@@ -1,0 +1,12 @@
+[package]
+name = "bloblex-hook"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "bloblex-hook"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+tokio.workspace = true

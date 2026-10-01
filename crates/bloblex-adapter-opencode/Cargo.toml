@@ -1,0 +1,7 @@
+[package]
+name = "bloblex-adapter-opencode"
+version.workspace = true
+edition.workspace = true
+[dependencies]
+bloblex-adapter-acp = { path = "../bloblex-adapter-acp" }
+bloblex-agent-core = { path = "../bloblex-agent-core" }

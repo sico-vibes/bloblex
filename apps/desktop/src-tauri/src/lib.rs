@@ -1,0 +1,1523 @@
+use futures_util::{SinkExt, StreamExt};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{
+    fs,
+    io::{BufRead, BufReader},
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+    time::Duration,
+};
+use tauri::{
+    menu::{IsMenuItem, Menu, MenuItem, Submenu},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, RunEvent, State, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::Message;
+use uuid::Uuid;
+
+#[cfg(test)]
+mod file_inspection_tests;
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[derive(Clone, Debug)]
+struct DaemonConnection {
+    address: String,
+    capability: String,
+}
+
+struct DaemonProcess {
+    child: Child,
+    executable_copy: PathBuf,
+    connection: DaemonConnection,
+}
+
+struct AppState {
+    daemon: Arc<Mutex<Option<DaemonProcess>>>,
+    daemon_start_lock: Mutex<()>,
+    event_cursor: Arc<AtomicU64>,
+    active_session: Arc<Mutex<Option<String>>>,
+    active_runtime: Arc<Mutex<Option<String>>>,
+    event_stream_started: Arc<Mutex<bool>>,
+    companion_resize_in_progress: Arc<AtomicBool>,
+    companion_resize_generation: Arc<AtomicU64>,
+    close_to_tray: AtomicBool,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            daemon: Arc::new(Mutex::new(None)),
+            daemon_start_lock: Mutex::new(()),
+            event_cursor: Arc::new(AtomicU64::new(0)),
+            active_session: Arc::new(Mutex::new(None)),
+            active_runtime: Arc::new(Mutex::new(None)),
+            event_stream_started: Arc::new(Mutex::new(false)),
+            companion_resize_in_progress: Arc::new(AtomicBool::new(false)),
+            companion_resize_generation: Arc::new(AtomicU64::new(0)),
+            close_to_tray: AtomicBool::new(true),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadyLine {
+    protocol_version: u32,
+    address: String,
+    capability: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RpcRequest<'a> {
+    v: u32,
+    id: String,
+    method: &'a str,
+    params: &'a Value,
+}
+
+#[derive(Deserialize)]
+struct RpcResponse {
+    v: u32,
+    id: String,
+    ok: bool,
+    result: Option<Value>,
+    error: Option<RpcError>,
+}
+
+#[derive(Deserialize)]
+struct RpcError {
+    code: String,
+    message: String,
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DaemonEvent {
+    v: u32,
+    #[serde(default)]
+    event_id: String,
+    sequence: u64,
+    #[serde(default)]
+    timestamp: String,
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    payload: Value,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Point {
+    x: i32,
+    y: i32,
+    #[serde(default)]
+    anchor_x: Option<f64>,
+    #[serde(default)]
+    bottom_gap: Option<f64>,
+    #[serde(default)]
+    monitor_name: Option<String>,
+}
+
+fn app_data_file(app: &AppHandle, name: &str) -> Option<PathBuf> {
+    let root = app.path().app_config_dir().ok()?;
+    fs::create_dir_all(&root).ok()?;
+    Some(root.join(name))
+}
+
+fn connection(state: &State<'_, AppState>) -> Result<DaemonConnection, String> {
+    let mut process = state
+        .daemon
+        .lock()
+        .map_err(|_| "Daemon state is unavailable.".to_string())?;
+    let Some(daemon) = process.as_mut() else {
+        return Err("The local Bloblex daemon is not running.".to_string());
+    };
+    if daemon
+        .child
+        .try_wait()
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        let executable_copy = daemon.executable_copy.clone();
+        *process = None;
+        let _ = fs::remove_file(executable_copy);
+        return Err("The local Bloblex daemon stopped unexpectedly.".to_string());
+    }
+    Ok(process
+        .as_ref()
+        .expect("checked daemon slot")
+        .connection
+        .clone())
+}
+
+fn candidate_daemon_paths(app: &AppHandle) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(path) = app.path().resolve(
+        "binaries/bloblexd-x86_64-pc-windows-msvc.exe",
+        tauri::path::BaseDirectory::Resource,
+    ) {
+        candidates.push(path);
+    }
+    if let Ok(path) = app
+        .path()
+        .resolve("bloblexd.exe", tauri::path::BaseDirectory::Resource)
+    {
+        candidates.push(path);
+    }
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    candidates.push(manifest.join("binaries/bloblexd-x86_64-pc-windows-msvc.exe"));
+    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+        let target_dir = PathBuf::from(target_dir);
+        candidates.push(target_dir.join("debug/bloblexd.exe"));
+        candidates.push(target_dir.join("release/bloblexd.exe"));
+    }
+    candidates.push(manifest.join("../../../target/debug/bloblexd.exe"));
+    candidates.push(manifest.join("../../../target/release/bloblexd.exe"));
+    candidates
+}
+
+fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    let _startup_guard = state
+        .daemon_start_lock
+        .lock()
+        .map_err(|_| "Daemon startup state is unavailable.".to_string())?;
+    {
+        let mut slot = state
+            .daemon
+            .lock()
+            .map_err(|_| "Daemon state is unavailable.".to_string())?;
+        if let Some(existing) = slot.as_mut() {
+            if existing
+                .child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_none()
+            {
+                return Ok(());
+            }
+            let stopped_copy = existing.executable_copy.clone();
+            *slot = None;
+            let _ = fs::remove_file(stopped_copy);
+        }
+    }
+    let executable = candidate_daemon_paths(app)
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            "bloblexd.exe is missing. Build the workspace daemon first (npm run build:daemon)."
+                .to_string()
+        })?;
+
+    let mut runtime_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("Could not resolve Bloblex local data directory: {error}"))?;
+    runtime_dir.push("runtime-processes");
+    fs::create_dir_all(&runtime_dir)
+        .map_err(|error| format!("Could not prepare the local daemon folder: {error}"))?;
+    let executable_copy = runtime_dir.join(format!(
+        "bloblexd-{}-{}.exe",
+        std::process::id(),
+        Uuid::new_v4()
+    ));
+    fs::copy(&executable, &executable_copy).map_err(|error| {
+        format!("Could not copy the daemon to its private run location: {error}")
+    })?;
+
+    let mut command = Command::new(&executable_copy);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let mut child = command.spawn().map_err(|error| {
+        let _ = fs::remove_file(&executable_copy);
+        format!("Could not start bloblexd.exe: {error}")
+    })?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Daemon bootstrap stream is unavailable.".to_string())?;
+    let stderr = child.stderr.take();
+    let mut reader = BufReader::new(stdout);
+    let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut line = String::new();
+        let result = reader
+            .read_line(&mut line)
+            .map(|_| line)
+            .map_err(|error| error.to_string());
+        let _ = bootstrap_tx.send(result);
+        for _line in reader.lines() {}
+    });
+    let line = match bootstrap_rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(Ok(line)) if !line.trim().is_empty() => line,
+        Ok(Ok(_)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&executable_copy);
+            return Err("Daemon exited before sending its bootstrap line.".to_string());
+        }
+        Ok(Err(error)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&executable_copy);
+            return Err(format!("Could not read daemon bootstrap: {error}"));
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&executable_copy);
+            return Err("Daemon did not send its bootstrap line within 10 seconds.".to_string());
+        }
+    };
+    let ready: ReadyLine = match serde_json::from_str(line.trim()) {
+        Ok(ready) => ready,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&executable_copy);
+            return Err("Daemon returned an invalid bootstrap line.".to_string());
+        }
+    };
+    if ready.protocol_version != 1
+        || !ready.address.starts_with("127.0.0.1:")
+        || ready.capability.is_empty()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_file(&executable_copy);
+        return Err("Daemon bootstrap did not satisfy the local IPC contract.".to_string());
+    }
+    if let Some(stderr) = stderr {
+        thread::spawn(move || for _line in BufReader::new(stderr).lines() {});
+    }
+
+    let mut slot = state
+        .daemon
+        .lock()
+        .map_err(|_| "Daemon state is unavailable.".to_string())?;
+    *slot = Some(DaemonProcess {
+        child,
+        executable_copy,
+        connection: DaemonConnection {
+            address: ready.address,
+            capability: ready.capability,
+        },
+    });
+    Ok(())
+}
+
+async fn rpc_call(
+    connection: &DaemonConnection,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let request_id = format!("desktop_{}", Uuid::new_v4());
+    let request = RpcRequest {
+        v: 1,
+        id: request_id.clone(),
+        method,
+        params: &params,
+    };
+    let response = client
+        .post(format!("http://{}/v1/rpc", connection.address))
+        .header(AUTHORIZATION, format!("Bearer {}", connection.capability))
+        .header(CONTENT_TYPE, "application/json")
+        .json(&request)
+        .send()
+        .await
+        .map_err(|error| format!("Daemon request failed: {error}"))?;
+    let status = response.status();
+    let body = response
+        .json::<RpcResponse>()
+        .await
+        .map_err(|error| format!("Daemon returned invalid JSON: {error}"))?;
+    if body.v != 1 || body.id != request_id {
+        return Err("Daemon response did not match the request.".to_string());
+    }
+    if !status.is_success() || !body.ok {
+        let error = body.error.unwrap_or(RpcError {
+            code: "internal".to_string(),
+            message: "Daemon request failed.".to_string(),
+        });
+        return Err(format!("{}: {}", error.code, error.message));
+    }
+    Ok(body.result.unwrap_or(Value::Null))
+}
+
+#[tauri::command]
+async fn daemon_rpc(
+    state: State<'_, AppState>,
+    method: String,
+    params: Value,
+) -> Result<Value, String> {
+    let conn = connection(&state)?;
+    let result = rpc_call(&conn, &method, params).await?;
+    if method == "app.snapshot" {
+        if let Some(sequence) = result.get("sequence").and_then(Value::as_u64) {
+            state.event_cursor.store(sequence, Ordering::Release);
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+async fn daemon_events_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let mut started = state
+        .event_stream_started
+        .lock()
+        .map_err(|_| "Event stream state is unavailable.".to_string())?;
+    if *started {
+        return Ok(());
+    }
+    *started = true;
+    let cursor = state.event_cursor.load(Ordering::Acquire);
+    let app_handle = app.clone();
+    let event_cursor = Arc::clone(&state.event_cursor);
+    let daemon = Arc::clone(&state.daemon);
+    thread::spawn(move || event_loop(app_handle, daemon, event_cursor, cursor));
+    Ok(())
+}
+
+#[tauri::command]
+fn ensure_daemon(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    start_daemon(&app, &state)
+}
+
+fn event_loop(
+    app: AppHandle,
+    daemon: Arc<Mutex<Option<DaemonProcess>>>,
+    cursor: Arc<AtomicU64>,
+    initial: u64,
+) {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return;
+    };
+    runtime.block_on(async move {
+        let mut last = initial;
+        let mut stream_connected = false;
+        loop {
+            let conn = daemon
+                .lock()
+                .ok()
+                .and_then(|slot| slot.as_ref().map(|process| process.connection.clone()));
+            let Some(conn) = conn else {
+                if stream_connected {
+                    let _ = app.emit("daemon-connection", false);
+                    stream_connected = false;
+                }
+                thread::sleep(Duration::from_millis(900));
+                continue;
+            };
+            let url = format!("ws://{}/v1/events", conn.address);
+            let mut request = match url.into_client_request() {
+                Ok(request) => request,
+                Err(_) => break,
+            };
+            if let Ok(value) = format!("Bearer {}", conn.capability).parse() {
+                request.headers_mut().insert(AUTHORIZATION, value);
+            }
+            match tokio_tungstenite::connect_async(request).await {
+                Ok((mut socket, _)) => {
+                    let snapshot_cursor = cursor.load(Ordering::Acquire);
+                    if snapshot_cursor < last {
+                        last = snapshot_cursor;
+                    }
+                    let sequence = cursor.load(Ordering::Acquire);
+                    let hello = json!({"v": 1, "afterSequence": sequence});
+                    if socket
+                        .send(Message::Text(hello.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        if stream_connected {
+                            let _ = app.emit("daemon-connection", false);
+                            stream_connected = false;
+                        }
+                        thread::sleep(Duration::from_millis(250));
+                        continue;
+                    }
+                    while let Some(frame) = socket.next().await {
+                        let Ok(frame) = frame else {
+                            break;
+                        };
+                        let text = match frame {
+                            Message::Text(text) => text.to_string(),
+                            Message::Binary(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                            Message::Ping(bytes) => {
+                                let _ = socket.send(Message::Pong(bytes)).await;
+                                continue;
+                            }
+                            Message::Close(_) => break,
+                            _ => continue,
+                        };
+                        let Ok(event) = serde_json::from_str::<DaemonEvent>(&text) else {
+                            continue;
+                        };
+                        if event.v != 1 {
+                            continue;
+                        }
+                        if event.event_type == "events.replay.complete" {
+                            let through = event
+                                .payload
+                                .get("throughSequence")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(last);
+                            last = last.max(through);
+                            cursor.fetch_max(last, Ordering::Release);
+                            if !stream_connected {
+                                let _ = app.emit("daemon-connection", true);
+                                stream_connected = true;
+                            }
+                            continue;
+                        }
+                        if event.event_type == "replay.gap" {
+                            let _ = app.emit("daemon-event", event);
+                            if stream_connected {
+                                let _ = app.emit("daemon-connection", false);
+                                stream_connected = false;
+                            }
+                            break;
+                        }
+                        if event.sequence <= last {
+                            continue;
+                        }
+                        last = event.sequence;
+                        cursor.store(last, Ordering::Release);
+                        let _ = app.emit("daemon-event", event);
+                    }
+                    if stream_connected {
+                        let _ = app.emit("daemon-connection", false);
+                        stream_connected = false;
+                    }
+                }
+                Err(_) => {
+                    if stream_connected {
+                        let _ = app.emit("daemon-connection", false);
+                        stream_connected = false;
+                    }
+                }
+            }
+            thread::sleep(Duration::from_millis(900));
+        }
+    });
+}
+
+#[tauri::command]
+fn select_project_folder(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .set_title("Choose a project folder")
+        .blocking_pick_folder()
+        .and_then(|path| path.into_path().ok())
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn select_local_file(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .set_title("Choose a local file to reference")
+        .blocking_pick_file()
+        .and_then(|path| path.into_path().ok())
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalFileInspection {
+    path: String,
+    file_name: String,
+    size_bytes: u64,
+}
+
+#[tauri::command]
+fn inspect_local_file(path: String) -> Result<LocalFileInspection, String> {
+    let canonical = PathBuf::from(&path)
+        .canonicalize()
+        .map_err(|_| "The selected file could not be found.".to_string())?;
+    if !canonical.is_file() {
+        return Err("The selected path is not a file.".to_string());
+    }
+    // Open only to verify access; file contents are never read here.
+    let _access = fs::File::open(&canonical).map_err(|_| {
+        "Bloblex cannot read this file path with the current Windows account.".to_string()
+    })?;
+    let metadata =
+        fs::metadata(&canonical).map_err(|_| "File metadata is unavailable.".to_string())?;
+    let file_name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "The selected file name is not valid Unicode.".to_string())?;
+    Ok(LocalFileInspection {
+        path: canonical.to_string_lossy().into_owned(),
+        file_name: file_name.to_string(),
+        size_bytes: metadata.len(),
+    })
+}
+
+fn canonical_project_file(path: String, project_root: Option<String>) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(&path);
+    let absolute = if candidate.is_absolute() {
+        candidate
+    } else {
+        let root = project_root.as_deref().ok_or_else(|| {
+            "A project folder is required to resolve this relative file path.".to_string()
+        })?;
+        PathBuf::from(root).join(candidate)
+    };
+    let canonical = absolute
+        .canonicalize()
+        .map_err(|_| "The file path no longer exists.".to_string())?;
+    if let Some(root) = project_root.as_deref() {
+        let canonical_root = PathBuf::from(root)
+            .canonicalize()
+            .map_err(|_| "The project folder no longer exists.".to_string())?;
+        if !canonical.starts_with(&canonical_root) {
+            return Err("The file is outside this session's project folder.".to_string());
+        }
+    }
+    if !canonical.is_file() {
+        return Err("The selected path is not a file.".to_string());
+    }
+    Ok(canonical)
+}
+
+#[tauri::command]
+async fn open_in_editor(
+    state: State<'_, AppState>,
+    path: String,
+    project_root: Option<String>,
+) -> Result<(), String> {
+    let path = canonical_project_file(path, project_root.clone())?
+        .to_string_lossy()
+        .into_owned();
+    let conn = connection(&state)?;
+    let settings = rpc_call(&conn, "settings.get", json!({})).await?;
+    let settings = settings.get("settings").unwrap_or(&settings);
+    let configured = settings
+        .get("editorExecutable")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty());
+    let executable = if let Some(configured) = configured {
+        let editor = Path::new(configured);
+        let executable_extension = editor
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("com")
+            });
+        if !editor.is_absolute() || !editor.is_file() || !executable_extension {
+            return Err(
+                "The configured editor must be an existing absolute .exe or .com file.".to_string(),
+            );
+        }
+        configured.to_string()
+    } else {
+        "notepad.exe".to_string()
+    };
+    let arguments = settings
+        .get("editorArgs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut command = Command::new(executable);
+    let mut used_file = false;
+    for argument in arguments {
+        let Some(argument) = argument.as_str() else {
+            continue;
+        };
+        let expanded = argument
+            .replace("{file}", &path)
+            .replace("{project}", project_root.as_deref().unwrap_or(""));
+        if expanded.contains(&path) {
+            used_file = true;
+        }
+        command.arg(expanded);
+    }
+    if !used_file {
+        command.arg(&path);
+    }
+    command
+        .spawn()
+        .map_err(|error| format!("Could not start the configured editor: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn resolve_project_file(path: String, project_root: Option<String>) -> Result<String, String> {
+    Ok(canonical_project_file(path, project_root)?
+        .to_string_lossy()
+        .into_owned())
+}
+
+#[tauri::command]
+fn reveal_in_explorer(path: String, project_root: Option<String>) -> Result<(), String> {
+    let path = canonical_project_file(path, project_root)?;
+    let folder = path
+        .parent()
+        .ok_or_else(|| "This file has no containing folder.".to_string())?;
+    Command::new("explorer.exe")
+        .arg(folder)
+        .spawn()
+        .map_err(|error| format!("Could not open File Explorer: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn show_main_window(app: AppHandle, session_id: Option<String>) -> Result<(), String> {
+    if let Some(id) = session_id {
+        if let Some(state) = app.try_state::<AppState>() {
+            if let Ok(mut active) = state.active_session.lock() {
+                *active = Some(id.clone());
+            }
+            let _ = app.emit("active-session", id);
+        }
+    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "The main window is unavailable.".to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn show_main_settings(app: AppHandle, session_id: Option<String>) -> Result<(), String> {
+    show_main_window(app.clone(), session_id)?;
+    app.emit("bloblex-open-settings", ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_active_session(app: AppHandle, session_id: Option<String>, state: State<'_, AppState>) {
+    if let Ok(mut active) = state.active_session.lock() {
+        *active = session_id.clone();
+    }
+    let _ = app.emit("active-session", session_id);
+}
+
+#[tauri::command]
+fn get_active_session(state: State<'_, AppState>) -> Option<String> {
+    state
+        .active_session
+        .lock()
+        .ok()
+        .and_then(|active| active.clone())
+}
+
+#[tauri::command]
+fn set_active_runtime(app: AppHandle, runtime_id: Option<String>, state: State<'_, AppState>) {
+    if let Ok(mut active) = state.active_runtime.lock() {
+        *active = runtime_id.clone();
+    }
+    let _ = app.emit("active-runtime", runtime_id);
+}
+
+#[tauri::command]
+fn get_active_runtime(state: State<'_, AppState>) -> Option<String> {
+    state
+        .active_runtime
+        .lock()
+        .ok()
+        .and_then(|active| active.clone())
+}
+
+#[tauri::command]
+fn toggle_companion(app: AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window("companion")
+        .ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    if window.is_visible().unwrap_or(false) {
+        window.hide().map_err(|error| error.to_string())?;
+        Ok(false)
+    } else {
+        window.show().map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+fn set_companion_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mode: String,
+    animate: bool,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("companion")
+        .ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    let (desired_width, desired_height) = match mode.as_str() {
+        "coucou" | "home" => (640.0, 160.0),
+        "home-chat" => (640.0, 264.0),
+        "petit" | "hidden" => (344.0, 62.0),
+        _ => return Err("Unknown companion presentation state.".to_string()),
+    };
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let initial = window.inner_size().map_err(|error| error.to_string())?;
+    let start_width = initial.width as f64 / scale;
+    let start_height = initial.height as f64 / scale;
+    let start_position = window.outer_position().map_err(|error| error.to_string())?;
+    let generation = state
+        .companion_resize_generation
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    let generation_counter = Arc::clone(&state.companion_resize_generation);
+    let resize_flag = Arc::clone(&state.companion_resize_in_progress);
+    resize_flag.store(true, Ordering::SeqCst);
+    if !animate {
+        window
+            .set_size(LogicalSize::new(desired_width, desired_height))
+            .map_err(|error| error.to_string())?;
+        let new_width = (desired_width * scale).round() as i32;
+        let new_height = (desired_height * scale).round() as i32;
+        window
+            .set_position(PhysicalPosition::new(
+                start_position.x - (new_width - initial.width as i32) / 2,
+                start_position.y - (new_height - initial.height as i32),
+            ))
+            .map_err(|error| error.to_string())?;
+        let resize_flag = Arc::clone(&resize_flag);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(120));
+            if generation_counter.load(Ordering::SeqCst) == generation {
+                resize_flag.store(false, Ordering::SeqCst);
+            }
+        });
+        return Ok(());
+    }
+    let expand = mode == "home" || mode == "home-chat" || mode == "coucou";
+    let grow_duration = if mode == "coucou" { 0.5 } else { 1.2 };
+    thread::spawn(move || {
+        let began = std::time::Instant::now();
+        let mut last_width = initial.width as i32;
+        let mut last_height = initial.height as i32;
+        loop {
+            if generation_counter.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let elapsed = began.elapsed().as_secs_f64();
+            let progress = if expand {
+                spring_progress(elapsed)
+            } else {
+                cubic_bezier(0.45, 0.0, 0.2, 1.0, elapsed / 0.34)
+            };
+            let width = (start_width + (desired_width - start_width) * progress).round() as i32;
+            let height = (start_height + (desired_height - start_height) * progress).round() as i32;
+            let duration = if expand { grow_duration } else { 0.34 };
+            let width = if elapsed >= duration {
+                (desired_width * scale).round() as i32
+            } else {
+                (width as f64 * scale).round() as i32
+            };
+            let height = if elapsed >= duration {
+                (desired_height * scale).round() as i32
+            } else {
+                (height as f64 * scale).round() as i32
+            };
+            if let Err(error) =
+                window.set_size(tauri::PhysicalSize::new(width as u32, height as u32))
+            {
+                eprintln!("Bloblex companion resize: {error}");
+                break;
+            }
+            let next_position = PhysicalPosition::new(
+                start_position.x - (width - initial.width as i32) / 2,
+                start_position.y - (height - initial.height as i32),
+            );
+            if let Err(error) = window.set_position(next_position) {
+                eprintln!("Bloblex companion anchor: {error}");
+                break;
+            }
+            last_width = width;
+            last_height = height;
+            if elapsed >= duration {
+                break;
+            }
+            thread::sleep(Duration::from_millis(16));
+        }
+        let _ = (last_width, last_height);
+        if generation_counter.load(Ordering::SeqCst) == generation {
+            resize_flag.store(false, Ordering::SeqCst);
+        }
+    });
+    Ok(())
+}
+
+fn spring_progress(seconds: f64) -> f64 {
+    let damping: f64 = 0.72;
+    let omega = std::f64::consts::TAU / 0.5;
+    let damped = omega * (1.0 - damping * damping).sqrt();
+    1.0 - (-damping * omega * seconds).exp()
+        * ((damped * seconds).cos()
+            + damping / (1.0 - damping * damping).sqrt() * (damped * seconds).sin())
+}
+
+fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, input: f64) -> f64 {
+    let input = input.clamp(0.0, 1.0);
+    let curve = |a: f64, b: f64, t: f64| {
+        3.0 * (1.0 - t).powi(2) * t * a + 3.0 * (1.0 - t) * t.powi(2) * b + t.powi(3)
+    };
+    let (mut low, mut high) = (0.0, 1.0);
+    for _ in 0..16 {
+        let middle = (low + high) / 2.0;
+        if curve(x1, x2, middle) < input {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    curve(y1, y2, (low + high) / 2.0)
+}
+
+#[tauri::command]
+async fn set_companion_visible(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    visible: bool,
+) -> Result<(), String> {
+    let conn = connection(&state)?;
+    let _ = rpc_call(
+        &conn,
+        "settings.set",
+        json!({"key":"showCompanion","value":visible}),
+    )
+    .await?;
+    let window = app
+        .get_webview_window("companion")
+        .ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    if visible {
+        window.show().map_err(|error| error.to_string())?;
+    } else {
+        window.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_close_to_tray(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let conn = connection(&state)?;
+    rpc_call(
+        &conn,
+        "settings.set",
+        json!({"key":"closeToTray","value":enabled}),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    state.close_to_tray.store(enabled, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+fn companion_monitor_options(app: AppHandle) -> Result<Vec<String>, String> {
+    let companion = app
+        .get_webview_window("companion")
+        .ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    let mut names = companion
+        .available_monitors()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter_map(|monitor| monitor.name().cloned())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+#[tauri::command]
+fn current_companion_monitor(app: AppHandle) -> Result<Option<String>, String> {
+    let companion = app
+        .get_webview_window("companion")
+        .ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    Ok(companion
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .and_then(|monitor| monitor.name().cloned()))
+}
+
+#[tauri::command]
+fn set_companion_monitor(app: AppHandle, monitor_name: String) -> Result<(), String> {
+    let companion = app
+        .get_webview_window("companion")
+        .ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    let monitor = companion
+        .available_monitors()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|monitor| monitor.name().map(String::as_str) == Some(monitor_name.as_str()))
+        .ok_or_else(|| {
+            "That display is no longer available. Choose a connected display.".to_string()
+        })?;
+    let area = monitor.work_area();
+    let size = companion.outer_size().map_err(|error| error.to_string())?;
+    let scale = monitor.scale_factor();
+    let gap = (18.0 * scale).round() as i32;
+    let x = area.position.x + (area.size.width as i32 - size.width as i32) / 2;
+    let y = area.position.y + area.size.height as i32 - size.height as i32 - gap;
+    companion
+        .set_position(PhysicalPosition::new(x, y))
+        .map_err(|error| error.to_string())?;
+    persist_companion_position(&app, &companion);
+    Ok(())
+}
+
+#[tauri::command]
+fn quit_bloblex(app: AppHandle, state: State<'_, AppState>) {
+    let conn = connection(&state).ok();
+    let app = app.clone();
+    let daemon = Arc::clone(&state.daemon);
+    thread::spawn(move || {
+        if let Some(conn) = conn {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(4))
+                .build();
+            if let Ok(client) = client {
+                let _ = client.post(format!("http://{}/v1/rpc", conn.address))
+                    .header(AUTHORIZATION, format!("Bearer {}", conn.capability))
+                    .json(&json!({"v":1,"id":format!("quit_{}",Uuid::new_v4()),"method":"daemon.shutdown","params":{}}))
+                    .send();
+            }
+        }
+        stop_daemon(daemon);
+        app.exit(0);
+    });
+}
+
+fn stop_daemon(daemon_process: Arc<Mutex<Option<DaemonProcess>>>) {
+    if let Ok(mut slot) = daemon_process.lock() {
+        if let Some(mut daemon) = slot.take() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                if daemon.child.try_wait().ok().flatten().is_some() {
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let _ = daemon.child.kill();
+                    let _ = daemon.child.wait();
+                    break;
+                }
+                thread::sleep(Duration::from_millis(60));
+            }
+            let _ = fs::remove_file(daemon.executable_copy);
+        }
+    }
+}
+
+impl AppState {
+    fn stop_child(&self) {
+        stop_daemon(Arc::clone(&self.daemon));
+    }
+}
+
+impl Drop for AppState {
+    fn drop(&mut self) {
+        self.stop_child();
+    }
+}
+
+fn companion_position(app: &AppHandle, window: &WebviewWindow) -> PhysicalPosition<i32> {
+    let monitors = window.available_monitors().unwrap_or_default();
+    let primary = window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| monitors.first().cloned());
+    let Some(primary_monitor) = primary else {
+        return PhysicalPosition::new(300, 600);
+    };
+    let scale = primary_monitor.scale_factor();
+    let size = window
+        .inner_size()
+        .unwrap_or(tauri::PhysicalSize::new(344, 62));
+    let width = size.width as i32;
+    let height = size.height as i32;
+    let inset = (12.0 * scale).round() as i32;
+    let mut saved = None;
+    if let Some(file) = app_data_file(app, "companion-position.json") {
+        if let Ok(content) = fs::read_to_string(file) {
+            saved = serde_json::from_str::<Point>(&content).ok();
+        }
+    }
+    let monitor = saved
+        .as_ref()
+        .and_then(|point| {
+            if let Some(name) = &point.monitor_name {
+                if let Some(found) = monitors
+                    .iter()
+                    .find(|monitor| monitor.name().map(String::as_str) == Some(name.as_str()))
+                {
+                    return Some(found.clone());
+                }
+            }
+            if point.anchor_x.is_some() {
+                return None;
+            }
+            let center_x = point.x + width / 2;
+            let center_y = point.y + height / 2;
+            monitors
+                .iter()
+                .find(|monitor| {
+                    let area = monitor.work_area();
+                    center_x >= area.position.x
+                        && center_x < area.position.x + area.size.width as i32
+                        && center_y >= area.position.y
+                        && center_y < area.position.y + area.size.height as i32
+                })
+                .cloned()
+        })
+        .unwrap_or(primary_monitor);
+    let area = monitor.work_area();
+    let position = saved
+        .as_ref()
+        .map(|point| {
+            if let (Some(anchor_x), Some(bottom_gap)) = (point.anchor_x, point.bottom_gap) {
+                let center_x = area.position.x
+                    + (area.size.width as f64 * anchor_x.clamp(0.0, 1.0)).round() as i32;
+                let bottom = area.position.y + area.size.height as i32
+                    - (bottom_gap * monitor.scale_factor()).round() as i32;
+                Point {
+                    x: center_x - width / 2,
+                    y: bottom - height,
+                    anchor_x: None,
+                    bottom_gap: None,
+                    monitor_name: None,
+                }
+            } else {
+                Point {
+                    x: point.x,
+                    y: point.y,
+                    anchor_x: None,
+                    bottom_gap: None,
+                    monitor_name: None,
+                }
+            }
+        })
+        .unwrap_or_else(|| Point {
+            x: area.position.x + ((area.size.width as i32 - width) / 2),
+            y: area.position.y + area.size.height as i32 - height - inset,
+            anchor_x: None,
+            bottom_gap: None,
+            monitor_name: None,
+        });
+    let min_x = area.position.x + inset;
+    let min_y = area.position.y + inset;
+    let max_x = area.position.x + area.size.width as i32 - width - inset;
+    let max_y = area.position.y + area.size.height as i32 - height - inset;
+    PhysicalPosition::new(
+        position.x.clamp(min_x, max_x.max(min_x)),
+        position.y.clamp(min_y, max_y.max(min_y)),
+    )
+}
+
+fn persist_companion_position(app: &AppHandle, window: &WebviewWindow) {
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let monitors = window.available_monitors().unwrap_or_default();
+    let primary = window.primary_monitor().ok().flatten();
+    let size = window
+        .inner_size()
+        .unwrap_or(tauri::PhysicalSize::new(344, 62));
+    let center = PhysicalPosition::new(
+        position.x + size.width as i32 / 2,
+        position.y + size.height as i32 / 2,
+    );
+    let monitor = monitors
+        .iter()
+        .find(|monitor| {
+            let area = monitor.work_area();
+            center.x >= area.position.x
+                && center.x < area.position.x + area.size.width as i32
+                && center.y >= area.position.y
+                && center.y < area.position.y + area.size.height as i32
+        })
+        .or(primary.as_ref());
+    if let Some(path) = app_data_file(app, "companion-position.json") {
+        let temp = path.with_extension("json.tmp");
+        let anchor = if let Some(monitor) = monitor {
+            let area = monitor.work_area();
+            let bottom_gap = (area.position.y + area.size.height as i32
+                - position.y
+                - size.height as i32) as f64
+                / monitor.scale_factor();
+            Point {
+                x: position.x,
+                y: position.y + size.height as i32,
+                anchor_x: Some((center.x - area.position.x) as f64 / area.size.width as f64),
+                bottom_gap: Some(bottom_gap),
+                monitor_name: monitor.name().cloned(),
+            }
+        } else {
+            Point {
+                x: position.x,
+                y: position.y + size.height as i32,
+                anchor_x: None,
+                bottom_gap: None,
+                monitor_name: None,
+            }
+        };
+        if fs::write(&temp, serde_json::to_vec(&anchor).unwrap_or_default()).is_ok() {
+            let _ = fs::rename(temp, path);
+        }
+    }
+}
+
+fn make_companion(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+    let window = WebviewWindowBuilder::new(
+        app,
+        "companion",
+        WebviewUrl::App("index.html?companion=1".into()),
+    )
+    .title("Bloblex Companion")
+    .inner_size(344.0, 62.0)
+    .position(400.0, 400.0)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .focused(false)
+    .visible(false)
+    .shadow(false)
+    .build()?;
+    let position = companion_position(app, &window);
+    let _ = window.set_position(position);
+    let app_handle = app.clone();
+    let resize_flag = Arc::clone(&app.state::<AppState>().companion_resize_in_progress);
+    let window_for_event = window.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::Moved(_) = event {
+            if !resize_flag.load(Ordering::SeqCst) {
+                persist_companion_position(&app_handle, &window_for_event);
+            }
+        }
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = window_for_event.hide();
+        }
+    });
+    Ok(window)
+}
+
+fn build_tray_menu(app: &AppHandle, sessions: &[Value]) -> tauri::Result<Menu<tauri::Wry>> {
+    let open = MenuItem::with_id(app, "open", "Open Bloblex", true, None::<&str>)?;
+    let companion = MenuItem::with_id(
+        app,
+        "companion",
+        "Show / hide companion",
+        true,
+        None::<&str>,
+    )?;
+    let refresh = MenuItem::with_id(app, "refresh", "Refresh runtimes", true, None::<&str>)?;
+    let refresh_sessions = MenuItem::with_id(
+        app,
+        "refresh-sessions",
+        "Refresh active sessions",
+        true,
+        None::<&str>,
+    )?;
+    let mut session_items = Vec::new();
+    for session in sessions.iter().filter(|item| tray_session_is_active(item)) {
+        let id = session["id"].as_str().unwrap_or_default();
+        if id.is_empty() {
+            continue;
+        }
+        let provider = session["provider"].as_str().unwrap_or("Agent");
+        let title = session["title"]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("Untitled session");
+        let state = session["state"].as_str().unwrap_or("active");
+        let label = format!("{} — {} ({})", provider, title, state);
+        let label = label.chars().take(76).collect::<String>();
+        session_items.push(MenuItem::with_id(
+            app,
+            format!("session:{id}"),
+            label,
+            true,
+            None::<&str>,
+        )?);
+    }
+    if session_items.is_empty() {
+        session_items.push(MenuItem::with_id(
+            app,
+            "no-active-sessions",
+            "No active sessions",
+            false,
+            None::<&str>,
+        )?);
+    }
+    let mut session_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = session_items
+        .iter()
+        .map(|item| item as &dyn IsMenuItem<tauri::Wry>)
+        .collect();
+    session_refs.push(&refresh_sessions);
+    let active_sessions = Submenu::with_id_and_items(
+        app,
+        "active-sessions",
+        "Active sessions",
+        true,
+        &session_refs,
+    )?;
+    let pause_all = MenuItem::with_id(app, "pause-all", "Pause all agents…", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Bloblex", true, None::<&str>)?;
+    Menu::with_items(
+        app,
+        &[
+            &open,
+            &active_sessions,
+            &pause_all,
+            &companion,
+            &refresh,
+            &settings,
+            &quit,
+        ],
+    )
+}
+
+fn tray_session_is_active(session: &Value) -> bool {
+    matches!(
+        session["state"].as_str().unwrap_or_default(),
+        "starting" | "working" | "waiting_permission" | "waiting_user"
+    )
+}
+
+fn load_tray_sessions(app: &AppHandle) -> Result<Vec<Value>, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "Application state is unavailable".to_string())?;
+    let conn = connection(&state)?;
+    let response = tauri::async_runtime::block_on(rpc_call(&conn, "session.list", json!({})))?;
+    Ok(response["sessions"].as_array().cloned().unwrap_or_default())
+}
+
+fn refresh_tray_sessions(app: AppHandle) {
+    thread::spawn(move || {
+        let sessions = match load_tray_sessions(&app) {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                let _ = app.emit("bloblex-tray-notice", error);
+                return;
+            }
+        };
+        let app_for_menu = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let Some(tray) = app_for_menu.tray_by_id("bloblex-tray") else {
+                return;
+            };
+            match build_tray_menu(&app_for_menu, &sessions) {
+                Ok(menu) => {
+                    if let Err(error) = tray.set_menu(Some(menu)) {
+                        let _ = app_for_menu.emit(
+                            "bloblex-tray-notice",
+                            format!("Could not update active sessions: {error}"),
+                        );
+                    }
+                }
+                Err(error) => {
+                    let _ = app_for_menu.emit(
+                        "bloblex-tray-notice",
+                        format!("Could not update active sessions: {error}"),
+                    );
+                }
+            }
+        });
+    });
+}
+
+#[tauri::command]
+fn refresh_tray_menu(app: AppHandle) {
+    refresh_tray_sessions(app);
+}
+
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let sessions = load_tray_sessions(app).unwrap_or_default();
+    let menu = build_tray_menu(app, &sessions)?;
+    let decoded = image::load_from_memory(include_bytes!("../../../../assets/icon/tray.png"))
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+        .to_rgba8();
+    let (width, height) = decoded.dimensions();
+    let icon = tauri::image::Image::new_owned(decoded.into_raw(), width, height);
+    TrayIconBuilder::with_id("bloblex-tray")
+        .tooltip("Bloblex")
+        .icon(icon)
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            let event_id = event.id().as_ref().to_string();
+            if let Some(session_id) = event_id.strip_prefix("session:") {
+                let _ = show_main_window(app.clone(), Some(session_id.to_string()));
+                return;
+            }
+            match event_id.as_str() {
+                "open" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+                "companion" => {
+                    let _ = toggle_companion(app.clone());
+                }
+                "refresh" => {
+                    let app = app.clone();
+                    thread::spawn(move || {
+                        let _ = tauri::async_runtime::block_on(async {
+                            if let Some(state) = app.try_state::<AppState>() {
+                                if let Ok(conn) = connection(&state) {
+                                    let _ = rpc_call(&conn, "runtime.refresh", json!({})).await;
+                                }
+                            }
+                        });
+                        refresh_tray_sessions(app);
+                    });
+                }
+                "refresh-sessions" => refresh_tray_sessions(app.clone()),
+                "pause-all" => {
+                    let _ = show_main_window(app.clone(), None);
+                    let _ = app.emit("bloblex-pause-all-requested", ());
+                }
+                "settings" => {
+                    let _ = show_main_settings(app.clone(), None);
+                }
+                "quit" => {
+                    if let Some(state) = app.try_state::<AppState>() {
+                        quit_bloblex(app.clone(), state);
+                    }
+                }
+                _ => {}
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                if let Some(window) = tray.app_handle().get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .manage(AppState::default())
+        .setup(|app| {
+            let mut show_companion = true;
+            if let Some(state) = app.try_state::<AppState>() {
+                if let Err(error) = start_daemon(app.handle(), &state) {
+                    eprintln!("Bloblex daemon startup: {error}");
+                }
+                if let Ok(conn) = connection(&state) {
+                    if let Ok(settings) =
+                        tauri::async_runtime::block_on(rpc_call(&conn, "settings.get", json!({})))
+                    {
+                        let preferences = settings.get("settings").unwrap_or(&settings);
+                        show_companion = preferences
+                            .get("showCompanion")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true);
+                        state.close_to_tray.store(
+                            preferences
+                                .get("closeToTray")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(true),
+                            Ordering::SeqCst,
+                        );
+                    }
+                }
+            }
+            let companion = make_companion(app.handle())?;
+            if show_companion {
+                companion.show()?;
+            }
+            build_tray(app.handle())?;
+            if let Some(main) = app.get_webview_window("main") {
+                let main_for_event = main.clone();
+                let app_for_event = app.handle().clone();
+                main.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        if let Some(state) = app_for_event.try_state::<AppState>() {
+                            if state.close_to_tray.load(Ordering::SeqCst) {
+                                let _ = main_for_event.hide();
+                            } else {
+                                quit_bloblex(app_for_event.clone(), state);
+                            }
+                        } else {
+                            let _ = main_for_event.hide();
+                        }
+                    }
+                });
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            daemon_rpc,
+            daemon_events_start,
+            ensure_daemon,
+            select_project_folder,
+            select_local_file,
+            inspect_local_file,
+            open_in_editor,
+            resolve_project_file,
+            reveal_in_explorer,
+            show_main_window,
+            show_main_settings,
+            set_active_session,
+            get_active_session,
+            set_active_runtime,
+            get_active_runtime,
+            toggle_companion,
+            set_companion_mode,
+            set_companion_visible,
+            set_close_to_tray,
+            companion_monitor_options,
+            current_companion_monitor,
+            set_companion_monitor,
+            refresh_tray_menu,
+            quit_bloblex
+        ])
+        .build(tauri::generate_context!())
+        .expect("Bloblex desktop application failed to start")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.stop_child();
+                }
+            }
+        });
+}

@@ -1,0 +1,8 @@
+[package]
+name = "bloblex-security"
+version.workspace = true
+edition.workspace = true
+[dependencies]
+rand.workspace = true
+subtle.workspace = true
+tokio.workspace = true

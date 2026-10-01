@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Minimal event subscription access for the main and companion windows.","local":true,"windows":["main","companion"],"permissions":["core:event:allow-listen","core:event:allow-unlisten","core:window:allow-start-dragging"]}}

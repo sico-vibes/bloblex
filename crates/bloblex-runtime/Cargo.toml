@@ -1,0 +1,9 @@
+[package]
+name = "bloblex-runtime"
+version.workspace = true
+edition.workspace = true
+[dependencies]
+bloblex-protocol = { path = "../bloblex-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

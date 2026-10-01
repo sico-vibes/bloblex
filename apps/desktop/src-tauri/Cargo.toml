@@ -1,0 +1,27 @@
+[package]
+name = "bloblex-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+futures-util.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-window-state = "2"
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+uuid.workspace = true
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

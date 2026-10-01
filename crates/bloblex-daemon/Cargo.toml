@@ -1,0 +1,28 @@
+[package]
+name = "bloblex-daemon"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "bloblexd"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+bloblex-protocol = { path = "../bloblex-protocol" }
+bloblex-security = { path = "../bloblex-security" }
+bloblex-storage = { path = "../bloblex-storage" }
+bloblex-usage = { path = "../bloblex-usage" }
+bloblex-runtime = { path = "../bloblex-runtime" }
+bloblex-agent-core = { path = "../bloblex-agent-core" }
+bloblex-adapter-acp = { path = "../bloblex-adapter-acp" }
+bloblex-adapter-codex = { path = "../bloblex-adapter-codex" }
+bloblex-adapter-claude = { path = "../bloblex-adapter-claude" }
+chrono.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

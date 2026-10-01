@@ -1,0 +1,9 @@
+[package]
+name = "bloblex-adapter-codex"
+version.workspace = true
+edition.workspace = true
+[dependencies]
+async-trait.workspace = true
+bloblex-agent-core = { path = "../bloblex-agent-core" }
+serde_json.workspace = true
+tokio.workspace = true

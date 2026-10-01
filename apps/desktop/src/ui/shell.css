@@ -32,10 +32,7 @@
 .sidebar-top { height: 52px; padding: 0 10px 0 16px; display: flex; align-items: center; justify-content: space-between; }
 .brand-lockup { display: flex; align-items: center; gap: 9px; }
 .brand-lockup strong { font-size: 14px; font-weight: 640; letter-spacing: -0.2px; }
-.blob-mark { width: 24px; height: 20px; position: relative; display: inline-block; flex: 0 0 auto; }
-.blob-mark i { position: absolute; top: 2px; width: 15px; height: 15px; border-radius: 50%; background: radial-gradient(circle at 34% 30%, #ffffff, #c9ccd3 70%, #9ea2aa); }
-.blob-mark i:first-child { left: 0; }
-.blob-mark i:last-child { left: 9px; top: 4px; background: radial-gradient(circle at 34% 30%, #cfe4ff, #82aaff 70%, #5d83d6); }
+.brand-logo { width: 24px; height: 24px; flex: 0 0 auto; object-fit: contain; }
 .sidebar-search { margin: 2px 10px 10px; height: 32px; padding: 0 10px; display: flex; align-items: center; gap: 8px; color: var(--ink-3); border-radius: 8px; background: var(--raised); }
 .sidebar-search input { min-width: 0; flex: 1; height: 100%; padding: 0; color: var(--ink); border: 0; outline: 0; background: transparent; font-size: 13px; }
 .sidebar-search input::placeholder { color: var(--ink-3); }

@@ -114,7 +114,6 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .context-footer { min-height: 35px; padding: 0 17px; display: flex; align-items: center; justify-content: space-between; color: var(--faint); font-size: 10px; }
 .empty-conversation { max-width: 440px; margin: auto; padding: 20px; transform: translateY(-12px); text-align: center; }
 .empty-art { height: 105px; display: grid; place-items: center; }
-.empty-art .blob-mark { filter: drop-shadow(0 0 22px #7e84f350); }
 .eyebrow { margin: 0; color: #999ee2; font-size: 10px; font-weight: 720; letter-spacing: 1.15px; }
 .empty-conversation h1 { margin: 11px 0 9px; font-size: 20px; font-weight: 640; letter-spacing: -0.5px; }
 .empty-description { max-width: 365px; margin: 0 auto 18px; color: var(--muted); font-size: 13px; line-height: 1.7; }

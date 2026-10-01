@@ -169,6 +169,18 @@ afterEach(() => {
 })
 
 describe('App mounted lifecycle', () => {
+  it('links the sidebar brand to the imported PNG logo asset', async () => {
+    const view = startApp()
+    await view.settle()
+    const logo = view.host.querySelector<HTMLImageElement>('.brand-lockup img')
+    expect(logo).not.toBeNull()
+    expect(logo?.getAttribute('alt')).toBe('Bloblex logo')
+    const logoUrl = logo?.getAttribute('src') ?? ''
+    expect(logoUrl.length).toBeGreaterThan(0)
+    expect(logoUrl.endsWith('.png')).toBe(true)
+    expect(logo?.getAttribute('class')).toBe('brand-logo')
+  })
+
   it('unlistens when a StrictMode registration resolves after cleanup', async () => {
     const registrations: Array<ReturnType<typeof deferred<() => void>>> = []
     h.listenForActiveRuntime.mockImplementation(() => {

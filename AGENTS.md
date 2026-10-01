@@ -1,6 +1,10 @@
 # Bloblex collaboration instructions
 
-## Resume — 1 October 2026, evening
+# Delegation pipeline (from 1 October 2026, evening)
+
+This section supersedes the older **Resume** and **User's current working arrangement** sections below; their text remains as history. The Director is the orchestrating Claude session acting as CTO. The Director directs and reviews every diff and never writes production code. Implementer lane `impl` is Codex `gpt-6-luna` at high effort. QA lane `qa` is OpenCode `opencode-go/deepseek-v4.1-flash` and reports to the Director only. Backend work is RESUMED according to [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Implementers never run `git commit`; the Director commits after review and gates. The invariants in **Scope and invariants** below remain in force.
+
+## Resume — 1 October 2026, evening (superseded by Delegation pipeline above)
 
 The user explicitly resumed work after the 20:37 stop. Finish the UI first: the main shell should follow the OpenMausBot / Grok-style chat layout while keeping Bloblex's plan (agents, sessions, usage, permissions, companion). Companion blobs must match Coucou's animation and face language on a circle, and the same face is used in the chat. Backend expansion stays paused. Read `docs/STOPPED_CHECKPOINT.md` for the pre-resume snapshot. The older "coordinator must not touch code" arrangement applied to the Luna lanes; this resume is direct UI work unless the user says otherwise.
 
@@ -8,7 +12,7 @@ Status at 22:30: the character engine, companion island and OpenMausBot-style ma
 
 Read `SESSION_HANDOFF.md` and `docs/implementation-status.md` before resuming work. They describe an unfinished implementation; passing old checks is not current acceptance.
 
-## User's current working arrangement
+## User's current working arrangement (superseded by Delegation pipeline above)
 
 - The coordinator/root is responsible for documentation and orchestration. The user explicitly instructed it to stop touching code, including small production fixes.
 - Two Luna 6 agents at High effort implement the application; a third Luna 6 agent at High effort performs independent QA and reports directly to the implementers for corrections.
@@ -22,7 +26,7 @@ Read `SESSION_HANDOFF.md` and `docs/implementation-status.md` before resuming wo
 - Desktop implementer: App/styles, shell FSM/layout, native Tauri windows and commands.
 - Character implementer: BlobCanvas, motion helpers, original opt-in sound module and character/mounted lifecycle tests; backend implementation remains its later lane.
 - At the 19:07 checkpoint, that implementer also owns a separate native file-inspection test module, coordinated with desktop. Desktop alone registers the module or edits native production source.
-- QA: independent tests/review and `docs/qa-ui-execution.md`; production corrections go to the implementer who owns the file.
+- QA (amended): reports to the Director; the Director routes production corrections to the `impl` lane.
 - The 19:55 UI continuation permits DOM-mounted React unit tests while Computer Use/browser/native interaction remains deferred. QA coordinated a one-time test-only `happy-dom` dependency/lockfile addition and then released those files; coordinate any subsequent dependency edit with both implementers.
 - Coordinator: handoff, status/checklist and documentation index. Avoid concurrent edits to an implementer's source-provenance document.
 

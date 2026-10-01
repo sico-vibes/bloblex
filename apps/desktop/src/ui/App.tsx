@@ -14,6 +14,7 @@ import { deriveCompanionStatus } from './companionStatus'
 import { moneyMinor, records, tokenValue, usageTokenBuckets, valuationLabel } from './usagePresentation'
 import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermission } from './permissionSelection'
 import { PermissionChoiceButton } from './PermissionChoiceButton'
+import bloblexLogo from '../assets/bloblex-128.png'
 import { sessionsForPauseRequest } from './trayActions'
 import { budgetValue, findApplicableBudget } from './budgetPresentation'
 import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, providerColor, type ConnectionState, type DaemonEvent, type PermissionRequest, type Runtime, type Session, type Snapshot } from '../types'
@@ -408,7 +409,7 @@ export function App() {
     <main className={`app-shell ${inspectorOpen ? 'inspector-open' : ''}`} style={{ '--agent-accent': accent } as React.CSSProperties}>
       <aside className="sidebar" aria-label="Agents">
         <div className="sidebar-top">
-          <div className="brand-lockup"><BlobMark /><strong>Bloblex</strong></div>
+          <div className="brand-lockup"><img className="brand-logo" src={bloblexLogo} alt="Bloblex logo" /><strong>Bloblex</strong></div>
           <button className="icon-button" title="New session" aria-label="New session" disabled={!selectedRuntime || busy || connection !== 'connected'} onClick={() => void newSession()}><Plus size={18} /></button>
         </div>
         <label className="sidebar-search"><Search size={14} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" aria-label="Search agents and conversations" /></label>
@@ -1373,10 +1374,6 @@ function formatMinor(value: number, currency: unknown) {
   if (typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency)) return 'Unknown'
   const digits = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2
   return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: digits }).format(value / (10 ** digits))
-}
-
-function BlobMark({ large = false }: { large?: boolean }) {
-  return <span className={`blob-mark ${large ? 'large' : ''}`} aria-hidden="true"><i /><i /></span>
 }
 
 function permissionChoiceLabel(choice: string) {

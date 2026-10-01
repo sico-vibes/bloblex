@@ -1,5 +1,11 @@
 # Bloblex session handoff
 
+## Current carry-forward (1 October 2026, evening)
+
+The implementation plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). The current delegation pipeline is in [AGENTS.md](AGENTS.md): the Director directs and reviews, `impl` implements, and `qa` reports to the Director. Current pointer: **Phase 1 in progress / Task 1** (logo and icons). Backend work follows the revised plan order.
+
+`docs/E2E_PLAN_V2.md` is the current authoritative plan; [Bloblex_E2E_Windows_Desktop_Plan.md](Bloblex_E2E_Windows_Desktop_Plan.md) remains the original product plan and history. Both remain readable.
+
 ## Resume, 1 October 2026, 21:35–22:30 BST (direct UI work)
 
 The user resumed UI work after a failed attempt by another assistant (Grok) at 21:19–21:27, which had edited `App.tsx`, `styles.css`, `BlobCanvas.tsx`, `main.tsx` and `characterMotion.test.ts` with no git history to diff. At that point 77/78 tests passed (companion sound toggle failing). This session replaced the affected surfaces:
@@ -19,7 +25,7 @@ Workspace: `C:\Users\jbmst\OneDrive\Documents\ChatGPT\Bloblex`. Windows PowerShe
 
 1. This handoff and `AGENTS.md` for current user instructions.
 2. [Implementation status and open checklist](docs/implementation-status.md).
-3. [Authoritative plan](Bloblex_E2E_Windows_Desktop_Plan.md), especially sections 31, 32, 35, 36 and 37.
+3. Current plan: [E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Original product plan/history: [Bloblex_E2E_Windows_Desktop_Plan.md](Bloblex_E2E_Windows_Desktop_Plan.md), especially sections 31, 32, 35, 36 and 37.
 4. [Current independent UI QA log](docs/qa-ui-execution.md), [UI fidelity criteria](docs/qa-ui-fidelity.md), [full QA report](docs/qa-report.md) and [findings register](docs/qa-findings.md).
 5. [Coucou source mapping](docs/companion-motion.md), [IPC contract](docs/ipc-contract.md), `PRODUCT.md` and `DESIGN.md`.
 6. [Preserved user screenshots](docs/ui-reference-images.md). Exact copies and hashes are retained in documentation, including the negative reference for the old pill; temporary clipboard paths are no longer required.

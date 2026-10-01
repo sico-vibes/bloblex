@@ -33,3 +33,7 @@ The main window layout and its "Midnight" colour tokens (sidebar roster, slim he
 ## Character reference
 
 The character's proportions (capsule eyes, ring badge, spherical body, state tints) were measured from Novra's public Grok Bot case study images for personal use. No images or Rive files from that study are included.
+
+## Multica (clean-room behavioural reference)
+
+Bloblex reimplements selected analytics behaviour clean-room. It includes no Multica code, text, assets, layout or other copied material. Multica is Apache-2.0 with additional conditions that forbid embedding it in distributed products and require Multica branding on derived UI; Bloblex uses it only as a behavioural reference and designs its UI independently.

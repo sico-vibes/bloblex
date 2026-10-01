@@ -1,0 +1,14 @@
+{
+  "version": "delegate-fleet.v1",
+  "lanes": {
+    "impl": {
+      "implementer": "codex",
+      "model": "gpt-6-luna",
+      "effort": "high"
+    },
+    "qa": {
+      "implementer": "opencode",
+      "model": "opencode-go/deepseek-v4.1-flash"
+    }
+  }
+}

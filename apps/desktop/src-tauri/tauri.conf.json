@@ -38,7 +38,7 @@
     "longDescription": "Manage local coding-agent runtimes and sessions from one desktop app.",
     "icon": [
       "../../../assets/icon/bloblex.ico",
-      "../../../assets/icon/bloblex.png"
+      "../../../assets/icon/bloblex-master.png"
     ],
     "resources": ["../../../THIRD_PARTY_NOTICES.md"],
     "externalBin": ["binaries/bloblexd", "binaries/bloblex-hook"],

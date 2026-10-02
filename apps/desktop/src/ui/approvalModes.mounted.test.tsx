@@ -1,0 +1,168 @@
+// @vitest-environment happy-dom
+import { act, useState, type ReactNode } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Agent, Runtime, Snapshot } from '../types'
+import type { AgentDraft } from './agentForm'
+import { BlobSettings } from './BlobSettings'
+import { ApprovalBadge, ApprovalPill, AutoApprovedList } from './approvalUi'
+import { SettingsSheet } from './SettingsSheet'
+
+const rpc = vi.hoisted(() => vi.fn())
+const policy = vi.hoisted(() => vi.fn())
+vi.mock('../tauri', () => ({
+  inDesktop: true,
+  rpc,
+  permissionsPolicyGet: policy,
+  setCompanionVisibility: vi.fn(),
+  setCloseToTray: vi.fn(),
+  setCompanionMonitor: vi.fn(),
+  companionMonitorOptions: async () => [],
+  currentCompanionMonitor: async () => null,
+}))
+vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn() }))
+
+function draft(partial: Partial<AgentDraft> = {}): AgentDraft {
+  return { name: 'Claude', description: '', instructions: '', color: 'mint', runtimeId: 'rt-1', defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null, ...partial }
+}
+
+function mount(node: ReactNode) {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root: Root = createRoot(host)
+  act(() => root.render(node))
+  return {
+    host,
+    async settle() { await act(async () => { await Promise.resolve(); await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))) }) },
+    unmount() { act(() => root.unmount()); host.remove() },
+  }
+}
+
+const views: Array<{ unmount: () => void }> = []
+afterEach(() => { for (const view of views.splice(0)) view.unmount(); rpc.mockReset(); policy.mockReset() })
+
+function PermissionsHarness() {
+  const [value, setValue] = useState(draft())
+  return <BlobSettings draft={value} runtimes={[{ id: 'rt-1', provider: 'claude', status: 'online' }]} errors={{}} execution={{ model: null, thinking: null, serviceTier: null, maxConcurrency: 1 }} onDraftChange={setValue} />
+}
+
+describe('approval mode UI', () => {
+  it('requires the exact blob name before bypass and cancels on Escape', async () => {
+    rpc.mockResolvedValue({})
+    const view = mount(<PermissionsHarness />)
+    views.push(view)
+    await view.settle()
+    const select = view.host.querySelector<HTMLSelectElement>('[aria-label="Approval mode"]')!
+    select.focus()
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, 'bypass')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await view.settle()
+    const dialog = view.host.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('approves every action without asking')
+    const confirm = [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Turn on bypass') as HTMLButtonElement
+    expect(confirm.disabled).toBe(true)
+    const input = dialog.querySelector('input') as HTMLInputElement
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'claude')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(confirm.disabled).toBe(true)
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'Claude')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(confirm.disabled).toBe(false)
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(view.host.querySelector('#bypass-dialog-title')).toBeNull()
+    expect(select.value).toBe('')
+    expect(document.activeElement).toBe(select)
+  })
+
+  it('shows shield badges only for auto and bypass', () => {
+    const view = mount(<div><ApprovalBadge mode="ask" /><ApprovalBadge mode="auto" /><ApprovalBadge mode="bypass" /><ApprovalPill mode="ask" /><ApprovalPill mode="bypass" /></div>)
+    views.push(view)
+    expect(view.host.querySelectorAll('.approval-badge')).toHaveLength(2)
+    expect(view.host.querySelector('.approval-badge-auto')?.getAttribute('aria-label')).toBe('Auto-approve')
+    expect(view.host.querySelector('.approval-badge-bypass')?.getAttribute('aria-label')).toBe('Bypass approvals')
+    expect(view.host.querySelector('.approval-pill-bypass')?.textContent).toBe('Bypass')
+    expect(view.host.querySelector('.approval-pill-ask')).toBeNull()
+  })
+
+  it('lists auto-approved actions newest first', () => {
+    const view = mount(<AutoApprovedList actions={[
+      { summary: 'Read file', category: 'READ', mode: 'auto', sequence: 1 },
+      { summary: 'Edit file', category: 'EDIT', mode: 'bypass', sequence: 4 },
+    ]} />)
+    views.push(view)
+    const items = [...view.host.querySelectorAll('.auto-approved-list li')].map((item) => item.textContent ?? '')
+    expect(items[0]).toContain('Edit file')
+    expect(items[0]).toContain('EDIT')
+    expect(items[0]).toContain('Bypass')
+    expect(items[1]).toContain('Read file')
+    expect(items[1]).toContain('Auto')
+    const empty = mount(<AutoApprovedList actions={[]} />)
+    views.push(empty)
+    expect(empty.host.textContent).toContain('No actions have been auto-approved.')
+  })
+})
+
+const agent = (partial: Partial<Agent>): Agent => ({
+  id: 'agent-1', name: 'Claude', description: '', instructions: '', color: 'mint', runtimeId: 'rt-1', model: null, thinking: null, serviceTier: null,
+  customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: '', updatedAt: '', ...partial,
+})
+
+describe('settings modal', () => {
+  it('navigates the four pages and marks start-with-Windows unavailable', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { showCompanion: true, closeToTray: true, 'companion.soundsEnabled': false } } : {})
+    policy.mockResolvedValue({ defaultMode: 'ask', perAgent: [{ agentId: 'agent-2', mode: 'bypass', effectiveMode: 'bypass' }] })
+    const snapshot: Snapshot = {
+      agents: [agent({ id: 'agent-1', name: 'Claude' }), agent({ id: 'agent-2', name: 'Risky', effectiveApprovalMode: 'bypass' })],
+      runtimes: [{ id: 'rt-1', provider: 'codex', status: 'online', authState: 'authenticated', version: '0.159.3', executablePath: 'C:\\Tools\\codex.exe' } satisfies Runtime],
+    }
+    const opened: string[] = []
+    const view = mount(<SettingsSheet snapshot={snapshot} initialPage="General" onClose={() => undefined} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={(id) => opened.push(id)} />)
+    views.push(view)
+    await view.settle()
+    const nav = [...view.host.querySelectorAll('.settings-nav button')].map((button) => button.textContent)
+    expect(nav).toEqual(['General', 'Agents', 'Runtimes', 'Permissions'])
+    expect(view.host.textContent).not.toContain('Usage & budgets')
+    expect(view.host.textContent).not.toContain('Updates')
+    const start = view.host.querySelector<HTMLButtonElement>('[aria-label="Start with Windows"]')!
+    expect(start.disabled).toBe(true)
+    expect(view.host.textContent).toContain('Unavailable')
+    expect(view.host.querySelector('[aria-label="Companion sounds"]')).not.toBeNull()
+    await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === 'Permissions')?.click() })
+    const mode = view.host.querySelector<HTMLSelectElement>('[aria-label="Default approval mode"]')!
+    expect([...mode.options].map((option) => option.value)).toEqual(['ask', 'auto'])
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(mode, 'auto')
+      mode.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await view.settle()
+    expect(rpc).toHaveBeenCalledWith('settings.set', { key: 'permissions.default_mode', value: 'auto' })
+    expect(rpc.mock.calls.some((call) => call[1]?.value === 'bypass')).toBe(false)
+    expect(view.host.textContent).toContain('Bypass is per blob only')
+    await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Risky'))?.click() })
+    expect(opened).toEqual(['agent-2'])
+    await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === 'Runtimes')?.click() })
+    expect(view.host.textContent).toContain('Auth Authenticated')
+    expect(view.host.textContent).not.toMatch(/token|credential|secret/i)
+    await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === 'Agents')?.click() })
+    await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Claude'))?.click() })
+    expect(opened).toEqual(['agent-2', 'agent-1'])
+  })
+
+  it('disables the global default when the policy cannot be loaded', async () => {
+    rpc.mockResolvedValue({ settings: {} })
+    policy.mockRejectedValue(new Error('unsupported: not ready'))
+    const view = mount(<SettingsSheet snapshot={{ agents: [] }} initialPage="Permissions" onClose={() => undefined} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />)
+    views.push(view)
+    await view.settle()
+    const mode = view.host.querySelector<HTMLSelectElement>('[aria-label="Default approval mode"]')!
+    expect(mode.disabled).toBe(true)
+    expect(view.host.textContent).toContain('Unavailable')
+    expect(rpc).not.toHaveBeenCalledWith('settings.set', expect.anything())
+  })
+})

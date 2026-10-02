@@ -1,3 +1,5 @@
+import type { ApprovalMode } from '../approvalContract'
+import type { ExecutionSendGate } from '../executionContract'
 import type { Agent, Runtime } from '../types'
 import { colorForRpc, colorsEquivalent, parseCustomHex, swatchForColor } from './agentColor'
 import { runtimeUsable, scalarLength } from './rosterSelectors'
@@ -9,6 +11,17 @@ export interface AgentDraft {
   color: string
   runtimeId: string
   defaultProject: string | null
+  model: string | null
+  thinking: string | null
+  serviceTier: string | null
+  approvalMode: ApprovalMode | null
+}
+
+const CLOSED_GATE: ExecutionSendGate = { model: false, thinking: false, serviceTier: false }
+
+function nullableText(value: string | null | undefined) {
+  const trimmed = value?.trim() ?? ''
+  return trimmed ? trimmed : null
 }
 
 export const CLIENT_MESSAGES = {
@@ -39,6 +52,10 @@ export function draftFromAgent(agent: Agent): AgentDraft {
     color: agent.color,
     runtimeId: agent.runtimeId,
     defaultProject: agent.defaultProject,
+    model: agent.model,
+    thinking: agent.thinking,
+    serviceTier: agent.serviceTier,
+    approvalMode: agent.approvalMode ?? null,
   }
 }
 
@@ -48,7 +65,7 @@ export function createDraft(runtimes: readonly Runtime[], selectedRuntimeId: str
     ?? runtimes.find((runtime) => runtimeUsable(runtime))?.id
     ?? runtimes[0]?.id
     ?? ''
-  return { name: '', description: '', instructions: '', color: 'mint', runtimeId, defaultProject: null }
+  return { name: '', description: '', instructions: '', color: 'mint', runtimeId, defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null }
 }
 
 export function isAgentDirty(draft: AgentDraft, baseline: AgentDraft) {
@@ -58,6 +75,10 @@ export function isAgentDirty(draft: AgentDraft, baseline: AgentDraft) {
     || !colorsEquivalent(draft.color, baseline.color)
     || draft.runtimeId !== baseline.runtimeId
     || normalizeProject(draft.defaultProject) !== normalizeProject(baseline.defaultProject)
+    || nullableText(draft.model) !== nullableText(baseline.model)
+    || nullableText(draft.thinking) !== nullableText(baseline.thinking)
+    || nullableText(draft.serviceTier) !== nullableText(baseline.serviceTier)
+    || (draft.approvalMode ?? null) !== (baseline.approvalMode ?? null)
 }
 
 export function validateAgentDraft(draft: AgentDraft, otherActiveNames: readonly string[]): FieldErrors {
@@ -77,8 +98,8 @@ export function draftReady(draft: AgentDraft, otherActiveNames: readonly string[
   return Object.keys(validateAgentDraft(draft, otherActiveNames)).length === 0
 }
 
-export function createParams(draft: AgentDraft): Record<string, unknown> {
-  return {
+export function createParams(draft: AgentDraft, gate: ExecutionSendGate = CLOSED_GATE): Record<string, unknown> {
+  const params: Record<string, unknown> = {
     name: draft.name.trim(),
     runtimeId: draft.runtimeId,
     description: draft.description,
@@ -86,6 +107,11 @@ export function createParams(draft: AgentDraft): Record<string, unknown> {
     color: colorForRpc(draft.color),
     defaultProject: normalizeProject(draft.defaultProject),
   }
+  if (gate.model && nullableText(draft.model)) params.model = nullableText(draft.model)
+  if (gate.thinking && nullableText(draft.thinking)) params.thinking = nullableText(draft.thinking)
+  if (gate.serviceTier && nullableText(draft.serviceTier)) params.serviceTier = nullableText(draft.serviceTier)
+  if (draft.approvalMode) params.approvalMode = draft.approvalMode
+  return params
 }
 
 export function duplicateParams(source: Agent, name: string): Record<string, unknown> {
@@ -102,10 +128,11 @@ export function duplicateParams(source: Agent, name: string): Record<string, unk
     customEnv: source.customEnv,
     maxConcurrency: source.maxConcurrency,
     defaultProject: source.defaultProject,
+    ...(source.approvalMode ? { approvalMode: source.approvalMode } : {}),
   }
 }
 
-export function updateParams(agentId: string, draft: AgentDraft, baseline: AgentDraft): Record<string, unknown> {
+export function updateParams(agentId: string, draft: AgentDraft, baseline: AgentDraft, gate: ExecutionSendGate = CLOSED_GATE): Record<string, unknown> {
   const params: Record<string, unknown> = { agentId }
   if (draft.name !== baseline.name) params.name = draft.name.trim()
   if (draft.description !== baseline.description) params.description = draft.description
@@ -113,6 +140,10 @@ export function updateParams(agentId: string, draft: AgentDraft, baseline: Agent
   if (!colorsEquivalent(draft.color, baseline.color)) params.color = colorForRpc(draft.color)
   if (draft.runtimeId !== baseline.runtimeId) params.runtimeId = draft.runtimeId
   if (normalizeProject(draft.defaultProject) !== normalizeProject(baseline.defaultProject)) params.defaultProject = normalizeProject(draft.defaultProject)
+  if (gate.model && nullableText(draft.model) !== nullableText(baseline.model)) params.model = nullableText(draft.model)
+  if (gate.thinking && nullableText(draft.thinking) !== nullableText(baseline.thinking)) params.thinking = nullableText(draft.thinking)
+  if (gate.serviceTier && nullableText(draft.serviceTier) !== nullableText(baseline.serviceTier)) params.serviceTier = nullableText(draft.serviceTier)
+  if ((draft.approvalMode ?? null) !== (baseline.approvalMode ?? null)) params.approvalMode = draft.approvalMode
   return params
 }
 

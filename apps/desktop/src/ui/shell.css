@@ -97,6 +97,11 @@
 .model-pill:hover { background: var(--raised); }
 .model-pill-mark { width: 16px; height: 16px; flex: 0 0 auto; border-radius: 50%; box-shadow: inset -2px -3px 4px #0003, inset 2px 2px 3px #fff6; }
 .model-pill-model { min-width: 0; overflow: hidden; color: var(--ink-2); text-overflow: ellipsis; }
+.approval-badge { display: inline-flex; flex: 0 0 auto; color: var(--ink-2); }
+.approval-badge-bypass { color: #e2b15a; }
+.approval-pill { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--raised); color: var(--ink-2); font-size: 11px; }
+.approval-pill-bypass { background: #3a3120; color: #e7d7b4; }
+.approval-pill.compact { height: 16px; padding: 0 6px; font-size: 10px; }
 .more-menu-wrap { position: relative; }
 .more-menu { position: absolute; z-index: 25; top: calc(100% + 6px); right: 0; width: 190px; padding: 5px; display: grid; gap: 2px; border: 1px solid #ffffff12; border-radius: 12px; background: #262626; box-shadow: 0 14px 36px #000a; }
 .more-menu button { min-height: 32px; padding: 0 9px; display: flex; align-items: center; gap: 9px; color: var(--ink); border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 12.5px; }

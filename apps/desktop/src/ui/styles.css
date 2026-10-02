@@ -176,9 +176,9 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .settings-sheet { width: min(890px, calc(100vw - 40px)); height: min(740px, calc(100vh - 40px)); overflow: hidden; border: 1px solid #41434b; border-radius: 15px; background: #191b20; box-shadow: 0 20px 80px #0008; animation: sheet-in 180ms ease-out; }
 .settings-header { height: 66px; padding: 14px 19px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-soft); }
 .settings-header h2 { margin: 3px 0 0; font-size: 16px; font-weight: 650; }
-.settings-layout { height: calc(100% - 66px); display: grid; grid-template-columns: 180px minmax(0, 1fr); }
+.settings-layout { height: calc(100% - 66px); display: grid; grid-template-columns: 200px minmax(0, 1fr); }
 .settings-nav { padding: 15px 10px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--line-soft); background: #15171b; }
-.settings-nav button { min-height: 36px; padding: 0 10px; color: var(--muted); border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 12px; }
+.settings-nav button { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 8px; color: var(--muted); border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 12px; }
 .settings-nav button:hover { color: var(--text); background: #ffffff08; }
 .settings-nav button.selected { color: var(--text); background: #2a2d34; }
 .settings-content { padding: 18px 23px 28px; overflow: auto; scrollbar-width: thin; scrollbar-color: #383c44 transparent; }
@@ -190,6 +190,21 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .settings-row > span:first-child { display: grid; gap: 5px; }
 .settings-row strong { color: #d8dbe2; font-size: 12px; font-weight: 620; }
 .settings-row small { color: var(--muted); font-size: 11px; }
+.settings-group { margin: 0 0 18px; }
+.settings-group > h3 { margin: 0 0 8px; color: #e1e3e9; font-size: 13px; font-weight: 650; }
+.settings-card { display: grid; border: 1px solid var(--line-soft); border-radius: 12px; background: #202228; overflow: hidden; }
+.settings-card-row { min-height: 52px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-card-row + .settings-card-row, .settings-card-form { border-top: 1px solid #ffffff10; }
+.settings-card-row > span:first-child, .settings-card-row > span:nth-child(2):not(.settings-card-control) { min-width: 0; display: grid; gap: 3px; }
+.settings-card-row strong { color: #e0e3e9; font-size: 12px; font-weight: 620; }
+.settings-card-row small { color: var(--muted); font-size: 11px; }
+.settings-card-control { display: flex; align-items: center; gap: 8px; }
+.settings-link-row { width: 100%; color: inherit; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.settings-link-row:hover, .settings-link-row:focus-visible { background: #ffffff08; }
+.settings-card-form { padding: 12px 14px; display: grid; gap: 10px; }
+.settings-card-form label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
+.settings-card-form input, .settings-card-form select, .pill-select { min-width: 0; height: 30px; padding: 0 12px; color: var(--text); border: 1px solid #41444d; border-radius: 999px; background: #15171b; font-size: 12px; }
+.settings-card-form input { width: 100%; }
 .setting-value { color: #bbc1cb; font-size: 11px; }
 .settings-select { min-width: 190px; max-width: 260px; height: 31px; padding: 0 9px; color: var(--text); border: 1px solid #41444d; border-radius: 6px; background: #15171b; font-size: 12px; }
 .toggle { width: 36px; height: 21px; padding: 2px; display: flex; align-items: center; border: 1px solid #595d66; border-radius: 999px; background: #34373e; transition: background 160ms ease; }
@@ -247,7 +262,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 780px) {
   .settings-sheet { width: calc(100vw - 22px); height: calc(100vh - 22px); }
-  .settings-layout { grid-template-columns: 132px minmax(0, 1fr); }
+  .settings-layout { grid-template-columns: 200px minmax(0, 1fr); }
   .settings-content { padding: 15px; }
 }
 @media (prefers-reduced-motion: reduce) {

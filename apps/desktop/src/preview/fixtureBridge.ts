@@ -212,6 +212,9 @@ export async function setCompanionMode(mode: string) {
     .companion-root { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); width: ${width}px !important; height: ${height}px !important; transition: width .34s, height .34s; }`
 }
 export async function quitBloblex() {}
+export async function permissionsPolicyGet() {
+  return { defaultMode: 'ask' as const, perAgent: [] }
+}
 export async function listenForActiveSession(): Promise<Unlisten> { return noop }
 export async function listenForActiveRuntime(): Promise<Unlisten> { return noop }
 export async function listenForOpenSettings(): Promise<Unlisten> { return noop }

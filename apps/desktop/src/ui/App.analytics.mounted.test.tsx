@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../tauri', () => ({
   inDesktop: true,
   rpc: h.rpc,
+  permissionsPolicyGet: async () => ({ defaultMode: 'ask', perAgent: [] }),
   fetchSnapshot: h.fetchSnapshot,
   ensureDaemon: h.ensureDaemon,
   startDaemonEventStream: h.startDaemonEventStream,

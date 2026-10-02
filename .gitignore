@@ -4,3 +4,4 @@ apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/binaries/bloblexd-*.exe
 target/
 *.log
+*.tsbuildinfo

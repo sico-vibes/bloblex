@@ -3,6 +3,9 @@
 // value below is a visual fixture, not product data.
 import type { Agent, DaemonEvent, Runtime, Session, Snapshot } from '../types'
 import { answerUsageAnalytics } from '../ui/analyticsFixtures'
+import { normalizeAnalytics } from '../ui/analyticsFormat'
+import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from '../executionContract'
+import type { UsageAnalyticsRequest } from '../analyticsTypes'
 import { parseUpdateChannel, type UpdateChannel, type UpdateInfo, type UpdateProgress, type UpdatesState } from '../updatesContract'
 
 type Unlisten = () => void
@@ -318,4 +321,25 @@ export async function listenForUpdateAvailable(handler: (info: UpdateInfo) => vo
 export async function listenForUpdateProgress(handler: (progress: UpdateProgress) => void): Promise<Unlisten> {
   updateProgressHandlers.add(handler)
   return () => { updateProgressHandlers.delete(handler) }
+}
+
+export async function runtimeCapabilities(runtimeId: string, agentId?: string) {
+  return parseCapabilities(await rpc('runtime.capabilities', agentId ? { runtimeId, agentId } : { runtimeId }))
+}
+
+export async function runtimeModels(runtimeId: string, refresh = false) {
+  return parseModelCatalog(await rpc('runtime.models', refresh ? { runtimeId, refresh: true } : { runtimeId }))
+}
+
+export async function execSnapshotLatest(sessionId: string) {
+  return parseExecSnapshot(await rpc('exec.snapshot.latest', { sessionId }))
+}
+
+export async function fetchUsageAnalytics(request: UsageAnalyticsRequest) {
+  const params: Record<string, unknown> = { from: request.from, to: request.to, bucket: request.bucket, tz: request.tz }
+  if (request.projectPath) params.projectPath = request.projectPath
+  if (request.agentId) params.agentId = request.agentId
+  const parsed = normalizeAnalytics(await rpc('usage.analytics', params))
+  if (!parsed) throw new Error('internal: Usage analytics could not be loaded.')
+  return parsed
 }

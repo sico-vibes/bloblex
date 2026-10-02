@@ -1,22 +1,28 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { emit } from '@tauri-apps/api/event'
-import { Bot, Check, Cpu, Plus, RefreshCw, Shield, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
-import type { Agent, Runtime, Snapshot } from '../types'
-import { labelize, providerColor } from '../types'
-import { parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
+import { Bot, Check, ChevronDown, ChevronRight, Download, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
+import type { Agent, Snapshot } from '../types'
+import { labelize } from '../types'
+import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
 import { companionMonitorOptions, currentCompanionMonitor, inDesktop, permissionsPolicyGet, rpc, setCloseToTray, setCompanionMonitor, setCompanionVisibility } from '../tauri'
-import { appVersion } from '../appRelease'
+import { agentColorHex } from './agentColor'
 import { useDialogAccessibility } from './dialogFocus'
+import { Select } from './Select'
 import { UpdatesPanel } from './UpdatesPanel'
 
-export type SettingsPageId = 'General' | 'Agents' | 'Runtimes' | 'Permissions'
+export type SettingsPageId = 'General' | 'Agents' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
   { id: 'Agents', label: 'Agents', icon: Bot },
-  { id: 'Runtimes', label: 'Runtimes', icon: Cpu },
-  { id: 'Permissions', label: 'Permissions', icon: Shield },
+  { id: 'Updates', label: 'Updates', icon: Download },
 ]
+
+const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
+
+export function providerDisplayName(provider: string | undefined) {
+  return PROVIDER_NAMES[(provider ?? '').toLowerCase()] ?? labelize(provider, 'Coding agent')
+}
 
 export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onError, onOpenAgent, focusUpdates = false }: {
   snapshot: Snapshot | null
@@ -28,7 +34,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   focusUpdates?: boolean
 }) {
   const dialogRef = useDialogAccessibility(onClose)
-  const [page, setPage] = useState<SettingsPageId>(initialPage)
+  const [page, setPage] = useState<SettingsPageId>(focusUpdates ? 'Updates' : initialPage)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [profiles, setProfiles] = useState<Record<string, unknown>[]>([])
@@ -46,9 +52,11 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   const [profileProtocol, setProfileProtocol] = useState('codex_app_server')
   const [profilePath, setProfilePath] = useState('')
   const [profileArgs, setProfileArgs] = useState('[]')
+  const [launcherFormOpen, setLauncherFormOpen] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [defaultMode, setDefaultMode] = useState<'ask' | 'auto'>('ask')
+  const [openRuntimes, setOpenRuntimes] = useState<Record<string, boolean>>({})
 
   const load = useCallback(async () => {
     if (!inDesktop) return
@@ -87,68 +95,50 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   useEffect(() => { void load() }, [load])
 
   useEffect(() => {
-    if (!focusUpdates || loading || page !== 'General') return
+    if (!focusUpdates || loading || page !== 'Updates') return
     const frame = requestAnimationFrame(() => {
       dialogRef.current?.querySelector<HTMLElement>('[data-settings-section="updates"]')?.scrollIntoView?.({ block: 'nearest' })
     })
     return () => cancelAnimationFrame(frame)
   }, [focusUpdates, loading, page])
 
-  const setCompanion = async (visible: boolean) => {
+  const guarded = async (action: () => Promise<void>) => {
     setSaving(true)
     setFormError(null)
-    try { await setCompanionVisibility(visible); setCompanionVisible(visible) }
-    catch (reason) { setFormError(messageOf(reason)) }
+    try { await action() }
+    catch (reason) { const message = messageOf(reason); setFormError(message); return message }
     finally { setSaving(false) }
+    return null
   }
 
-  const updateCloseToTray = async (enabled: boolean) => {
-    setSaving(true)
-    setFormError(null)
-    try { await setCloseToTray(enabled); setCloseToTrayValue(enabled) }
-    catch (reason) { setFormError(messageOf(reason)) }
-    finally { setSaving(false) }
-  }
-
-  const updateCompanionMonitor = async (monitorName: string) => {
-    setSaving(true)
-    setFormError(null)
-    try { await setCompanionMonitor(monitorName); setCompanionMonitorValue(monitorName); setNotice(`Companion moved to ${monitorName}.`) }
-    catch (reason) { setFormError(messageOf(reason)) }
-    finally { setSaving(false) }
-  }
+  const setCompanion = (visible: boolean) => guarded(async () => { await setCompanionVisibility(visible); setCompanionVisible(visible) })
+  const updateCloseToTray = (enabled: boolean) => guarded(async () => { await setCloseToTray(enabled); setCloseToTrayValue(enabled) })
+  const updateCompanionMonitor = (monitorName: string) => guarded(async () => {
+    await setCompanionMonitor(monitorName)
+    setCompanionMonitorValue(monitorName)
+    setNotice(`Companion moved to ${monitorName}.`)
+  })
 
   const setSounds = async (enabled: boolean) => {
     setSoundsEnabled(enabled)
-    setSaving(true)
-    setFormError(null)
-    try {
+    const failure = await guarded(async () => {
       await rpc('settings.set', { key: 'companion.soundsEnabled', value: enabled })
       try { await emit('bloblex-sounds-changed', enabled) } catch { /* the companion hydrates the saved value on its next connection */ }
       setNotice(enabled ? 'Companion sounds enabled.' : 'Companion sounds muted.')
-    } catch (reason) {
-      const message = messageOf(reason)
-      setSoundsEnabled(!enabled)
-      setFormError(message)
-      onError(message)
-    } finally { setSaving(false) }
+    })
+    if (failure) { setSoundsEnabled(!enabled); onError(failure) }
   }
 
   const saveDefaultMode = async (value: string) => {
     const mode = parseGlobalMode(value)
     if (value !== 'ask' && value !== 'auto') return
-    setSaving(true)
-    setFormError(null)
-    try {
+    const failure = await guarded(async () => {
       await rpc('settings.set', { key: 'permissions.default_mode', value: mode })
       setDefaultMode(mode)
-      setNotice(mode === 'auto' ? 'New blobs inherit Auto-approve.' : 'New blobs inherit Ask.')
+      setNotice(mode === 'auto' ? 'Blobs without their own setting now auto-approve low-risk actions.' : 'Blobs without their own setting now ask first.')
       onError(null)
-    } catch (reason) {
-      const message = messageOf(reason)
-      setFormError(message)
-      onError(message)
-    } finally { setSaving(false) }
+    })
+    if (failure) onError(failure)
   }
 
   const saveEditor = async (event: FormEvent) => {
@@ -156,15 +146,13 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
     let args: unknown
     try { args = JSON.parse(editorArgs) } catch { setFormError('Editor arguments must be a JSON array of strings.'); return }
     if (!Array.isArray(args) || !args.every((argument) => typeof argument === 'string')) { setFormError('Editor arguments must be a JSON array of strings.'); return }
-    setSaving(true)
-    setFormError(null)
-    try {
+    const failure = await guarded(async () => {
       await rpc('settings.set', { key: 'editorExecutable', value: editorExecutable.trim() })
       await rpc('settings.set', { key: 'editorArgs', value: args })
-      setNotice('Editor preference saved.')
+      setNotice('Editor saved.')
       onError(null)
-    } catch (reason) { const message = messageOf(reason); setFormError(message); onError(message) }
-    finally { setSaving(false) }
+    })
+    if (failure) onError(failure)
   }
 
   const saveProfile = async (event: FormEvent) => {
@@ -172,129 +160,185 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
     let args: unknown
     try { args = JSON.parse(profileArgs) } catch { setFormError('Fixed arguments must be a valid JSON array of strings.'); return }
     if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) { setFormError('Fixed arguments must be a valid JSON array of strings.'); return }
-    setSaving(true)
-    setFormError(null)
-    try {
+    const failure = await guarded(async () => {
       await rpc('runtime.profile.save', { profile: { name: profileName, provider: profileProvider, protocolFamily: profileProtocol, executablePath: profilePath, args, workingDirectoryPolicy: 'per_session' } })
       setProfileName('')
       setProfilePath('')
       setProfileArgs('[]')
-      setNotice('Profile saved.')
+      setLauncherFormOpen(false)
+      setNotice('Launcher saved.')
       onError(null)
       await load()
-    } catch (reason) { const message = messageOf(reason); setFormError(message); onError(message) }
-    finally { setSaving(false) }
+    })
+    if (failure) onError(failure)
   }
 
-  const deleteProfile = async (profileId: string) => {
-    setSaving(true)
-    try { await rpc('runtime.profile.delete', { profileId }); setNotice('Runtime profile removed.'); await load() }
-    catch (reason) { setFormError(messageOf(reason)) }
-    finally { setSaving(false) }
-  }
+  const deleteProfile = (profileId: string) => guarded(async () => {
+    await rpc('runtime.profile.delete', { profileId })
+    setNotice('Launcher removed.')
+    await load()
+  })
 
+  const runtimes = snapshot?.runtimes ?? []
   const agents = (snapshot?.agents ?? []).filter((agent) => !agent.archived)
-  const exceptions = (policy?.perAgent ?? []).filter((row) => row.effectiveMode !== 'ask')
+  const orphanAgents = agents.filter((agent) => !runtimes.some((runtime) => runtime.id === agent.runtimeId))
+  const modeFor = (agent: Agent) => policy?.perAgent.find((row) => row.agentId === agent.id)?.effectiveMode ?? effectiveApprovalMode(agent) ?? defaultMode
+  const switchPage = (next: SettingsPageId) => { setPage(next); setFormError(null); setNotice(null) }
 
-  return <div className="sheet-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
-    <header className="settings-header"><div><p className="eyebrow">BLOBLEX</p><h2 id="settings-title">Settings</h2></div><button className="icon-button" data-dialog-initial-focus aria-label="Close settings" onClick={onClose}><X size={17} aria-hidden="true" /></button></header>
-    <div className="settings-layout"><nav className="settings-nav" aria-label="Settings pages">{PAGES.map((item) => <button className={page === item.id ? 'selected' : ''} key={item.id} aria-current={page === item.id ? 'page' : undefined} onClick={() => { setPage(item.id); setFormError(null); setNotice(null) }}><item.icon size={15} aria-hidden="true" />{item.label}</button>)}</nav>
-      <div className="settings-content">
-        {formError && <div className="inline-error settings-error" role="alert"><ShieldAlert size={15} /><span>{formError}</span></div>}
-        {notice && <div className="settings-success" role="status"><Check size={14} />{notice}</div>}
-        {loading && <div className="settings-loading"><span>Loading saved settings…</span></div>}
-        {!loading && page === 'General' && <>
-          <SettingsGroup title="System">
-            <CardRow label="Start with Windows">
-              <span className="setting-value">Unavailable</span>
-              <button type="button" className="toggle" role="switch" aria-label="Start with Windows" aria-checked={false} disabled><i /></button>
-            </CardRow>
-            <CardRow label="Close to tray" hint="Closing the main window hides Bloblex and keeps the tray controls.">
-              <button className={`toggle ${closeToTray ? 'on' : ''}`} role="switch" aria-label="Close to tray" aria-checked={closeToTray} onClick={() => void updateCloseToTray(!closeToTray)} disabled={saving}><i /></button>
-            </CardRow>
-            <CardRow label="Companion monitor" hint="Moves the companion to the bottom center of a connected display.">
-              <select className="pill-select" aria-label="Companion monitor" value={companionMonitor ?? ''} onChange={(event) => void updateCompanionMonitor(event.target.value)} disabled={saving || monitors.length === 0}>{monitors.length === 0 ? <option value="">No displays reported</option> : monitors.map((monitor) => <option key={monitor} value={monitor}>{monitor}</option>)}</select>
-            </CardRow>
-          </SettingsGroup>
-          <SettingsGroup title="Companion">
-            <CardRow label="Show companion">
-              <button className={`toggle ${companionVisible ? 'on' : ''}`} role="switch" aria-label="Show companion" aria-checked={companionVisible} onClick={() => void setCompanion(!companionVisible)} disabled={saving}><i /></button>
-            </CardRow>
-            <CardRow label="Sounds" hint="Optional original cues. Muted until you enable them.">
-              <button className={`toggle ${soundsEnabled ? 'on' : ''}`} role="switch" aria-label="Companion sounds" aria-checked={soundsEnabled} onClick={() => void setSounds(!soundsEnabled)} disabled={saving}><i /></button>
-            </CardRow>
-          </SettingsGroup>
-          <SettingsGroup title="About">
-            <div className="settings-about" data-settings-about>
-              <p>Version: {appVersion || 'Unknown'}</p>
-              <p>Channel: local build</p>
-              <p>Signing: not configured</p>
-            </div>
-          </SettingsGroup>
-          <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />
-          <SettingsGroup title="Editor">
-            <form className="settings-card-form" onSubmit={(event) => void saveEditor(event)}>
-              <label>Editor executable<input aria-label="Editor executable" value={editorExecutable} onChange={(event) => setEditorExecutable(event.target.value)} placeholder="C:\\Program Files\\Microsoft VS Code\\Code.exe" /></label>
-              <label>Arguments (JSON array; {'{file}'} and {'{project}'} placeholders)<input aria-label="Editor arguments" value={editorArgs} onChange={(event) => setEditorArgs(event.target.value)} spellCheck={false} /></label>
-              <button className="primary-button" disabled={saving}><Check size={14} />Save editor</button>
-            </form>
-          </SettingsGroup>
-        </>}
-        {!loading && page === 'Agents' && <SettingsGroup title="Blobs">
-          {agents.length === 0 ? <p className="settings-data-empty">No blobs yet.</p> : <div className="settings-card">{agents.map((agent) => <button type="button" className="settings-card-row settings-link-row" key={agent.id} onClick={() => onOpenAgent(agent.id)}><span><strong>{agent.name}</strong><small>{agentLabel(agent, snapshot?.runtimes ?? [])}</small></span><span>Open</span></button>)}</div>}
-        </SettingsGroup>}
-        {!loading && page === 'Runtimes' && <>
-          <SettingsGroup title="Detected CLIs">
-            <RuntimeSettingsList runtimes={snapshot?.runtimes ?? []} />
-            <button className="secondary-button settings-action" onClick={onRefresh} disabled={saving}><RefreshCw size={14} />Refresh detected runtimes</button>
-          </SettingsGroup>
-          <SettingsGroup title="Launcher profiles">
-            {profiles.length === 0 ? <p className="settings-data-empty">No custom profiles saved.</p> : <div className="settings-card">{profiles.map((profile, index) => <div className="settings-card-row" key={String(profile.id ?? index)}><span><strong>{String(profile.name ?? profile.provider ?? 'Runtime profile')}</strong><small>{labelize(profile.protocolFamily)} · {String(profile.executablePath ?? 'Executable unavailable')}</small></span>{typeof profile.id === 'string' && <button type="button" className="settings-row-action danger" onClick={() => void deleteProfile(profile.id as string)}>Remove</button>}</div>)}</div>}
-            <form className="settings-card-form" onSubmit={(event) => void saveProfile(event)}>
-              <label>Profile name<input aria-label="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} required /></label>
-              <label>Provider<select aria-label="Profile provider" value={profileProvider} onChange={(event) => { setProfileProvider(event.target.value); setProfileProtocol(event.target.value === 'claude' ? 'claude_stream' : event.target.value === 'opencode' ? 'acp' : 'codex_app_server') }}><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="opencode">OpenCode</option></select></label>
-              <label>Protocol<select aria-label="Profile protocol" value={profileProtocol} onChange={(event) => setProfileProtocol(event.target.value)}><option value="claude_stream">Claude stream</option><option value="codex_app_server">Codex app-server</option><option value="acp">ACP</option></select></label>
-              <label>Executable path<input aria-label="Profile executable" value={profilePath} onChange={(event) => setProfilePath(event.target.value)} required /></label>
-              <label>Fixed arguments, JSON array<input aria-label="Profile arguments" value={profileArgs} onChange={(event) => setProfileArgs(event.target.value)} spellCheck={false} /></label>
-              <button className="primary-button" disabled={saving}><Plus size={14} />Save profile</button>
-            </form>
-          </SettingsGroup>
-        </>}
-        {!loading && page === 'Permissions' && <SettingsGroup title="Default approval">
-          {policyError ? <CardRow label="Default approval"><span className="setting-value">Unavailable</span><select className="pill-select" aria-label="Default approval mode" disabled value="ask"><option value="ask">Ask</option></select></CardRow> : <CardRow label="Default approval" hint="Ask waits for you. Auto-approve allows low-risk actions inside the project. Bypass is per blob only and cannot be the default.">
-            <select className="pill-select" aria-label="Default approval mode" value={defaultMode} disabled={saving} onChange={(event) => void saveDefaultMode(event.target.value)}>
-              <option value="ask">Ask</option>
-              <option value="auto">Auto-approve</option>
-            </select>
-          </CardRow>}
-          <p className="settings-intro">Bypass is per blob only. It is never the default for every blob.</p>
-          <h3>Blobs not using Ask</h3>
-          {exceptions.length === 0 ? <p className="settings-data-empty">Every reported blob is using Ask.</p> : <div className="settings-card">{exceptions.map((row) => {
-            const agent = agents.find((item) => item.id === row.agentId)
-            return <button type="button" className="settings-card-row settings-link-row" key={row.agentId} onClick={() => onOpenAgent(row.agentId)}><span><strong>{agent?.name ?? row.agentId}</strong><small>{row.effectiveMode === 'bypass' ? 'Bypass' : 'Auto-approve'}</small></span><span>Open blob</span></button>
-          })}</div>}
-        </SettingsGroup>}
-      </div>
-    </div>
-  </section></div>
+  return <div className="sheet-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-label="Settings" tabIndex={-1}>
+      <header className="settings-page-head">
+        <h2 id="settings-title">{page}</h2>
+        <button type="button" className="icon-button" data-dialog-initial-focus aria-label="Close settings" onClick={onClose}><X size={17} aria-hidden="true" /></button>
+      </header>
+      <nav className="settings-nav" aria-label="Settings pages">
+        {PAGES.map((item) => <button type="button" className={page === item.id ? 'selected' : ''} key={item.id} aria-current={page === item.id ? 'page' : undefined} onClick={() => switchPage(item.id)}><item.icon size={16} aria-hidden="true" />{item.label}</button>)}
+      </nav>
+        <div className="settings-content">
+          {formError && <div className="settings-banner error" role="alert"><ShieldAlert size={15} /><span>{formError}</span></div>}
+          {notice && <div className="settings-banner" role="status"><Check size={14} /><span>{notice}</span></div>}
+          {loading && <div className="settings-loading">Loading settings…</div>}
+
+          {!loading && page === 'General' && <>
+            <SettingsGroup title="System">
+              <SettingsRow label="Start with Windows" hint="Not available yet.">
+                <button type="button" className="toggle" role="switch" aria-label="Start with Windows" aria-checked={false} disabled><i /></button>
+              </SettingsRow>
+              <SettingsRow label="Close to tray" hint="Closing the window keeps Bloblex running in the tray.">
+                <button type="button" className={`toggle ${closeToTray ? 'on' : ''}`} role="switch" aria-label="Close to tray" aria-checked={closeToTray} onClick={() => void updateCloseToTray(!closeToTray)} disabled={saving}><i /></button>
+              </SettingsRow>
+              <SettingsRow label="Companion display" hint="The companion starts at the bottom center of this display.">
+                <Select ariaLabel="Companion monitor" variant="muted" value={companionMonitor ?? ''} disabled={saving || monitors.length === 0} placeholder="No displays reported" onChange={(value) => void updateCompanionMonitor(value)} options={monitors.map((monitor) => ({ value: monitor, label: monitorLabel(monitor) }))} />
+              </SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup title="Companion">
+              <SettingsRow label="Show companion">
+                <button type="button" className={`toggle ${companionVisible ? 'on' : ''}`} role="switch" aria-label="Show companion" aria-checked={companionVisible} onClick={() => void setCompanion(!companionVisible)} disabled={saving}><i /></button>
+              </SettingsRow>
+              <SettingsRow label="Sounds" hint="Short cues when a blob finishes, fails or needs approval.">
+                <button type="button" className={`toggle ${soundsEnabled ? 'on' : ''}`} role="switch" aria-label="Companion sounds" aria-checked={soundsEnabled} onClick={() => void setSounds(!soundsEnabled)} disabled={saving}><i /></button>
+              </SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup title="Editor">
+              <form className="settings-form" onSubmit={(event) => void saveEditor(event)}>
+                <label className="settings-field"><span>Editor executable</span><input className="text-input" aria-label="Editor executable" value={editorExecutable} onChange={(event) => setEditorExecutable(event.target.value)} placeholder="Notepad is used when this is empty" /></label>
+                <label className="settings-field"><span>Arguments <small>JSON array, {'{file}'} and {'{project}'} are replaced</small></span><input className="text-input mono" aria-label="Editor arguments" value={editorArgs} onChange={(event) => setEditorArgs(event.target.value)} spellCheck={false} /></label>
+                <div className="settings-form-actions"><button className="primary-button small" disabled={saving}>Save editor</button></div>
+              </form>
+            </SettingsGroup>
+          </>}
+
+          {!loading && page === 'Agents' && <>
+            <p className="settings-intro">Bloblex runs the coding agents installed on this device. Sign in with each agent's own command line tool; Bloblex never handles your provider login.</p>
+            <SettingsGroup title="Approvals">
+              <SettingsRow label="Default approval" hint="Ask waits for you. Auto-approve allows low-risk actions inside the project. Bypass can only be turned on for a single blob.">
+                {policyError
+                  ? <span className="settings-unavailable"><span className="settings-value">Unavailable</span><Select ariaLabel="Default approval mode" variant="muted" value="ask" disabled onChange={() => undefined} options={[{ value: 'ask', label: 'Ask' }]} /></span>
+                  : <Select ariaLabel="Default approval mode" variant="muted" value={defaultMode} disabled={saving} onChange={(value) => void saveDefaultMode(value)} options={[{ value: 'ask', label: 'Ask' }, { value: 'auto', label: 'Auto-approve' }]} />}
+              </SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup title="Coding agents" action={<button type="button" className="ghost-button small" onClick={onRefresh} disabled={saving}><RefreshCw size={13} />Scan again</button>}>
+              {runtimes.length === 0 && <p className="settings-empty">No coding agents found on this device.</p>}
+              {runtimes.map((runtime) => {
+                const open = openRuntimes[runtime.id] === true
+                const owned = agents.filter((agent) => agent.runtimeId === runtime.id)
+                return <div className={`runtime-entry ${open ? 'open' : ''}`} key={runtime.id}>
+                  <button type="button" className="settings-row runtime-entry-head" aria-expanded={open} onClick={() => setOpenRuntimes((current) => ({ ...current, [runtime.id]: !open }))}>
+                    <span className="runtime-mark" aria-hidden="true">{providerDisplayName(runtime.provider).slice(0, 1)}</span>
+                    <span className="settings-row-copy"><strong>{providerDisplayName(runtime.provider)}</strong><small>{[runtime.version, signInLabel(runtime.authState)].filter(Boolean).join(' · ') || 'Details unavailable'}</small></span>
+                    <span className="settings-value">{owned.length === 1 ? '1 blob' : `${owned.length} blobs`}</span>
+                    {open ? <ChevronDown size={15} className="row-chevron" aria-hidden="true" /> : <ChevronRight size={15} className="row-chevron" aria-hidden="true" />}
+                  </button>
+                  {open && <div className="runtime-entry-body">
+                    <dl className="settings-facts">
+                      <div><dt>Status</dt><dd>{labelize(runtime.status, 'Unknown')}</dd></div>
+                      <div><dt>Sign-in</dt><dd>{labelize(runtime.authState, 'Unknown')}</dd></div>
+                      <div><dt>Protocol</dt><dd>{labelize(runtime.protocolFamily, 'Unknown')}</dd></div>
+                      <div><dt>Executable</dt><dd className="mono">{runtime.executablePath ?? 'Unknown'}</dd></div>
+                    </dl>
+                    {owned.length === 0 ? <p className="settings-empty">No blobs use this agent yet.</p> : owned.map((agent) => <BlobLink key={agent.id} agent={agent} mode={modeFor(agent)} onOpen={() => onOpenAgent(agent.id)} />)}
+                  </div>}
+                </div>
+              })}
+              {orphanAgents.length > 0 && <div className="runtime-entry open">
+                <div className="settings-row"><span className="settings-row-copy"><strong>Blobs without a detected agent</strong><small>Their command line tool was not found on this device.</small></span></div>
+                <div className="runtime-entry-body">{orphanAgents.map((agent) => <BlobLink key={agent.id} agent={agent} mode={modeFor(agent)} onOpen={() => onOpenAgent(agent.id)} />)}</div>
+              </div>}
+            </SettingsGroup>
+            <SettingsGroup title="Custom launchers">
+              {profiles.map((profile, index) => <div className="settings-row" key={String(profile.id ?? index)}>
+                <span className="settings-row-copy"><strong>{String(profile.name ?? profile.provider ?? 'Launcher')}</strong><small className="mono">{String(profile.executablePath ?? 'Executable unavailable')}</small></span>
+                {typeof profile.id === 'string' && <button type="button" className="ghost-button small" onClick={() => void deleteProfile(profile.id as string)}>Remove</button>}
+              </div>)}
+              {!launcherFormOpen && <div className="settings-row">
+                <span className="settings-row-copy"><strong>{profiles.length === 0 ? 'No custom launchers' : 'Add another launcher'}</strong><small>Run an agent from a specific executable with fixed arguments.</small></span>
+                <button type="button" className="secondary-button small" onClick={() => setLauncherFormOpen(true)}><Plus size={13} />Add launcher</button>
+              </div>}
+              {launcherFormOpen && <form className="settings-form" onSubmit={(event) => void saveProfile(event)}>
+                <label className="settings-field"><span>Name</span><input className="text-input" aria-label="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} required /></label>
+                <div className="settings-field-pair">
+                  <div className="settings-field"><span>Agent</span><Select ariaLabel="Profile provider" variant="field" align="left" value={profileProvider} onChange={(value) => { setProfileProvider(value); setProfileProtocol(value === 'claude' ? 'claude_stream' : value === 'opencode' ? 'acp' : 'codex_app_server') }} options={[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex' }, { value: 'opencode', label: 'OpenCode' }]} /></div>
+                  <div className="settings-field"><span>Protocol</span><Select ariaLabel="Profile protocol" variant="field" align="left" value={profileProtocol} onChange={setProfileProtocol} options={[{ value: 'claude_stream', label: 'Claude stream' }, { value: 'codex_app_server', label: 'Codex app-server' }, { value: 'acp', label: 'ACP' }]} /></div>
+                </div>
+                <label className="settings-field"><span>Executable path</span><input className="text-input mono" aria-label="Profile executable" value={profilePath} onChange={(event) => setProfilePath(event.target.value)} required /></label>
+                <label className="settings-field"><span>Fixed arguments <small>JSON array</small></span><input className="text-input mono" aria-label="Profile arguments" value={profileArgs} onChange={(event) => setProfileArgs(event.target.value)} spellCheck={false} /></label>
+                <div className="settings-form-actions"><button type="button" className="ghost-button small" onClick={() => setLauncherFormOpen(false)}>Cancel</button><button className="primary-button small" disabled={saving}>Save launcher</button></div>
+              </form>}
+            </SettingsGroup>
+          </>}
+
+          {!loading && page === 'Updates' && <>
+            <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />
+            <SettingsGroup title="About">
+              <div data-settings-about>
+                <SettingsRow label="Code signing" hint="Windows may warn the first time you run a new installer."><span className="settings-value">Not configured</span></SettingsRow>
+              </div>
+            </SettingsGroup>
+          </>}
+        </div>
+    </section>
+  </div>
 }
 
-function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="settings-group"><h3>{title}</h3><div className="settings-card">{children}</div></section>
+function SettingsGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  return <section className="settings-group">
+    <div className="settings-group-head"><h3>{title}</h3>{action}</div>
+    <div className="settings-card">{children}</div>
+  </section>
 }
 
-function CardRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return <div className="settings-card-row"><span><strong>{label}</strong>{hint && <small>{hint}</small>}</span><span className="settings-card-control">{children}</span></div>
+function SettingsRow({ label, hint, children }: { label: string; hint?: string; children?: ReactNode }) {
+  return <div className="settings-row">
+    <span className="settings-row-copy"><strong>{label}</strong>{hint && <small>{hint}</small>}</span>
+    {children && <span className="settings-row-control">{children}</span>}
+  </div>
 }
 
-function RuntimeSettingsList({ runtimes }: { runtimes: Runtime[] }) {
-  if (!runtimes.length) return <p className="settings-data-empty">No installed runtime was reported.</p>
-  return <div className="settings-card">{runtimes.map((item) => <article className="settings-card-row" key={item.id}><span className="settings-entity-dot" style={{ background: providerColor(item.provider) }} /><span><strong>{labelize(item.provider)}</strong><small>{labelize(item.status, 'Status unknown')} · Auth {labelize(item.authState, 'unknown')} · {item.version ?? 'Version unknown'}</small><small className="settings-entity-path">{item.executablePath ?? 'Executable path unavailable'}</small></span></article>)}</div>
+function BlobLink({ agent, mode, onOpen }: { agent: Agent; mode: string; onOpen: () => void }) {
+  return <div className="blob-link">
+    <span className="blob-link-dot" style={{ background: agentColorHex(agent.color) }} aria-hidden="true" />
+    <span className="settings-row-copy"><strong>{agent.name}</strong><small>{approvalLabel(mode)}</small></span>
+    <button type="button" className="ghost-button small" aria-label={`Open ${agent.name}`} onClick={onOpen}>Open</button>
+  </div>
 }
 
-function agentLabel(agent: Agent, runtimes: Runtime[]) {
-  const runtime = runtimes.find((item) => item.id === agent.runtimeId)
-  return labelize(runtime?.provider, 'Runtime')
+function approvalLabel(mode: string) {
+  if (mode === 'bypass') return 'Bypass approvals'
+  if (mode === 'auto') return 'Auto-approve'
+  return 'Ask before acting'
+}
+
+function signInLabel(state?: string) {
+  const value = (state ?? '').toLowerCase()
+  if (!value) return ''
+  if (['signed_in', 'authenticated', 'logged_in'].includes(value)) return 'Signed in'
+  if (['signed_out', 'unauthenticated', 'logged_out'].includes(value)) return 'Signed out'
+  return labelize(state)
+}
+
+function monitorLabel(monitor: string) {
+  const match = /DISPLAY(\d+)$/i.exec(monitor)
+  return match ? `Display ${match[1]}` : monitor
 }
 
 function messageOf(reason: unknown) {
@@ -312,3 +356,4 @@ function listFrom(value: unknown): Record<string, unknown>[] {
   const list = Object.values(record).find((item) => Array.isArray(item))
   return Array.isArray(list) ? list.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object') : []
 }
+

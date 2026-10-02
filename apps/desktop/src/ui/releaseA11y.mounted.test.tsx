@@ -2,7 +2,6 @@
 import { act, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { appVersion } from '../appRelease'
 import { ConfirmDialog } from './BlobPage'
 import { SettingsSheet } from './SettingsSheet'
 
@@ -60,7 +59,7 @@ describe('settings and blob dialog accessibility', () => {
       const [open, setOpen] = useState(false)
       return <>
         <button type="button" onClick={() => setOpen(true)}>Open settings</button>
-        {open && <SettingsSheet snapshot={{ agents: [] }} initialPage="General" onClose={() => setOpen(false)} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />}
+        {open && <SettingsSheet snapshot={{ agents: [] }} initialPage="Updates" onClose={() => setOpen(false)} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />}
       </>
     }
     const view = mount(<Harness />)
@@ -71,9 +70,8 @@ describe('settings and blob dialog accessibility', () => {
     await view.settle()
     await view.settle()
     const about = view.host.querySelector('[data-settings-about]')
-    expect(about?.textContent).toContain(`Version: ${appVersion}`)
-    expect(about?.textContent).toContain('Channel: local build')
-    expect(about?.textContent).toContain('Signing: not configured')
+    expect(about?.textContent).toContain('Code signing')
+    expect(about?.textContent).toContain('Not configured')
     expect(about?.textContent).not.toContain('Updates: not configured')
     expect(about?.querySelector('button, input, select, textarea')).toBeNull()
     expect(view.host.querySelector('[aria-label="Close settings"] svg')?.getAttribute('aria-hidden')).toBe('true')

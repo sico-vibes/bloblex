@@ -2,36 +2,43 @@
 
 ## Scene and Register
 
-Product UI for a developer moving between coding-agent sessions on a desktop, usually focused on a project in a quiet work setting. The interface should feel steady and precise; the character animation supplies warmth in small moments.
+Product UI for a developer moving between coding-agent sessions on a desktop. It should feel like a simple chat app: calm, monochrome chrome, very little repeated information. The blob characters supply the warmth; everything else stays quiet.
 
-## Color Strategy
+## Rules
 
-Restrained tinted dark neutrals for chrome, with a single selected-agent accent used for active selection and state. Original character accents: Claude coral, Codex blue, OpenCode violet, generic mint. Never rely on accent color alone to convey status.
+- **Say each thing once.** A blob's name, state and model appear in one place per screen. The sidebar row shows the blob and one line (what it is doing now, else its latest conversation). The header shows the blob name and the conversation. The details panel shows the full facts.
+- **One animated blob per place.** Sidebar rows, the details panel head, empty states and the companion each show a blob. Messages, the header and the working indicator do not.
+- **Monochrome chrome.** Black, greys and white. Primary actions are white with black text; toggles are white when on. Color is reserved for blob colors and for status that needs attention (amber for working or approval, red for failure, green only for added lines).
+- **Status dots only when something is happening.** Idle and finished conversations have no dot.
 
-## Surfaces
+## Tokens
 
-- Main background: deep blue-gray, not pure black.
-- Rail and context pane: slightly separated cool-neutral surfaces.
-- Conversation region: broad, low-chrome canvas with subtle dividers.
-- Permission and error states: restrained amber/red surfaces with explicit labels.
-- Companion: rounded rectangular bill with source-informed 14px compact and 22px expanded corners, an opaque tinted surface and clear drag affordance; transparent native window around it. The outer shell must not use a stadium/pill radius.
+All colors, type sizes and radii live in `apps/desktop/src/ui/theme.css`. Component stylesheets use only these tokens.
 
-## Typography
-
-Use a native system sans stack (`Segoe UI`, `system-ui`, sans-serif). Keep labels compact and readable, reserve stronger weight and scale for the selected agent and conversation. Use a monospace stack only for code and paths.
+- Surfaces: app `#0e0e0e`, sidebar and panels `#151515`, raised cards `#1d1d1d`, menus `#202020`, selection `#262626` / `#303030`.
+- Text: primary `#f4f4f4`, secondary `#a6a6a6`, tertiary `#737373`.
+- Type scale: 11, 12, 13, 14, 15, 18, 22 px. Body and row labels 13–14 px at weight 400–500; headings 600. No other weights.
+- Radii: 6 (controls), 10 (menus, inputs), 14 (cards), pill (buttons, composer).
 
 ## Layout
 
-At desktop size, use a narrow agent rail, flexible conversation pane, and context pane with Details, Runtime, and Files tabs. Collapse context before compromising the composer or message readability. The default desktop target is 1360×860 with a practical 1000×680 minimum.
+- Sidebar (280 px): logo and new-blob button, search, blob rows, profile button at the bottom.
+- Blob row: avatar, name and time on the first line, one subtitle line and the expand chevron on the second. An expanded blob keeps one continuous highlight; its projects and conversations hang off a guide line under the avatar.
+- Header: blob name (opens the blob editor) and a conversation dropdown on the left; model, approval mode (only when not Ask), new conversation, details toggle and more on the right.
+- Details panel (320 px): avatar, name and runtime at the top, then text tabs (Details, Runtime, Files) and plain label/value rows. It hides on the blob editor and Analytics.
+- Settings: left page list (General, Agents, Updates), page title, grey group labels over rounded cards of rows. Agents merges detected command line tools, their blobs and approvals: each tool expands in place.
+- Profile: initials and name; its menu holds Usage, Find coding agents, Settings, name editing and Quit. First run asks for a name without blocking the app.
 
-## Components
+## Controls
 
-- Agent rail rows pair one original animated blob with agent name and textual runtime state.
-- Conversation uses clear user/agent alignment and compact cards only for tools, changed files, commands, and permissions.
-- Composer stays anchored to the conversation bottom.
-- Usage is a compact summary that opens a focused sheet for detail.
-- Companion follows the island home/chat/navigation structure: selected session/activity glance, real local runtime peers, an inline conversation, file-drop preparation and permission controls. Its compact form stays slim; its separate welcome view centers the waving character.
+- Dropdowns use `Select` (`ui/Select.tsx`), never the native select: its popup cannot be styled on Windows.
+- Menus share `.menu-surface` and `.menu-item`.
+- Buttons: `.primary-button`, `.secondary-button`, `.ghost-button`, `.icon-button`; add `.small` in dense rows.
 
-## Motion
+## Character moods
 
-Use the island's source-informed spring growth and 340ms collapse. The separate launch greeting follows its 4.6-second growth, dip/pop, hand wave, tuck and settling choreography. Procedural blob motion may spring and deform while communicating state; keep its original base form circular and expressions mouth-free. Distinguish idle, typing, thinking, activity, approval, completion, error, rate limit and sleeping. Honor reduced motion, pause when hidden, and reduce idle work. The bill position persists across launches and is clamped to a usable area after display changes.
+Moods come from `ui/companionStatus.ts` and settle over time: a finished turn shows the happy face for about 6 seconds, then idle; a blob reads as online for 2 minutes after activity, then idle, and falls asleep after 10 minutes. Working, approval, failure and offline states never time out. The character sheet at `/preview.html` (preview server) shows every mood.
+
+## Companion
+
+Rounded rectangular bill with 14 px compact and 22 px expanded corners, an opaque surface and a clear drag affordance, inside a transparent native window. The outer shell must not use a pill radius.

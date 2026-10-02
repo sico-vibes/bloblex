@@ -5,7 +5,6 @@ import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentColorHex, previewHex, resolvedAgentColor } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
 import type { AgentDraft } from './agentForm'
-import { runtimeDotClass } from './rosterSelectors'
 import { SwatchGrid } from './SwatchGrid'
 
 export function BlobOverview({ draft, runtime, session, connected, model, mode, onColorChange }: {
@@ -17,14 +16,14 @@ export function BlobOverview({ draft, runtime, session, connected, model, mode, 
   mode: 'create' | 'edit'
   onColorChange: (color: string) => void
 }) {
-  const derived = deriveCompanionStatus({ connected, runtime, session: mode === 'create' ? null : session })
+  const derived = deriveCompanionStatus({ connected, runtime, session: mode === 'create' ? null : session, now: Date.now() })
   const mood = mode === 'create' ? (connected ? 'idle' : 'offline') : derived.mood
   const lastValid = useRef(resolvedAgentColor(draft.color) ?? agentColorHex('mint'))
   const resolved = resolvedAgentColor(draft.color)
   if (resolved) lastValid.current = resolved
   // previewHex is the last-valid form of agentColorHex (spec section 4): an invalid draft keeps the previous paint.
   const paint = previewHex(draft.color, lastValid.current)
-  const modelValue = model?.trim() ? model : 'CLI default'
+  const modelValue = model?.trim() ? model : 'Default model'
   return <div className="blob-card">
     <div className="blob-profile">
       <BlobCanvas color={paint} size={96} mood={mood} label={draft.name.trim() || 'New blob'} />
@@ -34,11 +33,9 @@ export function BlobOverview({ draft, runtime, session, connected, model, mode, 
       </div>
     </div>
     <div className="blob-facts">
-      <div className="blob-fact"><span>Runtime</span><strong><i className={`status-dot ${connected ? runtimeDotClass(runtime?.status) : 'muted'}`} /> {labelize(runtime?.provider, 'No runtime')} · {derived.label}</strong></div>
+      <div className="blob-fact"><span>Runtime</span><strong>{runtime ? [labelize(runtime.provider), runtime.version].filter(Boolean).join(' · ') : 'No runtime'}</strong></div>
       <div className="blob-fact"><span>Model</span><strong>{modelValue}</strong></div>
-      <p className="blob-help">The chat header shows the model from the latest applied snapshot when one exists. A missing snapshot stays unreported.</p>
-      <div className="blob-fact"><span>Status</span><strong>{derived.label}</strong></div>
-      <div className="blob-fact"><span>Usage</span><strong>Open the Usage tab.</strong></div>
+      <div className="blob-fact"><span>Status</span><strong>{mode === 'create' ? 'Not created yet' : derived.label}</strong></div>
     </div>
     <SwatchGrid value={draft.color} onChange={onColorChange} />
   </div>

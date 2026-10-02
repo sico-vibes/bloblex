@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { chooseOption, selectOptions, selectTrigger, selectValue } from './testSelect'
 import { act, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -58,12 +59,8 @@ describe('approval mode UI', () => {
     const view = mount(<PermissionsHarness />)
     views.push(view)
     await view.settle()
-    const select = view.host.querySelector<HTMLSelectElement>('[aria-label="Approval mode"]')!
-    select.focus()
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, 'bypass')
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-    })
+    const select = selectTrigger(view.host, 'Approval mode')!
+    await chooseOption(view.host, 'Approval mode', 'bypass')
     await view.settle()
     const dialog = view.host.querySelector('[role="dialog"]')!
     expect(dialog.textContent).toContain('approves every action without asking')
@@ -82,7 +79,7 @@ describe('approval mode UI', () => {
     expect(confirm.disabled).toBe(false)
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
     expect(view.host.querySelector('#bypass-dialog-title')).toBeNull()
-    expect(select.value).toBe('')
+    expect(selectValue(view.host, 'Approval mode')).toBe('')
     expect(document.activeElement).toBe(select)
   })
 
@@ -131,50 +128,51 @@ describe('settings modal', () => {
     const view = mount(<SettingsSheet snapshot={snapshot} initialPage="General" onClose={() => undefined} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={(id) => opened.push(id)} />)
     views.push(view)
     await view.settle()
+    const page = async (name: string) => { await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === name)?.click() }) }
     const nav = [...view.host.querySelectorAll('.settings-nav button')].map((button) => button.textContent)
-    expect(nav).toEqual(['General', 'Agents', 'Runtimes', 'Permissions'])
-    expect(nav.join('\n')).not.toContain('Updates')
+    expect(nav).toEqual(['General', 'Agents', 'Updates'])
     expect(view.host.textContent).not.toContain('Usage & budgets')
-    const about = view.host.querySelector('[data-settings-about]')
-    expect(about?.textContent).not.toContain('Updates: not configured')
-    expect(about?.textContent).toContain('Signing: not configured')
-    expect(about?.textContent).toContain('Channel: local build')
-    expect(about?.textContent).toContain('Version:')
-    expect(about?.querySelector('button, input, select, textarea')).toBeNull()
-    expect(view.host.querySelector('[data-settings-section="updates"]')).not.toBeNull()
     const start = view.host.querySelector<HTMLButtonElement>('[aria-label="Start with Windows"]')!
     expect(start.disabled).toBe(true)
-    expect(view.host.textContent).toContain('Unavailable')
+    expect(view.host.textContent).toContain('Not available yet')
     expect(view.host.querySelector('[aria-label="Companion sounds"]')).not.toBeNull()
-    await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === 'Permissions')?.click() })
-    const mode = view.host.querySelector<HTMLSelectElement>('[aria-label="Default approval mode"]')!
-    expect([...mode.options].map((option) => option.value)).toEqual(['ask', 'auto'])
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(mode, 'auto')
-      mode.dispatchEvent(new Event('change', { bubbles: true }))
-    })
+
+    await page('Updates')
+    expect(view.host.querySelector('[data-settings-section="updates"]')).not.toBeNull()
+    const about = view.host.querySelector('[data-settings-about]')
+    expect(about?.textContent).toContain('Code signing')
+    expect(about?.textContent).toContain('Not configured')
+    expect(about?.querySelector('button, input, select, textarea')).toBeNull()
+
+    await page('Agents')
+    expect((await selectOptions(view.host, 'Default approval mode')).map((option) => option.value)).toEqual(['ask', 'auto'])
+    await chooseOption(view.host, 'Default approval mode', 'auto')
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('settings.set', { key: 'permissions.default_mode', value: 'auto' })
     expect(rpc.mock.calls.some((call) => call[1]?.value === 'bypass')).toBe(false)
-    expect(view.host.textContent).toContain('Bypass is per blob only')
-    await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Risky'))?.click() })
-    expect(opened).toEqual(['agent-2'])
-    await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === 'Runtimes')?.click() })
-    expect(view.host.textContent).toContain('Auth Authenticated')
+    expect(view.host.textContent).toContain('Bypass can only be turned on for a single blob')
+    const runtimeHead = view.host.querySelector<HTMLButtonElement>('.runtime-entry-head')!
+    expect(runtimeHead.getAttribute('aria-expanded')).toBe('false')
+    expect(runtimeHead.textContent).toContain('Codex')
+    expect(runtimeHead.textContent).toContain('Signed in')
+    expect(runtimeHead.textContent).toContain('2 blobs')
+    await act(async () => { runtimeHead.click() })
+    expect(view.host.querySelector('.settings-facts')?.textContent).toContain('C:\\Tools\\codex.exe')
+    expect(view.host.textContent).toContain('Bypass approvals')
     expect(view.host.textContent).not.toMatch(/token|credential|secret/i)
-    await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === 'Agents')?.click() })
-    await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Claude'))?.click() })
+    await act(async () => { view.host.querySelector<HTMLButtonElement>('[aria-label="Open Risky"]')?.click() })
+    expect(opened).toEqual(['agent-2'])
+    await act(async () => { view.host.querySelector<HTMLButtonElement>('[aria-label="Open Claude"]')?.click() })
     expect(opened).toEqual(['agent-2', 'agent-1'])
   })
 
   it('disables the global default when the policy cannot be loaded', async () => {
     rpc.mockResolvedValue({ settings: {} })
     policy.mockRejectedValue(new Error('unsupported: not ready'))
-    const view = mount(<SettingsSheet snapshot={{ agents: [] }} initialPage="Permissions" onClose={() => undefined} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />)
+    const view = mount(<SettingsSheet snapshot={{ agents: [] }} initialPage="Agents" onClose={() => undefined} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />)
     views.push(view)
     await view.settle()
-    const mode = view.host.querySelector<HTMLSelectElement>('[aria-label="Default approval mode"]')!
-    expect(mode.disabled).toBe(true)
+    expect(selectTrigger(view.host, 'Default approval mode')?.disabled).toBe(true)
     expect(view.host.textContent).toContain('Unavailable')
     expect(rpc).not.toHaveBeenCalledWith('settings.set', expect.anything())
   })

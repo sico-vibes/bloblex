@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { selectValue } from './testSelect'
 import { StrictMode, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -212,13 +213,12 @@ describe('App mounted lifecycle', () => {
     configure(snapshot(), { activeSession: 'session-b', activeRuntime: 'runtime-b' })
     const view = startApp()
     await view.settle()
-    const selector = view.host.querySelector<HTMLSelectElement>('select[aria-label="Current conversation"]')!
-    expect(selector.value).toBe('session-b')
+    expect(selectValue(view.host, 'Current conversation')).toBe('session-b')
     expect(view.host.querySelector('.context-pane')?.textContent).toContain('Beta task')
 
     const handler = h.daemonEventHandlers.at(-1)!
     act(() => handler({ sequence: 21, type: 'session.changed', payload: { session: { ...sessionA, title: 'Alpha updated', state: 'working' } } }))
-    expect(view.host.querySelector<HTMLSelectElement>('select[aria-label="Current conversation"]')!.value).toBe('session-b')
+    expect(selectValue(view.host, 'Current conversation')).toBe('session-b')
     expect(view.host.querySelector('.context-pane')?.textContent).toContain('Beta task')
     expect(h.setActiveSession.mock.calls.some(([id]) => id === 'session-a')).toBe(false)
   })
@@ -296,7 +296,8 @@ describe('App mounted lifecycle', () => {
     configure(snapshot(), { soundsEnabled: false })
     const view = startApp()
     await view.settle()
-    act(() => view.host.querySelector<HTMLButtonElement>('.settings-trigger')!.click())
+    act(() => view.host.querySelector<HTMLButtonElement>('.profile-button')!.click())
+    act(() => [...view.host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent === 'Settings')!.click())
     await view.settle()
     const sounds = [...view.host.querySelectorAll<HTMLButtonElement>('[role="switch"]')].find((button) => button.getAttribute('aria-label') === 'Companion sounds')!
     act(() => sounds.click())

@@ -1,0 +1,161 @@
+/* Bloblex design tokens and shared controls. One monochrome palette and one
+   type scale for every surface; component stylesheets only use these tokens. */
+
+:root {
+  /* Surfaces */
+  --surface-app: #0e0e0e;
+  --surface-sidebar: #151515;
+  --surface-panel: #151515;
+  --surface-raised: #1d1d1d;
+  --surface-overlay: #202020;
+  --surface-input: #1d1d1d;
+  --surface-hover: #ffffff0d;
+  --surface-selected: #262626;
+  --surface-selected-strong: #303030;
+
+  /* Lines */
+  --line: #ffffff12;
+  --line-strong: #ffffff22;
+
+  /* Text */
+  --text-1: #f4f4f4;
+  --text-2: #a6a6a6;
+  --text-3: #737373;
+  --text-inverse: #0e0e0e;
+
+  /* Status (used sparingly, never as decoration) */
+  --status-working: #e8b04b;
+  --status-danger: #ff6b6b;
+  --status-success: #6fdc9b;
+
+  /* Type */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --fs-2xs: 11px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 22px;
+
+  /* Shape */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+  --shadow-pop: 0 12px 32px #000000b3, 0 0 0 1px var(--line);
+  --focus-ring: 0 0 0 2px #ffffff8c;
+
+  /* Legacy aliases so older component sheets follow the same palette */
+  --app: var(--surface-app);
+  --panel: var(--surface-panel);
+  --raised: var(--surface-selected);
+  --raised-hover: var(--surface-selected-strong);
+  --card: var(--surface-raised);
+  --inset: var(--surface-raised);
+  --hairline: var(--line-strong);
+  --ink: var(--text-1);
+  --ink-2: var(--text-2);
+  --ink-3: var(--text-3);
+  --blue: #f4f4f4;
+  --blue-border: #ffffff8c;
+  --bubble-user: #2c2c2c;
+  --font: var(--font-ui);
+  --mono: var(--font-mono);
+  --bg: var(--surface-app);
+  --text: var(--text-1);
+  --muted: var(--text-2);
+  --faint: var(--text-3);
+  --line-soft: var(--line);
+  --good: var(--status-success);
+  --bad: var(--status-danger);
+  --warning: var(--status-working);
+  --accent: #f4f4f4;
+
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  color: var(--text-1);
+  background: var(--surface-app);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { background: var(--surface-app); }
+:root.companion-surface, :root.companion-surface body, :root.companion-surface #root { background: transparent !important; }
+button, textarea, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.42; }
+:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+.primary-button, .secondary-button, .ghost-button {
+  height: 32px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  border: 1px solid transparent; border-radius: var(--radius-pill); font-size: var(--fs-sm); font-weight: 500; white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.primary-button { color: var(--text-inverse); background: var(--text-1); }
+.primary-button:hover:not(:disabled) { background: #ffffff; }
+.secondary-button { color: var(--text-1); border-color: var(--line-strong); background: transparent; }
+.secondary-button:hover:not(:disabled) { background: var(--surface-hover); }
+.ghost-button { color: var(--text-2); background: transparent; }
+.ghost-button:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }
+.primary-button.small, .secondary-button.small, .ghost-button.small { height: 28px; padding: 0 12px; font-size: var(--fs-xs); }
+.danger-button { color: #ffb4b4; border-color: #ff6b6b40; }
+.icon-button { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; flex: 0 0 auto; color: var(--text-2); border: 0; border-radius: var(--radius-sm); background: transparent; }
+.icon-button:hover:not(:disabled), .icon-button.active { color: var(--text-1); background: var(--surface-hover); }
+.icon-button.quiet { width: 26px; height: 26px; }
+
+/* ── Toggle (monochrome switch) ──────────────────────────────────────── */
+.toggle { width: 36px; height: 20px; flex: 0 0 auto; padding: 2px; display: flex; align-items: center; border: 0; border-radius: var(--radius-pill); background: #3a3a3a; transition: background 160ms ease; }
+.toggle i { width: 16px; height: 16px; display: block; border-radius: 50%; background: #d4d4d4; transition: transform 160ms ease, background 160ms ease; }
+.toggle.on { background: var(--text-1); }
+.toggle.on i { transform: translateX(16px); background: var(--text-inverse); }
+
+/* ── Text inputs ─────────────────────────────────────────────────────── */
+.text-input { width: 100%; min-width: 0; height: 34px; padding: 0 12px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-input); font-size: var(--fs-sm); }
+.text-input::placeholder { color: var(--text-3); }
+.text-input:focus { outline: none; border-color: #ffffff59; }
+
+/* ── Select (custom dropdown) ────────────────────────────────────────── */
+.select { position: relative; display: inline-flex; min-width: 0; }
+.select-trigger { max-width: 100%; height: 30px; padding: 0 8px 0 10px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-1); border: 0; border-radius: var(--radius-sm); background: transparent; font-size: var(--fs-sm); text-align: left; }
+.select-trigger:hover:not(:disabled), .select.open .select-trigger { background: var(--surface-hover); }
+.select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-trigger > svg { flex: 0 0 auto; color: var(--text-3); }
+.select.field .select-trigger { width: 100%; height: 34px; justify-content: space-between; border: 1px solid var(--line-strong); background: var(--surface-input); }
+.select.muted .select-trigger { color: var(--text-2); }
+.select-menu, .menu-surface {
+  position: absolute; z-index: 60; min-width: 100%; max-width: 340px; max-height: 300px; padding: 5px; overflow-y: auto;
+  border-radius: var(--radius-md); background: var(--surface-overlay); box-shadow: var(--shadow-pop); scrollbar-width: thin; scrollbar-color: #3a3a3a transparent;
+}
+.select-menu { top: calc(100% + 4px); right: 0; width: max-content; }
+.select-menu.align-left { left: 0; right: auto; }
+.select-option, .menu-item {
+  width: 100%; min-height: 32px; padding: 0 10px; display: flex; align-items: center; gap: 9px;
+  color: var(--text-1); border: 0; border-radius: var(--radius-sm); background: transparent; font-size: var(--fs-sm); text-align: left; white-space: nowrap;
+}
+.select-option > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.select-option > svg { flex: 0 0 auto; color: var(--text-1); }
+.select-option.active, .select-option:hover:not(:disabled), .menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--surface-hover); box-shadow: none; }
+.select-option[aria-disabled="true"] { color: var(--text-3); cursor: default; }
+.select-group-label { padding: 8px 10px 4px; color: var(--text-3); font-size: var(--fs-2xs); }
+.menu-item > svg { flex: 0 0 auto; color: var(--text-2); }
+.menu-item .menu-item-trail { margin-left: auto; color: var(--text-3); font-size: var(--fs-xs); }
+.menu-separator { height: 1px; margin: 4px 6px; background: var(--line); }
+.danger-menu-item, .menu-item.danger { color: #ff9b9b !important; }
+.danger-menu-item svg, .menu-item.danger svg { color: #ff9b9b !important; }
+
+/* ── Dialogs ─────────────────────────────────────────────────────────── */
+.sheet-backdrop { position: fixed; z-index: 40; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; background: #000000a6; }
+@keyframes sheet-in { from { opacity: 0; transform: translateY(6px) scale(0.99); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}

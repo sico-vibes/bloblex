@@ -64,3 +64,28 @@ describe('companion status from live app state', () => {
     } })).toEqual({ mood: 'file_activity', label: 'Updated App.tsx' })
   })
 })
+
+describe('blob moods settle over time', () => {
+  const at = Date.parse('2026-10-02T12:00:00Z')
+  const ago = (ms: number) => new Date(at - ms).toISOString()
+  const base = { id: 's-1', runtimeId: runtime.id }
+
+  it('shows the happy face right after a turn completes, then relaxes to idle and finally sleeps', () => {
+    expect(deriveCompanionStatus({ connected: true, runtime, session: { ...base, state: 'completed', updatedAt: ago(2_000) }, now: at }).mood).toBe('success')
+    expect(deriveCompanionStatus({ connected: true, runtime, session: { ...base, state: 'completed', updatedAt: ago(30_000) }, now: at })).toEqual({ mood: 'idle', label: 'Done' })
+    expect(deriveCompanionStatus({ connected: true, runtime, session: { ...base, state: 'completed', updatedAt: ago(20 * 60_000) }, now: at })).toEqual({ mood: 'sleeping', label: 'Sleeping' })
+  })
+
+  it('reads online only briefly after activity, then idle, then asleep', () => {
+    expect(deriveCompanionStatus({ connected: true, runtime, session: { ...base, state: 'idle', updatedAt: ago(30_000) }, now: at }).mood).toBe('online')
+    expect(deriveCompanionStatus({ connected: true, runtime, session: { ...base, state: 'idle', updatedAt: ago(5 * 60_000) }, now: at })).toEqual({ mood: 'idle', label: 'Idle' })
+    expect(deriveCompanionStatus({ connected: true, runtime, session: { ...base, state: 'idle', updatedAt: ago(60 * 60_000) }, now: at }).mood).toBe('sleeping')
+  })
+
+  it('never puts an active, failing or approval-waiting blob to sleep', () => {
+    const old = ago(60 * 60_000)
+    expect(deriveCompanionStatus({ connected: true, runtime, session: { ...base, state: 'working', updatedAt: old }, now: at }).mood).toBe('working')
+    expect(deriveCompanionStatus({ connected: true, runtime, session: { ...base, state: 'failed', updatedAt: old }, now: at }).mood).toBe('error')
+    expect(deriveCompanionStatus({ connected: true, runtime, session: { ...base, state: 'waiting_permission', updatedAt: old }, now: at }).mood).toBe('permission')
+  })
+})

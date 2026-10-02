@@ -1,7 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Search } from 'lucide-react'
 import type { Agent, Runtime, Session } from '../types'
-import { labelize } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { effectiveApprovalMode } from '../approvalContract'
 import { ApprovalBadge } from './approvalUi'
@@ -10,8 +9,8 @@ import { deriveCompanionStatus } from './companionStatus'
 import { AgentContextMenu } from './AgentContextMenu'
 import { RowActionMenu, SessionTree } from './SessionTree'
 import {
-  OTHER_CAP_KEY, PROJECT_CAP, SESSION_CAP, activeAgents, layoutBlobTree, rosterGroupLabel, rosterPreview,
-  runtimeDotClass, runtimeUsable, shortTime, treeItemId, treeModel, type ExpandedState, type TreeRow,
+  OTHER_CAP_KEY, PROJECT_CAP, SESSION_CAP, activeAgents, layoutBlobTree, runtimeUsable, sessionDisplayTitle,
+  shortTime, treeItemId, treeModel, type ExpandedState, type TreeRow,
 } from './rosterSelectors'
 
 type Visible = {
@@ -33,12 +32,14 @@ type RosterMenu =
   | { kind: 'project'; agentId: string; projectKey: string; path: string; label: string; x: number; y: number }
   | { kind: 'session'; agentId: string; session: Session; x: number; y: number }
 
-export function AgentRoster({ agents, sessions, runtimes, connected, busy, selectedAgentId, selectedSessionId, query, expanded, onQueryChange, onSelect, onCreate, onScan, onNewSession, onEdit, onDuplicate, onArchive, onToggleBlob, onToggleProject, onToggleOther, onSelectSession, onNewSessionInProject, onResumeSession, onCancelSession }: {
+export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, selectedAgentId, selectedSessionId, query, expanded, onQueryChange, onSelect, onCreate, onScan, onNewSession, onEdit, onDuplicate, onArchive, onToggleBlob, onToggleProject, onToggleOther, onSelectSession, onNewSessionInProject, onResumeSession, onCancelSession }: {
   agents: Agent[]
   sessions: Session[]
   runtimes: Runtime[]
   connected: boolean
   busy: boolean
+  /** Current time, so row moods settle (happy, idle, asleep) without new events. */
+  now?: number
   selectedAgentId: string | null
   selectedSessionId: string | null
   query: string
@@ -61,7 +62,6 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, selec
 }) {
   const model = useMemo(() => treeModel(agents, sessions, query), [agents, sessions, query])
   const rows = model.groups.flatMap((group) => group.rows)
-  const showGroups = new Set(rows.map((row) => row.agent.runtimeId)).size > 1
   const active = activeAgents(agents)
   const treeItemRefs = useRef(new Map<string, HTMLElement>())
   const parentOf = useRef(new Map<string, string | null>())
@@ -259,10 +259,7 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, selec
       const found = visible.find((entry) => entry.id === item.getAttribute('data-tree-id'))
       if (found) openRowMenu(found, event.clientX, event.clientY)
     }}>
-      {showGroups ? model.groups.map((group) => <div key={group.runtimeId}>
-        <div className="roster-group-label">{rosterGroupLabel(runtimeFor(group.runtimeId), group.runtimeId)}</div>
-        {group.rows.map((row) => renderBlob(row))}
-      </div>) : rows.map((row) => renderBlob(row))}
+      {rows.map((row) => renderBlob(row))}
       {connected && runtimes.length === 0 && <div className="rail-empty">No coding CLIs detected yet.<button type="button" onClick={onScan}>Scan again</button></div>}
       {connected && runtimes.length > 0 && active.length === 0 && <div className="rail-empty">No blobs yet.<button type="button" onClick={onCreate}>Create blob</button></div>}
       {connected && active.length > 0 && rows.length === 0 && <div className="rail-empty">Nothing matches “{query}”.</div>}
@@ -300,59 +297,83 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, selec
     if (!item) return null
     const { agent } = row
     const runtime = runtimeFor(agent.runtimeId)
-    const status = deriveCompanionStatus({ connected, runtime, session: row.latest })
+    const status = deriveCompanionStatus({ connected, runtime, session: row.latest, now })
     const selected = agent.id === selectedAgentId
     const blobId = treeItemId('blob', agent.id)
     const index = rows.findIndex((entry) => entry.agent.id === agent.id)
+    const mode = effectiveApprovalMode(agent)
     return <Fragment key={agent.id}>
-      <button
-        type="button"
-        role="treeitem"
-        data-agent-id={agent.id}
-        data-tree-id={blobId}
-        className={`bot-row ${selected ? 'selected' : ''}`}
-        aria-current={selected ? 'true' : undefined}
-        aria-level={1}
-        aria-expanded={item.blobOpen}
-        aria-selected="false"
-        aria-setsize={rows.length}
-        aria-posinset={index + 1}
-        aria-owns={item.blobOpen ? `blob-group-${agent.id}` : undefined}
-        tabIndex={blobId === tabId ? 0 : -1}
-        ref={(node) => bindRef(blobId, node)}
-        onClick={() => { setFocusId(blobId); onSelect(agent) }}
-        onContextMenu={(event) => {
-          event.preventDefault()
-          const blob = visible.find((entry) => entry.id === blobId)
-          if (blob) openRowMenu(blob, event.clientX, event.clientY)
-        }}
-      >
-        <BlobCanvas color={agentColorHex(agent.color)} size={42} mood={status.mood} label={agent.name} />
-        <span className="bot-row-copy">
-          <span className="bot-row-top"><strong>{agent.name}</strong><ApprovalBadge mode={effectiveApprovalMode(agent)} />{row.latest?.updatedAt && <time>{shortTime(row.latest.updatedAt)}</time>}</span>
-          <span className="bot-row-preview">{rosterPreview(row, connected, status.label)}</span>
-          <span className="bot-row-meta"><i className={`status-dot ${connected ? runtimeDotClass(runtime?.status) : 'muted'}`} />{labelize(runtime?.provider, 'Runtime')} · {status.label}</span>
-        </span>
-        <span className="tree-chevron" aria-hidden="true" onClick={(event) => { event.stopPropagation(); onToggleBlob(agent.id) }}>{item.blobOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
-      </button>
-      {item.blobOpen && item.laid && <div id={`blob-group-${agent.id}`} role="group" className="tree-group">
-        <SessionTree
-          agentId={agent.id}
-          layout={item.laid.layout}
-          canCreate={canCreateFor(agent)}
-          selectedSessionId={selectedSessionId}
-          activeTreeId={tabId}
-          bindRef={bindRef}
-          onToggleProject={(key) => onToggleProject(agent.id, key)}
-          onToggleOther={() => onToggleOther(agent.id)}
-          onSelectSession={onSelectSession}
-          onNewSessionInProject={(path) => onNewSessionInProject(agent, path)}
-          onShowMoreProjects={() => showMoreProjects(agent.id)}
-          onShowMoreSessions={(key) => showMoreSessions(agent.id, key)}
-        />
-      </div>}
+      <div className={`blob-block ${selected ? 'selected' : ''} ${item.blobOpen ? 'open' : ''}`}>
+        <button
+          type="button"
+          role="treeitem"
+          data-agent-id={agent.id}
+          data-tree-id={blobId}
+          className={`bot-row ${selected ? 'selected' : ''}`}
+          aria-current={selected ? 'true' : undefined}
+          aria-level={1}
+          aria-expanded={item.blobOpen}
+          aria-selected="false"
+          aria-setsize={rows.length}
+          aria-posinset={index + 1}
+          aria-owns={item.blobOpen ? `blob-group-${agent.id}` : undefined}
+          tabIndex={blobId === tabId ? 0 : -1}
+          ref={(node) => bindRef(blobId, node)}
+          onClick={() => { setFocusId(blobId); onSelect(agent) }}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            const blob = visible.find((entry) => entry.id === blobId)
+            if (blob) openRowMenu(blob, event.clientX, event.clientY)
+          }}
+        >
+          <BlobCanvas color={agentColorHex(agent.color)} size={36} mood={status.mood} label={agent.name} />
+          <span className="bot-row-copy">
+            <span className="bot-row-line">
+              <strong>{agent.name}</strong>
+              {mode === 'bypass' && <ApprovalBadge mode={mode} />}
+              {row.latest?.updatedAt && <time>{shortTime(row.latest.updatedAt)}</time>}
+            </span>
+            <span className="bot-row-line">
+              <span className={`bot-row-preview ${rowIsActive(row.latest?.state) ? 'active' : ''}`}>{rowSubtitle(row, connected, status.label, status.mood === 'offline')}</span>
+              <span className="tree-chevron" aria-hidden="true" onClick={(event) => { event.stopPropagation(); onToggleBlob(agent.id) }}>{item.blobOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
+            </span>
+          </span>
+        </button>
+        {item.blobOpen && item.laid && <div id={`blob-group-${agent.id}`} role="group" className="tree-group blob-children">
+          <SessionTree
+            agentId={agent.id}
+            layout={item.laid.layout}
+            canCreate={canCreateFor(agent)}
+            selectedSessionId={selectedSessionId}
+            activeTreeId={tabId}
+            bindRef={bindRef}
+            onToggleProject={(key) => onToggleProject(agent.id, key)}
+            onToggleOther={() => onToggleOther(agent.id)}
+            onSelectSession={onSelectSession}
+            onNewSessionInProject={(path) => onNewSessionInProject(agent, path)}
+            onShowMoreProjects={() => showMoreProjects(agent.id)}
+            onShowMoreSessions={(key) => showMoreSessions(agent.id, key)}
+          />
+        </div>}
+      </div>
     </Fragment>
   }
+}
+
+/** One short line under the blob name: what it is doing now, else its latest conversation. */
+function rowSubtitle(row: TreeRow, connected: boolean, statusLabel: string, offline: boolean) {
+  if (!connected) return 'Offline'
+  if (offline) return statusLabel
+  if (row.matchedTitle) return `Conversation: ${row.matchedTitle}`
+  const state = (row.latest?.state ?? '').toLowerCase()
+  if (state === 'waiting_permission') return 'Waiting for your approval'
+  if (rowIsActive(state)) return statusLabel
+  if (state === 'error' || state === 'failed') return 'Needs attention'
+  return row.latest ? sessionDisplayTitle(row.latest) : 'No conversations yet'
+}
+
+function rowIsActive(state?: string) {
+  return ['working', 'starting', 'cancelling', 'waiting_permission'].includes((state ?? '').toLowerCase())
 }
 
 function prepareRow(row: TreeRow, expanded: ExpandedState, caps: { projects: Record<string, boolean>; sessions: Record<string, boolean> }, selectedSessionId: string | null) {

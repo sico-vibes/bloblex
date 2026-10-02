@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { chooseOption, selectOptions, selectTrigger, selectValue } from './testSelect'
 import { act, useRef, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -79,15 +80,8 @@ function mount(node: ReactNode) {
 }
 afterEach(() => { for (const view of mounted.splice(0)) view.unmount(); rpc.mockReset() })
 
-async function choose(select: HTMLSelectElement, value: string) {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, value)
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-  })
-}
-
 function selectNamed(host: ParentNode, label: string) {
-  return [...host.querySelectorAll('label')].find((node) => (node.textContent ?? '').includes(label))?.querySelector('select') ?? null
+  return selectTrigger(host, label)
 }
 
 describe('live execution card', () => {
@@ -98,7 +92,7 @@ describe('live execution card', () => {
     }) : method === 'runtime.models' ? catalog : null)
     const disabled = mount(<Harness provider="codex" initial={draft({ model: 'alpha', thinking: 'high' })} sessionId={null} />)
     await disabled.settle()
-    const model = disabled.host.querySelector('[data-capability="disabled"] select') as HTMLSelectElement
+    const model = disabled.host.querySelector('[data-capability="disabled"] .select-trigger') as HTMLButtonElement
     expect(model.disabled).toBe(true)
     expect(disabled.host.textContent).toContain('No model flag')
     expect(selectNamed(disabled.host, 'Thinking')).toBeNull()
@@ -110,7 +104,7 @@ describe('live execution card', () => {
     }) : method === 'runtime.models' ? catalog : null)
     const gated = mount(<Harness provider="codex" initial={draft({ model: 'alpha' })} sessionId={null} />)
     await gated.settle()
-    expect((gated.host.querySelector('[data-capability="gated"] select') as HTMLSelectElement).disabled).toBe(true)
+    expect((gated.host.querySelector('[data-capability="gated"] .select-trigger') as HTMLButtonElement).disabled).toBe(true)
     expect(gated.host.textContent).toContain('Gate closed')
     expect(selectNamed(gated.host, 'Thinking')).toBeNull()
     gated.unmount()
@@ -127,13 +121,12 @@ describe('live execution card', () => {
     rpc.mockImplementation(async (method: string) => answer(method))
     const view = mount(<Harness provider="codex" initial={draft({ model: 'alpha', thinking: 'high', serviceTier: 'priority' })} />)
     await view.settle()
-    const speed = selectNamed(view.host, 'Speed') as HTMLSelectElement
-    expect([...speed.options].map((option) => [option.value, option.textContent])).toEqual([['', 'Runtime default'], ['priority', 'Priority']])
-    expect(speed.querySelector('option[value="fast"]')).toBeNull()
-    expect(speed.querySelector('option[value="standard"]')).toBeNull()
-    await choose(selectNamed(view.host, 'Model') as HTMLSelectElement, 'beta')
-    expect((selectNamed(view.host, 'Thinking') as HTMLSelectElement).value).toBe('low')
-    expect((selectNamed(view.host, 'Speed') as HTMLSelectElement).value).toBe('flex')
+    const speedOptions = (await selectOptions(view.host, 'Speed')).map((option) => [option.value, option.label])
+    expect(speedOptions).toEqual([['', 'Runtime default'], ['priority', 'Priority']])
+    expect(speedOptions.some(([value]) => value === 'fast' || value === 'standard')).toBe(false)
+    await chooseOption(view.host, 'Model', 'beta')
+    expect(selectValue(view.host, 'Thinking')).toBe('low')
+    expect(selectValue(view.host, 'Speed')).toBe('flex')
     await act(async () => { [...view.host.querySelectorAll('button')].find((button) => button.textContent === 'Save probe')?.click() })
     const saved = (document.body as HTMLElement & { __saved?: Record<string, unknown> }).__saved
     expect(saved).toMatchObject({ model: 'beta', thinking: 'low', serviceTier: 'flex' })
@@ -149,7 +142,7 @@ describe('live execution card', () => {
     const view = mount(<Harness provider="claude" initial={draft()} sessionId={null} />)
     await view.settle()
     expect(view.host.textContent).toContain('suggestions only')
-    await choose(selectNamed(view.host, 'Model') as HTMLSelectElement, '__custom__')
+    await chooseOption(view.host, 'Model', '__custom__')
     const input = view.host.querySelector<HTMLInputElement>('[aria-label="Custom model id"]')!
     expect(view.host.textContent).toContain('Not validated')
     await act(async () => {

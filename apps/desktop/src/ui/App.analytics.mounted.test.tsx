@@ -159,7 +159,9 @@ describe('sidebar usage analytics', () => {
   it('opens analytics from Usage, requests the local timezone, and returns focus on Back', async () => {
     const view = startApp()
     await view.settle()
-    const usage = [...view.host.querySelectorAll<HTMLButtonElement>('.sidebar-link')].find((button) => button.textContent?.includes('Usage'))
+    const profile = view.host.querySelector<HTMLButtonElement>('.profile-button')
+    await click(profile)
+    const usage = [...view.host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent?.includes('Usage'))
     expect(usage?.disabled).toBe(false)
     await click(usage)
     await view.settle()
@@ -173,6 +175,6 @@ describe('sidebar usage analytics', () => {
     await click(buttonNamed(view.host, 'Back'))
     await view.settle()
     expect(view.host.querySelector('.analytics-page')).toBeNull()
-    expect(document.activeElement).toBe(usage)
+    expect(document.activeElement).toBe(profile)
   })
 })

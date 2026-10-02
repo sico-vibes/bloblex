@@ -2,9 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { emit, listen } from '@tauri-apps/api/event'
 import {
-  Activity, ArrowDownToLine, ArrowUp, ArrowUpRight, ChevronDown, ChevronUp, CircleHelp, Clock3, Code2, Copy, FileText, FolderOpen,
-  Gauge, GitBranch, Home, Laptop, LoaderCircle, MessageCircle, MessageSquarePlus, MoreHorizontal, PanelRight, Paperclip, Play, Plus,
-  RefreshCw, Settings2, ShieldAlert, Square, Terminal, Volume2, VolumeX, X,
+  Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronUp, CircleHelp, Code2, Copy, FileText, FolderOpen,
+  Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelRight, Paperclip, Play, Plus,
+  RefreshCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X,
 } from 'lucide-react'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, unlockCompanionAudioFromGesture } from '../blob/soundCues'
@@ -32,6 +32,9 @@ import { ApprovalPill } from './approvalUi'
 import { BlobPage, ConfirmDialog } from './BlobPage'
 import { UpdateAvailableBanner, useMainUpdateOffer } from './UpdateBanner'
 import { SettingsSheet, type SettingsPageId } from './SettingsSheet'
+import { ProfileMenu } from './ProfileMenu'
+import { Select } from './Select'
+import { useClock } from './useClock'
 import { stampCompanionDragRegions } from './companionDrag'
 import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectLocalFile, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream } from '../tauri'
 
@@ -68,6 +71,7 @@ export function App() {
   const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPageId>('General')
   const [settingsFocus, setSettingsFocus] = useState<null | 'updates'>(null)
   const updateOffer = useMainUpdateOffer(companion)
+  const now = useClock(10_000)
   const executionGate = useRef<ExecutionSendGate>({ model: false, thinking: false, serviceTier: false })
   const [appliedModel, setAppliedModel] = useState<string | null>(null)
   const [diffViewer, setDiffViewer] = useState<{ path: string; content: string } | null>(null)
@@ -110,7 +114,6 @@ export function App() {
   }, [])
   const [budgetAlertActive, setBudgetAlertActive] = useState(false)
   const [permissionClock, setPermissionClock] = useState(() => Date.now())
-  const [runtimeExplainerDismissed, setRuntimeExplainerDismissed] = useState(() => storageFlag('bloblex.runtimeExplainer.dismissed'))
   const [inspectorOpen, setInspectorOpen] = useState(() => storageFlag('bloblex.inspector.open'))
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<ExpandedState>(() => companion ? emptyExpandedState() : readRosterExpanded())
@@ -168,7 +171,7 @@ export function App() {
   const companionRuntime = runtimes.find((runtime) => runtime.id === companionAgent?.runtimeId) ?? runtimes.find((runtime) => runtime.id === companionSession?.runtimeId) ?? selectedRuntime
   const alertSessionId = typeof snapshot?.latestBudgetAlert?.sessionId === 'string' ? snapshot.latestBudgetAlert.sessionId : null
   const budgetWarningFor = (item: Session | null) => budgetAlertActive && (!alertSessionId || alertSessionId === item?.id)
-  const companionStatus = deriveCompanionStatus({ connected: connection === 'connected', runtime: companionRuntime, session: companionSession, permissionPending: !!companionPermission, budgetWarning: budgetWarningFor(companionSession) })
+  const companionStatus = deriveCompanionStatus({ connected: connection === 'connected', runtime: companionRuntime, session: companionSession, permissionPending: !!companionPermission, budgetWarning: budgetWarningFor(companionSession), now })
   const previousCueMood = useRef<string | null>(null)
   const previousPermissionCue = useRef<string | null>(null)
   const selectedBudget = findApplicableBudget(snapshot?.budgets, selectedRuntime, selectedSession, selectedRuntime?.hostId)
@@ -836,12 +839,14 @@ export function App() {
     </>
   }
 
-  const selectedMood = deriveCompanionStatus({ connected: connection === 'connected', runtime: selectedRuntime, session: selectedSession, budgetWarning: budgetWarningFor(selectedSession), composing: !!composer.trim() }).mood
+  const selectedMood = deriveCompanionStatus({ connected: connection === 'connected', runtime: selectedRuntime, session: selectedSession, budgetWarning: budgetWarningFor(selectedSession), composing: !!composer.trim(), now }).mood
   const sessionBusy = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
   const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
   const runtimeReady = runtimeUsable(selectedRuntime)
   const canStartSession = connection === 'connected' && !busy && !!activeSelectedAgent && runtimeReady
   const lastAgentIndex = conversationItems.reduce((last, item, index) => item.kind === 'message' && !isUserMessage(item.value) ? index : last, -1)
+  // The details panel describes the open conversation, so it steps aside for the blob editor and Analytics.
+  const detailsVisible = inspectorOpen && !blobPage && !analyticsOpen
   const toggleInspector = () => setInspectorOpen((open) => { localStorage.setItem('bloblex.inspector.open', open ? '0' : '1'); return !open })
   const editingAgent = blobPage?.mode === 'edit' ? agents.find((agent) => agent.id === blobPage.agentId) ?? null : null
   const otherNames = activeAgents(agents).filter((agent) => agent.id !== editingAgent?.id).map((agent) => agent.name)
@@ -855,23 +860,24 @@ export function App() {
   const headerLegacy = activeSelectedAgent ? legacySessions(sessions, activeSelectedAgent.runtimeId) : []
 
   return (
-    <main className={`app-shell ${inspectorOpen ? 'inspector-open' : ''}`} style={accent ? { '--agent-accent': accent } as React.CSSProperties : undefined}>
+    <main className={`app-shell ${detailsVisible ? 'inspector-open' : ''}`} style={accent ? { '--agent-accent': accent } as React.CSSProperties : undefined}>
       <aside className="sidebar" aria-label="Agents">
         <div className="sidebar-top">
           <div className="brand-lockup"><img className="brand-logo" src={bloblexLogo} alt="Bloblex logo" /><strong>Bloblex</strong></div>
-          <button className="icon-button" title="Create blob" aria-label="Create blob" disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={openCreate}><Plus size={18} /></button>
+          <button className="icon-button" title="Create blob" aria-label="Create blob" disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={openCreate}><Plus size={17} /></button>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <AgentRoster agents={agents} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} busy={busy} selectedAgentId={activeSelectedAgent?.id ?? null} selectedSessionId={selectedSession?.id ?? null} query={search} expanded={expanded} onQueryChange={setSearch} onSelect={selectAgent} onCreate={openCreate} onScan={() => void refreshRuntimes()} onNewSession={(agent) => newSession(agent.id)} onEdit={openEdit} onDuplicate={(agent) => void duplicateAgent(agent)} onArchive={setArchiveTarget} onToggleBlob={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, open: !entry.open }))} onToggleProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, projects: { ...entry.projects, [key]: entry.projects[key] !== true } }))} onToggleOther={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, other: !entry.other }))} onSelectSession={selectSession} onNewSessionInProject={(agent, path) => void createSession(agent, path, 'project')} onResumeSession={(session) => { selectSession(session); void resumeSession(session) }} onCancelSession={(session) => { selectSession(session); void cancelTurn(session) }} />
-        <div className="sidebar-foot">
-          <button ref={usageLinkRef} className="sidebar-link" aria-current={analyticsOpen ? 'page' : undefined} onClick={() => setAnalyticsOpen(true)} disabled={connection !== 'connected'}><Gauge size={15} />Usage</button>
-          <button className="sidebar-link" onClick={() => void refreshRuntimes()} disabled={connection !== 'connected' || refreshing}><RefreshCw size={15} className={refreshing ? 'spinning' : ''} />Find agents</button>
-          <div className="sidebar-profile">
-            <span className={`presence-ring ${connection}`}><i /></span>
-            <span className="sidebar-profile-copy"><strong>{connection === 'connected' ? 'Local runtime' : connection === 'connecting' ? 'Connecting…' : 'Runtime offline'}</strong><small>{connection === 'connected' ? 'Private to this device' : connection === 'connecting' ? 'Checking daemon' : 'No agent state available'}</small></span>
-            <button className="icon-button settings-trigger" title="Settings" aria-label="Settings" onClick={() => { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }}><Settings2 size={16} /></button>
-          </div>
-        </div>
+        <AgentRoster agents={agents} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} busy={busy} now={now} selectedAgentId={activeSelectedAgent?.id ?? null} selectedSessionId={selectedSession?.id ?? null} query={search} expanded={expanded} onQueryChange={setSearch} onSelect={selectAgent} onCreate={openCreate} onScan={() => void refreshRuntimes()} onNewSession={(agent) => newSession(agent.id)} onEdit={openEdit} onDuplicate={(agent) => void duplicateAgent(agent)} onArchive={setArchiveTarget} onToggleBlob={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, open: !entry.open }))} onToggleProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, projects: { ...entry.projects, [key]: entry.projects[key] !== true } }))} onToggleOther={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, other: !entry.other }))} onSelectSession={selectSession} onNewSessionInProject={(agent, path) => void createSession(agent, path, 'project')} onResumeSession={(session) => { selectSession(session); void resumeSession(session) }} onCancelSession={(session) => { selectSession(session); void cancelTurn(session) }} />
+        <ProfileMenu
+          connection={connection}
+          usageActive={analyticsOpen}
+          refreshing={refreshing}
+          triggerRef={usageLinkRef}
+          onUsage={() => setAnalyticsOpen(true)}
+          onFindAgents={() => void refreshRuntimes()}
+          onSettings={() => { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }}
+          onQuit={() => void quitBloblex()}
+        />
       </aside>
 
       <section className="conversation-pane">
@@ -879,19 +885,32 @@ export function App() {
         {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} connected={connection === 'connected'} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         <header className="chat-header">
           <div className="chat-title">
-            {activeSelectedAgent ? <button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} onClick={() => openEdit(activeSelectedAgent)}><BlobCanvas color={accent} size={28} mood={selectedMood} label={activeSelectedAgent.name} /><strong>{activeSelectedAgent.name}</strong></button> : <><span className="agent-placeholder"><Code2 size={15} /></span><strong>{agentName}</strong></>}
-            {selectedRuntime && <i className={`status-dot ${connection === 'connected' ? statusClass(selectedRuntime.status) : 'muted'}`} />}
-            {(headerOwned.length > 0 || headerLegacy.length > 0) && (activeSelectedAgent || selectedRuntime) && <div className="session-switcher-wrap"><select aria-label="Current conversation" value={selectedSession?.id ?? ''} onChange={(event) => setSelectedSessionId(event.target.value)}><option value="" disabled>Select a conversation</option>{headerOwned.map((session) => <option value={session.id} key={session.id}>{formatUnknownSafe(session.title, session.projectPath?.split(/[\\/]/).pop() ?? 'New session')}</option>)}{headerLegacy.length > 0 && <option disabled>Not linked to a blob</option>}{headerLegacy.map((session) => <option value={session.id} key={session.id}>{formatUnknownSafe(session.title, session.projectPath?.split(/[\\/]/).pop() ?? 'New session')}</option>)}</select><ChevronDown size={13} /></div>}
+            {activeSelectedAgent
+              ? <button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title="Blob settings" onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button>
+              : <strong className="chat-title-text">{agentName}</strong>}
+            {(headerOwned.length > 0 || headerLegacy.length > 0) && (activeSelectedAgent || selectedRuntime) && <Select
+              ariaLabel="Current conversation"
+              variant="muted"
+              align="left"
+              className="session-switcher"
+              value={selectedSession?.id ?? ''}
+              placeholder="Select a conversation"
+              onChange={(value) => setSelectedSessionId(value)}
+              options={[
+                ...headerOwned.map((session) => ({ value: session.id, label: formatUnknownSafe(session.title, session.projectPath?.split(/[\/]/).pop() ?? 'New session') })),
+                ...headerLegacy.map((session, index) => ({ value: session.id, label: formatUnknownSafe(session.title, session.projectPath?.split(/[\/]/).pop() ?? 'New session'), group: index === 0 ? 'Not linked to a blob' : undefined })),
+              ]}
+            />}
           </div>
           <div className="header-actions">
-            <button className="pill-button" disabled={!canStartSession} onClick={(event) => newSession(undefined, event.currentTarget)}><Plus size={13} />Session</button>
-            {selectedRuntime && <div className="model-pill" role="group" title={appliedModel ? 'Applied on the latest turn.' : 'Reported by the session. No applied snapshot is available.'}><span className="model-pill-mark" style={{ background: accent || 'transparent' }} />{labelize(selectedRuntime.provider)}<span className="model-pill-model">{appliedModel ?? (selectedSession?.model?.trim() ? selectedSession.model : 'CLI default')}</span></div>}
+            {selectedRuntime && <span className="model-pill" title={appliedModel ? 'Model applied on the latest turn' : 'Model reported by the session'}>{appliedModel ?? (selectedSession?.model?.trim() ? selectedSession.model : 'Default model')}</span>}
             <ApprovalPill mode={headerMode} />
             {selectedSession?.resumable && !sessionBusy && <button className="icon-button" title="Resume conversation" aria-label="Resume conversation" disabled={busy || connection !== 'connected' || !runtimeReady} onClick={() => void resumeSession()}><Play size={15} /></button>}
-            <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Toggle details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
+            <button className="icon-button" title="New session" aria-label="New session" disabled={!canStartSession} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>
+            <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') setMoreOpen(false) }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
-              {moreOpen && <div className="more-menu" role="menu"><button role="menuitem" disabled={!canStartSession} onClick={(event) => { setMoreOpen(false); newSession(undefined, event.currentTarget) }}><MessageSquarePlus size={15} />New session</button><button role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><span className="more-menu-separator" /><button role="menuitem" className="danger-menu-item" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
+              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />Blob settings</button>}<span className="menu-separator" /><button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
             </div>
           </div>
         </header>
@@ -899,17 +918,14 @@ export function App() {
         {error && <div className="inline-error" role="alert"><ShieldAlert size={16} /><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError(null)}><X size={15} /></button></div>}
         {archiveNotice && <div className="inline-error" role="status"><span>{archiveNotice}</span><button aria-label="Dismiss notice" onClick={() => setArchiveNotice(null)}><X size={15} /></button></div>}
 
-        {selectedSession && !runtimeExplainerDismissed && <RuntimeExplainer onDismiss={() => { localStorage.setItem('bloblex.runtimeExplainer.dismissed', '1'); setRuntimeExplainerDismissed(true) }} />}
-
         {!selectedSession ? <>{activePermission && <PermissionCard permission={activePermission} onReply={(choice) => void answerPermission(activePermission, choice)} />}<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} accent={accent} mood={selectedMood} agentName={agentName} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={openCreate} onRefresh={() => void refreshRuntimes()} /></> : <>
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
             <div className="chat-column">
-              <div className="conversation-meta"><span><FolderOpen size={13} />{selectedSession.projectPath ?? 'Project path unavailable'}</span><span className="meta-divider" /><span><Clock3 size={13} />{labelize(selectedSession.state, 'Unknown state')}</span></div>
-              {conversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent} size={112} mood={selectedMood} label={agentName} /><h2>Ready when you are.</h2><p>This conversation is connected to <code>{selectedSession.projectPath ?? 'a project'}</code>. Ask {agentName} to explore the code or make a change.</p><div className="session-facts"><span><GitBranch size={13} />{selectedRuntime?.version ?? 'CLI version unknown'}</span><span><Laptop size={13} />{labelize(selectedSession.state, 'Idle')}</span></div></div> : conversationItems.map((item, index) => item.kind === 'message'
+              {conversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent} size={112} mood={selectedMood} label={agentName} /><h2>Ready when you are.</h2><p>Ask {agentName} to explore <code>{currentProjectName ?? 'the project'}</code> or make a change.</p></div> : conversationItems.map((item, index) => item.kind === 'message'
                 ? <MessageItem key={item.id} message={item.value!} accent={accent} agentName={agentName} showAvatar={!isUserMessage(item.value) && (index === 0 || conversationItems[index - 1].kind !== 'message' || isUserMessage(conversationItems[index - 1].value))} mood={index === lastAgentIndex ? selectedMood : 'idle'} />
                 : <ActivityItem key={item.id} item={item} />)}
               {activePermission && <PermissionCard permission={activePermission} onReply={(choice) => void answerPermission(activePermission, choice)} />}
-              {selectedSession.state === 'working' && <div className="working-indicator"><BlobCanvas color={accent} size={28} mood="working" label={`${agentName} working`} /><span className="typing"><i /><i /><i /></span>{agentName} is working</div>}
+              {selectedSession.state === 'working' && <div className="working-indicator" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>{agentName} is working</div>}
             </div>
           </section>
           <div className="composer-wrap">
@@ -924,14 +940,18 @@ export function App() {
         </>}
       </section>
 
-      <aside className="context-pane" aria-label="Conversation details" aria-hidden={!inspectorOpen} inert={!inspectorOpen}>
+      <aside className="context-pane" aria-label="Conversation details" aria-hidden={!detailsVisible} inert={!detailsVisible}>
+        <section className="context-head">
+          {activeSelectedAgent ? <BlobCanvas color={accent} size={64} mood={selectedMood} label={activeSelectedAgent.name} /> : <span className="context-head-placeholder"><Code2 size={20} /></span>}
+          <h2>{agentName}</h2>
+          <p>{selectedRuntime ? [labelize(selectedRuntime.provider), selectedRuntime.version].filter(Boolean).join(' · ') : 'No coding agent selected'}</p>
+        </section>
         <div className="context-tabs" role="tablist" aria-label="Conversation context">{(['Details', 'Runtime', 'Files'] as ContextTab[]).map((name, index, tabs) => <button key={name} type="button" id={`context-tab-${name.toLowerCase()}`} role="tab" aria-controls="context-panel" aria-selected={tab === name} tabIndex={tab === name ? 0 : -1} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} onKeyDown={(event) => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); const targetIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length; const target = tabs[targetIndex]; setTab(target); document.getElementById(`context-tab-${target.toLowerCase()}`)?.focus() }}>{name}</button>)}</div>
         <div id="context-panel" role="tabpanel" aria-labelledby={`context-tab-${tab.toLowerCase()}`} tabIndex={0} className="context-tab-panel">
-          {tab === 'Details' && <DetailsPane runtime={selectedRuntime} session={selectedSession} agentName={activeSelectedAgent?.name ?? null} color={accent} connected={connection === 'connected'} budgetWarning={budgetWarningFor(selectedSession)} budget={selectedBudget} usage={snapshot?.usageSummary ?? null} onUsage={() => void showUsage()} />}
+          {tab === 'Details' && <DetailsPane session={selectedSession} model={appliedModel ?? selectedSession?.model ?? null} budgetWarning={budgetWarningFor(selectedSession)} budget={selectedBudget} usage={snapshot?.usageSummary ?? null} onUsage={() => void showUsage()} />}
           {tab === 'Runtime' && <RuntimePane runtime={selectedRuntime} connected={connection === 'connected'} onRefresh={() => void refreshRuntimes()} refreshing={refreshing} />}
           {tab === 'Files' && <FilesPane session={selectedSession} onOpen={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onReveal={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopy={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} />}
         </div>
-        <div className="context-footer"><span>Bloblex for Windows</span><span>Local mode</span></div>
       </aside>
 
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} loading={busy && usageSummary === null} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onClose={() => setUsageSheet(false)} />}
@@ -961,12 +981,10 @@ function MessageItem({ message, accent, agentName, showAvatar, mood }: { message
   const isError = message.status === 'error' || role === 'error' || eventType === 'turn.error'
   const time = typeof message.createdAt === 'string' ? new Date(message.createdAt) : null
   const stamp = time && !Number.isNaN(time.valueOf()) ? <time>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time> : null
-  return <article className={`message-row ${isUser ? 'user' : 'agent'} ${showAvatar ? 'group-start' : ''}`}>
-    {!isUser && <span className="message-avatar">{showAvatar && <BlobCanvas color={accent} size={30} mood={isError ? 'error' : mood} label={`${agentName} avatar`} />}</span>}
+  return <article className={`message-row ${isUser ? 'user' : 'agent'} ${showAvatar ? 'group-start' : ''}`} aria-label={isUser ? 'You' : agentName} data-mood={isError ? 'error' : mood} data-accent={accent || undefined}>
     <div className="message-content">
-      {showAvatar && <div className="message-byline">{agentName}{stamp}</div>}
       {isTool ? <div className={`activity-card ${isError ? 'error' : ''}`}><div className="activity-heading"><Terminal size={14} /><strong>{labelize(toolName ?? eventType.replace('.', ' '))}</strong><span>{isError ? 'Failed' : formatUnknownSafe(String(message.status ?? ''), 'Activity')}</span></div><p>{text || (typeof message.command === 'string' ? message.command : typeof message.summary === 'string' ? message.summary : 'Details are unavailable for this event.')}</p>{typeof message.path === 'string' && <code>{message.path}</code>}</div> : <div className={`message-bubble ${isError ? 'message-error' : ''}`}><SafeMessageText text={text || 'Message content unavailable.'} /></div>}
-      {isUser && stamp && <div className="message-byline user-stamp">{stamp}</div>}
+      {stamp && <div className="message-time">{stamp}</div>}
     </div>
   </article>
 }
@@ -1050,10 +1068,6 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   return <div className="message-code"><div className="message-code-header"><span>{language || 'Code'}</span><button onClick={() => void copy()} aria-label="Copy code"><Copy size={13} />{copied ? 'Copied' : 'Copy'}</button></div><pre><code>{code}</code></pre></div>
 }
 
-function RuntimeExplainer({ onDismiss }: { onDismiss: () => void }) {
-  return <aside className="runtime-explainer" role="note" aria-label="About local agent runtimes"><CircleHelp size={17} /><span><strong>How Bloblex connects</strong><small>Bloblex coordinates coding-agent CLIs installed on this device. Sign in with each provider’s own CLI; Bloblex does not provide model access. Actions that need approval wait for your choice.</small></span><button className="icon-button quiet" aria-label="Dismiss runtime explanation" title="Dismiss" onClick={onDismiss}><X size={15} /></button></aside>
-}
-
 function PermissionCard({ permission, onReply }: { permission: PermissionRequest; onReply: (choice: string) => void }) {
   const choices = permission.choices ?? []
   const detail = typeof permission.detail === 'string' ? permission.detail : typeof permission.description === 'string' ? permission.description : typeof permission.command === 'string' ? permission.command : null
@@ -1062,32 +1076,84 @@ function PermissionCard({ permission, onReply }: { permission: PermissionRequest
   return <section className="permission-card"><div className="permission-icon"><ShieldAlert size={17} /></div><div className="permission-copy"><strong>{formatUnknownSafe(permission.title, 'Approval requested')}</strong><p>{detail ?? `The agent requested permission${tool ? ` to use ${tool}` : ''}.`}</p>{Number.isFinite(deadline) && <small className="permission-deadline">Expires {new Date(deadline).toLocaleTimeString()}</small>}<div className="permission-actions">{choices.map((choice) => <PermissionChoiceButton key={choice} permission={permission} choice={choice} className="permission-choice" onReply={onReply}>{permissionChoiceLabel(choice)}</PermissionChoiceButton>)}</div></div></section>
 }
 
-function DetailsPane({ runtime, session, agentName, color, connected, budgetWarning, budget, usage, onUsage }: { runtime: Runtime | null; session: Session | null; agentName: string | null; color: string; connected: boolean; budgetWarning: boolean; budget: Record<string, unknown> | null; usage: Record<string, unknown> | null; onUsage: () => void }) {
-  const mood = deriveCompanionStatus({ connected, runtime, session, budgetWarning }).mood
-  const heading = agentName ?? (runtime ? labelize(runtime.provider) : 'No agent selected')
-  return <div className="context-scroll"><section className="selected-agent"><BlobCanvas color={color} size={54} mood={mood} label={heading} /><div><h2>{heading}</h2><p>{labelize(runtime?.protocolFamily, 'Local coding agent')}</p><span className="context-status"><i className={`status-dot ${connected ? statusClass(runtime?.status) : 'muted'}`} />{connected ? labelize(runtime?.status, 'Unknown') : 'Daemon disconnected'}</span></div></section>
-    <section className="context-section"><div className="section-heading"><h3>Current session</h3><MessageSquarePlus size={16} /></div>{session ? <div className="current-task"><strong>{formatUnknownSafe(session.title, fileNameForPath(session.projectPath ?? '') ?? 'Untitled session')}</strong><p>{session.projectPath ?? 'Project path unavailable'}</p><span>{labelize(session.state, 'Unknown state')}</span></div> : <div className="context-empty">No conversation selected.</div>}</section>
-    <section className="context-section usage-section"><div className="section-heading"><h3>Usage</h3><ArrowDownToLine size={15} /></div><div className="details-usage-grid"><div><span>Total input tokens</span><strong>{tokenValue(usage?.inputTokens)}</strong></div><div><span>Total output tokens</span><strong>{tokenValue(usage?.outputTokens)}</strong></div><div><span>Total provider actual</span><strong>{moneyMinor(usage?.providerReportedCostMinor, usage?.providerReportedCurrency)}</strong></div><div><span>Total API estimate</span><strong>{moneyMinor(usage?.apiEstimateMinor, usage?.apiEstimateCurrency)}</strong></div></div><small className="usage-scope">Total across all blobs · all time</small>{budget && <div className="details-budget"><span>{labelize(budget.metric)} {labelize(budget.period)} budget</span><strong>{budgetValue(budget.remaining, budget.metric)} remaining of {budgetValue(budget.hardLimit, budget.metric)}</strong></div>}<button className="usage-summary" onClick={onUsage}><span className="usage-leading"><span className="usage-icon"><Code2 size={16} /></span><span><strong>Usage details</strong><small>Open date-bounded summary</small></span></span><ChevronDown size={15} /></button>{budgetWarning && <p className="budget-inline-warning" role="status">A budget warning was reported for this session.</p>}<p className="honesty-note">Provider-reported cost and API estimates are separate. Unknown prices stay unknown; totals may be partial.</p></section>
+function DetailRow({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
+  return <div className="detail-row"><span>{label}</span><strong className={mono ? 'mono' : undefined}>{value}</strong></div>
+}
+
+function DetailsPane({ session, model, budgetWarning, budget, usage, onUsage }: { session: Session | null; model: string | null; budgetWarning: boolean; budget: Record<string, unknown> | null; usage: Record<string, unknown> | null; onUsage: () => void }) {
+  return <div className="context-scroll">
+    <section className="context-section">
+      <h3>Conversation</h3>
+      {session ? <div className="detail-list">
+        <DetailRow label="Title" value={formatUnknownSafe(session.title, fileNameForPath(session.projectPath ?? '') ?? 'Untitled')} />
+        <DetailRow label="Project" value={session.projectPath ?? 'Unavailable'} mono />
+        <DetailRow label="Status" value={labelize(session.state, 'Unknown')} />
+        <DetailRow label="Model" value={model?.trim() ? model : 'Default model'} />
+      </div> : <p className="context-empty">No conversation selected.</p>}
+    </section>
+    <section className="context-section usage-section">
+      <h3>Usage <small className="usage-scope">All blobs, all time</small></h3>
+      <div className="detail-list">
+        <DetailRow label="Input tokens" value={tokenValue(usage?.inputTokens)} />
+        <DetailRow label="Output tokens" value={tokenValue(usage?.outputTokens)} />
+        <DetailRow label="Provider cost" value={moneyMinor(usage?.providerReportedCostMinor, usage?.providerReportedCurrency)} />
+        <DetailRow label="API estimate" value={moneyMinor(usage?.apiEstimateMinor, usage?.apiEstimateCurrency)} />
+        {budget && <DetailRow label={`${labelize(budget.period)} budget`} value={`${budgetValue(budget.remaining, budget.metric)} of ${budgetValue(budget.hardLimit, budget.metric)} left`} />}
+      </div>
+      {budgetWarning && <p className="budget-inline-warning" role="status">A budget warning was reported for this session.</p>}
+      <button type="button" className="secondary-button small context-action" onClick={onUsage}>Usage details</button>
+      <p className="honesty-note">Provider cost and API estimates are separate. Unknown prices stay unknown.</p>
+    </section>
   </div>
 }
 
 function RuntimePane({ runtime, connected, refreshing, onRefresh }: { runtime: Runtime | null; connected: boolean; refreshing: boolean; onRefresh: () => void }) {
-  if (!runtime) return <div className="context-empty centered">{connected ? 'No runtime selected.' : 'Runtime details appear when the daemon is connected.'}</div>
+  if (!runtime) return <div className="context-empty centered">{connected ? 'No coding agent selected.' : 'Runtime details appear when the daemon is connected.'}</div>
   const host = runtime.host
-  const auth = labelize(runtime.authState, 'Unknown')
-  return <div className="context-scroll"><section className="runtime-summary"><div className="runtime-summary-icon"><Laptop size={19} /></div><div><strong>{typeof host?.name === 'string' ? host.name : 'This computer'}</strong><span>{labelize(host?.kind, 'Windows')}</span></div><button className="icon-button quiet" title="Refresh runtime" onClick={onRefresh} disabled={refreshing}><RefreshCw size={14} className={refreshing ? 'spinning' : ''} /></button></section><div className="runtime-detail-list">
-    <InfoRow icon={<CircleHelp size={15} />} label="Daemon" value={connected ? 'Connected' : 'Disconnected'} good={connected} />
-    <InfoRow icon={<Terminal size={15} />} label="Agent CLI" value={runtime.executablePath ?? 'Path unknown'} mono />
-    <InfoRow icon={<Code2 size={15} />} label="Version" value={runtime.version ?? 'Unknown'} />
-    <InfoRow icon={<ShieldAlert size={15} />} label="Authentication" value={auth} good={runtime.authState === 'authenticated'} />
-    <InfoRow icon={<GitBranch size={15} />} label="Protocol" value={labelize(runtime.protocolFamily, 'Unknown')} />
-    <InfoRow icon={<Laptop size={15} />} label="Host" value={typeof host?.name === 'string' ? host.name : runtime.hostId ?? 'Local'} />
-  </div><section className="context-section capabilities"><div className="section-heading"><h3>Capabilities</h3></div>{Array.isArray(runtime.capabilities) ? <div className="capability-list">{runtime.capabilities.map((capability) => <span key={String(capability)}>{labelize(capability)}</span>)}</div> : runtime.capabilities && typeof runtime.capabilities === 'object' ? <div className="capability-list">{Object.entries(runtime.capabilities).filter(([, enabled]) => enabled).map(([name]) => <span key={name}>{labelize(name)}</span>)}</div> : <p className="context-empty">Not reported by this runtime.</p>}</section></div>
+  const capabilities = Array.isArray(runtime.capabilities)
+    ? runtime.capabilities.map((capability) => String(capability))
+    : runtime.capabilities && typeof runtime.capabilities === 'object' ? Object.entries(runtime.capabilities).filter(([, enabled]) => enabled).map(([name]) => name) : []
+  return <div className="context-scroll">
+    <section className="context-section">
+      <h3>Runtime <button className="icon-button quiet" title="Refresh runtime" aria-label="Refresh runtime" onClick={onRefresh} disabled={refreshing}><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button></h3>
+      <div className="detail-list">
+        <DetailRow label="Daemon" value={connected ? 'Connected' : 'Disconnected'} />
+        <DetailRow label="Version" value={runtime.version ?? 'Unknown'} />
+        <DetailRow label="Sign-in" value={labelize(runtime.authState, 'Unknown')} />
+        <DetailRow label="Protocol" value={labelize(runtime.protocolFamily, 'Unknown')} />
+        <DetailRow label="Host" value={typeof host?.name === 'string' ? host.name : runtime.hostId ?? 'This computer'} />
+        <DetailRow label="Executable" value={runtime.executablePath ?? 'Unknown'} mono />
+      </div>
+    </section>
+    <section className="context-section">
+      <h3>Capabilities</h3>
+      {capabilities.length ? <div className="capability-list">{capabilities.map((name) => <span key={name}>{labelize(name)}</span>)}</div> : <p className="context-empty">Not reported by this runtime.</p>}
+    </section>
+  </div>
 }
 
 function FilesPane({ session, onOpen, onReveal, onCopy, onDiff }: { session: Session | null; onOpen: (path: string) => void; onReveal: (path: string) => void; onCopy: (path: string) => void; onDiff: (path: string, content: string) => void }) {
   const files = session?.files ?? []
-  return <div className="context-scroll"><section className="files-heading"><div className="files-icon"><FileText size={17} /></div><div><h3>Files in this session</h3><p>Changes reported by the runtime</p></div></section>{files.length === 0 ? <div className="files-empty"><FileText size={21} /><strong>No files reported</strong><span>File activity appears here when the agent reports edits.</span></div> : <div className="file-list">{files.map((file, index) => { const path = String(file.path ?? file.filePath ?? 'Unknown path'); const diff = typeof file.diff === 'string' ? file.diff : typeof file.patch === 'string' ? file.patch : null; return <article className="file-row" key={String(file.id ?? path) + index}><FileText size={16} /><span className="file-main"><strong>{path.split(/[\\/]/).pop()}</strong><small>{path}</small></span>{typeof file.addedLines === 'number' && <em>+{file.addedLines}</em>}{typeof file.additions === 'number' && file.addedLines === undefined && <em>+{file.additions}</em>}{typeof file.removedLines === 'number' && <i>−{file.removedLines}</i>}{typeof file.deletions === 'number' && file.removedLines === undefined && <i>−{file.deletions}</i>}<span className="file-actions"><button title="Open in configured editor" aria-label={`Open ${path} in editor`} disabled={path === 'Unknown path'} onClick={() => onOpen(path)}><Code2 size={13} /></button><button title="Reveal in File Explorer" aria-label={`Reveal ${path} in File Explorer`} disabled={path === 'Unknown path'} onClick={() => onReveal(path)}><FolderOpen size={13} /></button><button title="Copy absolute path" aria-label={`Copy ${path}`} disabled={path === 'Unknown path'} onClick={() => onCopy(path)}><Copy size={13} /></button><button title={diff ? 'View reported diff' : 'No diff reported'} aria-label={`View diff for ${path}`} disabled={!diff} onClick={() => diff && onDiff(path, diff)}><FileText size={13} /></button></span></article> })}</div>}<p className="honesty-note">Paths are resolved inside the session project. The default editor is Notepad; configured editors run directly with argument arrays, never through a shell.</p></div>
+  if (files.length === 0) return <div className="context-scroll"><div className="files-empty"><FileText size={20} /><strong>No files yet</strong><span>Files the agent edits in this conversation appear here.</span></div></div>
+  return <div className="context-scroll"><div className="file-list">{files.map((file, index) => {
+    const path = String(file.path ?? file.filePath ?? 'Unknown path')
+    const diff = typeof file.diff === 'string' ? file.diff : typeof file.patch === 'string' ? file.patch : null
+    const added = typeof file.addedLines === 'number' ? file.addedLines : typeof file.additions === 'number' ? file.additions : null
+    const removed = typeof file.removedLines === 'number' ? file.removedLines : typeof file.deletions === 'number' ? file.deletions : null
+    const unknown = path === 'Unknown path'
+    return <article className="file-row" key={String(file.id ?? path) + index}>
+      <FileText size={15} />
+      <span className="file-main"><strong>{path.split(/[\\/]/).pop()}</strong><small>{path}</small></span>
+      {added !== null && <em>+{added}</em>}
+      {removed !== null && <i>−{removed}</i>}
+      <span className="file-actions">
+        <button title="Open in editor" aria-label={`Open ${path} in editor`} disabled={unknown} onClick={() => onOpen(path)}><Code2 size={13} /></button>
+        <button title="Reveal in File Explorer" aria-label={`Reveal ${path} in File Explorer`} disabled={unknown} onClick={() => onReveal(path)}><FolderOpen size={13} /></button>
+        <button title="Copy path" aria-label={`Copy ${path}`} disabled={unknown} onClick={() => onCopy(path)}><Copy size={13} /></button>
+        <button title={diff ? 'View diff' : 'No diff reported'} aria-label={`View diff for ${path}`} disabled={!diff} onClick={() => diff && onDiff(path, diff)}><FileText size={13} /></button>
+      </span>
+    </article>
+  })}</div></div>
 }
 
 function DiffViewer({ path, content, onClose }: { path: string; content: string; onClose: () => void }) {
@@ -1122,9 +1188,6 @@ function useDialogAccessibility(onClose: () => void) {
   return ref
 }
 
-function InfoRow({ icon, label, value, good, mono }: { icon: React.ReactNode; label: string; value: string; good?: boolean; mono?: boolean }) {
-  return <div className="info-row"><span className="info-icon">{icon}</span><span className="info-label">{label}</span><span className={`info-value ${mono ? 'mono' : ''} ${good ? 'good' : ''}`}>{value}</span></div>
-}
 
 function UsageSheet({ summary, period, loading, onPeriodChange, onClose }: { summary: Record<string, unknown> | null; period: 'today' | 'month'; loading: boolean; onPeriodChange: (period: 'today' | 'month') => void; onClose: () => void }) {
   const dialogRef = useDialogAccessibility(onClose)
@@ -1182,7 +1245,8 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
   permissionRef.current = permission
   sessionRef.current = session
   const latestTool = session?.tools?.at(-1)
-  const derived = deriveCompanionStatus({ connected, runtime, session, permissionPending: !!permission, budgetWarning, composing: !!draft.trim() })
+  const clock = useClock(10_000)
+  const derived = deriveCompanionStatus({ connected, runtime, session, permissionPending: !!permission, budgetWarning, composing: !!draft.trim(), now: clock })
   const displayMood = derived.mood
   const activity = derived.mood === 'listening' ? derived.label : activityLabel
   const fileStage = dropActive ? 'drop' : preparingFile ? 'preparing' : fileError ? 'error' : droppedFile ? (sending ? 'sending' : 'ready') : undefined

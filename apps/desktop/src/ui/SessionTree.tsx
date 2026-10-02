@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { ChevronDown, ChevronRight, Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, Folder, Plus } from 'lucide-react'
 import type { Session } from '../types'
 import { labelize } from '../types'
 import { sessionDisplayTitle, sessionDotClass, shortTime, type BlobLayout } from './rosterSelectors'
@@ -42,8 +42,9 @@ export function SessionTree({ agentId, layout, canCreate, selectedSessionId, act
           ref={(node) => bindRef(project.id, node)}
           onClick={() => onToggleProject(key)}
         >
-          <span className="tree-chevron" aria-hidden="true" onMouseDown={(event) => event.preventDefault()} onClick={(event) => { event.stopPropagation(); onToggleProject(key) }}>{project.open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
+          <Folder size={14} className="tree-icon" aria-hidden="true" />
           <span className="tree-label">{project.group.label}</span>
+          <span className="tree-chevron" aria-hidden="true" onMouseDown={(event) => event.preventDefault()} onClick={(event) => { event.stopPropagation(); onToggleProject(key) }}>{project.open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
         </div>
         {project.group.key !== null && <button type="button" className="tree-new" tabIndex={-1} data-tree-for={project.id} aria-label={`New session in ${project.group.label}`} disabled={!canCreate} onClick={(event) => { event.stopPropagation(); onNewSessionInProject(project.group.path) }}><Plus size={14} aria-hidden="true" /></button>}
         {project.open && <div id={groupId} role="group" className="tree-group">
@@ -70,8 +71,9 @@ export function SessionTree({ agentId, layout, canCreate, selectedSessionId, act
         ref={(node) => bindRef(layout.other?.id ?? '', node)}
         onClick={onToggleOther}
       >
-        <span className="tree-chevron" aria-hidden="true" onMouseDown={(event) => event.preventDefault()} onClick={(event) => { event.stopPropagation(); onToggleOther() }}>{layout.other.open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
+        <Folder size={14} className="tree-icon" aria-hidden="true" />
         <span className="tree-label">Other sessions</span>
+        <span className="tree-chevron" aria-hidden="true" onMouseDown={(event) => event.preventDefault()} onClick={(event) => { event.stopPropagation(); onToggleOther() }}>{layout.other.open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
       </div>
       {layout.other.open && <div id={`other-group-${agentId}`} role="group" className="tree-group">
         {layout.other.sessions.map((item) => <SessionRow key={item.id} id={item.id} session={item.session} pos={item.pos} setSize={layout.other?.sessionSetSize ?? 0} selected={item.session.id === selectedSessionId} activeTreeId={activeTreeId} bindRef={bindRef} onSelect={() => onSelectSession(item.session)} />)}
@@ -94,6 +96,9 @@ function SessionRow({ id, session, pos, setSize, selected, activeTreeId, bindRef
   const title = sessionDisplayTitle(session)
   const word = labelize(session.state, 'Idle')
   const clock = session.updatedAt ? shortTime(session.updatedAt) : ''
+  // Completed and idle conversations stay quiet; only live or failed ones get a dot.
+  const dot = sessionDotClass(session.state)
+  const activity = dot === 'good' ? 'muted' : dot
   return <div
     role="treeitem"
     className="tree-session"
@@ -109,9 +114,8 @@ function SessionRow({ id, session, pos, setSize, selected, activeTreeId, bindRef
     ref={(node) => bindRef(id, node)}
     onClick={onSelect}
   >
-    <i className={`status-dot ${sessionDotClass(session.state)}`} />
-    <span className="tree-session-state">{word}</span>
     <span className="tree-label" title={title}>{title}</span>
+    {activity !== 'muted' && <i className={`status-dot ${activity}`} aria-hidden="true" />}
     {clock && <time>{clock}</time>}
   </div>
 }

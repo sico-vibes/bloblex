@@ -8,6 +8,7 @@ import {
 } from '../updatesContract'
 import { listenForUpdateProgress, updatesCheck, updatesGetState, updatesInstall, updatesSetPreferences } from '../tauri'
 import { useDialogAccessibility } from './dialogFocus'
+import { Select } from './Select'
 
 type CheckKind = 'idle' | 'checking' | 'up_to_date' | 'available' | 'no_stable_release' | 'error'
 
@@ -164,34 +165,36 @@ export function UpdatesPanel({ sessions = [], permissions = [] }: {
   }
 
   return <section className="settings-group" data-settings-section="updates" aria-labelledby="settings-updates-title">
-    <h3 id="settings-updates-title">Updates</h3>
+    <div className="settings-group-head"><h3 id="settings-updates-title">Updates</h3></div>
     <div className="settings-card">
       {devBuild && <p className="update-dev-note">{DEV_BUILD_UPDATES_MESSAGE}</p>}
-      <div className="settings-card-row"><span><strong>Current version</strong></span><span className="setting-value" data-update-version>{loaded ? version : '…'}</span></div>
-      <div className="settings-card-row">
-        <span><strong>Channel</strong><small id="update-channel-hint">{channel === 'stable' ? STABLE_CHANNEL_EXPLANATION : BETA_CHANNEL_EXPLANATION}</small></span>
-        <span className="settings-card-control">
-          <select className="pill-select" aria-label="Update channel" aria-describedby="update-channel-hint" value={channel} disabled={controlsDisabled || !state} onChange={(event) => { const next = parseUpdateChannel(event.target.value); if (next) void persist({ channel: next }) }}>
-            <option value="stable">Stable</option>
-            <option value="beta">Beta</option>
-          </select>
+      <div className="settings-row update-summary">
+        <span className="settings-row-copy">
+          <strong>Current version <span data-update-version>{loaded ? version : '…'}</span></strong>
+          <small>{state && lastChecked !== 'Not checked yet' ? <>Last checked <span data-update-last-checked>{lastChecked}</span></> : <span data-update-last-checked>Not checked yet</span>}</small>
+        </span>
+        <span className="settings-row-control">
+          {offer && !devBuild && <button type="button" className="primary-button small" aria-label="Install and restart" disabled={installing} onClick={beginInstall}>Install and restart</button>}
+          <button type="button" className="secondary-button small" data-update-check disabled={controlsDisabled || checkKind === 'checking'} onClick={() => { if (!state) void load(); else void runCheck() }}>{checkLabel}</button>
         </span>
       </div>
-      <div className="settings-card-row">
-        <span><strong>Check for updates automatically</strong><small>Looks for updates in the background. You still choose when to install.</small></span>
-        <button type="button" className={`toggle ${state?.autoCheck !== false ? 'on' : ''}`} role="switch" aria-label="Check for updates automatically" aria-checked={state?.autoCheck !== false} disabled={controlsDisabled || !state} onClick={() => void persist({ autoCheck: state?.autoCheck === false })}><i /></button>
-      </div>
-      <div className="settings-card-row"><span><strong>Last checked</strong></span><span className="setting-value" data-update-last-checked>{state ? lastChecked : 'Not checked yet'}</span></div>
-      <div className="settings-card-form update-results">
+      {(statusText || (checkKind === 'available' && offer && !devBuild) || shownProgress) && <div className="update-results">
         <p className="update-status" role="status" aria-live="polite" aria-busy={checkKind === 'checking' || installing} data-update-status>{statusText}</p>
         {checkKind === 'available' && offer && !devBuild && <UpdateOffer info={offer} />}
         {shownProgress && <div className={`update-progress${shownProgress.percent == null && !reducedMotion ? ' is-indeterminate' : ''}${reducedMotion ? ' is-reduced-motion' : ''}`} role="progressbar" aria-label={progress?.phase === 'installing' ? 'Installing update' : 'Downloading update'} aria-valuemin={0} {...(shownProgress.percent == null ? {} : { 'aria-valuemax': 100, 'aria-valuenow': shownProgress.percent })}>
           <span style={shownProgress.percent == null ? undefined : { width: `${shownProgress.percent}%` }} />
         </div>}
-        <div className="update-actions">
-          <button type="button" className="secondary-button" data-update-check disabled={controlsDisabled || checkKind === 'checking'} onClick={() => { if (!state) void load(); else void runCheck() }}>{checkLabel}</button>
-          {offer && !devBuild && <button type="button" className="primary-button" aria-label="Install and restart" disabled={installing} onClick={beginInstall}>Install and restart</button>}
-        </div>
+      </div>}
+      {!(statusText || (checkKind === 'available' && offer && !devBuild) || shownProgress) && <p className="sr-only" role="status" aria-live="polite" data-update-status />}
+      <div className="settings-row">
+        <span className="settings-row-copy"><strong>Channel</strong><small id="update-channel-hint">{channel === 'stable' ? STABLE_CHANNEL_EXPLANATION : BETA_CHANNEL_EXPLANATION}</small></span>
+        <span className="settings-row-control">
+          <Select ariaLabel="Update channel" describedBy="update-channel-hint" variant="muted" value={channel} disabled={controlsDisabled || !state} onChange={(value) => { const next = parseUpdateChannel(value); if (next) void persist({ channel: next }) }} options={[{ value: 'stable', label: 'Stable' }, { value: 'beta', label: 'Beta' }]} />
+        </span>
+      </div>
+      <div className="settings-row">
+        <span className="settings-row-copy"><strong>Check for updates automatically</strong><small>Looks in the background. You still choose when to install.</small></span>
+        <span className="settings-row-control"><button type="button" className={`toggle ${state?.autoCheck !== false ? 'on' : ''}`} role="switch" aria-label="Check for updates automatically" aria-checked={state?.autoCheck !== false} disabled={controlsDisabled || !state} onClick={() => void persist({ autoCheck: state?.autoCheck === false })}><i /></button></span>
       </div>
     </div>
     {confirming && <InstallConfirmDialog count={countInstallAffectedSessions(sessions, permissions)} onCancel={() => setConfirming(false)} onConfirm={() => void runInstall()} />}

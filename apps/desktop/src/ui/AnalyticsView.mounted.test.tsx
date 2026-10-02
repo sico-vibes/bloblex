@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { chooseOptionByLabel, selectOptions, selectValue } from './testSelect'
 import { act, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -84,15 +85,7 @@ async function click(element: Element | null | undefined) {
 }
 
 async function chooseProject(host: ParentNode, label: string) {
-  const select = host.querySelector<HTMLSelectElement>('select[aria-label="Project"]')
-  if (!select) throw new Error('missing project filter')
-  const option = [...select.options].find((item) => item.text === label)
-  if (!option) throw new Error(`missing project ${label}`)
-  await act(async () => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
-    setter?.call(select, option.value)
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+  await chooseOptionByLabel(host, 'Project', label)
 }
 
 function requests(): UsageAnalyticsRequest[] {
@@ -491,9 +484,8 @@ describe('analytics view', () => {
     expect(requests()[0]).toEqual(buildAnalyticsRequest({ days: 90, bucket: 'week', now, timeZone: tz }))
     expect(requests()[0]?.projectPath).toBeUndefined()
     expect(view.host.querySelector('#analytics-tab-errors')?.getAttribute('aria-selected')).toBe('true')
-    const select = view.host.querySelector<HTMLSelectElement>('select[aria-label="Project"]')
-    expect(select?.value).toBe('')
-    const offered = [...(select?.options ?? [])].map((option) => option.value)
+    expect(selectValue(view.host, 'Project')).toBe('')
+    const offered = (await selectOptions(view.host, 'Project')).map((option) => option.value)
     expect(offered).toEqual(['', ...analyticsProjectChoices(sessions).map((option) => option.key)])
     expect(offered).not.toContain('c:\\missing-project')
     await click(buttonNamed(view.host, 'Overview'))
@@ -536,9 +528,8 @@ describe('analytics view', () => {
     expect(requests().at(-1)?.projectPath).toBe('c:\\work\\site\\')
     await click(buttonNamed(view.host, 'Clear projects'))
     await view.flush()
-    const select = view.host.querySelector<HTMLSelectElement>('select[aria-label="Project"]')
-    expect(select?.value).toBe('')
-    expect([...select?.options ?? []].map((option) => option.text)).toEqual(['All projects'])
+    expect(selectValue(view.host, 'Project')).toBe('')
+    expect((await selectOptions(view.host, 'Project')).map((option) => option.label)).toEqual(['All projects'])
     expect(requests().at(-1)?.projectPath).toBeUndefined()
   })
 

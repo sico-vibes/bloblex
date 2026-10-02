@@ -38,6 +38,7 @@ import {
 } from './analyticsFormat'
 import { analyticsProjectChoices } from './rosterSelectors'
 import './analytics.css'
+import { Select } from './Select'
 
 const RANGES: AnalyticsRangeDays[] = [7, 30, 90]
 const PANELS = ['overview', 'errors'] as const
@@ -120,12 +121,7 @@ export function AnalyticsView({ agentId = null, sessions, agents, connected, emb
           <button type="button" aria-pressed={bucket === 'day'} onClick={() => setBucket('day')}>Daily</button>
           <button type="button" aria-pressed={bucket === 'week'} onClick={() => setBucket('week')}>Weekly</button>
         </div>
-        <label className="analytics-field">Project
-          <select aria-label="Project" value={projectPath ? projectChoice : ''} onChange={(event) => setProjectChoice(event.target.value)}>
-            <option value="">All projects</option>
-            {projects.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-          </select>
-        </label>
+        <Select ariaLabel="Project" variant="muted" value={projectPath ? projectChoice : ''} onChange={setProjectChoice} options={[{ value: '', label: 'All projects' }, ...projects.map((option) => ({ value: option.key, label: option.label }))]} />
       </div>
       {phase === 'loading' && <AnalyticsSkeleton />}
       {phase === 'error' && <AnalyticsTabs panel={panel} onPanel={setPanel}>

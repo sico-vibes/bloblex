@@ -13,6 +13,7 @@ import {
   sendGateFor, settingReason, showThinkingControl, showTierControl,
   type CapabilitySetting, type ExecutionSendGate, type ExecSnapshotView, type ModelCatalog, type RuntimeCapabilities,
 } from '../executionContract'
+import { Select } from './Select'
 import { BypassConfirmDialog } from './approvalUi'
 
 export function BlobSettings({ draft, runtimes, errors, execution, agentId, sessionId, onDraftChange, onArchive, onExecutionGate }: {
@@ -165,9 +166,7 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
       <label className="blob-field">Runtime
         <span className="blob-runtime-picker">
           <i className={`status-dot ${runtimeDotClass(runtime?.status)}`} />
-          <select aria-label="Runtime" value={draft.runtimeId} onChange={(event) => { setCustom(false); onDraftChange({ ...draft, runtimeId: event.target.value, model: null, thinking: null, serviceTier: null }) }}>
-            {runtimes.map((item) => <option key={item.id} value={item.id}>{runtimeOptionLabel(item, runtimes)}</option>)}
-          </select>
+          <Select ariaLabel="Runtime" variant="field" align="left" value={draft.runtimeId} onChange={(value) => { setCustom(false); onDraftChange({ ...draft, runtimeId: value, model: null, thinking: null, serviceTier: null }) }} options={runtimes.map((item) => ({ value: item.id, label: runtimeOptionLabel(item, runtimes) }))} />
         </span>
       </label>
       {errors.runtimeId && <p className="blob-error">{errors.runtimeId}</p>}
@@ -180,31 +179,25 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
       {!loading && catalog && catalog.models.length === 0 && <p className="blob-help">No models were reported for this runtime.</p>}
       {catalog?.fallback && <p className="blob-help">These models are suggestions only. Bloblex has not validated that this runtime can run them.</p>}
       <CapabilityField label="Model" state={modelState} setting={capabilities?.settings.model ?? null}>
-        <select aria-label="Model" value={custom ? '__custom__' : (draft.model ?? '')} disabled={!modelInteractive} onChange={(event) => {
-          if (event.target.value === '__custom__') applyModel(draft.model, true)
-          else applyModel(event.target.value || null, false)
-        }}>
-          <option value="">Runtime default</option>
-          {(catalog?.models ?? []).map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}
-          {draft.model && !custom && !(catalog?.models ?? []).some((model) => model.id === draft.model) && <option value={draft.model}>{draft.model}</option>}
-          {allowsCustomModelId(provider) && <option value="__custom__">Custom model id</option>}
-        </select>
+        <Select ariaLabel="Model" variant="field" align="left" value={custom ? '__custom__' : (draft.model ?? '')} disabled={!modelInteractive} onChange={(value) => {
+          if (value === '__custom__') applyModel(draft.model, true)
+          else applyModel(value || null, false)
+        }} options={[
+          { value: '', label: 'Runtime default' },
+          ...(catalog?.models ?? []).map((model) => ({ value: model.id, label: model.displayName })),
+          ...(draft.model && !custom && !(catalog?.models ?? []).some((model) => model.id === draft.model) ? [{ value: draft.model, label: draft.model }] : []),
+          ...(allowsCustomModelId(provider) ? [{ value: '__custom__', label: 'Custom model id' }] : []),
+        ]} />
         {custom && allowsCustomModelId(provider) && <>
           <input aria-label="Custom model id" aria-describedby="custom-model-note" value={draft.model ?? ''} disabled={!modelInteractive} onChange={(event) => onDraftChange({ ...draft, model: event.target.value || null, thinking: null, serviceTier: null })} />
           <p id="custom-model-note" className="blob-help">Not validated</p>
         </>}
       </CapabilityField>
       {thinkingVisible && <label className="blob-field">Thinking
-        <select aria-label="Thinking" value={draft.thinking ?? ''} onChange={(event) => onDraftChange({ ...draft, thinking: event.target.value || null })}>
-          <option value="">Runtime default</option>
-          {(selected?.supportedThinking ?? []).map((level) => <option key={level} value={level}>{level}</option>)}
-        </select>
+        <Select ariaLabel="Thinking" variant="field" align="left" value={draft.thinking ?? ''} onChange={(value) => onDraftChange({ ...draft, thinking: value || null })} options={[{ value: '', label: 'Runtime default' }, ...(selected?.supportedThinking ?? []).map((level) => ({ value: level, label: level }))]} />
       </label>}
       {tierVisible && <CapabilityField label="Speed" state={tierState} setting={capabilities?.settings.serviceTier ?? null}>
-        <select aria-label="Speed" value={draft.serviceTier ?? ''} disabled={!tierInteractive} onChange={(event) => onDraftChange({ ...draft, serviceTier: event.target.value || null })}>
-          <option value="">Runtime default</option>
-          {(selected?.serviceTiers ?? []).map((tier) => <option key={tier.id} value={tier.id}>{tier.name}</option>)}
-        </select>
+        <Select ariaLabel="Speed" variant="field" align="left" value={draft.serviceTier ?? ''} disabled={!tierInteractive} onChange={(value) => onDraftChange({ ...draft, serviceTier: value || null })} options={[{ value: '', label: 'Runtime default' }, ...(selected?.serviceTiers ?? []).map((tier) => ({ value: tier.id, label: tier.name }))]} />
       </CapabilityField>}
       <div className="blob-field-actions">
         <button type="button" className="secondary-button" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}>Refresh models</button>
@@ -230,12 +223,7 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
     <section className="blob-card" aria-label="Permissions">
       <h3>Permissions</h3>
       <label className="blob-field">Approval mode
-        <select aria-label="Approval mode" value={draft.approvalMode ?? ''} onChange={(event) => onApproval(event.target.value)}>
-          <option value="">Inherit default</option>
-          <option value="ask">Ask</option>
-          <option value="auto">Auto-approve</option>
-          <option value="bypass">Bypass</option>
-        </select>
+        <Select ariaLabel="Approval mode" variant="field" align="left" value={draft.approvalMode ?? ''} onChange={onApproval} options={[{ value: '', label: 'Inherit default' }, { value: 'ask', label: 'Ask' }, { value: 'auto', label: 'Auto-approve' }, { value: 'bypass', label: 'Bypass' }]} />
       </label>
       <p className="blob-help">{approvalDescription(draft.approvalMode)}</p>
     </section>

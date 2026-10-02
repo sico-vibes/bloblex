@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { chooseOption, selectTrigger, selectValue } from './testSelect'
 import { act, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -90,7 +91,7 @@ function buttonNamed(root: ParentNode, label: string) {
 }
 
 async function openUpdates(search: { sessions?: Array<{ id: string; runtimeId: string; state: string }>; permissions?: Array<{ id: string; sessionId?: string; status?: string }> } = {}) {
-  const view = mount(<SettingsSheet snapshot={{ agents: [], sessions: search.sessions ?? [], permissions: search.permissions ?? [] }} initialPage="General" onClose={() => undefined} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />)
+  const view = mount(<SettingsSheet snapshot={{ agents: [], sessions: search.sessions ?? [], permissions: search.permissions ?? [] }} initialPage="Updates" onClose={() => undefined} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />)
   views.push(view)
   await view.settle()
   await view.settle()
@@ -105,7 +106,7 @@ describe('updates settings', () => {
     expect(updates?.querySelector('[data-update-version]')?.textContent).toBe('0.1.0')
     expect(updates?.querySelector('[data-update-last-checked]')?.textContent).toBe('Not checked yet')
     expect(updates?.querySelector('[role="status"]')?.getAttribute('aria-live')).toBe('polite')
-    expect(view.host.querySelector('.settings-nav')?.textContent).not.toContain('Updates')
+    expect(view.host.querySelector('.settings-nav')?.textContent).toContain('Updates')
 
     const check = view.host.querySelector<HTMLButtonElement>('[data-update-check]')!
     await act(async () => { check.click() })
@@ -180,7 +181,7 @@ describe('updates settings', () => {
     expect(view.host.textContent).toContain(DEV_BUILD_UPDATES_MESSAGE)
     expect(view.host.textContent).not.toContain('SECRET_DEV')
     expect(view.host.textContent).not.toContain('9.9.9')
-    expect(view.host.querySelector<HTMLSelectElement>('[aria-label="Update channel"]')!.disabled).toBe(true)
+    expect(selectTrigger(view.host, 'Update channel')!.disabled).toBe(true)
     expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Check for updates automatically"]')!.disabled).toBe(true)
     expect(view.host.querySelector<HTMLButtonElement>('[data-update-check]')!.disabled).toBe(true)
     expect(buttonNamed(view.host, 'Install and restart')).toBeUndefined()
@@ -197,12 +198,8 @@ describe('updates settings', () => {
     expect(h.updatesSetPreferences).toHaveBeenCalledWith({ autoCheck: false })
     expect(h.updatesSetPreferences.mock.calls[0]?.[0]).toEqual({ autoCheck: false })
 
-    const select = view.host.querySelector<HTMLSelectElement>('[aria-label="Update channel"]')!
     expect(view.host.querySelector('#update-channel-hint')?.textContent).toContain('pre-releases')
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, 'stable')
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-    })
+    await chooseOption(view.host, 'Update channel', 'stable')
     await view.settle()
     expect(h.updatesSetPreferences).toHaveBeenCalledWith({ channel: 'stable' })
     expect(view.host.querySelector('#update-channel-hint')?.textContent).toBe('Finished releases only.')
@@ -212,7 +209,7 @@ describe('updates settings', () => {
     await view.settle()
     expect(view.host.querySelector('[data-update-status]')?.textContent).toBe(UPDATE_ERROR_MESSAGES.network)
     expect(view.host.textContent).not.toContain('SECRET_HOST')
-    expect(view.host.querySelector<HTMLSelectElement>('[aria-label="Update channel"]')!.value).toBe('stable')
+    expect(selectValue(view.host, 'Update channel')).toBe('stable')
     expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Check for updates automatically"]')!.getAttribute('aria-checked')).toBe('true')
   })
 
@@ -225,7 +222,7 @@ describe('updates settings', () => {
           { id: 'run', runtimeId: 'rt', state: 'working' },
           { id: 'ask', runtimeId: 'rt', state: 'idle' },
           { id: 'done', runtimeId: 'rt', state: 'completed' },
-        ], permissions: [{ id: 'perm', sessionId: 'ask', status: 'pending' }] }} initialPage="General" onClose={() => setOpen(false)} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />}
+        ], permissions: [{ id: 'perm', sessionId: 'ask', status: 'pending' }] }} initialPage="Updates" onClose={() => setOpen(false)} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />}
       </>
     }
     h.updatesGetState.mockResolvedValue(state({ available: offer }))

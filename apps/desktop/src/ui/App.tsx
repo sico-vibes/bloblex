@@ -24,6 +24,7 @@ import { ProjectChooser } from './ProjectChooser'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
+import { turnFailureTitle } from './analyticsFormat'
 import { createDraft, createParams, daemonCodeOf, draftFromAgent, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
 import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicateAgentName, emptyExpandedState, garbageCollectExpanded, legacySessions, nextAgentAfterArchive, parseExpandedState, projectFolderName, projectGroups, projectKey, recentProjects, runtimeUsable, sessionDisplayTitle, sessionForSelection, sessionNewParams, sessionSelectionTarget, type ExpandedState } from './rosterSelectors'
 import { AnalyticsView } from './AnalyticsView'
@@ -1011,7 +1012,7 @@ function ActivityItem({ item }: { item: ConversationItem }) {
   const activity = item.activity ?? {}
   const file = item.activityKind === 'file'
   const failed = ['error', 'failed', 'rejected'].includes(String(activity.state ?? activity.status ?? '').toLowerCase()) || item.activityKind === 'turn'
-  const title = item.activityKind === 'turn' ? 'Turn failed' : file ? labelize(activity.operation, 'File change') : formatUnknownSafe(activity.title, formatUnknownSafe(activity.kind, 'Agent activity'))
+  const title = item.activityKind === 'turn' ? turnFailureTitle(activity.failureClass) : file ? labelize(activity.operation, 'File change') : formatUnknownSafe(activity.title, formatUnknownSafe(activity.kind, 'Agent activity'))
   const detail = file ? String(activity.path ?? 'Changed file') : String(activity.command ?? activity.summary ?? activity.detail ?? activity.output ?? '')
   const timeValue = activity.completedAt ?? activity.startedAt ?? activity.createdAt
   const time = typeof timeValue === 'string' ? new Date(timeValue) : null

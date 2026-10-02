@@ -49,6 +49,7 @@
 .analytics-mix [data-class="timeout"] { background: #7eb6f0; }
 .analytics-mix [data-class="budget"] { background: #f0a05a; }
 .analytics-mix [data-class="config"] { background: #bf9cff; }
+.analytics-mix [data-class="context"] { background: #e07a7a; }
 .analytics-mix [data-class="other"] { background: var(--raised); }
 .analytics-mix-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 14px; color: var(--ink-2); font-size: 12px; }
 .analytics-offender { width: 100%; padding: 8px 0; display: grid; gap: 4px; color: inherit; border: 0; background: transparent; text-align: left; }

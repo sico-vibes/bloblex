@@ -201,13 +201,99 @@ export function answerUsageAnalytics(params: Record<string, unknown>, scenario: 
   const tz = typeof params.tz === 'string' ? params.tz.trim() : ''
   const fromMs = Date.parse(from)
   const toMs = Date.parse(to)
-  if (!from || !to || !bucket || !tz || !Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) {
-    throw new Error('invalid_argument: The analytics range is invalid.')
+  if (!from || !to || !bucket || !tz || !Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs || toMs - fromMs > MAX_RANGE_MS) {
+    throw new Error('invalid_argument: analytics range, bucket, or timezone is invalid')
   }
-  if (toMs - fromMs > MAX_RANGE_MS) throw new Error('invalid_argument: The analytics range is too long.')
-  if (params.agentId === 'missing-agent') throw new Error('not_found: That blob is no longer available.')
+  if ((params.projectPath != null && typeof params.projectPath !== 'string') || (params.agentId != null && typeof params.agentId !== 'string')) {
+    throw new Error('invalid_argument: projectPath and agentId must be strings')
+  }
+  if (params.agentId === 'missing-agent') throw new Error('not_found: agent not found')
   const name = analyticsFixtureName(scenario)
   const fixture = structuredClone(analyticsFixtures[name])
   if (name === 'dst') return fixture
   return { ...fixture, range: { from, to, bucket, tz } }
+}
+
+const wireCost = (amountMinor: number | null, actualMinor: number | null, estimatedMinor: number | null, lowerBound: boolean) => ({
+  amountMinor, currency: 'USD', actualMinor, estimatedMinor, lowerBound,
+})
+
+const wireTokens = (input: number | null, output: number | null, cacheRead: number | null, cacheWrite: number | null, reasoning: number | null, total: number | null) => ({
+  input, output, cacheRead, cacheWrite, reasoning, total,
+})
+
+/**
+ * Hand-written `usage.analytics` body in the daemon's wire shape:
+ * camelCase names, millisecond RFC3339 `Z` timestamps, nullable token and cost
+ * fields, and `cancelledRuns` always present as a number.
+ */
+export const daemonAnalyticsWire = {
+  range: { from: '2026-03-28T00:00:00.000Z', to: '2026-03-31T00:00:00.000Z', bucket: 'day', tz: 'Europe/London' },
+  totals: {
+    cost: wireCost(null, null, null, true),
+    tokens: wireTokens(12, null, null, null, null, 12),
+    runTimeMs: 3600000,
+    runs: 2,
+    failedRuns: 1,
+    cancelledRuns: 1,
+    activeRuns: 0,
+    unreportedRuns: 1,
+    unpricedModels: ['codex/model-x'],
+    excludedCurrencies: ['EUR'],
+  },
+  series: [
+    {
+      cost: wireCost(null, null, null, false),
+      tokens: wireTokens(null, null, null, null, null, null),
+      runTimeMs: 0,
+      runs: 0,
+      failedRuns: 0,
+      cancelledRuns: 0,
+      bucketStart: '2026-03-28T00:00:00.000Z',
+    },
+    {
+      cost: wireCost(1234, 1000, 234, true),
+      tokens: wireTokens(12, null, null, null, null, 12),
+      runTimeMs: 3600000,
+      runs: 2,
+      failedRuns: 1,
+      cancelledRuns: 1,
+      bucketStart: '2026-03-29T23:00:00.000Z',
+    },
+  ],
+  leaderboard: [
+    {
+      cost: wireCost(null, null, null, true),
+      tokens: wireTokens(12, null, null, null, null, 12),
+      runTimeMs: 3600000,
+      runs: 2,
+      failedRuns: 1,
+      cancelledRuns: 1,
+      agentId: null,
+      agentName: null,
+      runtimeId: 'rt',
+      unreportedRuns: 1,
+      unpricedModels: ['codex/model-x'],
+    },
+  ],
+  errors: [
+    {
+      turnId: 'analytics-turn',
+      sessionId: 'analytics-session',
+      agentId: null,
+      at: '2026-03-29T01:10:00.000Z',
+      message: 'Provider reported an error.',
+      failureClass: 'provider',
+      prompt: 'SECRET_PROMPT',
+    },
+    {
+      turnId: 'analytics-context',
+      sessionId: 'analytics-session',
+      agentId: 'agent-1',
+      at: '2026-03-29T02:10:00.000Z',
+      message: 'Turn ended with an error.',
+      failureClass: 'context',
+    },
+  ],
+  subscriptions: [{ provider: 'claude', monthlyMinor: 2000, currency: 'USD', quotaState: 'unknown' }],
 }

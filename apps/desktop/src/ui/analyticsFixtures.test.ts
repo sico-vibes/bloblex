@@ -8,7 +8,9 @@ describe('analytics fixtures', () => {
     expect(() => answerUsageAnalytics({ ...request, from: request.to, to: request.from }, null)).toThrow(/invalid_argument/)
     expect(() => answerUsageAnalytics({ ...request, bucket: 'month' }, null)).toThrow(/invalid_argument/)
     expect(() => answerUsageAnalytics({ from: '2020-01-01T00:00:00.000Z', to: '2022-01-01T00:00:00.000Z', bucket: 'day', tz: 'UTC' }, 'full')).toThrow(/invalid_argument/)
-    expect(() => answerUsageAnalytics({ ...request, agentId: 'missing-agent' }, 'full')).toThrow(/not_found/)
+    expect(() => answerUsageAnalytics({ ...request, agentId: 'missing-agent' }, 'full')).toThrow(/not_found: agent not found/)
+    expect(() => answerUsageAnalytics({ ...request, agentId: 4 }, 'full')).toThrow(/projectPath and agentId must be strings/)
+    expect(() => answerUsageAnalytics({ ...request, from: request.to, to: request.from }, null)).toThrow(/analytics range, bucket, or timezone is invalid/)
   })
 
   it('covers full, lower-bound, empty, unknown, legacy, and DST-week responses', () => {

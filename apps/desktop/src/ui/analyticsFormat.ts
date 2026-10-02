@@ -354,7 +354,7 @@ export function writeAnalyticsPrefs(prefs: AnalyticsViewPrefs): void {
   }
 }
 
-export const FAILURE_CLASS_ORDER = ['provider', 'permission', 'cancelled', 'timeout', 'budget', 'config', 'other'] as const
+export const FAILURE_CLASS_ORDER = ['provider', 'permission', 'cancelled', 'timeout', 'budget', 'config', 'context', 'other'] as const
 export type FailureClassId = (typeof FAILURE_CLASS_ORDER)[number]
 
 const FAILURE_CLASS_LABEL: Record<FailureClassId, string> = {
@@ -364,6 +364,7 @@ const FAILURE_CLASS_LABEL: Record<FailureClassId, string> = {
   timeout: 'Timeout',
   budget: 'Budget stop',
   config: 'Config/unsupported',
+  context: 'Context full',
   other: 'Other',
 }
 
@@ -374,6 +375,11 @@ export function normalizeFailureClass(value: string | undefined): FailureClassId
 
 export function failureClassLabel(value: string | undefined): string {
   return FAILURE_CLASS_LABEL[normalizeFailureClass(value)]
+}
+
+/** Chat turn cards stay "Turn failed" unless the daemon sent the context class. */
+export function turnFailureTitle(failureClass: unknown): string {
+  return typeof failureClass === 'string' && failureClass.trim().toLowerCase() === 'context' ? failureClassLabel('context') : 'Turn failed'
 }
 
 export interface FailureMixSegment {
@@ -583,7 +589,10 @@ export function isEmptyAnalytics(data: UsageAnalytics): boolean {
 export function analyticsErrorText(reason: unknown): string {
   const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : ''
   const code = text.includes(': ') ? text.slice(0, text.indexOf(': ')) : ''
-  if (code === 'invalid_argument') return 'That date range cannot be loaded.'
+  if (code === 'invalid_argument') {
+    if (/projectPath|agentId/i.test(text)) return 'That project or blob filter cannot be loaded.'
+    return 'That date range cannot be loaded.'
+  }
   if (code === 'not_found') return 'That blob is no longer available.'
   if (code === 'internal') return 'Usage analytics could not be loaded.'
   if (text.trim()) return 'Usage analytics could not be loaded.'
@@ -627,7 +636,8 @@ function stringList(value: unknown): string[] {
 function readCost(value: unknown): AnalyticsCost | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const row = value as Record<string, unknown>
-  const currency = typeof row.currency === 'string' ? row.currency : ''
+  const rawCurrency = typeof row.currency === 'string' ? row.currency.trim() : ''
+  const currency = rawCurrency || 'USD'
   return {
     amountMinor: numberOrNull(row.amountMinor),
     currency,

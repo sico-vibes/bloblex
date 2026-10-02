@@ -1,6 +1,6 @@
 # Windows desktop development
 
-**Stopped by the user, 1 October 2026:** agents and identified Bloblex app/daemon/dev processes were stopped. The commands below are future-run reference only. No further build/launch/testing is authorized until the user asks to resume. Earlier running-process/cleanup observations in this document are historical.
+These commands are the local development path. Do not point them at a live inspection database. Earlier notes in this file about a running executable lock are historical; the launcher stages a private daemon copy. A full native pass of the current tree is still Phase 7.
 
 ## Run locally
 
@@ -45,7 +45,7 @@ cargo check -p bloblex-desktop --lib
 
 Backend tests use their own target and a fresh `BLOBLEX_DB_PATH`; the default database is `%LOCALAPPDATA%\Bloblex\bloblex.db`. Coordinate shared sidecar staging with the desktop lane. The revised `scripts/stage-daemon.mjs` resolves Cargo's actual target directory through `cargo metadata`, including `CARGO_TARGET_DIR`, and checks that both binaries exist before copying either. `BLOBLEX_STAGE_DESTINATION` allows staging regression tests into a private directory; a real Tauri build must point at the staged files it will bundle.
 
-The latest 1 October settled source checkpoint independently passed 55 frontend tests across 12 files, typecheck and a TypeScript/Vite production build (JS 379.56 kB / CSS 45.27 kB). The supported native development command successfully launched; independent OS checks and a forced rebuild while the daemon stayed live verified the executable-lock repair. GUI/Computer Use checks remain deferred. See [handoff](../SESSION_HANDOFF.md), [status checklist](implementation-status.md) and independent UI log for current evidence and the safe resume sequence.
+The 1 October checkpoint below (55 frontend tests, one isolated `desktop:dev` launch, and the rebuild-while-live hash check) is historical. Current phase status, test commands, and the still-open native pass are in [SESSION_HANDOFF.md](../SESSION_HANDOFF.md) and [implementation-status.md](implementation-status.md).
 
 ## Running-executable lock repair, 1 October
 

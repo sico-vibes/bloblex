@@ -9,16 +9,18 @@ describe('pending permission selection', () => {
     { id: 'resolved', sessionId: 'selected', status: 'resolved', expiresAt: '2026-10-01T12:00:00Z' },
   ]
 
+  const now = Date.parse('2026-10-02T12:00:00Z')
+
   it('prioritizes a pending request for the selected session', () => {
-    expect(selectPendingPermission(requests, 'selected', 'active')?.id).toBe('selected')
+    expect(selectPendingPermission(requests, 'selected', 'active', now)?.id).toBe('selected')
   })
 
   it('surfaces an approval from another session when none matches the current selection', () => {
-    expect(selectPendingPermission(requests, 'missing', null)?.id).toBe('active')
+    expect(selectPendingPermission(requests, 'missing', null, now)?.id).toBe('active')
   })
 
   it('uses expiry and stable IDs when no active session has a request', () => {
-    expect(selectPendingPermission(requests.filter((item) => item.sessionId !== 'active'), 'missing', null)?.id).toBe('later')
+    expect(selectPendingPermission(requests.filter((item) => item.sessionId !== 'active'), 'missing', null, now)?.id).toBe('later')
   })
 
   it('excludes expired and malformed-deadline requests while allowing an absent deadline', () => {

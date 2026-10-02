@@ -218,7 +218,7 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
       {capabilities?.settings.customEnv && <p className="blob-help">{envNote(capabilities.settings.customEnv)}</p>}
       <div aria-label="Last applied snapshot">
         <h4 className="blob-subhead">Last applied snapshot</h4>
-        {snapshot ? <ul className="snapshot-outcomes">{snapshot.outcomes.map((outcome) => <li key={outcome.setting} data-outcome={outcome.label}><span>{labelize(outcome.setting)}</span><strong>{outcomeText(outcome)}</strong></li>)}</ul> : <p className="blob-help">{snapshotNote}</p>}
+        {snapshot ? <ul className="snapshot-outcomes">{snapshot.outcomes.map((outcome) => <li key={outcome.setting} data-outcome={outcome.label}><span>{outcome.setting === 'approvalMode' ? 'Approval mode' : outcome.setting === 'serviceTier' ? 'Speed' : labelize(outcome.setting)}</span><strong>{outcomeText(outcome)}</strong></li>)}</ul> : <p className="blob-help">{snapshotNote}</p>}
       </div>
       <label className="blob-field">Default project
         <input aria-label="Default project" aria-describedby="blob-project-help" value={draft.defaultProject ?? ''} onChange={(event) => onDraftChange({ ...draft, defaultProject: event.target.value })} />

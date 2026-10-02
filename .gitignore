@@ -8,3 +8,4 @@ target/
 
 # Local-only references and notes (never committed)
 /.local/
+apps/desktop/src-tauri/binaries/bloblex-hook-*.exe

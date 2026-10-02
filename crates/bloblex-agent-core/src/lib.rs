@@ -122,6 +122,12 @@ pub struct UsageReport {
     pub cost_minor: Option<i64>,
     pub cost_currency: Option<String>,
     pub reported_cost_decimal: Option<String>,
+    /// True when `reported_cost_decimal` is a session-cumulative total.
+    /// OpenCode ACP's `usage_update.cost.amount` is cumulative; the daemon
+    /// derives the per-turn delta. Omitted JSON deserializes as false so
+    /// per-turn costs from other adapters stay per-turn.
+    #[serde(default)]
+    pub cost_is_cumulative: bool,
 }
 
 /// Computes a lowercase SHA-256 digest without retaining the input. Used for
@@ -301,4 +307,22 @@ mod exec_option_tests {
     }
     #[test]
     fn instruction_sha256_is_standard_and_empty_is_absent(){assert_eq!(instruction_sha256("abc").as_deref(),Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));assert_eq!(instruction_sha256(""),None);}
+
+
+    #[test]
+    fn usage_report_cost_is_cumulative_defaults_false_and_serializes_camel_case() {
+        let report: UsageReport = serde_json::from_value(serde_json::json!({
+            "inputTokens": 1, "outputTokens": 2, "cacheReadTokens": null, "cacheWriteTokens": null,
+            "reasoningTokens": null, "usageStatus": "reported", "providerUpdateId": "1",
+            "contextUsed": null, "contextSize": null, "model": null, "costMinor": null,
+            "costCurrency": "USD", "reportedCostDecimal": "0.0015894"
+        })).unwrap();
+        assert!(!report.cost_is_cumulative);
+        assert_eq!(report.reported_cost_decimal.as_deref(), Some("0.0015894"));
+        let mut report = report;
+        report.cost_is_cumulative = true;
+        let encoded = serde_json::to_value(&report).unwrap();
+        assert_eq!(encoded["costIsCumulative"], true);
+        assert!(encoded.get("cost_is_cumulative").is_none());
+    }
 }

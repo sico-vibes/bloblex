@@ -1,0 +1,35 @@
+opencode/big-pickle
+{
+  "id": "big-pickle",
+  "providerID": "opencode",
+  "name": "Big Pickle",
+  "api": { "id": "chat", "url": "https://example.invalid" },
+  "status": "active",
+  "cost": { "input": 0, "output": 0, "cache": { "read": 0, "write": 0 } },
+  "limit": { "context": 128000, "output": 32000 },
+  "capabilities": { "reasoning": false, "attachment": false },
+  "variants": {}
+}
+opencode-go/deepseek-v4.1-flash
+{
+  "id": "deepseek-v4.1-flash",
+  "providerID": "opencode-go",
+  "name": "DeepSeek",
+  "cost": { "input": 0.14, "output": 0.28, "cache": { "read": 0.01, "write": 0.02 } },
+  "limit": { "context": 128000, "input": 128000, "output": 8192 },
+  "capabilities": { "reasoning": true },
+  "variants": {
+    "low": { "reasoningEffort": "low" },
+    "high": { "reasoningEffort": "high" },
+    "max": { "reasoningEffort": "max" }
+  }
+}
+opencode/reasoning-only
+{
+  "id": "reasoning-only",
+  "providerID": "opencode",
+  "name": "Reasoning Only",
+  "cost": { "input": 0, "output": 0 },
+  "limit": { "context": 8192 },
+  "capabilities": { "reasoning": true }
+}

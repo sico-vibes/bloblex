@@ -445,6 +445,7 @@ fn usage_report(last: Option<&Value>, model: Option<String>, success: bool) -> U
             cost_minor: None,
             cost_currency: None,
             reported_cost_decimal: None,
+            cost_is_cumulative: false,
         };
     }
     let u = last.cloned().unwrap_or(Value::Null);
@@ -480,6 +481,7 @@ fn usage_report(last: Option<&Value>, model: Option<String>, success: bool) -> U
         cost_minor: None,
         cost_currency: None,
         reported_cost_decimal: None,
+        cost_is_cumulative: false,
     }
 }
 fn parse_catalog_model(m: &Value) -> Result<ModelInfo, AdapterError> {

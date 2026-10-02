@@ -347,6 +347,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bloblex-agent-core",
+ "chrono",
  "serde_json",
  "tokio",
 ]

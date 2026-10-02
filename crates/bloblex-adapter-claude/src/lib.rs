@@ -221,7 +221,7 @@ async fn parse_line(
             let turn_id = active_turn_id.lock().await.clone().unwrap_or_default();
             let _ = tx.send(AgentEvent::UsageReport { turn_id, report: UsageReport {
                 input_tokens: None, output_tokens: None, cache_read_tokens: None, cache_write_tokens: None, reasoning_tokens: None,
-                usage_status: "unreported".into(), provider_update_id: None, context_used: None, context_size: None,
+                usage_status: "unreported".into(), evidence_note: None, provider_update_id: None, context_used: None, context_size: None,
                 model: None, cost_minor: None, cost_currency: None, reported_cost_decimal: None,
             }}).await;
             let _ = tx
@@ -243,7 +243,7 @@ async fn parse_line(
             let _ = tx.send(AgentEvent::UsageReport { turn_id, report: UsageReport {
                     input_tokens: u["input_tokens"].as_u64(), output_tokens: u["output_tokens"].as_u64(),
                     cache_read_tokens: u["cache_read_input_tokens"].as_u64(), cache_write_tokens: u["cache_creation_input_tokens"].as_u64(),
-                    reasoning_tokens: u["output_tokens_details"]["thinking_tokens"].as_u64(), usage_status: if u.is_object() { "reported" } else { "unreported" }.into(),
+                    reasoning_tokens: u["output_tokens_details"]["thinking_tokens"].as_u64(), usage_status: if u.is_object() { "reported" } else { "unreported" }.into(), evidence_note: None,
                     provider_update_id: None, context_used: None, context_size: None,
                     model, cost_minor, cost_currency: cost_minor.map(|_| "USD".into()),
                     reported_cost_decimal: total_cost,
@@ -251,7 +251,7 @@ async fn parse_line(
             } else {
                 let _ = tx.send(AgentEvent::UsageReport { turn_id: String::new(), report: UsageReport {
                     input_tokens: None, output_tokens: None, cache_read_tokens: None, cache_write_tokens: None, reasoning_tokens: None,
-                    usage_status: "unreported".into(), provider_update_id: None, context_used: None, context_size: None,
+                    usage_status: "unreported".into(), evidence_note: None, provider_update_id: None, context_used: None, context_size: None,
                     model: None, cost_minor: None, cost_currency: None, reported_cost_decimal: None,
                 }}).await;
             }

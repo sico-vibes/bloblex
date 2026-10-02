@@ -11,6 +11,8 @@ pub enum AdapterError {
     Unsupported(String),
     #[error("provider protocol error: {0}")]
     Protocol(String),
+    #[error("provider rejected execution settings: {0}")]
+    Rejected(String),
     #[error("provider process unavailable: {0}")]
     Process(String),
     #[error("operation failed: {0}")]
@@ -111,6 +113,8 @@ pub struct UsageReport {
     pub cache_write_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
     pub usage_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_note: Option<String>,
     pub provider_update_id: Option<String>,
     pub context_used: Option<u64>,
     pub context_size: Option<u64>,

@@ -30,6 +30,7 @@ import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicat
 import { AnalyticsView } from './AnalyticsView'
 import { ApprovalPill } from './approvalUi'
 import { BlobPage, ConfirmDialog } from './BlobPage'
+import { UpdateAvailableBanner, useMainUpdateOffer } from './UpdateBanner'
 import { SettingsSheet, type SettingsPageId } from './SettingsSheet'
 import { stampCompanionDragRegions } from './companionDrag'
 import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectLocalFile, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream } from '../tauri'
@@ -65,6 +66,8 @@ export function App() {
   const [usagePeriod, setUsagePeriod] = useState<'today' | 'month'>('today')
   const [settingsSheet, setSettingsSheet] = useState(false)
   const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPageId>('General')
+  const [settingsFocus, setSettingsFocus] = useState<null | 'updates'>(null)
+  const updateOffer = useMainUpdateOffer(companion)
   const executionGate = useRef<ExecutionSendGate>({ model: false, thinking: false, serviceTier: false })
   const [appliedModel, setAppliedModel] = useState<string | null>(null)
   const [diffViewer, setDiffViewer] = useState<{ path: string; content: string } | null>(null)
@@ -866,12 +869,13 @@ export function App() {
           <div className="sidebar-profile">
             <span className={`presence-ring ${connection}`}><i /></span>
             <span className="sidebar-profile-copy"><strong>{connection === 'connected' ? 'Local runtime' : connection === 'connecting' ? 'Connecting…' : 'Runtime offline'}</strong><small>{connection === 'connected' ? 'Private to this device' : connection === 'connecting' ? 'Checking daemon' : 'No agent state available'}</small></span>
-            <button className="icon-button settings-trigger" title="Settings" aria-label="Settings" onClick={() => { setSettingsInitialPage('General'); setSettingsSheet(true) }}><Settings2 size={16} /></button>
+            <button className="icon-button settings-trigger" title="Settings" aria-label="Settings" onClick={() => { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }}><Settings2 size={16} /></button>
           </div>
         </div>
       </aside>
 
       <section className="conversation-pane">
+        {updateOffer.version && <UpdateAvailableBanner version={updateOffer.version} onView={() => { setSettingsInitialPage('General'); setSettingsFocus('updates'); setSettingsSheet(true) }} onLater={updateOffer.dismiss} />}
         {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} connected={connection === 'connected'} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         <header className="chat-header">
           <div className="chat-title">
@@ -931,7 +935,7 @@ export function App() {
       </aside>
 
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} loading={busy && usageSummary === null} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onClose={() => setUsageSheet(false)} />}
-      {settingsSheet && <SettingsSheet snapshot={snapshot} initialPage={settingsInitialPage} onClose={() => setSettingsSheet(false)} onRefresh={refreshRuntimes} onError={setError} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
+      {settingsSheet && <SettingsSheet snapshot={snapshot} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
       {chooserView}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body="It leaves the roster. Its conversations stay saved. Restoring a blob is not available yet." confirmLabel="Archive" cancelLabel="Cancel" onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}

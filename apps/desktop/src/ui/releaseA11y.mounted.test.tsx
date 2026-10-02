@@ -17,6 +17,12 @@ vi.mock('../tauri', () => ({
   setCompanionMonitor: vi.fn(),
   companionMonitorOptions: async () => [],
   currentCompanionMonitor: async () => null,
+  updatesGetState: async () => ({ currentVersion: '0.1.0', channel: 'beta' as const, autoCheck: true, lastCheckedAt: null, available: null, devBuild: false }),
+  updatesSetPreferences: async () => ({ currentVersion: '0.1.0', channel: 'beta' as const, autoCheck: true, lastCheckedAt: null, available: null, devBuild: false }),
+  updatesCheck: async () => ({ status: 'up_to_date' as const, checkedAt: '2026-10-02T00:00:00.000Z' }),
+  updatesInstall: async () => undefined,
+  listenForUpdateAvailable: async () => () => undefined,
+  listenForUpdateProgress: async () => () => undefined,
 }))
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn() }))
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => null }))
@@ -67,8 +73,8 @@ describe('settings and blob dialog accessibility', () => {
     const about = view.host.querySelector('[data-settings-about]')
     expect(about?.textContent).toContain(`Version: ${appVersion}`)
     expect(about?.textContent).toContain('Channel: local build')
-    expect(about?.textContent).toContain('Updates: not configured')
     expect(about?.textContent).toContain('Signing: not configured')
+    expect(about?.textContent).not.toContain('Updates: not configured')
     expect(about?.querySelector('button, input, select, textarea')).toBeNull()
     expect(view.host.querySelector('[aria-label="Close settings"] svg')?.getAttribute('aria-hidden')).toBe('true')
     const dialog = view.host.querySelector('.settings-sheet')

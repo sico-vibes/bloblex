@@ -263,6 +263,20 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .release-status small { color: #b8ac92; font-size: 10px; line-height: 1.5; }
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.update-dev-note { margin: 0; padding: 12px 14px; color: #e7d7b4; border-bottom: 1px solid #ffffff10; font-size: 12px; line-height: 1.5; }
+.update-results { gap: 12px; }
+.update-status { margin: 0; color: #d8dbe2; font-size: 12px; line-height: 1.5; }
+.update-offer p { margin: 0; color: #d8dbe2; font-size: 12px; line-height: 1.5; }
+.update-notes { white-space: pre-wrap; color: var(--muted); }
+.update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.update-progress { height: 6px; border-radius: 999px; background: #ffffff14; overflow: hidden; }
+.update-progress > span { display: block; height: 100%; width: 0; background: #89d6b3; }
+.update-progress.is-indeterminate > span { width: 35%; animation: update-progress-slide 1.1s ease-in-out infinite; }
+@keyframes update-progress-slide { from { transform: translateX(-120%); } to { transform: translateX(320%); } }
+.update-confirm-backdrop { z-index: 30; align-items: center; }
+@media (prefers-reduced-motion: reduce) {
+  .update-progress.is-indeterminate > span { animation: none; transform: none; width: 100%; opacity: 0.55; }
+}
 @media (max-width: 780px) {
   .settings-sheet { width: calc(100vw - 22px); height: calc(100vh - 22px); }
   .settings-layout { grid-template-columns: 200px minmax(0, 1fr); }

@@ -263,6 +263,9 @@ async fn parse_line(
                 }
             }
         }
+        "result" if resume_rejected_result(v) => {
+            return;
+        }
         "result" if v["is_error"].as_bool().unwrap_or(false) => {
             let terminal_reason = v["terminal_reason"].as_str().unwrap_or("");
             let error_text = v["result"].as_str().unwrap_or("").to_ascii_lowercase();
@@ -359,6 +362,19 @@ async fn parse_line(
         _ => {}
     }
 }
+
+fn resume_rejected_result(value: &Value) -> bool {
+    value["type"].as_str() == Some("result")
+        && value["subtype"].as_str() == Some("error_during_execution")
+        && value["num_turns"].as_u64() == Some(0)
+        && value["errors"].as_array().is_some_and(|errors| {
+            errors.iter().any(|error| {
+                error.as_str().is_some_and(|message| {
+                    message.starts_with("No conversation found with session ID")
+                })
+            })
+        })
+}
 impl ClaudeAdapter {
     pub fn with_private_tmp_dir(path:PathBuf)->Self{Self{sessions:Mutex::new(HashMap::new()),instruction_hash_context:Mutex::new(HashMap::new()),private_tmp_override:Some(path),system_root_override:None}}
     /// Test seam: use a fake `System32/icacls.exe` while keeping the same ACL arguments.
@@ -434,10 +450,26 @@ impl ClaudeAdapter {
             active_turn_id: Mutex::new(None),
         });
         let reader = conn.clone();
+        let (resume_ready_tx, resume_ready_rx) = tokio::sync::oneshot::channel();
+        let check_resume = provider_session_id.is_some();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
+            let mut resume_ready_tx = Some(resume_ready_tx);
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                    if check_resume {
+                        if resume_rejected_result(&v) {
+                            if let Some(tx) = resume_ready_tx.take() {
+                                let _ = tx.send(Err(AdapterError::ResumeRejected));
+                            }
+                        } else if v["type"].as_str() == Some("system")
+                            && v["subtype"].as_str() == Some("init")
+                        {
+                            if let Some(tx) = resume_ready_tx.take() {
+                                let _ = tx.send(Ok(()));
+                            }
+                        }
+                    }
                         if v["type"].as_str() == Some("result") {
                             reader.active_turn.store(false, Ordering::SeqCst);
                             if !v["is_error"].as_bool().unwrap_or(false) {
@@ -484,6 +516,21 @@ impl ClaudeAdapter {
                 let _ = reader.events.send(event).await;
             }
         });
+        if check_resume {
+            match tokio::time::timeout(StdDuration::from_secs(8), resume_ready_rx).await {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(error))) => {
+                    let _ = conn.process_tree.terminate();
+                    let _ = conn.child.lock().await.kill().await;
+                    return Err(error);
+                }
+                _ => {
+                    let _ = conn.process_tree.terminate();
+                    let _ = conn.child.lock().await.kill().await;
+                    return Err(AdapterError::Process("Claude resume did not initialize".into()));
+                }
+            }
+        }
         Ok(conn)
     }
 }

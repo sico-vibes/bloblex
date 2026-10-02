@@ -648,16 +648,17 @@ async fn prompt_rpc_error_is_unreported_and_hides_provider_text() {
 async fn verbose_catalog_comes_from_the_child_and_isolates_its_profile() {
     let temp = Temp::new();
     let adapter = AcpAdapter::default();
-    let runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into()]);
+    let runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into(), "--catalog-with-effort".into()]);
     let catalog = adapter.model_catalog(&runtime).await.unwrap();
-    assert_eq!(catalog.source, "cli_verbose");
+    assert_eq!(catalog.source, "acp_config_options");
     assert!(!catalog.fallback);
-    assert_eq!(catalog.models.len(), 3);
+    assert_eq!(catalog.models.len(), 2);
+    assert_eq!(catalog.models[0].id, "opencode/big-pickle");
+    assert_eq!(catalog.models[0].variants.as_deref(), Some(&["build", "plan"].map(str::to_owned)[..]));
+    assert!(catalog.models[0].supported_thinking.contains(&"low".into()));
     assert!(catalog.models.iter().all(|model| model.host_dependent && model.service_tiers.is_empty()));
-    assert!(catalog.models.iter().all(|model| !model.supported_thinking.iter().any(|level| level == "default")));
-    let thinking: BTreeSet<_> = catalog.models[1].supported_thinking.iter().cloned().collect();
-    assert_eq!(thinking, BTreeSet::from(["high".into(), "low".into(), "max".into()]));
-    assert!(catalog.models[2].supported_thinking.is_empty());
+    assert!(catalog.models.iter().all(|model| model.supported_thinking.iter().any(|level| level == "default")));
+    assert!(catalog.models[1].supported_thinking.contains(&"max".into()));
     let isolated: BTreeSet<_> = read_record(&temp.record())["isolated_dirs"]
         .as_array()
         .unwrap()
@@ -677,6 +678,17 @@ async fn verbose_catalog_comes_from_the_child_and_isolates_its_profile() {
             "OPENCODE_STATE_DIR".into(),
         ])
     );
+}
+
+#[tokio::test]
+async fn verbose_catalog_is_used_when_session_handshake_has_no_config_options() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into(), "--catalog-no-config-options".into()]);
+    let catalog = adapter.model_catalog(&runtime).await.unwrap();
+    assert_eq!(catalog.source, "cli_verbose");
+    assert!(!catalog.fallback);
+    assert_eq!(catalog.models.len(), 3);
 }
 
 #[tokio::test]

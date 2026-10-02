@@ -20,6 +20,13 @@ fn main() {
         catalog_main(&flags);
         return;
     }
+    if args.iter().any(|arg| arg == "--hang") {
+        thread::sleep(Duration::from_secs(30));
+        return;
+    }
+    if args.iter().any(|arg| arg == "--fail") {
+        std::process::exit(2);
+    }
     acp_main(&args, &flags);
 }
 
@@ -115,10 +122,10 @@ impl Session {
         }
     }
 
-    fn options(&self) -> Value {
+    fn options(&self, include_effort: bool) -> Value {
         let mut options = vec![select("model", &self.model, &self.models), select("mode", &self.mode, &self.modes)];
-        if let Some(effort) = &self.effort {
-            options.push(select("effort", effort, &self.efforts));
+        if include_effort || self.effort.is_some() {
+            options.push(select("effort", self.effort.as_deref().unwrap_or("low"), &self.efforts));
         }
         Value::Array(options)
     }
@@ -191,7 +198,11 @@ fn acp_main(_args: &[String], flags: &Flags) {
             }
             "session/new" | "session/load" => {
                 let session_id = message["params"]["sessionId"].as_str().unwrap_or("native-session");
-                respond(&mut stdout, &id, json!({"sessionId": session_id, "configOptions": session.options()}));
+                let mut result = json!({"sessionId": session_id});
+                if !env::args().any(|arg| arg == "--catalog-no-config-options") {
+                    result["configOptions"] = session.options(env::args().any(|arg| arg == "--catalog-with-effort"));
+                }
+                respond(&mut stdout, &id, result);
             }
             "session/set_config_option" => {
                 let config_id = message["params"]["configId"].as_str().unwrap_or("");
@@ -199,7 +210,7 @@ fn acp_main(_args: &[String], flags: &Flags) {
                 if !apply_option(&mut session, config_id, value) {
                     error(&mut stdout, &id, -32602, "option value is not offered");
                 } else {
-                    respond(&mut stdout, &id, json!({"configOptions": session.options()}));
+                    respond(&mut stdout, &id, json!({"configOptions": session.options(false)}));
                 }
                 write_record(flags, &rpc, Some(&session));
             }

@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt},
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
 };
 use uuid::Uuid;
@@ -18,6 +18,16 @@ pub(crate) async fn fetch_model_catalog(
     runtime: &RuntimeSpec,
     timeout: Duration,
 ) -> Result<ModelCatalog, AdapterError> {
+    if let Some(models) = fetch_config_options(runtime, timeout).await {
+        let fetched = unix_now();
+        return Ok(ModelCatalog {
+            models,
+            fetched_at: rfc3339_from_unix(fetched),
+            expires_at: rfc3339_from_unix(fetched.saturating_add(60)),
+            fallback: false,
+            source: "acp_config_options".into(),
+        });
+    }
     let temp = TempHome::new().map_err(|_| AdapterError::Process(ERR_CATALOG.into()))?;
     let mut command = Command::new(&runtime.executable);
     prepare_command(&mut command);
@@ -72,6 +82,56 @@ pub(crate) async fn fetch_model_catalog(
         fallback: false,
         source: "cli_verbose".into(),
     })
+}
+
+async fn fetch_config_options(runtime: &RuntimeSpec, timeout: Duration) -> Option<Vec<ModelInfo>> {
+    let temp = TempHome::new().ok()?;
+    let mut command = Command::new(&runtime.executable);
+    prepare_command(&mut command);
+    command
+        .args(&runtime.args)
+        .arg("acp")
+        .arg("--cwd")
+        .arg(temp.path())
+        .current_dir(temp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    temp.apply_env(&mut command);
+    command.env_remove("OPENCODE_CONFIG_CONTENT");
+    let mut child = command.spawn().ok()?;
+    let process_tree = ProcessTree::attach(&mut child).ok()?;
+    let stdin = child.stdin.take()?;
+    let stdout = child.stdout.take()?;
+    let result = tokio::time::timeout(timeout, async move {
+        let mut stdin = stdin;
+        let mut stdout = BufReader::new(stdout).lines();
+        for request in [
+            r#"{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Bloblex","version":"0.1.0"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":"2","method":"session/new","params":{"cwd":".","mcpServers":[]}}"#,
+        ] {
+            stdin.write_all(request.as_bytes()).await.ok()?;
+            stdin.write_all(b"\n").await.ok()?;
+        }
+        while let Some(line) = stdout.next_line().await.ok()? {
+            let message: Value = serde_json::from_str(&line).ok()?;
+            if message["id"].as_str() == Some("2") && message.get("error").is_none() {
+                return crate::exec::config_option_catalog(
+                    &crate::exec::options_from_result(&message["result"]),
+                );
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten();
+    let _ = process_tree.terminate();
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    result
 }
 
 async fn kill_child(child: &mut Child, process_tree: &ProcessTree) {

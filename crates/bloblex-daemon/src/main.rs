@@ -833,6 +833,60 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         json!({"id":id,"runtimeId":runtime_id,"agentId":agent_id,"provider":provider,"providerSessionId":handle.provider_session_id,"projectPath":p["projectPath"],"title":title,"state":"idle","resumable":handle.capabilities.resume,"turns":[],"messages":[],"tools":[],"files":[]}),
     )
 }
+async fn resume_or_start_fresh(
+    st: &AppState,
+    adapter: Arc<dyn AgentAdapter>,
+    runtime: &RuntimeSpec,
+    session_id: &str,
+    provider_session_id: String,
+    project_path: PathBuf,
+    exec_options: ExecOptions,
+) -> Result<(SessionHandle, tokio::sync::mpsc::Receiver<AgentEvent>, bool), bloblex_agent_core::AdapterError> {
+    let (tx, rx) = tokio::sync::mpsc::channel(256);
+    match adapter
+        .resume_session(
+            runtime,
+            ResumeSessionRequest {
+                session_id: session_id.to_owned(),
+                provider_session_id,
+                project_path: project_path.clone(),
+                exec_options: exec_options.clone(),
+            },
+            tx,
+        )
+        .await
+    {
+        Ok(handle) => Ok((handle, rx, false)),
+        Err(bloblex_agent_core::AdapterError::ResumeRejected) => {
+            st.db
+                .clear_session_provider_id(session_id)
+                .map_err(|error| bloblex_agent_core::AdapterError::Other(error.to_string()))?;
+            st.emit(
+                "session.resume_rejected",
+                json!({
+                    "sessionId": session_id,
+                    "outcomeNote": "The saved provider session expired. A new provider session was started."
+                }),
+            )
+            .await;
+            let (fresh_tx, fresh_rx) = tokio::sync::mpsc::channel(256);
+            let handle = adapter
+                .new_session(
+                    runtime,
+                    NewSessionRequest {
+                        session_id: session_id.to_owned(),
+                        project_path,
+                        exec_options,
+                    },
+                    fresh_tx,
+                )
+                .await?;
+            Ok((handle, fresh_rx, true))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
     if st.sessions.lock().await.contains_key(&sid) {
@@ -888,22 +942,18 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
     let desired_instruction_hash=bloblex_agent_core::instruction_sha256(exec_options.instructions.as_deref().unwrap_or(""));
     if provider=="codex" {let baseline=st.db.codex_thread_instruction_sha256(&sid).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;adapter.set_instruction_hash_context(&sid,desired_instruction_hash,baseline).await;}
     let startup_options=exec_options.clone();
-    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-    let handle_result = adapter
-        .resume_session(
-            &spec,
-            ResumeSessionRequest {
-                session_id: sid.clone(),
-                provider_session_id: native_id,
-                project_path: project.clone(),
-                exec_options,
-            },
-            tx,
-        )
-        .await;
-    let mut resume_fallback = false;
-    let handle=match handle_result {
-        Ok(handle)=>handle,
+    let resume_result = resume_or_start_fresh(
+        st,
+        adapter.clone(),
+        &spec,
+        &sid,
+        native_id,
+        project.clone(),
+        exec_options,
+    )
+    .await;
+    let (handle, rx, resume_fallback) = match resume_result {
+        Ok(result) => result,
         Err(bloblex_agent_core::AdapterError::ContextExhausted) => {
             st.emit("session.context_exhausted", json!({
                 "sessionId": sid,
@@ -912,30 +962,9 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
             })).await;
             return Err(derr("provider_error", "Context window is full. Start a new conversation.", StatusCode::BAD_GATEWAY));
         }
-        Err(bloblex_agent_core::AdapterError::ResumeRejected) => {
-            st.db.clear_session_provider_id(&sid).map_err(|e| {
-                derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
-            })?;
-            st.emit("session.resume_rejected", json!({
-                "sessionId": sid,
-                "outcomeNote": "The saved provider session expired. A new provider session was started."
-            })).await;
-            let (fresh_tx, fresh_rx) = tokio::sync::mpsc::channel(256);
-            rx = fresh_rx;
-            resume_fallback = true;
-            adapter.new_session(
-                &spec,
-                NewSessionRequest {
-                    session_id: sid.clone(),
-                    project_path: project,
-                    exec_options: startup_options.clone(),
-                },
-                fresh_tx,
-            ).await.map_err(|e| derr("provider_error", &e.to_string(), StatusCode::BAD_GATEWAY))?
-        }
-        Err(e)=>{
-            if provider=="codex"&&matches!(&e,bloblex_agent_core::AdapterError::Rejected(_)) {emit_codex_startup_rejections(st,&sid,row["agentId"].as_str(),&runtime,&startup_options).await;}
-            return Err(derr("provider_error",&e.to_string(),StatusCode::BAD_GATEWAY));
+        Err(other) => {
+            if provider=="codex"&&matches!(&other,bloblex_agent_core::AdapterError::Rejected(_)) {emit_codex_startup_rejections(st,&sid,row["agentId"].as_str(),&runtime,&startup_options).await;}
+            return Err(derr("provider_error",&other.to_string(),StatusCode::BAD_GATEWAY));
         }
     };
     if st.sessions.lock().await.contains_key(&sid) {
@@ -1179,10 +1208,29 @@ async fn forward_events(
     sid: String,
     provider: String,
     runtime_id: String,
-    mut rx: tokio::sync::mpsc::Receiver<AgentEvent>,
+    rx: tokio::sync::mpsc::Receiver<AgentEvent>,
 ) {
-    const STARTUP_NO_PROGRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
-    const SEMANTIC_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+    forward_events_with_timeouts(
+        st,
+        sid,
+        provider,
+        runtime_id,
+        rx,
+        std::time::Duration::from_secs(45),
+        std::time::Duration::from_secs(300),
+    )
+    .await;
+}
+
+async fn forward_events_with_timeouts(
+    st: AppState,
+    sid: String,
+    provider: String,
+    runtime_id: String,
+    mut rx: tokio::sync::mpsc::Receiver<AgentEvent>,
+    startup_no_progress_timeout: std::time::Duration,
+    semantic_inactivity_timeout: std::time::Duration,
+) {
     let mut watched_turn: Option<String> = None;
     let mut last_semantic_progress = Instant::now();
     let mut saw_semantic_progress = false;
@@ -1195,21 +1243,47 @@ async fn forward_events(
                 saw_semantic_progress = false;
             }
             let limit = if saw_semantic_progress {
-                SEMANTIC_INACTIVITY_TIMEOUT
+                semantic_inactivity_timeout
             } else {
-                STARTUP_NO_PROGRESS_TIMEOUT
+                startup_no_progress_timeout
             };
             let remaining = limit.saturating_sub(last_semantic_progress.elapsed());
             match tokio::time::timeout(remaining, rx.recv()).await {
                 Ok(event) => event,
                 Err(_) => {
-                    let active = st.sessions.lock().await.get(&sid).cloned();
+                    let active = st.sessions.lock().await.remove(&sid);
                     if let Some(active) = active {
                         let _ = active.adapter.close_session(&active.handle).await;
+                        let row = st.db.session_detail(&sid).ok();
+                        if let Some(row) = row {
+                            let options = exec_options_for_session(&st, &row).unwrap_or_default();
+                            let (fresh_tx, fresh_rx) = tokio::sync::mpsc::channel(256);
+                            if let Ok(handle) = active.adapter.resume_session(
+                                &active.runtime,
+                                ResumeSessionRequest {
+                                    session_id: sid.clone(),
+                                    provider_session_id: active.handle.provider_session_id.clone(),
+                                    project_path: PathBuf::from(row["projectPath"].as_str().unwrap_or("")),
+                                    exec_options: options,
+                                },
+                                fresh_tx,
+                            ).await {
+                                let recovered = ActiveSession {
+                                    handle,
+                                    runtime: active.runtime.clone(),
+                                    adapter: active.adapter.clone(),
+                                    launch_approval_mode: active.launch_approval_mode,
+                                };
+                                st.sessions.lock().await.insert(sid.clone(), recovered);
+                                let _ = st.db.update_session_state(&sid, "idle");
+                                rx = fresh_rx;
+                            }
+                        }
                     }
-                    st.sessions.lock().await.remove(&sid);
                     let _ = st.db.update_turn_outcome(turn_id, "error", Some("timeout"));
-                    let _ = st.db.update_session_state(&sid, "error");
+                    if !st.sessions.lock().await.contains_key(&sid) {
+                        let _ = st.db.update_session_state(&sid, "error");
+                    }
                     st.active_turns.lock().await.remove(&sid);
                     st.emit("turn.error", json!({
                         "sessionId": sid,
@@ -1728,6 +1802,35 @@ mod phase2a_tests {
         async fn reply_permission(&self,_:&str,_:&str)->Result<(),bloblex_agent_core::AdapterError>{self.replies.fetch_add(1,std::sync::atomic::Ordering::SeqCst);Ok(())}
         async fn close_session(&self,_:&SessionHandle)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
     }
+    struct LifecycleAdapter {
+        reject_resume: bool,
+        allow_resume: bool,
+        resume_calls: std::sync::atomic::AtomicUsize,
+        new_calls: std::sync::atomic::AtomicUsize,
+        close_calls: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl AgentAdapter for LifecycleAdapter {
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, request: NewSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.new_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = events.send(AgentEvent::SessionStarted { provider_session_id: "fresh-provider-session".into() }).await;
+            Ok(SessionHandle { session_id: request.session_id, provider_session_id: "fresh-provider-session".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() })
+        }
+        async fn resume_session(&self, _: &RuntimeSpec, request: ResumeSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.resume_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.reject_resume { return Err(bloblex_agent_core::AdapterError::ResumeRejected); }
+            if self.allow_resume {
+                let _ = events.send(AgentEvent::SessionStarted { provider_session_id: "saved-provider-session".into() }).await;
+                return Ok(SessionHandle { session_id: request.session_id, provider_session_id: request.provider_session_id, capabilities: bloblex_agent_core::AgentCapabilities::default() });
+            }
+            Err(bloblex_agent_core::AdapterError::Protocol("generic adapter error".into()))
+        }
+        async fn prompt(&self, _: &SessionHandle, _: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { self.close_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst); Ok(()) }
+    }
     #[test] fn normalized_permission_requests_map_provider_tool_names_and_fail_closed(){
         let(kind,body)=normalized_permission("claude",&json!({"request":{"tool_name":"Bash","input":{"command":"git status"}}}));assert_eq!(kind,"shell");assert_eq!(body["command"],"git status");
         let(kind,body)=normalized_permission("claude",&json!({"request":{"tool_name":"Read","input":{"file_path":"src/lib.rs"}}}));assert_eq!(kind,"read");assert_eq!(body["file_path"],"src/lib.rs");
@@ -1776,6 +1879,67 @@ mod phase2a_tests {
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
         let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),stopping:Arc::new(tokio::sync::Notify::new())};(st,rx)
+    }
+    #[tokio::test]
+    async fn daemon_resume_rejection_clears_pointer_starts_fresh_and_records_outcome(){
+        let(st,mut events)=state();
+        st.db.create_session("resume-test","rt-test","codex",".","Resume test").unwrap();
+        st.db.set_session_provider_id("resume-test","saved-provider-session",true).unwrap();
+        let adapter=Arc::new(LifecycleAdapter{reject_resume:true,allow_resume:false,resume_calls:Default::default(),new_calls:Default::default(),close_calls:Default::default()});
+        let runtime=RuntimeSpec{runtime_id:"rt-test".into(),provider:"codex".into(),executable:PathBuf::from("fake"),args:vec![],cwd:None};
+        let(handle,_rx,fallback)=resume_or_start_fresh(&st,adapter.clone(),&runtime,"resume-test","saved-provider-session".into(),PathBuf::from("."),ExecOptions::default()).await.unwrap();
+        assert!(fallback);
+        assert_eq!(handle.provider_session_id,"fresh-provider-session");
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst),1);
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst),1);
+        assert_eq!(st.db.session_detail("resume-test").unwrap()["providerSessionId"],Value::Null);
+        let event=events.recv().await.unwrap();
+        assert_eq!(event.event_type,"session.resume_rejected");
+        assert!(event.payload["outcomeNote"].as_str().unwrap().contains("new provider session was started"));
+    }
+    #[tokio::test]
+    async fn daemon_generic_resume_error_preserves_saved_provider_pointer(){
+        let(st,_events)=state();
+        st.db.create_session("resume-generic","rt-test","codex",".","Resume test").unwrap();
+        st.db.set_session_provider_id("resume-generic","saved-provider-session",true).unwrap();
+        let adapter=Arc::new(LifecycleAdapter{reject_resume:false,allow_resume:false,resume_calls:Default::default(),new_calls:Default::default(),close_calls:Default::default()});
+        let runtime=RuntimeSpec{runtime_id:"rt-test".into(),provider:"codex".into(),executable:PathBuf::from("fake"),args:vec![],cwd:None};
+        let error=resume_or_start_fresh(&st,adapter.clone(),&runtime,"resume-generic","saved-provider-session".into(),PathBuf::from("."),ExecOptions::default()).await.unwrap_err();
+        assert!(matches!(error,bloblex_agent_core::AdapterError::Protocol(_)));
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst),0);
+        assert_eq!(st.db.session_detail("resume-generic").unwrap()["providerSessionId"],"saved-provider-session");
+    }
+    #[tokio::test]
+    async fn watchdogs_expire_both_progress_windows_close_sessions_and_release_turns(){
+        for semantic_progress in [false,true]{
+            let(st,mut events)=state();
+            let sid=if semantic_progress{"semantic-timeout"}else{"startup-timeout"};
+            let turn=if semantic_progress{"semantic-turn"}else{"startup-turn"};
+            st.db.create_session(sid,"rt-test","codex",".","Watchdog").unwrap();
+            st.db.create_turn(turn,sid).unwrap();
+            st.db.update_session_state(sid,"working").unwrap();
+            st.active_turns.lock().await.insert(sid.into(),turn.into());
+            let adapter=Arc::new(LifecycleAdapter{reject_resume:false,allow_resume:true,resume_calls:Default::default(),new_calls:Default::default(),close_calls:Default::default()});
+            let handle=SessionHandle{session_id:sid.into(),provider_session_id:"native".into(),capabilities:bloblex_agent_core::AgentCapabilities::default()};
+            let runtime=RuntimeSpec{runtime_id:"rt-test".into(),provider:"codex".into(),executable:PathBuf::from("fake"),args:vec![],cwd:None};
+            st.sessions.lock().await.insert(sid.into(),ActiveSession{handle,runtime,adapter:adapter.clone(),launch_approval_mode:ApprovalMode::Ask});
+            let(tx,rx)=tokio::sync::mpsc::channel(8);
+            let task=tokio::spawn(forward_events_with_timeouts(st.clone(),sid.into(),"codex".into(),"rt-test".into(),rx,std::time::Duration::from_millis(25),std::time::Duration::from_millis(25)));
+            if semantic_progress { tx.send(AgentEvent::AssistantDelta{text:"progress".into()}).await.unwrap(); }
+            let mut saw_error=false;
+            while !saw_error {
+                let event=tokio::time::timeout(std::time::Duration::from_secs(1),events.recv()).await.unwrap().unwrap();
+                if event.event_type=="turn.error" { assert_eq!(event.payload["failureClass"],"timeout"); saw_error=true; }
+            }
+            drop(tx);
+            task.await.unwrap();
+            assert_eq!(st.db.turn_failure_class(turn).unwrap().as_deref(),Some("timeout"));
+            assert_eq!(st.active_turns.lock().await.contains_key(sid),false);
+            assert_eq!(adapter.close_calls.load(std::sync::atomic::Ordering::SeqCst),1);
+            assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst),1);
+            assert_eq!(st.db.session_detail(sid).unwrap()["state"],"idle");
+            assert!(st.sessions.lock().await.contains_key(sid));
+        }
     }
     #[tokio::test]
     async fn agent_rpc_crud_reorder_archive_errors_and_persisted_event_sequence(){

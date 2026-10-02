@@ -39,7 +39,17 @@ fn main() {
     }
     let session_id = args.windows(2).find(|pair| pair[0] == "--session-id").map(|pair| pair[1].clone())
         .or_else(|| args.windows(2).find(|pair| pair[0] == "--resume").map(|pair| pair[1].clone())).unwrap_or_else(|| "fake-session".into());
+    if args.iter().any(|arg| arg == "--fake-resume-reject") {
+        emit(json!({"type":"result","subtype":"error_during_execution","duration_ms":0,"duration_api_ms":0,"is_error":true,"num_turns":0,"stop_reason":null,"session_id":session_id,"total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{},"permission_denials":[],"errors":["No conversation found with session ID: 00000000-0000-4000-8000-000000000000"],"result_index":0}));
+        return;
+    }
     emit(json!({"type":"system","subtype":"init","session_id":session_id,"model":model.clone().unwrap_or_else(||"init-only-echo".into())}));
+    if args.iter().any(|arg| arg == "--fake-startup-generic-error") {
+        emit(json!({"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0},"errors":["Provider request failed"]}));
+    }
+    if args.iter().any(|arg| arg == "--fake-startup-phrase-error") {
+        emit(json!({"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0},"errors":["prefix: No conversation found with session ID: elsewhere"]}));
+    }
     let stdin = io::stdin();
     for line in stdin.lock().lines().flatten() {
         let Ok(input) = serde_json::from_str::<Value>(&line) else { continue };

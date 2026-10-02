@@ -1,5 +1,5 @@
 use bloblex_agent_core::{
-    AdapterError, EvidenceKind, ExecOptions, SettingOutcome, UsageReport,
+    AdapterError, EvidenceKind, ExecOptions, ModelInfo, SettingOutcome, UsageReport,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -202,6 +202,31 @@ pub(crate) fn option_values(option: &Value) -> BTreeSet<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+pub(crate) fn config_option_catalog(options: &[Value]) -> Option<Vec<ModelInfo>> {
+    let model_option = config_option(options, "model")?;
+    let models = model_option["options"].as_array()?;
+    let modes = config_option(options, "mode").map(option_values).unwrap_or_default();
+    let effort_option = config_option(options, "effort");
+    let efforts = effort_option.map(option_values).unwrap_or_default();
+    let default_effort = effort_option.and_then(current_value);
+    let mut catalog = Vec::new();
+    for model in models {
+        let id = model["value"].as_str().or_else(|| model["id"].as_str())?;
+        catalog.push(ModelInfo {
+            id: id.to_owned(),
+            display_name: model["name"].as_str().unwrap_or(id).to_owned(),
+            provider_id: None,
+            supported_thinking: efforts.iter().cloned().collect(),
+            default_thinking: default_effort.clone(),
+            service_tiers: Vec::new(),
+            default_service_tier: None,
+            variants: (!modes.is_empty()).then(|| modes.iter().cloned().collect()),
+            host_dependent: true,
+        });
+    }
+    (!catalog.is_empty()).then_some(catalog)
 }
 
 pub(crate) fn current_value(option: &Value) -> Option<String> {

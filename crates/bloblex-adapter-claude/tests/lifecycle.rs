@@ -186,3 +186,43 @@ async fn fake_provider_catalog_failure_returns_static_suggestions() {
     assert_eq!(catalog.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["sonnet", "opus", "fable", "haiku"]);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn resume_rejection_requires_the_observed_zero_turn_session_error_shape() {
+    for (mode, rejected) in [
+        ("--fake-resume-reject", true),
+        ("--fake-startup-generic-error", false),
+        ("--fake-startup-phrase-error", false),
+    ] {
+        let (root, private, audit_path) = paths();
+        let system_root = setup_test_acl(&root);
+        let adapter = ClaudeAdapter::with_test_acl_executable(private, system_root);
+        let rt = runtime(&audit_path, &[mode]);
+        let (tx, mut rx) = mpsc::channel(16);
+        let result = adapter
+            .resume_session(
+                &rt,
+                bloblex_agent_core::ResumeSessionRequest {
+                    session_id: format!("resume-{mode}"),
+                    provider_session_id: "00000000-0000-4000-8000-000000000000".into(),
+                    project_path: root.clone(),
+                    exec_options: ExecOptions::default(),
+                },
+                tx,
+            )
+            .await;
+        if rejected {
+            assert!(matches!(result, Err(bloblex_agent_core::AdapterError::ResumeRejected)));
+            while let Ok(event) = rx.try_recv() {
+                assert!(
+                    !matches!(event, AgentEvent::UsageReport { .. }),
+                    "rejection zeros must not be emitted as usage"
+                );
+            }
+        } else {
+            let handle = result.expect("a generic or embedded phrase error is not resume rejection");
+            adapter.close_session(&handle).await.unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

@@ -8,6 +8,7 @@ name = "bloblexd"
 path = "src/main.rs"
 
 [dependencies]
+async-trait.workspace = true
 axum.workspace = true
 bloblex-protocol = { path = "../bloblex-protocol" }
 bloblex-security = { path = "../bloblex-security" }

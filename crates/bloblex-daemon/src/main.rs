@@ -12,7 +12,7 @@ use bloblex_adapter_acp::AcpAdapter;
 use bloblex_adapter_claude::ClaudeAdapter;
 use bloblex_adapter_codex::CodexAdapter;
 use bloblex_agent_core::{
-    AgentAdapter, AgentEvent, ExecOptions, NewSessionRequest, PromptRequest, ResumeSessionRequest, RuntimeSpec,
+    AgentAdapter, AgentEvent, ApprovalMode, ExecOptions, NewSessionRequest, PromptRequest, ResumeSessionRequest, RuntimeSpec,
     SessionHandle,
 };
 use bloblex_protocol::{
@@ -58,6 +58,7 @@ struct ActiveSession {
     handle: SessionHandle,
     runtime: RuntimeSpec,
     adapter: Arc<dyn AgentAdapter>,
+    launch_approval_mode: ApprovalMode,
 }
 impl AppState {
     async fn emit(&self, kind: &str, payload: Value) {
@@ -199,6 +200,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.db.agent_list(include,runtime).map(|agents|json!({"agents":agents})).map_err(agent_error)
         }
         "agent.get" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?; st.db.agent_get(id).map(|agent|json!({"agent":agent})).map_err(agent_error) }
+        "permissions.policy.get" => { let default=st.db.default_approval_mode().map_err(agent_error)?;let agents=st.db.agent_list(false,None).map_err(agent_error)?;let per_agent=agents.iter().map(|a|json!({"agentId":a["id"],"mode":a["approvalMode"],"effectiveMode":a["effectiveApprovalMode"]})).collect::<Vec<_>>();Ok(json!({"defaultMode":default,"perAgent":per_agent})) }
         "agent.create" => { let runtime_id=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;validate_agent_catalog(st,runtime_id,&p).await?;let (agent,events)=st.db.agent_create(&p).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
         "agent.update" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let existing=st.db.agent_get(id).map_err(agent_error)?;let mut fields=p.clone();fields.as_object_mut().unwrap().remove("agentId");let runtime_id=fields["runtimeId"].as_str().unwrap_or(existing["runtimeId"].as_str().unwrap_or(""));let mut effective=existing.clone();if let (Some(dst),Some(src))=(effective.as_object_mut(),fields.as_object()){for(k,v)in src{dst.insert(k.clone(),v.clone());}}validate_agent_catalog(st,runtime_id,&effective).await?;let (agent,events)=st.db.agent_update(id,&fields).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
         "agent.delete" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
@@ -275,11 +277,6 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::NOT_FOUND,
                 )
             })?;
-            active
-                .adapter
-                .cancel(&active.handle)
-                .await
-                .map_err(|e| derr("unsupported", &e.to_string(), StatusCode::BAD_REQUEST))?;
             st.db.update_session_state(id, "cancelling").map_err(|e| {
                 derr(
                     "internal",
@@ -287,6 +284,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::INTERNAL_SERVER_ERROR,
                 )
             })?;
+            if let Err(e)=active.adapter.cancel(&active.handle).await {
+                let _=st.db.update_session_state(id,"working");
+                return Err(derr("unsupported",&e.to_string(),StatusCode::BAD_REQUEST));
+            }
             let session = st
                 .db
                 .session_detail(id)
@@ -420,6 +421,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let k = p["key"].as_str().unwrap_or("");
             if k.is_empty(){return Err(derr("invalid_argument","key is required",StatusCode::BAD_REQUEST));}
             if k.starts_with("exec_gate.")&&!p["value"].is_boolean(){return Err(derr("invalid_argument","execution gates require a JSON boolean",StatusCode::BAD_REQUEST));}
+            if k=="permissions.default_mode"&&!p["value"].as_str().is_some_and(|v|["ask","auto"].contains(&v)){return Err(derr("invalid_argument","permissions.default_mode must be ask or auto",StatusCode::BAD_REQUEST));}
             if k.to_ascii_lowercase().contains("token")
                 || k.to_ascii_lowercase().contains("secret")
                 || k.to_ascii_lowercase().contains("password")
@@ -432,9 +434,9 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             }
             let events=st.db.set_setting(k, &p["value"]).map_err(|e| {
                 derr(
-                    if k.starts_with("exec_gate."){"invalid_argument"}else{"internal"},
+                    if k.starts_with("exec_gate.")||k=="permissions.default_mode"{"invalid_argument"}else{"internal"},
                     &e.to_string(),
-                    if k.starts_with("exec_gate."){StatusCode::BAD_REQUEST}else{StatusCode::INTERNAL_SERVER_ERROR},
+                    if k.starts_with("exec_gate.")||k=="permissions.default_mode"{StatusCode::BAD_REQUEST}else{StatusCode::INTERNAL_SERVER_ERROR},
                 )
             })?;
             st.broadcast_persisted(events);
@@ -496,10 +498,23 @@ fn adapter_for(a: &Adapters, provider: &str) -> Option<Arc<dyn AgentAdapter>> {
     }
 }
 fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,DispatchError>{
-    let Some(agent_id)=session["agentId"].as_str() else { return Ok(ExecOptions{max_concurrency:4,..ExecOptions::default()}); };
+    let default=st.db.default_approval_mode().map_err(agent_error)?;
+    let Some(agent_id)=session["agentId"].as_str() else { return Ok(ExecOptions{approval_mode:parse_mode(&default),max_concurrency:4,..ExecOptions::default()}); };
     let a=st.db.agent_get(agent_id).map_err(agent_error)?;
     let env=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
-    Ok(ExecOptions{model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32})
+    let mode=a["approvalMode"].as_str().unwrap_or(&default);
+    Ok(ExecOptions{approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32})
+}
+fn parse_mode(s:&str)->ApprovalMode{match s{"auto"=>ApprovalMode::Auto,"bypass"=>ApprovalMode::Bypass,_=>ApprovalMode::Ask}}
+fn provider_mode(provider:&str)->&'static str{match provider{"claude"=>"bypassPermissions","codex"=>"never",_=>"daemon_allow_all"}}
+fn normalized_permission(provider:&str,raw:&Value)->(String,Value){
+    let name=raw["request"]["tool_name"].as_str().or_else(||raw["params"]["toolCall"]["kind"].as_str()).or_else(||raw["toolCall"]["kind"].as_str()).unwrap_or("");
+    let mut body=if provider=="claude"&&!raw["request"]["input"].is_null(){raw["request"]["input"].clone()}else if !raw["params"]["toolCall"].is_null(){raw["params"]["toolCall"].clone()}else{raw.clone()};
+    if let Some(s)=body.as_str(){if let Ok(parsed)=serde_json::from_str::<Value>(s){body=parsed}}
+    let mut kind=name.to_ascii_lowercase().replace(['-','_',' '],"");
+    if kind.is_empty(){let title=raw["params"]["toolCall"]["title"].as_str().or_else(||raw["toolCall"]["title"].as_str()).unwrap_or("").to_ascii_lowercase();if title.contains("command")||title.contains("shell")||title.contains("terminal"){kind="shell".into();}}
+    kind=match kind.as_str(){"bash"|"shell"|"terminal"|"command"=>"shell".into(),"read"|"glob"|"grep"|"ls"|"list"|"search"=>kind,"notebookread"=>"notebook_read".into(),"edit"|"write"=>kind,"notebookedit"=>"edit".into(),_=>"unknown".into()};
+    (kind,body)
 }
 async fn emit_codex_startup_rejections(st:&AppState,session_id:&str,agent_id:Option<&str>,runtime_id:&str,options:&ExecOptions){
     for (setting,requested) in [("model",options.model.as_ref()),("thinking",options.thinking.as_ref()),("serviceTier",options.service_tier.as_ref()),("instructions",options.instructions.as_ref())] {
@@ -576,7 +591,7 @@ async fn preflight_exec_options(st:&AppState,runtime:&Value,provider:&str,option
 }
 const EXEC_UNAVAILABLE: &str = "The requested setting is unavailable for this runtime until its execution check passes.";
 fn safe_requested_options(options: &ExecOptions) -> Value {
-    json!({"model":options.model,"thinking":options.thinking,"serviceTier":options.service_tier,"instructionsPresent":options.instructions.is_some(),"extraArgs":[],"maxConcurrency":options.max_concurrency,"customEnvKeys":options.env.keys().collect::<Vec<_>>()})
+    json!({"model":options.model,"thinking":options.thinking,"serviceTier":options.service_tier,"approvalMode":options.approval_mode.as_str(),"instructionsPresent":options.instructions.is_some(),"extraArgs":[],"maxConcurrency":options.max_concurrency,"customEnvKeys":options.env.keys().collect::<Vec<_>>()})
 }
 fn exec_option_rejection(st: &AppState, provider: &str, options: &ExecOptions) -> Result<Option<(&'static str, &'static str)>, DispatchError> {
     let capabilities: &[(&str, bool)] = match provider {
@@ -712,8 +727,10 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         handle: handle.clone(),
         runtime: spec,
         adapter,
+        launch_approval_mode: startup_options.approval_mode,
     };
     st.sessions.lock().await.insert(id.clone(), active);
+    if startup_options.approval_mode==ApprovalMode::Bypass && matches!(provider.as_str(),"claude"|"codex") { st.emit("permission.bypass_active",json!({"sessionId":id,"agentId":agent_id,"providerMode":provider_mode(&provider)})).await; }
     let state = st.clone();
     let stream_id = id.clone();
     let event_provider = provider.clone();
@@ -817,8 +834,10 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
             handle: handle.clone(),
             runtime: spec,
             adapter,
+            launch_approval_mode: startup_options.approval_mode,
         },
     );
+    if startup_options.approval_mode==ApprovalMode::Bypass&&matches!(provider.as_str(),"claude"|"codex"){st.emit("permission.bypass_active",json!({"sessionId":sid,"agentId":row["agentId"],"providerMode":provider_mode(&provider)})).await;}
     let state = st.clone();
     let sid_for_events = sid.clone();
     let provider_for_events = provider.clone();
@@ -859,7 +878,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             StatusCode::BAD_REQUEST,
         ));
     }
-    let active = st.sessions.lock().await.get(&sid).cloned().ok_or_else(|| {
+    let mut active = st.sessions.lock().await.get(&sid).cloned().ok_or_else(|| {
         derr(
             "not_found",
             "active session not found",
@@ -868,6 +887,17 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
     })?;
     let session_options=st.db.session_detail(&sid).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
     let exec_options=exec_options_for_session(st,&session_options)?;
+    if st.active_turns.lock().await.contains_key(&sid){return Err(derr("conflict","this session already has an active turn",StatusCode::CONFLICT));}
+    if active.runtime.provider=="codex"&&active.launch_approval_mode!=exec_options.approval_mode {
+        let runtime=active.runtime.clone();let adapter=active.adapter.clone();let provider_id=active.handle.provider_session_id.clone();
+        adapter.close_session(&active.handle).await.map_err(|e|derr("provider_error",&e.to_string(),StatusCode::BAD_GATEWAY))?;
+        let (tx,rx)=tokio::sync::mpsc::channel(256);
+        let handle=adapter.resume_session(&runtime,ResumeSessionRequest{session_id:sid.clone(),provider_session_id:provider_id,project_path:PathBuf::from(session_options["projectPath"].as_str().unwrap_or("")),exec_options:exec_options.clone()},tx).await.map_err(|e|derr("provider_error",&e.to_string(),StatusCode::BAD_GATEWAY))?;
+        active=ActiveSession{handle,runtime,adapter,launch_approval_mode:exec_options.approval_mode};
+        st.sessions.lock().await.insert(sid.clone(),active.clone());
+        let state=st.clone();let stream_id=sid.clone();let event_provider=active.runtime.provider.clone();let event_runtime=active.runtime.runtime_id.clone();
+        tokio::spawn(async move{forward_events(state,stream_id,event_provider,event_runtime,rx).await;});
+    }
     let turn = Uuid::new_v4().to_string();
     let runtime_value=st.runtimes.read().await.iter().find(|r|r["id"]==active.runtime.runtime_id).cloned().unwrap_or(Value::Null);
     let desired_instruction_hash=bloblex_agent_core::instruction_sha256(exec_options.instructions.as_deref().unwrap_or(""));
@@ -950,10 +980,12 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             })?;
         let snapshot_id = Uuid::new_v4().to_string();
         let requested = safe_requested_options(&exec_options);
-        let requested_any = exec_options.model.is_some() || exec_options.thinking.is_some() || exec_options.service_tier.is_some() || exec_options.instructions.is_some() || !exec_options.env.is_empty();
+        let requested_any = exec_options.model.is_some() || exec_options.thinking.is_some() || exec_options.service_tier.is_some() || exec_options.instructions.is_some() || !exec_options.env.is_empty() || exec_options.approval_mode!=ApprovalMode::Ask;
         let settings = st.db.settings().unwrap_or(Value::Null);
         let gates = json!({"model":settings[format!("exec_gate.{}.model",active.runtime.provider)],"thinking":settings[format!("exec_gate.{}.thinking",active.runtime.provider)],"serviceTier":settings[format!("exec_gate.{}.serviceTier",active.runtime.provider)],"instructions":settings[format!("exec_gate.{}.instructions",active.runtime.provider)]});
-        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({}),&json!({}),desired_instruction_hash.as_deref(),&json!({"adapter":active.runtime.provider,"gates":gates}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+        let launch_applied=active.runtime.provider=="claude"||active.runtime.provider=="codex";
+        let mode_outcome=json!({"value":exec_options.approval_mode.as_str(),"applied":true,"kind":"request_shape","reason":if launch_applied{"provider launch mode requested for this turn"}else{"daemon policy mode"}});
+        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({"approvalMode":mode_outcome}),&json!({"approvalMode":{"kind":"request_shape","value":exec_options.approval_mode.as_str()}}),desired_instruction_hash.as_deref(),&json!({"adapter":active.runtime.provider,"gates":gates,"approvalMode":exec_options.approval_mode.as_str()}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
         st.emit("exec.options.changed", json!({"sessionId":sid,"turnId":turn,"agentId":session["agentId"],"runtimeId":active.runtime.runtime_id,"requested":snapshot["requested"],"applied":snapshot["applied"],"snapshotId":snapshot_id})).await;
         st.db.update_session_state(&sid, "working").map_err(|e| {
             derr(
@@ -964,6 +996,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
         })?;
         turns.insert(sid.clone(), turn.clone());
     }
+    if exec_options.approval_mode==ApprovalMode::Bypass && matches!(active.runtime.provider.as_str(),"claude"|"codex") { st.emit("permission.bypass_active",json!({"sessionId":sid,"agentId":session_options["agentId"],"providerMode":provider_mode(&active.runtime.provider)})).await; }
     let state = st.clone();
     let sid2 = sid.clone();
     let turn2 = turn.clone();
@@ -1092,7 +1125,7 @@ async fn forward_events(
                 raw,
             } => {
                 let id = Uuid::new_v4().to_string();
-                let _ = st.db.insert_permission(
+                let inserted = st.db.insert_permission(
                     &id,
                     &sid,
                     &provider_request_id,
@@ -1101,10 +1134,35 @@ async fn forward_events(
                     &choices,
                     &raw,
                 );
-                (
-                    "permission.requested",
-                    json!({"id":id,"sessionId":sid,"runtimeId":runtime_id,"category":"other","title":title,"detail":detail,"risk":"unknown","choices":choices,"expiresAt":null,"status":"pending"}),
-                )
+                let session=st.db.session_detail(&sid).unwrap_or(Value::Null);
+                let default=st.db.default_approval_mode().unwrap_or_else(|_|"ask".into());
+                let mode=session["agentId"].as_str().and_then(|agent|st.db.agent_get(agent).ok()).and_then(|a|a["approvalMode"].as_str().map(str::to_owned)).unwrap_or(default);
+                let turn_id=turn.clone();
+                let (kind,normalized)=normalized_permission(&provider,&raw);
+                let base_summary=bloblex_agent_core::permission_summary(&kind,&normalized);
+                let (summary,decision)=if mode=="bypass" { (base_summary,Some(("policy:bypass".to_owned(),"BYPASS".to_owned()))) }
+                else if mode=="auto" {
+                    let project=PathBuf::from(session["projectPath"].as_str().unwrap_or(""));
+                    let classified=bloblex_agent_core::classify_permission(&kind,&normalized,&project);let category=classified.category.to_owned();let decision=classified.allowed.then(||("policy:auto".to_owned(),category));(classified.summary,decision)
+                } else {(base_summary,None)};
+                if inserted.is_ok() && session["state"]=="working" && st.active_turns.lock().await.contains_key(&sid) {
+                    if let Some((resolved_by,category))=decision {
+                        let choice=choices.iter().find(|c|["allow","allow_once","accept","yes"].contains(&c.as_str())).cloned();
+                        if let Some(choice)=choice {
+                        if let Some((_,reserved_provider_id))=st.db.begin_permission_reply(&id,&choice).ok().flatten() {
+                        if let Some(active)=st.sessions.lock().await.get(&sid).cloned() {
+                            if active.adapter.reply_permission(&reserved_provider_id,&choice).await.is_ok() {
+                                let _=st.db.finish_permission_policy_reply(&id,true,&resolved_by,&choice);
+                                st.emit("permission.auto_resolved",json!({"permissionId":id,"sessionId":sid,"turnId":turn_id,"agentId":session["agentId"],"mode":mode,"decision":choice,"category":category,"summary":summary.chars().take(160).collect::<String>()})).await;
+                                st.emit("permission.resolved",json!({"permissionId":id,"choice":choice})).await;
+                                continue;
+                            } else { let _=st.db.finish_permission_policy_reply(&id,false,&resolved_by,&choice); }
+                        } else { let _=st.db.finish_permission_policy_reply(&id,false,&resolved_by,&choice); }
+                            }
+                    }
+                    }
+                }
+                ("permission.requested",json!({"id":id,"sessionId":sid,"runtimeId":runtime_id,"category":"other","title":title,"detail":detail,"risk":"unknown","choices":choices,"expiresAt":null,"status":"pending"}))
             }
             AgentEvent::UsageUpdated {
                 raw,
@@ -1390,6 +1448,22 @@ async fn main() {
 #[cfg(test)]
 mod phase2a_tests {
     use super::*;
+    #[derive(Default)] struct PolicyAdapter{replies:std::sync::atomic::AtomicUsize}
+    #[async_trait::async_trait] impl AgentAdapter for PolicyAdapter {
+        async fn probe(&self,_:&RuntimeSpec)->Result<bloblex_agent_core::ProbeResult,bloblex_agent_core::AdapterError>{Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))}
+        async fn new_session(&self,_:&RuntimeSpec,_:NewSessionRequest,_:tokio::sync::mpsc::Sender<AgentEvent>)->Result<SessionHandle,bloblex_agent_core::AdapterError>{Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))}
+        async fn resume_session(&self,_:&RuntimeSpec,_:ResumeSessionRequest,_:tokio::sync::mpsc::Sender<AgentEvent>)->Result<SessionHandle,bloblex_agent_core::AdapterError>{Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))}
+        async fn prompt(&self,_:&SessionHandle,_:PromptRequest)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+        async fn cancel(&self,_:&SessionHandle)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+        async fn reply_permission(&self,_:&str,_:&str)->Result<(),bloblex_agent_core::AdapterError>{self.replies.fetch_add(1,std::sync::atomic::Ordering::SeqCst);Ok(())}
+        async fn close_session(&self,_:&SessionHandle)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+    }
+    #[test] fn normalized_permission_requests_map_provider_tool_names_and_fail_closed(){
+        let(kind,body)=normalized_permission("claude",&json!({"request":{"tool_name":"Bash","input":{"command":"git status"}}}));assert_eq!(kind,"shell");assert_eq!(body["command"],"git status");
+        let(kind,body)=normalized_permission("claude",&json!({"request":{"tool_name":"Read","input":{"file_path":"src/lib.rs"}}}));assert_eq!(kind,"read");assert_eq!(body["file_path"],"src/lib.rs");
+        let(kind,body)=normalized_permission("opencode",&json!({"params":{"toolCall":{"title":"Run fixture command","rawInput":"echo safe"}}}));assert_eq!(kind,"shell");assert_eq!(body["rawInput"],"echo safe");
+        let(kind,_)=normalized_permission("codex",&json!({"params":{"approval":{"unknown":true}}}));assert_eq!(kind,"unknown");
+    }
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
         let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),stopping:Arc::new(tokio::sync::Notify::new())};(st,rx)
@@ -1409,6 +1483,33 @@ mod phase2a_tests {
         assert_eq!(dispatch(&st,"agent.update",json!({"agentId":second,"name":"x"})).await.unwrap_err().1.code,"conflict");
         assert_eq!(dispatch(&st,"agent.get",json!({"agentId":Uuid::new_v4().to_string()})).await.unwrap_err().1.code,"not_found");
         assert_eq!(dispatch(&st,"agent.create",json!({"name":"Alpha Prime","runtimeId":"rt-test"})).await.unwrap_err().1.code,"conflict");
+    }
+    #[tokio::test]
+    async fn approval_policy_rpc_defaults_and_rejects_global_bypass(){
+        let(st,mut events)=state();let created=dispatch(&st,"agent.create",json!({"name":"Guarded","runtimeId":"rt-test"})).await.unwrap()["agent"].clone();let id=created["id"].as_str().unwrap();let _=events.recv().await.unwrap();
+        assert_eq!(created["approvalMode"],Value::Null);assert_eq!(created["effectiveApprovalMode"],"ask");
+        assert_eq!(dispatch(&st,"settings.set",json!({"key":"permissions.default_mode","value":"bypass"})).await.unwrap_err().1.code,"invalid_argument");
+        dispatch(&st,"settings.set",json!({"key":"permissions.default_mode","value":"auto"})).await.unwrap();assert_eq!(events.recv().await.unwrap().payload,json!({"key":"permissions.default_mode","mode":"auto"}));
+        let updated=dispatch(&st,"agent.update",json!({"agentId":id,"approvalMode":"bypass"})).await.unwrap()["agent"].clone();assert_eq!(updated["approvalMode"],"bypass");assert_eq!(updated["effectiveApprovalMode"],"bypass");assert_eq!(events.recv().await.unwrap().event_type,"agent.changed");
+        let policy=dispatch(&st,"permissions.policy.get",json!({})).await.unwrap();assert_eq!(policy["defaultMode"],"auto");assert_eq!(policy["perAgent"][0]["effectiveMode"],"bypass");
+        assert_eq!(dispatch(&st,"agent.create",json!({"name":"Bad","runtimeId":"rt-test","approvalMode":"dangerous"})).await.unwrap_err().1.code,"invalid_argument");
+    }
+    #[test]
+    fn approval_mode_resolution_reloads_for_each_turn_and_keeps_per_agent_override(){
+        let(st,_)=state();let(agent,_)=st.db.agent_create(&json!({"name":"Inherited","runtimeId":"rt-test"})).unwrap();let id=agent["id"].as_str().unwrap();
+        let row=json!({"agentId":id});assert_eq!(exec_options_for_session(&st,&row).unwrap().approval_mode,ApprovalMode::Ask);
+        st.db.set_setting("permissions.default_mode",&json!("auto")).unwrap();assert_eq!(exec_options_for_session(&st,&row).unwrap().approval_mode,ApprovalMode::Auto);
+        st.db.agent_update(id,&json!({"approvalMode":"bypass"})).unwrap();assert_eq!(exec_options_for_session(&st,&row).unwrap().approval_mode,ApprovalMode::Bypass);
+        st.db.set_setting("permissions.default_mode",&json!("ask")).unwrap();assert_eq!(exec_options_for_session(&st,&row).unwrap().approval_mode,ApprovalMode::Bypass);
+    }
+    #[tokio::test]
+    async fn automatic_permission_path_acknowledges_audits_and_fails_closed(){
+        let(st,mut observed)=state();let root=std::env::temp_dir().join(format!("bloblex-policy-daemon-{}",Uuid::new_v4()));std::fs::create_dir_all(&root).unwrap();std::fs::write(root.join("README.md"),"safe").unwrap();let root=root.canonicalize().unwrap();
+        let(agent,_)=st.db.agent_create(&json!({"name":"Policy","runtimeId":"rt-test","approvalMode":"auto"})).unwrap();let agent_id=agent["id"].as_str().unwrap().to_owned();let sid="policy-session";st.db.create_session_for_agent(sid,"rt-test","claude",&root.to_string_lossy(),"Policy",Some(&agent_id)).unwrap();st.db.create_turn("policy-turn",sid).unwrap();st.db.update_session_state(sid,"working").unwrap();st.active_turns.lock().await.insert(sid.into(),"policy-turn".into());
+        let adapter=Arc::new(PolicyAdapter::default());let handle=SessionHandle{session_id:sid.into(),provider_session_id:"native".into(),capabilities:bloblex_agent_core::AgentCapabilities::default()};let runtime=RuntimeSpec{runtime_id:"rt-test".into(),provider:"claude".into(),executable:PathBuf::from("fake"),args:vec![],cwd:Some(root.clone())};st.sessions.lock().await.insert(sid.into(),ActiveSession{handle,runtime,adapter:adapter.clone(),launch_approval_mode:ApprovalMode::Ask});
+        let(tx,rx)=tokio::sync::mpsc::channel(8);let task=tokio::spawn(forward_events(st.clone(),sid.into(),"claude".into(),"rt-test".into(),rx));tx.send(AgentEvent::PermissionRequested{provider_request_id:"req-read".into(),title:"Read file".into(),detail:Some("private body excluded".into()),choices:vec!["allow".into(),"deny".into()],raw:json!({"request":{"tool_name":"Read","input":{"file_path":"README.md"}}})}).await.unwrap();let resolved=observed.recv().await.unwrap();assert_eq!(resolved.event_type,"permission.auto_resolved");
+        st.db.agent_update(&agent_id,&json!({"approvalMode":"bypass"})).unwrap();st.db.update_session_state(sid,"cancelling").unwrap();tx.send(AgentEvent::PermissionRequested{provider_request_id:"req-cancelled".into(),title:"Unknown tool".into(),detail:None,choices:vec!["allow".into(),"deny".into()],raw:json!({"request":{"tool_name":"NetworkFetch","input":{"url":"https://example.invalid"}}})}).await.unwrap();drop(tx);task.await.unwrap();
+        assert_eq!(adapter.replies.load(std::sync::atomic::Ordering::SeqCst),1);let mut audited=Some(resolved.payload);let mut surfaced=false;while let Ok(ev)=observed.try_recv(){if ev.event_type=="permission.auto_resolved"{audited=Some(ev.payload)}if ev.event_type=="permission.requested"{surfaced=true;}}let event=audited.expect("automatic decision audit");assert_eq!(event["mode"],"auto");assert_eq!(event["category"],"READ");assert!(event["summary"].as_str().unwrap().contains("README.md"));assert_eq!(st.db.permission_resolved_by(event["permissionId"].as_str().unwrap()).unwrap().as_deref(),Some("policy:auto"));assert!(surfaced,"cancelled session permission remains visible for user approval");let _=std::fs::remove_dir_all(root);
     }
     #[tokio::test]
     async fn session_new_agent_xor_and_archived_conflict_are_validated(){

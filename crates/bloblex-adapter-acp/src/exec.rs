@@ -459,6 +459,10 @@ mod tests {
         assert_eq!(full["agent"][AGENT_NAME]["prompt"], "SENTINEL_PROMPT");
         assert!(full["$schema"].as_str().unwrap().contains("opencode.ai"));
     }
+    #[test]
+    fn approval_modes_never_become_acp_args_or_config_fields(){
+        for mode in [bloblex_agent_core::ApprovalMode::Ask,bloblex_agent_core::ApprovalMode::Auto,bloblex_agent_core::ApprovalMode::Bypass]{let options=ExecOptions{approval_mode:mode,..ExecOptions::default()};let config=config_content(&options);assert!(!config.contains("approval"));assert!(!config.contains("bypass"));assert!(options.extra_args.is_empty());}
+    }
 
     #[test]
     fn disallowed_env_and_service_tier_and_args_fail_closed() {

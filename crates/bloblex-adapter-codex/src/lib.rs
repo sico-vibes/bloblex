@@ -249,7 +249,8 @@ impl CodexAdapter {
         result
     }
     fn start_params(cwd: &Path, options: &ExecOptions) -> Value {
-        let mut p = json!({"cwd":cwd.to_string_lossy(),"approvalPolicy":"on-request","sandbox":"workspace-write"});
+        let (approval,sandbox)=if options.approval_mode==bloblex_agent_core::ApprovalMode::Bypass {("never","danger-full-access")}else{("on-request","workspace-write")};
+        let mut p = json!({"cwd":cwd.to_string_lossy(),"approvalPolicy":approval,"sandbox":sandbox});
         if let Some(v) = &options.model {
             p["model"] = json!(v)
         }
@@ -266,7 +267,8 @@ impl CodexAdapter {
         p
     }
     fn resume_params(id: &str, cwd: &Path, options: &ExecOptions) -> Value {
-        let mut p = json!({"threadId":id,"cwd":cwd.to_string_lossy()});
+        let (approval,sandbox)=if options.approval_mode==ApprovalMode::Bypass {("never","danger-full-access")}else{("on-request","workspace-write")};
+        let mut p = json!({"threadId":id,"cwd":cwd.to_string_lossy(),"approvalPolicy":approval,"sandbox":sandbox});
         if let Some(v) = &options.model {
             p["model"] = json!(v)
         }
@@ -960,6 +962,7 @@ impl AgentAdapter for CodexAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn approval_policy_and_sandbox_are_typed_and_bypass_only_for_bypass(){let cwd=Path::new("C:/project");let start=CodexAdapter::start_params(cwd,&ExecOptions::default());assert_eq!(start["approvalPolicy"],"on-request");assert_eq!(start["sandbox"],"workspace-write");let auto=CodexAdapter::start_params(cwd,&ExecOptions{approval_mode:ApprovalMode::Auto,..ExecOptions::default()});assert_eq!(auto["approvalPolicy"],"on-request");assert_eq!(auto["sandbox"],"workspace-write");let bypass=ExecOptions{approval_mode:ApprovalMode::Bypass,..ExecOptions::default()};let start=CodexAdapter::start_params(cwd,&bypass);assert_eq!(start["approvalPolicy"],"never");assert_eq!(start["sandbox"],"danger-full-access");let resume=CodexAdapter::resume_params("thread",cwd,&bypass);assert_eq!(resume["approvalPolicy"],"never");assert_eq!(resume["sandbox"],"danger-full-access");}
     #[test]
     fn usage_subtraction_is_validated_and_keeps_reported_fallback() {
         let a = usage_report(

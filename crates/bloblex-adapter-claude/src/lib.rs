@@ -96,6 +96,7 @@ fn typed_args(options: &ExecOptions, instruction_file: Option<&std::path::Path>,
     if instruction_changed { args.extend(["--system-prompt-snapshot".into(), "off".into()]); }
     args
 }
+fn permission_args(mode: bloblex_agent_core::ApprovalMode) -> Vec<&'static str>{if mode==bloblex_agent_core::ApprovalMode::Bypass{vec!["--permission-mode","bypassPermissions","--allow-dangerously-skip-permissions"]}else{vec!["--permission-mode","default","--permission-prompt-tool","stdio"]}}
 fn exact_usd_minor(decimal: &str) -> Option<i64> {
     let value = decimal.strip_prefix('+').unwrap_or(decimal);
     if value.starts_with('-') { return None; }
@@ -333,11 +334,8 @@ impl ClaudeAdapter {
             "--verbose",
             "--include-partial-messages",
             "--include-hook-events",
-            "--permission-mode",
-            "default",
-            "--permission-prompt-tool",
-            "stdio",
         ]);
+        c.args(permission_args(options.approval_mode));
         let instruction_file = if let Some(instructions) = options.instructions.as_deref().filter(|s| !s.is_empty()) {
             Some(self.create_instruction_file(instructions).map_err(|e| AdapterError::Process(format!("private instruction file unavailable: {e}")))?)
         } else { None };
@@ -558,7 +556,7 @@ impl AgentAdapter for ClaudeAdapter {
             .ok_or_else(|| AdapterError::Process("Claude session not active".into()))?;
         let (desired_hash,baseline)=self.instruction_hash_context.lock().await.remove(&h.session_id).unwrap_or((None,None));
         let instruction_changed=baseline.as_ref().is_some_and(|old|Some(old)!=desired_hash.as_ref());
-        let options_changed = c.launch_options.model != q.exec_options.model || c.launch_options.thinking != q.exec_options.thinking || c.launch_options.service_tier != q.exec_options.service_tier || c.launch_options.instructions != q.exec_options.instructions || c.launch_options.env != q.exec_options.env || instruction_changed;
+        let options_changed = c.launch_options.approval_mode != q.exec_options.approval_mode || c.launch_options.model != q.exec_options.model || c.launch_options.thinking != q.exec_options.thinking || c.launch_options.service_tier != q.exec_options.service_tier || c.launch_options.instructions != q.exec_options.instructions || c.launch_options.env != q.exec_options.env || instruction_changed;
         if options_changed {
             let runtime = c.runtime.clone(); let cwd = c.cwd.clone(); let events = c.event_sender.clone();
             let provider_id = c.provider_id.lock().await.clone().ok_or_else(|| AdapterError::Unsupported("Claude resume identity is unavailable for changed execution options".into()))?;
@@ -636,6 +634,7 @@ impl AgentAdapter for ClaudeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn permission_modes_have_typed_launch_flags_only_for_bypass(){let bypass=permission_args(bloblex_agent_core::ApprovalMode::Bypass);assert!(bypass.contains(&"bypassPermissions"));assert!(bypass.contains(&"--allow-dangerously-skip-permissions"));for mode in [bloblex_agent_core::ApprovalMode::Ask,bloblex_agent_core::ApprovalMode::Auto]{let args=permission_args(mode);assert!(!args.contains(&"bypassPermissions"));assert!(args.contains(&"--permission-prompt-tool"));}}
     #[test]
     fn control_request_parser_preserves_wire_id_and_input() {
         let v = json!({"type":"control_request","request_id":"r-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"echo test"}}});

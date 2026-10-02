@@ -48,6 +48,18 @@ fn audit(path: &std::path::Path) -> Vec<Value> {
 fn index(args: &[String], flag: &str) -> usize { args.iter().position(|arg| arg == flag).unwrap() }
 
 #[tokio::test]
+async fn fake_process_launches_bypass_flags_only_for_bypass_mode(){
+    for (mode,name) in [(bloblex_agent_core::ApprovalMode::Ask,"ask"),(bloblex_agent_core::ApprovalMode::Auto,"auto"),(bloblex_agent_core::ApprovalMode::Bypass,"bypass")]{
+        let(root,_,audit_path)=paths();let system=setup_test_acl(&root);let adapter=ClaudeAdapter::with_test_acl_executable(root.join("private-tmp"),system);let rt=runtime(&audit_path,&[]);let(tx,mut rx)=mpsc::channel(32);
+        let handle=adapter.new_session(&rt,NewSessionRequest{session_id:name.into(),project_path:root.clone(),exec_options:ExecOptions{approval_mode:mode,..ExecOptions::default()}},tx).await.unwrap();wait_session_start(&mut rx).await;adapter.close_session(&handle).await.unwrap();
+        let rows=audit(&audit_path);assert_eq!(rows.len(),1);let args=rows[0]["args"].as_array().unwrap().iter().filter_map(Value::as_str).collect::<Vec<_>>();
+        if mode==bloblex_agent_core::ApprovalMode::Bypass{assert!(args.windows(2).any(|w|w==["--permission-mode","bypassPermissions"]));assert!(args.contains(&"--allow-dangerously-skip-permissions"));assert!(!args.contains(&"--permission-prompt-tool"));}
+        else{assert!(args.windows(2).any(|w|w==["--permission-mode","default"]));assert!(args.contains(&"--permission-prompt-tool"));assert!(!args.contains(&"bypassPermissions"));assert!(!args.contains(&"--allow-dangerously-skip-permissions"));}
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn fake_provider_proves_argv_order_hash_restart_secure_file_lifecycle_and_catalog() {
     let (root, private, audit_path) = paths();
     let system_root = setup_test_acl(&root);

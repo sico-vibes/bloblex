@@ -383,6 +383,7 @@ dependencies = [
 name = "bloblex-daemon"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "bloblex-adapter-acp",
  "bloblex-adapter-claude",

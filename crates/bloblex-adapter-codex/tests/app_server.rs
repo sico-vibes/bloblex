@@ -49,6 +49,13 @@ fn log(path: &PathBuf) -> Vec<Value> {
         .map(|l| serde_json::from_str(l).unwrap())
         .collect()
 }
+#[tokio::test]
+async fn fake_peer_receives_approval_and_sandbox_fields_for_each_mode(){
+    for (mode,name,approval,sandbox) in [(ApprovalMode::Ask,"ask","on-request","workspace-write"),(ApprovalMode::Auto,"auto","on-request","workspace-write"),(ApprovalMode::Bypass,"bypass","never","danger-full-access")]{
+        let(rt,record)=setup(None);let adapter=CodexAdapter::default();let(tx,_rx)=tokio::sync::mpsc::channel(32);let opts=ExecOptions{approval_mode:mode,..ExecOptions::default()};
+        let handle=adapter.new_session(&rt,NewSessionRequest{session_id:name.into(),project_path:rt.cwd.clone().unwrap(),exec_options:opts},tx).await.unwrap();let rows=log(&record);let start=rows.iter().find(|r|r["method"]=="thread/start").unwrap();assert_eq!(start["params"]["approvalPolicy"],approval);assert_eq!(start["params"]["sandbox"],sandbox);adapter.close_session(&handle).await.unwrap();let _=std::fs::remove_dir_all(rt.cwd.unwrap());
+    }
+}
 #[cfg(windows)]
 fn pid_is_live(pid: u32) -> bool {
     unsafe {

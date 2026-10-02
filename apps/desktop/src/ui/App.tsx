@@ -23,6 +23,7 @@ import { AgentRoster } from './AgentRoster'
 import { createDraft, createParams, daemonCodeOf, draftFromAgent, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
 import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicateAgentName, legacySessions, nextAgentAfterArchive, runtimeUsable, sessionForSelection, sessionNewParams } from './rosterSelectors'
 import { BlobPage, ConfirmDialog } from './BlobPage'
+import { stampCompanionDragRegions } from './companionDrag'
 import { companionMonitorOptions, currentCompanionMonitor, ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectLocalFile, setActiveRuntime, setActiveSession, setCloseToTray, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream } from '../tauri'
 
 type ContextTab = 'Details' | 'Runtime' | 'Files'
@@ -915,7 +916,7 @@ function DetailsPane({ runtime, session, agentName, color, connected, budgetWarn
   const heading = agentName ?? (runtime ? labelize(runtime.provider) : 'No agent selected')
   return <div className="context-scroll"><section className="selected-agent"><BlobCanvas color={color} size={54} mood={mood} label={heading} /><div><h2>{heading}</h2><p>{labelize(runtime?.protocolFamily, 'Local coding agent')}</p><span className="context-status"><i className={`status-dot ${connected ? statusClass(runtime?.status) : 'muted'}`} />{connected ? labelize(runtime?.status, 'Unknown') : 'Daemon disconnected'}</span></div></section>
     <section className="context-section"><div className="section-heading"><h3>Current session</h3><MessageSquarePlus size={16} /></div>{session ? <div className="current-task"><strong>{formatUnknownSafe(session.title, fileNameForPath(session.projectPath ?? '') ?? 'Untitled session')}</strong><p>{session.projectPath ?? 'Project path unavailable'}</p><span>{labelize(session.state, 'Unknown state')}</span></div> : <div className="context-empty">No conversation selected.</div>}</section>
-    <section className="context-section usage-section"><div className="section-heading"><h3>Usage</h3><ArrowDownToLine size={15} /></div><div className="details-usage-grid"><div><span>Input tokens</span><strong>{tokenValue(usage?.inputTokens)}</strong></div><div><span>Output tokens</span><strong>{tokenValue(usage?.outputTokens)}</strong></div><div><span>Provider actual</span><strong>{moneyMinor(usage?.providerReportedCostMinor, usage?.providerReportedCurrency)}</strong></div><div><span>API estimate</span><strong>{moneyMinor(usage?.apiEstimateMinor, usage?.apiEstimateCurrency)}</strong></div></div><small className="usage-scope">All runtimes - all time</small>{budget && <div className="details-budget"><span>{labelize(budget.metric)} {labelize(budget.period)} budget</span><strong>{budgetValue(budget.remaining, budget.metric)} remaining of {budgetValue(budget.hardLimit, budget.metric)}</strong></div>}<button className="usage-summary" onClick={onUsage}><span className="usage-leading"><span className="usage-icon"><Code2 size={16} /></span><span><strong>Usage details</strong><small>Open date-bounded summary</small></span></span><ChevronDown size={15} /></button>{budgetWarning && <p className="budget-inline-warning" role="status">A budget warning was reported for this session.</p>}<p className="honesty-note">Provider-reported cost and API estimates are separate. Unknown prices stay unknown; totals may be partial.</p></section>
+    <section className="context-section usage-section"><div className="section-heading"><h3>Usage</h3><ArrowDownToLine size={15} /></div><div className="details-usage-grid"><div><span>Total input tokens</span><strong>{tokenValue(usage?.inputTokens)}</strong></div><div><span>Total output tokens</span><strong>{tokenValue(usage?.outputTokens)}</strong></div><div><span>Total provider actual</span><strong>{moneyMinor(usage?.providerReportedCostMinor, usage?.providerReportedCurrency)}</strong></div><div><span>Total API estimate</span><strong>{moneyMinor(usage?.apiEstimateMinor, usage?.apiEstimateCurrency)}</strong></div></div><small className="usage-scope">Total across all blobs · all time</small>{budget && <div className="details-budget"><span>{labelize(budget.metric)} {labelize(budget.period)} budget</span><strong>{budgetValue(budget.remaining, budget.metric)} remaining of {budgetValue(budget.hardLimit, budget.metric)}</strong></div>}<button className="usage-summary" onClick={onUsage}><span className="usage-leading"><span className="usage-icon"><Code2 size={16} /></span><span><strong>Usage details</strong><small>Open date-bounded summary</small></span></span><ChevronDown size={15} /></button>{budgetWarning && <p className="budget-inline-warning" role="status">A budget warning was reported for this session.</p>}<p className="honesty-note">Provider-reported cost and API estimates are separate. Unknown prices stay unknown; totals may be partial.</p></section>
   </div>
 }
 
@@ -1443,6 +1444,10 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
     const log = chatLogRef.current
     if (log) log.scrollTop = log.scrollHeight
   }, [view, session?.id, session?.messages?.length, session?.state])
+  useLayoutEffect(() => {
+    const root = capsuleRef.current
+    if (root) stampCompanionDragRegions(root)
+  })
   const toggleExpanded = () => { if (mode === 'home') fsmRef.current?.forcePetit(); else fsmRef.current?.click() }
   const openView = (next: typeof view) => { setView(next); if (mode !== 'home') fsmRef.current?.forceHome() }
   const detail = permission && (typeof permission.detail === 'string' ? permission.detail : typeof permission.description === 'string' ? permission.description : null)
@@ -1549,7 +1554,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
     <div ref={capsuleRef} className={`companion-capsule island ${mode}`} data-tauri-drag-region>
       {mode === 'petit' ? <div className="companion-compact" data-tauri-drag-region>
         <button className="compact-bot" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}>{focusBlob(40)}</button>
-        <button className="compact-copy" onClick={() => fsmRef.current?.click()}><strong>{name}</strong><span role="status" aria-live="polite" className={shimmering ? 'shimmer' : ''}>{statusLine}</span></button>
+        <div className="compact-copy" onClick={() => fsmRef.current?.click()}><strong>{name}</strong><span role="status" aria-live="polite" className={shimmering ? 'shimmer' : ''}>{statusLine}</span></div>
         {permission && <ShieldAlert className="companion-alert" size={15} aria-label="Approval required" />}
         {peers.length > 0 && <div className="mini-grid" aria-hidden="true" data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} label={item.name} /> })}</div>}
         <button className="companion-collapse" aria-label="Expand companion" onClick={() => fsmRef.current?.click()}><ChevronUp size={15} /></button>
@@ -1593,7 +1598,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
               <div className="card-stack">
                 <div className="who"><i className={`status-dot ${connected ? statusClass(runtime?.status) : 'muted'}`} /><span className="name">{name}</span><span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
                 <div className="ticker">{tickerLines.map((line, index) => <div key={index} className={`ticker-row ${index === tickerLines.length - 1 ? 'current' : ''}`}><span className={index === tickerLines.length - 1 && shimmering ? 'shimmer' : ''}>{line}</span></div>)}</div>
-                <div className="glance" title={`Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()} · API estimate ${apiCost}`}><span>Tokens <b>{tokenGlance}</b></span><span>Cost <b>{actualCost}</b></span></div>
+                <div className="glance" title={`Totals across all blobs. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()} · API estimate ${apiCost}`}><span>All blobs: Tokens <b>{tokenGlance}</b> · Cost <b>{actualCost}</b></span></div>
               </div>
             </div>
             <div className="island-card pills-card">
@@ -1602,7 +1607,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
           </div> : view === 'chat' ? <div className="island-card chat-card companion-chat-view">
             <span className="card-bot small">{focusBlob(44)}</span>
             <div className="chat-body">
-              <div className="chat-log" ref={chatLogRef}>
+              <div className="chat-log" ref={chatLogRef} data-companion-no-drag="">
                 {!session && <p className="companion-empty companion-no-session">Open or create a session to chat here. <button type="button" disabled={!canStart} onClick={() => void onNewSession()}>New session</button></p>}
                 {recentMessages.map((message, index) => <div key={String(message.id ?? index)} className={`chat-row ${message.role === 'user' ? 'user' : ''}`}>{message.role === 'user' ? <div className="bubble">{String(message.content ?? message.text ?? '')}</div> : <div className="reply">{plainText(String(message.content ?? message.text ?? '')) || 'Message content unavailable.'}</div>}</div>)}
                 {session && recentMessages.length === 0 && <p className="companion-empty">No messages in this conversation yet.</p>}
@@ -1611,7 +1616,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
               {droppedFile && fileInfo && <div className="chip settled companion-file-ready"><Paperclip size={11} /><span><strong>{fileInfo.fileName}</strong> · {formatBytes(fileInfo.sizeBytes)} · path only</span><button aria-label="Remove local file reference" onClick={() => { fileRequest.current++; setDroppedFile(null); setFileInfo(null); setPreparingFile(false); setFileError(null) }}><X size={11} /></button></div>}
               {preparingFile && <p className="companion-file-note" role="status">Checking the selected path is a readable file… <button type="button" onClick={() => { fileRequest.current++; setPreparingFile(false); setFileInfo(null); setDroppedFile(null) }}>Cancel</button></p>}
               {(fileError ?? dropError ?? appError) && <p className="companion-drop-error" role="alert">{fileError ?? dropError ?? appError}</p>}
-              <form className="chat-bar companion-chat-composer" onSubmit={(event) => void sendCompanionPrompt(event)}>
+              <form className="chat-bar companion-chat-composer" data-companion-no-drag="" onSubmit={(event) => void sendCompanionPrompt(event)}>
                 <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !session || preparingFile}><Paperclip size={13} /></button>
                 <textarea className="chat-input" aria-label="Message agent" placeholder={connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !session || sending || session.state === 'waiting_permission'} rows={1} />
                 <button className="send-btn" type={sessionBusy ? 'button' : 'submit'} disabled={!session || sending || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={sessionBusy ? cancelCompanionTurn : undefined} aria-label={sessionBusy ? 'Cancel turn' : 'Send message'}>{sending ? <LoaderCircle size={13} className="spinning" /> : sessionBusy ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
@@ -1624,7 +1629,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
             <div className="card-stack wide">
               <div className="settings-rows">
                 <div className="settings-line"><span>Companion sounds</span><button className={`switch ${soundsEnabled ? 'on' : ''}`} role="switch" aria-checked={soundsEnabled} aria-label="Companion sounds" onClick={toggleSounds} /></div>
-                <div className="settings-line"><span>Drag the island by its header to place it anywhere.</span></div>
+                <div className="settings-line"><span>Drag the island to place it anywhere.</span></div>
               </div>
               {soundError && <p className="companion-drop-error" role="alert">{soundError}</p>}
               <div className="actions"><button className="btn primary" onClick={onOpenSettings}>Open Bloblex settings</button><button className="btn secondary" onClick={() => void setCompanionVisibility(false)}>Hide companion</button></div>

@@ -41,6 +41,24 @@ fn table_counts(c: &Connection) -> Result<std::collections::BTreeMap<String, i64
 }
 fn title_case_provider(provider:&str)->String{provider.split(|c:char|!c.is_alphanumeric()).filter(|w|!w.is_empty()).map(|word|{let mut chars=word.chars();chars.next().map(|first|first.to_uppercase().collect::<String>()+&chars.as_str().to_lowercase()).unwrap_or_default()}).collect::<Vec<_>>().join(" ")}
 
+fn ensure_default_agents_tx(tx:&Transaction<'_>,now:&str,emit_events:bool)->Result<Vec<Value>,StorageError>{
+    let runtimes={let mut q=tx.prepare("SELECT id,provider FROM runtimes ORDER BY provider,id")?;let rows=q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()?;rows};
+    let mut events=Vec::new();
+    for(runtime,provider)in runtimes{
+        let existing:i64=tx.query_row("SELECT count(*) FROM agents WHERE runtime_id=?1",[&runtime],|r|r.get(0))?;
+        if existing>0{continue;}
+        let base=match provider.as_str(){"claude"=>"Claude".to_owned(),"codex"=>"Codex".to_owned(),"opencode"=>"OpenCode".to_owned(),_=>{let name=title_case_provider(&provider);if name.is_empty(){"Other".into()}else{name}}};
+        let mut name=base.clone();let mut n=2;
+        loop{let key=name.to_lowercase();let found:i64=tx.query_row("SELECT count(*) FROM agents WHERE name_key=?1 AND archived=0",[&key],|r|r.get(0))?;if found==0{break;}name=format!("{base} ({n})");n+=1;}
+        let color=match provider.as_str(){"claude"=>"#F38C6F","codex"=>"#82AAFF","opencode"=>"#BF9CFF",_=>"#89D6B3"};
+        let pos:i64=tx.query_row("SELECT COALESCE(MAX(sort_order)+1,0) FROM agents WHERE runtime_id=?1 AND archived=0",[&runtime],|r|r.get(0))?;
+        let id=Uuid::new_v4().to_string();
+        tx.execute("INSERT INTO agents(id,name,name_key,description,color,runtime_id,sort_order,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)",params![id,name,name.to_lowercase(),format!("Default agent for {base}."),color,runtime,pos,now])?;
+        if emit_events{let agent=agent_read(tx,&id)?;events.push(push_agent_event(tx,"created",&agent)?);}
+    }
+    Ok(events)
+}
+
 fn verified_backup(c: &Connection, db_path: &Path) -> Result<(), StorageError> {
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let dir = parent.join("backups");
@@ -52,6 +70,7 @@ fn verified_backup(c: &Connection, db_path: &Path) -> Result<(), StorageError> {
     let source_counts = table_counts(c)?;
     let mut copy = Connection::open(&backup_path)?;
     Backup::new(c, &mut copy)?.run_to_completion(128, std::time::Duration::from_millis(10), None)?;
+    let _:String=copy.query_row("PRAGMA journal_mode=DELETE",[],|r|r.get(0))?;
     drop(copy);
     let read = Connection::open_with_flags(&backup_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let integrity: String = read.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
@@ -86,18 +105,8 @@ fn migrate_agents(c: &mut Connection, path: Option<&Path>, backup_done:bool) -> 
       CREATE INDEX idx_usage_agent_time ON usage_events(agent_id,timestamp);")?;
     let before_sessions: i64 = tx.query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))?;
     let before_usage: i64 = tx.query_row("SELECT count(*) FROM usage_events", [], |r| r.get(0))?;
-    let runtimes = { let mut q=tx.prepare("SELECT id,provider FROM runtimes ORDER BY provider,id")?; let rows=q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()?; rows };
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
-    for (runtime,provider) in runtimes {
-       let existing:i64=tx.query_row("SELECT count(*) FROM agents WHERE runtime_id=?1 AND archived=0",[&runtime],|r|r.get(0))?;
-       if existing>0 { continue; }
-        let base = match provider.as_str(){"claude"=>"Claude".to_owned(),"codex"=>"Codex".to_owned(),"opencode"=>"OpenCode".to_owned(),_=>{let x=title_case_provider(&provider);if x.is_empty(){"Other".into()}else{x}}};
-       let mut name=base.clone(); let mut n=2;
-       loop { let key=name.to_lowercase(); let found:i64=tx.query_row("SELECT count(*) FROM agents WHERE name_key=?1 AND archived=0",[&key],|r|r.get(0))?; if found==0 {break;} name=format!("{base} ({n})");n+=1; }
-       let color=match provider.as_str(){"claude"=>"#F38C6F","codex"=>"#82AAFF","opencode"=>"#BF9CFF",_=>"#89D6B3"};
-       let pos:i64=tx.query_row("SELECT COALESCE(MAX(sort_order)+1,0) FROM agents WHERE runtime_id=?1 AND archived=0",[&runtime],|r|r.get(0))?;
-       tx.execute("INSERT INTO agents(id,name,name_key,description,color,runtime_id,sort_order,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)",params![Uuid::new_v4().to_string(),name,name.to_lowercase(),format!("Default agent for {base}."),color,runtime,pos,now])?;
-    }
+    ensure_default_agents_tx(&tx,&now,false)?;
     tx.execute("UPDATE sessions SET agent_id=(SELECT id FROM agents WHERE agents.runtime_id=sessions.runtime_id AND archived=0 ORDER BY created_at,id LIMIT 1) WHERE agent_id IS NULL AND EXISTS(SELECT 1 FROM agents WHERE agents.runtime_id=sessions.runtime_id AND archived=0)",[])?;
     tx.execute("UPDATE usage_events SET agent_id=(SELECT agent_id FROM sessions WHERE sessions.id=usage_events.session_id) WHERE agent_id IS NULL",[])?;
     if tx.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0))?!=0
@@ -232,6 +241,14 @@ impl Storage {
         }
     }
     pub fn agent_get(&self, id:&str)->Result<Value,StorageError>{ validate_agent_id(id)?;let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?; agent_read(&c,id) }
+    pub fn ensure_default_agents(&self)->Result<Vec<Value>,StorageError>{
+        let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
+        let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
+        let events=ensure_default_agents_tx(&tx,&now,true)?;
+        tx.commit()?;
+        Ok(events)
+    }
     pub fn agent_create(&self, input:&Value)->Result<(Value,Vec<Value>),StorageError>{
         validate_agent_fields(input,true)?;
         let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?; let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1298,10 +1315,23 @@ mod tests {
         assert!(matches!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt","maxConcurrency":51})),Err(StorageError::InvalidAgent)));
     }
     #[test]
+    fn first_runtime_discovery_creates_one_default_and_respects_archived_agents(){
+        let db=Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-claude","provider":"claude"})).unwrap();
+        db.upsert_runtime(&json!({"id":"rt-codex","provider":"codex"})).unwrap();
+        let events=db.ensure_default_agents().unwrap();assert_eq!(events.len(),2);assert!(events.iter().all(|event|event["type"]=="agent.changed"&&event["payload"]["action"]=="created"));
+        let agents=db.agent_list(false,None).unwrap();assert_eq!(agents.len(),2);
+        let claude=agents.iter().find(|agent|agent["runtimeId"]=="rt-claude").unwrap();assert_eq!(claude["name"],"Claude");assert_eq!(claude["color"],"#F38C6F");assert_eq!(claude["description"],"Default agent for Claude.");assert_eq!(claude["sortOrder"],0);
+        assert!(db.ensure_default_agents().unwrap().is_empty());
+        db.agent_archive(claude["id"].as_str().unwrap()).unwrap();assert!(db.ensure_default_agents().unwrap().is_empty());assert_eq!(db.agent_list(true,Some("rt-claude")).unwrap().len(),1);
+        db.upsert_runtime(&json!({"id":"rt-codex-2","provider":"codex"})).unwrap();let later=db.ensure_default_agents().unwrap();assert_eq!(later.len(),1);let added=db.agent_list(false,Some("rt-codex-2")).unwrap().remove(0);assert_eq!(added["name"],"Codex (2)");assert_eq!(added["color"],"#82AAFF");assert_eq!(added["description"],"Default agent for Codex.");
+        let replay=db.replay_events(0,100).unwrap();assert_eq!(replay.iter().filter(|event|event["type"]=="agent.changed"&&event["payload"]["action"]=="created").count(),3);
+    }
+    #[test]
     fn v1_migration_backfills_once_creates_verified_backup_and_rolls_back_in_temp_paths(){
         let(dir,path)=v1_fixture();
         let baseline={let db=Storage::open(&path).unwrap();let s= db.sessions().unwrap();assert_eq!(s.len(),2);assert!(s.iter().find(|x|x["id"]=="s-missing").unwrap()["agentId"].is_null());assert_eq!(db.agent_list(true,None).unwrap().len(),2);(db.agent_list(true,None).unwrap(),s)};
-        let backup_dir=dir.join("backups");let paths=fs::read_dir(&backup_dir).unwrap().map(|x|x.unwrap().path()).collect::<Vec<_>>();let backup=paths.iter().find(|x|x.extension().is_some_and(|e|e=="db")).unwrap().clone();let manifest_path=paths.iter().find(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")).unwrap();let manifest:Value=serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();assert_eq!(manifest["integrity"],"ok");assert_eq!(manifest["schemaVersion"],1);assert_eq!(manifest["tableRowCounts"]["sessions"],2);
+        let backup_dir=dir.join("backups");let paths=fs::read_dir(&backup_dir).unwrap().map(|x|x.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),2);assert_eq!(paths.iter().filter(|x|x.extension().is_some_and(|e|e=="db")).count(),1);assert_eq!(paths.iter().filter(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")).count(),1);assert!(paths.iter().all(|x|!x.file_name().unwrap().to_string_lossy().ends_with("-wal")&&!x.file_name().unwrap().to_string_lossy().ends_with("-shm")));let backup=paths.iter().find(|x|x.extension().is_some_and(|e|e=="db")).unwrap().clone();let manifest_path=paths.iter().find(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")).unwrap();let manifest:Value=serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();assert_eq!(manifest["integrity"],"ok");assert_eq!(manifest["schemaVersion"],1);assert_eq!(manifest["tableRowCounts"]["sessions"],2);
         {let db=Storage::open(&path).unwrap();assert_eq!(db.agent_list(true,None).unwrap(),baseline.0);assert_eq!(db.sessions().unwrap(),baseline.1);}
         let read=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(read.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(read.query_row("SELECT count(*) FROM usage_events WHERE agent_id IS NOT NULL",[],|r|r.get::<_,i64>(0)).unwrap(),1);assert_eq!(read.query_row("SELECT agent_id FROM usage_events WHERE id='u-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap(),Some(read.query_row("SELECT agent_id FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap()));assert_eq!(read.query_row("SELECT created_at FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap(),"2026-01-02T00:00:00.000Z");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='codex'",[],|r|r.get::<_,String>(0)).unwrap(),"#82AAFF");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='claude'",[],|r|r.get::<_,String>(0)).unwrap(),"#F38C6F");for (table,column) in [("sessions","agent_id"),("usage_events","agent_id")] {assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get::<_,bool>(0)).unwrap());}for index in ["idx_agents_active_name","idx_agents_active_runtime_order","idx_agents_runtime_archived_order","idx_sessions_agent_updated","idx_usage_agent_time"]{assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",[index],|r|r.get::<_,bool>(0)).unwrap());}drop(read);
         let failed=restore_verified_backup(&backup,&path).unwrap();assert!(failed.exists());let restored=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(restored.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),0);assert_eq!(restored.query_row("SELECT count(*) FROM sessions",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert!(!restored.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='agent_id')",[],|r|r.get::<_,bool>(0)).unwrap());drop(restored);let _=fs::remove_dir_all(dir);

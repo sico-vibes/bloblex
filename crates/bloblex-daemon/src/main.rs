@@ -227,6 +227,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 let _ = st.db.upsert_runtime(&value);
                 values.push(value)
             }
+            let default_events=st.db.ensure_default_agents().map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+            st.broadcast_persisted(default_events);
             *st.runtimes.write().await = values.clone();
             st.emit("runtime.changed", json!({"runtimes":values})).await;
             Ok(json!({"runtimes":values}))
@@ -1106,6 +1108,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         db.upsert_runtime(&v)?;
         runtimes.push(v)
     }
+    let default_agent_events=db.ensure_default_agents()?;
     let st = AppState {
         token: Arc::new(token.clone()),
         started: Instant::now(),
@@ -1117,6 +1120,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         active_turns: Arc::new(Mutex::new(HashMap::new())),
         stopping: Arc::new(tokio::sync::Notify::new()),
     };
+    st.broadcast_persisted(default_agent_events);
     for id in recovered_sessions {
         if let Ok(session) = st.db.session_detail(&id) {
             st.emit("session.changed", session).await;

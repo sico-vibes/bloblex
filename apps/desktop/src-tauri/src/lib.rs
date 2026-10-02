@@ -782,6 +782,11 @@ fn set_companion_mode(
     let start_width = initial.width as f64 / scale;
     let start_height = initial.height as f64 / scale;
     let start_position = window.outer_position().map_err(|error| error.to_string())?;
+    let work_areas = companion_work_areas(&window);
+    let initial_center = (
+        start_position.x + initial.width as i32 / 2,
+        start_position.y + initial.height as i32 / 2,
+    );
     let generation = state
         .companion_resize_generation
         .fetch_add(1, Ordering::SeqCst)
@@ -795,11 +800,13 @@ fn set_companion_mode(
             .map_err(|error| error.to_string())?;
         let new_width = (desired_width * scale).round() as i32;
         let new_height = (desired_height * scale).round() as i32;
+        let target=PhysicalPosition::new(
+            start_position.x - (new_width - initial.width as i32) / 2,
+            start_position.y - (new_height - initial.height as i32),
+        );
+        let target=clamp_companion_position(target,new_width,new_height,&work_areas,initial_center);
         window
-            .set_position(PhysicalPosition::new(
-                start_position.x - (new_width - initial.width as i32) / 2,
-                start_position.y - (new_height - initial.height as i32),
-            ))
+            .set_position(target)
             .map_err(|error| error.to_string())?;
         let resize_flag = Arc::clone(&resize_flag);
         thread::spawn(move || {
@@ -849,6 +856,7 @@ fn set_companion_mode(
                 start_position.x - (width - initial.width as i32) / 2,
                 start_position.y - (height - initial.height as i32),
             );
+            let next_position=clamp_companion_position(next_position,width,height,&work_areas,initial_center);
             if let Err(error) = window.set_position(next_position) {
                 eprintln!("Bloblex companion anchor: {error}");
                 break;
@@ -866,6 +874,144 @@ fn set_companion_mode(
         }
     });
     Ok(())
+}
+
+fn clamp_physical_position(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    area_x: i32,
+    area_y: i32,
+    area_width: i32,
+    area_height: i32,
+) -> (i32, i32) {
+    let (x, y, area_x, area_y) = (x as i64, y as i64, area_x as i64, area_y as i64);
+    let (width, height, area_width, area_height) = (
+        width.max(0) as i64,
+        height.max(0) as i64,
+        area_width.max(0) as i64,
+        area_height.max(0) as i64,
+    );
+    let clamp_axis = |position: i64, size: i64, origin: i64, area_size: i64| {
+        if size > area_size {
+            origin
+        } else {
+            position.clamp(origin, origin + area_size - size)
+        }
+    };
+    (
+        clamp_axis(x, width, area_x, area_width) as i32,
+        clamp_axis(y, height, area_y, area_height) as i32,
+    )
+}
+
+fn companion_work_areas(window: &WebviewWindow) -> Vec<(i32, i32, i32, i32)> {
+    window
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(|monitor| {
+            let area = monitor.work_area();
+            (
+                area.position.x,
+                area.position.y,
+                area.size.width as i32,
+                area.size.height as i32,
+            )
+        })
+        .collect()
+}
+
+fn clamp_companion_position(
+    position: PhysicalPosition<i32>,
+    width: i32,
+    height: i32,
+    areas: &[(i32, i32, i32, i32)],
+    fallback_center: (i32, i32),
+) -> PhysicalPosition<i32> {
+    let center = (position.x + width / 2, position.y + height / 2);
+    let area = areas
+        .iter()
+        .find(|(x, y, w, h)| {
+            center.0 >= *x && center.0 < *x + *w && center.1 >= *y && center.1 < *y + *h
+        })
+        .or_else(|| {
+            areas.iter().find(|(x, y, w, h)| {
+                fallback_center.0 >= *x
+                    && fallback_center.0 < *x + *w
+                    && fallback_center.1 >= *y
+                    && fallback_center.1 < *y + *h
+            })
+        })
+        .or_else(|| areas.first());
+    if let Some((x, y, w, h)) = area {
+        let (x, y) = clamp_physical_position(position.x, position.y, width, height, *x, *y, *w, *h);
+        PhysicalPosition::new(x, y)
+    } else {
+        position
+    }
+}
+
+#[cfg(test)]
+mod companion_clamp_tests {
+    use super::clamp_physical_position;
+
+    #[test]
+    fn inside_is_unchanged() {
+        assert_eq!(
+            clamp_physical_position(120, 130, 200, 100, 0, 0, 500, 400),
+            (120, 130)
+        );
+    }
+
+    #[test]
+    fn clamps_past_right_edge() {
+        assert_eq!(
+            clamp_physical_position(450, 80, 100, 100, 0, 0, 500, 400),
+            (400, 80)
+        );
+    }
+
+    #[test]
+    fn clamps_past_left_edge() {
+        assert_eq!(
+            clamp_physical_position(-50, 80, 100, 100, 0, 0, 500, 400),
+            (0, 80)
+        );
+    }
+
+    #[test]
+    fn clamps_past_top_edge() {
+        assert_eq!(
+            clamp_physical_position(80, -50, 100, 100, 0, 0, 500, 400),
+            (80, 0)
+        );
+    }
+
+    #[test]
+    fn clamps_past_bottom_edge() {
+        assert_eq!(
+            clamp_physical_position(80, 350, 100, 100, 0, 0, 500, 400),
+            (80, 300)
+        );
+    }
+
+    #[test]
+    fn oversized_window_pins_to_work_area_origin() {
+        assert_eq!(
+            clamp_physical_position(80, 80, 600, 450, 10, 20, 500, 400),
+            (10, 20)
+        );
+    }
+
+    #[test]
+    fn clamps_on_negative_origin_monitor() {
+        assert_eq!(
+            clamp_physical_position(-20, 60, 100, 100, -1080, 0, 1080, 800),
+            (-100, 60)
+        );
+    }
 }
 
 fn spring_progress(seconds: f64) -> f64 {

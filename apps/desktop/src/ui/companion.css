@@ -96,7 +96,8 @@
 .ticker-row { height: 22px; display: flex; align-items: center; min-width: 0; color: var(--c-dim-3); font: 500 11.5px var(--c-font); }
 .ticker-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ticker-row.current { color: var(--c-ink-2); font-size: 13px; }
-.glance { display: flex; gap: 12px; color: var(--c-dim-3); font: 400 10.5px var(--c-font); white-space: nowrap; overflow: hidden; }
+.glance { color: var(--c-dim-3); font: 400 10.5px var(--c-font); line-height: 1.35; }
+.glance span { white-space: normal; }
 .glance b { color: #c5c8cd; font-weight: 500; font-variant-numeric: tabular-nums; }
 .shimmer { background: linear-gradient(90deg, #7c818a 0%, #f2f3f5 40%, #7c818a 70%); background-size: 260% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: shimmer 2.2s linear infinite; }
 @keyframes shimmer { from { background-position: 130% 0; } to { background-position: -130% 0; } }

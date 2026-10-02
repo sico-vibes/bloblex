@@ -70,6 +70,11 @@ impl AppState {
             });
         }
     }
+    fn broadcast_persisted(&self, events: Vec<Value>) {
+        for event in events {
+            let _ = self.events.send(EventEnvelope { v:1,event_id:event["eventId"].as_str().unwrap_or("").to_owned(),sequence:event["sequence"].as_u64().unwrap_or(0),timestamp:event["timestamp"].as_str().unwrap_or("").to_owned(),event_type:event["type"].as_str().unwrap_or("").to_owned(),payload:event["payload"].clone() });
+        }
+    }
 }
 
 fn auth(headers: &HeaderMap, token: &str) -> bool {
@@ -149,6 +154,10 @@ fn error(id: String, code: &str, message: &str) -> RpcResponse {
     }
 }
 type DispatchError = (StatusCode, RpcError);
+fn agent_error(e: bloblex_storage::StorageError) -> DispatchError {
+    use bloblex_storage::StorageError::*;
+    match e { InvalidAgent=>derr("invalid_argument","agent fields or membership are invalid",StatusCode::BAD_REQUEST),AgentNotFound=>derr("not_found","agent or runtime not found",StatusCode::NOT_FOUND),AgentConflict=>derr("conflict","agent conflicts with current state",StatusCode::CONFLICT),_=>derr("internal","agent storage operation failed",StatusCode::INTERNAL_SERVER_ERROR) }
+}
 fn derr(code: &str, msg: &str, status: StatusCode) -> DispatchError {
     (
         status,
@@ -161,6 +170,16 @@ fn derr(code: &str, msg: &str, status: StatusCode) -> DispatchError {
 
 async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, DispatchError> {
     match method {
+        "agent.list" => {
+            let include=match p.get("includeArchived"){None=>false,Some(v)=>v.as_bool().ok_or_else(||derr("invalid_argument","includeArchived must be a boolean",StatusCode::BAD_REQUEST))?};
+            let runtime=match p.get("runtimeId"){None=>None,Some(v)=>Some(v.as_str().ok_or_else(||derr("invalid_argument","runtimeId must be a string",StatusCode::BAD_REQUEST))?)};
+            st.db.agent_list(include,runtime).map(|agents|json!({"agents":agents})).map_err(agent_error)
+        }
+        "agent.get" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?; st.db.agent_get(id).map(|agent|json!({"agent":agent})).map_err(agent_error) }
+        "agent.create" => { let (agent,events)=st.db.agent_create(&p).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
+        "agent.update" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let mut fields=p.clone();fields.as_object_mut().unwrap().remove("agentId");let (agent,events)=st.db.agent_update(id,&fields).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
+        "agent.delete" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
+        "agent.reorder" => { let rt=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;let ids=p["agentIds"].as_array().filter(|a|a.iter().all(Value::is_string)).ok_or_else(||derr("invalid_argument","agentIds must be an array of strings",StatusCode::BAD_REQUEST))?.iter().map(|v|v.as_str().unwrap().to_owned()).collect::<Vec<_>>();let (agents,events)=st.db.agent_reorder(rt,&ids).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agents":agents})) }
         "app.snapshot" => st.db.snapshot().map_err(|e| {
             derr(
                 "internal",
@@ -449,7 +468,10 @@ fn adapter_for(a: &Adapters, provider: &str) -> Option<Arc<dyn AgentAdapter>> {
     }
 }
 async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
-    let runtime_id = p["runtimeId"].as_str().unwrap_or("").to_owned();
+    let agent_supplied=p.get("agentId").is_some(); let runtime_supplied=p.get("runtimeId").is_some();
+    if agent_supplied==runtime_supplied{return Err(derr("invalid_argument","exactly one of agentId or runtimeId is required",StatusCode::BAD_REQUEST));}
+    let agent_id=if agent_supplied{Some(p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId must be a string",StatusCode::BAD_REQUEST))?.to_owned())}else{None};
+    let runtime_id = if let Some(agent_id)=agent_id.as_deref(){let agent=st.db.agent_get(agent_id).map_err(agent_error)?;if agent["archived"]==true{return Err(derr("conflict","archived agents cannot start sessions",StatusCode::CONFLICT));}agent["runtimeId"].as_str().unwrap_or("").to_owned()}else{p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId must be a string",StatusCode::BAD_REQUEST))?.to_owned()};
     let project = PathBuf::from(p["projectPath"].as_str().unwrap_or(""));
     if !project.is_dir() {
         return Err(derr(
@@ -482,20 +504,15 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         .unwrap_or("New chat")
         .to_owned();
     st.db
-        .create_session(
+        .create_session_for_agent(
             &id,
             &runtime_id,
             &provider,
             &project.to_string_lossy(),
             &title,
+            agent_id.as_deref(),
         )
-        .map_err(|e| {
-            derr(
-                "internal",
-                &e.to_string(),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        })?;
+        .map_err(agent_error)?;
     let (tx, rx) = tokio::sync::mpsc::channel(256);
     let handle = adapter
         .new_session(
@@ -534,11 +551,11 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         forward_events(state, stream_id, event_provider, event_runtime, rx).await
     });
     let session_event = st.db.session_detail(&id).unwrap_or_else(|_| {
-        json!({"id":id,"runtimeId":runtime_id,"provider":provider,"title":title,"state":"idle"})
+        json!({"id":id,"runtimeId":runtime_id,"agentId":agent_id,"provider":provider,"title":title,"state":"idle"})
     });
     st.emit("session.changed", session_event).await;
     Ok(
-        json!({"id":id,"runtimeId":runtime_id,"provider":provider,"providerSessionId":handle.provider_session_id,"projectPath":p["projectPath"],"title":title,"state":"idle","resumable":handle.capabilities.resume,"turns":[],"messages":[],"tools":[],"files":[]}),
+        json!({"id":id,"runtimeId":runtime_id,"agentId":agent_id,"provider":provider,"providerSessionId":handle.provider_session_id,"projectPath":p["projectPath"],"title":title,"state":"idle","resumable":handle.capabilities.resume,"turns":[],"messages":[],"tools":[],"files":[]}),
     )
 }
 async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
@@ -1139,5 +1156,47 @@ async fn main() {
     if let Err(e) = run().await {
         eprintln!("bloblexd failed: {e}");
         std::process::exit(1)
+    }
+}
+
+#[cfg(test)]
+mod phase2a_tests {
+    use super::*;
+    fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
+        let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),stopping:Arc::new(tokio::sync::Notify::new())};(st,rx)
+    }
+    #[tokio::test]
+    async fn agent_rpc_crud_reorder_archive_errors_and_persisted_event_sequence(){
+        let(st,mut events)=state();
+        let created=dispatch(&st,"agent.create",json!({"name":"Alpha","runtimeId":"rt-test","instructions":"keep private","customEnv":{"SAFE_VALUE":"do-not-broadcast"}})).await.unwrap()["agent"].clone();let id=created["id"].as_str().unwrap().to_owned();
+        let ev=events.recv().await.unwrap();assert_eq!(ev.event_type,"agent.changed");assert_eq!(ev.payload["action"],"created");assert!(ev.payload.get("instructions").is_none());assert!(ev.payload.get("customEnv").is_none());assert!(ev.payload.get("customArgs").is_none());
+        assert_eq!(dispatch(&st,"agent.get",json!({"agentId":id})).await.unwrap()["agent"]["name"],"Alpha");assert_eq!(dispatch(&st,"agent.list",json!({})).await.unwrap()["agents"].as_array().unwrap().len(),1);
+        let second=dispatch(&st,"agent.create",json!({"name":"Beta","runtimeId":"rt-test"})).await.unwrap()["agent"]["id"].as_str().unwrap().to_owned();let _=events.recv().await.unwrap();
+        let updated=dispatch(&st,"agent.update",json!({"agentId":id,"name":"Alpha Prime"})).await.unwrap();assert_eq!(updated["agent"]["name"],"Alpha Prime");let update_event=events.recv().await.unwrap();assert!(update_event.sequence>ev.sequence);
+        let reorder=dispatch(&st,"agent.reorder",json!({"runtimeId":"rt-test","agentIds":[second,id]})).await.unwrap();assert_eq!(reorder["agents"][0]["id"],second);let _=events.recv().await.unwrap();let _=events.recv().await.unwrap();
+        assert_eq!(dispatch(&st,"agent.reorder",json!({"runtimeId":"rt-test","agentIds":[id]})).await.unwrap_err().1.code,"invalid_argument");
+        let archived=dispatch(&st,"agent.delete",json!({"agentId":second})).await.unwrap();assert_eq!(archived["agent"]["archived"],true);let archive_event=events.recv().await.unwrap();assert_eq!(archive_event.payload["action"],"archived");
+        assert_eq!(dispatch(&st,"agent.delete",json!({"agentId":second})).await.unwrap()["agent"]["archived"],true);
+        assert_eq!(dispatch(&st,"agent.update",json!({"agentId":second,"name":"x"})).await.unwrap_err().1.code,"conflict");
+        assert_eq!(dispatch(&st,"agent.get",json!({"agentId":Uuid::new_v4().to_string()})).await.unwrap_err().1.code,"not_found");
+        assert_eq!(dispatch(&st,"agent.create",json!({"name":"Alpha Prime","runtimeId":"rt-test"})).await.unwrap_err().1.code,"conflict");
+    }
+    #[tokio::test]
+    async fn session_new_agent_xor_and_archived_conflict_are_validated(){
+        let(st,_)=state();let a=dispatch(&st,"agent.create",json!({"name":"Agent","runtimeId":"rt-test"})).await.unwrap()["agent"]["id"].as_str().unwrap().to_owned();let _=dispatch(&st,"agent.delete",json!({"agentId":a})).await.unwrap();
+        assert_eq!(dispatch(&st,"session.new",json!({"projectPath":".","runtimeId":"rt-test","agentId":Uuid::new_v4().to_string()})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"session.new",json!({"projectPath":"."})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"session.new",json!({"projectPath":".","agentId":a})).await.unwrap_err().1.code,"conflict");
+        assert_eq!(dispatch(&st,"session.new",json!({"projectPath":".","agentId":Uuid::new_v4().to_string()})).await.unwrap_err().1.code,"not_found");
+        let active=dispatch(&st,"agent.create",json!({"name":"Active","runtimeId":"rt-test"})).await.unwrap()["agent"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(dispatch(&st,"session.new",json!({"projectPath":"C:/does-not-exist","agentId":active})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"session.new",json!({"projectPath":".","runtimeId":"missing"})).await.unwrap_err().1.code,"not_found");
+    }
+    #[tokio::test]
+    async fn agent_list_without_capability_is_rejected_before_dispatch(){
+        let(st,_)=state();let request=RpcRequest{v:PROTOCOL_VERSION,id:"auth-test".into(),method:"agent.list".into(),params:json!({})};
+        let response=main_rpc(State(st),ConnectInfo("127.0.0.1:12345".parse().unwrap()),HeaderMap::new(),Json(request)).await.into_response();
+        assert_eq!(response.status(),StatusCode::UNAUTHORIZED);
     }
 }

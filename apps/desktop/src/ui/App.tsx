@@ -17,7 +17,7 @@ import { PermissionChoiceButton } from './PermissionChoiceButton'
 import bloblexLogo from '../assets/bloblex-128.png'
 import { sessionsForPauseRequest } from './trayActions'
 import { budgetValue, findApplicableBudget } from './budgetPresentation'
-import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, providerColor, type ConnectionState, type DaemonEvent, type PermissionRequest, type Runtime, type Session, type Snapshot } from '../types'
+import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, providerColor, type Agent, type ConnectionState, type DaemonEvent, type PermissionRequest, type Runtime, type Session, type Snapshot } from '../types'
 import { companionMonitorOptions, currentCompanionMonitor, ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectLocalFile, setActiveRuntime, setActiveSession, setCloseToTray, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream } from '../tauri'
 
 type ContextTab = 'Details' | 'Runtime' | 'Files'
@@ -46,6 +46,17 @@ export function App() {
   const [runtimeMenu, setRuntimeMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [usageSummary, setUsageSummary] = useState<Record<string, unknown> | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const hydrateAgentChanges = useCallback((events: DaemonEvent[]) => {
+    for (const event of events) {
+      if (event.type !== 'agent.changed' || typeof event.payload?.agentId !== 'string') continue
+      void rpc<{ agent?: Agent }>('agent.get', { agentId: event.payload.agentId }).then(({ agent }) => {
+        if (!agent?.id) return
+        setSnapshot((current) => current && (current.sequence ?? 0) >= (event.sequence ?? 0)
+          ? { ...current, agents: [...(current.agents ?? []).filter((item) => item.id !== agent.id), agent].sort((a, b) => a.runtimeId.localeCompare(b.runtimeId) || a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)) }
+          : current)
+      }).catch(() => undefined)
+    }
+  }, [])
   const [budgetAlertActive, setBudgetAlertActive] = useState(false)
   const [permissionClock, setPermissionClock] = useState(() => Date.now())
   const [runtimeExplainerDismissed, setRuntimeExplainerDismissed] = useState(() => localStorage.getItem('bloblex.runtimeExplainer.dismissed') === '1')
@@ -119,6 +130,7 @@ export function App() {
       queuedEvents.current = []
       hydrating.current = false
       setSnapshot(queued.reduce((state, event) => applyEvent(state, event), next))
+      hydrateAgentChanges(queued)
       setConnection('connected')
       setError(null)
     } catch (reason) {
@@ -133,7 +145,7 @@ export function App() {
         window.setTimeout(() => void refresh(), 0)
       }
     }
-  }, [])
+  }, [hydrateAgentChanges])
 
   useEffect(() => {
     if (!activePermission?.sessionId) return
@@ -180,7 +192,10 @@ export function App() {
         if (refreshingRef.current) refreshAgain.current = true
         else void refresh()
       } else if (hydrating.current) queuedEvents.current.push(event)
-      else setSnapshot((current) => current ? applyEvent(current, event) : current)
+      else {
+        setSnapshot((current) => current ? applyEvent(current, event) : current)
+        hydrateAgentChanges([event])
+      }
     }).then((stop) => { if (cancelled) stop(); else unlistenEvents = stop })
     void listenForDaemonConnection((connected) => {
       if (connected && hydrating.current) return
@@ -188,7 +203,7 @@ export function App() {
       if (connected) setError(null)
     }).then((stop) => { if (cancelled) stop(); else unlistenConnection = stop })
     return () => { cancelled = true; unlistenEvents?.(); unlistenConnection?.() }
-  }, [])
+  }, [hydrateAgentChanges])
 
   useEffect(() => {
     if (!inDesktop || companion) return

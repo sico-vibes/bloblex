@@ -71,4 +71,13 @@ describe('daemon event reconciliation', () => {
     const next = applyEvent(original, event('provider.raw_payload', 5, { secret: 'must not be rendered' }))
     expect(next).toEqual({ ...original, sequence: 5 })
   })
+
+  it('projects agent changes, keeps archived rows, and deduplicates their sequence', () => {
+    const initial = { ...base(), agents: [{ id: 'agent-a', name: 'A', description: '', instructions: '', color: 'mint', runtimeId: 'rt-a', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: 't0', updatedAt: 't0' }] }
+    const changed = applyEvent(initial, event('agent.changed', 5, { action: 'archived', agentId: 'agent-a', runtimeId: 'rt-a', updatedAt: 't1', archived: true, sortOrder: 0 }))
+    expect(changed.agents?.[0]).toMatchObject({ id: 'agent-a', archived: true, updatedAt: 't1' })
+    expect(applyEvent(changed, event('agent.changed', 5, { agentId: 'agent-a', archived: false })).agents).toEqual(changed.agents)
+    const inserted = applyEvent(changed, event('agent.changed', 6, { action: 'created', agentId: 'agent-b', runtimeId: 'rt-a', updatedAt: 't2', archived: false, sortOrder: 1 }))
+    expect(inserted.agents?.map((agent) => agent.id)).toEqual(['agent-a', 'agent-b'])
+  })
 })

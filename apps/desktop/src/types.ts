@@ -6,6 +6,7 @@ export interface Snapshot extends JsonRecord {
   daemon?: JsonRecord
   hosts?: JsonRecord[]
   runtimes?: Runtime[]
+  agents?: Agent[]
   sessions?: Session[]
   permissions?: PermissionRequest[]
   usage?: JsonRecord[]
@@ -27,6 +28,26 @@ export interface Runtime extends JsonRecord {
   capabilities?: JsonRecord | string[]
 }
 
+export interface Agent extends JsonRecord {
+  id: string
+  name: string
+  description: string
+  instructions: string
+  color: string
+  runtimeId: string
+  model: string | null
+  thinking: string | null
+  serviceTier: string | null
+  customArgs: string[]
+  customEnv: Record<string, string>
+  maxConcurrency: number
+  defaultProject: string | null
+  sortOrder: number
+  archived: boolean
+  createdAt: string
+  updatedAt: string
+}
+
 export interface ChatMessage extends JsonRecord {
   id?: string
   role?: string
@@ -42,6 +63,7 @@ export interface ChatMessage extends JsonRecord {
 export interface Session extends JsonRecord {
   id: string
   runtimeId: string
+  agentId?: string | null
   provider?: string
   projectPath?: string
   title?: string
@@ -117,6 +139,23 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
     const existing = sessions.find((item) => item.id === session.id)
     const merged = existing ? { ...existing, ...session, messages: session.messages ?? existing.messages, turns: session.turns ?? existing.turns, tools: session.tools ?? existing.tools, files: session.files ?? existing.files } : session
     return { ...snapshot, sequence, sessions: [...sessions.filter((item) => item.id !== session.id), merged] }
+  }
+
+  if (event.type === 'agent.changed') {
+    const id = typeof payload.agentId === 'string' ? payload.agentId : undefined
+    if (!id) return { ...snapshot, sequence }
+    const agents = snapshot.agents ?? []
+    const existing = agents.find((agent) => agent.id === id)
+    const projected = {
+      ...(existing ?? { id, name: '', description: '', instructions: '', color: 'mint', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, createdAt: '' }),
+      runtimeId: typeof payload.runtimeId === 'string' ? payload.runtimeId : existing?.runtimeId ?? '',
+      updatedAt: typeof payload.updatedAt === 'string' ? payload.updatedAt : existing?.updatedAt ?? '',
+      archived: typeof payload.archived === 'boolean' ? payload.archived : existing?.archived ?? false,
+      sortOrder: typeof payload.sortOrder === 'number' ? payload.sortOrder : existing?.sortOrder ?? 0,
+    } satisfies Agent
+    const nextAgents = [...agents.filter((agent) => agent.id !== id), projected]
+      .sort((a, b) => a.runtimeId.localeCompare(b.runtimeId) || a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    return { ...snapshot, sequence, agents: nextAgents }
   }
 
   if (event.type === 'permission.resolved') {

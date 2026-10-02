@@ -1,6 +1,6 @@
 import type { Agent, Session } from '../types'
 import { formatUnknownSafe, labelize } from '../types'
-import { projectFolderName, runtimeDotClass, shortTime } from './rosterSelectors'
+import { projectFolderName, sessionDotClass, shortTime } from './rosterSelectors'
 
 export function BlobSessions({ agent, sessions, legacyCount, canCreate, onOpenSession, onNewSession }: {
   agent: Agent | null
@@ -16,7 +16,7 @@ export function BlobSessions({ agent, sessions, legacyCount, canCreate, onOpenSe
     {sessions.length === 0 && canCreate && <button type="button" className="primary-button" onClick={onNewSession}>New session</button>}
     {sessions.map((session) => <button type="button" className="blob-session-row" key={session.id} onClick={() => onOpenSession(session)}>
       <strong>{formatUnknownSafe(session.title, 'New session')}</strong>
-      <span><i className={`status-dot ${runtimeDotClass(session.state === 'error' || session.state === 'failed' ? 'error' : session.state === 'working' ? 'working' : 'online')}`} /> {labelize(session.state, 'Idle')}</span>
+      <span><i className={`status-dot ${sessionDotClass(session.state)}`} /> {labelize(session.state, 'Idle')}</span>
       <small>{projectFolderName(session.projectPath)}</small>
       <small>{session.updatedAt ? shortTime(session.updatedAt) : ''}</small>
     </button>)}

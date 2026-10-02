@@ -80,6 +80,7 @@ Events:
 | `session.close` | `{ "sessionId": string }` | Closes managed adapter process; persisted session remains. |
 | `permission.reply` | `{ "permissionId": string, "choice": string }` | Choice is an opaque provider-supported option ID from that request; the provider adapter must receive and acknowledge it before Bloblex marks it resolved. |
 | `usage.summary` | `{ "from": string, "to": string, "scope"?: object }` | Raw token totals and separate known/unknown valuations; subscription fees are not API estimates. |
+| `usage.analytics` | `{ "from": string, "to": string, "bucket": "day"|"week", "tz": string, "projectPath"?: string, "agentId"?: string }` | Returns `UsageAnalytics` as defined in `docs/PHASE_5_CONTRACT.md`; invalid range, bucket, or timezone is `invalid_argument`, unknown agent is `not_found`. |
 | `pricing.list` | `{ "provider"?: string }` | Effective pricing rules including source and aliases. |
 | `pricing.override` | `{ "rule": PricingRule }` | Save user-defined pricing, visibly marked as an override. |
 | `subscription.list` | `{}` | User-entered plan fees, separated from token estimates and quota (`unknown` unless measured). |

@@ -1,6 +1,7 @@
 //! Codex app-server adapter over JSON-RPC stdio; never reads terminal UI output.
 use async_trait::async_trait;
 use bloblex_agent_core::*;
+use bloblex_process::{prepare_command, ProcessTree};
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
 use std::{
@@ -23,6 +24,7 @@ const CATALOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 struct Conn {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
+    process_tree: ProcessTree,
     pending: Mutex<HashMap<String, oneshot::Sender<Result<Value, AdapterError>>>>,
     incoming: Mutex<HashMap<String, Value>>,
     next: AtomicU64,
@@ -36,6 +38,7 @@ struct TurnState {
     id: Option<String>,
     options: ExecOptions,
     usage: Option<Value>,
+    completed: bool,
 }
 #[derive(Clone, Default)]
 struct ThreadMeta {
@@ -65,6 +68,7 @@ impl CodexAdapter {
         events: EventSender,
     ) -> Result<Arc<Conn>, AdapterError> {
         let mut c = Command::new(&r.executable);
+        prepare_command(&mut c);
         c.args(&r.args)
             .args(["app-server", "--listen", "stdio://"])
             .current_dir(cwd)
@@ -75,6 +79,7 @@ impl CodexAdapter {
         let mut child = c
             .spawn()
             .map_err(|e| AdapterError::Process(e.to_string()))?;
+        let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
         let stdin = child
             .stdin
             .take()
@@ -86,6 +91,7 @@ impl CodexAdapter {
         let conn = Arc::new(Conn {
             stdin: Mutex::new(stdin),
             child: Mutex::new(child),
+            process_tree,
             pending: Mutex::new(HashMap::new()),
             incoming: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
@@ -155,6 +161,7 @@ impl CodexAdapter {
                             let failed = !success;
                             let (options, usage) = {
                                 let mut t = r.turn.lock().await;
+                                t.completed = true;
                                 (t.options.clone(), t.usage.take())
                             };
                             let turn_id = r.turn_id.lock().await.clone().unwrap_or_default();
@@ -219,7 +226,7 @@ impl CodexAdapter {
             Ok(Err(_)) => Err(AdapterError::Process("app-server closed".into())),
             Err(_) => {
                 c.pending.lock().await.remove(&id);
-                Err(AdapterError::Protocol(format!("timeout waiting for {m}")))
+                Err(AdapterError::Timeout)
             }
         }
     }
@@ -244,6 +251,7 @@ impl CodexAdapter {
             Err(e) => Err(e),
         };
         if result.is_err() {
+            let _ = c.process_tree.terminate();
             let _ = c.child.lock().await.kill().await;
         }
         result
@@ -561,6 +569,7 @@ async fn write_rpc(
 }
 async fn catalog_pages(r: &RuntimeSpec) -> Result<Vec<Value>, AdapterError> {
     let mut cmd = Command::new(&r.executable);
+    prepare_command(&mut cmd);
     cmd.args(&r.args)
         .args(["app-server", "--listen", "stdio://"])
         .stdin(Stdio::piped())
@@ -573,6 +582,7 @@ async fn catalog_pages(r: &RuntimeSpec) -> Result<Vec<Value>, AdapterError> {
     let mut child = cmd
         .spawn()
         .map_err(|_| AdapterError::Process("Codex app-server catalog could not start".into()))?;
+    let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
     let result = async {
         let mut stdin = child
             .stdin
@@ -625,6 +635,7 @@ async fn catalog_pages(r: &RuntimeSpec) -> Result<Vec<Value>, AdapterError> {
         .await
         .map_err(|_| AdapterError::Process("Codex model catalog timed out".into()))
         .and_then(|v| v);
+    let _ = process_tree.terminate();
     let _ = child.kill().await;
     result
 }
@@ -672,15 +683,18 @@ impl AgentAdapter for CodexAdapter {
     }
     async fn probe(&self, r: &RuntimeSpec) -> Result<ProbeResult, AdapterError> {
         let mut c = Command::new(&r.executable);
+        prepare_command(&mut c);
         c.args(&r.args)
             .args(["app-server", "--help"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
-        let o = tokio::time::timeout(std::time::Duration::from_secs(6), c.output())
+        let mut child = c.spawn().map_err(|e| AdapterError::Process(e.to_string()))?;
+        let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
+        let o = tokio::time::timeout(std::time::Duration::from_secs(6), child.wait_with_output())
             .await
-            .map_err(|_| AdapterError::Process("Codex app-server probe timed out".into()))?
+            .map_err(|_| { let _ = process_tree.terminate(); AdapterError::Process("Codex app-server probe timed out".into()) })?
             .map_err(|e| AdapterError::Process(e.to_string()))?;
         if !o.status.success() || !String::from_utf8_lossy(&o.stdout).contains("app-server") {
             return Err(AdapterError::Unsupported(
@@ -719,6 +733,7 @@ impl AgentAdapter for CodexAdapter {
             .or(t["id"].as_str())
             .map(str::to_owned)
         else {
+            let _ = c.process_tree.terminate();
             let _ = c.child.lock().await.kill().await;
             return Err(AdapterError::Protocol(
                 "thread/start returned no thread id".into(),
@@ -847,6 +862,7 @@ impl AgentAdapter for CodexAdapter {
             id: None,
             options: q.exec_options,
             usage: None,
+            completed: false,
         };
         *c.turn_id.lock().await = Some(q.turn_id);
         let result = match Self::call(&c, "turn/start", p).await {
@@ -888,7 +904,11 @@ impl AgentAdapter for CodexAdapter {
             .or(result["turnId"].as_str())
             .ok_or_else(|| AdapterError::Protocol("turn/start returned no turn id".into()))?
             .to_owned();
-        c.turn.lock().await.id = Some(id);
+        {
+            let mut turn = c.turn.lock().await;
+            turn.id = Some(id);
+            turn.completed = false;
+        }
         Ok(())
     }
     async fn cancel(&self, h: &SessionHandle) -> Result<(), AdapterError> {
@@ -906,12 +926,20 @@ impl AgentAdapter for CodexAdapter {
             .id
             .clone()
             .ok_or_else(|| AdapterError::Unsupported("there is no active Codex turn".into()))?;
-        Self::call(
-            &c,
-            "turn/interrupt",
-            json!({"threadId":h.provider_session_id,"turnId":t}),
-        )
-        .await?;
+        let interrupted = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Self::call(&c, "turn/interrupt", json!({"threadId":h.provider_session_id,"turnId":t})),
+        ).await;
+        if matches!(interrupted, Ok(Ok(_))) {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !c.turn.lock().await.completed && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }
+        if !c.turn.lock().await.completed {
+            let _ = c.process_tree.terminate();
+            let _ = c.child.lock().await.kill().await;
+        }
         Ok(())
     }
     async fn reply_permission(&self, id: &str, choice: &str) -> Result<(), AdapterError> {
@@ -953,6 +981,7 @@ impl AgentAdapter for CodexAdapter {
     }
     async fn close_session(&self, h: &SessionHandle) -> Result<(), AdapterError> {
         if let Some(c) = self.sessions.lock().await.remove(&h.session_id) {
+            let _ = c.process_tree.terminate();
             let _ = c.child.lock().await.kill().await;
         }
         Ok(())

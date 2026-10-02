@@ -24,7 +24,7 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap, future::IntoFuture, net::SocketAddr, path::PathBuf, sync::{Arc, OnceLock, Mutex as StdMutex},
+    collections::{HashMap, HashSet}, future::IntoFuture, net::SocketAddr, path::PathBuf, sync::{Arc, OnceLock, Mutex as StdMutex},
     time::Instant,
 };
 use tokio::{
@@ -45,6 +45,7 @@ struct AppState {
     adapters: Arc<Adapters>,
     sessions: Arc<Mutex<HashMap<String, ActiveSession>>>,
     active_turns: Arc<Mutex<HashMap<String, String>>>,
+    denied_turns: Arc<Mutex<HashSet<String>>>,
     stopping: Arc<tokio::sync::Notify>,
 }
 #[derive(Clone)]
@@ -77,6 +78,23 @@ impl AppState {
         for event in events {
             let _ = self.events.send(EventEnvelope { v:1,event_id:event["eventId"].as_str().unwrap_or("").to_owned(),sequence:event["sequence"].as_u64().unwrap_or(0),timestamp:event["timestamp"].as_str().unwrap_or("").to_owned(),event_type:event["type"].as_str().unwrap_or("").to_owned(),payload:event["payload"].clone() });
         }
+    }
+}
+
+fn adapter_failure_class(error: &bloblex_agent_core::AdapterError, permission_denied: bool) -> &'static str {
+    if matches!(error, bloblex_agent_core::AdapterError::Timeout) {
+        return "timeout";
+    }
+    if permission_denied {
+        return "permission_denied";
+    }
+    match error {
+        bloblex_agent_core::AdapterError::Timeout => "timeout",
+        bloblex_agent_core::AdapterError::Rejected(_)
+        | bloblex_agent_core::AdapterError::Unsupported(_) => "config_unsupported",
+        bloblex_agent_core::AdapterError::Protocol(_) => "provider_error",
+        bloblex_agent_core::AdapterError::Process(_)
+        | bloblex_agent_core::AdapterError::Other(_) => "other",
     }
 }
 
@@ -300,7 +318,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let active = st.sessions.lock().await.remove(id);
             let active_turn = st.active_turns.lock().await.remove(id);
             if let Some(turn) = active_turn {
-                let _ = st.db.update_turn_state(&turn, "cancelled");
+                st.denied_turns.lock().await.remove(&turn);
+                let _ = st.db.update_turn_outcome(&turn, "cancelled", Some("cancelled"));
                 if let Some(s) = active.as_ref() {
                     let _ = s.adapter.cancel(&s.handle).await;
                 }
@@ -350,6 +369,11 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::INTERNAL_SERVER_ERROR,
                 )
             })?;
+            if matches!(choice.to_ascii_lowercase().as_str(), "deny" | "reject" | "no") {
+                if let Some(turn_id) = st.active_turns.lock().await.get(&session_id).cloned() {
+                    st.denied_turns.lock().await.insert(turn_id);
+                }
+            }
             st.emit(
                 "permission.resolved",
                 json!({"permissionId":id,"choice":choice}),
@@ -387,6 +411,18 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 StatusCode::INTERNAL_SERVER_ERROR,
             )
         }),
+        "usage.analytics" => {
+            if p.get("projectPath").is_some_and(|value| !value.is_null() && !value.is_string())
+                || p.get("agentId").is_some_and(|value| !value.is_null() && !value.is_string())
+            {
+                return Err(derr("invalid_argument", "projectPath and agentId must be strings", StatusCode::BAD_REQUEST));
+            }
+            st.db.usage_analytics(&p).map_err(|error| match error {
+                bloblex_storage::StorageError::InvalidAnalytics => derr("invalid_argument", "analytics range, bucket, or timezone is invalid", StatusCode::BAD_REQUEST),
+                bloblex_storage::StorageError::AgentNotFound => derr("not_found", "agent not found", StatusCode::NOT_FOUND),
+                other => derr("internal", &other.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
+            })
+        }
         "runtime.profile.list" => st.db.profiles().map_err(|e| {
             derr(
                 "internal",
@@ -958,9 +994,10 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
                 )
             })?;
         if !reserved {
+            let _ = st.db.record_budget_stopped_turn(&turn, &sid);
             return Err(derr("budget_blocked", "an applicable budget has insufficient remaining capacity or cannot be safely estimated", StatusCode::TOO_MANY_REQUESTS));
         }
-        st.db.create_turn(&turn, &sid).map_err(|e| {
+        let admitted = st.db.create_reserved_turn(&turn, &sid).map_err(|e| {
             let _ = st.db.release_budget_turn(&turn);
             derr(
                 "internal",
@@ -968,10 +1005,15 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
                 StatusCode::INTERNAL_SERVER_ERROR,
             )
         })?;
+        if !admitted {
+            let _ = st.db.release_budget_turn(&turn);
+            return Err(derr("conflict", "daemon or agent concurrency limit reached", StatusCode::CONFLICT));
+        }
         st.db
             .append_message(&sid, &turn, "user", &text)
             .map_err(|e| {
                 let _ = st.db.release_budget_turn(&turn);
+                let _ = st.db.update_turn_outcome(&turn, "error", Some("other"));
                 derr(
                     "internal",
                     &e.to_string(),
@@ -985,9 +1027,11 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
         let gates = json!({"model":settings[format!("exec_gate.{}.model",active.runtime.provider)],"thinking":settings[format!("exec_gate.{}.thinking",active.runtime.provider)],"serviceTier":settings[format!("exec_gate.{}.serviceTier",active.runtime.provider)],"instructions":settings[format!("exec_gate.{}.instructions",active.runtime.provider)]});
         let launch_applied=active.runtime.provider=="claude"||active.runtime.provider=="codex";
         let mode_outcome=json!({"value":exec_options.approval_mode.as_str(),"applied":true,"kind":"request_shape","reason":if launch_applied{"provider launch mode requested for this turn"}else{"daemon policy mode"}});
-        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({"approvalMode":mode_outcome}),&json!({"approvalMode":{"kind":"request_shape","value":exec_options.approval_mode.as_str()}}),desired_instruction_hash.as_deref(),&json!({"adapter":active.runtime.provider,"gates":gates,"approvalMode":exec_options.approval_mode.as_str()}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({"approvalMode":mode_outcome}),&json!({"approvalMode":{"kind":"request_shape","value":exec_options.approval_mode.as_str()}}),desired_instruction_hash.as_deref(),&json!({"adapter":active.runtime.provider,"gates":gates,"approvalMode":exec_options.approval_mode.as_str()}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|{let _=st.db.update_turn_outcome(&turn,"error",Some("other"));let _=st.db.release_budget_turn(&turn);derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR)})?;
         st.emit("exec.options.changed", json!({"sessionId":sid,"turnId":turn,"agentId":session["agentId"],"runtimeId":active.runtime.runtime_id,"requested":snapshot["requested"],"applied":snapshot["applied"],"snapshotId":snapshot_id})).await;
         st.db.update_session_state(&sid, "working").map_err(|e| {
+            let _ = st.db.update_turn_outcome(&turn, "error", Some("other"));
+            let _ = st.db.release_budget_turn(&turn);
             derr(
                 "internal",
                 &e.to_string(),
@@ -996,6 +1040,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
         })?;
         turns.insert(sid.clone(), turn.clone());
     }
+    st.denied_turns.lock().await.remove(&turn);
     if exec_options.approval_mode==ApprovalMode::Bypass && matches!(active.runtime.provider.as_str(),"claude"|"codex") { st.emit("permission.bypass_active",json!({"sessionId":sid,"agentId":session_options["agentId"],"providerMode":provider_mode(&active.runtime.provider)})).await; }
     let state = st.clone();
     let sid2 = sid.clone();
@@ -1013,15 +1058,23 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             )
             .await
         {
-            let _ = state.db.update_turn_state(&turn2, "error");
+            let permission_denied = state.denied_turns.lock().await.remove(&turn2);
+            let failure_class = adapter_failure_class(&e, permission_denied);
+            let public_message = match failure_class {
+                "config_unsupported" => "Requested execution settings were unsupported.",
+                "provider_error" => "The provider reported a turn error.",
+                "permission_denied" => "A required permission was denied.",
+                _ => "The turn could not be completed.",
+            };
+            let _ = state.db.update_turn_outcome(&turn2, "error", Some(failure_class));
             let _ = state.db.update_session_state(&sid2, "error");
-            // Keep the reservation when usage is unknown so restart recovery cannot
-            // silently free capacity for a turn that may have consumed tokens.
+            // Budget admission remains charged when usage is unknown; the
+            // concurrency slot is released because this execution ended.
             state.active_turns.lock().await.remove(&sid2);
             state
                 .emit(
                     "turn.error",
-                    json!({"sessionId":sid2,"turnId":turn2,"message":e.to_string()}),
+                    json!({"sessionId":sid2,"turnId":turn2,"message":public_message}),
                 )
                 .await;
         }
@@ -1185,6 +1238,7 @@ async fn forward_events(
                     source: "stream".into(),
                     raw: raw.clone(),
                 };
+                let usage_status = if [input_tokens, output_tokens, cache_read_tokens, cache_write_tokens].iter().any(Option::is_some) { "partial" } else { "unreported" };
                 let rules = st
                     .db
                     .pricing_list(Some(&provider))
@@ -1208,11 +1262,11 @@ async fn forward_events(
                     bloblex_usage::estimate(&record, rule)
                 };
                 let valuation = serde_json::to_value(valuation).unwrap_or(Value::Null);
-                let usage = json!({"id":Uuid::new_v4().to_string(),"runtimeId":runtime_id,"sessionId":sid,"turnId":turn,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":input_tokens,"outputTokens":output_tokens,"cacheReadTokens":cache_read_tokens,"cacheWriteTokens":cache_write_tokens,"source":"stream","raw":raw,"providerReportedCostMinor":record.reported_cost_minor,"providerReportedCurrency":record.currency,"valuation":valuation});
+                let usage = json!({"id":Uuid::new_v4().to_string(),"runtimeId":runtime_id,"sessionId":sid,"turnId":turn,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":input_tokens,"outputTokens":output_tokens,"cacheReadTokens":cache_read_tokens,"cacheWriteTokens":cache_write_tokens,"source":"fallback","raw":raw,"providerReportedCostMinor":record.reported_cost_minor,"providerReportedCurrency":record.currency,"usageStatus":usage_status,"valuation":valuation});
                 let _ = st.db.insert_usage(&usage);
                 (
                     "usage.updated",
-                    json!({"id":usage["id"],"runtimeId":runtime_id,"sessionId":sid,"turnId":turn,"provider":provider,"model":model,"timestamp":usage["timestamp"],"inputTokens":input_tokens,"outputTokens":output_tokens,"cacheReadTokens":cache_read_tokens,"cacheWriteTokens":cache_write_tokens,"reasoningTokens":null,"providerReportedCostMinor":record.reported_cost_minor,"providerReportedCurrency":record.currency,"source":"stream","valuation":valuation}),
+                    json!({"id":usage["id"],"runtimeId":runtime_id,"sessionId":sid,"turnId":turn,"provider":provider,"model":model,"timestamp":usage["timestamp"],"inputTokens":input_tokens,"outputTokens":output_tokens,"cacheReadTokens":cache_read_tokens,"cacheWriteTokens":cache_write_tokens,"reasoningTokens":null,"providerReportedCostMinor":record.reported_cost_minor,"providerReportedCurrency":record.currency,"source":"fallback","usageStatus":usage_status,"valuation":valuation}),
                 )
             }
             AgentEvent::ExecApplied { turn_id, outcomes } => {
@@ -1227,11 +1281,51 @@ async fn forward_events(
             AgentEvent::UsageReport { turn_id, report } => {
                 let timestamp = Utc::now().to_rfc3339();
                 let model = report.model.clone();
-                let usage = json!({"id":Uuid::new_v4().to_string(),"runtimeId":runtime_id,"sessionId":sid,"turnId":turn_id,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":report.input_tokens,"outputTokens":report.output_tokens,"cacheReadTokens":report.cache_read_tokens,"cacheWriteTokens":report.cache_write_tokens,"reasoningTokens":report.reasoning_tokens,"source":"stream","raw":{},"providerReportedCostMinor":report.cost_minor,"providerReportedCurrency":report.cost_currency,"providerUpdateId":report.provider_update_id,"usageStatus":report.usage_status,"contextUsed":report.context_used,"contextSize":report.context_size,"reportedCostDecimal":report.reported_cost_decimal,"valuation":null});
+                let provider_update_id = report
+                    .provider_update_id
+                    .as_deref()
+                    .map(|id| format!("{}:{}", turn_id, id));
+                let valuation = if report.cost_minor.is_some() {
+                    serde_json::to_value(bloblex_usage::Valuation {
+                        basis: bloblex_usage::CostBasis::ProviderReportedActual,
+                        amount_minor: report.cost_minor,
+                        currency: report.cost_currency.clone(),
+                        pricing_rule_id: None,
+                        status: "reported_actual".into(),
+                    })
+                    .unwrap_or(Value::Null)
+                } else if report.reported_cost_decimal.is_none() {
+                    let rules = st
+                        .db
+                        .pricing_list(Some(&provider))
+                        .ok()
+                        .and_then(|value| {
+                            serde_json::from_value::<Vec<bloblex_usage::PriceRule>>(value["rules"].clone()).ok()
+                        })
+                        .unwrap_or_default();
+                    let rule = bloblex_usage::resolve_rule_at(&provider, model.as_deref(), &timestamp, &rules);
+                    let record = bloblex_usage::UsageRecord {
+                        input_tokens: report.input_tokens,
+                        output_tokens: report.output_tokens,
+                        cache_read_tokens: report.cache_read_tokens,
+                        cache_write_tokens: report.cache_write_tokens,
+                        reasoning_tokens: report.reasoning_tokens,
+                        model: model.clone(),
+                        reported_cost_minor: None,
+                        currency: None,
+                        source: "terminal".into(),
+                        raw: Value::Null,
+                    };
+                    serde_json::to_value(bloblex_usage::estimate(&record, rule)).unwrap_or(Value::Null)
+                } else {
+                    Value::Null
+                };
+                let usage = json!({"id":Uuid::new_v4().to_string(),"runtimeId":runtime_id,"sessionId":sid,"turnId":turn_id,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":report.input_tokens,"outputTokens":report.output_tokens,"cacheReadTokens":report.cache_read_tokens,"cacheWriteTokens":report.cache_write_tokens,"reasoningTokens":report.reasoning_tokens,"source":"terminal","raw":{},"providerReportedCostMinor":report.cost_minor,"providerReportedCurrency":report.cost_currency,"providerUpdateId":provider_update_id,"usageStatus":report.usage_status,"contextUsed":report.context_used,"contextSize":report.context_size,"reportedCostDecimal":report.reported_cost_decimal,"costIsCumulative":report.cost_is_cumulative,"valuation":valuation});
                 let _ = st.db.insert_usage(&usage);
                 ("usage.updated", json!({"id":usage["id"],"runtimeId":runtime_id,"sessionId":sid,"turnId":turn_id,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":report.input_tokens,"outputTokens":report.output_tokens,"cacheReadTokens":report.cache_read_tokens,"cacheWriteTokens":report.cache_write_tokens,"reasoningTokens":report.reasoning_tokens,"providerReportedCostMinor":report.cost_minor,"providerReportedCurrency":report.cost_currency,"source":"stream","usageStatus":report.usage_status,"evidenceNote":report.evidence_note,"contextUsed":report.context_used,"contextSize":report.context_size}))
             }
             AgentEvent::TurnCompleted => {
+                if let Some(t) = turn.as_deref() { st.denied_turns.lock().await.remove(t); }
                 if let Some(t) = turn.as_deref() {
                     let _ = st.db.update_turn_state(t, "completed");
                     if let Ok(metrics) = st.db.latest_turn_budget_metrics(t) {
@@ -1246,8 +1340,9 @@ async fn forward_events(
                 )
             }
             AgentEvent::TurnCancelled => {
+                if let Some(t) = turn.as_deref() { st.denied_turns.lock().await.remove(t); }
                 if let Some(t) = turn.as_deref() {
-                    let _ = st.db.update_turn_state(t, "cancelled");
+                    let _ = st.db.update_turn_outcome(t, "cancelled", Some("cancelled"));
                     if let Ok(metrics) = st.db.latest_turn_budget_metrics(t) {
                         let _ = st.db.reconcile_budget_turn_metrics(t, &metrics);
                     }
@@ -1259,10 +1354,18 @@ async fn forward_events(
                     json!({"sessionId":sid,"turnId":turn,"state":"cancelled"}),
                 )
             }
-            AgentEvent::Error { message } => {
-                if let Some(t) = turn.as_deref() {
-                    let _ = st.db.update_turn_state(t, "error");
-                }
+            AgentEvent::Error { message: _ } => {
+                let denied = if let Some(t) = turn.as_deref() {
+                    let denied = st.denied_turns.lock().await.remove(t);
+                    let class = if denied { "permission_denied" } else { "provider_error" };
+                    let _ = st.db.update_turn_outcome(t, "error", Some(class));
+                    denied
+                } else { false };
+                let message = if denied {
+                    "A required permission was denied."
+                } else {
+                    "The provider reported a turn error."
+                };
                 let _ = st.db.update_session_state(&sid, "error");
                 st.active_turns.lock().await.remove(&sid);
                 (
@@ -1400,6 +1503,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         adapters,
         sessions: Arc::new(Mutex::new(HashMap::new())),
         active_turns: Arc::new(Mutex::new(HashMap::new())),
+        denied_turns: Arc::new(Mutex::new(HashSet::new())),
         stopping: Arc::new(tokio::sync::Notify::new()),
     };
     st.broadcast_persisted(default_agent_events);
@@ -1464,9 +1568,13 @@ mod phase2a_tests {
         let(kind,body)=normalized_permission("opencode",&json!({"params":{"toolCall":{"title":"Run fixture command","rawInput":"echo safe"}}}));assert_eq!(kind,"shell");assert_eq!(body["rawInput"],"echo safe");
         let(kind,_)=normalized_permission("codex",&json!({"params":{"approval":{"unknown":true}}}));assert_eq!(kind,"unknown");
     }
+    #[test]
+    fn authoritative_timeout_errors_map_to_the_timeout_failure_class() {
+        assert_eq!(adapter_failure_class(&bloblex_agent_core::AdapterError::Timeout, false), "timeout");
+    }
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),stopping:Arc::new(tokio::sync::Notify::new())};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),stopping:Arc::new(tokio::sync::Notify::new())};(st,rx)
     }
     #[tokio::test]
     async fn agent_rpc_crud_reorder_archive_errors_and_persisted_event_sequence(){
@@ -1501,6 +1609,30 @@ mod phase2a_tests {
         st.db.set_setting("permissions.default_mode",&json!("auto")).unwrap();assert_eq!(exec_options_for_session(&st,&row).unwrap().approval_mode,ApprovalMode::Auto);
         st.db.agent_update(id,&json!({"approvalMode":"bypass"})).unwrap();assert_eq!(exec_options_for_session(&st,&row).unwrap().approval_mode,ApprovalMode::Bypass);
         st.db.set_setting("permissions.default_mode",&json!("ask")).unwrap();assert_eq!(exec_options_for_session(&st,&row).unwrap().approval_mode,ApprovalMode::Bypass);
+    }
+    #[tokio::test]
+    async fn an_explicit_permission_denial_classifies_a_later_terminal_turn_error() {
+        let (st, mut events) = state();
+        st.db.create_session("s-denied", "rt-test", "codex", ".", "Denied").unwrap();
+        st.db.create_turn("t-denied", "s-denied").unwrap();
+        st.active_turns.lock().await.insert("s-denied".into(), "t-denied".into());
+        st.db.insert_permission("p-denied", "s-denied", "provider-denied", "Protected action", None, &["deny".into()], &json!({})).unwrap();
+        let adapter = Arc::new(PolicyAdapter::default());
+        let handle = SessionHandle { session_id: "s-denied".into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
+        st.sessions.lock().await.insert("s-denied".into(), ActiveSession { handle, runtime, adapter, launch_approval_mode: ApprovalMode::Ask });
+        dispatch(&st, "permission.reply", json!({"permissionId":"p-denied","choice":"deny"})).await.unwrap();
+        assert!(st.denied_turns.lock().await.contains("t-denied"));
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let task = tokio::spawn(forward_events(st.clone(), "s-denied".into(), "codex".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::Error { message: "private provider detail".into() }).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        assert_eq!(events.recv().await.unwrap().event_type, "permission.resolved");
+        let event = events.recv().await.unwrap();
+        assert_eq!(event.event_type, "turn.error");
+        assert_eq!(event.payload["message"], "A required permission was denied.");
+        assert_eq!(st.db.turn_failure_class("t-denied").unwrap().as_deref(), Some("permission_denied"));
     }
     #[tokio::test]
     async fn automatic_permission_path_acknowledges_audits_and_fails_closed(){

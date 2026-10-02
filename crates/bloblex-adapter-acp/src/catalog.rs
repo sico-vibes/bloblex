@@ -1,5 +1,6 @@
 use crate::exec::{ERR_CATALOG, ERR_CATALOG_TIMEOUT};
 use bloblex_agent_core::{AdapterError, ModelCatalog, ModelInfo, RuntimeSpec};
+use bloblex_process::{prepare_command, ProcessTree};
 use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
@@ -19,6 +20,7 @@ pub(crate) async fn fetch_model_catalog(
 ) -> Result<ModelCatalog, AdapterError> {
     let temp = TempHome::new().map_err(|_| AdapterError::Process(ERR_CATALOG.into()))?;
     let mut command = Command::new(&runtime.executable);
+    prepare_command(&mut command);
     command
         .args(&runtime.args)
         .arg("models")
@@ -33,6 +35,7 @@ pub(crate) async fn fetch_model_catalog(
     let mut child = command
         .spawn()
         .map_err(|_| AdapterError::Process(ERR_CATALOG.into()))?;
+    let process_tree = ProcessTree::attach(&mut child).map_err(|_| AdapterError::Process(ERR_CATALOG.into()))?;
     let stdout = child
         .stdout
         .take()
@@ -40,11 +43,11 @@ pub(crate) async fn fetch_model_catalog(
     let read = tokio::time::timeout(timeout, read_limited(stdout, 4_000_000)).await;
     let text = match read {
         Err(_) => {
-            kill_child(&mut child).await;
+            kill_child(&mut child, &process_tree).await;
             return Err(AdapterError::Process(ERR_CATALOG_TIMEOUT.into()));
         }
         Ok(Err(error)) => {
-            kill_child(&mut child).await;
+            kill_child(&mut child, &process_tree).await;
             return Err(error);
         }
         Ok(Ok(text)) => text,
@@ -52,11 +55,11 @@ pub(crate) async fn fetch_model_catalog(
     let status = match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
         Ok(Ok(status)) => status,
         _ => {
-            kill_child(&mut child).await;
+            kill_child(&mut child, &process_tree).await;
             return Err(AdapterError::Process(ERR_CATALOG.into()));
         }
     };
-    kill_child(&mut child).await;
+    kill_child(&mut child, &process_tree).await;
     if !status.success() {
         return Err(AdapterError::Process(ERR_CATALOG.into()));
     }
@@ -71,7 +74,8 @@ pub(crate) async fn fetch_model_catalog(
     })
 }
 
-async fn kill_child(child: &mut Child) {
+async fn kill_child(child: &mut Child, process_tree: &ProcessTree) {
+    let _ = process_tree.terminate();
     let _ = child.kill().await;
     let _ = child.wait().await;
 }

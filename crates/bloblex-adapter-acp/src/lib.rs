@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bloblex_agent_core::*;
+use bloblex_process::{prepare_command, ProcessTree};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -27,6 +28,7 @@ pub use sha256::sha256_hex;
 struct Conn {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
+    process_tree: ProcessTree,
     pending: Mutex<HashMap<String, oneshot::Sender<Result<Value, AdapterError>>>>,
     incoming: Mutex<HashMap<String, Value>>,
     permission_options: Mutex<HashMap<String, Vec<Value>>>,
@@ -74,6 +76,7 @@ impl AcpAdapter {
         options: &ExecOptions,
     ) -> Result<Arc<Conn>, AdapterError> {
         let mut cmd = Command::new(&runtime.executable);
+        prepare_command(&mut cmd);
         cmd.args(&runtime.args)
             .arg("acp")
             .arg("--cwd")
@@ -87,6 +90,7 @@ impl AcpAdapter {
         // is the per-process config document, never a redirected data dir.
         exec::apply_child_env(&mut cmd, options);
         let mut child = cmd.spawn().map_err(|e| AdapterError::Process(e.to_string()))?;
+        let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
         let stdin = child
             .stdin
             .take()
@@ -118,6 +122,7 @@ impl AcpAdapter {
         let c = Arc::new(Conn {
             stdin: Mutex::new(stdin),
             child: Mutex::new(child),
+            process_tree,
             pending: Mutex::new(HashMap::new()),
             incoming: Mutex::new(HashMap::new()),
             permission_options: Mutex::new(HashMap::new()),
@@ -210,7 +215,7 @@ impl AcpAdapter {
             Ok(Err(_)) => Err(AdapterError::Process("ACP connection closed".into())),
             Err(_) => {
                 c.pending.lock().await.remove(&id);
-                Err(AdapterError::Protocol(format!("timeout waiting for {method}")))
+                Err(AdapterError::Timeout)
             }
         }
     }
@@ -471,6 +476,7 @@ impl AgentAdapter for AcpAdapter {
 
     async fn probe(&self, runtime: &RuntimeSpec) -> Result<ProbeResult, AdapterError> {
         let mut cmd = Command::new(&runtime.executable);
+        prepare_command(&mut cmd);
         cmd.args(&runtime.args)
             .arg("acp")
             .arg("--help")
@@ -478,9 +484,11 @@ impl AgentAdapter for AcpAdapter {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true);
-        let status = tokio::time::timeout(Duration::from_secs(5), cmd.status())
+        let mut child = cmd.spawn().map_err(|e| AdapterError::Process(e.to_string()))?;
+        let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
+        let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
             .await
-            .map_err(|_| AdapterError::Process("ACP probe timed out".into()))?
+            .map_err(|_| { let _ = process_tree.terminate(); AdapterError::Process("ACP probe timed out".into()) })?
             .map_err(|e| AdapterError::Process(e.to_string()))?;
         if !status.success() {
             return Err(AdapterError::Unsupported("OpenCode ACP is unavailable".into()));
@@ -549,6 +557,7 @@ impl AgentAdapter for AcpAdapter {
         let provider_id = match setup {
             Ok(provider_id) => provider_id,
             Err(error) => {
+                let _ = c.process_tree.terminate();
                 let _ = c.child.lock().await.kill().await;
                 return Err(error);
             }
@@ -611,6 +620,7 @@ impl AgentAdapter for AcpAdapter {
         }
         .await;
         if let Err(error) = setup {
+            let _ = c.process_tree.terminate();
             let _ = c.child.lock().await.kill().await;
             return Err(error);
         }
@@ -693,7 +703,25 @@ impl AgentAdapter for AcpAdapter {
                 .map_err(|e| AdapterError::Process(e.to_string()))?;
             c.permission_options.lock().await.remove(&key);
         }
-        Self::notify(&c, "session/cancel", json!({"sessionId": handle.provider_session_id})).await
+        let cancelled = tokio::time::timeout(
+            Duration::from_secs(2),
+            Self::notify(&c, "session/cancel", json!({"sessionId": handle.provider_session_id})),
+        ).await;
+        if !matches!(cancelled, Ok(Ok(()))) {
+            let _ = c.process_tree.terminate();
+            let _ = c.child.lock().await.kill().await;
+            return Ok(());
+        }
+        let completed = tokio::time::timeout(Duration::from_secs(2), async {
+            while !c.turn_completed.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }).await;
+        if completed.is_err() {
+            let _ = c.process_tree.terminate();
+            let _ = c.child.lock().await.kill().await;
+        }
+        Ok(())
     }
 
     async fn reply_permission(&self, id: &str, choice: &str) -> Result<(), AdapterError> {
@@ -730,7 +758,12 @@ impl AgentAdapter for AcpAdapter {
 
     async fn close_session(&self, handle: &SessionHandle) -> Result<(), AdapterError> {
         if let Some(c) = self.sessions.lock().await.remove(&handle.session_id) {
-            let _ = Self::request(&c, "session/close", json!({"sessionId": handle.provider_session_id})).await;
+            let _ = tokio::time::timeout(
+                Duration::from_secs(2),
+                Self::request(&c, "session/close", json!({"sessionId": handle.provider_session_id})),
+            )
+            .await;
+            let _ = c.process_tree.terminate();
             let _ = c.child.lock().await.kill().await;
         }
         Ok(())

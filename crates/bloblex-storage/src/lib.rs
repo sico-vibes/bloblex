@@ -1,4 +1,5 @@
-use chrono::{Datelike, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, SecondsFormat, TimeZone, Utc};
+use chrono_tz::Tz;
 use rusqlite::{backup::Backup, params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::{json, Value};
 use std::{fs, path::{Path, PathBuf}, sync::Mutex};
@@ -17,6 +18,8 @@ pub enum StorageError {
     InvalidBudget,
     #[error("invalid agent")]
     InvalidAgent,
+    #[error("invalid analytics request")]
+    InvalidAnalytics,
     #[error("agent not found")]
     AgentNotFound,
     #[error("agent conflict")]
@@ -95,6 +98,42 @@ fn schema_v4_valid(c:&Connection)->Result<bool,StorageError>{
     let resolved:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('permission_requests') WHERE name='resolved_by')",[],|r|r.get(0))?;
     let setting:Option<String>=c.query_row("SELECT value FROM settings WHERE key='permissions.default_mode'",[],|r|r.get(0)).optional()?;
     Ok(ledger==4&&pragma==4&&agent&&resolved&&setting.as_deref()==Some("\"ask\""))
+}
+fn schema_v5_valid(c: &Connection) -> Result<bool, StorageError> {
+    let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+    let pragma: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let started: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('turns') WHERE name='started_at')", [], |r| r.get(0))?;
+    let failure: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('turns') WHERE name='failure_class')", [], |r| r.get(0))?;
+    let integrity: String = c.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+    Ok(ledger == 5 && pragma == 5 && started && failure && integrity == "ok"
+        && c.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get::<_, i64>(0))? == 0)
+}
+
+fn migrate_turn_analytics(c: &mut Connection, path: Option<&Path>, backup_done: bool) -> Result<(), StorageError> {
+    let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+    let pragma: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if ledger == 5 {
+        return if schema_v5_valid(c)? { Ok(()) } else { Err(StorageError::InvalidAgent) };
+    }
+    if ledger != 4 || pragma != 4 { return Err(StorageError::InvalidAgent); }
+    if let Some(database_path) = path {
+        if !backup_done { verified_backup(c, database_path, 4)?; }
+    }
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let has_started: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('turns') WHERE name='started_at')", [], |r| r.get(0))?;
+    if !has_started { tx.execute("ALTER TABLE turns ADD COLUMN started_at TEXT", [])?; }
+    let has_failure: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('turns') WHERE name='failure_class')", [], |r| r.get(0))?;
+    if !has_failure {
+        tx.execute("ALTER TABLE turns ADD COLUMN failure_class TEXT CHECK(failure_class IS NULL OR failure_class IN ('provider_error','permission_denied','cancelled','timeout','budget_stop','config_unsupported','other'))", [])?;
+    }
+    tx.execute("UPDATE turns SET started_at=created_at WHERE started_at IS NULL AND state IN ('completed','error','cancelled')", [])?;
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    tx.execute("INSERT INTO schema_migrations(version,applied_at) VALUES(5,?1)", [now])?;
+    tx.pragma_update(None, "user_version", 5)?;
+    if !schema_v5_valid(&tx)? { return Err(StorageError::InvalidAgent); }
+    tx.commit()?;
+    if !schema_v5_valid(c)? { return Err(StorageError::InvalidAgent); }
+    Ok(())
 }
 fn migrate_approval_modes(c:&mut Connection,path:Option<&Path>,backup_done:bool)->Result<(),StorageError>{
     let ledger:i64=c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
@@ -260,9 +299,9 @@ impl Storage {
         if has_ledger {
             let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
             let user:i64=conn.query_row("PRAGMA user_version",[],|r|r.get(0))?;
-            if ledger>4||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
-            if ledger==4 {
-                if !schema_v4_valid(&conn)? { return Err(StorageError::InvalidAgent); }
+            if ledger>5||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
+            if ledger==5 {
+                if !schema_v5_valid(&conn)? { return Err(StorageError::InvalidAgent); }
                 return Ok(Self { conn: Mutex::new(conn) });
             }
         }
@@ -272,7 +311,7 @@ impl Storage {
         if has_ledger {
             let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
             let user:i64=conn.query_row("PRAGMA user_version",[],|r|r.get(0))?;
-            if ledger>4||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
+            if ledger>5||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
             if ledger==1 {if let Some(p)=path{verified_backup(&conn,p,1)?;backup_done=true;}}
             if ledger==2 {if let Some(p)=path{verified_backup(&conn,p,2)?;backup_v2_done=true;}}
         }
@@ -332,6 +371,12 @@ impl Storage {
         let mut backup_v3_done=false;
         if path.is_some() { let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?; if ledger==3 { verified_backup(&conn,path.unwrap(),3)?; backup_v3_done=true; } }
         migrate_approval_modes(&mut conn,path,backup_v3_done)?;
+        let mut backup_v4_done = false;
+        if path.is_some() {
+            let ledger: i64 = conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+            if ledger == 4 { verified_backup(&conn, path.unwrap(), 4)?; backup_v4_done = true; }
+        }
+        migrate_turn_analytics(&mut conn, path, backup_v4_done)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -529,7 +574,7 @@ impl Storage {
         let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (runtime,provider,agent):(String,String,Option<String>)=tx.query_row("SELECT runtime_id,provider,agent_id FROM sessions WHERE id=?1",[session_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
         let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
-        tx.execute("INSERT INTO turns(id,session_id,state,created_at,completed_at) VALUES(?1,?2,'error',?3,?3)",params![turn_id,session_id,now])?;
+        tx.execute("INSERT INTO turns(id,session_id,state,created_at,completed_at,failure_class) VALUES(?1,?2,'error',?3,?3,'config_unsupported')",params![turn_id,session_id,now])?;
         let sequence:i64=tx.query_row("SELECT COALESCE(MAX(sequence),0)+1 FROM messages WHERE session_id=?1",[session_id],|r|r.get(0))?;
         let message_id=Uuid::new_v4().to_string();tx.execute("INSERT INTO messages(id,session_id,turn_id,sequence,role,content,created_at) VALUES(?1,?2,?3,?4,'user',?5,?6)",params![message_id,session_id,turn_id,sequence,text,now])?;
         let requested=snapshot_requested(requested);let applied=snapshot_outcomes(applied);let evidence=snapshot_evidence(evidence);let flags=snapshot_flags(adapter_flags);
@@ -588,7 +633,43 @@ impl Storage {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let id = u["id"].as_str().unwrap_or("");
-        tx.execute("INSERT INTO usage_events(id,runtime_id,session_id,turn_id,provider,model,timestamp,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,reported_cost_minor,reported_currency,source,raw,agent_id,exec_snapshot_id,provider_update_id,usage_status,context_used,context_size,reported_cost_decimal) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'{}',(SELECT agent_id FROM sessions WHERE id=?3),(SELECT id FROM exec_snapshots WHERE turn_id=?4),?16,COALESCE(?17,'unreported'),?18,?19,?20)",params![id,u["runtimeId"].as_str().unwrap_or(""),u["sessionId"].as_str().unwrap_or(""),u["turnId"].as_str(),u["provider"].as_str().unwrap_or(""),u["model"].as_str(),u["timestamp"].as_str().unwrap_or(""),u["inputTokens"].as_i64(),u["outputTokens"].as_i64(),u["cacheReadTokens"].as_i64(),u["cacheWriteTokens"].as_i64(),u["reasoningTokens"].as_i64(),u["providerReportedCostMinor"].as_i64(),u["providerReportedCurrency"].as_str(),u["source"].as_str().unwrap_or("unknown"),u["providerUpdateId"].as_str(),u["usageStatus"].as_str(),u["contextUsed"].as_i64(),u["contextSize"].as_i64(),u["reportedCostDecimal"].as_str()])?;
+        let runtime = u["runtimeId"].as_str().unwrap_or("");
+        let session = u["sessionId"].as_str().unwrap_or("");
+        let turn = u["turnId"].as_str().unwrap_or("");
+        let source = u["source"].as_str().unwrap_or("unknown");
+        if source == "fallback" && tx.query_row("SELECT EXISTS(SELECT 1 FROM usage_events WHERE turn_id=?1 AND source='terminal')", [turn], |r| r.get::<_, bool>(0))? {
+            tx.commit()?;
+            return Ok(());
+        }
+        if let Some(update_id) = u["providerUpdateId"].as_str() {
+            if tx.query_row("SELECT EXISTS(SELECT 1 FROM usage_events WHERE runtime_id=?1 AND provider_update_id=?2)", params![runtime, update_id], |r| r.get::<_, bool>(0))? {
+                tx.commit()?;
+                return Ok(());
+            }
+        }
+        let mut reported_decimal = u["reportedCostDecimal"].as_str().map(str::to_owned);
+        if u["costIsCumulative"] == true {
+            if let Some(total_text) = reported_decimal.as_deref() {
+                if let Some(total) = decimal_units(total_text) {
+                    let stored: Option<String> = tx.query_row("SELECT opencode_cost_total FROM sessions WHERE id=?1", [session], |r| r.get(0))?;
+                    let baseline = stored.as_deref().and_then(decimal_units).unwrap_or(0);
+                    let previous_delta: Option<String> = tx.query_row("SELECT reported_cost_decimal FROM usage_events WHERE turn_id=?1 AND source='terminal' ORDER BY rowid DESC LIMIT 1", [turn], |r| r.get(0)).optional()?.flatten();
+                    let turn_baseline = previous_delta.as_deref().and_then(decimal_units).map(|delta| baseline.saturating_sub(delta)).unwrap_or(baseline);
+                    let effective_total = total.max(baseline);
+                    let delta = effective_total.saturating_sub(turn_baseline).max(0);
+                    reported_decimal = Some(format_decimal_units(delta));
+                    tx.execute("UPDATE sessions SET opencode_cost_total=?2 WHERE id=?1", params![session, format_decimal_units(effective_total)])?;
+                    tx.execute("DELETE FROM usage_events WHERE turn_id=?1 AND source IN ('terminal','fallback')", [turn])?;
+                }
+            }
+        } else if source == "terminal" {
+            tx.execute("DELETE FROM usage_events WHERE turn_id=?1 AND source IN ('terminal','fallback')", [turn])?;
+        } else if source == "fallback" {
+            tx.execute("DELETE FROM usage_events WHERE turn_id=?1 AND source='fallback'", [turn])?;
+        }
+        let cost_minor = u["providerReportedCostMinor"].as_i64().or_else(|| reported_decimal.as_deref().and_then(decimal_to_minor));
+        let cost_currency = u["providerReportedCurrency"].as_str().or_else(|| if u["provider"] == "opencode" && reported_decimal.is_some() { Some("USD") } else { None });
+        tx.execute("INSERT OR IGNORE INTO usage_events(id,runtime_id,session_id,turn_id,provider,model,timestamp,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,reported_cost_minor,reported_currency,source,raw,agent_id,exec_snapshot_id,provider_update_id,usage_status,context_used,context_size,reported_cost_decimal) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'{}',(SELECT agent_id FROM sessions WHERE id=?3),(SELECT id FROM exec_snapshots WHERE turn_id=?4),?16,COALESCE(?17,'unreported'),?18,?19,?20)",params![id,runtime,session,u["turnId"].as_str(),u["provider"].as_str().unwrap_or(""),u["model"].as_str(),u["timestamp"].as_str().unwrap_or(""),u["inputTokens"].as_i64(),u["outputTokens"].as_i64(),u["cacheReadTokens"].as_i64(),u["cacheWriteTokens"].as_i64(),u["reasoningTokens"].as_i64(),cost_minor,cost_currency,source,u["providerUpdateId"].as_str(),u["usageStatus"].as_str(),u["contextUsed"].as_i64(),u["contextSize"].as_i64(),reported_decimal.as_deref()])?;
         if !u["valuation"].is_null() {
             let v = &u["valuation"];
             tx.execute("INSERT INTO usage_valuations(usage_event_id,basis,amount_minor,currency,pricing_rule_id,status,valued_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,v["basis"].as_str().unwrap_or("unknown"),v["amountMinor"].as_i64(),v["currency"].as_str(),v["pricingRuleId"].as_str(),v["status"].as_str().unwrap_or("unavailable"),u["timestamp"].as_str().unwrap_or("")])?;
@@ -788,10 +869,41 @@ impl Storage {
     pub fn create_turn(&self, id: &str, session: &str) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         c.execute(
-            "INSERT INTO turns(id,session_id,state,created_at) VALUES(?1,?2,'working',?3)",
+            "INSERT INTO turns(id,session_id,state,created_at,started_at) VALUES(?1,?2,'working',?3,?3)",
             params![id, session, Utc::now().to_rfc3339()],
         )?;
         Ok(())
+    }
+    pub fn record_budget_stopped_turn(&self, id: &str, session: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        c.execute(
+            "INSERT INTO turns(id,session_id,state,created_at,started_at,completed_at,failure_class) VALUES(?1,?2,'error',?3,?3,?3,'budget_stop')",
+            params![id, session, now],
+        )?;
+        Ok(())
+    }
+    pub fn create_reserved_turn(&self, id: &str, session: &str) -> Result<bool, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let agent: Option<String> = tx.query_row("SELECT agent_id FROM sessions WHERE id=?1", [session], |r| r.get(0))?;
+        let active: i64 = tx.query_row("SELECT count(*) FROM active_turn_reservations", [], |r| r.get(0))?;
+        if active >= 4 { return Ok(false); }
+        if tx.query_row("SELECT EXISTS(SELECT 1 FROM active_turn_reservations WHERE session_id=?1)", [session], |r| r.get::<_, bool>(0))? { return Ok(false); }
+        if let Some(agent_id) = agent.as_deref() {
+            let configured: i64 = tx.query_row("SELECT max_concurrency FROM agents WHERE id=?1", [agent_id], |r| r.get(0))?;
+            let count: i64 = tx.query_row("SELECT count(*) FROM active_turn_reservations WHERE agent_id=?1", [agent_id], |r| r.get(0))?;
+            if count >= configured.clamp(1, 4) { return Ok(false); }
+        }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        tx.execute("INSERT INTO turns(id,session_id,state,created_at,started_at) VALUES(?1,?2,'working',?3,?3)", params![id, session, now])?;
+        tx.execute("INSERT INTO active_turn_reservations(turn_id,session_id,agent_id,created_at) VALUES(?1,?2,?3,?4)", params![id, session, agent, now])?;
+        tx.commit()?;
+        Ok(true)
+    }
+    pub fn active_turn_reservation_count(&self) -> Result<u64, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT count(*) FROM active_turn_reservations", [], |r| r.get::<_, i64>(0))?.max(0) as u64)
     }
     pub fn update_session_state(&self, id: &str, state: &str) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -816,7 +928,8 @@ impl Storage {
                 .collect::<Result<Vec<_>, _>>()?;
             rows
         };
-        tx.execute("UPDATE turns SET state='error',completed_at=?1 WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
+        tx.execute("UPDATE turns SET state='error',started_at=COALESCE(started_at,created_at),completed_at=?1,failure_class='other' WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
+        tx.execute("DELETE FROM active_turn_reservations WHERE turn_id IN (SELECT id FROM turns WHERE state IN ('error','cancelled','completed'))", [])?;
         tx.execute("UPDATE sessions SET state='offline',updated_at=?1 WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
         tx.execute("UPDATE permission_requests SET status='expired',data=json_set(data,'$.status','expired','$.resolution','daemon_restarted') WHERE status IN ('pending','resolving')", [])?;
         tx.execute("UPDATE budget_reservations SET status='reconciled',reconciled_amount=amount WHERE status='active' AND turn_id IN (SELECT id FROM turns WHERE state='error')", [])?;
@@ -906,9 +1019,12 @@ impl Storage {
         }
     }
     pub fn update_turn_state(&self, id: &str, state: &str) -> Result<(), StorageError> {
+        self.update_turn_outcome(id, state, None)
+    }
+    pub fn update_turn_outcome(&self, id: &str, state: &str, failure_class: Option<&str>) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         c.execute(
-            "UPDATE turns SET state=?2,completed_at=?3 WHERE id=?1",
+            "UPDATE turns SET state=?2,completed_at=?3,failure_class=?4 WHERE id=?1",
             params![
                 id,
                 state,
@@ -916,10 +1032,19 @@ impl Storage {
                     None
                 } else {
                     Some(Utc::now().to_rfc3339())
-                }
+                },
+                failure_class.filter(|class| matches!(*class, "provider_error" | "permission_denied" | "cancelled" | "timeout" | "budget_stop" | "config_unsupported" | "other"))
             ],
         )?;
+        if matches!(state, "completed" | "error" | "cancelled") {
+            c.execute("DELETE FROM active_turn_reservations WHERE turn_id=?1", [id])?;
+        }
         Ok(())
+    }
+    pub fn turn_failure_class(&self, id: &str) -> Result<Option<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.query_row("SELECT failure_class FROM turns WHERE id=?1", [id], |row| row.get(0))
+            .map_err(StorageError::from)
     }
     pub fn upsert_tool(
         &self,
@@ -1259,7 +1384,287 @@ impl Storage {
     }
 }
 
+#[derive(Clone, Default)]
+struct AnalyticsAccumulator {
+    tokens: [Option<i64>; 5],
+    actual: std::collections::BTreeMap<String, i64>,
+    estimated: std::collections::BTreeMap<String, i64>,
+    excluded: std::collections::BTreeSet<String>,
+    lower_bound: bool,
+    unreported_runs: u64,
+    unpriced: std::collections::BTreeSet<String>,
+    run_time_ms: u64,
+    runs: u64,
+    failed_runs: u64,
+    cancelled_runs: u64,
+    active_runs: u64,
+}
+impl AnalyticsAccumulator {
+    fn add_tokens(&mut self, values: [Option<i64>; 5]) {
+        for (sum, value) in self.tokens.iter_mut().zip(values) {
+            if let Some(value) = value {
+                *sum = Some(sum.unwrap_or(0).saturating_add(value.max(0)));
+            }
+        }
+    }
+    fn add_actual(&mut self, amount: i64, currency: &str) {
+        *self.actual.entry(currency.to_ascii_uppercase()).or_default() += amount;
+    }
+    fn add_estimate(&mut self, amount: i64, currency: &str) {
+        *self.estimated.entry(currency.to_ascii_uppercase()).or_default() += amount;
+    }
+    fn add_run(&mut self, state: &str, started: Option<&str>, completed: Option<&str>) {
+        if matches!(state, "starting" | "working" | "waiting_permission" | "cancelling") {
+            self.active_runs = 1;
+            return;
+        }
+        if !matches!(state, "completed" | "error" | "cancelled") { return; }
+        self.runs = 1;
+        self.failed_runs = u64::from(state == "error");
+        self.cancelled_runs = u64::from(state == "cancelled");
+        if let (Some(start), Some(end)) = (
+            started.and_then(|value| DateTime::parse_from_rfc3339(value).ok()),
+            completed.and_then(|value| DateTime::parse_from_rfc3339(value).ok()),
+        ) {
+            self.run_time_ms = end.signed_duration_since(start).num_milliseconds().max(0) as u64;
+        }
+    }
+    fn merge(&mut self, other: &Self) {
+        for (sum, value) in self.tokens.iter_mut().zip(other.tokens) {
+            if let Some(value) = value { *sum = Some(sum.unwrap_or(0).saturating_add(value)); }
+        }
+        for (currency, amount) in &other.actual { *self.actual.entry(currency.clone()).or_default() += amount; }
+        for (currency, amount) in &other.estimated { *self.estimated.entry(currency.clone()).or_default() += amount; }
+        self.excluded.extend(other.excluded.iter().cloned());
+        self.lower_bound |= other.lower_bound;
+        self.unreported_runs += other.unreported_runs;
+        self.unpriced.extend(other.unpriced.iter().cloned());
+        self.run_time_ms = self.run_time_ms.saturating_add(other.run_time_ms);
+        self.runs += other.runs;
+        self.failed_runs += other.failed_runs;
+        self.cancelled_runs += other.cancelled_runs;
+        self.active_runs += other.active_runs;
+    }
+    fn tokens_json(&self) -> Value {
+        let total = self.tokens.iter().flatten().copied().fold(None, |sum: Option<i64>, value| Some(sum.unwrap_or(0).saturating_add(value)));
+        json!({"input":self.tokens[0],"output":self.tokens[1],"cacheRead":self.tokens[2],"cacheWrite":self.tokens[3],"reasoning":self.tokens[4],"total":total})
+    }
+    fn cost_json(&self) -> Value {
+        let mut currencies = std::collections::BTreeSet::new();
+        currencies.extend(self.actual.keys().cloned());
+        currencies.extend(self.estimated.keys().cloned());
+        let currency = currencies.iter().next().cloned().unwrap_or_else(|| "USD".into());
+        let actual_minor = if self.actual.len() == 1 { self.actual.get(&currency).copied() } else { None };
+        let estimated_minor = if self.estimated.len() == 1 { self.estimated.get(&currency).copied() } else { None };
+        let mut excluded = self.excluded.clone();
+        excluded.extend(currencies.iter().filter(|item| **item != currency).cloned());
+        let mixed = currencies.len() > 1 || self.actual.len() > 1 || self.estimated.len() > 1;
+        let amount_minor = if currencies.is_empty() || mixed { None } else { Some(actual_minor.unwrap_or(0).saturating_add(estimated_minor.unwrap_or(0))) };
+        let actual_minor = if self.actual.contains_key(&currency) { actual_minor } else { None };
+        let estimated_minor = if self.estimated.contains_key(&currency) { estimated_minor } else { None };
+        json!({"amountMinor":amount_minor,"currency":currency,"actualMinor":actual_minor,"estimatedMinor":estimated_minor,"lowerBound":self.lower_bound || mixed || !excluded.is_empty()})
+    }
+    fn point_json(&self) -> Value {
+        json!({"cost":self.cost_json(),"tokens":self.tokens_json(),"runTimeMs":self.run_time_ms,"runs":self.runs,"failedRuns":self.failed_runs,"cancelledRuns":self.cancelled_runs})
+    }
+    fn totals_json(&self) -> Value {
+        let mut result = self.point_json();
+        let mut currencies = std::collections::BTreeSet::new();
+        currencies.extend(self.actual.keys().cloned());
+        currencies.extend(self.estimated.keys().cloned());
+        let primary = currencies.iter().next().cloned();
+        let excluded = currencies
+            .into_iter()
+            .filter(|currency| Some(currency) != primary.as_ref())
+            .collect::<Vec<_>>();
+        result["activeRuns"] = json!(self.active_runs);
+        result["unreportedRuns"] = json!(self.unreported_runs);
+        result["unpricedModels"] = json!(self.unpriced.iter().collect::<Vec<_>>());
+        result["excludedCurrencies"] = json!(excluded);
+        result
+    }
+}
+fn analytics_leader(agent_id: Option<String>, agent_name: Option<String>, runtime_id: String, metrics: AnalyticsAccumulator) -> Value {
+    let mut result = metrics.point_json();
+    result["agentId"] = json!(agent_id);
+    result["agentName"] = json!(agent_name);
+    result["runtimeId"] = json!(runtime_id);
+    result["unreportedRuns"] = json!(metrics.unreported_runs);
+    result["unpricedModels"] = json!(metrics.unpriced.iter().collect::<Vec<_>>());
+    result
+}
+fn analytics_failure_class(class: Option<&str>) -> &'static str {
+    match class.unwrap_or("other") {
+        "provider_error" => "provider",
+        "permission_denied" => "permission",
+        "cancelled" => "cancelled",
+        "timeout" => "timeout",
+        "budget_stop" => "budget",
+        "config_unsupported" => "config",
+        _ => "other",
+    }
+}
+fn analytics_failure_message(class: &str) -> &'static str {
+    match class {
+        "provider" => "Provider reported an error.",
+        "permission" => "Permission was denied.",
+        "cancelled" => "Turn was cancelled.",
+        "timeout" => "Turn timed out.",
+        "budget" => "Turn stopped by a budget limit.",
+        "config" => "Configuration or capability was unsupported.",
+        _ => "Turn ended with an error.",
+    }
+}
+fn normalize_project_path(value: &str) -> String {
+    value.replace('\\', "/").split('/').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("/").to_ascii_lowercase()
+}
+fn analytics_bucket_start(date: NaiveDate, timezone: Tz, bucket: &str) -> Result<DateTime<Utc>, StorageError> {
+    let date = if bucket == "week" { date - Duration::days(i64::from(date.weekday().num_days_from_monday())) } else { date };
+    let midnight = date.and_hms_opt(0, 0, 0).ok_or(StorageError::InvalidAnalytics)?;
+    let mut local = midnight;
+    for _ in 0..=180 {
+        match timezone.from_local_datetime(&local) {
+            chrono::LocalResult::Single(value) => return Ok(value.with_timezone(&Utc)),
+            chrono::LocalResult::Ambiguous(first, second) => return Ok(first.min(second).with_timezone(&Utc)),
+            chrono::LocalResult::None => local += Duration::minutes(1),
+        }
+    }
+    Err(StorageError::InvalidAnalytics)
+}
+fn analytics_bucket_starts(from: DateTime<Utc>, to: DateTime<Utc>, timezone: Tz, bucket: &str) -> Result<Vec<DateTime<Utc>>, StorageError> {
+    let mut date = from.with_timezone(&timezone).date_naive();
+    if bucket == "week" { date -= Duration::days(i64::from(date.weekday().num_days_from_monday())); }
+    let step = if bucket == "week" { 7 } else { 1 };
+    let mut starts = Vec::new();
+    loop {
+        let start = analytics_bucket_start(date, timezone, bucket)?;
+        if start >= to { break; }
+        starts.push(start);
+        date = date.checked_add_signed(Duration::days(step)).ok_or(StorageError::InvalidAnalytics)?;
+    }
+    Ok(starts)
+}
 fn validate_agent_id(id:&str)->Result<(),StorageError>{if Uuid::parse_str(id).is_ok_and(|uuid|uuid.hyphenated().to_string()==id){Ok(())}else{Err(StorageError::InvalidAgent)}}
+const DECIMAL_SCALE: i128 = 1_000_000_000_000_000_000;
+fn decimal_units(value: &str) -> Option<i128> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || fraction.len() > 18
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let whole: i128 = whole.parse().ok()?;
+    let mut padded_fraction = fraction.to_owned();
+    padded_fraction.push_str(&"0".repeat(18 - fraction.len()));
+    let fraction: i128 = padded_fraction.parse().ok()?;
+    whole
+        .checked_mul(DECIMAL_SCALE)?
+        .checked_add(fraction)
+}
+
+impl Storage {
+    pub fn usage_analytics(&self, request: &Value) -> Result<Value, StorageError> {
+        let parse_utc = |value: &Value| {
+            value
+                .as_str()
+                .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+                .filter(|value| value.offset().local_minus_utc() == 0)
+                .map(|value| value.with_timezone(&Utc))
+        };
+        let from = parse_utc(&request["from"]).ok_or(StorageError::InvalidAnalytics)?;
+        let to = parse_utc(&request["to"]).ok_or(StorageError::InvalidAnalytics)?;
+        if from >= to || to.signed_duration_since(from) > Duration::days(400) { return Err(StorageError::InvalidAnalytics); }
+        let bucket = request["bucket"].as_str().filter(|s| *s == "day" || *s == "week").ok_or(StorageError::InvalidAnalytics)?;
+        let tz_name = request["tz"].as_str().filter(|s| !s.is_empty()).ok_or(StorageError::InvalidAnalytics)?;
+        let tz: Tz = tz_name.parse().map_err(|_| StorageError::InvalidAnalytics)?;
+        let project_filter = request["projectPath"].as_str().map(normalize_project_path);
+        let agent_filter = request["agentId"].as_str();
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        if let Some(agent_id) = agent_filter {
+            if !c.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1)", [agent_id], |r| r.get::<_, bool>(0))? {
+                return Err(StorageError::AgentNotFound);
+            }
+        }
+        let mut buckets = analytics_bucket_starts(from, to, tz, bucket)?;
+        let mut totals = AnalyticsAccumulator::default();
+        let mut series: Vec<(DateTime<Utc>, AnalyticsAccumulator)> = buckets.drain(..).map(|start| (start, AnalyticsAccumulator::default())).collect();
+        let mut leaders: std::collections::BTreeMap<(Option<String>, String), (Option<String>, AnalyticsAccumulator)> = std::collections::BTreeMap::new();
+        let mut errors = Vec::new();
+        let mut query = c.prepare("SELECT t.id,t.session_id,t.state,t.created_at,t.started_at,t.completed_at,t.failure_class,s.agent_id,s.project_path,s.runtime_id,COALESCE(a.name,''),s.provider FROM turns t JOIN sessions s ON s.id=t.session_id LEFT JOIN agents a ON a.id=s.agent_id ORDER BY COALESCE(t.completed_at,t.started_at,t.created_at)")?;
+        let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, Option<String>>(5)?, row.get::<_, Option<String>>(6)?, row.get::<_, Option<String>>(7)?, row.get::<_, String>(8)?, row.get::<_, String>(9)?, row.get::<_, String>(10)?, row.get::<_, String>(11)?)))?.collect::<Result<Vec<_>, _>>()?;
+        for (turn_id, session_id, state, created, started, completed, failure_class, agent_id, project_path, runtime_id, agent_name, provider) in rows {
+            if agent_filter.is_some_and(|filter| agent_id.as_deref() != Some(filter)) { continue; }
+            if project_filter.as_deref().is_some_and(|filter| normalize_project_path(&project_path) != filter) { continue; }
+            let at_text = completed.as_deref().or(started.as_deref()).unwrap_or(&created);
+            let Some(at) = DateTime::parse_from_rfc3339(at_text).ok().map(|v| v.with_timezone(&Utc)) else { continue; };
+            if at < from || at >= to { continue; }
+            let mut turn = AnalyticsAccumulator::default();
+            turn.add_run(&state, started.as_deref(), completed.as_deref());
+            let mut usage = c.prepare("SELECT e.input_tokens,e.output_tokens,e.cache_read_tokens,e.cache_write_tokens,e.reasoning_tokens,e.model,e.reported_cost_minor,e.reported_currency,e.usage_status,v.basis,v.amount_minor,v.currency,v.status FROM usage_events e LEFT JOIN usage_valuations v ON v.usage_event_id=e.id WHERE e.turn_id=?1 ORDER BY e.timestamp,e.rowid")?;
+            let usage_rows = usage.query_map([&turn_id], |row| Ok((row.get::<_, Option<i64>>(0)?,row.get::<_, Option<i64>>(1)?,row.get::<_, Option<i64>>(2)?,row.get::<_, Option<i64>>(3)?,row.get::<_, Option<i64>>(4)?,row.get::<_, Option<String>>(5)?,row.get::<_, Option<i64>>(6)?,row.get::<_, Option<String>>(7)?,row.get::<_, String>(8)?,row.get::<_, Option<String>>(9)?,row.get::<_, Option<i64>>(10)?,row.get::<_, Option<String>>(11)?,row.get::<_, Option<String>>(12)?)))?.collect::<Result<Vec<_>, _>>()?;
+            let mut reported = false;
+            for (input, output, read, write, reasoning, model, actual, actual_currency, usage_status, basis, estimated, estimate_currency, valuation_status) in usage_rows {
+                if !matches!(usage_status.as_str(), "reported" | "partial") { continue; }
+                reported = true;
+                if usage_status == "partial" { turn.lower_bound = true; }
+                turn.add_tokens([input, output, read, write, reasoning]);
+                if let (Some(amount), Some(currency)) = (actual, actual_currency.as_deref()) {
+                    turn.add_actual(amount, currency);
+                } else if basis.as_deref() == Some("api_rate_estimate") && estimated.is_some() && estimate_currency.is_some() {
+                    turn.add_estimate(estimated.unwrap(), estimate_currency.as_deref().unwrap());
+                    if valuation_status.as_deref() != Some("estimated") { turn.lower_bound = true; }
+                } else {
+                    turn.unpriced.insert(format!("{}/{}", provider, model.as_deref().unwrap_or("unknown")));
+                    turn.lower_bound = true;
+                }
+            }
+            if !reported { turn.unreported_runs = 1; turn.lower_bound = true; }
+            totals.merge(&turn);
+            let local_date = at.with_timezone(&tz).date_naive();
+            let bucket_start = analytics_bucket_start(local_date, tz, bucket)?;
+            if let Some((_, metrics)) = series.iter_mut().find(|(start, _)| *start == bucket_start) { metrics.merge(&turn); }
+            let key = (agent_id.clone(), runtime_id.clone());
+            let leader = leaders.entry(key).or_insert_with(|| (if agent_name.is_empty() { None } else { Some(agent_name.clone()) }, AnalyticsAccumulator::default()));
+            leader.1.merge(&turn);
+            if matches!(state.as_str(), "error" | "cancelled") {
+                let class = analytics_failure_class(failure_class.as_deref());
+                errors.push(json!({"turnId":turn_id,"sessionId":session_id,"agentId":agent_id,"at":at.to_rfc3339_opts(SecondsFormat::Millis,true),"message":analytics_failure_message(class),"failureClass":class}));
+            }
+        }
+        errors.sort_by(|a, b| b["at"].as_str().cmp(&a["at"].as_str()));
+        errors.truncate(50);
+        let subscriptions = {
+            let mut q = c.prepare("SELECT provider,monthly_minor,currency,quota_state FROM subscription_plans WHERE monthly_minor IS NOT NULL ORDER BY provider")?;
+            let rows = q.query_map([], |row| Ok(json!({"provider":row.get::<_,String>(0)?,"monthlyMinor":row.get::<_,i64>(1)?,"currency":row.get::<_,String>(2)?,"quotaState":row.get::<_,String>(3)?})))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let mut leaderboard = leaders.into_iter().map(|((agent_id, runtime_id), (agent_name, metrics))| analytics_leader(agent_id, agent_name, runtime_id, metrics)).collect::<Vec<_>>();
+        leaderboard.sort_by(|a, b| {
+            let cost_order = match (a["cost"]["amountMinor"].as_i64(), b["cost"]["amountMinor"].as_i64()) {
+                (Some(left), Some(right)) => right.cmp(&left),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            };
+            cost_order.then_with(|| b["runs"].as_u64().cmp(&a["runs"].as_u64()))
+        });
+        Ok(json!({"range":{"from":from.to_rfc3339_opts(SecondsFormat::Millis,true),"to":to.to_rfc3339_opts(SecondsFormat::Millis,true),"bucket":bucket,"tz":tz_name},"totals":totals.totals_json(),"series":series.into_iter().map(|(start,metrics)|{let mut item=metrics.point_json();item["bucketStart"]=json!(start.to_rfc3339_opts(SecondsFormat::Millis,true));item}).collect::<Vec<_>>(),"leaderboard":leaderboard,"errors":errors,"subscriptions":subscriptions}))
+    }
+}
+
+fn decimal_to_minor(value: &str) -> Option<i64> {
+    let units = decimal_units(value)?;
+    i64::try_from(units.saturating_add(DECIMAL_SCALE / 200) / (DECIMAL_SCALE / 100)).ok()
+}
+fn format_decimal_units(value: i128) -> String {
+    let whole = value / DECIMAL_SCALE;
+    let fraction = value % DECIMAL_SCALE;
+    if fraction == 0 { return whole.to_string(); }
+    let fraction = format!("{fraction:018}").trim_end_matches('0').to_owned();
+    format!("{whole}.{fraction}")
+}
 fn nullable(v:&Value)->Option<&str>{ if v.is_null(){None}else{v.as_str()} }
 fn trimmed(v:&Value,key:&str)->String{v[key].as_str().unwrap_or("").trim().to_owned()}
 fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
@@ -1374,14 +1779,149 @@ fn single_currency_total<'a>(rows: &[&'a Value]) -> (Option<i64>, Option<&'a str
 mod tests {
     use super::*;
     #[test]
+    fn budget_stop_is_persisted_as_a_classified_failed_turn() {
+        let db = Storage::open_in_memory().unwrap();
+        db.create_session("s-budget", "rt", "codex", ".", "Budget").unwrap();
+        db.record_budget_stopped_turn("t-budget", "s-budget").unwrap();
+        let c = db.conn.lock().unwrap();
+        let (state, class): (String, Option<String>) = c.query_row(
+            "SELECT state,failure_class FROM turns WHERE id='t-budget'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(state, "error");
+        assert_eq!(class.as_deref(), Some("budget_stop"));
+    }
+    #[test]
+    fn dst_day_boundaries_and_week_monday_use_local_calendar_time() {
+        let timezone: Tz = "Europe/London".parse().unwrap();
+        let spring_from = DateTime::parse_from_rfc3339("2026-03-28T00:00:00Z").unwrap().with_timezone(&Utc);
+        let spring_to = DateTime::parse_from_rfc3339("2026-03-31T00:00:00Z").unwrap().with_timezone(&Utc);
+        let spring = analytics_bucket_starts(spring_from, spring_to, timezone, "day").unwrap();
+        assert_eq!(spring[2].signed_duration_since(spring[1]).num_hours(), 23);
+        let autumn_from = DateTime::parse_from_rfc3339("2026-10-24T00:00:00Z").unwrap().with_timezone(&Utc);
+        let autumn_to = DateTime::parse_from_rfc3339("2026-10-27T00:00:00Z").unwrap().with_timezone(&Utc);
+        let autumn = analytics_bucket_starts(autumn_from, autumn_to, timezone, "day").unwrap();
+        assert_eq!(autumn[2].signed_duration_since(autumn[1]).num_hours(), 25);
+        let week = analytics_bucket_start(NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(), timezone, "week").unwrap();
+        assert_eq!(week.with_timezone(&timezone).date_naive(), NaiveDate::from_ymd_opt(2026, 5, 25).unwrap());
+    }
+    #[test]
+    fn unknown_cost_stays_null_and_cumulative_decimal_reconciles_exactly() {
+        assert!(AnalyticsAccumulator::default().cost_json()["amountMinor"].is_null());
+        assert_eq!(format_decimal_units(decimal_units("0.001637988").unwrap() - decimal_units("0.0015894").unwrap()), "0.000048588");
+        assert_eq!(decimal_to_minor("0.005"), Some(1));
+        assert_eq!(decimal_to_minor("0.004"), Some(0));
+    }
+    #[test]
+    fn cumulative_cost_becomes_turn_delta_and_duplicate_updates_are_ignored() {
+        let db = Storage::open_in_memory().unwrap();
+        db.create_session("s-cumulative", "rt", "opencode", ".", "Cumulative").unwrap();
+        db.create_turn("t-first", "s-cumulative").unwrap();
+        let report = |id: &str, turn: &str, update: &str, amount: &str| json!({
+            "id": id, "runtimeId": "rt", "sessionId": "s-cumulative", "turnId": turn,
+            "provider": "opencode", "timestamp": "2026-10-02T00:00:00Z",
+            "providerUpdateId": update, "usageStatus": "reported", "source": "terminal",
+            "reportedCostDecimal": amount, "costIsCumulative": true
+        });
+        db.insert_usage(&report("u-first", "t-first", "event-1", "0.0015894")).unwrap();
+        db.insert_usage(&report("u-duplicate", "t-first", "event-1", "0.0015894")).unwrap();
+        db.insert_usage(&report("u-first-update", "t-first", "event-2", "0.001637988")).unwrap();
+        db.create_turn("t-second", "s-cumulative").unwrap();
+        db.insert_usage(&report("u-second", "t-second", "event-3", "0.001686576")).unwrap();
+
+        let c = db.conn.lock().unwrap();
+        let first: String = c.query_row("SELECT reported_cost_decimal FROM usage_events WHERE turn_id='t-first'", [], |r| r.get(0)).unwrap();
+        let second: String = c.query_row("SELECT reported_cost_decimal FROM usage_events WHERE turn_id='t-second'", [], |r| r.get(0)).unwrap();
+        let rows: i64 = c.query_row("SELECT count(*) FROM usage_events WHERE provider_update_id='event-2'", [], |r| r.get(0)).unwrap();
+        let total: String = c.query_row("SELECT opencode_cost_total FROM sessions WHERE id='s-cumulative'", [], |r| r.get(0)).unwrap();
+        assert_eq!(first, "0.001637988");
+        assert_eq!(second, "0.000048588");
+        assert_eq!(rows, 1);
+        assert_eq!(total, "0.001686576");
+    }
+    #[test]
+    fn terminal_usage_replaces_fallback_for_the_same_turn() {
+        let db = Storage::open_in_memory().unwrap();
+        db.create_session("s-reconcile", "rt", "codex", ".", "Reconcile").unwrap();
+        db.create_turn("t-reconcile", "s-reconcile").unwrap();
+        let base = json!({"runtimeId":"rt","sessionId":"s-reconcile","turnId":"t-reconcile","provider":"codex","timestamp":"2026-10-02T00:00:00Z","usageStatus":"reported"});
+        let mut fallback = base.clone();
+        fallback["id"] = json!("u-fallback");
+        fallback["source"] = json!("fallback");
+        fallback["inputTokens"] = json!(2);
+        db.insert_usage(&fallback).unwrap();
+        let mut terminal = base;
+        terminal["id"] = json!("u-terminal");
+        terminal["source"] = json!("terminal");
+        terminal["inputTokens"] = json!(3);
+        db.insert_usage(&terminal).unwrap();
+        terminal["id"] = json!("u-terminal-latest");
+        terminal["inputTokens"] = json!(4);
+        db.insert_usage(&terminal).unwrap();
+        let c = db.conn.lock().unwrap();
+        let row: (i64, String, i64) = c.query_row("SELECT input_tokens,source,(SELECT count(*) FROM usage_events WHERE turn_id='t-reconcile') FROM usage_events WHERE turn_id='t-reconcile'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert_eq!(row, (4, "terminal".into(), 1));
+    }
+    #[test]
+    fn durable_turn_reservations_survive_open_and_release_on_recovery() {
+        let path = std::env::temp_dir().join(format!("bloblex-reservation-{}.sqlite", Uuid::new_v4()));
+        {
+            let db = Storage::open(&path).unwrap();
+            db.create_session("reserve-session", "rt", "codex", ".", "Reserve").unwrap();
+            assert!(db.create_reserved_turn("reserve-turn", "reserve-session").unwrap());
+            assert_eq!(db.active_turn_reservation_count().unwrap(), 1);
+        }
+        let db = Storage::open(&path).unwrap();
+        assert_eq!(db.active_turn_reservation_count().unwrap(), 1);
+        db.recover_after_restart().unwrap();
+        assert_eq!(db.active_turn_reservation_count().unwrap(), 0);
+        let _ = fs::remove_file(path);
+    }
+    #[test]
+    fn durable_reservations_enforce_the_global_cap_of_four() {
+        let db = Storage::open_in_memory().unwrap();
+        for index in 0..5 {
+            let session = format!("s-cap-{index}");
+            db.create_session(&session, "rt", "codex", ".", "Cap").unwrap();
+        }
+        for index in 0..4 {
+            assert!(db.create_reserved_turn(&format!("t-cap-{index}"), &format!("s-cap-{index}")).unwrap());
+        }
+        assert!(!db.create_reserved_turn("t-cap-4", "s-cap-4").unwrap());
+        assert_eq!(db.active_turn_reservation_count().unwrap(), 4);
+    }
+    #[test]
+    fn analytics_reconciles_partial_usage_filters_paths_and_never_fakes_unknown_cost() {
+        let db = Storage::open_in_memory().unwrap();
+        db.create_session("analytics-session", "rt", "codex", "C:\\Project\\", "Analytics").unwrap();
+        db.create_turn("analytics-turn", "analytics-session").unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute("UPDATE turns SET state='error',started_at='2026-03-29T00:10:00Z',completed_at='2026-03-29T01:10:00Z',failure_class='provider_error' WHERE id='analytics-turn'", []).unwrap();
+        }
+        db.insert_usage(&json!({"id":"analytics-usage","runtimeId":"rt","sessionId":"analytics-session","turnId":"analytics-turn","provider":"codex","model":"model-x","timestamp":"2026-03-29T01:00:00Z","inputTokens":12,"usageStatus":"partial","source":"terminal"})).unwrap();
+        let result = db.usage_analytics(&json!({"from":"2026-03-28T00:00:00Z","to":"2026-03-31T00:00:00Z","bucket":"day","tz":"Europe/London","projectPath":"c:/project/"})).unwrap();
+        assert_eq!(result["totals"]["runs"], 1);
+        assert_eq!(result["totals"]["failedRuns"], 1);
+        assert_eq!(result["totals"]["tokens"]["input"], 12);
+        assert!(result["totals"]["tokens"]["output"].is_null());
+        assert!(result["totals"]["cost"]["amountMinor"].is_null());
+        assert_eq!(result["totals"]["cost"]["lowerBound"], true);
+        assert_eq!(result["totals"]["unpricedModels"][0], "codex/model-x");
+        assert_eq!(result["errors"][0]["failureClass"], "provider");
+        assert!(!result.to_string().contains("raw-provider"));
+        assert_eq!(result["series"].as_array().unwrap().len(), 4);
+    }
+    #[test]
     fn snapshot_evidence_keeps_numeric_usage_effect_and_instruction_reason(){let value=snapshot_evidence(&json!({"thinking":{"evidenceKind":"usage_effect","evidenceValue":37},"instructions":{"evidenceKind":"none","evidenceValue":null,"reason":"instructions_change_requires_new_thread"}}));assert_eq!(value["thinking"]["value"],37);assert_eq!(value["thinking"]["kind"],"usage_effect");assert_eq!(value["instructions"]["reason"],"instructions_change_requires_new_thread");}
     #[test]
     fn migration_3_to_4_preserves_rows_seeds_default_and_is_idempotent(){
         let dir=std::env::temp_dir().join(format!("bloblex-v4-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("db.sqlite");
         let agent_id;
         {let db=Storage::open(&path).unwrap();db.upsert_runtime(&json!({"id":"rt-v4","provider":"codex"})).unwrap();let (agent,_)=db.agent_create(&json!({"name":"Existing","runtimeId":"rt-v4"})).unwrap();agent_id=agent["id"].as_str().unwrap().to_owned();db.create_session_for_agent("session-v4","rt-v4","codex","C:/project","Existing",Some(&agent_id)).unwrap();db.insert_permission("perm-v4","session-v4","request-v4","Read file",None,&["allow".into(),"deny".into()],&json!({"toolCall":{"kind":"read"},"path":"README.md"})).unwrap();}
-        {let c=Connection::open(&path).unwrap();c.execute_batch("DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode';").unwrap();}
-        {let db=Storage::open(&path).unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");let agent=db.agent_get(&agent_id).unwrap();assert!(agent["approvalMode"].is_null());assert_eq!(agent["effectiveApprovalMode"],"ask");let c=Connection::open(&path).unwrap();assert_eq!(c.query_row("SELECT status FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,String>(0)).unwrap(),"pending");assert!(c.query_row("SELECT resolved_by FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),4);}
+        {let c=Connection::open(&path).unwrap();c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode';").unwrap();}
+        {let db=Storage::open(&path).unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");let agent=db.agent_get(&agent_id).unwrap();assert!(agent["approvalMode"].is_null());assert_eq!(agent["effectiveApprovalMode"],"ask");let c=Connection::open(&path).unwrap();assert_eq!(c.query_row("SELECT status FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,String>(0)).unwrap(),"pending");assert!(c.query_row("SELECT resolved_by FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),5);}
         let backups=fs::read_dir(dir.join("backups")).unwrap().count();drop(Storage::open(&path).unwrap());assert_eq!(fs::read_dir(dir.join("backups")).unwrap().count(),backups);
         {let c=Connection::open(&path).unwrap();c.pragma_update(None,"user_version",3).unwrap();}assert!(matches!(Storage::open(&path),Err(StorageError::InvalidAgent)));let _=fs::remove_dir_all(dir);
     }
@@ -1390,20 +1930,20 @@ mod tests {
         let db=Storage::open_in_memory().unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");assert!(matches!(db.set_setting("permissions.default_mode",&json!("bypass")),Err(StorageError::InvalidAgent)));db.upsert_runtime(&json!({"id":"rt-policy","provider":"codex"})).unwrap();db.create_session_for_agent("s-policy","rt-policy","codex",".","Policy",None).unwrap();db.insert_permission("p-policy","s-policy","provider-request","Check",None,&["allow".into(),"deny".into()],&json!({})).unwrap();assert_eq!(db.begin_permission_reply("p-policy","allow").unwrap().unwrap().1,"provider-request");db.finish_permission_policy_reply("p-policy",true,"policy:auto","allow").unwrap();assert_eq!(db.permission_resolved_by("p-policy").unwrap().as_deref(),Some("policy:auto"));assert!(db.begin_permission_reply("p-policy","allow").unwrap().is_none());
     }
     #[test]
-    fn migration_4_backup_failure_keeps_v3_schema_untouched(){
-        let dir=std::env::temp_dir().join(format!("bloblex-v4-backup-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("db.sqlite");drop(Storage::open(&path).unwrap());
-        {let c=Connection::open(&path).unwrap();c.execute_batch("DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode';").unwrap();}
-        let before=Connection::open(&path).unwrap().query_row("PRAGMA schema_version",[],|r|r.get::<_,i64>(0)).unwrap();fs::remove_dir_all(dir.join("backups")).unwrap();fs::write(dir.join("backups"),b"not a directory").unwrap();assert!(Storage::open(&path).is_err());let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA schema_version",[],|r|r.get::<_,i64>(0)).unwrap(),before);assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),3);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),3);assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='approval_mode')",[],|r|r.get::<_,bool>(0)).unwrap());drop(c);let _=fs::remove_dir_all(dir);
+    fn migration_5_backup_failure_keeps_v4_schema_untouched(){
+        let dir=std::env::temp_dir().join(format!("bloblex-v5-backup-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("db.sqlite");drop(Storage::open(&path).unwrap());
+        {let c=Connection::open(&path).unwrap();c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at;").unwrap();}
+        let before=Connection::open(&path).unwrap().query_row("PRAGMA schema_version",[],|r|r.get::<_,i64>(0)).unwrap();fs::remove_dir_all(dir.join("backups")).unwrap();fs::write(dir.join("backups"),b"not a directory").unwrap();assert!(Storage::open(&path).is_err());let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA schema_version",[],|r|r.get::<_,i64>(0)).unwrap(),before);assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),4);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),4);assert!(c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='approval_mode')",[],|r|r.get::<_,bool>(0)).unwrap());drop(c);let _=fs::remove_dir_all(dir);
     }
     fn v1_fixture() -> (PathBuf,PathBuf) {
         let dir=std::env::temp_dir().join(format!("bloblex-phase2a-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("bloblex.db");drop(Storage::open(&path).unwrap());
-        let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();c.execute_batch("DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode'; DROP INDEX idx_usage_provider_update; DROP INDEX idx_usage_exec_snapshot; DROP INDEX idx_active_reservations_session; DROP INDEX idx_active_reservations_agent; DROP INDEX idx_exec_snapshots_session_time; DROP INDEX idx_exec_snapshots_agent_time; DROP INDEX idx_exec_snapshots_runtime_time; DROP TABLE active_turn_reservations; DROP TABLE exec_snapshots; ALTER TABLE sessions DROP COLUMN first_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN latest_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN claude_instruction_sha256; ALTER TABLE sessions DROP COLUMN codex_thread_instruction_sha256; ALTER TABLE sessions DROP COLUMN opencode_cost_total; ALTER TABLE usage_events DROP COLUMN exec_snapshot_id; ALTER TABLE usage_events DROP COLUMN provider_update_id; ALTER TABLE usage_events DROP COLUMN usage_status; ALTER TABLE usage_events DROP COLUMN context_used; ALTER TABLE usage_events DROP COLUMN context_size; ALTER TABLE usage_events DROP COLUMN reported_cost_decimal; DELETE FROM app_events WHERE event_type='settings.changed'; DELETE FROM settings WHERE key LIKE 'exec_gate.%'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2; DROP INDEX idx_sessions_agent_updated; DROP INDEX idx_usage_agent_time; DROP INDEX idx_agents_active_name; DROP INDEX idx_agents_active_runtime_order; DROP INDEX idx_agents_runtime_archived_order; ALTER TABLE sessions DROP COLUMN agent_id; ALTER TABLE usage_events DROP COLUMN agent_id; DROP TABLE agents; DELETE FROM schema_migrations WHERE version=2; PRAGMA user_version=0;").unwrap();
+        let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode'; DROP INDEX idx_usage_provider_update; DROP INDEX idx_usage_exec_snapshot; DROP INDEX idx_active_reservations_session; DROP INDEX idx_active_reservations_agent; DROP INDEX idx_exec_snapshots_session_time; DROP INDEX idx_exec_snapshots_agent_time; DROP INDEX idx_exec_snapshots_runtime_time; DROP TABLE active_turn_reservations; DROP TABLE exec_snapshots; ALTER TABLE sessions DROP COLUMN first_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN latest_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN claude_instruction_sha256; ALTER TABLE sessions DROP COLUMN codex_thread_instruction_sha256; ALTER TABLE sessions DROP COLUMN opencode_cost_total; ALTER TABLE usage_events DROP COLUMN exec_snapshot_id; ALTER TABLE usage_events DROP COLUMN provider_update_id; ALTER TABLE usage_events DROP COLUMN usage_status; ALTER TABLE usage_events DROP COLUMN context_used; ALTER TABLE usage_events DROP COLUMN context_size; ALTER TABLE usage_events DROP COLUMN reported_cost_decimal; DELETE FROM app_events WHERE event_type='settings.changed'; DELETE FROM settings WHERE key LIKE 'exec_gate.%'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2; DROP INDEX idx_sessions_agent_updated; DROP INDEX idx_usage_agent_time; DROP INDEX idx_agents_active_name; DROP INDEX idx_agents_active_runtime_order; DROP INDEX idx_agents_runtime_archived_order; ALTER TABLE sessions DROP COLUMN agent_id; ALTER TABLE usage_events DROP COLUMN agent_id; DROP TABLE agents; DELETE FROM schema_migrations WHERE version=2; PRAGMA user_version=0;").unwrap();
         c.execute_batch("INSERT INTO runtimes(id,host_id,provider,protocol,executable,status,data) VALUES('rt-a','h','codex','codex_app_server','codex','online','{}'),('rt-b','h','claude','claude_stream','claude','offline','{}'); INSERT INTO sessions(id,runtime_id,provider,project_path,title,state,created_at,updated_at) VALUES('s-a','rt-a','codex','C:/a','A','idle','2026-01-02T00:00:00.000Z','2026-01-03T00:00:00.000Z'),('s-missing','rt-missing','other','C:/b','B','idle','2026-01-02T00:00:00.000Z','2026-01-03T00:00:00.000Z'); INSERT INTO usage_events(id,runtime_id,session_id,provider,timestamp,source,raw) VALUES('u-a','rt-a','s-a','codex','2026-01-03T00:00:00.000Z','stream','{}'),('u-missing','rt-missing','absent','other','2026-01-03T00:00:00.000Z','stream','{}');").unwrap();drop(c);let _=fs::remove_dir_all(dir.join("backups"));(dir,path)
     }
     fn v2_fixture()->(PathBuf,PathBuf){
         let(dir,path)=v1_fixture();drop(Storage::open(&path).unwrap());
         let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();
-        c.execute_batch("DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode'; DROP INDEX idx_usage_provider_update; DROP INDEX idx_usage_exec_snapshot; DROP INDEX idx_active_reservations_session; DROP INDEX idx_active_reservations_agent; DROP INDEX idx_exec_snapshots_session_time; DROP INDEX idx_exec_snapshots_agent_time; DROP INDEX idx_exec_snapshots_runtime_time; DROP TABLE active_turn_reservations; DROP TABLE exec_snapshots; ALTER TABLE sessions DROP COLUMN first_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN latest_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN claude_instruction_sha256; ALTER TABLE sessions DROP COLUMN codex_thread_instruction_sha256; ALTER TABLE sessions DROP COLUMN opencode_cost_total; ALTER TABLE usage_events DROP COLUMN exec_snapshot_id; ALTER TABLE usage_events DROP COLUMN provider_update_id; ALTER TABLE usage_events DROP COLUMN usage_status; ALTER TABLE usage_events DROP COLUMN context_used; ALTER TABLE usage_events DROP COLUMN context_size; ALTER TABLE usage_events DROP COLUMN reported_cost_decimal; DELETE FROM app_events WHERE event_type='settings.changed'; DELETE FROM settings WHERE key LIKE 'exec_gate.%'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2;").unwrap();
+        c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode'; DROP INDEX idx_usage_provider_update; DROP INDEX idx_usage_exec_snapshot; DROP INDEX idx_active_reservations_session; DROP INDEX idx_active_reservations_agent; DROP INDEX idx_exec_snapshots_session_time; DROP INDEX idx_exec_snapshots_agent_time; DROP INDEX idx_exec_snapshots_runtime_time; DROP TABLE active_turn_reservations; DROP TABLE exec_snapshots; ALTER TABLE sessions DROP COLUMN first_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN latest_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN claude_instruction_sha256; ALTER TABLE sessions DROP COLUMN codex_thread_instruction_sha256; ALTER TABLE sessions DROP COLUMN opencode_cost_total; ALTER TABLE usage_events DROP COLUMN exec_snapshot_id; ALTER TABLE usage_events DROP COLUMN provider_update_id; ALTER TABLE usage_events DROP COLUMN usage_status; ALTER TABLE usage_events DROP COLUMN context_used; ALTER TABLE usage_events DROP COLUMN context_size; ALTER TABLE usage_events DROP COLUMN reported_cost_decimal; DELETE FROM app_events WHERE event_type='settings.changed'; DELETE FROM settings WHERE key LIKE 'exec_gate.%'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2;").unwrap();
         c.execute("INSERT INTO settings(key,value) VALUES('exec_gate.codex.model','false')",[]).unwrap();drop(c);let _=fs::remove_dir_all(dir.join("backups"));(dir,path)
     }
     #[test]
@@ -1593,9 +2133,9 @@ mod tests {
     fn v1_migration_backfills_once_creates_verified_backup_and_rolls_back_in_temp_paths(){
         let(dir,path)=v1_fixture();
         let baseline={let db=Storage::open(&path).unwrap();let s= db.sessions().unwrap();assert_eq!(s.len(),2);assert!(s.iter().find(|x|x["id"]=="s-missing").unwrap()["agentId"].is_null());assert_eq!(db.agent_list(true,None).unwrap().len(),2);(db.agent_list(true,None).unwrap(),s)};
-        let backup_dir=dir.join("backups");let paths=fs::read_dir(&backup_dir).unwrap().map(|x|x.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),6);assert_eq!(paths.iter().filter(|x|x.extension().is_some_and(|e|e=="db")).count(),3);assert!(paths.iter().all(|x|!x.file_name().unwrap().to_string_lossy().ends_with("-wal")&&!x.file_name().unwrap().to_string_lossy().ends_with("-shm")));let backup=paths.iter().find(|x|x.extension().is_some_and(|e|e=="db")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap().clone();let manifest_path=paths.iter().find(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap();let manifest:Value=serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();assert_eq!(manifest["integrity"],"ok");assert_eq!(manifest["schemaVersion"],1);assert_eq!(manifest["tableRowCounts"]["sessions"],2);
+        let backup_dir=dir.join("backups");let paths=fs::read_dir(&backup_dir).unwrap().map(|x|x.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),8);assert_eq!(paths.iter().filter(|x|x.extension().is_some_and(|e|e=="db")).count(),4);assert!(paths.iter().all(|x|!x.file_name().unwrap().to_string_lossy().ends_with("-wal")&&!x.file_name().unwrap().to_string_lossy().ends_with("-shm")));let backup=paths.iter().find(|x|x.extension().is_some_and(|e|e=="db")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap().clone();let manifest_path=paths.iter().find(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap();let manifest:Value=serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();assert_eq!(manifest["integrity"],"ok");assert_eq!(manifest["schemaVersion"],1);assert_eq!(manifest["tableRowCounts"]["sessions"],2);
         {let db=Storage::open(&path).unwrap();assert_eq!(db.agent_list(true,None).unwrap(),baseline.0);assert_eq!(db.sessions().unwrap(),baseline.1);}
-        let read=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(read.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),4);assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),4);assert_eq!(read.query_row("SELECT count(*) FROM usage_events WHERE agent_id IS NOT NULL",[],|r|r.get::<_,i64>(0)).unwrap(),1);assert_eq!(read.query_row("SELECT agent_id FROM usage_events WHERE id='u-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap(),Some(read.query_row("SELECT agent_id FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap()));assert_eq!(read.query_row("SELECT created_at FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap(),"2026-01-02T00:00:00.000Z");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='codex'",[],|r|r.get::<_,String>(0)).unwrap(),"#82AAFF");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='claude'",[],|r|r.get::<_,String>(0)).unwrap(),"#F38C6F");for (table,column) in [("sessions","agent_id"),("usage_events","agent_id"),("sessions","first_exec_snapshot_id"),("usage_events","usage_status"),("agents","approval_mode"),("permission_requests","resolved_by")] {assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get::<_,bool>(0)).unwrap());}for index in ["idx_agents_active_name","idx_agents_active_runtime_order","idx_agents_runtime_archived_order","idx_sessions_agent_updated","idx_usage_agent_time","idx_usage_provider_update"]{assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",[index],|r|r.get::<_,bool>(0)).unwrap());}drop(read);
+        let read=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(read.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),5);assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),5);assert_eq!(read.query_row("SELECT count(*) FROM usage_events WHERE agent_id IS NOT NULL",[],|r|r.get::<_,i64>(0)).unwrap(),1);assert_eq!(read.query_row("SELECT agent_id FROM usage_events WHERE id='u-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap(),Some(read.query_row("SELECT agent_id FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap()));assert_eq!(read.query_row("SELECT created_at FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap(),"2026-01-02T00:00:00.000Z");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='codex'",[],|r|r.get::<_,String>(0)).unwrap(),"#82AAFF");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='claude'",[],|r|r.get::<_,String>(0)).unwrap(),"#F38C6F");for (table,column) in [("sessions","agent_id"),("usage_events","agent_id"),("sessions","first_exec_snapshot_id"),("usage_events","usage_status"),("agents","approval_mode"),("permission_requests","resolved_by")] {assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get::<_,bool>(0)).unwrap());}for index in ["idx_agents_active_name","idx_agents_active_runtime_order","idx_agents_runtime_archived_order","idx_sessions_agent_updated","idx_usage_agent_time","idx_usage_provider_update"]{assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",[index],|r|r.get::<_,bool>(0)).unwrap());}drop(read);
         let failed=restore_verified_backup(&backup,&path,1).unwrap();assert!(failed.exists());let restored=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(restored.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),0);assert_eq!(restored.query_row("SELECT count(*) FROM sessions",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert!(!restored.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='agent_id')",[],|r|r.get::<_,bool>(0)).unwrap());drop(restored);let _=fs::remove_dir_all(dir);
     }
     #[test]
@@ -1610,10 +2150,10 @@ mod tests {
     fn migration_2_to_3_seeds_gates_preserves_operator_values_and_reopens_without_backup_or_sidecars(){
         let(dir,path)=v2_fixture();
         {let db=Storage::open(&path).unwrap();let settings=db.settings().unwrap();assert_eq!(settings["exec_gate.codex.model"],false);for key in ["exec_gate.claude.model","exec_gate.claude.thinking","exec_gate.claude.instructions","exec_gate.codex.thinking","exec_gate.codex.serviceTier","exec_gate.codex.instructions","exec_gate.opencode.model","exec_gate.opencode.instructions"]{assert_eq!(settings[key],true);}assert_eq!(settings["exec_gate.opencode.thinking"],false);}
-        let backup_dir=dir.join("backups");let before=fs::read_dir(&backup_dir).unwrap().count();assert_eq!(before,4);
-        {let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),4);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),4);assert_eq!(c.query_row("SELECT COUNT(*) FROM usage_events WHERE usage_status='unreported' AND exec_snapshot_id IS NULL AND provider_update_id IS NULL AND context_used IS NULL AND context_size IS NULL AND reported_cost_decimal IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='settings.changed'",[],|r|r.get::<_,i64>(0)).unwrap(),9);for (table,column) in [("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","reported_cost_decimal")] {assert_eq!(c.query_row("SELECT type FROM pragma_table_info(?1) WHERE name=?2",params![table,column],|r|r.get::<_,String>(0)).unwrap(),"TEXT");}assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cumulative_cost_micros')",[],|r|r.get::<_,bool>(0)).unwrap());}
+        let backup_dir=dir.join("backups");let before=fs::read_dir(&backup_dir).unwrap().count();assert_eq!(before,6);
+        {let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),5);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),5);assert_eq!(c.query_row("SELECT COUNT(*) FROM usage_events WHERE usage_status='unreported' AND exec_snapshot_id IS NULL AND provider_update_id IS NULL AND context_used IS NULL AND context_size IS NULL AND reported_cost_decimal IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='settings.changed'",[],|r|r.get::<_,i64>(0)).unwrap(),9);for (table,column) in [("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","reported_cost_decimal")] {assert_eq!(c.query_row("SELECT type FROM pragma_table_info(?1) WHERE name=?2",params![table,column],|r|r.get::<_,String>(0)).unwrap(),"TEXT");}assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cumulative_cost_micros')",[],|r|r.get::<_,bool>(0)).unwrap());}
         drop(Storage::open(&path).unwrap());assert_eq!(fs::read_dir(&backup_dir).unwrap().count(),before);
-        let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();c.execute_batch("DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2;").unwrap();drop(c);drop(Storage::open(&path).unwrap());
+        let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2;").unwrap();drop(c);drop(Storage::open(&path).unwrap());
         let entries=fs::read_dir(&dir).unwrap().map(|e|e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>();assert!(entries.iter().all(|n|!n.ends_with("-wal")&&!n.ends_with("-shm")));let backup_entries=fs::read_dir(&backup_dir).unwrap().map(|e|e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>();assert!(backup_entries.iter().all(|n|!n.ends_with("-wal")&&!n.ends_with("-shm")));let _=fs::remove_dir_all(dir);
     }
     #[test]

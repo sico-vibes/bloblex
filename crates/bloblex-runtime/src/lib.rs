@@ -1,4 +1,5 @@
 use bloblex_protocol::{AuthState, ProtocolFamily};
+use bloblex_process::{prepare_command, ProcessTree};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -144,15 +145,19 @@ fn quoted_tokens(input: &str) -> Vec<String> {
 
 async fn bounded_output(exe: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(exe);
+    prepare_command(&mut cmd);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = timeout(Duration::from_secs(6), cmd.output())
+    let mut child = cmd.spawn().ok()?;
+    let process_tree = ProcessTree::attach(&mut child).ok()?;
+    let output = timeout(Duration::from_secs(6), child.wait_with_output())
         .await
         .ok()?
         .ok()?;
+    let _ = process_tree.terminate();
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     if text.len() < 32 * 1024 {
         text.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -275,15 +280,19 @@ async fn auth_status(provider: &str, exe: &Path, args: &[String]) -> AuthState {
 }
 async fn safe_status_output(exe: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(exe);
+    prepare_command(&mut cmd);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let out = timeout(Duration::from_secs(5), cmd.output())
+    let mut child = cmd.spawn().ok()?;
+    let process_tree = ProcessTree::attach(&mut child).ok()?;
+    let out = timeout(Duration::from_secs(5), child.wait_with_output())
         .await
         .ok()?
         .ok()?;
+    let _ = process_tree.terminate();
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     if text.len() < 32 * 1024 {
         text.push_str(&String::from_utf8_lossy(&out.stderr));

@@ -1,6 +1,7 @@
 //! Claude Code's documented print/stream-json mode, never interactive TUI scraping.
 use async_trait::async_trait;
 use bloblex_agent_core::*;
+use bloblex_process::{prepare_command, prepare_std_command, ProcessTree};
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
 use std::{
@@ -30,8 +31,13 @@ fn icacls(path:&std::path::Path,directory:bool,system_root_override:Option<&std:
         let root=system_root_override.map(PathBuf::from).or_else(||std::env::var_os("SystemRoot").map(PathBuf::from)).ok_or_else(||std::io::Error::new(std::io::ErrorKind::PermissionDenied,"SystemRoot is unavailable"))?;
         let user=match(std::env::var("USERDOMAIN"),std::env::var("USERNAME")){(Ok(d),Ok(u))if !d.is_empty()&&!u.is_empty()=>format!("{d}\\{u}"),_=>return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,"current Windows account is unavailable"))};
         let grant=if directory{format!("{user}:(OI)(CI)F")}else{format!("{user}:F")};
-        let mut command=std::process::Command::new(root.join("System32").join("icacls.exe"));command.arg(path).arg("/inheritance:r").arg("/grant:r").arg(grant).stdout(Stdio::null()).stderr(Stdio::null());
-        let status=command.status()?;if !status.success(){return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,"icacls rejected the private path"))}
+        let mut command=std::process::Command::new(root.join("System32").join("icacls.exe"));prepare_std_command(&mut command);command.arg(path).arg("/inheritance:r").arg("/grant:r").arg(grant).stdout(Stdio::null()).stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let tree = match ProcessTree::attach_process_id(child.id()) {
+            Ok(tree) => tree,
+            Err(error) => { let _ = child.kill(); return Err(error); }
+        };
+        let status=child.wait()?;drop(tree);if !status.success(){return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,"icacls rejected the private path"))}
     }
     #[cfg(not(windows))] { let _=(path,directory,system_root_override); }
     Ok(())
@@ -110,6 +116,7 @@ fn exact_usd_minor(decimal: &str) -> Option<i64> {
 struct Conn {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
+    process_tree: ProcessTree,
     events: EventSender,
     provider_id: Mutex<Option<String>>,
     active_turn: AtomicBool,
@@ -325,6 +332,7 @@ impl ClaudeAdapter {
             .map(str::to_owned)
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let mut c = Command::new(&r.executable);
+        prepare_command(&mut c);
         c.args(&r.args).args([
             "-p",
             "--output-format",
@@ -351,11 +359,13 @@ impl ClaudeAdapter {
             .stderr(Stdio::null())
             .kill_on_drop(true);
         let mut child = match c.spawn() { Ok(child) => child, Err(e) => { if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);} return Err(AdapterError::Process(e.to_string())); } };
+        let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
         let Some(stdin)=child.stdin.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdin unavailable".into()))};
         let Some(stdout)=child.stdout.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdout unavailable".into()))};
         let conn = Arc::new(Conn {
             stdin: Mutex::new(stdin),
             child: Mutex::new(child),
+            process_tree,
             events: events.clone(),
             provider_id: Mutex::new(Some(assigned_id)),
             active_turn: AtomicBool::new(false),
@@ -427,11 +437,13 @@ impl AgentAdapter for ClaudeAdapter {
     async fn model_catalog(&self, r: &RuntimeSpec) -> Result<ModelCatalog, AdapterError> {
         let now = Utc::now();
         let mut command = Command::new(&r.executable);
+        prepare_command(&mut command);
         command.args(&r.args).args(["-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--permission-mode", "default", "--permission-prompt-tool", "stdio", "--no-session-persistence"])
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
         if let Some(cwd) = r.cwd.as_ref() { command.current_dir(cwd); }
         let result = async {
             let mut child = command.spawn().map_err(|e| AdapterError::Process(e.to_string()))?;
+            let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
             let mut stdin = child.stdin.take().ok_or_else(|| AdapterError::Process("Claude catalog stdin unavailable".into()))?;
             let stdout = child.stdout.take().ok_or_else(|| AdapterError::Process("Claude catalog stdout unavailable".into()))?;
             let request = json!({"type":"control_request","request_id":"bloblex-list-models","request":{"subtype":"list_models"}});
@@ -443,6 +455,7 @@ impl AgentAdapter for ClaudeAdapter {
                 let parsed: Value = serde_json::from_str(&line).map_err(|_| AdapterError::Protocol("Claude catalog response was malformed".into()))?;
                 if parsed["type"] == "control_response" && parsed["response"]["subtype"] == "success" { found = Some(parsed["response"].clone()); break; }
             }
+            let _ = process_tree.terminate();
             let _ = child.kill().await;
             let body = found.ok_or_else(|| AdapterError::Protocol("Claude catalog response was missing".into()))?;
             parse_model_catalog(&body["response"])
@@ -452,15 +465,18 @@ impl AgentAdapter for ClaudeAdapter {
     }
     async fn probe(&self, r: &RuntimeSpec) -> Result<ProbeResult, AdapterError> {
         let mut c = Command::new(&r.executable);
+        prepare_command(&mut c);
         c.args(&r.args)
             .arg("--help")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let out = tokio::time::timeout(std::time::Duration::from_secs(6), c.output())
+        let mut child = c.spawn().map_err(|e| AdapterError::Process(e.to_string()))?;
+        let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
+        let out = tokio::time::timeout(std::time::Duration::from_secs(6), child.wait_with_output())
             .await
-            .map_err(|_| AdapterError::Process("Claude probe timed out".into()))?
+            .map_err(|_| { let _ = process_tree.terminate(); AdapterError::Process("Claude probe timed out".into()) })?
             .map_err(|e| AdapterError::Process(e.to_string()))?;
         let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
         if text.len() < 32 * 1024 {
@@ -560,7 +576,8 @@ impl AgentAdapter for ClaudeAdapter {
         if options_changed {
             let runtime = c.runtime.clone(); let cwd = c.cwd.clone(); let events = c.event_sender.clone();
             let provider_id = c.provider_id.lock().await.clone().ok_or_else(|| AdapterError::Unsupported("Claude resume identity is unavailable for changed execution options".into()))?;
-            let _ = c.child.lock().await.kill().await;
+        let _ = c.process_tree.terminate();
+        let _ = c.child.lock().await.kill().await;
             c = self.start(&runtime, &cwd, Some(&provider_id), events, &h.session_id, &q.exec_options, instruction_changed, desired_hash.clone()).await.map_err(|_| AdapterError::Unsupported("Claude could not resume with the requested execution options".into()))?;
             self.sessions.lock().await.insert(h.session_id.clone(), c.clone());
         }
@@ -595,6 +612,7 @@ impl AgentAdapter for ClaudeAdapter {
             .cloned()
             .ok_or_else(|| AdapterError::Process("Claude session not active".into()))?;
         c.cancellation_requested.store(true, Ordering::SeqCst);
+        let _ = c.process_tree.terminate();
         let result = c.child.lock().await.kill().await;
         result.map_err(|e| AdapterError::Process(e.to_string()))
     }
@@ -626,6 +644,7 @@ impl AgentAdapter for ClaudeAdapter {
     }
     async fn close_session(&self, h: &SessionHandle) -> Result<(), AdapterError> {
         if let Some(c) = self.sessions.lock().await.remove(&h.session_id) {
+            let _ = c.process_tree.terminate();
             let _ = c.child.lock().await.kill().await;
         }
         Ok(())

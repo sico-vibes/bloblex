@@ -46,6 +46,12 @@ Response:
 - Currency and number formatting through `Intl`. Subscription fees are shown in a separate card or section labelled "Subscriptions (not included in usage cost)".
 - Fixtures: extend the preview fixture bridge with analytics responses covering: full data, partial data (lower bound), no data, unknown pricing, a legacy `agentId: null` row, a DST-week range.
 
+## Additive backend notes
+
+- The daemon records execution start in `turns.started_at`; completed, failed, and cancelled run time uses `completed_at - started_at`. `cancelledRuns` is included in totals and non-empty series/leaderboard rows.
+- Failed and cancelled turns may include `failureClass` in an error row. Wire values are `provider`, `permission`, `cancelled`, `timeout`, `budget`, `config`, and `other`; message text is a fixed safe summary and never provider output.
+- When no rate can be established from the supplied verified rate material or a user's override, `unpricedModels` lists the provider-qualified model and the amount stays null. No price is inferred from model names.
+
 ## Tests the owners must write
 
 - Daemon: reconciliation of totals with the raw `usage_events` on a fixture, partial/unreported data labelled with `lowerBound`, unknown prices stay null (never 0), subscriptions excluded from cost, timezone bucketing incl. a DST transition week, week-start Monday, project and agent filters, null-agent row, failed-run list safety (no prompt text), range validation.

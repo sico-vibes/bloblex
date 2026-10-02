@@ -5,6 +5,7 @@ edition.workspace = true
 [dependencies]
 async-trait.workspace = true
 bloblex-agent-core = { path = "../bloblex-agent-core" }
+bloblex-process = { path = "../bloblex-process" }
 chrono.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

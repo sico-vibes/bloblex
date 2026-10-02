@@ -12,6 +12,7 @@ members = [
   "crates/bloblex-adapter-opencode",
   "crates/bloblex-usage",
   "crates/bloblex-budget",
+  "crates/bloblex-process",
   "crates/bloblex-wsl",
   "crates/bloblex-daemon",
   "apps/desktop/src-tauri",
@@ -28,6 +29,7 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde", "clock"] }
+chrono-tz = "0.10"
 futures-util = "0.3"
 rand = "0.9"
 rusqlite = { version = "0.37", features = ["bundled", "chrono", "backup"] }

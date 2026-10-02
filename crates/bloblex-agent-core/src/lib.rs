@@ -22,61 +22,426 @@ pub fn permission_summary(tool_kind:&str,raw:&Value)->String{
 }
 
 /// Conservative, daemon-callable classifier. Any missing or ambiguous evidence fails closed.
-pub fn classify_permission(tool_kind: &str, raw: &Value, project: &std::path::Path) -> PermissionClassification {
+pub fn classify_permission(
+    tool_kind: &str,
+    raw: &Value,
+    project: &std::path::Path,
+) -> PermissionClassification {
     let kind = tool_kind.to_ascii_lowercase();
     let read = ["read", "glob", "grep", "list", "search", "notebook_read"];
     let edit = ["edit", "write", "file_edit", "file_write"];
     let mut paths = Vec::new();
-    fn collect(v: &Value, out: &mut Vec<String>) {
-        match v {
-            Value::Object(m) => for (k,v) in m { if ["path","file_path","filePath","target","uri"].contains(&k.as_str()) { if let Some(s)=v.as_str(){out.push(s.to_owned())} } else { collect(v,out) } },
-            Value::Array(a) => for v in a { collect(v,out) }, _ => {}
+
+    fn collect(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if ["path", "file_path", "filePath", "target", "uri"].contains(&key.as_str()) {
+                        if let Some(path) = child.as_str() {
+                            out.push(path.to_owned());
+                        }
+                    } else {
+                        collect(child, out);
+                    }
+                }
+            }
+            Value::Array(values) => {
+                for child in values {
+                    collect(child, out);
+                }
+            }
+            _ => {}
         }
     }
+
     collect(raw, &mut paths);
-    let project = match project.canonicalize() { Ok(p)=>p, Err(_)=>return denied(&kind,"unknown") };
-    let worktree=project.ancestors().find(|p|p.join(".git").exists()).map(std::path::Path::to_path_buf);
+    let project = match project.canonicalize() {
+        Ok(path) => path,
+        Err(_) => return denied(&kind, "unknown"),
+    };
+    let worktree = project
+        .ancestors()
+        .find(|path| path.join(".git").exists())
+        .map(std::path::Path::to_path_buf);
+
     if read.contains(&kind.as_str()) || edit.contains(&kind.as_str()) {
-        if paths.is_empty() { return denied(&kind,"unknown"); }
-        for input in &paths {
-            let Some(normalized)=normalize_path_spelling(input) else{return denied(&kind,input)};
-            if foreign_windows_absolute(&normalized) { return denied(&kind,input); }
-            let p = std::path::Path::new(&normalized);
-            let candidate = if p.is_absolute() { p.to_path_buf() } else { project.join(p) };
-            let resolved = match canonicalize_target(&candidate) { Some(p)=>p, None=>return denied(&kind,input) };
-            let in_project=path_within(&resolved,&project);
-            let in_worktree=read.contains(&kind.as_str())&&worktree.as_ref().is_some_and(|root|path_within(&resolved,root));
-            if !in_project&&!in_worktree { return denied(&kind,input); }
-            let rel = resolved.strip_prefix(&project).unwrap_or(&resolved).to_string_lossy().replace('\\',"/");
-            let lower = rel.to_ascii_lowercase();
-            if lower.split('/').any(|s|s==".git") { return denied(&kind,&rel); }
-            let base = lower.rsplit('/').next().unwrap_or(&lower);
-            if base.starts_with(".env") || [".pem",".key"].iter().any(|s|base.ends_with(s)) || ["credential","credentials","token","secret"].iter().any(|s|base.contains(s)) { return denied(&kind,&rel); }
+        if paths.is_empty() {
+            return denied(&kind, "unknown");
         }
-        return PermissionClassification { allowed: true, category: if read.contains(&kind.as_str()){"READ"}else{"EDIT"}, summary: safe_summary(&kind, paths.first().map(String::as_str).unwrap_or("")) };
-    }
-    if ["shell","bash","command","terminal"].contains(&kind.as_str()) {
-        let command = raw.get("command").and_then(Value::as_str).or_else(||raw.get("rawInput").and_then(Value::as_str)).or_else(||raw["toolCall"]["rawInput"].as_str()).or_else(||raw["params"]["toolCall"]["rawInput"].as_str()).or_else(||raw.as_str()).unwrap_or("");
-        let summary = command_head(command);
-        let lower=command.to_ascii_lowercase();
-        if command.is_empty() || ["&&","||",";","|",">","<","`","$","%","&","\n","\r"].iter().any(|op|command.contains(op)) || lower.contains("find ") && ["-delete","-exec"].iter().any(|x|lower.contains(x)) { return denied(&kind,&summary); }
-        let words=command.split_whitespace().collect::<Vec<_>>();
-        if words.is_empty() { return denied(&kind,"unknown"); }
-        let head=words[0].trim_matches('"').to_ascii_lowercase();
-        let safe=match head.as_str(){
-            "git"=>words.get(1).is_some_and(|s|["status","diff","log","show","branch","rev-parse"].contains(&s.to_ascii_lowercase().as_str())) && !lower.contains("reset --hard") && !lower.contains("clean ") && !lower.contains("push"),
-            "ls"|"dir"=>words.iter().skip(1).all(|word|safe_relative_arg(word)),
-            "pwd"|"echo"=>true,
-            "rg"|"grep"=>words.iter().skip(1).all(|word| safe_relative_arg(word)),
-            "cat"|"type"=>words.iter().skip(1).all(|s| {let w=s.trim_matches('"');if foreign_windows_absolute(w){return false;}let p=std::path::Path::new(w);let p=if p.is_absolute(){p.to_path_buf()}else{project.join(p)};p.canonicalize().is_ok_and(|x|path_within(&x,&project)) }),
-            "find"=>!lower.contains("-delete")&&!lower.contains("-exec")&&words.iter().skip(1).take_while(|w|!w.starts_with('-')).all(|w|safe_relative_arg(w)),
-            "node"=>words.get(1).is_some_and(|s|*s=="--version"||*s=="-v"),
-            _=>false
+        for input in &paths {
+            if !safe_command_path(input, &project, worktree.as_deref(), read.contains(&kind.as_str())) {
+                return denied(&kind, input);
+            }
+        }
+        return PermissionClassification {
+            allowed: true,
+            category: if read.contains(&kind.as_str()) { "READ" } else { "EDIT" },
+            summary: safe_summary(&kind, paths.first().map(String::as_str).unwrap_or("")),
         };
-        if safe { return PermissionClassification{allowed:true,category:"SAFE_COMMANDS",summary:safe_summary(&kind,&summary)}; }
-        return denied(&kind,&summary);
     }
-    denied(&kind,"unknown")
+
+    if ["shell", "bash", "command", "terminal"].contains(&kind.as_str()) {
+        let command = raw
+            .get("command")
+            .and_then(Value::as_str)
+            .or_else(|| raw.get("rawInput").and_then(Value::as_str))
+            .or_else(|| raw["toolCall"]["rawInput"].as_str())
+            .or_else(|| raw["params"]["toolCall"]["rawInput"].as_str())
+            .or_else(|| raw.as_str())
+            .unwrap_or("");
+        let summary = command_head(command);
+        if command.is_empty() || has_shell_operator(command) {
+            return denied(&kind, &summary);
+        }
+        let Some(words) = tokenize_command(command) else {
+            return denied(&kind, &summary);
+        };
+        if words.is_empty() {
+            return denied(&kind, "unknown");
+        }
+        let head = normalize_executable(&words[0]);
+        let safe = match head.as_str() {
+            "git" => safe_git(&words),
+            "ls" | "dir" => words.iter().skip(1).all(|word| {
+                !word.starts_with('-') && safe_command_path(word, &project, worktree.as_deref(), true)
+            }),
+            "pwd" | "echo" => true,
+            "rg" | "grep" => safe_search(&words, &project, worktree.as_deref()),
+            "cat" | "type" => {
+                !words.iter().skip(1).any(|word| word.starts_with('-'))
+                    && words.iter().skip(1).all(|word| {
+                        safe_command_path(word, &project, worktree.as_deref(), true)
+                    })
+            }
+            "find" => safe_find(&words, &project, worktree.as_deref()),
+            "node" => words.get(1).is_some_and(|arg| arg == "--version" || arg == "-v"),
+            _ => false,
+        };
+        if safe {
+            return PermissionClassification {
+                allowed: true,
+                category: "SAFE_COMMANDS",
+                summary: safe_summary(&kind, &summary),
+            };
+        }
+        return denied(&kind, &summary);
+    }
+    denied(&kind, "unknown")
+}
+
+fn has_shell_operator(command: &str) -> bool {
+    ["&&", "||", ";", "|", ">", "<", "`", "$", "%", "&", "\n", "\r", "\t", "\u{000b}", "\u{000c}"]
+        .iter()
+        .any(|operator| command.contains(operator))
+}
+
+fn tokenize_command(command: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in command.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(active) = quote {
+            if ch == active {
+                quote = None;
+            } else {
+                current.push(ch);
+            }
+        } else if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+        } else if ch.is_whitespace() {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if escaped || quote.is_some() {
+        return None;
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    Some(words)
+}
+
+fn normalize_executable(word: &str) -> String {
+    let base = word.rsplit(['/', '\\']).next().unwrap_or(word);
+    let lower = base.to_ascii_lowercase();
+    lower.strip_suffix(".exe").unwrap_or(&lower).to_owned()
+}
+
+fn safe_git(words: &[String]) -> bool {
+    let Some(subcommand) = words.get(1).map(|word| word.to_ascii_lowercase()) else {
+        return false;
+    };
+    if words.iter().skip(2).any(|word| {
+        word == "-c"
+            || word.starts_with("-c=")
+            || ["--output", "--ext-diff", "--textconv", "--git-dir", "--work-tree", "-C"]
+                .contains(&word.as_str())
+            || word.starts_with("--output=")
+            || word.starts_with("--git-dir=")
+            || word.starts_with("--work-tree=")
+    }) {
+        return false;
+    }
+    if subcommand == "branch" {
+        return words.iter().skip(2).all(|word| {
+            ["-a", "-r", "-v", "-vv", "--list", "--show-current"].contains(&word.as_str())
+        });
+    }
+    ["status", "diff", "log", "show", "rev-parse"].contains(&subcommand.as_str())
+        && words.iter().skip(2).all(|word| !word.starts_with('-') || safe_relative_arg(word))
+}
+
+fn safe_search(words: &[String], project: &std::path::Path, worktree: Option<&std::path::Path>) -> bool {
+    let command = normalize_executable(&words[0]);
+    let mut index = 1;
+    let mut operands = Vec::new();
+    let mut options_ended = false;
+    let mut saw_pattern = false;
+
+    while index < words.len() {
+        let word = words[index].as_str();
+        if options_ended {
+            operands.push(word);
+            index += 1;
+            continue;
+        }
+        if word == "--" {
+            options_ended = true;
+            index += 1;
+            continue;
+        }
+        if !word.starts_with('-') || word == "-" {
+            if !saw_pattern {
+                saw_pattern = true;
+            } else {
+                operands.push(word);
+            }
+            index += 1;
+            continue;
+        }
+
+        let option = word.to_ascii_lowercase();
+        if ["--pre", "--pre-glob", "--hostname-bin", "--search-zip", "-z"]
+            .contains(&option.as_str())
+            || option.starts_with("--pre=")
+            || option.starts_with("--pre-glob=")
+            || option.starts_with("--hostname-bin=")
+            || option.starts_with("--search-zip=")
+        {
+            return false;
+        }
+
+        if command == "rg" {
+            if [
+                "-i", "-n", "-h", "-v", "-w", "-x", "-f", "-s", "-F", "-S", "-H",
+                "--heading", "--no-heading", "--line-number", "--no-line-number", "--column",
+                "--no-column", "--hidden", "--no-ignore", "--no-messages", "--count",
+                "--count-matches", "--files", "--files-with-matches", "--files-without-match",
+            ]
+                .contains(&option.as_str())
+            {
+                if option == "-f" { return false; }
+                index += 1;
+                continue;
+            }
+            if [
+                "-e", "--regexp", "-g", "--glob", "-t", "--type", "-T", "--type-not", "-A",
+                "--after-context", "-B", "--before-context", "-C", "--context", "-m",
+                "--max-count", "--maxdepth", "--sort",
+            ]
+                .contains(&option.as_str())
+            {
+                index += 1;
+                if index >= words.len() || words[index].starts_with('-') { return false; }
+                if matches!(option.as_str(), "-g" | "--glob")
+                    && !safe_glob_arg(&words[index])
+                {
+                    return false;
+                }
+                index += 1;
+                continue;
+            }
+            if ["-e", "-g", "-t", "-T", "-A", "-B", "-C", "-m"]
+                .iter()
+                .any(|prefix| option.starts_with(prefix) && option.len() > prefix.len())
+            {
+                if option.starts_with("-g") && !safe_glob_arg(&word[2..]) { return false; }
+                index += 1;
+                continue;
+            }
+            if [
+                "--regexp=", "--glob=", "--type=", "--type-not=", "--after-context=",
+                "--before-context=", "--context=", "--max-count=", "--maxdepth=", "--sort=",
+            ]
+                .iter().any(|prefix| option.starts_with(prefix))
+            {
+                if let Some(glob) = option.strip_prefix("--glob=") {
+                    if !safe_glob_arg(glob) { return false; }
+                }
+                index += 1;
+                continue;
+            }
+            return false;
+        }
+
+        if [
+            "-i", "-n", "-v", "-w", "-x", "-c", "-l", "-L", "-q", "-H", "-h", "-s", "-r",
+            "-R", "-E", "-F", "--ignore-case", "--line-number", "--count", "--with-filename",
+            "--no-filename", "--recursive", "--extended-regexp", "--fixed-strings",
+            "--word-regexp", "--line-regexp", "--no-messages", "--color", "--colour",
+        ]
+            .contains(&option.as_str())
+        {
+            index += 1;
+            continue;
+        }
+        if ["-e", "--regexp", "--include", "--exclude", "--include-dir", "--exclude-dir"]
+            .contains(&option.as_str())
+            {
+                index += 1;
+                if index >= words.len() || words[index].starts_with('-') { return false; }
+                if matches!(option.as_str(), "--include" | "--exclude" | "--include-dir" | "--exclude-dir")
+                    && !safe_glob_arg(&words[index])
+                {
+                    return false;
+                }
+                index += 1;
+            continue;
+        }
+        if option == "-f" || option.starts_with("-f") {
+            let path = if option == "-f" {
+                index += 1;
+                if index >= words.len() { return false; }
+                words[index].as_str()
+            } else {
+                &word[2..]
+            };
+            if !safe_command_path(path, project, worktree, true) { return false; }
+            index += 1;
+            continue;
+        }
+        if ["--regexp=", "--include=", "--exclude=", "--include-dir=", "--exclude-dir="]
+            .iter().any(|prefix| option.starts_with(prefix))
+        {
+            if ["--include=", "--exclude=", "--include-dir=", "--exclude-dir="]
+                .iter()
+                .any(|prefix| option.strip_prefix(prefix).is_some_and(|value| !safe_glob_arg(value)))
+            {
+                return false;
+            }
+            index += 1;
+            continue;
+        }
+        return false;
+    }
+
+    saw_pattern && operands.iter().all(|path| safe_command_path(path, project, worktree, true))
+}
+
+fn safe_glob_arg(value: &str) -> bool {
+    !value.starts_with('/')
+        && !value.starts_with('\\')
+        && !foreign_windows_absolute(value)
+        && !value.replace('\\', "/").split('/').any(|part| part == "..")
+        && !unsafe_secret_spelling(value)
+}
+
+fn safe_find(words: &[String], project: &std::path::Path, worktree: Option<&std::path::Path>) -> bool {
+    let denied_options = [
+        "-ok", "-okdir", "-execdir", "-fprint", "-fprint0", "-fprintf", "-fls", "-delete",
+        "-exec",
+    ];
+    if words.iter().skip(1).any(|word| {
+        denied_options.iter().any(|bad| word.eq_ignore_ascii_case(bad))
+    }) {
+        return false;
+    }
+    let Some(root) = words.get(1) else { return false; };
+    if root.starts_with('-') || !safe_command_path(root, project, worktree, true) {
+        return false;
+    }
+    let value_options = [
+        "-name", "-iname", "-path", "-ipath", "-type", "-size", "-mtime", "-mmin", "-atime",
+        "-amin", "-ctime", "-cmin", "-perm", "-user", "-group", "-uid", "-gid", "-inum",
+        "-links", "-maxdepth", "-mindepth", "-newer",
+    ];
+    let flags = [
+        "-print", "-print0", "-ls", "-depth", "-empty", "-readable", "-writable", "-executable",
+        "-hidden", "-true", "-false", "-prune", "-and", "-a", "-or", "-o", "!", "(", ")",
+    ];
+    let mut index = 2;
+    while index < words.len() {
+        let token = words[index].to_ascii_lowercase();
+        if flags.contains(&token.as_str()) {
+            index += 1;
+            continue;
+        }
+        if value_options.contains(&token.as_str()) {
+            index += 1;
+            if index >= words.len() { return false; }
+            let value = &words[index];
+            if matches!(token.as_str(), "-path" | "-ipath") && unsafe_secret_spelling(value) {
+                return false;
+            }
+            if token == "-newer" && !safe_command_path(value, project, worktree, true) {
+                return false;
+            }
+            index += 1;
+            continue;
+        }
+        return false;
+    }
+    true
+}
+
+fn unsafe_secret_spelling(value: &str) -> bool {
+    let normalized = value.replace('\\', "/").to_ascii_lowercase();
+    normalized.split('/').any(|segment| {
+        segment.contains(".git")
+            || segment.contains(".env")
+            || segment.ends_with(".pem")
+            || segment.ends_with(".key")
+            || ["credential", "credentials", "token", "secret"]
+                .iter()
+                .any(|needle| segment.contains(needle))
+    })
+}
+
+fn safe_command_path(
+    input: &str,
+    project: &std::path::Path,
+    worktree: Option<&std::path::Path>,
+    allow_worktree: bool,
+) -> bool {
+    let Some(normalized) = normalize_path_spelling(input) else { return false; };
+    if foreign_windows_absolute(&normalized) { return false; }
+    let path = std::path::Path::new(&normalized);
+    let candidate = if path.is_absolute() { path.to_path_buf() } else { project.join(path) };
+    let Some(resolved) = canonicalize_target(&candidate) else { return false; };
+    let in_project = path_within(&resolved, project);
+    let in_worktree = allow_worktree && worktree.is_some_and(|root| path_within(&resolved, root));
+    if !in_project && !in_worktree { return false; }
+    let relative = resolved.strip_prefix(project).unwrap_or(&resolved).to_string_lossy().replace('\\', "/");
+    let lower = relative.to_ascii_lowercase();
+    if lower.split('/').any(|segment| segment == ".git") { return false; }
+    let base = lower.rsplit('/').next().unwrap_or(&lower);
+    !(base.starts_with(".env")
+        || [".pem", ".key"].iter().any(|suffix| base.ends_with(suffix))
+        || ["credential", "credentials", "token", "secret"].iter().any(|needle| base.contains(needle)))
 }
 fn foreign_windows_absolute(input:&str)->bool{
     #[cfg(not(windows))] {let b=input.as_bytes();return (b.len()>=3&&b[0].is_ascii_alphabetic()&&b[1]==b':'&&(b[2]==b'\\'||b[2]==b'/'))||input.starts_with("\\\\")||input.contains('\\');}
@@ -109,7 +474,97 @@ mod approval_tests {
     use serde_json::json;
     use std::{fs,path::PathBuf,time::{SystemTime,UNIX_EPOCH}};
     fn project()->PathBuf{let p=std::env::temp_dir().join(format!("bloblex-policy-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));fs::create_dir_all(p.join(".git")).unwrap();fs::write(p.join("readme.md"),"x").unwrap();fs::write(p.join("edit.txt"),"x").unwrap();fs::write(p.join(".env.local"),"x").unwrap();p.canonicalize().unwrap()}
-    #[test] fn classifier_table_fails_closed_and_accepts_only_safe_categories(){let p=project();let cases=[("read",json!({"path":"readme.md"}),true,"READ"),("glob",json!({"path":"readme.md"}),true,"READ"),("edit",json!({"path":"edit.txt"}),true,"EDIT"),("write",json!({"path":"edit.txt"}),true,"EDIT"),("read",json!({"path":".env.local"}),false,"ASKED"),("edit",json!({"path":".git/config"}),false,"ASKED"),("edit",json!({"path":"../outside"}),false,"ASKED"),("mcp",json!({"path":"readme.md"}),false,"ASKED"),("shell",json!({"command":"git status --short"}),true,"SAFE_COMMANDS"),("shell",json!({"command":"node --version"}),true,"SAFE_COMMANDS"),("shell",json!({"command":"find . -delete"}),false,"ASKED"),("shell",json!({"command":"git push"}),false,"ASKED"),("shell",json!({"command":"ls && whoami"}),false,"ASKED"),("shell",json!({"command":"echo x | sh"}),false,"ASKED"),("shell",json!({"command":"echo %PATH%"}),false,"ASKED"),("shell",json!({"command":"echo `whoami`"}),false,"ASKED"),("shell",json!({"command":"echo $(whoami)"}),false,"ASKED"),("shell",json!({"command":"echo x; dir"}),false,"ASKED")];for(kind,raw,allowed,category)in cases{let result=classify_permission(kind,&raw,&p);assert_eq!(result.allowed,allowed,"{kind} {raw}");assert_eq!(result.category,category,"{kind} {raw}");}let _=fs::remove_dir_all(p);}
+    #[test]
+    fn classifier_table_fails_closed_and_accepts_only_safe_categories() {
+        let p = project();
+        fs::write(p.join("secret.pem"), "key").unwrap();
+        fs::write(p.join("id_token"), "secret").unwrap();
+        let cases = [
+            ("read", "readme.md", true),
+            ("glob", "readme.md", true),
+            ("edit", "edit.txt", true),
+            ("write", "edit.txt", true),
+            ("read", ".env.local", false),
+            ("edit", ".git/config", false),
+            ("edit", "../outside", false),
+        ];
+        for (kind, path, expected) in cases {
+            assert_eq!(
+                classify_permission(kind, &json!({"path": path}), &p).allowed,
+                expected,
+                "file tool {kind} {path}"
+            );
+        }
+        let commands = [
+            ("git status --short", true),
+            ("node --version", true),
+            ("find . -name '*.rs'", true),
+            ("find . -maxdepth 2 -type f", true),
+            ("find . -newer ../outside", false),
+            ("find . -path ./.env.local", false),
+            ("find . -files0-from ../outside", false),
+            ("find . -delete", false),
+            ("git push", false),
+            ("ls && whoami", false),
+            ("echo x | sh", false),
+            ("echo %PATH%", false),
+            ("echo `whoami`", false),
+            ("echo $(whoami)", false),
+            ("echo x; dir", false),
+            ("echo\twhoami", false),
+            ("echo\u{000b}whoami", false),
+            ("echo\u{000c}whoami", false),
+            ("GIT.EXE status", true),
+            ("\"git\" status", true),
+            ("git branch", true),
+            ("git branch -a -r -vv --list", true),
+            ("git branch new-name", false),
+            ("git branch -D old-name", false),
+            ("git branch -m old new", false),
+            ("git -c alias.x=bad status", false),
+            ("git --output=out status", false),
+            ("git --output out status", false),
+            ("git --ext-diff diff", false),
+            ("git --textconv diff", false),
+            ("git --git-dir ../outside status", false),
+            ("git --work-tree ../outside status", false),
+            ("git -C ../outside status", false),
+            ("rg --pre cat pattern src", false),
+            ("rg --pre-glob '*.rs' cat pattern src", false),
+            ("rg --hostname-bin ../outside pattern src", false),
+            ("rg --search-zip pattern src", false),
+            ("rg -z pattern src", false),
+            ("grep -z pattern src", false),
+            ("rg pattern ../outside", false),
+            ("rg pattern .env.local", false),
+            ("rg --glob ../outside pattern .", false),
+            ("rg --glob '*.pem' pattern .", false),
+            ("rg --files-from ../outside pattern .", false),
+            ("grep -f ../outside pattern .", false),
+            ("grep -f .env.local pattern .", false),
+            ("grep pattern secret.pem", false),
+            ("grep pattern id_token", false),
+            ("cat .env.local", false),
+            ("type secret.pem", false),
+            ("find . -ok echo {} \\;", false),
+            ("find . -okdir echo {} \\;", false),
+            ("find . -execdir echo {} \\;", false),
+            ("find . -fprint out", false),
+            ("find . -fprint0 out", false),
+            ("find . -fprintf out '%p'", false),
+            ("find . -fls out", false),
+            ("find . -delete", false),
+            ("find . -exec echo {} \\;", false),
+            ("find . '-ExEc' echo", false),
+            ("find . '-DELETE'", false),
+        ];
+        for (command, expected) in commands {
+            let result = classify_permission("shell", &json!({"command": command}), &p);
+            assert_eq!(result.allowed, expected, "command {command}");
+            assert_eq!(result.category, if expected { "SAFE_COMMANDS" } else { "ASKED" });
+        }
+        let _ = fs::remove_dir_all(p);
+    }
     #[test] fn symlink_escape_is_denied_and_path_spellings_fail_closed(){let p=project();let outside=p.parent().unwrap().join(format!("{}-outside",p.file_name().unwrap().to_string_lossy()));fs::create_dir_all(&outside).unwrap();fs::write(outside.join("secret.txt"),"x").unwrap();let link=p.join("escape");
         #[cfg(unix)] let linked=std::os::unix::fs::symlink(&outside,&link).is_ok();
         #[cfg(windows)] let linked=std::os::windows::fs::symlink_dir(&outside,&link).is_ok();
@@ -127,6 +582,8 @@ pub enum AdapterError {
     Unsupported(String),
     #[error("provider protocol error: {0}")]
     Protocol(String),
+    #[error("operation timed out")]
+    Timeout,
     #[error("provider rejected execution settings: {0}")]
     Rejected(String),
     #[error("provider process unavailable: {0}")]

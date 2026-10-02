@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 [dependencies]
 bloblex-protocol = { path = "../bloblex-protocol" }
+bloblex-process = { path = "../bloblex-process" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-adapter-acp"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "async-trait",
  "bloblex-agent-core",
@@ -341,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-adapter-claude"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "async-trait",
  "bloblex-agent-core",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-adapter-codex"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "async-trait",
  "bloblex-agent-core",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-adapter-opencode"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "bloblex-adapter-acp",
  "bloblex-agent-core",
@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-budget"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-daemon"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-desktop"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "chrono",
  "futures-util",
@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-hook"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "serde_json",
  "tokio",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-process"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "tokio",
  "windows-sys 0.61.2",
@@ -466,7 +466,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-runtime"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "bloblex-process",
  "bloblex-protocol",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-security"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "rand",
  "subtle",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-storage"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-usage"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-wsl"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "tokio",
 ]

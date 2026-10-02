@@ -3,7 +3,7 @@
 ## Director amendments (1 Oct 2026)
 
 - Phase 2 is split: **2a** delivers agent storage, migration/backfill, `agent.*` RPCs/events, snapshot inclusion, and `session.new` by `agentId` without execution options. **2b** adds `ExecOptions`, adapter mappings, model catalog, concurrency and usage capture. Phases 3 and 4 depend only on 2a.
-- Phase 1.5 verifies all relied-on capabilities against installed Claude 2.1.x, Codex CLI 0.159.3 and OpenCode 1.18.x, recording results in `docs/runtime-capabilities.md`. Phase 2b waits until that file exists.
+- Phase 1.5 verified relied-on capabilities against installed Claude 2.1.x, Codex CLI 0.159.3 and OpenCode 1.18.x, recording results in `docs/runtime-capabilities.md`; it is DONE (`2b4b92f`).
 - Store the applied `exec_snapshot` per turn. Keep the first and most recent snapshot on the session for display.
 - Custom arguments use a per-adapter allowlist; custom environment rejects secret-looking keys.
 - Enforce both each blob's `max_concurrency` and a global concurrency cap.
@@ -11,9 +11,11 @@
 - Run the isolated-database `desktop:dev` native smoke test immediately after Phase 3, before Phase 4. Phase 7 retains the full native pass.
 - Phase 6 ships only General, Agents, Runtimes and Permissions. Usage and Billing, Updates, language and theme remain deferred until they have working consumers.
 - Multica is a clean-room behavioural reference only: design the UI independently and copy no Multica layout, text or assets. Record this in `THIRD_PARTY_NOTICES.md`.
-- Revised order: Phase 1 and 1.5 -> 2a -> 3 -> native smoke -> 4 -> 2b -> 5 -> trimmed 6 -> 7.
+- Revised order: **Phase 1 DONE (`7f10e60`)** and **Phase 1.5 DONE (`2b4b92f`)** -> 2a -> 3 -> native smoke -> 4 -> 2b -> 5 -> trimmed 6 -> 7.
 
-## Starting point (verified 1 Oct 2026, 22:40)
+## Starting point (historical source checkpoint: 1 Oct 2026, 22:40)
+
+The UI and code facts below describe that checkpoint, before Tasks 1–3; reported test counts are not current acceptance evidence.
 
 - **UI:**
   - The character engine, the companion island and the OpenMausBot-style shell are done (79/79 tests passing).
@@ -25,7 +27,7 @@
 - **Adapters:** all launch with fixed args.
   - Claude: `-p --output-format stream-json ...`
   - Codex: `app-server --listen stdio://`, with `thread/start` = cwd, approval and sandbox only.
-  - OpenCode: `acp --cwd`. It reports no usage.
+  - OpenCode: `acp --cwd`; ACP can emit `usage_update` with context-window `used`/`size` and cost that appears cumulative for the session. It does not expose input/output/cache token buckets in that update; successful-run cost semantics remain unverified.
 - **Storage** ([crates/bloblex-storage/src/lib.rs](crates/bloblex-storage/src/lib.rs)):
   - `sessions.project_path` exists.
   - `usage_events` already holds model and tokens, plus `usage_valuations` by basis.
@@ -55,7 +57,7 @@ flowchart LR
 **New `agents` table (the blobs):**
 
 - **Profile:** `id`, `name`, `description` (up to 255 characters), `instructions` (long text), `color` (one of 12 swatches or hex).
-- **Execution:** `runtime_id`, `model` (null = CLI default), `thinking` (null = default), `service_tier` (null / `standard` / `fast`), `custom_args` (JSON), `custom_env` (JSON, non-secret keys only), `max_concurrency` (1–50).
+- **Execution:** `runtime_id`, `model` (null = CLI default), `thinking` (null = default), `service_tier` (null or the selected model's advertised tier ID; never a universal `standard`/`fast` string), `custom_args` (JSON), `custom_env` (JSON, non-secret keys only), `max_concurrency` (1-50).
 - **Housekeeping:** `default_project`, `sort_order`, `archived`, `created_at`, `updated_at`.
 
 **Changes to existing tables:**
@@ -64,7 +66,7 @@ flowchart LR
 - `usage_events` gains `agent_id`, copied from the session at insert time.
 - **Migration safety:** before migration, make and verify a timestamped copy of the SQLite database and document the rollback path. Never touch the live inspection app database or its locked sidecars. Create one default blob per existing runtime, then backfill `sessions.agent_id` from `runtime_id`.
 
-## Phase 1: Logo and icons (small, independent)
+## Phase 1: Logo and icons (small, independent) — DONE (`7f10e60`)
 
 - Add `scripts/prepare-logo.ps1` (System.Drawing). Preserve the source alpha silhouette and rounded corners; retain exact alpha on pixels at or below 250 and treat higher alpha as opaque for matte processing. Remove only opaque near-white pixels connected to the border. Write the result centered and padded to `assets/icon/bloblex-master.png` at 1024x1024.
 - Generate `bloblex.ico` from the master with 16/24/32/48/64/128/256 entries. The script writes the PNG-compressed ICO directly, without a new dependency.
@@ -72,9 +74,9 @@ flowchart LR
 - Replace the CSS `BlobMark` in the sidebar header with the logo image.
 - **Gate:** icons visible in the build, the installer and the tray, with no white halo on a dark taskbar.
 
-## Phase 1.5: CLI capability spike (before execution support)
+## Phase 1.5: CLI capability spike (before execution support) — DONE (`2b4b92f`)
 
-Verify every CLI flag, field and command the plan relies on against the installed CLIs: Claude Code 2.1.x, Codex CLI 0.159.3 and OpenCode 1.18.x. Record exact versions, supported and unsupported results, evidence and date in `docs/runtime-capabilities.md`; do not include credentials, secret values or private prompt text. Cover `--model`, `--effort`, `--append-system-prompt-file`, `codex debug models`, `codex app-server generate-json-schema` including the developer-instructions field and `serviceTier`, `OPENCODE_CONFIG_CONTENT`, and `opencode models --verbose`. Phase 2b cannot start until this file exists and its results are reviewed.
+This phase verified the relied-on flags, fields and commands against Claude Code 2.1.286, Codex CLI 0.159.3 and OpenCode 1.18.34. Evidence, limitations and open questions are recorded in `docs/runtime-capabilities.md`; no credentials, secret values or private prompt text belong there. The spike covered `--model`, `--effort`, `--append-system-prompt-file`, `codex debug models`, `codex app-server generate-json-schema`, `OPENCODE_CONFIG_CONTENT` and `opencode models --verbose`. See the Phase 2b entry gate for remaining live checks.
 
 ## Phase 2a: Blob identity storage and RPCs (backend)
 
@@ -88,50 +90,62 @@ Verify every CLI flag, field and command the plan relies on against the installe
 
 ## Phase 2b: Execution options, adapters, models and usage (backend)
 
-Phase 2b cannot start until `docs/runtime-capabilities.md` exists with reviewed results from Phase 1.5.
+Phase 2b may start after Phase 1.5, which is recorded in `docs/runtime-capabilities.md`. Its entry gate below remains mandatory; capability shapes and static probes do not prove provider-side application.
 
 **Agent core:**
 
-- Add `ExecOptions { model, thinking, service_tier, instructions, extra_args, env }` to `NewSessionRequest`, the resume request and `PromptRequest`. Apply settings to new sessions, resumed processes and each new turn.
+- **Phase 2b implementation assumption:** add `ExecOptions { model, thinking, service_tier, instructions, extra_args, env }` to `NewSessionRequest`, the resume request and `PromptRequest`. Apply only the fields each adapter can verify at new-session, resume and per-turn scope; preserve unsupported/default states.
 
 **Per-adapter mapping:** use the Phase 1.5 evidence for installed CLIs.
 
 - **Claude:**
-  - `--model <id>` and `--effort <level>`.
-  - Instructions go through `--append-system-prompt-file <app-local temp file>`, so prompt text stays out of argv. If unsupported, prepend instructions inside a clear delimiter to the first stdin message after each process start, including resume. For a later turn whose settings require the fallback, prepend them to that turn's first stdin message only; do not repeat them on subsequent messages in the same turn. Record exactly which instructions were applied in that turn's snapshot.
-  - Speed: no native tier, so the picker is hidden.
+  - Spawn with typed `--model <id>` and `--effort <low|medium|high|xhigh|max>`. Valid aliases/full IDs and successful provider application remain only partly verified; preserve editable custom IDs and surface provider errors.
+  - Keep instructions in an app-local temporary file and pass `--append-system-prompt-file <path>`. This flag appears in installed help text only: self-check its presence in installed help at spawn time. **Fallback design assumption:** if absent or rejected, deliberately prefix the first user stdin message of each applicable turn with a clearly delimited instruction block, record this lower-assurance route and hash in that turn's snapshot, and disclose that it is not a system instruction. Never silently claim system-level application.
+  - The `--system-prompt-snapshot` default is on: the rendered initial prompt is reused for every request/resume, and changed launch instructions are ignored until compaction. Snapshot the instruction hash actually applied per turn; when desired instructions change, either start a fresh provider process/session or use a compaction-aware flow that demonstrably applies the new instructions. Do not claim changed instructions took effect merely because launch text changed.
+  - No speed/service-tier option was found; hide the speed picker.
 - **Codex:**
-  - `thread/start.model`.
-  - Effort: `config.model_reasoning_effort` on `thread/start` and `thread/resume`, and `effort` on `turn/start`.
-  - Speed: `serviceTier`.
-  - Instructions: the developer-instructions field of `thread/start`. Confirm the field name with `codex app-server generate-json-schema`.
+  - Load the typed model catalog from app-server `model/list` (paginate it); it includes per-model supported/default efforts and service tiers. Keep `codex debug models` as a diagnostics fallback. Equality between these catalogs has not been tested.
+  - `thread/start` and `thread/resume` carry `model`, `developerInstructions`, `baseInstructions`, `serviceTier`, and `config`. Per-turn `turn/start` carries `model`, `effort`, `serviceTier`, and `serviceTierForTurn`.
+  - Populate effort choices from each model's advertised efforts and send selected effort on `turn/start`. `config.model_reasoning_effort` on thread start/resume is unverified; do not depend on it until a live check proves acceptance.
+  - Service-tier IDs come from the selected model catalog. For the observed `gpt-6-luna`, tier id `priority` is named Fast and described as 1.5x speed; `additional_speed_tiers: ["fast"]` is a separate field. `serviceTierForTurn: "default"` means standard. Never hard-code `fast` or `standard` as a service-tier ID.
+  - Send instructions using `developerInstructions` or `baseInstructions` on start/resume. These fields prove request shape only; verify persistence and effective application across resume before claiming it.
 - **OpenCode (ACP):**
-  - Model, plus instructions as an agent prompt, go into `OPENCODE_CONFIG_CONTENT` (a JSON env var).
-  - Effort maps to a variant where the model exposes one.
-  - Speed: none.
+  - Put the default model and agent prompt in `OPENCODE_CONFIG_CONTENT`; it is process-scoped, so each blob needing distinct configuration gets its own process environment. `opencode debug config` verified resolved configuration.
+  - Populate a reasoning picker from each selected model's own `variants` keys in `opencode models --verbose` (33 of 52 observed models exposed variants); hide it when a model has none. ACP variant selection remains unproven, so do not claim a selected variant was applied until the entry-gate check passes.
+  - Model/mode selection is represented by ACP `configOptions`; `mode` is build/plan, not reasoning effort. ACP model change through `session/set_config_option` was confirmed in a no-turn check.
+  - No speed tier was exposed in the inspected ACP handshake/help; hide the speed picker.
 - **Safety rules:**
-  - Custom args are accepted only from a per-adapter allowlist of safe flags; do not use a blocklist.
-  - Custom env rejects secret-looking keys, matching the existing `settings.set` rule.
-  - Never log env values or instructions in raw events.
+  - Initial custom-argument allowlists are empty for Claude, Codex and OpenCode ACP. Use typed adapter-owned fields only; do not accept arbitrary option/value pairs.
+  - Never let users control protocol, permission, cwd, transport, output-format, or configuration-source flags. Claude-owned flags include `-p`/`--print`, input/output format, hooks, permissions, tools, directories, settings/MCP/plugin config, model/effort/instruction flags and cwd. Codex-owned flags include `app-server`, listen/stdio, cwd, sandbox, approval, bypass/danger flags, `-c`/config, profile, strict-config, auth/remote transport and thread/turn payload fields. ACP-owned flags include `acp`, cwd, transport, config/env source, model/mode/variant, permission/auto-approval, and process cwd; never allow `run`, `serve` or TUI subcommands.
+  - Custom environment remains a separately reviewed, explicit per-runtime allowlist; reject secret-looking keys and never log values. Never log instructions or put raw provider JSON into React.
 
 **Model catalog:**
 
-- New `runtime.models { runtimeId, refresh? }` RPC with a 60 s cache:
-  - Codex: `codex debug models`, which returns slugs, reasoning levels, default level and service tiers.
-  - Claude: stream-json `list_models` where supported, otherwise a static fallback marked `fallback: true`.
-  - OpenCode: `opencode models --verbose`.
-- Typing a custom model ID is always allowed.
+- **Bloblex design assumption:** add `runtime.models { runtimeId, refresh? }` RPC with a 60 s cache; the TTL is a local caching choice, not a verified CLI capability.
+  - Codex: prefer authenticated app-server `model/list`, including per-model effort choices/defaults and service tiers; retain `codex debug models` only as a diagnostics fallback. The RPC exists in the installed schema but its response has not yet been live-compared with `debug models`.
+  - Claude: optional stream-json `list_models` control-request probe; headless support is unproven. If unavailable or unsuccessful, return a static catalog with `fallback: true`; keep custom IDs editable.
+  - OpenCode: `opencode models --verbose`, including provider/model metadata and each model's optional variant keys. Hide the reasoning selector for models without variants; ACP selection is gated below.
+- Keep custom IDs editable for Claude as a recovery path for catalog gaps. Codex choices come from its advertised per-model catalog; OpenCode choices come from the verbose model list. Do not imply arbitrary IDs were provider-validated.
 
 **Concurrency:**
 
-- The daemon enforces per-blob `max_concurrency` and a separate global active-turn cap, rejecting work beyond either limit with an actionable error. Queueing is deferred.
+- **Plan requirement (not an installed CLI capability claim):** the daemon enforces per-blob `max_concurrency` and a separate global active-turn cap, rejecting work beyond either limit with an actionable error. Queueing is deferred.
 
 **Usage capture:**
 
-- Add OpenCode/ACP usage where the protocol emits it; otherwise count the run as unreported.
-- Set `agent_id` on every usage event.
+- Claude stream-json `result` includes usage/model/cost fields, but only an API-error result was captured. Treat its zero values as unknown for a successful turn until a successful result-event check confirms semantics; do not synthesize zero.
+- Codex usage comes from `thread/tokenUsage/updated`; that notification has token/context breakdown and thread/turn IDs, but no model. Associate model from the session/turn metadata.
+- OpenCode ACP `session/update` includes `usage_update { used, size, cost: { amount, currency } }`. Store `used`/`size` as context-window figures, not token buckets; the observed `cost` appears cumulative for the session, so store it as provider-reported cost and never sum repeated cumulative snapshots. Verify the cumulative behavior on a successful run before deriving deltas or presenting finalized totals. Input/output/cache token buckets remain unknown, never zero.
+- **Data-integrity rule:** mark a run unreported only when no usable provider usage/cost evidence exists for the requested metric; context-window figures alone do not make token totals known.
+- **Phase 2a/2b storage requirement:** set `agent_id` on every usage event from its persisted session when available.
 
-**Gate:** real Codex and Claude sessions start with each setting and the `exec_snapshot` shows it, verified by provider-side evidence such as the model name in the usage events. The tests must assert argv, JSON-RPC and env per adapter. Persist each turn's actual `exec_snapshot`; retain the first and latest snapshots on its session for display.
+**Phase 2b entry gate:** the following PARTIAL findings require a live integration check before the UI claims the corresponding setting or data works:
+
+- Claude: confirm the prompt-file flag at spawn (including fallback behavior), a successful non-error result-event's usage/model/cost semantics, requested effort application, and changed instructions after resume/compaction.
+- Codex: verify nested `config.model_reasoning_effort` acceptance if used, and verify instructions are effectively retained/applied across resume; verify `model/list` against `debug models` before any assumption that catalogs match.
+- OpenCode ACP: verify `session/set_config_option` in a live flow and verify variant selection end to end. Selection remains unproven even though model option changes passed a no-turn check.
+
+For every adapter, separate request/launch evidence from provider-side applied-setting evidence. **Test-plan requirement:** tests assert argv, JSON-RPC and environment per adapter. **Plan requirement:** persist each turn's actual `exec_snapshot`; retain the first and latest snapshots on its session for display.
 
 ## Phase 3: Blob roster and editor (UI)
 
@@ -193,7 +207,7 @@ This phase depends on Phase 2a and the intervening native smoke gate; it does no
   - Totals: cost, tokens (input, output, cache read, cache write), run time, runs and failed runs.
   - A series per bucket for each of those metrics.
   - A leaderboard per blob: tokens, cost, time, runs, `unreportedRuns` and `unpricedModels`.
-- Runs are turns. Run time is `completed_at - created_at`, and a failed run is a turn in the `error` state.
+- Runs are turns. Run time is `completed_at - created_at`, and a failed run is a turn in the `error` state. OpenCode ACP `usage_update` provides context-window `used`/`size` and cost that appears cumulative for the session, but no input/output/cache buckets. Analytics must preserve those bucket values as unknown, avoid summing repeated cumulative cost snapshots, and gate derived totals on a successful check of cumulative semantics.
 
 **Cost rule:**
 

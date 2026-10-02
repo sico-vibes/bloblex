@@ -181,6 +181,9 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .settings-nav button { min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 8px; color: var(--muted); border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 12px; }
 .settings-nav button:hover { color: var(--text); background: #ffffff08; }
 .settings-nav button.selected { color: var(--text); background: #2a2d34; }
+.settings-sheet button:focus-visible, .settings-sheet input:focus-visible, .settings-sheet select:focus-visible, .settings-sheet textarea:focus-visible, .icon-button:focus-visible { outline: 2px solid var(--blue-border); outline-offset: 2px; }
+.settings-about { padding: 12px 14px; display: grid; gap: 6px; }
+.settings-about p { margin: 0; color: #d8dbe2; font-size: 12px; }
 .settings-content { padding: 18px 23px 28px; overflow: auto; scrollbar-width: thin; scrollbar-color: #383c44 transparent; }
 .settings-section { max-width: 620px; }
 .settings-section > h3 { margin: 2px 0 12px; color: #e1e3e9; font-size: 14px; font-weight: 650; }
@@ -267,4 +270,5 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  .settings-sheet { animation: none; }
 }

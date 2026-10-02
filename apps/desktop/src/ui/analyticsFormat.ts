@@ -1,4 +1,4 @@
-import type { AnalyticsBucket, AnalyticsCost, AnalyticsMetric, AnalyticsRangeDays, AnalyticsSeriesPoint, AnalyticsTokens, UsageAnalytics, UsageAnalyticsRequest } from '../analyticsTypes'
+import type { AnalyticsBucket, AnalyticsCost, AnalyticsLeaderboardRow, AnalyticsMetric, AnalyticsRangeDays, AnalyticsSeriesPoint, AnalyticsTokens, UsageAnalytics, UsageAnalyticsRequest } from '../analyticsTypes'
 import { moneyMinor } from './usagePresentation'
 
 export function resolvedTimeZone(): string {
@@ -277,8 +277,307 @@ export function leaderboardFractions(costs: readonly (number | null)[]): Array<n
   })
 }
 
+/** Shown only when `cancelledRuns` was sent. A missing count is not rendered as 0. */
+export function formatCancelledCount(value: number | null | undefined): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
+  const formatted = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
+  return `${formatted} cancelled`
+}
+
+export function formatUpdatedClock(instant: Date, timeZone: string): string {
+  if (Number.isNaN(instant.getTime())) return 'Unknown time'
+  const format = (zone: string) => new Intl.DateTimeFormat('en-GB', {
+    timeZone: zone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(instant)
+  try {
+    return format(timeZone)
+  } catch {
+    try { return format('UTC') } catch { return 'Unknown time' }
+  }
+}
+
+export const ANALYTICS_STORAGE_KEY = 'bloblex.analytics.view'
+
+export interface AnalyticsViewPrefs {
+  days: AnalyticsRangeDays
+  bucket: AnalyticsBucket
+  metric: AnalyticsMetric
+  panel: 'overview' | 'errors'
+  projectKey: string
+}
+
+export const DEFAULT_ANALYTICS_PREFS: AnalyticsViewPrefs = {
+  days: 7,
+  bucket: 'day',
+  metric: 'tokens',
+  panel: 'overview',
+  projectKey: '',
+}
+
+export function readAnalyticsPrefs(): AnalyticsViewPrefs {
+  try {
+    if (typeof localStorage === 'undefined') return { ...DEFAULT_ANALYTICS_PREFS }
+    const raw = localStorage.getItem(ANALYTICS_STORAGE_KEY)
+    if (!raw) return { ...DEFAULT_ANALYTICS_PREFS }
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ...DEFAULT_ANALYTICS_PREFS }
+    const row = parsed as Record<string, unknown>
+    const days: AnalyticsRangeDays = row.days === 30 || row.days === 90 || row.days === 7 ? row.days : 7
+    const metric: AnalyticsMetric = row.metric === 'cost' || row.metric === 'time' || row.metric === 'runs' || row.metric === 'tokens' ? row.metric : 'tokens'
+    return {
+      days,
+      bucket: row.bucket === 'week' ? 'week' : 'day',
+      metric,
+      panel: row.panel === 'errors' ? 'errors' : 'overview',
+      projectKey: typeof row.projectKey === 'string' ? row.projectKey : '',
+    }
+  } catch {
+    return { ...DEFAULT_ANALYTICS_PREFS }
+  }
+}
+
+export function writeAnalyticsPrefs(prefs: AnalyticsViewPrefs): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify({
+      days: prefs.days,
+      bucket: prefs.bucket,
+      metric: prefs.metric,
+      panel: prefs.panel,
+      projectKey: prefs.projectKey,
+    }))
+  } catch {
+    /* storage can be disabled, full, or blocked */
+  }
+}
+
+export const FAILURE_CLASS_ORDER = ['provider', 'permission', 'cancelled', 'timeout', 'budget', 'config', 'other'] as const
+export type FailureClassId = (typeof FAILURE_CLASS_ORDER)[number]
+
+const FAILURE_CLASS_LABEL: Record<FailureClassId, string> = {
+  provider: 'Provider error',
+  permission: 'Permission denied',
+  cancelled: 'Cancelled',
+  timeout: 'Timeout',
+  budget: 'Budget stop',
+  config: 'Config/unsupported',
+  other: 'Other',
+}
+
+export function normalizeFailureClass(value: string | undefined): FailureClassId {
+  const text = value?.trim().toLowerCase() ?? ''
+  return (FAILURE_CLASS_ORDER as readonly string[]).includes(text) ? text as FailureClassId : 'other'
+}
+
+export function failureClassLabel(value: string | undefined): string {
+  return FAILURE_CLASS_LABEL[normalizeFailureClass(value)]
+}
+
+export interface FailureMixSegment {
+  id: FailureClassId
+  label: string
+  count: number
+}
+
+export function failureMix(errors: readonly { failureClass?: string }[]): FailureMixSegment[] {
+  const counts = new Map<FailureClassId, number>(FAILURE_CLASS_ORDER.map((id) => [id, 0]))
+  for (const error of errors) {
+    const raw = error.failureClass?.trim() ?? ''
+    const id = raw ? normalizeFailureClass(raw) : 'other'
+    counts.set(id, (counts.get(id) ?? 0) + 1)
+  }
+  return FAILURE_CLASS_ORDER.map((id) => ({ id, label: FAILURE_CLASS_LABEL[id], count: counts.get(id) ?? 0 }))
+}
+
+export function failureMixSummary(segments: readonly FailureMixSegment[]): string {
+  const parts = segments.map((segment) => `${segment.label} ${formatExactNumber(segment.count)}`)
+  return `Failure classes. ${parts.join(', ')}.`
+}
+
+export interface AgentIdentity {
+  id: string
+  name?: string
+  archived?: boolean
+}
+
+/** Null ids stay unassigned. Archived ids and ids missing from the roster fold to Other. */
+export function analyticsAgentKey(agentId: string | null, agents: readonly AgentIdentity[]): string {
+  if (!agentId) return 'unassigned'
+  const agent = agents.find((item) => item.id === agentId)
+  if (!agent || agent.archived) return 'other'
+  return agentId
+}
+
+export interface LeaderboardViewRow {
+  key: string
+  name: string
+  kind: 'agent' | 'unassigned' | 'other'
+  agentId: string | null
+  tokens: AnalyticsTokens
+  tokensLowerBound: boolean
+  cost: AnalyticsCost
+  runTimeMs: number
+  runs: number
+  failedRuns: number
+  cancelledRuns?: number
+  unreportedRuns: number
+  unpricedModels: string[]
+}
+
+function sumNullable(values: readonly (number | null)[]): { value: number | null; partial: boolean } {
+  const known = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  if (!known.length) return { value: null, partial: false }
+  return { value: known.reduce((sum, value) => sum + value, 0), partial: known.length !== values.length }
+}
+
+function mergeTokens(rows: readonly AnalyticsTokens[]): { tokens: AnalyticsTokens; partial: boolean } {
+  const keys = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'total'] as const
+  const tokens: AnalyticsTokens = { input: null, output: null, cacheRead: null, cacheWrite: null, reasoning: null, total: null }
+  let partial = false
+  for (const key of keys) {
+    const summed = sumNullable(rows.map((row) => row[key]))
+    tokens[key] = summed.value
+    partial = partial || summed.partial
+  }
+  return { tokens, partial }
+}
+
+function mergeCost(rows: readonly AnalyticsCost[]): AnalyticsCost {
+  const currencies = [...new Set(rows.map((row) => row.currency).filter((currency) => currency.trim()))]
+  const mixed = currencies.length > 1
+  const currency = currencies.length === 1 ? currencies[0] ?? '' : ''
+  const amount = sumNullable(rows.map((row) => row.amountMinor))
+  const actual = sumNullable(rows.map((row) => row.actualMinor))
+  const estimated = sumNullable(rows.map((row) => row.estimatedMinor))
+  const partial = !mixed && (amount.partial || actual.partial || estimated.partial)
+  return {
+    amountMinor: mixed ? null : amount.value,
+    currency,
+    actualMinor: mixed ? null : actual.value,
+    estimatedMinor: mixed ? null : estimated.value,
+    lowerBound: mixed || partial || rows.some((row) => row.lowerBound),
+  }
+}
+
+function mergeCancelled(rows: readonly AnalyticsLeaderboardRow[]): number | undefined {
+  if (rows.some((row) => typeof row.cancelledRuns !== 'number' || !Number.isFinite(row.cancelledRuns))) return undefined
+  return rows.reduce((sum, row) => sum + (row.cancelledRuns ?? 0), 0)
+}
+
+function leaderboardIdentity(key: string, group: readonly AnalyticsLeaderboardRow[], agents: readonly AgentIdentity[]): { name: string; kind: LeaderboardViewRow['kind']; agentId: string | null } {
+  if (key === 'other') return { name: 'Other', kind: 'other', agentId: null }
+  if (key === 'unassigned') return { name: 'Unassigned sessions', kind: 'unassigned', agentId: null }
+  const agent = agents.find((item) => item.id === key)
+  const named = agent?.name?.trim() || group.find((row) => row.agentName?.trim())?.agentName?.trim() || 'Blob'
+  return { name: named, kind: 'agent', agentId: key }
+}
+
+function mergeLeaderboardGroup(key: string, group: readonly AnalyticsLeaderboardRow[], agents: readonly AgentIdentity[]): LeaderboardViewRow {
+  const identity = leaderboardIdentity(key, group, agents)
+  if (group.length === 1 && key !== 'other') {
+    const row = group[0]
+    if (row) return {
+      key,
+      name: identity.name,
+      kind: identity.kind,
+      agentId: identity.agentId,
+      tokens: row.tokens,
+      tokensLowerBound: row.cost.lowerBound,
+      cost: row.cost,
+      runTimeMs: row.runTimeMs,
+      runs: row.runs,
+      failedRuns: row.failedRuns,
+      ...(typeof row.cancelledRuns === 'number' ? { cancelledRuns: row.cancelledRuns } : {}),
+      unreportedRuns: row.unreportedRuns,
+      unpricedModels: [...row.unpricedModels],
+    }
+  }
+  const tokens = mergeTokens(group.map((row) => row.tokens))
+  const cost = mergeCost(group.map((row) => row.cost))
+  const cancelledRuns = mergeCancelled(group)
+  const unpricedModels = [...new Set(group.flatMap((row) => row.unpricedModels))]
+  return {
+    key,
+    name: identity.name,
+    kind: identity.kind,
+    agentId: identity.agentId,
+    tokens: tokens.tokens,
+    tokensLowerBound: cost.lowerBound || tokens.partial,
+    cost,
+    runTimeMs: group.reduce((sum, row) => sum + row.runTimeMs, 0),
+    runs: group.reduce((sum, row) => sum + row.runs, 0),
+    failedRuns: group.reduce((sum, row) => sum + row.failedRuns, 0),
+    ...(cancelledRuns === undefined ? {} : { cancelledRuns }),
+    unreportedRuns: group.reduce((sum, row) => sum + row.unreportedRuns, 0),
+    unpricedModels,
+  }
+}
+
+function compareLeaderboard(left: LeaderboardViewRow, right: LeaderboardViewRow): number {
+  const leftMissing = left.cost.amountMinor === null
+  const rightMissing = right.cost.amountMinor === null
+  if (leftMissing !== rightMissing) return leftMissing ? 1 : -1
+  if (!leftMissing && !rightMissing && left.cost.amountMinor !== right.cost.amountMinor) {
+    return (right.cost.amountMinor ?? 0) - (left.cost.amountMinor ?? 0)
+  }
+  return right.runs - left.runs || left.name.localeCompare(right.name)
+}
+
+export function foldLeaderboard(rows: readonly AnalyticsLeaderboardRow[], agents: readonly AgentIdentity[]): LeaderboardViewRow[] {
+  const groups = new Map<string, AnalyticsLeaderboardRow[]>()
+  for (const row of rows) {
+    const key = analyticsAgentKey(row.agentId, agents)
+    const existing = groups.get(key)
+    if (existing) existing.push(row)
+    else groups.set(key, [row])
+  }
+  return [...groups.entries()]
+    .map(([key, group]) => mergeLeaderboardGroup(key, group, agents))
+    .sort(compareLeaderboard)
+}
+
+export const OFFENDER_RATE_MIN_RUNS = 5
+
+export interface OffenderModel {
+  key: string
+  name: string
+  count: number
+  runs: number | null
+  rate: number | null
+}
+
+export function rankOffenders(
+  errors: readonly { agentId: string | null }[],
+  leaderboard: readonly LeaderboardViewRow[],
+  agents: readonly AgentIdentity[],
+): OffenderModel[] {
+  const counts = new Map<string, number>()
+  for (const error of errors) {
+    const key = analyticsAgentKey(error.agentId, agents)
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return [...counts.entries()].map(([key, count]) => {
+    const board = leaderboard.find((row) => row.key === key)
+    const runs = board ? board.runs : null
+    const rate = runs !== null && runs >= OFFENDER_RATE_MIN_RUNS ? count / runs : null
+    const name = board?.name ?? (key === 'unassigned' ? 'Unassigned sessions' : key === 'other' ? 'Other' : 'Blob')
+    return { key, name, count, runs, rate }
+  }).sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+}
+
+export function offenderRateLabel(offender: Pick<OffenderModel, 'rate' | 'runs'>): string {
+  if (offender.rate === null || offender.runs === null || offender.runs < OFFENDER_RATE_MIN_RUNS) {
+    return `Rate needs at least ${OFFENDER_RATE_MIN_RUNS} runs`
+  }
+  return new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 }).format(offender.rate)
+}
+
 export function isEmptyAnalytics(data: UsageAnalytics): boolean {
-  return data.totals.runs === 0 && data.totals.activeRuns === 0 && data.totals.failedRuns === 0 && data.leaderboard.length === 0 && data.errors.length === 0
+  const cancelled = typeof data.totals.cancelledRuns === 'number' ? data.totals.cancelledRuns : 0
+  return data.totals.runs === 0 && data.totals.activeRuns === 0 && data.totals.failedRuns === 0 && cancelled === 0 && data.leaderboard.length === 0 && data.errors.length === 0
 }
 
 export function analyticsErrorText(reason: unknown): string {
@@ -294,6 +593,30 @@ export function analyticsErrorText(reason: unknown): string {
 function numberOrNull(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null
   return value
+}
+
+function optionalCount(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined
+  return value
+}
+
+function cancelledField(value: unknown): { cancelledRuns: number } | Record<string, never> {
+  const cancelledRuns = optionalCount(value)
+  return cancelledRuns === undefined ? {} : { cancelledRuns }
+}
+
+function safeReason(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  if (!text || text.startsWith('{') || text.startsWith('[')) return null
+  return text.slice(0, 240)
+}
+
+function readFailureClass(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const text = value.trim()
+  if (!text || text.startsWith('{') || text.startsWith('[')) return undefined
+  return text.slice(0, 64)
 }
 
 function stringList(value: unknown): string[] {
@@ -357,6 +680,7 @@ export function normalizeAnalytics(value: unknown): UsageAnalytics | null {
       runTimeMs: numberOrNull(item.runTimeMs) ?? 0,
       runs: numberOrNull(item.runs) ?? 0,
       failedRuns: numberOrNull(item.failedRuns) ?? 0,
+      ...cancelledField(item.cancelledRuns),
     }]
   }) : []
   const leaderboard = Array.isArray(row.leaderboard) ? row.leaderboard.flatMap((entry) => {
@@ -376,6 +700,7 @@ export function normalizeAnalytics(value: unknown): UsageAnalytics | null {
       runTimeMs: numberOrNull(item.runTimeMs) ?? 0,
       runs: numberOrNull(item.runs) ?? 0,
       failedRuns: numberOrNull(item.failedRuns) ?? 0,
+      ...cancelledField(item.cancelledRuns),
       unreportedRuns: numberOrNull(item.unreportedRuns) ?? 0,
       unpricedModels: stringList(item.unpricedModels),
     }]
@@ -384,13 +709,15 @@ export function normalizeAnalytics(value: unknown): UsageAnalytics | null {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
     const item = entry as Record<string, unknown>
     if (typeof item.turnId !== 'string' || typeof item.sessionId !== 'string' || typeof item.at !== 'string') return []
-    const message = typeof item.message === 'string' && item.message.trim() ? item.message.trim() : 'The run failed.'
+    const message = safeReason(item.message) ?? safeReason(item.reason) ?? 'The run failed.'
+    const failureClass = readFailureClass(item.failureClass)
     return [{
       turnId: item.turnId,
       sessionId: item.sessionId,
       agentId: typeof item.agentId === 'string' ? item.agentId : null,
       at: item.at,
       message,
+      ...(failureClass ? { failureClass } : {}),
     }]
   }).slice(0, 50) : []
   const subscriptions = Array.isArray(row.subscriptions) ? row.subscriptions.flatMap((entry) => {
@@ -414,6 +741,7 @@ export function normalizeAnalytics(value: unknown): UsageAnalytics | null {
       runTimeMs: numberOrNull(totalsRow.runTimeMs) ?? 0,
       runs: numberOrNull(totalsRow.runs) ?? 0,
       failedRuns: numberOrNull(totalsRow.failedRuns) ?? 0,
+      ...cancelledField(totalsRow.cancelledRuns),
       activeRuns: numberOrNull(totalsRow.activeRuns) ?? 0,
       unreportedRuns: numberOrNull(totalsRow.unreportedRuns) ?? 0,
       unpricedModels: stringList(totalsRow.unpricedModels),

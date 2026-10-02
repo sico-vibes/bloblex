@@ -7,6 +7,7 @@
 .blob-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--raised); }
 .blob-tabs button { flex: 1; min-height: 30px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-2); font-size: 12px; }
 .blob-tabs button[aria-selected="true"] { color: var(--ink); background: var(--card); }
+.blob-page button:focus-visible, .blob-page input:focus-visible, .blob-page select:focus-visible, .blob-page textarea:focus-visible, .blob-dialog button:focus-visible { outline: 2px solid var(--blue-border); outline-offset: 2px; }
 .blob-card { padding: 16px; display: grid; gap: 12px; border: 1px solid var(--hairline); border-radius: 16px; background: var(--card); }
 .blob-card h3 { margin: 0; font-size: 14px; font-weight: 650; }
 .blob-profile { display: flex; align-items: center; gap: 16px; }

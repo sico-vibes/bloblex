@@ -26,6 +26,8 @@ export interface AnalyticsSeriesPoint {
   runTimeMs: number
   runs: number
   failedRuns: number
+  /** Present only when the daemon counted cancelled turns. Absence is not zero. */
+  cancelledRuns?: number
 }
 
 export interface AnalyticsLeaderboardRow {
@@ -37,6 +39,8 @@ export interface AnalyticsLeaderboardRow {
   runTimeMs: number
   runs: number
   failedRuns: number
+  /** Present only when the daemon counted cancelled turns. Absence is not zero. */
+  cancelledRuns?: number
   unreportedRuns: number
   unpricedModels: string[]
 }
@@ -47,6 +51,13 @@ export interface AnalyticsErrorRow {
   agentId: string | null
   at: string
   message: string
+  /**
+   * Coarse class when the daemon persisted one.
+   * Known values: provider, permission, cancelled, timeout, budget, config, other.
+   * Any other string is displayed as Other. Absence leaves the turn unclassified in the list
+   * and counted under Other in the mix.
+   */
+  failureClass?: string
 }
 
 export interface AnalyticsSubscription {
@@ -62,6 +73,8 @@ export interface AnalyticsTotals {
   runTimeMs: number
   runs: number
   failedRuns: number
+  /** Present only when the daemon counted cancelled turns. Absence is not zero. */
+  cancelledRuns?: number
   activeRuns: number
   unreportedRuns: number
   unpricedModels: string[]

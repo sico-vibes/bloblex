@@ -33,6 +33,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": false,
     "category": "DeveloperTool",
     "shortDescription": "A local control plane for coding agents",
     "longDescription": "Manage local coding-agent runtimes and sessions from one desktop app.",

@@ -5,6 +5,7 @@ import type { Agent, Runtime, Snapshot } from '../types'
 import { labelize, providerColor } from '../types'
 import { parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
 import { companionMonitorOptions, currentCompanionMonitor, inDesktop, permissionsPolicyGet, rpc, setCloseToTray, setCompanionMonitor, setCompanionVisibility } from '../tauri'
+import { appVersion } from '../appRelease'
 import { useDialogAccessibility } from './dialogFocus'
 
 export type SettingsPageId = 'General' | 'Agents' | 'Runtimes' | 'Permissions'
@@ -185,8 +186,8 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   const agents = (snapshot?.agents ?? []).filter((agent) => !agent.archived)
   const exceptions = (policy?.perAgent ?? []).filter((row) => row.effectiveMode !== 'ask')
 
-  return <div className="sheet-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-    <header className="settings-header"><div><p className="eyebrow">BLOBLEX</p><h2 id="settings-title">Settings</h2></div><button className="icon-button" data-dialog-initial-focus aria-label="Close settings" onClick={onClose}><X size={17} /></button></header>
+  return <div className="sheet-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
+    <header className="settings-header"><div><p className="eyebrow">BLOBLEX</p><h2 id="settings-title">Settings</h2></div><button className="icon-button" data-dialog-initial-focus aria-label="Close settings" onClick={onClose}><X size={17} aria-hidden="true" /></button></header>
     <div className="settings-layout"><nav className="settings-nav" aria-label="Settings pages">{PAGES.map((item) => <button className={page === item.id ? 'selected' : ''} key={item.id} aria-current={page === item.id ? 'page' : undefined} onClick={() => { setPage(item.id); setFormError(null); setNotice(null) }}><item.icon size={15} aria-hidden="true" />{item.label}</button>)}</nav>
       <div className="settings-content">
         {formError && <div className="inline-error settings-error" role="alert"><ShieldAlert size={15} /><span>{formError}</span></div>}
@@ -212,6 +213,14 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
             <CardRow label="Sounds" hint="Optional original cues. Muted until you enable them.">
               <button className={`toggle ${soundsEnabled ? 'on' : ''}`} role="switch" aria-label="Companion sounds" aria-checked={soundsEnabled} onClick={() => void setSounds(!soundsEnabled)} disabled={saving}><i /></button>
             </CardRow>
+          </SettingsGroup>
+          <SettingsGroup title="About">
+            <div className="settings-about" data-settings-about>
+              <p>Version: {appVersion || 'Unknown'}</p>
+              <p>Channel: local build</p>
+              <p>Updates: not configured</p>
+              <p>Signing: not configured</p>
+            </div>
           </SettingsGroup>
           <SettingsGroup title="Editor">
             <form className="settings-card-form" onSubmit={(event) => void saveEditor(event)}>

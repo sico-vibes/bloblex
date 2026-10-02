@@ -113,7 +113,7 @@ export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, onConfir
 }) {
   const ref = useDialogAccessibility(onCancel)
   return <div className="sheet-backdrop blob-dialog-backdrop">
-    <section ref={ref} className="blob-dialog" role="dialog" aria-modal="true" aria-labelledby="blob-dialog-title">
+    <section ref={ref} className="blob-dialog" role="dialog" aria-modal="true" aria-labelledby="blob-dialog-title" tabIndex={-1}>
       <h2 id="blob-dialog-title">{title}</h2>
       {body && <p>{body}</p>}
       <div className="blob-dialog-actions">

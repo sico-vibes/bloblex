@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
-import { act, type ReactNode } from 'react'
+import { act, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, Runtime, Session } from '../types'
 import type { UsageAnalytics, UsageAnalyticsRequest } from '../analyticsTypes'
 import { createDraft, draftFromAgent, executionFromAgent } from './agentForm'
 import { analyticsFixtures } from './analyticsFixtures'
-import { buildAnalyticsRequest, resolvedTimeZone } from './analyticsFormat'
+import { ANALYTICS_STORAGE_KEY, OFFENDER_RATE_MIN_RUNS, buildAnalyticsRequest, resolvedTimeZone } from './analyticsFormat'
+import { analyticsProjectChoices } from './rosterSelectors'
 
 const fetchUsageAnalytics = vi.hoisted(() => vi.fn())
 
@@ -100,6 +101,7 @@ function requests(): UsageAnalyticsRequest[] {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  localStorage.removeItem(ANALYTICS_STORAGE_KEY)
   fetchUsageAnalytics.mockReset()
   fetchUsageAnalytics.mockResolvedValue(analyticsFixtures.full)
 })
@@ -356,5 +358,223 @@ describe('analytics view', () => {
     await click(buttonNamed(view.host, 'Errors'))
     expect(view.host.querySelector('[role="tabpanel"]')?.textContent).toContain('safe short text')
     expect(view.host.textContent).not.toContain('SECRET_PROMPT')
+  })
+
+  it('shows a cancelled count only when the daemon sent one', async () => {
+    fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.partial)
+    const absent = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
+    await absent.flush()
+    const absentRuns = absent.host.querySelector('[data-analytics-card="runs"]')
+    expect(absentRuns?.textContent).toContain('1 failed')
+    expect(absentRuns?.textContent?.toLowerCase()).not.toContain('cancelled')
+    expect(absentRuns?.getAttribute('aria-label')?.toLowerCase()).not.toContain('cancelled')
+    absent.unmount()
+
+    fetchUsageAnalytics.mockResolvedValueOnce({
+      ...analyticsFixtures.full,
+      totals: { ...analyticsFixtures.full.totals, cancelledRuns: 4 },
+      leaderboard: analyticsFixtures.full.leaderboard.map((row, index) => index === 0 ? { ...row, cancelledRuns: 4 } : row),
+    })
+    const present = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} connected now={now} />)
+    await present.flush()
+    expect(present.host.querySelector('[data-analytics-card="runs"]')?.textContent).toContain('4 cancelled')
+    expect(present.host.querySelector('[data-leader-kind="agent"]')?.textContent).toContain('4 cancelled')
+    const without = [...present.host.querySelectorAll('[data-leader-kind="agent"]')].find((row) => !row.textContent?.toLowerCase().includes('cancelled'))
+    expect(without?.textContent?.toLowerCase()).not.toContain('cancelled')
+  })
+
+  it('folds archived and unknown blobs into Other and shows per-row notes', async () => {
+    const codexRow = analyticsFixtures.full.leaderboard[0]
+    const claudeRow = analyticsFixtures.full.leaderboard[1]
+    if (!codexRow || !claudeRow) throw new Error('fixture rows missing')
+    fetchUsageAnalytics.mockResolvedValueOnce({
+      ...analyticsFixtures.full,
+      leaderboard: [
+        { ...codexRow, cancelledRuns: 2, unreportedRuns: 2, unpricedModels: ['provider/model'], cost: { ...codexRow.cost, lowerBound: true } },
+        { ...claudeRow, agentId: 'archived-claude', agentName: 'Claude', runs: 3, failedRuns: 1, unreportedRuns: 1, unpricedModels: ['other/model'], cost: { ...claudeRow.cost, lowerBound: true } },
+        { ...claudeRow, agentId: 'missing', agentName: 'Ghost', runs: 1, failedRuns: 1, unreportedRuns: 0, unpricedModels: [], cost: { ...claudeRow.cost, amountMinor: null, actualMinor: null, estimatedMinor: null, lowerBound: false } },
+      ],
+    })
+    const archived = agent({ id: 'archived-claude', name: 'Claude', color: 'coral', runtimeId: 'runtime-claude', archived: true })
+    const view = mount(<AnalyticsView sessions={sessions} agents={[codex, archived]} connected now={now} />)
+    await view.flush()
+    const rows = [...view.host.querySelectorAll('.analytics-leader-row')]
+    expect(rows.map((row) => row.querySelector('strong')?.textContent)).toEqual(['Codex', 'Other'])
+    const leader = view.host.querySelector('.analytics-leader')
+    expect(leader?.textContent).not.toContain('Ghost')
+    expect(leader?.textContent).not.toContain('Claude')
+    const other = view.host.querySelector('[data-leader-kind="other"]')
+    expect(other?.textContent).toContain('1 run did not report usage')
+    expect(other?.textContent).toContain('Unpriced models: other/model')
+    expect(other?.textContent).toContain('≥')
+    expect(other?.textContent?.toLowerCase()).not.toContain('cancelled')
+    expect(view.host.querySelector('[data-leader-kind="agent"]')?.textContent).toContain('2 runs did not report usage')
+    expect(view.host.querySelector('[data-leader-kind="agent"]')?.textContent).toContain('≥')
+  })
+
+  it('ranks error classes, withholds thin rates, and drills into safe reasons', async () => {
+    const codexRow = analyticsFixtures.full.leaderboard[0]
+    const claudeRow = analyticsFixtures.full.leaderboard[1]
+    if (!codexRow || !claudeRow) throw new Error('fixture rows missing')
+    fetchUsageAnalytics.mockResolvedValueOnce({
+      ...analyticsFixtures.full,
+      leaderboard: [
+        { ...codexRow, runs: 20, failedRuns: 3 },
+        { ...claudeRow, agentId: 'missing', agentName: 'Ghost', runs: 2, failedRuns: 1 },
+      ],
+      errors: [
+        { turnId: 'p1', sessionId: 's', agentId: 'agent-codex', at: '2026-10-01T15:04:00.000Z', message: 'Provider stopped the turn.', failureClass: 'provider' },
+        { turnId: 'p2', sessionId: 's', agentId: 'agent-codex', at: '2026-10-01T15:05:00.000Z', message: 'Provider stopped another turn.', failureClass: 'provider' },
+        { turnId: 'p3', sessionId: 's', agentId: 'agent-codex', at: '2026-10-01T15:06:00.000Z', message: 'Provider stopped a third turn.', failureClass: 'provider' },
+        { turnId: 'u1', sessionId: 's', agentId: 'missing', at: '2026-10-01T12:00:00.000Z', message: 'The turn stopped.', failureClass: 'nope-class', prompt: 'SECRET_PROMPT', raw: { error: 'SECRET_JSON' } },
+        { turnId: 'n1', sessionId: 's', agentId: null, at: '2026-10-01T11:00:00.000Z', message: 'Unassigned turn failed.' },
+      ],
+    })
+    const view = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
+    await view.flush()
+    await click(buttonNamed(view.host, 'Errors'))
+    const mix = view.host.querySelector('[data-analytics-mix]')
+    expect(mix?.getAttribute('aria-label')).toContain('Provider error 3')
+    expect(mix?.getAttribute('aria-label')).toContain('Other 2')
+    expect(mix?.getAttribute('aria-label')).not.toContain('nope-class')
+    expect(view.host.textContent).toContain('Provider error 3')
+    expect(view.host.textContent).toContain('Permission denied 0')
+    expect(view.host.textContent).not.toContain('nope-class')
+    expect(view.host.textContent).not.toContain('SECRET_PROMPT')
+    expect(view.host.textContent).not.toContain('SECRET_JSON')
+    const offenders = [...view.host.querySelectorAll('[data-offender]')].map((node) => node.getAttribute('data-offender'))
+    expect(offenders).toEqual(['agent-codex', 'other', 'unassigned'])
+    const codexButton = view.host.querySelector('[data-offender="agent-codex"]')
+    const otherButton = view.host.querySelector('[data-offender="other"]')
+    expect(codexButton?.getAttribute('aria-label')).toContain(new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 }).format(3 / 20))
+    expect(otherButton?.textContent).toContain(`Rate needs at least ${OFFENDER_RATE_MIN_RUNS} runs`)
+    expect(otherButton?.textContent).not.toContain('%')
+    await click(otherButton)
+    const turns = view.host.querySelector('[data-analytics-turns]')
+    expect(turns?.textContent).toContain('The turn stopped.')
+    expect(turns?.textContent).toContain('Other')
+    expect(turns?.textContent).not.toContain('Provider stopped the turn.')
+    expect(turns?.querySelector('[data-failure-class="other"]')?.textContent).toBe('Other')
+    expect(view.host.textContent).not.toContain('Ghost')
+  })
+
+  it('shows the time zone and update clock, a skeleton, and a refresh', async () => {
+    let resolveLoad: ((value: unknown) => void) | undefined
+    fetchUsageAnalytics.mockImplementationOnce(() => new Promise((resolve) => { resolveLoad = resolve }))
+    const view = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
+    expect(view.host.querySelector('[data-analytics-skeleton="true"]')?.getAttribute('aria-label')).toBe('Loading analytics')
+    expect(view.host.querySelector('[data-analytics-card="cost"]')).toBeNull()
+    await act(async () => { resolveLoad?.(analyticsFixtures.full) })
+    await view.flush()
+    expect(view.host.querySelector('[data-analytics-skeleton="true"]')).toBeNull()
+    expect(view.host.textContent).toContain('Time zone Europe/London')
+    expect(view.host.textContent).toContain('Updated 13:00')
+    const calls = fetchUsageAnalytics.mock.calls.length
+    await click(buttonNamed(view.host, 'Refresh'))
+    await view.flush()
+    expect(fetchUsageAnalytics.mock.calls.length).toBe(calls + 1)
+    expect(view.host.textContent).toContain('Updated 13:00')
+  })
+
+  it('persists range, bucket, metric, and tab, and resets a missing project to All', async () => {
+    localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify({ days: 90, bucket: 'week', metric: 'cost', panel: 'errors', projectKey: 'c:\\missing-project' }))
+    const view = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} connected now={now} />)
+    await view.flush()
+    const tz = resolvedTimeZone()
+    expect(requests()[0]).toEqual(buildAnalyticsRequest({ days: 90, bucket: 'week', now, timeZone: tz }))
+    expect(requests()[0]?.projectPath).toBeUndefined()
+    expect(view.host.querySelector('#analytics-tab-errors')?.getAttribute('aria-selected')).toBe('true')
+    const select = view.host.querySelector<HTMLSelectElement>('select[aria-label="Project"]')
+    expect(select?.value).toBe('')
+    const offered = [...(select?.options ?? [])].map((option) => option.value)
+    expect(offered).toEqual(['', ...analyticsProjectChoices(sessions).map((option) => option.key)])
+    expect(offered).not.toContain('c:\\missing-project')
+    await click(buttonNamed(view.host, 'Overview'))
+    expect(view.host.querySelector('[aria-label="Chart metric"] [aria-pressed="true"]')?.textContent).toBe('Cost')
+    await click(buttonNamed(view.host, '30 days'))
+    await view.flush()
+    expect(JSON.parse(localStorage.getItem(ANALYTICS_STORAGE_KEY) ?? '{}')).toMatchObject({ days: 30, bucket: 'week', metric: 'cost', panel: 'overview' })
+    await click(buttonNamed(view.host, 'Errors'))
+    expect(JSON.parse(localStorage.getItem(ANALYTICS_STORAGE_KEY) ?? '{}').panel).toBe('errors')
+    view.unmount()
+
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
+    try {
+      fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.full)
+      const resilient = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
+      await resilient.flush()
+      expect(figure(resilient.host, 'runs')).toBe('40')
+      await click(buttonNamed(resilient.host, '30 days'))
+      await resilient.flush()
+      expect(requests().at(-1)?.from).toBe(buildAnalyticsRequest({ days: 30, bucket: 'day', now, timeZone: tz }).from)
+    } finally {
+      setItem.mockRestore()
+      getItem.mockRestore()
+    }
+  })
+
+  it('drops a project that is no longer in the session list', async () => {
+    function Harness() {
+      const [list, setList] = useState(sessions)
+      return <>
+        <button type="button" onClick={() => setList([])}>Clear projects</button>
+        <AnalyticsView sessions={list} agents={[claude, codex]} connected now={now} />
+      </>
+    }
+    const view = mount(<Harness />)
+    await view.flush()
+    await chooseProject(view.host, 'site · work')
+    await view.flush()
+    expect(requests().at(-1)?.projectPath).toBe('c:\\work\\site\\')
+    await click(buttonNamed(view.host, 'Clear projects'))
+    await view.flush()
+    const select = view.host.querySelector<HTMLSelectElement>('select[aria-label="Project"]')
+    expect(select?.value).toBe('')
+    expect([...select?.options ?? []].map((option) => option.text)).toEqual(['All projects'])
+    expect(requests().at(-1)?.projectPath).toBeUndefined()
+  })
+
+  it('moves analytics and blob tabs with the arrow keys', async () => {
+    const view = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
+    await view.flush()
+    const overview = view.host.querySelector<HTMLButtonElement>('#analytics-tab-overview')
+    overview?.focus()
+    await act(async () => { overview?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })) })
+    expect(view.host.querySelector('#analytics-tab-errors')?.getAttribute('aria-selected')).toBe('true')
+    expect(view.host.querySelector('#analytics-tab-errors')?.getAttribute('aria-label') ?? view.host.querySelector('#analytics-tab-errors')?.textContent).toBe('Errors')
+    view.unmount()
+
+    const blob = mount(<BlobPage
+      mode="edit"
+      agent={claude}
+      draft={draftFromAgent(claude)}
+      runtime={runtime}
+      session={sessions[1] ?? null}
+      runtimes={[runtime]}
+      sessions={sessions.filter((item) => item.agentId === claude.id)}
+      legacyCount={0}
+      connected
+      saving={false}
+      dirty={false}
+      ready
+      canStartSession={false}
+      error={null}
+      remoteNotice={null}
+      errors={{}}
+      execution={executionFromAgent(claude)}
+      onDraftChange={() => undefined}
+      onBack={() => undefined}
+      onSave={() => undefined}
+      onCancel={() => undefined}
+      onArchive={() => undefined}
+      onNewSession={() => undefined}
+      onOpenSession={() => undefined}
+    />)
+    const blobOverview = blob.host.querySelector<HTMLButtonElement>('#blob-tab-Overview')
+    blobOverview?.focus()
+    await act(async () => { blobOverview?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })) })
+    expect(blob.host.querySelector('#blob-tab-Sessions')?.getAttribute('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(blob.host.querySelector('#blob-tab-Sessions'))
   })
 })

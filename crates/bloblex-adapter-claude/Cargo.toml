@@ -9,3 +9,15 @@ serde_json.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+
+[[bin]]
+name = "fake-claude"
+path = "src/bin/fake_claude.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fake-icacls"
+path = "src/bin/fake_icacls.rs"
+test = false
+bench = false

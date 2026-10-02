@@ -7,6 +7,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     process::Stdio,
+    time::{Duration as StdDuration, SystemTime},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -19,35 +20,50 @@ use tokio::{
 };
 use uuid::Uuid;
 
-/// Create a Bloblex-owned instruction file. Windows std does not expose a
-/// dependency-free ACL API; create-new protects against replacement and the
-/// Bloblex private directory is used, but deployments needing a strict
-/// current-user-only DACL must provide that ACL at the directory level.
-fn write_private_instruction_file(text: &str) -> std::io::Result<PathBuf> {
-    let base = std::env::var_os("BLOBLEX_PRIVATE_TMP").map(PathBuf::from).or_else(|| {
-        std::env::var_os("LOCALAPPDATA").map(PathBuf::from).map(|p| p.join("Bloblex").join("private-tmp"))
-    }).unwrap_or_else(|| std::env::temp_dir().join("Bloblex").join("private-tmp"));
-    write_instruction_file_at(&base, text)
+#[derive(Debug,Clone)]
+struct PrivateInstructionFile { path:PathBuf, lock_path:PathBuf }
+fn private_tmp_dir(override_dir:Option<&std::path::Path>)->PathBuf {
+    override_dir.map(PathBuf::from).or_else(||std::env::var_os("BLOBLEX_PRIVATE_TMP").map(PathBuf::from)).or_else(||std::env::var_os("LOCALAPPDATA").map(PathBuf::from).map(|p|p.join("Bloblex").join("private-tmp"))).unwrap_or_else(||std::env::temp_dir().join("Bloblex").join("private-tmp"))
 }
-fn write_instruction_file_at(base: &std::path::Path, text: &str) -> std::io::Result<PathBuf> {
+fn icacls(path:&std::path::Path,directory:bool,system_root_override:Option<&std::path::Path>)->std::io::Result<()> {
+    #[cfg(windows)] {
+        let root=system_root_override.map(PathBuf::from).or_else(||std::env::var_os("SystemRoot").map(PathBuf::from)).ok_or_else(||std::io::Error::new(std::io::ErrorKind::PermissionDenied,"SystemRoot is unavailable"))?;
+        let user=match(std::env::var("USERDOMAIN"),std::env::var("USERNAME")){(Ok(d),Ok(u))if !d.is_empty()&&!u.is_empty()=>format!("{d}\\{u}"),_=>return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,"current Windows account is unavailable"))};
+        let grant=if directory{format!("{user}:(OI)(CI)F")}else{format!("{user}:F")};
+        let mut command=std::process::Command::new(root.join("System32").join("icacls.exe"));command.arg(path).arg("/inheritance:r").arg("/grant:r").arg(grant).stdout(Stdio::null()).stderr(Stdio::null());
+        let status=command.status()?;if !status.success(){return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,"icacls rejected the private path"))}
+    }
+    #[cfg(not(windows))] { let _=(path,directory,system_root_override); }
+    Ok(())
+}
+fn remove_private_pair(pair:&PrivateInstructionFile){let _=std::fs::remove_file(&pair.path);let _=std::fs::remove_file(&pair.lock_path);}
+fn process_is_live(pid:u32)->bool {
+    #[cfg(windows)] unsafe {
+        #[link(name="kernel32")] extern "system" { fn OpenProcess(access:u32,inherit:i32,pid:u32)->*mut std::ffi::c_void; fn CloseHandle(handle:*mut std::ffi::c_void)->i32; }
+        let handle=OpenProcess(0x1000,0,pid);if handle.is_null(){false}else{let _=CloseHandle(handle);true}
+    }
+    #[cfg(not(windows))] { std::path::Path::new("/proc").join(pid.to_string()).exists() }
+}
+fn cleanup_private_instruction_files_at(base:&std::path::Path,now:SystemTime)->std::io::Result<()> {
+    let entries=match std::fs::read_dir(base){Ok(v)=>v,Err(e)if e.kind()==std::io::ErrorKind::NotFound=>return Ok(()),Err(e)=>return Err(e)};
+    for entry in entries.flatten(){let path=entry.path();if path.extension().and_then(|x|x.to_str())!=Some("txt")||!entry.file_name().to_string_lossy().starts_with("instruction-"){continue}
+        let Some(stem)=path.file_stem()else{continue};let lock_path=path.with_file_name(format!("{}.lock",stem.to_string_lossy()));let pair=PrivateInstructionFile{path:path.clone(),lock_path:lock_path.clone()};
+        let Ok(metadata)=std::fs::metadata(&path)else{continue};let old=metadata.modified().ok().and_then(|m|now.duration_since(m).ok()).is_some_and(|age|age>=StdDuration::from_secs(24*60*60));if !old{continue}
+        let Ok(pid_text)=std::fs::read_to_string(&lock_path)else{continue};let Ok(pid)=pid_text.trim().parse::<u32>()else{continue};if !process_is_live(pid){remove_private_pair(&pair)}
+    }
+    Ok(())
+}
+fn write_private_instruction_file_at(base:&std::path::Path,text:&str,system_root_override:Option<&std::path::Path>)->std::io::Result<PrivateInstructionFile>{
     std::fs::create_dir_all(base)?;
-    #[cfg(unix)] {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?;
+    #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;std::fs::set_permissions(base,std::fs::Permissions::from_mode(0o700))?;}
+    icacls(base,true,system_root_override)?;cleanup_private_instruction_files_at(base,SystemTime::now())?;
+    for _ in 0..8 {let path=base.join(format!("instruction-{}.txt",Uuid::new_v4()));let lock_path=path.with_extension("lock");let mut opts=std::fs::OpenOptions::new();opts.write(true).create_new(true);
+        #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;opts.mode(0o600);}
+        match opts.open(&path){Ok(mut file)=>{let pair=PrivateInstructionFile{path,lock_path};let result=(||{icacls(&pair.path,false,system_root_override)?;let mut lock=std::fs::OpenOptions::new().write(true).create_new(true).open(&pair.lock_path)?;icacls(&pair.lock_path,false,system_root_override)?;use std::io::Write;write!(lock,"{}",std::process::id())?;lock.flush()?;drop(lock);file.write_all(text.as_bytes())?;file.flush()?;drop(file);Ok(pair.clone())})();if result.is_err(){remove_private_pair(&pair)}return result},Err(e)if e.kind()==std::io::ErrorKind::AlreadyExists=>continue,Err(e)=>return Err(e)}
     }
-    for _ in 0..8 {
-        let path = base.join(format!("instruction-{}.txt", Uuid::new_v4()));
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; opts.mode(0o600); }
-        match opts.open(&path) {
-            Ok(mut file) => { use std::io::Write; file.write_all(text.as_bytes())?; file.flush()?; drop(file); return Ok(path); }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
-    }
-    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "could not allocate a unique instruction file"))
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists,"could not allocate a unique instruction file"))
 }
+fn write_private_instruction_file_at_dir(override_dir:Option<&std::path::Path>,text:&str,system_root_override:Option<&std::path::Path>)->std::io::Result<PrivateInstructionFile>{let base=private_tmp_dir(override_dir);write_private_instruction_file_at(&base,text,system_root_override)}
 
 fn parse_model_catalog(value: &Value) -> Result<Vec<ModelInfo>, AdapterError> {
     let models = value["models"].as_array().ok_or_else(|| AdapterError::Protocol("Claude catalog has no models array".into()))?;
@@ -99,10 +115,11 @@ struct Conn {
     cancellation_requested: AtomicBool,
     permission_requests: Mutex<HashMap<String, (Value, Value)>>,
     local_session_id: String,
-    instruction_file: Option<PathBuf>,
+    instruction_file: Option<PrivateInstructionFile>,
     runtime: RuntimeSpec,
     cwd: PathBuf,
     launch_options: ExecOptions,
+    desired_instruction_sha256: Option<String>,
     event_sender: EventSender,
     active_turn_id: Mutex<Option<String>>,
 }
@@ -123,6 +140,9 @@ fn control_response(original_id: Value, input: Value, choice: &str) -> Result<Va
 #[derive(Default)]
 pub struct ClaudeAdapter {
     sessions: Mutex<HashMap<String, Arc<Conn>>>,
+    instruction_hash_context: Mutex<HashMap<String,(Option<String>,Option<String>)>>,
+    private_tmp_override: Option<PathBuf>,
+    system_root_override: Option<PathBuf>,
 }
 async fn parse_line(
     tx: &EventSender,
@@ -283,6 +303,10 @@ async fn parse_line(
     }
 }
 impl ClaudeAdapter {
+    pub fn with_private_tmp_dir(path:PathBuf)->Self{Self{sessions:Mutex::new(HashMap::new()),instruction_hash_context:Mutex::new(HashMap::new()),private_tmp_override:Some(path),system_root_override:None}}
+    /// Test seam: use a fake `System32/icacls.exe` while keeping the same ACL arguments.
+    pub fn with_test_acl_executable(path:PathBuf,system_root:PathBuf)->Self{Self{sessions:Mutex::new(HashMap::new()),instruction_hash_context:Mutex::new(HashMap::new()),private_tmp_override:Some(path),system_root_override:Some(system_root)}}
+    fn create_instruction_file(&self,text:&str)->std::io::Result<PrivateInstructionFile>{write_private_instruction_file_at_dir(self.private_tmp_override.as_deref(),text,self.system_root_override.as_deref())}
     async fn start(
         &self,
         r: &RuntimeSpec,
@@ -292,6 +316,7 @@ impl ClaudeAdapter {
         local_session_id: &str,
         options: &ExecOptions,
         instruction_changed: bool,
+        desired_instruction_sha256: Option<String>,
     ) -> Result<Arc<Conn>, AdapterError> {
         let assigned_id = provider_session_id
             .map(str::to_owned)
@@ -312,9 +337,9 @@ impl ClaudeAdapter {
             "stdio",
         ]);
         let instruction_file = if let Some(instructions) = options.instructions.as_deref().filter(|s| !s.is_empty()) {
-            Some(write_private_instruction_file(instructions).map_err(|e| AdapterError::Process(format!("private instruction file unavailable: {e}")))?)
+            Some(self.create_instruction_file(instructions).map_err(|e| AdapterError::Process(format!("private instruction file unavailable: {e}")))?)
         } else { None };
-        c.args(typed_args(options, instruction_file.as_deref(), instruction_changed));
+        c.args(typed_args(options, instruction_file.as_ref().map(|f|f.path.as_path()), instruction_changed));
         if let Some(id) = provider_session_id {
             c.args(["--resume", id]);
         } else {
@@ -325,15 +350,9 @@ impl ClaudeAdapter {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
-        let mut child = match c.spawn() { Ok(child) => child, Err(e) => { if let Some(path)=instruction_file.as_ref(){let _=std::fs::remove_file(path);} return Err(AdapterError::Process(e.to_string())); } };
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| AdapterError::Process("Claude stdin unavailable".into()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| AdapterError::Process("Claude stdout unavailable".into()))?;
+        let mut child = match c.spawn() { Ok(child) => child, Err(e) => { if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);} return Err(AdapterError::Process(e.to_string())); } };
+        let Some(stdin)=child.stdin.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdin unavailable".into()))};
+        let Some(stdout)=child.stdout.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdout unavailable".into()))};
         let conn = Arc::new(Conn {
             stdin: Mutex::new(stdin),
             child: Mutex::new(child),
@@ -345,6 +364,7 @@ impl ClaudeAdapter {
             local_session_id: local_session_id.into(),
             instruction_file: instruction_file.clone(),
             runtime: r.clone(), cwd: cwd.clone(), launch_options: options.clone(),
+            desired_instruction_sha256,
             event_sender: events.clone(),
             active_turn_id: Mutex::new(None),
         });
@@ -366,13 +386,11 @@ impl ClaudeAdapter {
                                     let thinking = usage["output_tokens_details"]["thinking_tokens"].as_u64();
                                     outcomes.insert("thinking".into(), SettingOutcome { requested: Some(json!(requested)), applied: thinking.map(|_| true), evidence_kind: EvidenceKind::UsageEffect, evidence_value: thinking.map(|n| json!(n)), reason: None });
                                 }
-                                if reader.launch_options.instructions.is_some() {
-                                    outcomes.insert("instructions".into(), SettingOutcome { requested: Some(json!(true)), applied: Some(true), evidence_kind: EvidenceKind::SuccessfulTurn, evidence_value: reader.instruction_file.as_ref().map(|_| json!("successful_turn")), reason: None });
-                                }
+                                outcomes.insert("instructions".into(), SettingOutcome { requested: Some(json!(reader.desired_instruction_sha256)), applied: Some(true), evidence_kind: EvidenceKind::SuccessfulTurn, evidence_value: Some(json!(reader.desired_instruction_sha256)), reason: None });
                                 if !outcomes.is_empty() { let turn_id=reader.active_turn_id.lock().await.clone().unwrap_or_default();let _=reader.events.send(AgentEvent::ExecApplied{turn_id,outcomes}).await; }
                             } else {
                                 let mut outcomes = std::collections::BTreeMap::new();
-                                for (key,requested) in [("model",reader.launch_options.model.as_ref().map(|v|json!(v))), ("thinking",reader.launch_options.thinking.as_ref().map(|v|json!(v))), ("serviceTier",reader.launch_options.service_tier.as_ref().map(|v|json!(v))), ("instructions",reader.launch_options.instructions.as_ref().map(|_|json!(true)))] {
+                                for (key,requested) in [("model",reader.launch_options.model.as_ref().map(|v|json!(v))), ("thinking",reader.launch_options.thinking.as_ref().map(|v|json!(v))), ("serviceTier",reader.launch_options.service_tier.as_ref().map(|v|json!(v))), ("instructions",Some(json!(reader.desired_instruction_sha256)))] {
                                     if let Some(requested)=requested { outcomes.insert(key.into(),SettingOutcome{requested:Some(requested),applied:None,evidence_kind:EvidenceKind::None,evidence_value:None,reason:Some("failed_turn".into())}); }
                                 }
                                 if !outcomes.is_empty(){let turn_id=reader.active_turn_id.lock().await.clone().unwrap_or_default();let _=reader.events.send(AgentEvent::ExecApplied{turn_id,outcomes}).await;}
@@ -389,7 +407,7 @@ impl ClaudeAdapter {
                     .await;
                 }
             }
-            if let Some(path) = reader.instruction_file.as_ref() { let _ = std::fs::remove_file(path); }
+            if let Some(pair) = reader.instruction_file.as_ref() { remove_private_pair(pair); }
             if reader.active_turn.swap(false, Ordering::SeqCst) {
                 let event = if reader.cancellation_requested.swap(false, Ordering::SeqCst) {
                     AgentEvent::TurnCancelled
@@ -473,8 +491,9 @@ impl AgentAdapter for ClaudeAdapter {
         q: NewSessionRequest,
         events: EventSender,
     ) -> Result<SessionHandle, AdapterError> {
+        let mut launch_options=q.exec_options.clone();launch_options.instructions=None;
         let c = self
-            .start(r, &q.project_path, None, events, &q.session_id, &q.exec_options, false)
+            .start(r, &q.project_path, None, events, &q.session_id, &launch_options, false, None)
             .await?;
         let id = c
             .provider_id
@@ -501,6 +520,7 @@ impl AgentAdapter for ClaudeAdapter {
         q: ResumeSessionRequest,
         events: EventSender,
     ) -> Result<SessionHandle, AdapterError> {
+        let mut launch_options=q.exec_options.clone();launch_options.instructions=None;
         let c = self
             .start(
                 r,
@@ -508,8 +528,9 @@ impl AgentAdapter for ClaudeAdapter {
                 Some(&q.provider_session_id),
                 events,
                 &q.session_id,
-                &q.exec_options,
+                &launch_options,
                 false,
+                None,
             )
             .await?;
         self.sessions.lock().await.insert(q.session_id.clone(), c);
@@ -533,13 +554,14 @@ impl AgentAdapter for ClaudeAdapter {
             .get(&h.session_id)
             .cloned()
             .ok_or_else(|| AdapterError::Process("Claude session not active".into()))?;
-        let options_changed = c.launch_options.model != q.exec_options.model || c.launch_options.thinking != q.exec_options.thinking || c.launch_options.service_tier != q.exec_options.service_tier || c.launch_options.instructions != q.exec_options.instructions || c.launch_options.env != q.exec_options.env;
+        let (desired_hash,baseline)=self.instruction_hash_context.lock().await.remove(&h.session_id).unwrap_or((None,None));
+        let instruction_changed=baseline.as_ref().is_some_and(|old|Some(old)!=desired_hash.as_ref());
+        let options_changed = c.launch_options.model != q.exec_options.model || c.launch_options.thinking != q.exec_options.thinking || c.launch_options.service_tier != q.exec_options.service_tier || c.launch_options.instructions != q.exec_options.instructions || c.launch_options.env != q.exec_options.env || instruction_changed;
         if options_changed {
             let runtime = c.runtime.clone(); let cwd = c.cwd.clone(); let events = c.event_sender.clone();
             let provider_id = c.provider_id.lock().await.clone().ok_or_else(|| AdapterError::Unsupported("Claude resume identity is unavailable for changed execution options".into()))?;
-            let changed_instruction = c.launch_options.instructions != q.exec_options.instructions;
             let _ = c.child.lock().await.kill().await;
-            c = self.start(&runtime, &cwd, Some(&provider_id), events, &h.session_id, &q.exec_options, changed_instruction).await.map_err(|_| AdapterError::Unsupported("Claude could not resume with the requested execution options".into()))?;
+            c = self.start(&runtime, &cwd, Some(&provider_id), events, &h.session_id, &q.exec_options, instruction_changed, desired_hash.clone()).await.map_err(|_| AdapterError::Unsupported("Claude could not resume with the requested execution options".into()))?;
             self.sessions.lock().await.insert(h.session_id.clone(), c.clone());
         }
         let bytes =
@@ -557,6 +579,11 @@ impl AgentAdapter for ClaudeAdapter {
             c.active_turn.store(false, Ordering::SeqCst);
             return Err(AdapterError::Process(error.to_string()));
         }
+        Ok(())
+    }
+    async fn set_instruction_hash_context(&self,session_id:&str,desired:Option<String>,baseline:Option<String>){self.instruction_hash_context.lock().await.insert(session_id.into(),(desired,baseline));}
+    async fn preflight_exec_options(&self,options:&ExecOptions)->Result<(),AdapterError>{
+        if let Some(text)=options.instructions.as_deref().filter(|s|!s.is_empty()) { let pair=self.create_instruction_file(text).map_err(|_|AdapterError::Unsupported("The requested instructions are unavailable because secure private storage could not be established.".into()))?;remove_private_pair(&pair); }
         Ok(())
     }
     async fn cancel(&self, h: &SessionHandle) -> Result<(), AdapterError> {
@@ -639,10 +666,26 @@ mod tests {
     #[test]
     fn instruction_file_is_create_new_private_and_removable() {
         let dir=std::env::temp_dir().join(format!("bloblex-fake-private-{}",Uuid::new_v4()));
-        let file=write_instruction_file_at(&dir,"private sentinel").unwrap();
-        assert_eq!(std::fs::read_to_string(&file).unwrap(),"private sentinel");
-        assert!(write_instruction_file_at(&dir,"replacement").unwrap()!=file);
-        std::fs::remove_file(&file).unwrap();std::fs::remove_dir_all(&dir).unwrap();
+        let file=match write_private_instruction_file_at(&dir,"private sentinel",None) { Ok(file)=>file, Err(error)=>{assert_eq!(error.kind(),std::io::ErrorKind::PermissionDenied);assert_eq!(std::fs::read_dir(&dir).unwrap().count(),0);std::fs::remove_dir_all(&dir).unwrap();return;} };
+        assert_eq!(std::fs::read_to_string(&file.path).unwrap(),"private sentinel");assert!(file.lock_path.exists());
+        let replacement=write_private_instruction_file_at(&dir,"replacement",None).unwrap();assert_ne!(replacement.path,file.path);
+        remove_private_pair(&file);remove_private_pair(&replacement);std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cleanup_removes_only_old_owned_pairs_with_dead_pid(){
+        let dir=std::env::temp_dir().join(format!("bloblex-cleanup-{}",Uuid::new_v4()));std::fs::create_dir_all(&dir).unwrap();let stale=PrivateInstructionFile{path:dir.join("instruction-stale.txt"),lock_path:dir.join("instruction-stale.lock")};let live=PrivateInstructionFile{path:dir.join("instruction-live.txt"),lock_path:dir.join("instruction-live.lock")};let other=dir.join("other.txt");std::fs::write(&stale.path,"stale").unwrap();std::fs::write(&live.path,"live").unwrap();std::fs::write(&other,"untouched").unwrap();
+        let dead=[u32::MAX,u32::MAX-1,4,3,2,1].into_iter().find(|pid|!process_is_live(*pid)).unwrap_or(u32::MAX);std::fs::write(&stale.lock_path,dead.to_string()).unwrap();std::fs::write(&live.lock_path,std::process::id().to_string()).unwrap();
+        let future=SystemTime::now()+StdDuration::from_secs(25*60*60);cleanup_private_instruction_files_at(&dir,future).unwrap();
+        assert!(!stale.path.exists());assert!(!stale.lock_path.exists());assert!(live.path.exists());assert!(live.lock_path.exists());assert!(other.exists());remove_private_pair(&live);std::fs::remove_file(other).unwrap();std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn spawn_failure_removes_secure_instruction_pair(){
+        let root=std::env::temp_dir().join(format!("bloblex-spawn-fail-{}",Uuid::new_v4()));let dir=root.join("private");let system=root.join("fake-system");let system32=system.join("System32");std::fs::create_dir_all(&system32).unwrap();
+        let fake_icacls=std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("fake-icacls.exe");std::fs::copy(fake_icacls,system32.join("icacls.exe")).unwrap();let adapter=ClaudeAdapter::with_test_acl_executable(dir.clone(),system);let(events,_)=tokio::sync::mpsc::channel(4);
+        let runtime=RuntimeSpec{runtime_id:"fake".into(),provider:"claude".into(),executable:root.join("does-not-exist.exe"),args:vec![],cwd:Some(root.clone())};let options=ExecOptions{instructions:Some("private test sentinel".into()),..ExecOptions::default()};
+        assert!(adapter.start(&runtime,&root,None,events,"session",&options,false,Some("hash".into())).await.is_err());assert_eq!(std::fs::read_dir(&dir).unwrap().count(),0);std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

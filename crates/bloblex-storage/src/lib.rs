@@ -472,6 +472,9 @@ impl Storage {
         else { c.execute("UPDATE sessions SET latest_exec_snapshot_id=?2 WHERE id=?1",params![session_id,snapshot_id])?; }
         Ok(())
     }
+    pub fn claude_instruction_sha256(&self,session_id:&str)->Result<Option<String>,StorageError>{
+        let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;Ok(c.query_row("SELECT claude_instruction_sha256 FROM sessions WHERE id=?1",[session_id],|r|r.get(0))?)
+    }
     pub fn create_exec_snapshot(&self,session_id:&str,turn_id:&str,id:&str,requested:&Value,applied:&Value,evidence:&Value,instruction_sha256:Option<&str>,adapter_flags:&Value,status:&str)->Result<Value,StorageError>{
         let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let session:Option<(String,String,Option<String>)>=tx.query_row("SELECT runtime_id,provider,agent_id FROM sessions WHERE id=?1",[session_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
@@ -514,6 +517,7 @@ impl Storage {
         let pending=outcomes.as_object().is_some_and(|m|m.values().any(|v|v["applied"].is_null()));
         let status=if failed||pending{"partial"}else{"applied"};
         tx.execute("UPDATE exec_snapshots SET applied_json=?2,evidence_json=?3,status=?4 WHERE id=?1",params![id,applied.to_string(),evidence.to_string(),status])?;
+        if snapshot["provider"]=="claude"&&outcomes["instructions"]["applied"]==true { tx.execute("UPDATE sessions SET claude_instruction_sha256=?2 WHERE id=?1",params![snapshot["sessionId"].as_str().unwrap_or(""),snapshot["instructionSha256"].as_str()])?; }
         let payload=json!({"sessionId":snapshot["sessionId"],"turnId":turn_id,"agentId":snapshot["agentId"],"runtimeId":snapshot["runtimeId"],"requested":snapshot["requested"],"applied":outcomes,"snapshotId":id});
         let event_id=Uuid::new_v4().to_string();let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'exec.options.changed',?3)",params![event_id,now,payload.to_string()])?;
         let event=json!({"v":1,"eventId":event_id,"sequence":tx.last_insert_rowid(),"timestamp":now,"type":"exec.options.changed","payload":payload});
@@ -1542,6 +1546,20 @@ mod tests {
         db.insert_usage(&json!({"id":"u1","runtimeId":"rt","sessionId":"s","turnId":"t1","provider":"codex","timestamp":"2026-10-02T00:00:00Z","providerUpdateId":"update-1","usageStatus":"reported","contextUsed":12,"contextSize":100,"reportedCostDecimal":"0.000048588","raw":{"private":"raw-provider-data"}})).unwrap();
         let c=db.conn.lock().unwrap();let row:(Option<String>,Option<String>,String,Option<i64>,Option<i64>,Option<String>,String)=c.query_row("SELECT exec_snapshot_id,provider_update_id,usage_status,context_used,context_size,reported_cost_decimal,raw FROM usage_events WHERE id='u1'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).unwrap();assert_eq!(row,(Some("snap1".into()),Some("update-1".into()),"reported".into(),Some(12),Some(100),Some("0.000048588".into()),"{}".into()));drop(c);
         db.create_turn("t2","s").unwrap();db.create_exec_snapshot("s","t2","snap2",&json!({"maxConcurrency":1}),&json!({}),&json!({}),None,&json!({}),"runtime_default").unwrap();assert_eq!(db.exec_snapshot_latest("s").unwrap().unwrap()["id"],"snap2");let (items,next)=db.exec_snapshot_list("s",Some("snap1"),10).unwrap();assert_eq!(items.len(),1);assert_eq!(items[0]["id"],"snap2");assert!(next.is_none());db.set_session_exec_snapshot("s","snap2",true).unwrap();let (_,event)=db.update_exec_snapshot_evidence("t2",&json!({"model":{"requested":"gpt-6","applied":true,"evidenceKind":"provider_echo","evidenceValue":"gpt-6"}})).unwrap();assert_eq!(event["type"],"exec.options.changed");let updated=db.exec_snapshot_get("snap2").unwrap().unwrap();assert_eq!(updated["applied"]["model"]["applied"],true);assert_eq!(updated["evidence"]["model"]["kind"],"provider_echo");let c=db.conn.lock().unwrap();let ptrs:(String,String)=c.query_row("SELECT first_exec_snapshot_id,latest_exec_snapshot_id FROM sessions WHERE id='s'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(ptrs,("snap1".into(),"snap2".into()));
+    }
+    #[test]
+    fn claude_instruction_baseline_advances_only_after_successful_turn_evidence(){
+        let db=Storage::open_in_memory().unwrap();db.create_session("s-instructions","rt","claude",".","instructions").unwrap();assert_eq!(db.claude_instruction_sha256("s-instructions").unwrap(),None);
+        db.create_turn("t-success","s-instructions").unwrap();db.create_exec_snapshot("s-instructions","t-success","snap-success",&json!({"instructionsPresent":true}),&json!({}),&json!({}),Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),&json!({}),"partial").unwrap();
+        let (_,event)=db.update_exec_snapshot_evidence("t-success",&json!({"instructions":{"requested":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","applied":true,"evidenceKind":"successful_turn","evidenceValue":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}})).unwrap();assert!(!event.to_string().contains("instruction text"));assert!(!event.to_string().contains("secret"));
+        assert_eq!(db.claude_instruction_sha256("s-instructions").unwrap().as_deref(),Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        db.create_turn("t-failed","s-instructions").unwrap();db.create_exec_snapshot("s-instructions","t-failed","snap-failed",&json!({"instructionsPresent":true}),&json!({}),&json!({}),Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),&json!({}),"partial").unwrap();
+        db.update_exec_snapshot_evidence("t-failed",&json!({"instructions":{"requested":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","applied":null,"evidenceKind":"none","reason":"failed_turn"}})).unwrap();
+        assert_eq!(db.claude_instruction_sha256("s-instructions").unwrap().as_deref(),Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        db.create_turn("t-empty","s-instructions").unwrap();db.create_exec_snapshot("s-instructions","t-empty","snap-empty",&json!({"instructionsPresent":false}),&json!({}),&json!({}),None,&json!({}),"runtime_default").unwrap();
+        db.update_exec_snapshot_evidence("t-empty",&json!({"instructions":{"requested":null,"applied":true,"evidenceKind":"successful_turn","evidenceValue":null}})).unwrap();
+        assert_eq!(db.claude_instruction_sha256("s-instructions").unwrap(),None);
+        db.create_session("s-codex-instructions","rt","codex",".","codex").unwrap();db.create_turn("t-codex","s-codex-instructions").unwrap();db.create_exec_snapshot("s-codex-instructions","t-codex","snap-codex",&json!({}),&json!({}),&json!({}),Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),&json!({}),"partial").unwrap();db.update_exec_snapshot_evidence("t-codex",&json!({"instructions":{"applied":true}})).unwrap();assert_eq!(db.claude_instruction_sha256("s-codex-instructions").unwrap(),None);
     }
     #[test]
     fn rejected_turn_writes_error_message_snapshot_and_event_atomically_without_reservation(){

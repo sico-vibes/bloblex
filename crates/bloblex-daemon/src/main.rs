@@ -545,24 +545,28 @@ async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) 
     }
     let runtime = st.runtimes.read().await.iter().find(|r| r["id"] == runtime_id).cloned().ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
     let catalog = match fetch_model_catalog(st, &runtime, false).await { Ok(c) => c, Err(_) => return Ok(()) };
-    if catalog["fallback"] == true { return Ok(()); }
-    if let Some(model_id) = value["model"].as_str() {
-        let model = catalog["models"].as_array().and_then(|models| models.iter().find(|m| m["id"] == model_id)).ok_or_else(|| derr("invalid_argument", "model is not available in this runtime catalog", StatusCode::BAD_REQUEST))?;
-        if let Some(thinking) = value["thinking"].as_str() { if !model["supportedThinking"].as_array().is_some_and(|a| a.iter().any(|v| v.as_str() == Some(thinking))) { return Err(derr("invalid_argument", "thinking is not supported by the selected model", StatusCode::BAD_REQUEST)); } }
-        if let Some(tier) = value["serviceTier"].as_str() { if !model["serviceTiers"].as_array().is_some_and(|a| a.iter().any(|v| v["id"] == tier)) { return Err(derr("invalid_argument", "serviceTier is not supported by the selected model", StatusCode::BAD_REQUEST)); } }
-    }
+    validate_option_values_against_catalog(value["model"].as_str(),value["thinking"].as_str(),value["serviceTier"].as_str(),Some(&catalog))
+}
+fn validate_option_values_against_catalog(model_id:Option<&str>,thinking:Option<&str>,service_tier:Option<&str>,catalog:Option<&Value>)->Result<(),DispatchError>{
+    let Some(catalog)=catalog.filter(|c|c["fallback"]!=true)else{return Ok(())};
+    let models=catalog["models"].as_array().ok_or_else(||derr("provider_error","runtime returned an invalid model catalog",StatusCode::BAD_GATEWAY))?;
+    let selected=if let Some(id)=model_id{Some(models.iter().find(|m|m["id"]==id).ok_or_else(||derr("invalid_argument","model is not available in this runtime catalog",StatusCode::BAD_REQUEST))?)}else{None};
+    if let Some(effort)=thinking{let supported=selected.map(|m|m["supportedThinking"].as_array().is_some_and(|a|a.iter().any(|v|v.as_str()==Some(effort)))).unwrap_or_else(||models.iter().any(|m|m["supportedThinking"].as_array().is_some_and(|a|a.iter().any(|v|v.as_str()==Some(effort)))));if !supported{return Err(derr("invalid_argument",if selected.is_some(){"thinking is not supported by the selected model"}else{"thinking is not supported by the runtime catalog"},StatusCode::BAD_REQUEST));}}
+    if let Some(tier)=service_tier{let supported=selected.map(|m|m["serviceTiers"].as_array().is_some_and(|a|a.iter().any(|v|v["id"]==tier))).unwrap_or_else(||models.iter().any(|m|m["serviceTiers"].as_array().is_some_and(|a|a.iter().any(|v|v["id"]==tier))));if !supported{return Err(derr("invalid_argument",if selected.is_some(){"serviceTier is not supported by the selected model"}else{"serviceTier is not supported by the runtime catalog"},StatusCode::BAD_REQUEST));}}
     Ok(())
 }
 async fn validate_exec_catalog(st:&AppState,runtime:&Value,options:&ExecOptions)->Result<(),DispatchError>{
+    for (name,value) in [("model",options.model.as_deref()),("thinking",options.thinking.as_deref()),("serviceTier",options.service_tier.as_deref())]{if value.is_some_and(str::is_empty){return Err(derr("invalid_argument",&format!("{name} must be a non-empty identifier"),StatusCode::BAD_REQUEST));}}
     if options.model.is_none()&&options.thinking.is_none()&&options.service_tier.is_none(){return Ok(())}
-    let catalog=fetch_model_catalog(st,runtime,false).await.map_err(|_|derr("provider_unavailable","authoritative model catalog is required before applying this setting",StatusCode::BAD_GATEWAY))?;
-    if catalog["fallback"]==true{return Err(derr("provider_unavailable","authoritative model catalog is required before applying this setting",StatusCode::BAD_GATEWAY))}
-    let models=catalog["models"].as_array().ok_or_else(||derr("provider_error","runtime returned an invalid model catalog",StatusCode::BAD_GATEWAY))?;
-    if let Some(model_id)=options.model.as_deref(){let model=models.iter().find(|m|m["id"]==model_id).ok_or_else(||derr("invalid_argument","model is not available in this runtime catalog",StatusCode::BAD_REQUEST))?;
-        if let Some(thinking)=options.thinking.as_deref(){if !model["supportedThinking"].as_array().is_some_and(|a|a.iter().any(|v|v.as_str()==Some(thinking))){return Err(derr("invalid_argument","thinking is not supported by the selected model",StatusCode::BAD_REQUEST))}}
-        if let Some(tier)=options.service_tier.as_deref(){if !model["serviceTiers"].as_array().is_some_and(|a|a.iter().any(|v|v["id"]==tier)){return Err(derr("invalid_argument","serviceTier is not supported by the selected model",StatusCode::BAD_REQUEST))}}
-    } else if options.thinking.as_deref().is_some_and(|t|!models.iter().any(|m|m["supportedThinking"].as_array().is_some_and(|a|a.iter().any(|v|v.as_str()==Some(t))))) { return Err(derr("invalid_argument","thinking is not supported by the runtime catalog",StatusCode::BAD_REQUEST)); }
-    Ok(())
+    let catalog=fetch_model_catalog(st,runtime,false).await.ok();
+    validate_option_values_against_catalog(options.model.as_deref(),options.thinking.as_deref(),options.service_tier.as_deref(),catalog.as_ref())
+}
+async fn preflight_exec_options(st:&AppState,runtime:&Value,provider:&str,options:&ExecOptions)->Option<(String,DispatchError)>{
+    if let Ok(Some((setting,reason)))=exec_option_rejection(st,provider,options){return Some((setting.into(),derr("unsupported",reason,StatusCode::BAD_REQUEST)))}
+    if let Err(error)=validate_exec_catalog(st,runtime,options).await {
+        let setting=if error.1.message.contains("thinking"){"thinking"}else if error.1.message.contains("serviceTier"){"serviceTier"}else{"model"};return Some((setting.into(),error))
+    }
+    None
 }
 const EXEC_UNAVAILABLE: &str = "The requested setting is unavailable for this runtime until its execution check passes.";
 fn safe_requested_options(options: &ExecOptions) -> Value {
@@ -649,11 +653,10 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let options_session=if let Some(agent_id)=agent_id.as_deref(){st.db.agent_get(agent_id).map_err(agent_error)?}else{json!({"agentId":null})};
     let exec_options=exec_options_for_session(st,&options_session)?;
     let id = Uuid::new_v4().to_string();
-    if let Some((setting, reason)) = exec_option_rejection(st, &provider, &exec_options)? {
-        st.emit("exec.options.rejected", json!({"sessionId":id,"agentId":agent_id,"runtimeId":runtime_id,"setting":setting,"code":"unsupported","reason":reason})).await;
-        return Err(derr("unsupported", reason, StatusCode::BAD_REQUEST));
+    if let Some((setting, error)) = preflight_exec_options(st,&runtime,&provider,&exec_options).await {
+        st.emit("exec.options.rejected", json!({"sessionId":id,"agentId":agent_id,"runtimeId":runtime_id,"setting":setting,"code":error.1.code,"reason":error.1.message})).await;
+        return Err(error);
     }
-    validate_exec_catalog(st,&runtime,&exec_options).await?;
     let title = p["title"]
         .as_str()
         .filter(|s| !s.trim().is_empty())
@@ -762,11 +765,10 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         )
     })?;
     let exec_options=exec_options_for_session(st,&row)?;
-    if let Some((setting, reason)) = exec_option_rejection(st, &provider, &exec_options)? {
-        st.emit("exec.options.rejected", json!({"sessionId":sid,"agentId":row["agentId"],"runtimeId":runtime,"setting":setting,"code":"unsupported","reason":reason})).await;
-        return Err(derr("unsupported", reason, StatusCode::BAD_REQUEST));
+    if let Some((setting, error)) = preflight_exec_options(st,&rt,&provider,&exec_options).await {
+        st.emit("exec.options.rejected", json!({"sessionId":sid,"agentId":row["agentId"],"runtimeId":runtime,"setting":setting,"code":error.1.code,"reason":error.1.message})).await;
+        return Err(error);
     }
-    validate_exec_catalog(st,&rt,&exec_options).await?;
     let (tx, rx) = tokio::sync::mpsc::channel(256);
     let handle = adapter
         .resume_session(
@@ -847,13 +849,19 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
     let session_options=st.db.session_detail(&sid).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
     let exec_options=exec_options_for_session(st,&session_options)?;
     let turn = Uuid::new_v4().to_string();
-    if let Some((setting, reason)) = exec_option_rejection(st, &active.runtime.provider, &exec_options)? {
+    let runtime_value=st.runtimes.read().await.iter().find(|r|r["id"]==active.runtime.runtime_id).cloned().unwrap_or(Value::Null);
+    let desired_instruction_hash=bloblex_agent_core::instruction_sha256(exec_options.instructions.as_deref().unwrap_or(""));
+    let baseline=st.db.claude_instruction_sha256(&sid).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+    let mut rejection=preflight_exec_options(st,&runtime_value,&active.runtime.provider,&exec_options).await;
+    if rejection.is_none(){if let Err(e)=active.adapter.preflight_exec_options(&exec_options).await{let (code,msg)=match e{bloblex_agent_core::AdapterError::Unsupported(m)=>("unsupported",m),_=>("provider_error","Provider option preparation failed before prompt delivery.".into())};rejection=Some(("instructions".into(),derr(code,&msg,StatusCode::BAD_REQUEST)));}}
+    if let Some((setting, error)) = rejection {
         let snapshot_id = Uuid::new_v4().to_string();
-        let requested=safe_requested_options(&exec_options);let applied=json!({setting:{"applied":false,"reason":"execution_gate_or_capability_unavailable"}});
-        let (_,event)=st.db.reject_exec_turn(&sid,&turn,&snapshot_id,&text,&requested,&applied,&json!({}),None,&json!({"adapter":active.runtime.provider}),&json!({"agentId":session_options["agentId"],"runtimeId":active.runtime.runtime_id,"setting":setting,"code":"unsupported","reason":reason})).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+        let requested=safe_requested_options(&exec_options);let applied=json!({setting.clone():{"applied":false,"reason":"execution_gate_or_capability_unavailable"}});
+        let (_,event)=st.db.reject_exec_turn(&sid,&turn,&snapshot_id,&text,&requested,&applied,&json!({}),desired_instruction_hash.as_deref(),&json!({"adapter":active.runtime.provider}),&json!({"agentId":session_options["agentId"],"runtimeId":active.runtime.runtime_id,"setting":setting,"code":error.1.code,"reason":error.1.message})).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
         st.broadcast_persisted(vec![event]);
-        return Err(derr("unsupported", reason, StatusCode::BAD_REQUEST));
+        return Err(error);
     }
+    active.adapter.set_instruction_hash_context(&sid,desired_instruction_hash.clone(),baseline.clone()).await;
     {
         let mut turns = st.active_turns.lock().await;
         if turns.contains_key(&sid) {
@@ -925,7 +933,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
         let requested_any = exec_options.model.is_some() || exec_options.thinking.is_some() || exec_options.service_tier.is_some() || exec_options.instructions.is_some() || !exec_options.env.is_empty();
         let settings = st.db.settings().unwrap_or(Value::Null);
         let gates = json!({"model":settings[format!("exec_gate.{}.model",active.runtime.provider)],"thinking":settings[format!("exec_gate.{}.thinking",active.runtime.provider)],"serviceTier":settings[format!("exec_gate.{}.serviceTier",active.runtime.provider)],"instructions":settings[format!("exec_gate.{}.instructions",active.runtime.provider)]});
-        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({}),&json!({}),None,&json!({"adapter":active.runtime.provider,"gates":gates}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({}),&json!({}),desired_instruction_hash.as_deref(),&json!({"adapter":active.runtime.provider,"gates":gates}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
         st.emit("exec.options.changed", json!({"sessionId":sid,"turnId":turn,"agentId":session["agentId"],"runtimeId":active.runtime.runtime_id,"requested":snapshot["requested"],"applied":snapshot["applied"],"snapshotId":snapshot_id})).await;
         st.db.update_session_state(&sid, "working").map_err(|e| {
             derr(
@@ -1432,6 +1440,17 @@ mod phase2a_tests {
         let(st,_)=state();let events=st.db.set_setting("exec_gate.codex.model",&json!(false)).unwrap();st.broadcast_persisted(events);
         let requested=ExecOptions{model:Some("gpt-test".into()),..ExecOptions::default()};let rejection=exec_option_rejection(&st,"codex",&requested).unwrap().unwrap();assert_eq!(rejection.0,"model");assert_eq!(rejection.1,EXEC_UNAVAILABLE);
         assert!(exec_option_rejection(&st,"codex",&ExecOptions::default()).unwrap().is_none());
+    }
+    #[tokio::test]
+    async fn catalog_validation_rejects_turn_values_but_accepts_custom_ids_without_authority(){
+        let authoritative=json!({"fallback":false,"models":[{"id":"claude-sonnet-test","supportedThinking":["low","high"],"serviceTiers":[{"id":"fast"}]}]});
+        assert!(validate_option_values_against_catalog(Some("custom-model"),Some("custom-effort"),Some("custom-tier"),None).is_ok());
+        assert!(validate_option_values_against_catalog(Some("custom-model"),Some("custom-effort"),Some("custom-tier"),Some(&json!({"fallback":true,"models":[]}))).is_ok());
+        assert_eq!(validate_option_values_against_catalog(Some("missing"),None,None,Some(&authoritative)).unwrap_err().1.code,"invalid_argument");
+        assert_eq!(validate_option_values_against_catalog(Some("claude-sonnet-test"),Some("xhigh"),None,Some(&authoritative)).unwrap_err().1.message,"thinking is not supported by the selected model");
+        assert_eq!(validate_option_values_against_catalog(Some("claude-sonnet-test"),None,Some("slow"),Some(&authoritative)).unwrap_err().1.message,"serviceTier is not supported by the selected model");
+        assert!(validate_option_values_against_catalog(Some("claude-sonnet-test"),Some("high"),Some("fast"),Some(&authoritative)).is_ok());
+        let(st,_)=state();let empty=ExecOptions{model:Some(String::new()),..ExecOptions::default()};assert_eq!(validate_exec_catalog(&st,&json!({"id":"rt-test","provider":"codex"}),&empty).await.unwrap_err().1.code,"invalid_argument");
     }
     #[tokio::test]
     async fn agent_list_without_capability_is_rejected_before_dispatch(){

@@ -101,7 +101,14 @@ function requests(): UsageAnalyticsRequest[] {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  localStorage.removeItem(ANALYTICS_STORAGE_KEY)
+  // In-memory storage so the tests do not depend on the runtime's own localStorage.
+  const store = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => { store.set(key, String(value)) },
+    removeItem: (key: string) => { store.delete(key) },
+    clear: () => store.clear(),
+  })
   fetchUsageAnalytics.mockReset()
   fetchUsageAnalytics.mockResolvedValue(analyticsFixtures.full)
 })

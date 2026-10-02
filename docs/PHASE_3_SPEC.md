@@ -605,3 +605,13 @@ Open questions for the Director: none that block Phase 3. The choices in this sp
 - Multica layout, copy, or assets.
 - New npm dependencies, including a chart library or Testing Library.
 - A Tauri command for the selected agent.
+
+## Implementation notes (accepted deviations)
+
+The Director accepted these without a code change:
+
+- F4: component props beyond the tables in section 7 (`busy`, `onScan`, `mode`, `model`, `execution`, and the page dirty/ready flags).
+- F5: the extra "Archive blob" button on the Settings tab, in addition to the roster context menu.
+- F8: a benign extra `agent.get` after this client's own save. The fetch still replaces the row with the daemon's agent.
+
+Selectors live in `apps/desktop/src/ui/rosterSelectors.ts` (tests in `rosterSelectors.test.ts`). `agentRoster.ts` was renamed so it does not collide with `AgentRoster.tsx` on a case-insensitive filesystem.

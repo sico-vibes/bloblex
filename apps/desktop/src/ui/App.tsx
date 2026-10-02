@@ -4,7 +4,7 @@ import { emit, listen } from '@tauri-apps/api/event'
 import {
   Activity, ArrowDownToLine, ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronUp, CircleHelp, Clock3, Code2, Copy, FileText, FolderOpen,
   Gauge, GitBranch, Home, Laptop, LoaderCircle, MessageCircle, MessageSquarePlus, MoreHorizontal, PanelRight, Paperclip, Play, Plus,
-  RefreshCw, Search, Settings2, ShieldAlert, Square, Terminal, Volume2, VolumeX, X,
+  RefreshCw, Settings2, ShieldAlert, Square, Terminal, Volume2, VolumeX, X,
 } from 'lucide-react'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, unlockCompanionAudioFromGesture } from '../blob/soundCues'
@@ -18,6 +18,11 @@ import bloblexLogo from '../assets/bloblex-128.png'
 import { sessionsForPauseRequest } from './trayActions'
 import { budgetValue, findApplicableBudget } from './budgetPresentation'
 import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, providerColor, type Agent, type ConnectionState, type DaemonEvent, type PermissionRequest, type Runtime, type Session, type Snapshot } from '../types'
+import { agentColorHex } from './agentColor'
+import { AgentRoster } from './AgentRoster'
+import { createDraft, createParams, daemonCodeOf, draftFromAgent, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
+import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicateAgentName, legacySessions, nextAgentAfterArchive, runtimeUsable, sessionForSelection, sessionNewParams } from './rosterSelectors'
+import { BlobPage, ConfirmDialog } from './BlobPage'
 import { companionMonitorOptions, currentCompanionMonitor, ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectLocalFile, setActiveRuntime, setActiveSession, setCloseToTray, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream } from '../tauri'
 
 type ContextTab = 'Details' | 'Runtime' | 'Files'
@@ -33,6 +38,15 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [selectedRuntimeId, setSelectedRuntimeId] = useState<string | null>(null)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
+  const [blobPage, setBlobPage] = useState<{ mode: 'create' | 'edit'; agentId: string | null } | null>(null)
+  const [draft, setDraft] = useState<AgentDraft | null>(null)
+  const [baseline, setBaseline] = useState<AgentDraft | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [remoteNotice, setRemoteNotice] = useState<string | null>(null)
+  const [archiveTarget, setArchiveTarget] = useState<Agent | null>(null)
+  const [rosterAnnouncement, setRosterAnnouncement] = useState('')
+  const [archiveNotice, setArchiveNotice] = useState<string | null>(null)
   const [tab, setTab] = useState<ContextTab>('Details')
   const [composer, setComposer] = useState('')
   const [busy, setBusy] = useState(false)
@@ -43,52 +57,95 @@ export function App() {
   const [settingsInitialPage, setSettingsInitialPage] = useState<'General' | 'Runtimes'>('General')
   const [diffViewer, setDiffViewer] = useState<{ path: string; content: string } | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
-  const [runtimeMenu, setRuntimeMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [usageSummary, setUsageSummary] = useState<Record<string, unknown> | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const agentEventSeq = useRef(new Map<string, number>())
   const hydrateAgentChanges = useCallback((events: DaemonEvent[]) => {
     for (const event of events) {
       if (event.type !== 'agent.changed' || typeof event.payload?.agentId !== 'string') continue
-      void rpc<{ agent?: Agent }>('agent.get', { agentId: event.payload.agentId }).then(({ agent }) => {
+      const prior = snapshotRef.current
+      if (prior && typeof event.sequence === 'number' && typeof prior.sequence === 'number' && event.sequence <= prior.sequence) continue
+      const agentId = event.payload.agentId
+      const eventSequence = typeof event.sequence === 'number' ? event.sequence : Number.POSITIVE_INFINITY
+      const seen = agentEventSeq.current.get(agentId)
+      if (seen !== undefined && eventSequence <= seen) continue
+      agentEventSeq.current.set(agentId, eventSequence)
+      void rpc<{ agent?: Agent }>('agent.get', { agentId }).then(({ agent }) => {
         if (!agent?.id) return
-        setSnapshot((current) => current && (current.sequence ?? 0) >= (event.sequence ?? 0)
-          ? { ...current, agents: [...(current.agents ?? []).filter((item) => item.id !== agent.id), agent].sort((a, b) => a.runtimeId.localeCompare(b.runtimeId) || a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)) }
-          : current)
+        const latest = agentEventSeq.current.get(agent.id)
+        if (latest !== undefined && eventSequence < latest) return
+        setSnapshot((current) => {
+          if (!current) return current
+          const agents = [...(current.agents ?? []).filter((item) => item.id !== agent.id), agent]
+            .sort((a, b) => a.runtimeId.localeCompare(b.runtimeId) || a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+          return { ...current, agents }
+        })
+        const page = blobPageRef.current
+        if (page?.mode === 'edit' && page.agentId === agent.id && !agent.archived) {
+          if (draftDirtyRef.current) setRemoteNotice('This blob changed elsewhere. Save will overwrite those fields, or cancel to load the latest.')
+          else {
+            const next = draftFromAgent(agent)
+            setDraft(next)
+            setBaseline(next)
+            setRemoteNotice(null)
+          }
+        }
       }).catch(() => undefined)
     }
   }, [])
   const [budgetAlertActive, setBudgetAlertActive] = useState(false)
   const [permissionClock, setPermissionClock] = useState(() => Date.now())
-  const [runtimeExplainerDismissed, setRuntimeExplainerDismissed] = useState(() => localStorage.getItem('bloblex.runtimeExplainer.dismissed') === '1')
-  const [inspectorOpen, setInspectorOpen] = useState(() => localStorage.getItem('bloblex.inspector.open') === '1')
+  const [runtimeExplainerDismissed, setRuntimeExplainerDismissed] = useState(() => storageFlag('bloblex.runtimeExplainer.dismissed'))
+  const [inspectorOpen, setInspectorOpen] = useState(() => storageFlag('bloblex.inspector.open'))
   const [search, setSearch] = useState('')
   const composerRef = useRef<HTMLTextAreaElement>(null)
-  const runtimeRowFocus = useRef<HTMLButtonElement | null>(null)
   const messageListRef = useRef<HTMLElement>(null)
   const stickToBottom = useRef(true)
   const queuedEvents = useRef<DaemonEvent[]>([])
   const hydrating = useRef(true)
   const refreshingRef = useRef(false)
   const refreshAgain = useRef(false)
+  const snapshotRef = useRef<Snapshot | null>(null)
+  const selectedAgentIdRef = useRef<string | null>(null)
+  const selectedRuntimeIdRef = useRef<string | null>(null)
+  const activeSessionIdRef = useRef<string | null>(null)
+  const blobPageRef = useRef(blobPage)
+  const draftDirtyRef = useRef(false)
+  const rosterOrderRef = useRef<Agent[]>([])
+  const selectionBooted = useRef(false)
+  const handledArchiveRef = useRef<string | null>(null)
+  snapshotRef.current = snapshot
+  selectedAgentIdRef.current = selectedAgentId
+  selectedRuntimeIdRef.current = selectedRuntimeId
+  activeSessionIdRef.current = activeSessionId
+  blobPageRef.current = blobPage
+  draftDirtyRef.current = !!(draft && baseline && isAgentDirty(draft, baseline))
 
   const runtimes = snapshot?.runtimes ?? []
   const sessions = snapshot?.sessions ?? []
-  const selectedRuntime = runtimes.find((runtime) => runtime.id === selectedRuntimeId) ?? runtimes[0] ?? null
-  const selectedSession = sessions.find((session) => session.id === selectedSessionId && (!selectedRuntime || session.runtimeId === selectedRuntime.id))
-    ?? sessions.find((session) => session.id === activeSessionId && (!selectedRuntime || session.runtimeId === selectedRuntime.id))
-    ?? sessions.filter((session) => session.runtimeId === selectedRuntime?.id).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
-    ?? null
+  const agents = snapshot?.agents ?? []
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? null
+  const activeSelectedAgent = selectedAgent && !selectedAgent.archived ? selectedAgent : null
+  const selectedRuntime = activeSelectedAgent
+    ? runtimes.find((runtime) => runtime.id === activeSelectedAgent.runtimeId) ?? null
+    : runtimes.find((runtime) => runtime.id === selectedRuntimeId) ?? runtimes[0] ?? null
+  const selectedSession = activeSelectedAgent
+    ? sessionForSelection(sessions, activeSelectedAgent, selectedSessionId, activeSessionId)
+    : sessions.find((session) => session.id === selectedSessionId && (!selectedRuntime || session.runtimeId === selectedRuntime.id))
+      ?? sessions.find((session) => session.id === activeSessionId && (!selectedRuntime || session.runtimeId === selectedRuntime.id))
+      ?? sessions.filter((session) => session.runtimeId === selectedRuntime?.id).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
+      ?? null
   const sessionMessages = selectedSession?.messages ?? selectedSession?.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages : []) ?? selectedSession?.events ?? []
   const conversationItems = selectedSession ? buildConversationItems(selectedSession) : []
   const activePermission = selectPendingPermission(snapshot?.permissions ?? [], selectedSession?.id, activeSessionId, permissionClock)
-  const agentName = selectedRuntime ? labelize(selectedRuntime.provider) : 'No runtime selected'
-  const accent = providerColor(selectedRuntime?.provider)
+  const agentName = activeSelectedAgent?.name ?? (selectedRuntime ? labelize(selectedRuntime.provider) : 'No runtime selected')
+  const accent = activeSelectedAgent ? agentColorHex(activeSelectedAgent.color) : ''
   const companionPermission = activePermission ?? undefined
   const companionSessionRecord = sessions.find((session) => session.id === companionPermission?.sessionId)
-    ?? sessions.find((session) => session.id === activeSessionId && session.runtimeId === selectedRuntimeId)
     ?? selectedSession
   const companionSession = companionSessionRecord
-  const companionRuntime = runtimes.find((runtime) => runtime.id === companionSession?.runtimeId) ?? runtimes.find((runtime) => runtime.id === selectedRuntimeId) ?? selectedRuntime
+  const companionAgent = agents.find((agent) => agent.id === companionSession?.agentId && !agent.archived) ?? activeSelectedAgent
+  const companionRuntime = runtimes.find((runtime) => runtime.id === companionAgent?.runtimeId) ?? runtimes.find((runtime) => runtime.id === companionSession?.runtimeId) ?? selectedRuntime
   const alertSessionId = typeof snapshot?.latestBudgetAlert?.sessionId === 'string' ? snapshot.latestBudgetAlert.sessionId : null
   const budgetWarningFor = (item: Session | null) => budgetAlertActive && (!alertSessionId || alertSessionId === item?.id)
   const companionStatus = deriveCompanionStatus({ connected: connection === 'connected', runtime: companionRuntime, session: companionSession, permissionPending: !!companionPermission, budgetWarning: budgetWarningFor(companionSession) })
@@ -131,7 +188,7 @@ export function App() {
       hydrating.current = false
       setSnapshot(queued.reduce((state, event) => applyEvent(state, event), next))
       hydrateAgentChanges(queued)
-      setConnection('connected')
+      setConnection(new URLSearchParams(location.search).has('disconnected') ? 'disconnected' : 'connected')
       setError(null)
     } catch (reason) {
       hydrating.current = false
@@ -151,6 +208,10 @@ export function App() {
     if (!activePermission?.sessionId) return
     const target = sessions.find((item) => item.id === activePermission.sessionId)
     if (!target) return
+    if (target.agentId) {
+      const owner = (snapshot?.agents ?? []).find((agent) => agent.id === target.agentId && !agent.archived)
+      if (owner && owner.id !== selectedAgentId) setSelectedAgentId(owner.id)
+    }
     if (target.runtimeId !== selectedRuntimeId) setSelectedRuntimeId(target.runtimeId)
     if (target.id !== selectedSessionId) setSelectedSessionId(target.id)
     if (target.id !== activeSessionId) {
@@ -158,7 +219,7 @@ export function App() {
       void setActiveSession(target.id)
       void setActiveRuntime(target.runtimeId)
     }
-  }, [activePermission?.id, activePermission?.sessionId, sessions, selectedRuntimeId, selectedSessionId, activeSessionId])
+  }, [activePermission?.id, activePermission?.sessionId, sessions, selectedRuntimeId, selectedSessionId, activeSessionId, selectedAgentId, snapshot?.agents])
 
   useEffect(() => {
     const deadline = nextPermissionDeadline(snapshot?.permissions ?? [], permissionClock)
@@ -261,7 +322,7 @@ export function App() {
         setActiveSessionId(storedActive)
         setSelectedRuntimeId(storedRuntime)
         setSnapshot(initial)
-        setConnection('connected')
+        setConnection(new URLSearchParams(location.search).has('disconnected') ? 'disconnected' : 'connected')
         await startDaemonEventStream()
         const missedWhileSubscribing = [...(replay.replayAvailable === false ? [] : replay.events ?? []), ...queuedEvents.current]
           .filter((event) => (event.sequence ?? 0) > (initial.sequence ?? 0))
@@ -288,7 +349,17 @@ export function App() {
     if (!inDesktop) return
     let unlisten: (() => void) | undefined
     let cancelled = false
-    void listenForActiveRuntime((runtimeId) => setSelectedRuntimeId(runtimeId)).then((stop) => { if (cancelled) stop(); else unlisten = stop })
+    void listenForActiveRuntime((runtimeId) => {
+      const list = snapshotRef.current?.agents ?? []
+      const current = list.find((agent) => agent.id === selectedAgentIdRef.current)
+      if (!current) { setSelectedRuntimeId(runtimeId); return }
+      if (!runtimeId || current.runtimeId === runtimeId) return
+      const next = agentsForRuntime(list, runtimeId)[0]
+      if (!next) return
+      setSelectedAgentId(next.id)
+      setSelectedRuntimeId(next.runtimeId)
+      setSelectedSessionId(agentSessions(snapshotRef.current?.sessions ?? [], next.id)[0]?.id ?? null)
+    }).then((stop) => { if (cancelled) stop(); else unlisten = stop })
     return () => { cancelled = true; unlisten?.() }
   }, [])
 
@@ -312,12 +383,29 @@ export function App() {
     if (!inDesktop) return
     let unlisten: (() => void) | undefined
     let cancelled = false
-    void listenForActiveSession((sessionId) => { setActiveSessionId(sessionId); setSelectedSessionId(sessionId) }).then((stop) => { if (cancelled) stop(); else unlisten = stop })
+    void listenForActiveSession((sessionId) => {
+      setActiveSessionId(sessionId)
+      if (!sessionId) { setSelectedSessionId(null); return }
+      const session = snapshotRef.current?.sessions?.find((item) => item.id === sessionId)
+      if (!session) { setSelectedSessionId(sessionId); return }
+      if (session.agentId) {
+        const owner = (snapshotRef.current?.agents ?? []).find((agent) => agent.id === session.agentId && !agent.archived)
+        if (owner) { setSelectedAgentId(owner.id); setSelectedRuntimeId(owner.runtimeId) }
+        setSelectedSessionId(session.id)
+        return
+      }
+      setSelectedSessionId(session.id)
+      const current = (snapshotRef.current?.agents ?? []).find((agent) => agent.id === selectedAgentIdRef.current)
+      if (current && current.runtimeId !== session.runtimeId) {
+        const next = agentsForRuntime(snapshotRef.current?.agents ?? [], session.runtimeId)[0]
+        if (next) { setSelectedAgentId(next.id); setSelectedRuntimeId(next.runtimeId) }
+      }
+    }).then((stop) => { if (cancelled) stop(); else unlisten = stop })
     return () => { cancelled = true; unlisten?.() }
   }, [])
 
   useEffect(() => {
-    if (selectedSession && selectedSession.runtimeId !== selectedRuntimeId) setSelectedRuntimeId(selectedSession.runtimeId)
+    if (!activeSelectedAgent && selectedSession && selectedSession.runtimeId !== selectedRuntimeId) setSelectedRuntimeId(selectedSession.runtimeId)
     if (selectedSession && selectedSession.id !== activeSessionId) {
       setActiveSessionId(selectedSession.id)
       void setActiveSession(selectedSession.id)
@@ -325,39 +413,230 @@ export function App() {
       setActiveSessionId(null)
       void setActiveSession(null)
     }
-  }, [selectedSession, selectedRuntimeId, activeSessionId, selectedSessionId])
+  }, [activeSelectedAgent, selectedSession, selectedRuntimeId, activeSessionId, selectedSessionId])
 
-  const doRpc = useCallback(async <T,>(method: string, params: Record<string, unknown> = {}) => {
+  useEffect(() => {
+    if (!snapshot || selectionBooted.current) return
+    selectionBooted.current = true
+    const list = snapshot.agents ?? []
+    const active = activeAgents(list)
+    if (!active.length) return
+    const storedId = readStoredAgentId()
+    const stored = storedId ? active.find((agent) => agent.id === storedId) : undefined
+    const onRuntime = selectedRuntimeIdRef.current ? agentsForRuntime(list, selectedRuntimeIdRef.current)[0] : undefined
+    const agent = stored ?? onRuntime ?? active[0]
+    if (!agent) return
+    setSelectedAgentId(agent.id)
+    setSelectedRuntimeId(agent.runtimeId)
+    const storedSession = (snapshot.sessions ?? []).find((session) => session.id === activeSessionIdRef.current)
+    const storedOk = !!storedSession && (storedSession.agentId === agent.id || ((storedSession.agentId == null) && storedSession.runtimeId === agent.runtimeId))
+    const nextSession = storedOk ? storedSession : agentSessions(snapshot.sessions ?? [], agent.id)[0]
+    setSelectedSessionId(nextSession?.id ?? null)
+  }, [snapshot])
+
+  useEffect(() => {
+    if (!selectionBooted.current) return
+    const active = activeAgents(snapshot?.agents ?? [])
+    if (selectedAgentId && active.some((agent) => agent.id === selectedAgentId)) writeStoredAgentId(selectedAgentId)
+    else if (!selectedAgentId) writeStoredAgentId(null)
+  }, [selectedAgentId, snapshot])
+
+  useEffect(() => {
+    const list = snapshot?.agents ?? []
+    const active = activeAgents(list)
+    const editorId = blobPage?.mode === 'edit' ? blobPage.agentId : null
+    if (selectedAgentId) {
+      const current = list.find((agent) => agent.id === selectedAgentId)
+      if (!current || current.archived) {
+        if (handledArchiveRef.current !== selectedAgentId) {
+          handledArchiveRef.current = selectedAgentId
+          const prior = rosterOrderRef.current.some((agent) => agent.id === selectedAgentId)
+            ? rosterOrderRef.current
+            : activeAgents(list.map((agent) => agent.id === selectedAgentId ? { ...agent, archived: false } : agent))
+          const name = current?.name || prior.find((agent) => agent.id === selectedAgentId)?.name || 'Blob'
+          const next = nextAgentAfterArchive(prior, selectedAgentId)
+          const nextSession = next ? agentSessions(snapshot?.sessions ?? [], next.id)[0] ?? null : null
+          setRosterAnnouncement(next ? `Archived ${name}. Now showing ${next.name}.` : `Archived ${name}. No blobs left.`)
+          setSelectedAgentId(next?.id ?? null)
+          setSelectedSessionId(nextSession?.id ?? null)
+          if (next) setSelectedRuntimeId(next.runtimeId)
+          if (blobPage && blobPage.agentId === selectedAgentId) {
+            setArchiveNotice(`Archived “${name}”. Its conversations stay saved. Restoring a blob is not available yet.`)
+            setBlobPage(null)
+          }
+        }
+      }
+    }
+    if (editorId && editorId !== selectedAgentId) {
+      const editor = list.find((agent) => agent.id === editorId)
+      if (editor?.archived) {
+        setArchiveNotice(`Archived “${editor.name}”. Its conversations stay saved. Restoring a blob is not available yet.`)
+        setBlobPage(null)
+      }
+    }
+    rosterOrderRef.current = active
+  }, [snapshot, selectedAgentId, blobPage])
+
+  const doRpc = useCallback(async <T,>(method: string, params: Record<string, unknown> = {}, mapError?: (reason: unknown) => string) => {
     setBusy(true)
     setError(null)
     try {
       const result = await rpc<T>(method, params)
       return result
     } catch (reason) {
-      setError(messageOf(reason))
+      setError(mapError ? mapError(reason) : messageOf(reason))
       throw reason
     } finally {
       setBusy(false)
     }
   }, [])
 
-  const newSession = async (runtimeId?: string) => {
-    const targetRuntime = runtimeId ? runtimes.find((item) => item.id === runtimeId) : selectedRuntime
-    if (!targetRuntime) return
+  const mergeAgent = (agent: Agent) => {
+    setSnapshot((current) => current ? {
+      ...current,
+      agents: [...(current.agents ?? []).filter((item) => item.id !== agent.id), agent]
+        .sort((a, b) => a.runtimeId.localeCompare(b.runtimeId) || a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
+    } : current)
+  }
+
+  const openEdit = (agent: Agent) => {
+    const next = draftFromAgent(agent)
+    setDraft(next)
+    setBaseline(next)
+    setFormError(null)
+    setRemoteNotice(null)
+    setBlobPage({ mode: 'edit', agentId: agent.id })
+    if (agent.id !== selectedAgentId) {
+      setSelectedAgentId(agent.id)
+      setSelectedRuntimeId(agent.runtimeId)
+      const owned = agentSessions(sessions, agent.id)
+      const current = sessions.find((session) => session.id === selectedSessionId)
+      if (!current || current.agentId !== agent.id) setSelectedSessionId(owned[0]?.id ?? null)
+    }
+  }
+
+  const openCreate = () => {
+    const next = createDraft(runtimes, activeSelectedAgent?.runtimeId ?? selectedRuntime?.id ?? null)
+    setDraft(next)
+    setBaseline(next)
+    setFormError(null)
+    setRemoteNotice(null)
+    setBlobPage({ mode: 'create', agentId: null })
+  }
+
+  const closeBlobPage = (focusId: string | null) => {
+    setBlobPage(null)
+    setFormError(null)
+    window.setTimeout(() => {
+      const row = focusId ? document.querySelector<HTMLButtonElement>(`[data-agent-id="${CSS.escape(focusId)}"]`) : null
+      ;(row ?? document.querySelector<HTMLButtonElement>('[aria-label="Create blob"]'))?.focus()
+    }, 0)
+  }
+
+  const saveBlob = async () => {
+    if (!draft || !baseline) return
+    const others = activeAgents(agents).filter((agent) => agent.id !== (blobPage?.mode === 'edit' ? blobPage.agentId : undefined)).map((agent) => agent.name)
+    if (Object.keys(validateAgentDraft(draft, others)).length > 0) return
+    const editing = blobPage?.mode === 'edit' ? agents.find((agent) => agent.id === blobPage.agentId) ?? null : null
     try {
-      const projectPath = await openProjectFolder()
-      if (!projectPath) return
-      const result = await doRpc<Session | { session: Session }>('session.new', { runtimeId: targetRuntime.id, projectPath })
-      const session = (result as { session?: Session }).session ?? result as Session
+      if (!editing) {
+        const result = await doRpc<{ agent?: Agent }>('agent.create', createParams(draft), (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.create'))
+        const agent = result.agent
+        if (!agent?.id) return
+        mergeAgent(agent)
+        const next = draftFromAgent(agent)
+        setDraft(next)
+        setBaseline(next)
+        setFormError(null)
+        setRemoteNotice(null)
+        setSelectedAgentId(agent.id)
+        setSelectedRuntimeId(agent.runtimeId)
+        setBlobPage({ mode: 'edit', agentId: agent.id })
+        return
+      }
+      const params = updateParams(editing.id, draft, baseline)
+      if (Object.keys(params).length === 1) return
+      const result = await doRpc<{ agent?: Agent }>('agent.update', params, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.update', { archived: editing.archived, sentName: Object.prototype.hasOwnProperty.call(params, 'name') }))
+      const agent = result.agent
+      if (!agent?.id) return
+      mergeAgent(agent)
+      const next = draftFromAgent(agent)
+      setDraft(next)
+      setBaseline(next)
+      setFormError(null)
+      setRemoteNotice(null)
+    } catch (reason) {
+      const kind = editing ? 'agent.update' : 'agent.create'
+      setFormError(messageForDaemonCode(daemonCodeOf(reason), kind, { archived: editing?.archived === true, sentName: editing ? draft.name !== baseline.name : true }))
+      setError(null)
+    }
+  }
+
+  const duplicateAgent = async (agent: Agent) => {
+    const name = duplicateAgentName(agent.name, activeAgents(agents).map((item) => item.name))
+    try {
+      const result = await doRpc<{ agent?: Agent }>('agent.create', duplicateParams(agent, name), (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.create'))
+      const created = result.agent
+      if (!created?.id) return
+      mergeAgent(created)
+      setSelectedAgentId(created.id)
+      setSelectedRuntimeId(created.runtimeId)
+      setSelectedSessionId(null)
+    } catch (reason) {
+      setError(messageForDaemonCode(daemonCodeOf(reason), 'agent.create'))
+    }
+  }
+
+  const confirmArchive = async () => {
+    const agent = archiveTarget
+    if (!agent) return
+    setArchiveTarget(null)
+    try {
+      const result = await doRpc<{ agent?: Agent }>('agent.delete', { agentId: agent.id }, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.delete'))
+      if (result.agent?.id) mergeAgent(result.agent)
+      else mergeAgent({ ...agent, archived: true })
+    } catch (reason) {
+      setError(messageForDaemonCode(daemonCodeOf(reason), 'agent.delete'))
+    }
+  }
+
+  const newSession = async (agentId?: string) => {
+    const agent = agents.find((item) => item.id === (agentId ?? activeSelectedAgent?.id) && !item.archived)
+    const runtime = agent ? runtimes.find((item) => item.id === agent.runtimeId) : null
+    if (!agent || connection !== 'connected' || busy || !runtimeUsable(runtime)) return
+    const storedProject = agent.defaultProject?.trim() ?? ''
+    const mapError = (reason: unknown) => messageForDaemonCode(daemonCodeOf(reason), 'session.new')
+    try {
+      let projectPath = storedProject
+      if (!projectPath) {
+        const picked = await openProjectFolder()
+        if (!picked) return
+        projectPath = picked
+      }
+      let result: Session | { session?: Session }
+      try {
+        result = await doRpc<Session | { session?: Session }>('session.new', sessionNewParams(agent.id, projectPath), mapError)
+      } catch (reason) {
+        if (daemonCodeOf(reason) !== 'invalid_argument' || !storedProject) return
+        const picked = await openProjectFolder()
+        if (!picked) return
+        result = await doRpc<Session | { session?: Session }>('session.new', sessionNewParams(agent.id, picked), mapError)
+      }
+      const session = unwrapSession(result)
+      if (!session?.id) return
+      if (session.agentId) {
+        const owner = agents.find((item) => item.id === session.agentId && !item.archived)
+        if (owner) { setSelectedAgentId(owner.id); setSelectedRuntimeId(owner.runtimeId) }
+      }
       setSelectedSessionId(session.id)
       void refreshTrayMenu().catch(() => undefined)
       await refresh()
-    } catch { /* The actionable error is shown inline. */ }
+    } catch { /* The mapped error is shown inline. */ }
   }
 
   const sendPrompt = async () => {
     const text = composer.trim()
-    if (!text || !selectedSession || busy || selectedSession.state === 'waiting_permission') return
+    if (!text || !selectedSession || busy || selectedSession.state === 'waiting_permission' || !runtimeUsable(selectedRuntime)) return
     try {
       await doRpc('session.prompt', { sessionId: selectedSession.id, text })
       setComposer('')
@@ -405,51 +684,45 @@ export function App() {
   }
 
   if (companion) {
-    return <Companion runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} budgetWarning={budgetWarningFor(companionSession)} permission={companionPermission} onReply={answerPermission} onNewSession={newSession} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectRuntime={(runtimeId) => { const next = sessions.filter((item) => item.runtimeId === runtimeId).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0] ?? null; setSelectedRuntimeId(runtimeId); setSelectedSessionId(next?.id ?? null); void setActiveRuntime(runtimeId); void setActiveSession(next?.id ?? null) }} />
+    return <Companion agent={companionAgent} agents={agents} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} budgetWarning={budgetWarningFor(companionSession)} permission={companionPermission} onReply={answerPermission} onNewSession={() => void newSession(companionAgent?.id)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={(agentId) => { const agent = activeAgents(agents).find((item) => item.id === agentId); if (!agent) return; const latest = agentSessions(sessions, agent.id)[0] ?? null; setSelectedAgentId(agent.id); setSelectedRuntimeId(agent.runtimeId); setSelectedSessionId(latest?.id ?? null); void setActiveRuntime(agent.runtimeId); void setActiveSession(latest?.id ?? null) }} />
   }
 
-  const query = search.trim().toLowerCase()
-  const runtimeRows = runtimes.map((runtime) => {
-    const runtimeSessions = sessions.filter((session) => session.runtimeId === runtime.id).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
-    return { runtime, latest: runtimeSessions[0] ?? null, sessions: runtimeSessions }
-  }).filter(({ runtime, sessions: owned }) => !query || labelize(runtime.provider).toLowerCase().includes(query) || owned.some((session) => formatUnknownSafe(session.title, session.projectPath ?? '').toLowerCase().includes(query)))
   const selectedMood = deriveCompanionStatus({ connected: connection === 'connected', runtime: selectedRuntime, session: selectedSession, budgetWarning: budgetWarningFor(selectedSession), composing: !!composer.trim() }).mood
   const sessionBusy = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
+  const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
+  const runtimeReady = runtimeUsable(selectedRuntime)
+  const canStartSession = connection === 'connected' && !busy && !!activeSelectedAgent && runtimeReady
   const lastAgentIndex = conversationItems.reduce((last, item, index) => item.kind === 'message' && !isUserMessage(item.value) ? index : last, -1)
-  const selectRuntime = (runtime: Runtime, latest: Session | null) => { setSelectedRuntimeId(runtime.id); void setActiveRuntime(runtime.id); setSelectedSessionId(latest?.id ?? null); setActiveSessionId(latest?.id ?? null); void setActiveSession(latest?.id ?? null) }
-  const openRuntimeMenu = (runtimeId: string, element: HTMLButtonElement, x: number, y: number) => { runtimeRowFocus.current = element; setRuntimeMenu({ id: runtimeId, x, y }) }
+  const selectAgent = (agent: Agent) => {
+    const latest = agentSessions(sessions, agent.id)[0] ?? null
+    setSelectedAgentId(agent.id)
+    setSelectedRuntimeId(agent.runtimeId)
+    setSelectedSessionId(latest?.id ?? null)
+    void setActiveRuntime(agent.runtimeId)
+    void setActiveSession(latest?.id ?? null)
+    setBlobPage((page) => page && page.agentId !== agent.id ? null : page)
+  }
   const toggleInspector = () => setInspectorOpen((open) => { localStorage.setItem('bloblex.inspector.open', open ? '0' : '1'); return !open })
+  const editingAgent = blobPage?.mode === 'edit' ? agents.find((agent) => agent.id === blobPage.agentId) ?? null : null
+  const otherNames = activeAgents(agents).filter((agent) => agent.id !== editingAgent?.id).map((agent) => agent.name)
+  const fieldErrors = draft ? validateAgentDraft(draft, otherNames) : {}
+  const draftReady = Object.keys(fieldErrors).length === 0
+  const draftDirty = !!(draft && baseline && isAgentDirty(draft, baseline))
+  const draftRuntime = draft ? runtimes.find((runtime) => runtime.id === draft.runtimeId) ?? null : selectedRuntime
+  const pageSessions = editingAgent ? agentSessions(sessions, editingAgent.id) : []
+  const pageLegacy = legacySessions(sessions, (editingAgent ?? activeSelectedAgent)?.runtimeId ?? draft?.runtimeId ?? '')
+  const headerOwned = activeSelectedAgent ? agentSessions(sessions, activeSelectedAgent.id) : sessions.filter((session) => !selectedRuntime || session.runtimeId === selectedRuntime.id)
+  const headerLegacy = activeSelectedAgent ? legacySessions(sessions, activeSelectedAgent.runtimeId) : []
 
   return (
-    <main className={`app-shell ${inspectorOpen ? 'inspector-open' : ''}`} style={{ '--agent-accent': accent } as React.CSSProperties}>
+    <main className={`app-shell ${inspectorOpen ? 'inspector-open' : ''}`} style={accent ? { '--agent-accent': accent } as React.CSSProperties : undefined}>
       <aside className="sidebar" aria-label="Agents">
         <div className="sidebar-top">
           <div className="brand-lockup"><img className="brand-logo" src={bloblexLogo} alt="Bloblex logo" /><strong>Bloblex</strong></div>
-          <button className="icon-button" title="New session" aria-label="New session" disabled={!selectedRuntime || busy || connection !== 'connected'} onClick={() => void newSession()}><Plus size={18} /></button>
+          <button className="icon-button" title="Create blob" aria-label="Create blob" disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={openCreate}><Plus size={18} /></button>
         </div>
-        <label className="sidebar-search"><Search size={14} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" aria-label="Search agents and conversations" /></label>
-        <nav className="bot-list runtime-list">
-          {runtimeRows.map(({ runtime, latest }) => {
-            const selected = runtime.id === selectedRuntime?.id
-            const runtimeMood = deriveCompanionStatus({ connected: connection === 'connected', runtime, session: latest }).mood
-            const preview = latestPreview(latest) ?? (connection === 'connected' ? labelize(runtime.status, 'Ready') : 'Daemon disconnected')
-            return <button className={`bot-row runtime-row ${selected ? 'selected' : ''}`} key={runtime.id} aria-current={selected ? 'true' : undefined}
-              onContextMenu={(event) => { event.preventDefault(); openRuntimeMenu(runtime.id, event.currentTarget, event.clientX, event.clientY) }}
-              onKeyDown={(event) => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openRuntimeMenu(runtime.id, event.currentTarget, rect.left + 28, rect.bottom) } }}
-              onClick={() => selectRuntime(runtime, latest)}>
-              <BlobCanvas color={providerColor(runtime.provider)} size={42} mood={runtimeMood} label={labelize(runtime.provider)} />
-              <span className="bot-row-copy">
-                <span className="bot-row-top"><strong>{labelize(runtime.provider)}</strong>{latest?.updatedAt && <time>{shortTime(latest.updatedAt)}</time>}</span>
-                <span className="bot-row-preview">{preview}</span>
-              </span>
-            </button>
-          })}
-          {connection === 'connected' && runtimes.length === 0 && <div className="rail-empty">No coding CLIs detected yet.<button onClick={() => void refreshRuntimes()}>Scan again</button></div>}
-          {connection === 'connected' && runtimes.length > 0 && runtimeRows.length === 0 && <div className="rail-empty">Nothing matches “{search}”.</div>}
-          {connection !== 'connected' && <div className="rail-empty">Connect to your local runtime to see installed agents.</div>}
-        </nav>
-        {runtimeMenu && <RuntimeContextMenu runtime={runtimes.find((item) => item.id === runtimeMenu.id) ?? null} session={sessions.filter((item) => item.runtimeId === runtimeMenu.id).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0] ?? null} position={runtimeMenu} onClose={() => { setRuntimeMenu(null); window.setTimeout(() => runtimeRowFocus.current?.focus(), 0) }} onNew={() => { const id = runtimeMenu.id; setSelectedRuntimeId(id); setRuntimeMenu(null); void setActiveRuntime(id); void newSession(id) }} onResume={(target) => { setRuntimeMenu(null); setSelectedRuntimeId(target.runtimeId); setSelectedSessionId(target.id); void setActiveSession(target.id); void doRpc('session.resume', { sessionId: target.id }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() }).catch(() => undefined) }} onSettings={() => { setSelectedRuntimeId(runtimeMenu.id); setSettingsInitialPage('Runtimes'); setRuntimeMenu(null); setSettingsSheet(true) }} onStop={(target) => { setRuntimeMenu(null); void doRpc('session.cancel', { sessionId: target.id }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() }).catch(() => undefined) }} />}
-
+        <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
+        <AgentRoster agents={agents} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} busy={busy} selectedAgentId={activeSelectedAgent?.id ?? null} query={search} onQueryChange={setSearch} onSelect={selectAgent} onCreate={openCreate} onScan={() => void refreshRuntimes()} onNewSession={(agent) => void newSession(agent.id)} onEdit={openEdit} onDuplicate={(agent) => void duplicateAgent(agent)} onArchive={setArchiveTarget} />
         <div className="sidebar-foot">
           <button className="sidebar-link" onClick={() => void showUsage()} disabled={connection !== 'connected'}><Gauge size={15} />Usage</button>
           <button className="sidebar-link" onClick={() => void refreshRuntimes()} disabled={connection !== 'connected' || refreshing}><RefreshCw size={15} className={refreshing ? 'spinning' : ''} />Find agents</button>
@@ -462,30 +735,31 @@ export function App() {
       </aside>
 
       <section className="conversation-pane">
+        {blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) void newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         <header className="chat-header">
           <div className="chat-title">
-            {selectedRuntime ? <BlobCanvas color={accent} size={28} mood={selectedMood} label={agentName} /> : <span className="agent-placeholder"><Code2 size={15} /></span>}
-            <strong>{agentName}</strong>
+            {activeSelectedAgent ? <button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} onClick={() => openEdit(activeSelectedAgent)}><BlobCanvas color={accent} size={28} mood={selectedMood} label={activeSelectedAgent.name} /><strong>{activeSelectedAgent.name}</strong></button> : <><span className="agent-placeholder"><Code2 size={15} /></span><strong>{agentName}</strong></>}
             {selectedRuntime && <i className={`status-dot ${connection === 'connected' ? statusClass(selectedRuntime.status) : 'muted'}`} />}
-            {sessions.length > 0 && selectedRuntime && <div className="session-switcher-wrap"><select aria-label="Current conversation" value={selectedSession?.id ?? ''} onChange={(event) => setSelectedSessionId(event.target.value)}><option value="" disabled>Select a conversation</option>{sessions.filter((session) => session.runtimeId === selectedRuntime.id).map((session) => <option value={session.id} key={session.id}>{formatUnknownSafe(session.title, session.projectPath?.split(/[\\/]/).pop() ?? 'New session')}</option>)}</select><ChevronDown size={13} /></div>}
+            {(headerOwned.length > 0 || headerLegacy.length > 0) && (activeSelectedAgent || selectedRuntime) && <div className="session-switcher-wrap"><select aria-label="Current conversation" value={selectedSession?.id ?? ''} onChange={(event) => setSelectedSessionId(event.target.value)}><option value="" disabled>Select a conversation</option>{headerOwned.map((session) => <option value={session.id} key={session.id}>{formatUnknownSafe(session.title, session.projectPath?.split(/[\\/]/).pop() ?? 'New session')}</option>)}{headerLegacy.length > 0 && <option disabled>Not linked to a blob</option>}{headerLegacy.map((session) => <option value={session.id} key={session.id}>{formatUnknownSafe(session.title, session.projectPath?.split(/[\\/]/).pop() ?? 'New session')}</option>)}</select><ChevronDown size={13} /></div>}
           </div>
           <div className="header-actions">
-            <button className="pill-button" disabled={!selectedRuntime || busy || connection !== 'connected'} onClick={() => void newSession()}><Plus size={13} />Session</button>
-            {selectedRuntime && <button className="model-pill" title="Runtime settings" onClick={() => { setSettingsInitialPage('Runtimes'); setSettingsSheet(true) }}><span className="model-pill-mark" style={{ background: accent }} />{labelize(selectedRuntime.provider)}<span className="model-pill-model">{selectedSession?.model ?? 'CLI default'}</span><ChevronDown size={13} /></button>}
-            {selectedSession?.resumable && !sessionBusy && <button className="icon-button" title="Resume conversation" aria-label="Resume conversation" disabled={busy || connection !== 'connected'} onClick={() => void resumeSession()}><Play size={15} /></button>}
+            <button className="pill-button" disabled={!canStartSession} onClick={() => void newSession()}><Plus size={13} />Session</button>
+            {selectedRuntime && <div className="model-pill" role="group" title="Reported by the session. Bloblex does not choose the model until a later update."><span className="model-pill-mark" style={{ background: accent || 'transparent' }} />{labelize(selectedRuntime.provider)}<span className="model-pill-model">{selectedSession?.model?.trim() ? selectedSession.model : 'CLI default'}</span></div>}
+            {selectedSession?.resumable && !sessionBusy && <button className="icon-button" title="Resume conversation" aria-label="Resume conversation" disabled={busy || connection !== 'connected' || !runtimeReady} onClick={() => void resumeSession()}><Play size={15} /></button>}
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Toggle details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') setMoreOpen(false) }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
-              {moreOpen && <div className="more-menu" role="menu"><button role="menuitem" disabled={!selectedRuntime || busy} onClick={() => { setMoreOpen(false); void newSession() }}><MessageSquarePlus size={15} />New session</button><button role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><span className="more-menu-separator" /><button role="menuitem" className="danger-menu-item" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
+              {moreOpen && <div className="more-menu" role="menu"><button role="menuitem" disabled={!canStartSession} onClick={() => { setMoreOpen(false); void newSession() }}><MessageSquarePlus size={15} />New session</button><button role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><span className="more-menu-separator" /><button role="menuitem" className="danger-menu-item" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
             </div>
           </div>
         </header>
 
         {error && <div className="inline-error" role="alert"><ShieldAlert size={16} /><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError(null)}><X size={15} /></button></div>}
+        {archiveNotice && <div className="inline-error" role="status"><span>{archiveNotice}</span><button aria-label="Dismiss notice" onClick={() => setArchiveNotice(null)}><X size={15} /></button></div>}
 
         {selectedSession && !runtimeExplainerDismissed && <RuntimeExplainer onDismiss={() => { localStorage.setItem('bloblex.runtimeExplainer.dismissed', '1'); setRuntimeExplainerDismissed(true) }} />}
 
-        {!selectedSession ? <>{activePermission && <PermissionCard permission={activePermission} onReply={(choice) => void answerPermission(activePermission, choice)} />}<EmptyConversation connected={connection === 'connected'} hasRuntime={!!selectedRuntime} accent={accent} mood={selectedMood} agentName={agentName} onNewSession={() => void newSession()} onRefresh={() => void refreshRuntimes()} /></> : <>
+        {!selectedSession ? <>{activePermission && <PermissionCard permission={activePermission} onReply={(choice) => void answerPermission(activePermission, choice)} />}<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} accent={accent} mood={selectedMood} agentName={agentName} onNewSession={() => void newSession()} onCreate={openCreate} onRefresh={() => void refreshRuntimes()} /></> : <>
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
             <div className="chat-column">
               <div className="conversation-meta"><span><FolderOpen size={13} />{selectedSession.projectPath ?? 'Project path unavailable'}</span><span className="meta-divider" /><span><Clock3 size={13} />{labelize(selectedSession.state, 'Unknown state')}</span></div>
@@ -499,18 +773,19 @@ export function App() {
           <div className="composer-wrap">
             <div className="composer-box">
               <button className="composer-tool" aria-label="Attach files" title="File attachments are not available from this runtime yet" disabled><Plus size={18} /></button>
-              <textarea ref={composerRef} value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() } }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission'} rows={1} />
-              <button className={`send-button ${['working', 'waiting_permission'].includes(selectedSession.state ?? '') ? 'cancel' : ''}`} onClick={['working', 'waiting_permission'].includes(selectedSession.state ?? '') ? () => void cancelTurn() : () => void sendPrompt()} disabled={busy || (!composer.trim() && !['working', 'waiting_permission'].includes(selectedSession.state ?? ''))} aria-label={['working', 'waiting_permission'].includes(selectedSession.state ?? '') ? 'Cancel turn' : 'Send message'}>{busy ? <LoaderCircle size={16} className="spinning" /> : ['working', 'waiting_permission'].includes(selectedSession.state ?? '') ? <Square size={12} fill="currentColor" /> : <ArrowUp size={17} />}</button>
+              <textarea ref={composerRef} value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() } }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
+              <button className={`send-button ${turnLive ? 'cancel' : ''}`} onClick={turnLive ? () => void cancelTurn() : () => void sendPrompt()} disabled={busy || (!turnLive && (!composer.trim() || !runtimeReady))} aria-label={turnLive ? 'Cancel turn' : 'Send message'}>{busy ? <LoaderCircle size={16} className="spinning" /> : turnLive ? <Square size={12} fill="currentColor" /> : <ArrowUp size={17} />}</button>
             </div>
             <div className="composer-note">{currentProjectName ? <><FolderOpen size={11} />{currentProjectName}<span>·</span></> : null}Agent actions run on your device. You approve what matters.</div>
           </div>
+        </>}
         </>}
       </section>
 
       <aside className="context-pane" aria-label="Conversation details" aria-hidden={!inspectorOpen} inert={!inspectorOpen}>
         <div className="context-tabs" role="tablist" aria-label="Conversation context">{(['Details', 'Runtime', 'Files'] as ContextTab[]).map((name, index, tabs) => <button key={name} type="button" id={`context-tab-${name.toLowerCase()}`} role="tab" aria-controls="context-panel" aria-selected={tab === name} tabIndex={tab === name ? 0 : -1} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} onKeyDown={(event) => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); const targetIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length; const target = tabs[targetIndex]; setTab(target); document.getElementById(`context-tab-${target.toLowerCase()}`)?.focus() }}>{name}</button>)}</div>
         <div id="context-panel" role="tabpanel" aria-labelledby={`context-tab-${tab.toLowerCase()}`} tabIndex={0} className="context-tab-panel">
-          {tab === 'Details' && <DetailsPane runtime={selectedRuntime} session={selectedSession} connected={connection === 'connected'} budgetWarning={budgetWarningFor(selectedSession)} budget={selectedBudget} usage={snapshot?.usageSummary ?? null} onUsage={() => void showUsage()} />}
+          {tab === 'Details' && <DetailsPane runtime={selectedRuntime} session={selectedSession} agentName={activeSelectedAgent?.name ?? null} color={accent} connected={connection === 'connected'} budgetWarning={budgetWarningFor(selectedSession)} budget={selectedBudget} usage={snapshot?.usageSummary ?? null} onUsage={() => void showUsage()} />}
           {tab === 'Runtime' && <RuntimePane runtime={selectedRuntime} connected={connection === 'connected'} onRefresh={() => void refreshRuntimes()} refreshing={refreshing} />}
           {tab === 'Files' && <FilesPane session={selectedSession} onOpen={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onReveal={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopy={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} />}
         </div>
@@ -520,45 +795,18 @@ export function App() {
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} loading={busy && usageSummary === null} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onClose={() => setUsageSheet(false)} />}
       {settingsSheet && <SettingsSheet snapshot={snapshot} runtime={selectedRuntime} session={selectedSession} initialPage={settingsInitialPage} onClose={() => setSettingsSheet(false)} onRefresh={refreshRuntimes} onError={setError} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
+      {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body="It leaves the roster. Its conversations stay saved. Restoring a blob is not available yet." confirmLabel="Archive" cancelLabel="Cancel" onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
     </main>
   )
 }
 
-function EmptyConversation({ connected, hasRuntime, accent, mood, agentName, onNewSession, onRefresh }: { connected: boolean; hasRuntime: boolean; accent: string; mood: BlobMood; agentName: string; onNewSession: () => void; onRefresh: () => void }) {
-  return <div className="empty-conversation"><div className="empty-art">{hasRuntime ? <BlobCanvas color={accent} size={128} mood={connected ? mood : 'offline'} label={agentName} /> : <BlobCanvas color="#e6e9ee" size={128} mood={connected ? 'idle' : 'offline'} label="Bloblex" />}</div><h1>{!connected ? 'Connect to your local runtime' : hasRuntime ? `Start a conversation with ${agentName}` : 'Find your coding agent'}</h1><p className="empty-description">{!connected ? 'Bloblex keeps its daemon and agent sessions on this device. Reconnect to load the latest state.' : hasRuntime ? 'Choose a project folder. Your selected CLI starts a real session there.' : 'We only show agents installed on this device. Refresh to scan for Claude Code, Codex, or OpenCode.'}</p><button className="primary-button" onClick={!connected ? onRefresh : hasRuntime ? onNewSession : onRefresh} disabled={!connected && !hasRuntime}><FolderOpen size={15} />{!connected ? 'Try again' : hasRuntime ? 'Choose a project' : 'Scan for agents'}</button></div>
-}
-
-function RuntimeContextMenu({ runtime, session, position, onClose, onNew, onResume, onSettings, onStop }: { runtime: Runtime | null; session: Session | null; position: { x: number; y: number }; onClose: () => void; onNew: () => void; onResume: (session: Session) => void; onSettings: () => void; onStop: (session: Session) => void }) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus() }, [])
-  useEffect(() => {
-    const close = (event: MouseEvent | KeyboardEvent) => {
-      if (event instanceof KeyboardEvent && event.key === 'Escape') onClose()
-      if (event instanceof MouseEvent && ref.current && !ref.current.contains(event.target as Node)) onClose()
-    }
-    document.addEventListener('pointerdown', close)
-    document.addEventListener('keydown', close)
-    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close) }
-  }, [onClose])
-  const active = session && ['working', 'starting', 'cancelling', 'waiting_permission'].includes(session.state ?? '')
-  const moveFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const buttons = Array.from(ref.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])
-    const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
-    if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
-    let target = -1
-    if (event.key === 'ArrowDown') target = (index + 1) % buttons.length
-    else if (event.key === 'ArrowUp') target = (index - 1 + buttons.length) % buttons.length
-    else if (event.key === 'Home') target = 0
-    else if (event.key === 'End') target = buttons.length - 1
-    if (target >= 0 && buttons.length) { event.preventDefault(); buttons[target]?.focus() }
-  }
-  return <div ref={ref} className="runtime-context-menu" role="menu" aria-label={`${labelize(runtime?.provider)} runtime actions`} onKeyDown={moveFocus} style={{ left: Math.max(8, Math.min(position.x, window.innerWidth - 210)), top: Math.max(8, Math.min(position.y, window.innerHeight - 190)) }}>
-    <strong className="runtime-context-title">{labelize(runtime?.provider, 'Runtime')}</strong>
-    <button role="menuitem" onClick={onNew}><MessageSquarePlus size={14} />New session</button>
-    <button role="menuitem" disabled={!session?.resumable || !!active} onClick={() => session && onResume(session)}><Play size={14} />Resume session</button>
-    <button role="menuitem" onClick={onSettings}><Settings2 size={14} />Runtime settings</button>
-    <button role="menuitem" className="danger-menu-item" disabled={!active} onClick={() => session && onStop(session)}><Square size={13} />Stop active session</button>
-  </div>
+function EmptyConversation({ connected, hasRuntime, hasAgent, accent, mood, agentName, onNewSession, onCreate, onRefresh }: { connected: boolean; hasRuntime: boolean; hasAgent: boolean; accent: string; mood: BlobMood; agentName: string; onNewSession: () => void; onCreate: () => void; onRefresh: () => void }) {
+  const canvas = hasAgent ? <BlobCanvas color={accent} size={128} mood={connected ? mood : 'offline'} label={agentName} /> : <BlobCanvas color="#e6e9ee" size={128} mood={connected ? 'idle' : 'offline'} label="Bloblex" />
+  const heading = !connected ? 'Connect to your local runtime' : hasAgent ? `Start a conversation with ${agentName}` : hasRuntime ? 'No blobs yet.' : 'Find your coding agent'
+  const description = !connected ? 'Bloblex keeps its daemon and agent sessions on this device. Reconnect to load the latest state.' : hasAgent ? 'Choose a project folder. Your selected CLI starts a real session there.' : hasRuntime ? 'Create a blob for one of the coding CLIs on this device.' : 'We only show agents installed on this device. Refresh to scan for Claude Code, Codex, or OpenCode.'
+  const action = !connected ? onRefresh : hasAgent ? onNewSession : hasRuntime ? onCreate : onRefresh
+  const label = !connected ? 'Try again' : hasAgent ? 'Choose a project' : hasRuntime ? 'Create blob' : 'Scan for agents'
+  return <div className="empty-conversation"><div className="empty-art">{canvas}</div><h1>{heading}</h1><p className="empty-description">{description}</p><button className="primary-button" onClick={action} disabled={!connected && !hasRuntime}><FolderOpen size={15} />{label}</button></div>
 }
 
 function MessageItem({ message, accent, agentName, showAvatar, mood }: { message: Record<string, unknown>; accent: string; agentName: string; showAvatar: boolean; mood: BlobMood }) {
@@ -581,30 +829,35 @@ function MessageItem({ message, accent, agentName, showAvatar, mood }: { message
   </article>
 }
 
-function isUserMessage(message: Record<string, unknown> | undefined) {
-  return String(message?.role ?? message?.kind ?? 'assistant').toLowerCase() === 'user'
+function storageFlag(key: string) {
+  try { return localStorage.getItem(key) === '1' } catch { return false }
 }
 
-function latestPreview(session: Session | null) {
-  if (!session) return null
-  const last = (session.messages ?? []).at(-1)
-  const text = last && (typeof last.content === 'string' ? last.content : typeof last.text === 'string' ? last.text : '')
-  if (text) return `${isUserMessage(last) ? 'You: ' : ''}${text.replace(/\s+/g, ' ').slice(0, 90)}`
-  return formatUnknownSafe(session.title, session.projectPath?.split(/[\\/]/).pop() ?? 'New session')
+function readStoredAgentId() {
+  try { return localStorage.getItem('bloblex.selectedAgentId') } catch { return null }
+}
+
+function writeStoredAgentId(id: string | null) {
+  try {
+    if (id) localStorage.setItem('bloblex.selectedAgentId', id)
+    else localStorage.removeItem('bloblex.selectedAgentId')
+  } catch { /* A blocked Storage API must not break in-memory selection. */ }
+}
+
+function unwrapSession(result: Session | { session?: Session }): Session | null {
+  const wrapped = (result as { session?: Session }).session
+  if (wrapped && typeof wrapped.id === 'string') return wrapped
+  const direct = result as Session
+  return typeof direct.id === 'string' ? direct : null
+}
+
+function isUserMessage(message: Record<string, unknown> | undefined) {
+  return String(message?.role ?? message?.kind ?? 'assistant').toLowerCase() === 'user'
 }
 
 /** Compact surfaces show prose without markdown markers or code fences. */
 function plainText(text: string) {
   return text.replace(/```[\s\S]*?```/g, ' [code] ').replace(/\*\*|__|`/g, '').replace(/\s+/g, ' ').trim()
-}
-
-function shortTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.valueOf())) return ''
-  const now = new Date()
-  return date.toDateString() === now.toDateString()
-    ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    : date.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
 function ActivityItem({ item }: { item: ConversationItem }) {
@@ -657,9 +910,10 @@ function PermissionCard({ permission, onReply }: { permission: PermissionRequest
   return <section className="permission-card"><div className="permission-icon"><ShieldAlert size={17} /></div><div className="permission-copy"><strong>{formatUnknownSafe(permission.title, 'Approval requested')}</strong><p>{detail ?? `The agent requested permission${tool ? ` to use ${tool}` : ''}.`}</p>{Number.isFinite(deadline) && <small className="permission-deadline">Expires {new Date(deadline).toLocaleTimeString()}</small>}<div className="permission-actions">{choices.map((choice) => <PermissionChoiceButton key={choice} permission={permission} choice={choice} className="permission-choice" onReply={onReply}>{permissionChoiceLabel(choice)}</PermissionChoiceButton>)}</div></div></section>
 }
 
-function DetailsPane({ runtime, session, connected, budgetWarning, budget, usage, onUsage }: { runtime: Runtime | null; session: Session | null; connected: boolean; budgetWarning: boolean; budget: Record<string, unknown> | null; usage: Record<string, unknown> | null; onUsage: () => void }) {
+function DetailsPane({ runtime, session, agentName, color, connected, budgetWarning, budget, usage, onUsage }: { runtime: Runtime | null; session: Session | null; agentName: string | null; color: string; connected: boolean; budgetWarning: boolean; budget: Record<string, unknown> | null; usage: Record<string, unknown> | null; onUsage: () => void }) {
   const mood = deriveCompanionStatus({ connected, runtime, session, budgetWarning }).mood
-  return <div className="context-scroll"><section className="selected-agent"><BlobCanvas color={providerColor(runtime?.provider)} size={54} mood={mood} label={labelize(runtime?.provider)} /><div><h2>{runtime ? labelize(runtime.provider) : 'No agent selected'}</h2><p>{labelize(runtime?.protocolFamily, 'Local coding agent')}</p><span className="context-status"><i className={`status-dot ${connected ? statusClass(runtime?.status) : 'muted'}`} />{connected ? labelize(runtime?.status, 'Unknown') : 'Daemon disconnected'}</span></div></section>
+  const heading = agentName ?? (runtime ? labelize(runtime.provider) : 'No agent selected')
+  return <div className="context-scroll"><section className="selected-agent"><BlobCanvas color={color} size={54} mood={mood} label={heading} /><div><h2>{heading}</h2><p>{labelize(runtime?.protocolFamily, 'Local coding agent')}</p><span className="context-status"><i className={`status-dot ${connected ? statusClass(runtime?.status) : 'muted'}`} />{connected ? labelize(runtime?.status, 'Unknown') : 'Daemon disconnected'}</span></div></section>
     <section className="context-section"><div className="section-heading"><h3>Current session</h3><MessageSquarePlus size={16} /></div>{session ? <div className="current-task"><strong>{formatUnknownSafe(session.title, fileNameForPath(session.projectPath ?? '') ?? 'Untitled session')}</strong><p>{session.projectPath ?? 'Project path unavailable'}</p><span>{labelize(session.state, 'Unknown state')}</span></div> : <div className="context-empty">No conversation selected.</div>}</section>
     <section className="context-section usage-section"><div className="section-heading"><h3>Usage</h3><ArrowDownToLine size={15} /></div><div className="details-usage-grid"><div><span>Input tokens</span><strong>{tokenValue(usage?.inputTokens)}</strong></div><div><span>Output tokens</span><strong>{tokenValue(usage?.outputTokens)}</strong></div><div><span>Provider actual</span><strong>{moneyMinor(usage?.providerReportedCostMinor, usage?.providerReportedCurrency)}</strong></div><div><span>API estimate</span><strong>{moneyMinor(usage?.apiEstimateMinor, usage?.apiEstimateCurrency)}</strong></div></div><small className="usage-scope">All runtimes - all time</small>{budget && <div className="details-budget"><span>{labelize(budget.metric)} {labelize(budget.period)} budget</span><strong>{budgetValue(budget.remaining, budget.metric)} remaining of {budgetValue(budget.hardLimit, budget.metric)}</strong></div>}<button className="usage-summary" onClick={onUsage}><span className="usage-leading"><span className="usage-icon"><Code2 size={16} /></span><span><strong>Usage details</strong><small>Open date-bounded summary</small></span></span><ChevronDown size={15} /></button>{budgetWarning && <p className="budget-inline-warning" role="status">A budget warning was reported for this session.</p>}<p className="honesty-note">Provider-reported cost and API estimates are separate. Unknown prices stay unknown; totals may be partial.</p></section>
   </div>
@@ -1073,7 +1327,7 @@ function minorToMajor(value: unknown, currency: string) {
   return value / (10 ** fractionDigits)
 }
 
-function Companion({ runtime, runtimes, session, usage, connected, appError, activityLabel, budgetWarning, permission, onReply, onNewSession, onOpenMain, onOpenSettings, onSendPrompt, onCancelTurn, onSelectRuntime }: { runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; budgetWarning: boolean; permission?: PermissionRequest; onReply: (permission: PermissionRequest, choice: string) => void; onNewSession: () => void; onOpenMain: () => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectRuntime: (runtimeId: string) => void }) {
+function Companion({ agent, agents, runtime, runtimes, session, usage, connected, appError, activityLabel, budgetWarning, permission, onReply, onNewSession, onOpenMain, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; budgetWarning: boolean; permission?: PermissionRequest; onReply: (permission: PermissionRequest, choice: string) => void; onNewSession: () => void; onOpenMain: () => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agentId: string) => void }) {
   const choices = permission?.choices ?? []
   const [view, setView] = useState<'overview' | 'chat' | 'activity' | 'settings'>('overview')
   const [draft, setDraft] = useState('')
@@ -1274,9 +1528,11 @@ function Companion({ runtime, runtimes, session, usage, connected, appError, act
     ...(session?.tools ?? []).slice(-4).map((item): Record<string, unknown> & { activityKind: 'tool' } => ({ ...item, activityKind: 'tool' })),
     ...(session?.files ?? []).slice(-4).map((item): Record<string, unknown> & { activityKind: 'file' } => ({ ...item, activityKind: 'file' })),
   ].sort((a, b) => Number(a['sequence'] ?? 0) - Number(b['sequence'] ?? 0)).slice(-5)
-  const color = providerColor(runtime?.provider)
-  const name = runtime ? labelize(runtime.provider) : 'Bloblex'
-  const peers = runtimes.filter((item) => item.id !== runtime?.id).slice(0, 4)
+  const color = agent ? agentColorHex(agent.color) : ''
+  const name = agent?.name ?? (runtime ? labelize(runtime.provider) : 'Bloblex')
+  const peers = activeAgents(agents).filter((item) => item.id !== agent?.id).slice(0, 4)
+  const pills = companionPills(agents, agent?.id ?? null)
+  const canStart = !!agent && connected && runtimeUsable(runtime)
   const statusLine = confused ? 'A little dizzy… back to normal shortly' : appError ?? fileError ?? dropError ?? (preparingFile ? 'Checking local file access…' : activity)
   const shimmering = ['working', 'thinking', 'tool_activity', 'file_activity'].includes(displayMood)
   const sessionBusy = !!session && ['working', 'starting', 'waiting_permission'].includes(session.state ?? '')
@@ -1289,13 +1545,13 @@ function Companion({ runtime, runtimes, session, usage, connected, appError, act
   ].filter((line): line is string => !!line))].slice(-2)
   const focusBlob = (size: number) => <BlobCanvas color={color} size={size} mood={displayMood} fileStage={fileStage} soundCues={soundsEnabled} label={name} onDizzy={beginConfused} onDizzyRecovery={recoverFromConfused} />
 
-  return <main className="companion-root" data-mode={mode} style={{ '--agent-accent': color } as React.CSSProperties} onMouseEnter={() => fsmRef.current?.mouseEntered()} onMouseLeave={() => fsmRef.current?.mouseLeft()}>
+  return <main className="companion-root" data-mode={mode} style={color ? { '--agent-accent': color } as React.CSSProperties : undefined} onMouseEnter={() => fsmRef.current?.mouseEntered()} onMouseLeave={() => fsmRef.current?.mouseLeft()}>
     <div ref={capsuleRef} className={`companion-capsule island ${mode}`} data-tauri-drag-region>
       {mode === 'petit' ? <div className="companion-compact" data-tauri-drag-region>
         <button className="compact-bot" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}>{focusBlob(40)}</button>
         <button className="compact-copy" onClick={() => fsmRef.current?.click()}><strong>{name}</strong><span role="status" aria-live="polite" className={shimmering ? 'shimmer' : ''}>{statusLine}</span></button>
         {permission && <ShieldAlert className="companion-alert" size={15} aria-label="Approval required" />}
-        {peers.length > 0 && <div className="mini-grid" aria-hidden="true" data-tauri-drag-region>{peers.map((item) => <BlobCanvas key={item.id} color={providerColor(item.provider)} size={15} mini mood={!connected || ['offline', 'error'].includes(item.status ?? '') ? 'offline' : 'idle'} label={labelize(item.provider)} />)}</div>}
+        {peers.length > 0 && <div className="mini-grid" aria-hidden="true" data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} label={item.name} /> })}</div>}
         <button className="companion-collapse" aria-label="Expand companion" onClick={() => fsmRef.current?.click()}><ChevronUp size={15} /></button>
       </div> : mode === 'coucou' ? <section className="companion-welcome" aria-label="Bloblex welcome animation" data-tauri-drag-region>
         <BlobCanvas color={color} size={100} mood="idle" soundCues={soundsEnabled} label="Bloblex" greeting onGreetingComplete={() => fsmRef.current?.greetComplete()} />
@@ -1305,7 +1561,7 @@ function Companion({ runtime, runtimes, session, usage, connected, appError, act
             <button className={`tab ${view === 'overview' ? 'on' : ''}`} aria-label="Home" title="Home" onClick={() => openView('overview')}><Home size={13} /></button>
             <button className={`tab ${view === 'chat' ? 'on' : ''}`} aria-label="Chat" title="Chat" onClick={() => openView('chat')}><MessageCircle size={13} /></button>
             <button className={`tab ${view === 'activity' ? 'on' : ''}`} aria-label="Activity" title="Activity" onClick={() => openView('activity')}><Activity size={13} /></button>
-            <button className="tab" aria-label="New session" title="New session" disabled={!runtime || !connected} onClick={() => { openView('chat'); onNewSession() }}><Plus size={14} /></button>
+            <button className="tab" aria-label="New session" title="New session" disabled={!canStart} onClick={() => { openView('chat'); onNewSession() }}><Plus size={14} /></button>
           </nav>
           <span className="island-drag" data-tauri-drag-region title="Drag companion" aria-hidden="true" />
           <div className="island-actions">
@@ -1335,19 +1591,19 @@ function Companion({ runtime, runtimes, session, usage, connected, appError, act
               <span className="card-bot">{focusBlob(58)}</span>
               <button className="icon-btn jump" aria-label="Open in Bloblex" title="Open in Bloblex" onClick={onOpenMain}><ArrowUpRight size={9} /></button>
               <div className="card-stack">
-                <div className="who"><i className={`status-dot ${connected ? statusClass(runtime?.status) : 'muted'}`} /><span className="name">{name}</span><span className="tool">{formatUnknownSafe(session?.title, session?.projectPath?.split(/[\\/]/).pop() ?? (connected ? 'No active session' : 'Offline'))}</span></div>
+                <div className="who"><i className={`status-dot ${connected ? statusClass(runtime?.status) : 'muted'}`} /><span className="name">{name}</span><span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
                 <div className="ticker">{tickerLines.map((line, index) => <div key={index} className={`ticker-row ${index === tickerLines.length - 1 ? 'current' : ''}`}><span className={index === tickerLines.length - 1 && shimmering ? 'shimmer' : ''}>{line}</span></div>)}</div>
                 <div className="glance" title={`Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()} · API estimate ${apiCost}`}><span>Tokens <b>{tokenGlance}</b></span><span>Cost <b>{actualCost}</b></span></div>
               </div>
             </div>
             <div className="island-card pills-card">
-              {runtimes.length === 0 ? <p className="companion-empty">No coding agents discovered yet.</p> : <div className="pills">{runtimes.slice(0, 4).map((item) => <button key={item.id} className={`pill ${item.id === runtime?.id ? 'on' : ''}`} style={{ '--pill': providerColor(item.provider) } as React.CSSProperties} onClick={() => onSelectRuntime(item.id)}><BlobCanvas color={providerColor(item.provider)} size={22} mini mood={!connected || ['offline', 'error'].includes(item.status ?? '') ? 'offline' : 'idle'} label={labelize(item.provider)} /><span className="lbl">{labelize(item.provider)}</span></button>)}</div>}
+              {runtimes.length === 0 ? <p className="companion-empty">No coding agents discovered yet.</p> : pills.length === 0 ? <p className="companion-empty">No blobs yet.</p> : <div className="pills">{pills.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <button key={item.id} className={`pill ${item.id === agent?.id ? 'on' : ''}`} style={{ '--pill': agentColorHex(item.color) } as React.CSSProperties} onClick={() => onSelectAgent(item.id)}><BlobCanvas color={agentColorHex(item.color)} size={22} mini mood={offline ? 'offline' : 'idle'} label={item.name} /><span className="lbl">{item.name}</span></button> })}</div>}
             </div>
           </div> : view === 'chat' ? <div className="island-card chat-card companion-chat-view">
             <span className="card-bot small">{focusBlob(44)}</span>
             <div className="chat-body">
               <div className="chat-log" ref={chatLogRef}>
-                {!session && <p className="companion-empty companion-no-session">Open or create a session to chat here. <button type="button" disabled={!runtime || !connected} onClick={() => void onNewSession()}>New session</button></p>}
+                {!session && <p className="companion-empty companion-no-session">Open or create a session to chat here. <button type="button" disabled={!canStart} onClick={() => void onNewSession()}>New session</button></p>}
                 {recentMessages.map((message, index) => <div key={String(message.id ?? index)} className={`chat-row ${message.role === 'user' ? 'user' : ''}`}>{message.role === 'user' ? <div className="bubble">{String(message.content ?? message.text ?? '')}</div> : <div className="reply">{plainText(String(message.content ?? message.text ?? '')) || 'Message content unavailable.'}</div>}</div>)}
                 {session && recentMessages.length === 0 && <p className="companion-empty">No messages in this conversation yet.</p>}
                 {sessionBusy && session?.state !== 'waiting_permission' && <div className="typing" aria-label={`${name} is working`}><i /><i /><i /></div>}

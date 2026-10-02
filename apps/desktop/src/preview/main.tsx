@@ -5,15 +5,12 @@ import ReactDOM from 'react-dom/client'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { hexToRGB } from '../blob/blobEngine'
 import { drawGreetingScene } from '../blob/greetingScene'
-import { providerColor } from '../types'
+import { AGENT_SWATCHES, agentColorHex, swatchLabel } from '../ui/agentColor'
 
 const moods: BlobMood[] = ['idle', 'online', 'listening', 'thinking', 'working', 'tool_activity', 'permission', 'success', 'error', 'rate_limited', 'budget_warning', 'sleeping', 'offline', 'file_drop', 'file_preparing', 'file_ready', 'file_sending', 'file_error']
 const palette = [
   { name: 'Mochi white', color: '#e6e9ee' },
-  { name: 'Claude', color: providerColor('claude') },
-  { name: 'Codex', color: providerColor('codex') },
-  { name: 'OpenCode', color: providerColor('opencode') },
-  { name: 'Other', color: providerColor('') },
+  ...AGENT_SWATCHES.map((swatch) => ({ name: swatchLabel(swatch.key), color: agentColorHex(swatch.key) })),
 ]
 
 function GreetingFrame({ seconds, color }: { seconds: number; color: string }) {

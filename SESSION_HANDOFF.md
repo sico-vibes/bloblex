@@ -2,7 +2,7 @@
 
 ## Current carry-forward (1 October 2026, evening)
 
-The implementation plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). The current delegation pipeline is in [AGENTS.md](AGENTS.md): the Director directs and reviews, `impl` and `impl-b` implement, and `qa` reports to the Director. Current pointer: **Tasks 1–3 done; next = Phase 2a implementation per [docs/PHASE_2A_SPEC.md](docs/PHASE_2A_SPEC.md).** Backend work follows the revised plan order.
+The implementation plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). The current delegation pipeline is in [AGENTS.md](AGENTS.md): the Director directs and reviews, `impl` and `impl-b` implement, and `qa` reports to the Director. Current pointer: **Phase 3 implemented, awaiting merge** ([docs/PHASE_3_SPEC.md](docs/PHASE_3_SPEC.md), branch `task6-grok`). Native smoke (spec section 9) is still for the Director; no temp database path is recorded because that smoke was not run in this lane. Backend work follows the revised plan order.
 
 `docs/E2E_PLAN_V2.md` is the current authoritative plan; [Bloblex_E2E_Windows_Desktop_Plan.md](Bloblex_E2E_Windows_Desktop_Plan.md) remains the original product plan and history. Both remain readable.
 

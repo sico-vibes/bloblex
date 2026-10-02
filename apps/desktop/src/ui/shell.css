@@ -46,6 +46,8 @@
 .bot-row-top strong { min-width: 0; flex: 1; overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .bot-row-top time { flex: 0 0 auto; color: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
 .bot-row-preview { overflow: hidden; color: var(--ink-3); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.bot-row-meta { min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.roster-group-label { margin: 10px 8px 2px; color: var(--ink-3); font-size: 11px; font-weight: 650; letter-spacing: 0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-empty { margin: 8px 6px; padding: 12px; color: var(--ink-2); font-size: 13px; line-height: 1.55; }
 .rail-empty button { display: block; margin-top: 7px; padding: 0; color: #7fc0ff; border: 0; background: none; font-size: 13px; }
 .sidebar-foot { padding: 8px 8px 10px; display: grid; gap: 1px; }
@@ -72,8 +74,8 @@
 .status-dot.muted { background: #707582; }
 .pill-button { height: 28px; padding: 0 11px; display: inline-flex; align-items: center; gap: 5px; color: var(--ink); border: 1px solid var(--hairline); border-radius: 999px; background: transparent; font-size: 12px; }
 .pill-button:hover:not(:disabled) { background: #ffffff0d; }
-.model-pill { height: 28px; max-width: 320px; padding: 0 9px 0 8px; display: inline-flex; align-items: center; gap: 7px; color: var(--ink); border: 0; border-radius: 999px; background: var(--raised); font-size: 12px; white-space: nowrap; }
-.model-pill:hover { background: var(--raised-hover); }
+.model-pill { height: 28px; max-width: 320px; padding: 0 9px 0 8px; display: inline-flex; align-items: center; gap: 7px; color: var(--ink); border: 0; border-radius: 999px; background: var(--raised); font-size: 12px; white-space: nowrap; cursor: default; }
+.model-pill:hover { background: var(--raised); }
 .model-pill-mark { width: 16px; height: 16px; flex: 0 0 auto; border-radius: 50%; box-shadow: inset -2px -3px 4px #0003, inset 2px 2px 3px #fff6; }
 .model-pill-model { min-width: 0; overflow: hidden; color: var(--ink-2); text-overflow: ellipsis; }
 .more-menu-wrap { position: relative; }
@@ -96,6 +98,8 @@
 .chat-header { height: 52px; flex: 0 0 auto; padding: 0 12px 0 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #ffffff0a; }
 .chat-title { min-width: 0; display: flex; align-items: center; gap: 9px; }
 .chat-title strong { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.chat-title-button { min-width: 0; padding: 0; display: inline-flex; align-items: center; gap: 9px; color: inherit; border: 0; background: transparent; font: inherit; }
+.chat-title-button strong { font-size: 14px; font-weight: 600; }
 .agent-placeholder { width: 28px; height: 28px; display: grid; place-items: center; color: var(--ink-2); border-radius: 50%; background: var(--raised); }
 .session-switcher-wrap { min-width: 0; max-width: 260px; margin-left: 6px; position: relative; display: flex; align-items: center; }
 .session-switcher-wrap select { max-width: 100%; height: 26px; appearance: none; padding: 0 24px 0 9px; color: var(--ink-2); border: 0; border-radius: 7px; background: transparent; font-size: 12.5px; text-overflow: ellipsis; }

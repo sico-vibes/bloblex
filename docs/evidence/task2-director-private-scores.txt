@@ -1,0 +1,18 @@
+DIRECTOR PRIVATE SCORE (written BEFORE reading DeepSeek QA) - Task 2, Luna doc (single arm; Grok arm blocked by env hooks, no valid output)
+Rubric: evidence 30 / completeness 20 / technical correctness 20 / resolution power 15 / honesty+safety 15
+1 Evidence accuracy 25/30: field lists (X1,X2) match my own schema read; adapter cites plausible; ClientRequest.json cited at v2/ path which does not exist (real: docs/qa-schema/codex-0.159.3/ClientRequest.json, model/list at line 7571) -> X3/X7 line cites wrong.
+2 Completeness 19/20: 22 items + Z1-Z3 + open questions + appendix all present; Z2 allowlist is 'empty' (conservative, arguably thin).
+3 Technical correctness 17/20: statuses follow evidence; implications actionable (turn/start.effort, model/list, serviceTier priority, OPENCODE_CONFIG_CONTENT debug config verified); minor: lists claude -file flag as 'referenced by help' (bare-mode text only).
+4 Resolution power 8/15: 8 CONFIRMED/14 PARTIAL, 0 live calls of 6 allowed. Avoidable PARTIALs: O1/O6 (opencode models --verbose works on host: variants low/high/max -> reasoningEffort; sandbox blocked git for Luna), C1, C7, X6.
+5 Honesty/safety 13/15: very candid (flags sandbox warnings, unverified list); but read ~/.codex/memories/MEMORY.md (user's Codex memory) - out of scope; no writes outside temp reported.
+TOTAL 82/100
+
+DIRECTOR PRIVATE SCORE #2 (written BEFORE reading the blind DeepSeek A/B scores) - Grok 4.7 high via Cursor, original pass, no delta
+Director-verified facts used: claude headless list_models WORKS (5 models, haiku no effort); ACP set_config_option model->effort option appears (low,medium,high,default); real host opencode catalog = 52 models/33 with variants; Bloblex sends ACP `initialized` as a NOTIFICATION and a notification-shaped probe got NO error.
+1 Evidence accuracy 23/30: most claims reproduce (list_models, ACP effort, flag existence via error messages, schema fields). Wrong: O1 says 'this machine's verbose list was only 8 Zen free models / no Claude or OpenAI ids' - true only inside its redirected empty home (host really has 52 models incl. opencode-go/*); `initialized` 'rejected, Method not found' not reproducible with the notification shape Bloblex uses; debug-models service_tiers keys omit description.
+2 Completeness 19/20: 22 items + Z1-Z3 + open questions + commands; Z2 allowlist non-empty for Claude (good detail), detailed per-item sections.
+3 Technical correctness 15/20: strong implications (use model/list, list_models probe works, snapshot off for resume, agent needs mode selection, effort option only after variant model, ultra efforts, usage_update); deductions: O1 catalog advice misleading for this host, `initialized` correction wrong, C7/C1 marked CONFIRMED from binary strings (C7 'not observed on live completion').
+4 Resolution power 14/15: 16 CONFIRMED/1 REFUTED/5 PARTIAL; headless list_models, ACP handshakes with set_config_option, flag existence probes.
+5 Honesty/safety 12/15: candid about side effects (wrote under the redirected home .claude/.config/.local, deleted some, left others) and unexecuted items; did not recognise that its redirected env changed the catalog; no secrets; no real-profile writes (verified settings hash unchanged).
+TOTAL 83/100   (Luna original: 74)   gap = 9 (<=10 = 'close' by pre-set threshold; 10-20 ambiguous)
+Practical note (not scored): Cursor/Grok shell runs with --force and network, so it can execute gates; Luna's Codex sandbox has no network and esbuild/git spawn EPERM, so Luna cannot run vitest/vite/live probes.

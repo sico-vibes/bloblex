@@ -24,8 +24,10 @@ $junction = Join-Path $cleanHome '.cursor'
 if (-not (Test-Path $junction)) {
   cmd /c mklink /J "$junction" (Join-Path $realHome '.cursor') | Out-Null
 }
-if (Test-Path (Join-Path $cleanHome '.claude')) {
-  throw "Refusing to run: $cleanHome\.claude exists, so third-party hooks could load."
+foreach ($settingsFile in 'settings.json', 'settings.local.json') {
+  if (Test-Path (Join-Path $cleanHome ".claude\$settingsFile")) {
+    throw "Refusing to run: $cleanHome\.claude\$settingsFile exists, so third-party hooks could load."
+  }
 }
 
 $env:USERPROFILE = $cleanHome

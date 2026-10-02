@@ -1385,7 +1385,7 @@ impl Storage {
         let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',title,'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
         let mut v: Value =
             serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
-        let turns=query_jsons(c,"SELECT json_object('id',id,'state',state,'createdAt',created_at,'completedAt',completed_at) FROM turns WHERE session_id=?1 ORDER BY created_at",id)?;
+        let turns=query_jsons(c,"SELECT json_object('id',id,'state',state,'createdAt',created_at,'completedAt',completed_at,'failureClass',COALESCE(failure_class_v2,failure_class),'failureMessage',CASE COALESCE(failure_class_v2,failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END) FROM turns WHERE session_id=?1 ORDER BY created_at",id)?;
         let msgs=query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at) FROM messages WHERE session_id=?1 ORDER BY sequence",id)?;
         v["turns"] = json!(turns);
         v["messages"] = json!(msgs);
@@ -1425,7 +1425,6 @@ struct AnalyticsAccumulator {
     tokens: [Option<i64>; 5],
     actual: std::collections::BTreeMap<String, i64>,
     estimated: std::collections::BTreeMap<String, i64>,
-    excluded: std::collections::BTreeSet<String>,
     lower_bound: bool,
     unreported_runs: u64,
     unpriced: std::collections::BTreeSet<String>,
@@ -1471,7 +1470,6 @@ impl AnalyticsAccumulator {
         }
         for (currency, amount) in &other.actual { *self.actual.entry(currency.clone()).or_default() += amount; }
         for (currency, amount) in &other.estimated { *self.estimated.entry(currency.clone()).or_default() += amount; }
-        self.excluded.extend(other.excluded.iter().cloned());
         self.lower_bound |= other.lower_bound;
         self.unreported_runs += other.unreported_runs;
         self.unpriced.extend(other.unpriced.iter().cloned());
@@ -1492,13 +1490,12 @@ impl AnalyticsAccumulator {
         let currency = currencies.iter().next().cloned().unwrap_or_else(|| "USD".into());
         let actual_minor = if self.actual.len() == 1 { self.actual.get(&currency).copied() } else { None };
         let estimated_minor = if self.estimated.len() == 1 { self.estimated.get(&currency).copied() } else { None };
-        let mut excluded = self.excluded.clone();
-        excluded.extend(currencies.iter().filter(|item| **item != currency).cloned());
+        let has_excluded = currencies.iter().any(|item| **item != currency);
         let mixed = currencies.len() > 1 || self.actual.len() > 1 || self.estimated.len() > 1;
         let amount_minor = if currencies.is_empty() || mixed { None } else { Some(actual_minor.unwrap_or(0).saturating_add(estimated_minor.unwrap_or(0))) };
         let actual_minor = if self.actual.contains_key(&currency) { actual_minor } else { None };
         let estimated_minor = if self.estimated.contains_key(&currency) { estimated_minor } else { None };
-        json!({"amountMinor":amount_minor,"currency":currency,"actualMinor":actual_minor,"estimatedMinor":estimated_minor,"lowerBound":self.lower_bound || mixed || !excluded.is_empty()})
+        json!({"amountMinor":amount_minor,"currency":currency,"actualMinor":actual_minor,"estimatedMinor":estimated_minor,"lowerBound":self.lower_bound || mixed || has_excluded})
     }
     fn point_json(&self) -> Value {
         json!({"cost":self.cost_json(),"tokens":self.tokens_json(),"runTimeMs":self.run_time_ms,"runs":self.runs,"failedRuns":self.failed_runs,"cancelledRuns":self.cancelled_runs})
@@ -2237,6 +2234,34 @@ mod tests {
         db.update_turn_outcome("turn", "error", Some("context")).unwrap();
         assert_eq!(db.turn_failure_class("turn").unwrap().as_deref(), Some("context"));
         assert_eq!(analytics_failure_class(Some("context")), "context");
+    }
+
+    #[test]
+    fn session_turn_dto_includes_nullable_class_and_safe_failure_message() {
+        let db = Storage::open_in_memory().unwrap();
+        db.create_session("session", "runtime", "codex", ".", "Turn DTO").unwrap();
+        db.create_turn("failed", "session").unwrap();
+        db.update_turn_outcome("failed", "error", Some("timeout")).unwrap();
+        db.create_turn("successful", "session").unwrap();
+        db.update_turn_outcome("successful", "completed", None).unwrap();
+        let turns = db.session_detail("session").unwrap()["turns"].as_array().unwrap().clone();
+        let failed = turns.iter().find(|turn| turn["id"] == "failed").unwrap();
+        assert_eq!(failed["failureClass"], "timeout");
+        assert_eq!(failed["failureMessage"], "The provider stopped making progress before the turn completed.");
+        let successful = turns.iter().find(|turn| turn["id"] == "successful").unwrap();
+        assert!(successful["failureClass"].is_null());
+        assert!(successful["failureMessage"].is_null());
+    }
+
+    #[test]
+    fn mixed_currency_totals_report_secondary_currencies_as_excluded() {
+        let mut metrics = AnalyticsAccumulator::default();
+        metrics.add_actual(120, "USD");
+        metrics.add_actual(80, "GBP");
+        let totals = metrics.totals_json();
+        assert!(totals["cost"]["amountMinor"].is_null());
+        assert_eq!(totals["cost"]["lowerBound"], true);
+        assert_eq!(totals["excludedCurrencies"], json!(["USD"]));
     }
 
     #[test]

@@ -660,7 +660,7 @@ fn exec_option_rejection(st: &AppState, provider: &str, options: &ExecOptions) -
     let capabilities: &[(&str, bool)] = match provider {
         "claude" => &[("model",true),("thinking",true),("serviceTier",false),("instructions",true)],
         "codex" => &[("model",true),("thinking",true),("serviceTier",true),("instructions",true)],
-        "opencode" => &[("model",true),("thinking",false),("serviceTier",false),("instructions",true)],
+        "opencode" => &[("model",true),("thinking",true),("serviceTier",false),("instructions",true)],
         _ => &[],
     };
     let settings = st.db.settings().map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
@@ -1886,7 +1886,7 @@ mod phase2a_tests {
         let after=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-test"})).await.unwrap();assert_eq!(after["settings"]["model"]["supported"],true);assert_eq!(after["settings"]["model"]["enabled"],false);
         dispatch(&st,"settings.set",json!({"key":"exec_gate.codex.model","value":false})).await.unwrap();assert!(events.try_recv().is_err());
         let claude=json!({"id":"rt-claude","provider":"claude"});*st.runtimes.write().await=vec![claude];let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-claude"})).await.unwrap();assert_eq!(caps["settings"]["serviceTier"]["supported"],false);assert_eq!(caps["settings"]["serviceTier"]["enabled"],false);assert_eq!(caps["settings"]["thinking"]["evidence"],"usage_effect");
-        *st.runtimes.write().await=vec![json!({"id":"rt-opencode","provider":"opencode"})];st.db.upsert_runtime(&json!({"id":"rt-opencode","provider":"opencode"})).unwrap();let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(caps["settings"]["thinking"]["supported"],true);assert_eq!(caps["settings"]["thinking"]["enabled"],false);assert_eq!(caps["settings"]["serviceTier"]["supported"],false);
+        *st.runtimes.write().await=vec![json!({"id":"rt-opencode","provider":"opencode"})];st.db.upsert_runtime(&json!({"id":"rt-opencode","provider":"opencode"})).unwrap();let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(caps["settings"]["thinking"]["supported"],true);assert_eq!(caps["settings"]["thinking"]["enabled"],false);assert_eq!(caps["settings"]["serviceTier"]["supported"],false);st.db.set_setting("exec_gate.opencode.thinking",&json!(true)).unwrap();let enabled=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(enabled["settings"]["thinking"]["supported"],true);assert_eq!(enabled["settings"]["thinking"]["enabled"],true);
         let agent=st.db.agent_create(&json!({"name":"Capped","runtimeId":"rt-opencode","maxConcurrency":8})).unwrap().0;let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode","agentId":agent["id"]})).await.unwrap();assert_eq!(caps["agentConcurrency"]["configuredMaxConcurrency"],8);assert_eq!(caps["agentConcurrency"]["effectiveMaxConcurrency"],4);
     }
     #[test]
@@ -1894,6 +1894,15 @@ mod phase2a_tests {
         let(st,_)=state();let events=st.db.set_setting("exec_gate.codex.model",&json!(false)).unwrap();st.broadcast_persisted(events);
         let requested=ExecOptions{model:Some("gpt-test".into()),..ExecOptions::default()};let rejection=exec_option_rejection(&st,"codex",&requested).unwrap().unwrap();assert_eq!(rejection.0,"model");assert_eq!(rejection.1,EXEC_UNAVAILABLE);
         assert!(exec_option_rejection(&st,"codex",&ExecOptions::default()).unwrap().is_none());
+    }
+    #[test]
+    fn opencode_thinking_support_and_gate_share_one_source_of_truth(){
+        let(st,_)=state();
+        let requested=ExecOptions{thinking:Some("high".into()),..ExecOptions::default()};
+        assert!(exec_option_rejection(&st,"opencode",&ExecOptions::default()).unwrap().is_none());
+        assert_eq!(exec_option_rejection(&st,"opencode",&requested).unwrap().unwrap().1,EXEC_UNAVAILABLE);
+        st.db.set_setting("exec_gate.opencode.thinking",&json!(true)).unwrap();
+        assert!(exec_option_rejection(&st,"opencode",&requested).unwrap().is_none());
     }
     #[tokio::test]
     async fn catalog_validation_rejects_turn_values_but_accepts_custom_ids_without_authority(){

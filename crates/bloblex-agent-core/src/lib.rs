@@ -108,7 +108,8 @@ pub fn classify_permission(
             "pwd" | "echo" => true,
             "rg" | "grep" => safe_search(&words, &project, worktree.as_deref()),
             "cat" | "type" => {
-                !words.iter().skip(1).any(|word| word.starts_with('-'))
+                !unsafe_command_arguments(&words)
+                    && !words.iter().skip(1).any(|word| word.starts_with('-'))
                     && words.iter().skip(1).all(|word| {
                         safe_command_path(word, &project, worktree.as_deref(), true)
                     })
@@ -130,7 +131,7 @@ pub fn classify_permission(
 }
 
 fn has_shell_operator(command: &str) -> bool {
-    ["&&", "||", ";", "|", ">", "<", "`", "$", "%", "&", "\n", "\r", "\t", "\u{000b}", "\u{000c}"]
+    ["&&", "||", ";", "|", ">", "<", "`", "$", "%", "!", "&", "\n", "\r", "\t", "\u{000b}", "\u{000c}"]
         .iter()
         .any(|operator| command.contains(operator))
 }
@@ -182,6 +183,9 @@ fn normalize_executable(word: &str) -> String {
 }
 
 fn safe_git(words: &[String]) -> bool {
+    if unsafe_command_arguments(words) {
+        return false;
+    }
     let Some(subcommand) = words.get(1).map(|word| word.to_ascii_lowercase()) else {
         return false;
     };
@@ -206,6 +210,9 @@ fn safe_git(words: &[String]) -> bool {
 }
 
 fn safe_search(words: &[String], project: &std::path::Path, worktree: Option<&std::path::Path>) -> bool {
+    if unsafe_command_arguments(words) {
+        return false;
+    }
     let command = normalize_executable(&words[0]);
     let mut index = 1;
     let mut operands = Vec::new();
@@ -361,6 +368,9 @@ fn safe_glob_arg(value: &str) -> bool {
 }
 
 fn safe_find(words: &[String], project: &std::path::Path, worktree: Option<&std::path::Path>) -> bool {
+    if unsafe_command_arguments(words) {
+        return false;
+    }
     let denied_options = [
         "-ok", "-okdir", "-execdir", "-fprint", "-fprint0", "-fprintf", "-fls", "-delete",
         "-exec",
@@ -427,6 +437,9 @@ fn safe_command_path(
     worktree: Option<&std::path::Path>,
     allow_worktree: bool,
 ) -> bool {
+    if unsafe_path_spelling(input) {
+        return false;
+    }
     let Some(normalized) = normalize_path_spelling(input) else { return false; };
     if foreign_windows_absolute(&normalized) { return false; }
     let path = std::path::Path::new(&normalized);
@@ -442,6 +455,27 @@ fn safe_command_path(
     !(base.starts_with(".env")
         || [".pem", ".key"].iter().any(|suffix| base.ends_with(suffix))
         || ["credential", "credentials", "token", "secret"].iter().any(|needle| base.contains(needle)))
+}
+fn unsafe_command_arguments(words: &[String]) -> bool {
+    words.iter().skip(1).any(|word| {
+        word == "--"
+            || word.starts_with('@')
+            || unsafe_path_spelling(word)
+            || word.chars().any(|ch| matches!(ch, '\u{2215}' | '\u{2044}' | '\u{FF0F}' | '\u{29F8}'))
+    })
+}
+fn unsafe_path_spelling(value: &str) -> bool {
+    if value == "." || value == ".." {
+        return false;
+    }
+    if value.contains(':') || value.ends_with(['.', ' ']) {
+        return true;
+    }
+    let base = value.rsplit(['/', '\\']).next().unwrap_or(value);
+    let stem = base.split('.').next().unwrap_or(base).trim_end_matches(['.', ' ']);
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9" | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9")
+        || base.contains('~')
 }
 fn foreign_windows_absolute(input:&str)->bool{
     #[cfg(not(windows))] {let b=input.as_bytes();return (b.len()>=3&&b[0].is_ascii_alphabetic()&&b[1]==b':'&&(b[2]==b'\\'||b[2]==b'/'))||input.starts_with("\\\\")||input.contains('\\');}
@@ -529,6 +563,12 @@ mod approval_tests {
             ("git --git-dir ../outside status", false),
             ("git --work-tree ../outside status", false),
             ("git -C ../outside status", false),
+            ("git status -- @response", false),
+            ("git show refs/heads/main:file:stream", false),
+            ("git status CON", false),
+            ("git status trailing. ", false),
+            ("git show short~1", false),
+            ("git show src／file.rs", false),
             ("rg --pre cat pattern src", false),
             ("rg --pre-glob '*.rs' cat pattern src", false),
             ("rg --hostname-bin ../outside pattern src", false),
@@ -540,12 +580,40 @@ mod approval_tests {
             ("rg --glob ../outside pattern .", false),
             ("rg --glob '*.pem' pattern .", false),
             ("rg --files-from ../outside pattern .", false),
+            ("rg -- pattern -- src/readme.md", false),
+            ("rg pattern @patterns.txt", false),
+            ("rg pattern src/file:stream", false),
+            ("rg pattern NUL", false),
+            ("rg pattern src/trailing.", false),
+            ("rg pattern src/PROGRA~1", false),
+            ("rg pattern src／readme.md", false),
             ("grep -f ../outside pattern .", false),
             ("grep -f .env.local pattern .", false),
             ("grep pattern secret.pem", false),
             ("grep pattern id_token", false),
+            ("grep -- pattern -- readme.md", false),
+            ("grep pattern @response.txt", false),
+            ("grep pattern file:stream", false),
+            ("grep pattern AUX", false),
+            ("grep pattern trailing. ", false),
+            ("grep pattern SHORT~1", false),
+            ("grep pattern src／file", false),
             ("cat .env.local", false),
             ("type secret.pem", false),
+            ("cat -- readme.md", false),
+            ("cat @response.txt", false),
+            ("type file:stream", false),
+            ("cat NUL", false),
+            ("type trailing. ", false),
+            ("cat SHORT~1", false),
+            ("cat src／readme.md", false),
+            ("find . -name x:stream", false),
+            ("find . -name NUL", false),
+            ("find . -name 'trailing. ' ", false),
+            ("find . -name PROGRA~1", false),
+            ("find . -name src／file", false),
+            ("find . -- -name '*.rs'", false),
+            ("find . @response.txt", false),
             ("find . -ok echo {} \\;", false),
             ("find . -okdir echo {} \\;", false),
             ("find . -execdir echo {} \\;", false),

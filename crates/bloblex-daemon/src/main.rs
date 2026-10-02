@@ -12,7 +12,7 @@ use bloblex_adapter_acp::AcpAdapter;
 use bloblex_adapter_claude::ClaudeAdapter;
 use bloblex_adapter_codex::CodexAdapter;
 use bloblex_agent_core::{
-    AgentAdapter, AgentEvent, NewSessionRequest, PromptRequest, ResumeSessionRequest, RuntimeSpec,
+    AgentAdapter, AgentEvent, ExecOptions, NewSessionRequest, PromptRequest, ResumeSessionRequest, RuntimeSpec,
     SessionHandle,
 };
 use bloblex_protocol::{
@@ -170,6 +170,26 @@ fn derr(code: &str, msg: &str, status: StatusCode) -> DispatchError {
 
 async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, DispatchError> {
     match method {
+        "exec.snapshot.get" => {
+            let id=p["snapshotId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","snapshotId is required",StatusCode::BAD_REQUEST))?;
+            st.db.exec_snapshot_get(id).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?.ok_or_else(||derr("not_found","execution snapshot not found",StatusCode::NOT_FOUND))
+        }
+        "exec.snapshot.list" => {
+            let sid=p["sessionId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","sessionId is required",StatusCode::BAD_REQUEST))?;
+            let after=match p.get("after"){None|Some(Value::Null)=>None,Some(Value::String(s))=>Some(s.as_str()),_=>return Err(derr("invalid_argument","after must be a snapshot id",StatusCode::BAD_REQUEST))};
+            let limit=match p.get("limit"){None=>50,Some(v)=>u32::try_from(v.as_u64().ok_or_else(||derr("invalid_argument","limit must be a positive integer",StatusCode::BAD_REQUEST))?).map_err(|_|derr("invalid_argument","limit is out of range",StatusCode::BAD_REQUEST))?};
+            if limit==0||limit>200{return Err(derr("invalid_argument","limit must be between 1 and 200",StatusCode::BAD_REQUEST));}
+            if st.db.session_detail(sid).is_err(){return Err(derr("not_found","session not found",StatusCode::NOT_FOUND));}
+            if let Some(cursor)=after{let snapshot=st.db.exec_snapshot_get(cursor).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;if !snapshot.is_some_and(|v|v["sessionId"]==sid){return Err(derr("invalid_argument","after must identify a snapshot in this session",StatusCode::BAD_REQUEST));}}
+            let (snapshots,next)=st.db.exec_snapshot_list(sid,after,limit).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+            Ok(json!({"snapshots":snapshots,"next":next}))
+        }
+        "exec.snapshot.latest" => {
+            let sid=p["sessionId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","sessionId is required",StatusCode::BAD_REQUEST))?;
+            if st.db.session_detail(sid).is_err(){return Err(derr("not_found","session not found",StatusCode::NOT_FOUND));}
+            st.db.exec_snapshot_latest(sid).map(|v|v.unwrap_or(Value::Null)).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))
+        }
+        "runtime.capabilities" => runtime_capabilities(st,&p).await,
         "agent.list" => {
             let include=match p.get("includeArchived"){None=>false,Some(v)=>v.as_bool().ok_or_else(||derr("invalid_argument","includeArchived must be a boolean",StatusCode::BAD_REQUEST))?};
             let runtime=match p.get("runtimeId"){None=>None,Some(v)=>Some(v.as_str().ok_or_else(||derr("invalid_argument","runtimeId must be a string",StatusCode::BAD_REQUEST))?)};
@@ -395,6 +415,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         }),
         "settings.set" => {
             let k = p["key"].as_str().unwrap_or("");
+            if k.is_empty(){return Err(derr("invalid_argument","key is required",StatusCode::BAD_REQUEST));}
+            if k.starts_with("exec_gate.")&&!p["value"].is_boolean(){return Err(derr("invalid_argument","execution gates require a JSON boolean",StatusCode::BAD_REQUEST));}
             if k.to_ascii_lowercase().contains("token")
                 || k.to_ascii_lowercase().contains("secret")
                 || k.to_ascii_lowercase().contains("password")
@@ -405,13 +427,14 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::BAD_REQUEST,
                 ));
             }
-            st.db.set_setting(k, &p["value"]).map_err(|e| {
+            let events=st.db.set_setting(k, &p["value"]).map_err(|e| {
                 derr(
-                    "internal",
+                    if k.starts_with("exec_gate."){"invalid_argument"}else{"internal"},
                     &e.to_string(),
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    if k.starts_with("exec_gate."){StatusCode::BAD_REQUEST}else{StatusCode::INTERNAL_SERVER_ERROR},
                 )
             })?;
+            st.broadcast_persisted(events);
             Ok(json!({"saved":true}))
         }
         "pricing.list" => st.db.pricing_list(p["provider"].as_str()).map_err(|e| {
@@ -469,6 +492,47 @@ fn adapter_for(a: &Adapters, provider: &str) -> Option<Arc<dyn AgentAdapter>> {
         _ => None,
     }
 }
+fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,DispatchError>{
+    let Some(agent_id)=session["agentId"].as_str() else { return Ok(ExecOptions{max_concurrency:4,..ExecOptions::default()}); };
+    let a=st.db.agent_get(agent_id).map_err(agent_error)?;
+    let env=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
+    Ok(ExecOptions{model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32})
+}
+async fn active_for_agent(st:&AppState,agent_id:&str)->u32{
+    let sessions=st.active_turns.lock().await.keys().cloned().collect::<Vec<_>>();let mut n=0;
+    for sid in sessions{if st.db.session_detail(&sid).is_ok_and(|v|v["agentId"]==agent_id){n+=1;}}n
+}
+async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError>{
+    let runtime_id=p["runtimeId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;
+    let runtime=st.runtimes.read().await.iter().find(|r|r["id"]==runtime_id).cloned().ok_or_else(||derr("not_found","runtime not found",StatusCode::NOT_FOUND))?;
+    let provider=runtime["provider"].as_str().unwrap_or("");
+    let table:[(&str,bool,&str,&str);5]=match provider{
+        "claude"=>[("model",true,"spawn","provider_echo"),("thinking",true,"spawn","usage_effect"),("serviceTier",false,"turn","none"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape")],
+        "codex"=>[("model",true,"spawn","provider_echo"),("thinking",true,"turn","usage_effect"),("serviceTier",true,"turn","provider_echo"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape")],
+        "opencode"=>[("model",true,"session","provider_echo"),("thinking",true,"session","none"),("serviceTier",false,"session","none"),("instructions",true,"session","successful_turn"),("customEnv",true,"process","request_shape")],
+        _=>[("model",false,"turn","none"),("thinking",false,"turn","none"),("serviceTier",false,"turn","none"),("instructions",false,"turn","none"),("customEnv",false,"process","none")],
+    };
+    let settings=st.db.settings().map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+    let mut reported=serde_json::Map::new();
+    for (setting,supported,scope,evidence) in table {
+        let key=match setting{"model"=>format!("exec_gate.{provider}.model"),"thinking"=>format!("exec_gate.{provider}.thinking"),"serviceTier"=>format!("exec_gate.{provider}.serviceTier"),"instructions"=>format!("exec_gate.{provider}.instructions"),_=>String::new()};
+        let gate=if key.is_empty(){true}else{settings[&key].as_bool().unwrap_or(false)};
+        let mut value=json!({"supported":supported,"enabled":supported&&gate,"scope":scope,"evidence":evidence});
+        if setting=="customEnv"{value["allowedKeys"]=json!(["LANG","LC_ALL","TZ","NO_COLOR","TERM"]);}
+        if !supported{value["reason"]=json!(if setting=="customEnv"{"environment options are unsupported for this runtime"}else{"setting is unsupported by this runtime"});}
+        else if !gate{value["reason"]=json!("execution entry gate is disabled");}
+        reported.insert(setting.into(),value);
+    }
+    let active=st.active_turns.lock().await.len() as u32;
+    let agent_id=match p.get("agentId"){None|Some(Value::Null)=>None,Some(Value::String(s))=>Some(s.as_str()),_=>return Err(derr("invalid_argument","agentId must be a string",StatusCode::BAD_REQUEST))};
+    let agent_concurrency=if let Some(id)=agent_id{
+        let a=st.db.agent_get(id).map_err(agent_error)?;if a["runtimeId"]!=runtime_id{return Err(derr("invalid_argument","agentId does not belong to runtimeId",StatusCode::BAD_REQUEST));}
+        let configured=a["maxConcurrency"].as_u64().unwrap_or(1) as u32;Some(json!({"configuredMaxConcurrency":configured,"effectiveMaxConcurrency":configured.min(4),"active":active_for_agent(st,id).await}))
+    }else{None};
+    let mut agents=Vec::new();
+    if agent_id.is_none(){for a in st.db.agent_list(false,Some(runtime_id)).map_err(agent_error)?{let id=a["id"].as_str().unwrap_or("");let configured=a["maxConcurrency"].as_u64().unwrap_or(1) as u32;agents.push(json!({"agentId":id,"configuredMaxConcurrency":configured,"effectiveMaxConcurrency":configured.min(4),"active":active_for_agent(st,id).await}));}}
+    Ok(json!({"runtimeId":runtime_id,"settings":reported,"globalConcurrency":{"limit":4,"active":active},"agentConcurrency":agent_concurrency,"agentConcurrencies":agents,"hostDependent":true}))
+}
 async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let agent_supplied=p.get("agentId").is_some(); let runtime_supplied=p.get("runtimeId").is_some();
     if agent_supplied==runtime_supplied{return Err(derr("invalid_argument","exactly one of agentId or runtimeId is required",StatusCode::BAD_REQUEST));}
@@ -499,6 +563,8 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
             StatusCode::BAD_REQUEST,
         )
     })?;
+    let options_session=if let Some(agent_id)=agent_id.as_deref(){st.db.agent_get(agent_id).map_err(agent_error)?}else{json!({"agentId":null})};
+    let exec_options=exec_options_for_session(st,&options_session)?;
     let id = Uuid::new_v4().to_string();
     let title = p["title"]
         .as_str()
@@ -522,6 +588,7 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
             NewSessionRequest {
                 session_id: id.clone(),
                 project_path: project,
+                exec_options,
             },
             tx,
         )
@@ -606,6 +673,7 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
             StatusCode::BAD_REQUEST,
         )
     })?;
+    let exec_options=exec_options_for_session(st,&row)?;
     let (tx, rx) = tokio::sync::mpsc::channel(256);
     let handle = adapter
         .resume_session(
@@ -614,6 +682,7 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
                 session_id: sid.clone(),
                 provider_session_id: native_id,
                 project_path: project,
+                exec_options,
             },
             tx,
         )
@@ -682,6 +751,8 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             StatusCode::NOT_FOUND,
         )
     })?;
+    let session_options=st.db.session_detail(&sid).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+    let exec_options=exec_options_for_session(st,&session_options)?;
     let turn = Uuid::new_v4().to_string();
     {
         let mut turns = st.active_turns.lock().await;
@@ -769,6 +840,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
                 PromptRequest {
                     turn_id: turn2.clone(),
                     text,
+                    exec_options,
                 },
             )
             .await
@@ -1196,6 +1268,40 @@ mod phase2a_tests {
         let active=dispatch(&st,"agent.create",json!({"name":"Active","runtimeId":"rt-test"})).await.unwrap()["agent"]["id"].as_str().unwrap().to_owned();
         assert_eq!(dispatch(&st,"session.new",json!({"projectPath":"C:/does-not-exist","agentId":active})).await.unwrap_err().1.code,"invalid_argument");
         assert_eq!(dispatch(&st,"session.new",json!({"projectPath":".","runtimeId":"missing"})).await.unwrap_err().1.code,"not_found");
+    }
+    #[tokio::test]
+    async fn execution_snapshot_rpc_shapes_and_stable_errors(){
+        let(st,_)=state();
+        assert_eq!(dispatch(&st,"exec.snapshot.get",json!({})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"exec.snapshot.get",json!({"snapshotId":"missing"})).await.unwrap_err().1.code,"not_found");
+        assert_eq!(dispatch(&st,"exec.snapshot.list",json!({})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"exec.snapshot.list",json!({"sessionId":"missing"})).await.unwrap_err().1.code,"not_found");
+        assert_eq!(dispatch(&st,"exec.snapshot.list",json!({"sessionId":"missing","limit":0})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"exec.snapshot.list",json!({"sessionId":"missing","limit":201})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"exec.snapshot.latest",json!({})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"exec.snapshot.latest",json!({"sessionId":"missing"})).await.unwrap_err().1.code,"not_found");
+        st.db.create_session("s","rt-test","codex","C:/repo","RPC").unwrap();
+        assert_eq!(dispatch(&st,"exec.snapshot.list",json!({"sessionId":"s","after":"missing"})).await.unwrap_err().1.code,"invalid_argument");
+        assert!(dispatch(&st,"exec.snapshot.latest",json!({"sessionId":"s"})).await.unwrap().is_null());
+        st.db.create_turn("t1","s").unwrap();st.db.create_exec_snapshot("s","t1","snap1",&json!({"model":"gpt-6","maxConcurrency":2}),&json!({"model":{"applied":true}}),&json!({"model":{"kind":"provider_echo","value":"gpt-6"}}),None,&json!({"adapter":"codex"}),"applied").unwrap();
+        let snapshot=dispatch(&st,"exec.snapshot.get",json!({"snapshotId":"snap1"})).await.unwrap();assert_eq!(snapshot["id"],"snap1");assert_eq!(snapshot["requested"]["model"],"gpt-6");
+        let latest=dispatch(&st,"exec.snapshot.latest",json!({"sessionId":"s"})).await.unwrap();assert_eq!(latest["id"],"snap1");
+        let list=dispatch(&st,"exec.snapshot.list",json!({"sessionId":"s","limit":5})).await.unwrap();assert_eq!(list["snapshots"].as_array().unwrap().len(),1);assert!(list["next"].is_null());
+    }
+    #[tokio::test]
+    async fn runtime_capabilities_reflect_static_support_gates_and_audited_changes(){
+        let(st,mut events)=state();
+        assert_eq!(dispatch(&st,"runtime.capabilities",json!({})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"runtime.capabilities",json!({"runtimeId":"missing"})).await.unwrap_err().1.code,"not_found");
+        assert_eq!(dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-test","agentId":7})).await.unwrap_err().1.code,"invalid_argument");
+        let initial=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-test"})).await.unwrap();assert_eq!(initial["settings"]["model"]["supported"],true);assert_eq!(initial["settings"]["model"]["enabled"],true);assert_eq!(initial["settings"]["customEnv"]["enabled"],true);assert_eq!(initial["settings"]["serviceTier"]["supported"],true);assert_eq!(initial["globalConcurrency"],json!({"limit":4,"active":0}));
+        assert_eq!(dispatch(&st,"settings.set",json!({"key":"exec_gate.codex.model","value":"false"})).await.unwrap_err().1.code,"invalid_argument");
+        dispatch(&st,"settings.set",json!({"key":"exec_gate.codex.model","value":false})).await.unwrap();let event=events.recv().await.unwrap();assert_eq!(event.event_type,"settings.changed");assert_eq!(event.payload,json!({"key":"exec_gate.codex.model","enabled":false}));
+        let after=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-test"})).await.unwrap();assert_eq!(after["settings"]["model"]["supported"],true);assert_eq!(after["settings"]["model"]["enabled"],false);
+        dispatch(&st,"settings.set",json!({"key":"exec_gate.codex.model","value":false})).await.unwrap();assert!(events.try_recv().is_err());
+        let claude=json!({"id":"rt-claude","provider":"claude"});*st.runtimes.write().await=vec![claude];let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-claude"})).await.unwrap();assert_eq!(caps["settings"]["serviceTier"]["supported"],false);assert_eq!(caps["settings"]["serviceTier"]["enabled"],false);assert_eq!(caps["settings"]["thinking"]["evidence"],"usage_effect");
+        *st.runtimes.write().await=vec![json!({"id":"rt-opencode","provider":"opencode"})];st.db.upsert_runtime(&json!({"id":"rt-opencode","provider":"opencode"})).unwrap();let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(caps["settings"]["thinking"]["supported"],true);assert_eq!(caps["settings"]["thinking"]["enabled"],false);assert_eq!(caps["settings"]["serviceTier"]["supported"],false);
+        let agent=st.db.agent_create(&json!({"name":"Capped","runtimeId":"rt-opencode","maxConcurrency":8})).unwrap().0;let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode","agentId":agent["id"]})).await.unwrap();assert_eq!(caps["agentConcurrency"]["configuredMaxConcurrency"],8);assert_eq!(caps["agentConcurrency"]["effectiveMaxConcurrency"],4);
     }
     #[tokio::test]
     async fn agent_list_without_capability_is_rejected_before_dispatch(){

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
@@ -49,9 +49,44 @@ pub struct ProbeResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExecOptions {
+    pub model: Option<String>,
+    pub thinking: Option<String>,
+    pub service_tier: Option<String>,
+    pub instructions: Option<String>,
+    pub extra_args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub max_concurrency: u32,
+}
+impl Default for ExecOptions {
+    fn default() -> Self {
+        Self { model: None, thinking: None, service_tier: None, instructions: None, extra_args: vec![], env: BTreeMap::new(), max_concurrency: 1 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceKind { None, RequestShape, ProviderEcho, UsageEffect, SuccessfulTurn }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingOutcome {
+    pub requested: Option<Value>,
+    pub applied: Option<bool>,
+    pub evidence_kind: EvidenceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_value: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewSessionRequest {
     pub session_id: String,
     pub project_path: PathBuf,
+    #[serde(default)]
+    pub exec_options: ExecOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +95,8 @@ pub struct ResumeSessionRequest {
     pub session_id: String,
     pub provider_session_id: String,
     pub project_path: PathBuf,
+    #[serde(default)]
+    pub exec_options: ExecOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +104,8 @@ pub struct ResumeSessionRequest {
 pub struct PromptRequest {
     pub turn_id: String,
     pub text: String,
+    #[serde(default)]
+    pub exec_options: ExecOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,4 +197,19 @@ pub trait AgentAdapter: Send + Sync {
         choice: &str,
     ) -> Result<(), AdapterError>;
     async fn close_session(&self, handle: &SessionHandle) -> Result<(), AdapterError>;
+}
+
+#[cfg(test)]
+mod exec_option_tests {
+    use super::*;
+
+    #[test]
+    fn old_adapter_request_shapes_default_exec_options_and_new_fields_are_camel_case() {
+        let new:NewSessionRequest=serde_json::from_value(serde_json::json!({"sessionId":"s","projectPath":"."})).unwrap();
+        let resume:ResumeSessionRequest=serde_json::from_value(serde_json::json!({"sessionId":"s","providerSessionId":"p","projectPath":"."})).unwrap();
+        let prompt:PromptRequest=serde_json::from_value(serde_json::json!({"turnId":"t","text":"hello"})).unwrap();
+        assert_eq!(new.exec_options.max_concurrency,1);assert_eq!(resume.exec_options.max_concurrency,1);assert!(prompt.exec_options.env.is_empty());
+        let encoded=serde_json::to_value(ExecOptions::default()).unwrap();assert!(encoded.get("serviceTier").is_some());assert!(encoded.get("maxConcurrency").is_some());assert!(encoded.get("service_tier").is_none());
+        assert_eq!(serde_json::to_value(EvidenceKind::ProviderEcho).unwrap(),"provider_echo");
+    }
 }

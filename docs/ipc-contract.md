@@ -58,7 +58,11 @@ Events:
 | `runtime.profile.save` | `{ "profile": RuntimeProfile }` | Save a direct executable + parsed args profile after path validation. |
 | `runtime.profile.delete` | `{ "profileId": string }` | Delete a saved profile. |
 | `settings.get` | `{}` | Non-secret local preferences. |
-| `settings.set` | `{ "key": string, "value": any }` | Persist a preference; credential fields are rejected. |
+| `settings.set` | `{ "key": string, "value": any }` | Persist a preference; credential fields are rejected. `exec_gate.*` values must be JSON booleans and actual changes persist `settings.changed`. |
+| `runtime.capabilities` | `{ "runtimeId": string, "agentId"?: string }` | `{runtimeId,settings,globalConcurrency,agentConcurrency,agentConcurrencies,hostDependent}`; reports static provider support separately from the persisted `exec_gate.*` switch. Unsupported settings are disabled. |
+| `exec.snapshot.get` | `{ "snapshotId": string }` | Snapshot object; `not_found` when the snapshot does not exist. |
+| `exec.snapshot.list` | `{ "sessionId": string, "after"?: string, "limit"?: integer }` | `{snapshots,next}`; `after` is an exclusive snapshot ID cursor and limit defaults to 50 (maximum 200). |
+| `exec.snapshot.latest` | `{ "sessionId": string }` | Snapshot object or `null` when the session has no turns. |
 | `session.list` | `{}` | Persisted sessions. |
 | `session.get` | `{ "sessionId": string }` | Session with ordered turns, messages, tool cards and file changes. |
 | `session.new` | `{ "agentId"?: string, "runtimeId"?: string, "projectPath": string, "title"?: string }` | Exactly one of `agentId` or `runtimeId` is required. Agent selection derives its runtime; legacy runtime-only creation leaves `agentId:null`. |
@@ -105,6 +109,12 @@ The following examples define the v1 UI DTO fields. Nullable fields may be absen
 
 `Agent` fields are `{id,name,description,instructions,color,runtimeId,model,thinking,serviceTier,customArgs,customEnv,maxConcurrency,defaultProject,sortOrder,archived,createdAt,updatedAt}`. Session DTOs include nullable `agentId` while `runtimeId` remains required. `agent.changed` events carry `{action,agentId,runtimeId,updatedAt,archived,sortOrder}`; the safe event projection excludes instructions, custom environment values and custom arguments. In addition to agent RPC mutations, runtime discovery emits action `created` when it adds a default agent for a runtime with no agent rows; archived rows count and suppress recreation. Events are persisted with the mutation and replayed by the global sequence cursor.
 
+Execution snapshots are returned as `{id,sessionId,turnId,agentId,runtimeId,provider,createdAt,requested,applied,evidence,instructionSha256,adapterFlags,status}`. `requested` contains only setting values that are safe to retain, `instructionsPresent`, `maxConcurrency`, and custom environment key names; it never contains instruction text or environment values. Status is `applied`, `partial`, `rejected`, or `runtime_default`. Session baselines are `claudeInstructionSha256` (last Claude instruction hash proven applied), `codexThreadInstructionSha256` (instructions installed when the current Codex thread started), and `opencodeCostTotal` (exact cumulative USD cost as decimal text). Usage rows include nullable `execSnapshotId`, `providerUpdateId`, `usageStatus`, `contextUsed`, `contextSize`, and `reportedCostDecimal`; new usage rows store `{}` in the legacy raw field. `reportedCostDecimal` is the exact per-turn OpenCode USD delta, as decimal text.
+
+`runtime.capabilities.settings` has `model`, `thinking`, `serviceTier`, `instructions`, and `customEnv` entries, each `{supported,enabled,scope,evidence,reason?}`. The `customEnv` entry also returns an `allowedKeys` array containing `LANG`, `LC_ALL`, `TZ`, `NO_COLOR`, and `TERM`. `enabled` is `supported && exec_gate.<provider>.<setting>`; custom environment support uses the provider allowlist and has no execution gate. `globalConcurrency` is `{limit,active}` with a fixed limit of 4. With `agentId`, `agentConcurrency` is `{configuredMaxConcurrency,effectiveMaxConcurrency,active}`; effective is the lower of the configured cap and 4. Without `agentId`, `agentConcurrency` is null and `agentConcurrencies` lists the active agents for that runtime. All active counts in this foundation reflect current daemon turns; durable reservation enforcement is a later step.
+
+Persisted events added here are `settings.changed` `{key,enabled}` for actual `exec_gate.*` changes; no-op gate writes produce no event. Phase 2b later adds `exec.options.changed` `{sessionId,turnId,agentId,runtimeId,requested,applied,snapshotId}` and `exec.options.rejected` `{sessionId,agentId,runtimeId,setting,code,reason,turnId?,snapshotId?}`. These event payloads must not contain instructions, custom environment values, arguments, or raw provider JSON.
+
 `usageSummary` fields are `{from,to,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,reasoningTokens,providerReportedCostMinor,providerReportedCurrency,apiEstimateMinor,apiEstimateCurrency,pricingStatus,subscriptionFixedMinor,subscriptionCurrency,quotaState}`. Pricing rules are `{id,provider,canonicalModelId,aliases,inputPerMillion,outputPerMillion,cacheReadPerMillion,cacheWritePerMillion,currency,effectiveFrom,effectiveTo,sourceUrl,isUserOverride}`. Subscription plans are `{id,provider,billingMode:"subscription",currency,monthlyMinor,renewalDay,quotaState}`.
 
 ### Current financial source checkpoint (1 October)
@@ -129,6 +139,8 @@ Usage token buckets are mutually exclusive: `inputTokens` excludes `cacheReadTok
 ## Errors and compatibility
 
 Stable error codes: `invalid_argument`, `not_found`, `unauthorized`, `unsupported`, `provider_unavailable`, `provider_error`, `budget_blocked`, `conflict`, `replay_gap`, and `internal`. Error messages are safe for display and contain no credential material or prompt text. A client must compare `v`; an unsupported major version is a startup error. Adapter capability omissions mean unsupported.
+
+The execution snapshot RPCs use `invalid_argument` for malformed IDs, cursors, or limits; `not_found` for a missing snapshot, session, or runtime. `runtime.capabilities` returns `not_found` for a missing runtime and `invalid_argument` when the supplied agent belongs to another runtime. Later option application uses `unsupported` for closed gates or unsupported settings and `provider_unavailable` when the provider cannot be reached.
 
 ## Security invariants
 

@@ -25,6 +25,75 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
 }
 
+fn schema_v3_valid(c: &Connection) -> Result<bool, StorageError> {
+    let ledger:i64=c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
+    let pragma:i64=c.query_row("PRAGMA user_version",[],|r|r.get(0))?;
+    let integrity:String=c.query_row("PRAGMA integrity_check",[],|r|r.get(0))?;
+    let required=[("exec_snapshots","id"),("exec_snapshots","requested_json"),("sessions","first_exec_snapshot_id"),("sessions","latest_exec_snapshot_id"),("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","exec_snapshot_id"),("usage_events","provider_update_id"),("usage_events","usage_status"),("usage_events","context_used"),("usage_events","context_size"),("usage_events","reported_cost_decimal"),("active_turn_reservations","turn_id")];
+    if ledger!=3||pragma!=3||integrity!="ok"||c.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0))?!=0 { return Ok(false); }
+    for (table,column) in required { if !c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get::<_,bool>(0))? { return Ok(false); } }
+    for index in ["idx_exec_snapshots_session_time","idx_exec_snapshots_agent_time","idx_exec_snapshots_runtime_time","idx_usage_exec_snapshot","idx_usage_provider_update","idx_active_reservations_session","idx_active_reservations_agent"] {
+        if !c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",[index],|r|r.get::<_,bool>(0))? { return Ok(false); }
+    }
+    Ok(true)
+}
+
+fn migrate_exec_snapshots(c:&mut Connection,path:Option<&Path>,backup_done:bool)->Result<(),StorageError>{
+    let ledger:i64=c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
+    let pragma:i64=c.query_row("PRAGMA user_version",[],|r|r.get(0))?;
+    if ledger==3 { return if schema_v3_valid(c)? { Ok(()) } else { Err(StorageError::InvalidAgent) }; }
+    if ledger!=2||pragma!=2 { return Err(StorageError::InvalidAgent); }
+    if let Some(p)=path { if !backup_done {verified_backup(c,p,2)?;} }
+    let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let locked:i64=tx.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
+    let locked_pragma:i64=tx.query_row("PRAGMA user_version",[],|r|r.get(0))?;
+    if locked==3 { tx.commit()?; return if locked_pragma==3 { Ok(()) } else { Err(StorageError::InvalidAgent) }; }
+    if locked!=2||locked_pragma!=2 { return Err(StorageError::InvalidAgent); }
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS exec_snapshots (id TEXT PRIMARY KEY NOT NULL,session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,runtime_id TEXT NOT NULL,provider TEXT NOT NULL,created_at TEXT NOT NULL,requested_json TEXT NOT NULL CHECK(json_valid(requested_json)),applied_json TEXT NOT NULL CHECK(json_valid(applied_json)),evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)),instruction_sha256 TEXT,adapter_flags_json TEXT NOT NULL CHECK(json_valid(adapter_flags_json)),status TEXT NOT NULL CHECK(status IN ('applied','partial','rejected','runtime_default')),UNIQUE(turn_id));
+      CREATE INDEX IF NOT EXISTS idx_exec_snapshots_session_time ON exec_snapshots(session_id,created_at);
+      CREATE INDEX IF NOT EXISTS idx_exec_snapshots_agent_time ON exec_snapshots(agent_id,created_at);
+      CREATE INDEX IF NOT EXISTS idx_exec_snapshots_runtime_time ON exec_snapshots(runtime_id,created_at);
+      CREATE TABLE IF NOT EXISTS active_turn_reservations(turn_id TEXT PRIMARY KEY REFERENCES turns(id) ON DELETE CASCADE,session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,created_at TEXT NOT NULL);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_active_reservations_session ON active_turn_reservations(session_id);
+      CREATE INDEX IF NOT EXISTS idx_active_reservations_agent ON active_turn_reservations(agent_id);")?;
+    for (table,column,ddl) in [
+        ("sessions","first_exec_snapshot_id","ALTER TABLE sessions ADD COLUMN first_exec_snapshot_id TEXT REFERENCES exec_snapshots(id) ON DELETE SET NULL"),
+        ("sessions","latest_exec_snapshot_id","ALTER TABLE sessions ADD COLUMN latest_exec_snapshot_id TEXT REFERENCES exec_snapshots(id) ON DELETE SET NULL"),
+        ("sessions","claude_instruction_sha256","ALTER TABLE sessions ADD COLUMN claude_instruction_sha256 TEXT"),
+        ("sessions","codex_thread_instruction_sha256","ALTER TABLE sessions ADD COLUMN codex_thread_instruction_sha256 TEXT"),
+        ("sessions","opencode_cost_total","ALTER TABLE sessions ADD COLUMN opencode_cost_total TEXT"),
+        ("usage_events","exec_snapshot_id","ALTER TABLE usage_events ADD COLUMN exec_snapshot_id TEXT REFERENCES exec_snapshots(id) ON DELETE SET NULL"),
+        ("usage_events","provider_update_id","ALTER TABLE usage_events ADD COLUMN provider_update_id TEXT"),
+        ("usage_events","usage_status","ALTER TABLE usage_events ADD COLUMN usage_status TEXT NOT NULL DEFAULT 'unreported' CHECK(usage_status IN ('reported','partial','unreported'))"),
+        ("usage_events","context_used","ALTER TABLE usage_events ADD COLUMN context_used INTEGER"),
+        ("usage_events","context_size","ALTER TABLE usage_events ADD COLUMN context_size INTEGER"),
+        ("usage_events","reported_cost_decimal","ALTER TABLE usage_events ADD COLUMN reported_cost_decimal TEXT"),
+    ] {
+        let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get(0))?;
+        if !exists { tx.execute(ddl,[])?; }
+    }
+    tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_usage_exec_snapshot ON usage_events(exec_snapshot_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_provider_update ON usage_events(runtime_id,provider_update_id) WHERE provider_update_id IS NOT NULL;")?;
+    let gates=[("exec_gate.claude.model",true),("exec_gate.claude.thinking",true),("exec_gate.claude.instructions",true),("exec_gate.codex.model",true),("exec_gate.codex.thinking",true),("exec_gate.codex.serviceTier",true),("exec_gate.codex.instructions",true),("exec_gate.opencode.model",true),("exec_gate.opencode.thinking",false),("exec_gate.opencode.instructions",true)];
+    for (key,enabled) in gates {
+        let changed=tx.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,?2)",params![key,if enabled{"true"}else{"false"}])?;
+        if changed>0 { push_settings_event(&tx,key,enabled)?; }
+    }
+    let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
+    tx.execute("INSERT INTO schema_migrations(version,applied_at) VALUES(3,?1)",[now])?;
+    tx.pragma_update(None,"user_version",3)?;
+    if !schema_v3_valid(&tx)? { return Err(StorageError::InvalidAgent); }
+    tx.commit()?;
+    if !schema_v3_valid(c)? { return Err(StorageError::InvalidAgent); }
+    Ok(())
+}
+
+fn push_settings_event(tx:&Transaction<'_>,key:&str,enabled:bool)->Result<Value,StorageError>{
+    let payload=json!({"key":key,"enabled":enabled});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
+    tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'settings.changed',?3)",params![id,ts,payload.to_string()])?;
+    Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"settings.changed","payload":payload}))
+}
+
 pub struct Storage {
     conn: Mutex<Connection>,
 }
@@ -38,6 +107,15 @@ fn table_counts(c: &Connection) -> Result<std::collections::BTreeMap<String, i64
         counts.insert(name, c.query_row(&sql, [], |r| r.get(0))?);
     }
     Ok(counts)
+}
+fn verify_backup_file(path:&Path,expected_version:i64,expected_counts:&std::collections::BTreeMap<String,i64>)->Result<(),StorageError>{
+    let read=Connection::open_with_flags(path,OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let integrity:String=read.query_row("PRAGMA integrity_check",[],|r|r.get(0))?;
+    let version:i64=read.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
+    let user:i64=read.query_row("PRAGMA user_version",[],|r|r.get(0))?;
+    let marker_ok=if expected_version==1{user==0||user==1}else{user==expected_version};
+    if integrity!="ok"||version!=expected_version||!marker_ok||read.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0))?!=0||table_counts(&read)?!=*expected_counts{return Err(StorageError::InvalidAgent)}
+    Ok(())
 }
 fn title_case_provider(provider:&str)->String{provider.split(|c:char|!c.is_alphanumeric()).filter(|w|!w.is_empty()).map(|word|{let mut chars=word.chars();chars.next().map(|first|first.to_uppercase().collect::<String>()+&chars.as_str().to_lowercase()).unwrap_or_default()}).collect::<Vec<_>>().join(" ")}
 
@@ -59,12 +137,12 @@ fn ensure_default_agents_tx(tx:&Transaction<'_>,now:&str,emit_events:bool)->Resu
     Ok(events)
 }
 
-fn verified_backup(c: &Connection, db_path: &Path) -> Result<(), StorageError> {
+fn verified_backup(c: &Connection, db_path: &Path, expected_pre_migration_version: i64) -> Result<(), StorageError> {
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let dir = parent.join("backups");
     fs::create_dir_all(&dir)?;
     let instant=Utc::now();let stamp=format!("{}.{:07}Z",instant.format("%Y%m%dT%H%M%S"),instant.timestamp_subsec_nanos()/100);let timestamp=instant.to_rfc3339_opts(SecondsFormat::Nanos,true);
-    let stem = format!("bloblex-pre-agents-{stamp}");
+    let stem = format!("bloblex-pre-v{}-{stamp}", expected_pre_migration_version);
     let backup_path = dir.join(format!("{stem}.db"));
     let manifest_path = dir.join(format!("{stem}.manifest.json"));
     let source_counts = table_counts(c)?;
@@ -72,14 +150,8 @@ fn verified_backup(c: &Connection, db_path: &Path) -> Result<(), StorageError> {
     Backup::new(c, &mut copy)?.run_to_completion(128, std::time::Duration::from_millis(10), None)?;
     let _:String=copy.query_row("PRAGMA journal_mode=DELETE",[],|r|r.get(0))?;
     drop(copy);
-    let read = Connection::open_with_flags(&backup_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let integrity: String = read.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
-    let version: i64 = read.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
-    let backup_counts = table_counts(&read)?;
-    if integrity != "ok" || version != 1 || source_counts != backup_counts {
-        return Err(StorageError::InvalidAgent);
-    }
-    let manifest = json!({"sourcePath":db_path,"backupPath":backup_path,"timestamp":timestamp,"schemaVersion":version,"integrity":integrity,"tableRowCounts":backup_counts});
+    verify_backup_file(&backup_path,expected_pre_migration_version,&source_counts)?;
+    let manifest = json!({"sourcePath":db_path,"backupPath":backup_path,"timestamp":timestamp,"schemaVersion":expected_pre_migration_version,"integrity":"ok","tableRowCounts":source_counts});
     fs::write(manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
     Ok(())
 }
@@ -87,13 +159,13 @@ fn verified_backup(c: &Connection, db_path: &Path) -> Result<(), StorageError> {
 fn migrate_agents(c: &mut Connection, path: Option<&Path>, backup_done:bool) -> Result<(), StorageError> {
     let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
     let pragma: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if ledger > 2 || (pragma != 0 && pragma != ledger) { return Err(StorageError::InvalidAgent); }
-    if ledger == 2 { return if pragma == 2 { Ok(()) } else { Err(StorageError::InvalidAgent) }; }
-    if let Some(p) = path { if !backup_done {verified_backup(c, p)?;} }
+    if ledger > 3 || (pragma != 0 && pragma != ledger) { return Err(StorageError::InvalidAgent); }
+    if ledger >= 2 { return if pragma == ledger { Ok(()) } else { Err(StorageError::InvalidAgent) }; }
+    if let Some(p) = path { if !backup_done {verified_backup(c, p, 1)?;} }
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let locked_ledger: i64 = tx.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
     let locked_pragma: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if locked_ledger == 2 { tx.commit()?; return Ok(()); }
+    if locked_ledger >= 2 { tx.commit()?; return if locked_ledger == locked_pragma { Ok(()) } else { Err(StorageError::InvalidAgent) }; }
     if locked_ledger != 1 || (locked_pragma != 0 && locked_pragma != locked_ledger) { return Err(StorageError::InvalidAgent); }
     tx.execute_batch("CREATE TABLE agents (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 60), name_key TEXT NOT NULL, description TEXT NOT NULL DEFAULT '' CHECK(length(description) <= 255), instructions TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT 'mint' CHECK(color IN ('coral','orange','amber','lemon','lime','mint','teal','cyan','sky','blue','violet','pink') OR color GLOB '#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]'), runtime_id TEXT NOT NULL REFERENCES runtimes(id) ON DELETE RESTRICT, model TEXT, thinking TEXT, service_tier TEXT, custom_args TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(custom_args) AND json_type(custom_args)='array'), custom_env TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(custom_env) AND json_type(custom_env)='object'), max_concurrency INTEGER NOT NULL DEFAULT 1 CHECK(max_concurrency BETWEEN 1 AND 50), default_project TEXT, sort_order INTEGER NOT NULL DEFAULT 0 CHECK(sort_order>=0), archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE UNIQUE INDEX idx_agents_active_name ON agents(name_key) WHERE archived=0;
@@ -123,13 +195,15 @@ fn migrate_agents(c: &mut Connection, path: Option<&Path>, backup_done:bool) -> 
     Ok(())
 }
 
-/// Restores a verified v1 backup to an isolated or stopped database path.
+/// Restores a verified pre-migration backup to an isolated or stopped database path.
 /// Callers must close every SQLite connection first; this helper never touches WAL/SHM sidecars.
-pub fn restore_verified_backup(backup_path:&Path,destination:&Path)->Result<PathBuf,StorageError>{
+pub fn restore_verified_backup(backup_path:&Path,destination:&Path,expected_version:i64)->Result<PathBuf,StorageError>{
     let backup=Connection::open_with_flags(backup_path,OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let integrity:String=backup.query_row("PRAGMA integrity_check",[],|r|r.get(0))?;
     let version:i64=backup.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
-    if integrity!="ok"||version!=1{return Err(StorageError::InvalidAgent)}
+    let pragma:i64=backup.query_row("PRAGMA user_version",[],|r|r.get(0))?;
+    let marker_ok=if expected_version==1{pragma==0||pragma==1}else{pragma==expected_version};
+    if integrity!="ok"||version!=expected_version||!marker_ok||backup.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0))?!=0{return Err(StorageError::InvalidAgent)}
     let expected=table_counts(&backup)?;drop(backup);
     let parent=destination.parent().unwrap_or_else(||Path::new("."));fs::create_dir_all(parent)?;
     let temp=parent.join(format!("bloblex-restore-{}.tmp",Uuid::new_v4()));fs::copy(backup_path,&temp)?;
@@ -139,7 +213,7 @@ pub fn restore_verified_backup(backup_path:&Path,destination:&Path)->Result<Path
     if destination.exists(){fs::rename(destination,&failed)?;}
     fs::rename(&temp,destination)?;
     let restored=Connection::open_with_flags(destination,OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    if restored.query_row("PRAGMA integrity_check",[],|r|r.get::<_,String>(0))?!="ok"||restored.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get::<_,i64>(0))?!=1||table_counts(&restored)?!=expected{return Err(StorageError::InvalidAgent)}
+    if restored.query_row("PRAGMA integrity_check",[],|r|r.get::<_,String>(0))?!="ok"||restored.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get::<_,i64>(0))?!=expected_version||table_counts(&restored)?!=expected{return Err(StorageError::InvalidAgent)}
     Ok(failed)
 }
 
@@ -153,14 +227,25 @@ impl Storage {
         Self::migrate(Connection::open_in_memory()?, None)
     }
     fn migrate(mut conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
-        conn.pragma_update(None, "foreign_keys", "ON")?;
         let has_ledger:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')",[],|r|r.get(0))?;
-        let mut backup_done=false;
         if has_ledger {
             let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
             let user:i64=conn.query_row("PRAGMA user_version",[],|r|r.get(0))?;
-            if ledger>2||(user!=0&&user!=ledger)||(ledger==2&&user!=2){return Err(StorageError::InvalidAgent)}
-            if ledger==1 {if let Some(p)=path{verified_backup(&conn,p)?;backup_done=true;}}
+            if ledger>3||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
+            if ledger==3 {
+                if !schema_v3_valid(&conn)? { return Err(StorageError::InvalidAgent); }
+                return Ok(Self { conn: Mutex::new(conn) });
+            }
+        }
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        let has_ledger:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')",[],|r|r.get(0))?;
+        let mut backup_done=false;let mut backup_v2_done=false;
+        if has_ledger {
+            let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
+            let user:i64=conn.query_row("PRAGMA user_version",[],|r|r.get(0))?;
+            if ledger>3||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
+            if ledger==1 {if let Some(p)=path{verified_backup(&conn,p,1)?;backup_done=true;}}
+            if ledger==2 {if let Some(p)=path{verified_backup(&conn,p,2)?;backup_v2_done=true;}}
         }
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
           CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -214,6 +299,7 @@ impl Storage {
             )?;
         }
         migrate_agents(&mut conn, path,backup_done)?;
+        migrate_exec_snapshots(&mut conn, path,backup_v2_done)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -380,6 +466,33 @@ impl Storage {
         tx.execute("INSERT INTO sessions(id,runtime_id,provider,project_path,title,state,created_at,updated_at,agent_id) VALUES(?1,?2,?3,?4,?5,'starting',?6,?6,?7)",params![id,runtime_id,provider,project,title,now,agent_id])?;tx.commit()?;
         Ok(())
     }
+    pub fn set_session_exec_snapshot(&self,session_id:&str,snapshot_id:&str,first:bool)->Result<(),StorageError>{
+        let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
+        if first { c.execute("UPDATE sessions SET first_exec_snapshot_id=COALESCE(first_exec_snapshot_id,?2) WHERE id=?1",params![session_id,snapshot_id])?; }
+        else { c.execute("UPDATE sessions SET latest_exec_snapshot_id=?2 WHERE id=?1",params![session_id,snapshot_id])?; }
+        Ok(())
+    }
+    pub fn create_exec_snapshot(&self,session_id:&str,turn_id:&str,id:&str,requested:&Value,applied:&Value,evidence:&Value,instruction_sha256:Option<&str>,adapter_flags:&Value,status:&str)->Result<Value,StorageError>{
+        let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let session:Option<(String,String,Option<String>)>=tx.query_row("SELECT runtime_id,provider,agent_id FROM sessions WHERE id=?1",[session_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let (runtime,provider,agent)=session.ok_or(StorageError::AgentNotFound)?;
+        let belongs:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND session_id=?2)",params![turn_id,session_id],|r|r.get(0))?;
+        if !belongs||!matches!(status,"applied"|"partial"|"rejected"|"runtime_default"){return Err(StorageError::InvalidAgent)}
+        let requested=snapshot_requested(requested);let applied=snapshot_outcomes(applied);let evidence=snapshot_evidence(evidence);let adapter_flags=snapshot_flags(adapter_flags);
+        let instruction_sha256=instruction_sha256.filter(|hash|hash.len()==64&&hash.bytes().all(|b|b.is_ascii_hexdigit()));
+        let created=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
+        tx.execute("INSERT INTO exec_snapshots(id,session_id,turn_id,agent_id,runtime_id,provider,created_at,requested_json,applied_json,evidence_json,instruction_sha256,adapter_flags_json,status) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![id,session_id,turn_id,agent,runtime,provider,created,requested.to_string(),applied.to_string(),evidence.to_string(),instruction_sha256,adapter_flags.to_string(),status])?;
+        tx.execute("UPDATE sessions SET first_exec_snapshot_id=COALESCE(first_exec_snapshot_id,?2),latest_exec_snapshot_id=?2 WHERE id=?1",params![session_id,id])?;
+        let value=exec_snapshot_read(&tx,id)?.ok_or(StorageError::InvalidAgent)?;tx.commit()?;Ok(value)
+    }
+    pub fn exec_snapshot_get(&self,id:&str)->Result<Option<Value>,StorageError>{let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;exec_snapshot_read(&c,id)}
+    pub fn exec_snapshot_latest(&self,session_id:&str)->Result<Option<Value>,StorageError>{let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let id:Option<String>=c.query_row("SELECT latest_exec_snapshot_id FROM sessions WHERE id=?1",[session_id],|r|r.get(0)).optional()?.flatten();match id{Some(id)=>exec_snapshot_read(&c,&id),None=>Ok(None)}}
+    pub fn exec_snapshot_list(&self,session_id:&str,after:Option<&str>,limit:u32)->Result<(Vec<Value>,Option<String>),StorageError>{
+        let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let limit=limit.clamp(1,200) as i64;
+        let mut q=c.prepare("SELECT id FROM exec_snapshots WHERE session_id=?1 AND (?2 IS NULL OR (created_at,id)>(SELECT created_at,id FROM exec_snapshots WHERE id=?2)) ORDER BY created_at,id LIMIT ?3")?;
+        let ids=q.query_map(params![session_id,after,limit+1],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+        let next=if ids.len()>limit as usize{ids.get(limit as usize-1).cloned()}else{None};let ids=ids.into_iter().take(limit as usize).collect::<Vec<_>>();let mut values=Vec::new();for id in ids{if let Some(v)=exec_snapshot_read(&c,&id)?{values.push(v)}}Ok((values,next))
+    }
     pub fn set_session_provider_id(
         &self,
         id: &str,
@@ -401,7 +514,7 @@ impl Storage {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let id = u["id"].as_str().unwrap_or("");
-        tx.execute("INSERT INTO usage_events(id,runtime_id,session_id,turn_id,provider,model,timestamp,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,reported_cost_minor,reported_currency,source,raw,agent_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,(SELECT agent_id FROM sessions WHERE id=?3))",params![id,u["runtimeId"].as_str().unwrap_or(""),u["sessionId"].as_str().unwrap_or(""),u["turnId"].as_str(),u["provider"].as_str().unwrap_or(""),u["model"].as_str(),u["timestamp"].as_str().unwrap_or(""),u["inputTokens"].as_i64(),u["outputTokens"].as_i64(),u["cacheReadTokens"].as_i64(),u["cacheWriteTokens"].as_i64(),u["reasoningTokens"].as_i64(),u["providerReportedCostMinor"].as_i64(),u["providerReportedCurrency"].as_str(),u["source"].as_str().unwrap_or("unknown"),u["raw"].to_string()])?;
+        tx.execute("INSERT INTO usage_events(id,runtime_id,session_id,turn_id,provider,model,timestamp,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,reported_cost_minor,reported_currency,source,raw,agent_id,exec_snapshot_id,provider_update_id,usage_status,context_used,context_size,reported_cost_decimal) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'{}',(SELECT agent_id FROM sessions WHERE id=?3),(SELECT id FROM exec_snapshots WHERE turn_id=?4),?16,COALESCE(?17,'unreported'),?18,?19,?20)",params![id,u["runtimeId"].as_str().unwrap_or(""),u["sessionId"].as_str().unwrap_or(""),u["turnId"].as_str(),u["provider"].as_str().unwrap_or(""),u["model"].as_str(),u["timestamp"].as_str().unwrap_or(""),u["inputTokens"].as_i64(),u["outputTokens"].as_i64(),u["cacheReadTokens"].as_i64(),u["cacheWriteTokens"].as_i64(),u["reasoningTokens"].as_i64(),u["providerReportedCostMinor"].as_i64(),u["providerReportedCurrency"].as_str(),u["source"].as_str().unwrap_or("unknown"),u["providerUpdateId"].as_str(),u["usageStatus"].as_str(),u["contextUsed"].as_i64(),u["contextSize"].as_i64(),u["reportedCostDecimal"].as_str()])?;
         if !u["valuation"].is_null() {
             let v = &u["valuation"];
             tx.execute("INSERT INTO usage_valuations(usage_event_id,basis,amount_minor,currency,pricing_rule_id,status,valued_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,v["basis"].as_str().unwrap_or("unknown"),v["amountMinor"].as_i64(),v["currency"].as_str(),v["pricingRuleId"].as_str(),v["status"].as_str().unwrap_or("unavailable"),u["timestamp"].as_str().unwrap_or("")])?;
@@ -879,10 +992,18 @@ impl Storage {
         }
         Ok(Value::Object(out))
     }
-    pub fn set_setting(&self, k: &str, v: &Value) -> Result<(), StorageError> {
-        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        c.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![k,v.to_string()])?;
-        Ok(())
+    pub fn set_setting(&self, k: &str, v: &Value) -> Result<Vec<Value>, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let previous:Option<String>=tx.query_row("SELECT value FROM settings WHERE key=?1",[k],|r|r.get(0)).optional()?;
+        tx.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![k,v.to_string()])?;
+        let mut events=Vec::new();
+        if k.starts_with("exec_gate.") {
+            let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
+            let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
+            if !same { events.push(push_settings_event(&tx,k,enabled)?); }
+        }
+        tx.commit()?;Ok(events)
     }
     pub fn profiles(&self) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -1064,6 +1185,22 @@ fn ensure_name_free(c:&Connection,key:&str,except:Option<&str>)->Result<(),Stora
 fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
 fn insert_agent(tx:&Transaction<'_>,id:&str,v:&Value,name:&str,key:&str,pos:i64,now:&str)->Result<(),StorageError>{let color=v["color"].as_str().unwrap_or("mint");let color=if color.starts_with('#'){color.to_ascii_uppercase()}else{color.into()};tx.execute("INSERT INTO agents(id,name,name_key,description,instructions,color,runtime_id,model,thinking,service_tier,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,0,?16,?16)",params![id,name,key,v["description"].as_str().unwrap_or(""),v["instructions"].as_str().unwrap_or(""),color,v["runtimeId"].as_str().unwrap_or(""),nullable(&v["model"]),nullable(&v["thinking"]),nullable(&v["serviceTier"]),v.get("customArgs").cloned().unwrap_or(json!([])).to_string(),v.get("customEnv").cloned().unwrap_or(json!({})).to_string(),v["maxConcurrency"].as_i64().unwrap_or(1),nullable(&v["defaultProject"]),pos,now])?;Ok(())}
 fn push_agent_event(tx:&Transaction<'_>,action:&str,a:&Value)->Result<Value,StorageError>{let payload=json!({"action":action,"agentId":a["id"],"runtimeId":a["runtimeId"],"updatedAt":a["updatedAt"],"archived":a["archived"],"sortOrder":a["sortOrder"]});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'agent.changed',?3)",params![id,ts,payload.to_string()])?;Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"agent.changed","payload":payload}))}
+fn snapshot_requested(v:&Value)->Value{
+    let mut result=json!({"model":v["model"],"thinking":v["thinking"],"serviceTier":v["serviceTier"],"instructionsPresent":v["instructionsPresent"].as_bool().unwrap_or(false),"extraArgs":[],"maxConcurrency":v["maxConcurrency"].as_u64().unwrap_or(1)});
+    if let Some(keys)=v["customEnvKeys"].as_array(){result["envKeys"]=json!(keys.iter().filter_map(Value::as_str).collect::<Vec<_>>());}
+    result
+}
+fn snapshot_outcomes(v:&Value)->Value{
+    let mut out=serde_json::Map::new();for key in ["model","thinking","serviceTier","instructions","customEnv"]{if let Some(item)=v.get(key){let value=if key=="instructions"||key=="customEnv"{Value::Null}else{item["appliedValue"].as_str().map(|s|json!(s.chars().take(256).collect::<String>())).unwrap_or(Value::Null)};out.insert(key.into(),json!({"applied":item["applied"].as_bool(),"value":value}));}}Value::Object(out)
+}
+fn snapshot_evidence(v:&Value)->Value{
+    let mut out=serde_json::Map::new();for key in ["model","thinking","serviceTier","instructions","customEnv"]{if let Some(item)=v.get(key){out.insert(key.into(),json!({"kind":item["kind"].as_str().or_else(||item["evidenceKind"].as_str()),"value":item["value"].as_str().or_else(||item["evidenceValue"].as_str()).map(|s|s.chars().take(256).collect::<String>())}));}}Value::Object(out)
+}
+fn snapshot_flags(v:&Value)->Value{json!({"adapter":v["adapter"].as_str(),"version":v["version"].as_str(),"gates":v["gates"].as_object().map(|m|m.iter().filter_map(|(k,v)|v.as_bool().map(|b|(k.clone(),json!(b)))).collect::<serde_json::Map<String,Value>>()).unwrap_or_default()})}
+fn exec_snapshot_read(c:&Connection,id:&str)->Result<Option<Value>,StorageError>{
+    let row:Option<String>=c.query_row("SELECT json_object('id',id,'sessionId',session_id,'turnId',turn_id,'agentId',agent_id,'runtimeId',runtime_id,'provider',provider,'createdAt',created_at,'requested',json(requested_json),'applied',json(applied_json),'evidence',json(evidence_json),'instructionSha256',instruction_sha256,'adapterFlags',json(adapter_flags_json),'status',status) FROM exec_snapshots WHERE id=?1",[id],|r|r.get(0)).optional()?;
+    row.map(|s|serde_json::from_str(&s).map_err(StorageError::from)).transpose()
+}
 fn active_ids(c:&Connection,rt:&str)->Result<Vec<String>,StorageError>{let mut q=c.prepare("SELECT id FROM agents WHERE runtime_id=?1 AND archived=0 ORDER BY sort_order")?;let rows=q.query_map([rt],|r|r.get(0))?.collect::<Result<Vec<_>,_>>()?;Ok(rows)}
 fn active_order(c:&Connection,rt:&str)->Result<Vec<Value>,StorageError>{let ids=active_ids(c,rt)?;ids.iter().map(|id|agent_read(c,id)).collect()}
 fn shift_active(tx:&Transaction<'_>,rt:&str)->Result<(),StorageError>{tx.execute("UPDATE agents SET sort_order=sort_order+1000000 WHERE runtime_id=?1 AND archived=0",[rt])?;Ok(())}
@@ -1144,16 +1281,22 @@ mod tests {
     use super::*;
     fn v1_fixture() -> (PathBuf,PathBuf) {
         let dir=std::env::temp_dir().join(format!("bloblex-phase2a-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("bloblex.db");drop(Storage::open(&path).unwrap());
-        let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();c.execute_batch("DROP INDEX idx_sessions_agent_updated; DROP INDEX idx_usage_agent_time; DROP INDEX idx_agents_active_name; DROP INDEX idx_agents_active_runtime_order; DROP INDEX idx_agents_runtime_archived_order; ALTER TABLE sessions DROP COLUMN agent_id; ALTER TABLE usage_events DROP COLUMN agent_id; DROP TABLE agents; DELETE FROM schema_migrations WHERE version=2; PRAGMA user_version=0;").unwrap();
+        let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();c.execute_batch("DROP INDEX idx_usage_provider_update; DROP INDEX idx_usage_exec_snapshot; DROP INDEX idx_active_reservations_session; DROP INDEX idx_active_reservations_agent; DROP INDEX idx_exec_snapshots_session_time; DROP INDEX idx_exec_snapshots_agent_time; DROP INDEX idx_exec_snapshots_runtime_time; DROP TABLE active_turn_reservations; DROP TABLE exec_snapshots; ALTER TABLE sessions DROP COLUMN first_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN latest_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN claude_instruction_sha256; ALTER TABLE sessions DROP COLUMN codex_thread_instruction_sha256; ALTER TABLE sessions DROP COLUMN opencode_cost_total; ALTER TABLE usage_events DROP COLUMN exec_snapshot_id; ALTER TABLE usage_events DROP COLUMN provider_update_id; ALTER TABLE usage_events DROP COLUMN usage_status; ALTER TABLE usage_events DROP COLUMN context_used; ALTER TABLE usage_events DROP COLUMN context_size; ALTER TABLE usage_events DROP COLUMN reported_cost_decimal; DELETE FROM app_events WHERE event_type='settings.changed'; DELETE FROM settings WHERE key LIKE 'exec_gate.%'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2; DROP INDEX idx_sessions_agent_updated; DROP INDEX idx_usage_agent_time; DROP INDEX idx_agents_active_name; DROP INDEX idx_agents_active_runtime_order; DROP INDEX idx_agents_runtime_archived_order; ALTER TABLE sessions DROP COLUMN agent_id; ALTER TABLE usage_events DROP COLUMN agent_id; DROP TABLE agents; DELETE FROM schema_migrations WHERE version=2; PRAGMA user_version=0;").unwrap();
         c.execute_batch("INSERT INTO runtimes(id,host_id,provider,protocol,executable,status,data) VALUES('rt-a','h','codex','codex_app_server','codex','online','{}'),('rt-b','h','claude','claude_stream','claude','offline','{}'); INSERT INTO sessions(id,runtime_id,provider,project_path,title,state,created_at,updated_at) VALUES('s-a','rt-a','codex','C:/a','A','idle','2026-01-02T00:00:00.000Z','2026-01-03T00:00:00.000Z'),('s-missing','rt-missing','other','C:/b','B','idle','2026-01-02T00:00:00.000Z','2026-01-03T00:00:00.000Z'); INSERT INTO usage_events(id,runtime_id,session_id,provider,timestamp,source,raw) VALUES('u-a','rt-a','s-a','codex','2026-01-03T00:00:00.000Z','stream','{}'),('u-missing','rt-missing','absent','other','2026-01-03T00:00:00.000Z','stream','{}');").unwrap();drop(c);let _=fs::remove_dir_all(dir.join("backups"));(dir,path)
+    }
+    fn v2_fixture()->(PathBuf,PathBuf){
+        let(dir,path)=v1_fixture();drop(Storage::open(&path).unwrap());
+        let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();
+        c.execute_batch("DROP INDEX idx_usage_provider_update; DROP INDEX idx_usage_exec_snapshot; DROP INDEX idx_active_reservations_session; DROP INDEX idx_active_reservations_agent; DROP INDEX idx_exec_snapshots_session_time; DROP INDEX idx_exec_snapshots_agent_time; DROP INDEX idx_exec_snapshots_runtime_time; DROP TABLE active_turn_reservations; DROP TABLE exec_snapshots; ALTER TABLE sessions DROP COLUMN first_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN latest_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN claude_instruction_sha256; ALTER TABLE sessions DROP COLUMN codex_thread_instruction_sha256; ALTER TABLE sessions DROP COLUMN opencode_cost_total; ALTER TABLE usage_events DROP COLUMN exec_snapshot_id; ALTER TABLE usage_events DROP COLUMN provider_update_id; ALTER TABLE usage_events DROP COLUMN usage_status; ALTER TABLE usage_events DROP COLUMN context_used; ALTER TABLE usage_events DROP COLUMN context_size; ALTER TABLE usage_events DROP COLUMN reported_cost_decimal; DELETE FROM app_events WHERE event_type='settings.changed'; DELETE FROM settings WHERE key LIKE 'exec_gate.%'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2;").unwrap();
+        c.execute("INSERT INTO settings(key,value) VALUES('exec_gate.codex.model','false')",[]).unwrap();drop(c);let _=fs::remove_dir_all(dir.join("backups"));(dir,path)
     }
     #[test]
     fn migrations_create_idempotent_database_and_events_replay() {
         let db = Storage::open_in_memory().unwrap();
         db.push_event("x", &json!({"n":1})).unwrap();
-        let ev = db.replay_events(0, 10).unwrap();
-        assert_eq!(ev[0]["type"], "x");
-        assert_eq!(db.snapshot().unwrap()["sequence"], 1);
+        let ev = db.replay_events(0, 20).unwrap();
+        assert!(ev.iter().any(|e|e["type"]=="x"));
+        assert_eq!(db.snapshot().unwrap()["sequence"], ev.last().unwrap()["sequence"]);
     }
     #[test]
     fn restart_recovery_keeps_native_resume_identity_and_expires_approvals() {
@@ -1331,10 +1474,10 @@ mod tests {
     fn v1_migration_backfills_once_creates_verified_backup_and_rolls_back_in_temp_paths(){
         let(dir,path)=v1_fixture();
         let baseline={let db=Storage::open(&path).unwrap();let s= db.sessions().unwrap();assert_eq!(s.len(),2);assert!(s.iter().find(|x|x["id"]=="s-missing").unwrap()["agentId"].is_null());assert_eq!(db.agent_list(true,None).unwrap().len(),2);(db.agent_list(true,None).unwrap(),s)};
-        let backup_dir=dir.join("backups");let paths=fs::read_dir(&backup_dir).unwrap().map(|x|x.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),2);assert_eq!(paths.iter().filter(|x|x.extension().is_some_and(|e|e=="db")).count(),1);assert_eq!(paths.iter().filter(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")).count(),1);assert!(paths.iter().all(|x|!x.file_name().unwrap().to_string_lossy().ends_with("-wal")&&!x.file_name().unwrap().to_string_lossy().ends_with("-shm")));let backup=paths.iter().find(|x|x.extension().is_some_and(|e|e=="db")).unwrap().clone();let manifest_path=paths.iter().find(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")).unwrap();let manifest:Value=serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();assert_eq!(manifest["integrity"],"ok");assert_eq!(manifest["schemaVersion"],1);assert_eq!(manifest["tableRowCounts"]["sessions"],2);
+        let backup_dir=dir.join("backups");let paths=fs::read_dir(&backup_dir).unwrap().map(|x|x.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),4);assert_eq!(paths.iter().filter(|x|x.extension().is_some_and(|e|e=="db")).count(),2);assert!(paths.iter().all(|x|!x.file_name().unwrap().to_string_lossy().ends_with("-wal")&&!x.file_name().unwrap().to_string_lossy().ends_with("-shm")));let backup=paths.iter().find(|x|x.extension().is_some_and(|e|e=="db")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap().clone();let manifest_path=paths.iter().find(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap();let manifest:Value=serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();assert_eq!(manifest["integrity"],"ok");assert_eq!(manifest["schemaVersion"],1);assert_eq!(manifest["tableRowCounts"]["sessions"],2);
         {let db=Storage::open(&path).unwrap();assert_eq!(db.agent_list(true,None).unwrap(),baseline.0);assert_eq!(db.sessions().unwrap(),baseline.1);}
-        let read=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(read.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(read.query_row("SELECT count(*) FROM usage_events WHERE agent_id IS NOT NULL",[],|r|r.get::<_,i64>(0)).unwrap(),1);assert_eq!(read.query_row("SELECT agent_id FROM usage_events WHERE id='u-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap(),Some(read.query_row("SELECT agent_id FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap()));assert_eq!(read.query_row("SELECT created_at FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap(),"2026-01-02T00:00:00.000Z");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='codex'",[],|r|r.get::<_,String>(0)).unwrap(),"#82AAFF");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='claude'",[],|r|r.get::<_,String>(0)).unwrap(),"#F38C6F");for (table,column) in [("sessions","agent_id"),("usage_events","agent_id")] {assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get::<_,bool>(0)).unwrap());}for index in ["idx_agents_active_name","idx_agents_active_runtime_order","idx_agents_runtime_archived_order","idx_sessions_agent_updated","idx_usage_agent_time"]{assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",[index],|r|r.get::<_,bool>(0)).unwrap());}drop(read);
-        let failed=restore_verified_backup(&backup,&path).unwrap();assert!(failed.exists());let restored=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(restored.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),0);assert_eq!(restored.query_row("SELECT count(*) FROM sessions",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert!(!restored.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='agent_id')",[],|r|r.get::<_,bool>(0)).unwrap());drop(restored);let _=fs::remove_dir_all(dir);
+        let read=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(read.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),3);assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),3);assert_eq!(read.query_row("SELECT count(*) FROM usage_events WHERE agent_id IS NOT NULL",[],|r|r.get::<_,i64>(0)).unwrap(),1);assert_eq!(read.query_row("SELECT agent_id FROM usage_events WHERE id='u-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap(),Some(read.query_row("SELECT agent_id FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap()));assert_eq!(read.query_row("SELECT created_at FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap(),"2026-01-02T00:00:00.000Z");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='codex'",[],|r|r.get::<_,String>(0)).unwrap(),"#82AAFF");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='claude'",[],|r|r.get::<_,String>(0)).unwrap(),"#F38C6F");for (table,column) in [("sessions","agent_id"),("usage_events","agent_id"),("sessions","first_exec_snapshot_id"),("usage_events","usage_status")] {assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get::<_,bool>(0)).unwrap());}for index in ["idx_agents_active_name","idx_agents_active_runtime_order","idx_agents_runtime_archived_order","idx_sessions_agent_updated","idx_usage_agent_time","idx_usage_provider_update"]{assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",[index],|r|r.get::<_,bool>(0)).unwrap());}drop(read);
+        let failed=restore_verified_backup(&backup,&path,1).unwrap();assert!(failed.exists());let restored=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(restored.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),0);assert_eq!(restored.query_row("SELECT count(*) FROM sessions",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert!(!restored.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='agent_id')",[],|r|r.get::<_,bool>(0)).unwrap());drop(restored);let _=fs::remove_dir_all(dir);
     }
     #[test]
     fn backup_failure_aborts_before_schema_ddl(){
@@ -1343,5 +1486,34 @@ mod tests {
         assert_eq!(c.query_row("PRAGMA schema_version",[],|r|r.get::<_,i64>(0)).unwrap(),before);
         assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='agent_id')",[],|r|r.get::<_,bool>(0)).unwrap());
         assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),1);drop(c);let _=fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn migration_2_to_3_seeds_gates_preserves_operator_values_and_reopens_without_backup_or_sidecars(){
+        let(dir,path)=v2_fixture();
+        {let db=Storage::open(&path).unwrap();let settings=db.settings().unwrap();assert_eq!(settings["exec_gate.codex.model"],false);for key in ["exec_gate.claude.model","exec_gate.claude.thinking","exec_gate.claude.instructions","exec_gate.codex.thinking","exec_gate.codex.serviceTier","exec_gate.codex.instructions","exec_gate.opencode.model","exec_gate.opencode.instructions"]{assert_eq!(settings[key],true);}assert_eq!(settings["exec_gate.opencode.thinking"],false);}
+        let backup_dir=dir.join("backups");let before=fs::read_dir(&backup_dir).unwrap().count();assert_eq!(before,2);
+        {let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),3);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),3);assert_eq!(c.query_row("SELECT COUNT(*) FROM usage_events WHERE usage_status='unreported' AND exec_snapshot_id IS NULL AND provider_update_id IS NULL AND context_used IS NULL AND context_size IS NULL AND reported_cost_decimal IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='settings.changed'",[],|r|r.get::<_,i64>(0)).unwrap(),9);for (table,column) in [("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","reported_cost_decimal")] {assert_eq!(c.query_row("SELECT type FROM pragma_table_info(?1) WHERE name=?2",params![table,column],|r|r.get::<_,String>(0)).unwrap(),"TEXT");}assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cumulative_cost_micros')",[],|r|r.get::<_,bool>(0)).unwrap());}
+        drop(Storage::open(&path).unwrap());assert_eq!(fs::read_dir(&backup_dir).unwrap().count(),before);
+        let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();c.execute_batch("DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2;").unwrap();drop(c);drop(Storage::open(&path).unwrap());
+        let entries=fs::read_dir(&dir).unwrap().map(|e|e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>();assert!(entries.iter().all(|n|!n.ends_with("-wal")&&!n.ends_with("-shm")));let backup_entries=fs::read_dir(&backup_dir).unwrap().map(|e|e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>();assert!(backup_entries.iter().all(|n|!n.ends_with("-wal")&&!n.ends_with("-shm")));let _=fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn snapshots_keep_only_normalized_option_data_and_link_first_latest_and_usage(){
+        let db=Storage::open_in_memory().unwrap();db.create_session("s","rt","codex","C:/repo","Snapshot").unwrap();db.create_turn("t1","s").unwrap();
+        let first=db.create_exec_snapshot("s","t1","snap1",&json!({"model":"gpt-6","thinking":"high","serviceTier":"priority","instructions":"do-not-store-this","instructionsPresent":true,"maxConcurrency":3,"customEnvKeys":["LANG"],"customEnv":{"LANG":"private-value"}}),&json!({"model":{"requested":"gpt-6","applied":true}}),&json!({"model":{"evidenceKind":"provider_echo","evidenceValue":"gpt-6"},"raw":"provider-json-must-not-be-here"}),Some("sha256-safe"),&json!({"adapter":"codex","version":"0.1"}),"applied").unwrap();
+        let stored=first.to_string();assert!(!stored.contains("do-not-store-this"));assert!(!stored.contains("private-value"));assert!(!stored.contains("provider-json-must-not-be-here"));assert_eq!(first["requested"]["envKeys"][0],"LANG");assert_eq!(first["requested"]["extraArgs"],json!([]));
+        db.insert_usage(&json!({"id":"u1","runtimeId":"rt","sessionId":"s","turnId":"t1","provider":"codex","timestamp":"2026-10-02T00:00:00Z","providerUpdateId":"update-1","usageStatus":"reported","contextUsed":12,"contextSize":100,"reportedCostDecimal":"0.000048588","raw":{"private":"raw-provider-data"}})).unwrap();
+        let c=db.conn.lock().unwrap();let row:(Option<String>,Option<String>,String,Option<i64>,Option<i64>,Option<String>,String)=c.query_row("SELECT exec_snapshot_id,provider_update_id,usage_status,context_used,context_size,reported_cost_decimal,raw FROM usage_events WHERE id='u1'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).unwrap();assert_eq!(row,(Some("snap1".into()),Some("update-1".into()),"reported".into(),Some(12),Some(100),Some("0.000048588".into()),"{}".into()));drop(c);
+        db.create_turn("t2","s").unwrap();db.create_exec_snapshot("s","t2","snap2",&json!({"maxConcurrency":1}),&json!({}),&json!({}),None,&json!({}),"runtime_default").unwrap();assert_eq!(db.exec_snapshot_latest("s").unwrap().unwrap()["id"],"snap2");let (items,next)=db.exec_snapshot_list("s",Some("snap1"),10).unwrap();assert_eq!(items.len(),1);assert_eq!(items[0]["id"],"snap2");assert!(next.is_none());db.set_session_exec_snapshot("s","snap2",true).unwrap();let c=db.conn.lock().unwrap();let ptrs:(String,String)=c.query_row("SELECT first_exec_snapshot_id,latest_exec_snapshot_id FROM sessions WHERE id='s'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(ptrs,("snap1".into(),"snap2".into()));
+    }
+    #[test]
+    fn exec_gate_setting_audit_is_atomic_and_suppresses_noop_events(){
+        let db=Storage::open_in_memory().unwrap();let initial=db.set_setting("exec_gate.codex.model",&json!(false)).unwrap();assert_eq!(initial.len(),1);assert_eq!(initial[0]["type"],"settings.changed");assert_eq!(initial[0]["payload"],json!({"key":"exec_gate.codex.model","enabled":false}));assert!(db.set_setting("exec_gate.codex.model",&json!(false)).unwrap().is_empty());assert!(db.set_setting("ui.theme",&json!("dark")).unwrap().is_empty());assert_eq!(db.replay_events(initial[0]["sequence"].as_u64().unwrap()-1,5).unwrap().len(),1);
+    }
+    #[test]
+    fn v2_backup_failure_and_corrupt_backup_both_fail_before_schema_changes(){
+        let(dir,path)=v2_fixture();let before=Connection::open(&path).unwrap().query_row("PRAGMA schema_version",[],|r|r.get::<_,i64>(0)).unwrap();if dir.join("backups").exists(){fs::remove_dir_all(dir.join("backups")).unwrap();}fs::write(dir.join("backups"),b"cannot create backup directory").unwrap();
+        assert!(Storage::open(&path).is_err());let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA schema_version",[],|r|r.get::<_,i64>(0)).unwrap(),before);assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='first_exec_snapshot_id')",[],|r|r.get::<_,bool>(0)).unwrap());drop(c);
+        let corrupted=dir.join("corrupt.db");fs::write(&corrupted,b"not a SQLite backup").unwrap();assert!(verify_backup_file(&corrupted,2,&std::collections::BTreeMap::new()).is_err());let _=fs::remove_dir_all(dir);
     }
 }

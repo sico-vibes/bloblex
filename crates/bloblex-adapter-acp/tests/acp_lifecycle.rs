@@ -37,6 +37,7 @@ async fn new_session(
             NewSessionRequest {
                 session_id: session_id.into(),
                 project_path: std::env::current_dir().unwrap(),
+                exec_options: Default::default(),
             },
             tx,
         )
@@ -58,6 +59,7 @@ async fn fake_child_roundtrips_unknown_rpc_stream_and_prompt_stop_reason() {
                 PromptRequest {
                     turn_id: "turn-1".into(),
                     text: "Return fixture text".into(),
+                    exec_options: Default::default(),
                 },
             )
             .await
@@ -94,6 +96,7 @@ async fn fake_child_permission_reply_reaches_provider_and_resolves_prompt() {
                 PromptRequest {
                     turn_id: "turn-permission".into(),
                     text: "Ask permission".into(),
+                    exec_options: Default::default(),
                 },
             )
             .await
@@ -107,6 +110,7 @@ async fn fake_child_permission_reply_reaches_provider_and_resolves_prompt() {
                 PromptRequest {
                     turn_id: "turn-permission-b".into(),
                     text: "Ask permission".into(),
+                    exec_options: Default::default(),
                 },
             )
             .await
@@ -189,6 +193,7 @@ async fn fake_child_cancel_uses_provider_stop_reason() {
                 PromptRequest {
                     turn_id: "turn-cancel".into(),
                     text: "Wait for cancellation".into(),
+                    exec_options: Default::default(),
                 },
             )
             .await
@@ -224,6 +229,7 @@ async fn cancelling_pending_approval_settles_provider_request_and_rejects_late_r
                 PromptRequest {
                     turn_id: "turn-permission-cancel".into(),
                     text: "Wait for permission".into(),
+                    exec_options: Default::default(),
                 },
             )
             .await

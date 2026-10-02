@@ -9,7 +9,7 @@
 
 ## 2026-10-02 - Task 2 bake-off result (Luna `impl` vs Grok `impl-b`), blind A/B
 - Documents: the original first-pass outputs for the same brief, committed under `docs/evidence/`. The mapping was randomised and hidden from QA: A = Luna (`gpt-6-luna` high via Codex), B = Grok (`grok-4.7-high` via Cursor).
-- Scores (rubric: evidence 30 / completeness 20 / technical correctness 20 / resolution power 15 / honesty and safety 15): DeepSeek QA A 78, B 89 (gap 11). Director (scored privately before reading QA, then adjusted after verification) A 75, B 86 (gap 11). The judges agree on the winner and the margin; totals differ by 3 points on each document. Private score notes: `docs/evidence/task2-director-private-scores.txt`.
+- Scores (rubric: evidence 30 / completeness 20 / technical correctness 20 / resolution power 15 / honesty and safety 15): DeepSeek QA A 78, B 89 (gap 11). Director (scored privately before reading QA, then adjusted after verification) A 75, B 86 (gap 11). The judges agree on the winner and the margin; totals differ by 3 points on each document.txt`.
 - Judge reconciliation (the Director re-verified QA's contested claims on the real host):
   - Claude headless `list_models` works (confirmed live, no model call).
   - ACP `session/set_config_option` on `model` adds an `effort` option (confirmed).

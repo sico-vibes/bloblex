@@ -428,5 +428,5 @@ Live model calls: **none**.
 
 Writes outside the temp dir, then what was done about them:
 
-- The `list_models` probes created `%USERPROFILE%\.claude\sessions` and `.last-cleanup` even with `--no-session-persistence`. On this machine `USERPROFILE` is `C:\Users\jbmst\AppData\Local\bloblex-cursor-home`. Those new session files and `.last-cleanup` were deleted. The pre-existing `backups\.claude.json.backup.*` was left unread and in place.
+- The `list_models` probes created `%USERPROFILE%\.claude\sessions` and `.last-cleanup` even with `--no-session-persistence`. On this machine `USERPROFILE` is `C:\Users\user\AppData\Local\bloblex-cursor-home`. Those new session files and `.last-cleanup` were deleted. The pre-existing `backups\.claude.json.backup.*` was left unread and in place.
 - `opencode models --verbose`, `opencode debug paths`, and `opencode acp --help` ran before `XDG_*` was set. They left a default `opencode.jsonc` (schema stub only), `.gitignore`, `opencode.db` (+ `-shm`/`-wal`), and a `log` directory under that same home's `.config\opencode` and `.local\share\opencode`. Those files were not deleted. Later ACP handshakes used temp XDG dirs. `~/.codex` under that home was not created. No `login`, `logout`, or `config set` was run.

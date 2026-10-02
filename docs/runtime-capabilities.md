@@ -11,7 +11,7 @@
   - **Real host, Director-verified, 2026-10-02:** the user's real profile, re-checked by the Director (not this Task 4B session).
   - **Real profile, QA-reported, 2026-10-02:** reported by QA; the Director did not re-verify the count or the default.
   - **Isolated redirected home, impl-b, 2026-10-02:** the Cursor launcher home (empty of the user's Claude/OpenCode catalogs). Counts from this profile do not describe the real machine.
-  - **impl spike, 2026-10-02:** the probes already recorded in the previous revision of this file. Claude turns used default session persistence (not an isolated home). Codex warned it could not write `C:\Users\jbmst\.codex\tmp\arg0`.
+  - **impl spike, 2026-10-02:** the probes already recorded in the previous revision of this file. Claude turns used default session persistence (not an isolated home). Codex warned it could not write `C:\Users\user\.codex\tmp\arg0`.
 - Evidence kinds are named in each row: **help text**, **live no-model probe**, **schema**, **source**, **binary string**, or **failed-request probe** (a turn was attempted and the provider returned an error; zero usage from that event is not a successful turn).
 - **Status scorecard:** CONFIRMED 12 / REFUTED 1 / PARTIAL 9 / UNVERIFIED 0 across C1–C7, X1–X8, and O1–O7.
 - No credential, account identifier, provider key, or private configuration value is included. Prompt text shown is synthetic.
@@ -180,7 +180,7 @@ PowerShell. CLI cwd was a temp directory, not the repo, unless noted. XDG and Op
 
 ### impl spike, 2026-10-02 (previous revision of this file)
 
-Commands ran from the repo unless marked. Temp output was under `$env:TEMP`. **Codex warned it could not create PATH aliases under `C:\Users\jbmst\.codex\tmp\arg0` (access denied) and continued; no successful write there was reported.** One OpenCode model-list attempt without an isolated env tried to open `C:\Users\jbmst\.local\share\opencode\log\opencode.log` and failed; the log was not read. The Claude prompt probe used default session persistence, so the CLI may have written session data outside the temp working directory.
+Commands ran from the repo unless marked. Temp output was under `$env:TEMP`. **Codex warned it could not create PATH aliases under `C:\Users\user\.codex\tmp\arg0` (access denied) and continued; no successful write there was reported.** One OpenCode model-list attempt without an isolated env tried to open `C:\Users\user\.local\share\opencode\log\opencode.log` and failed; the log was not read. The Claude prompt probe used default session persistence, so the CLI may have written session data outside the temp working directory.
 
 1. Help, version, and subcommand help for `claude`, `codex`, and `opencode`.
 2. `codex app-server generate-json-schema` into a temp directory, compared with `docs/qa-schema/codex-0.159.3/`.

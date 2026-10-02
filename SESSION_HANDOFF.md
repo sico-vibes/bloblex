@@ -208,3 +208,13 @@ B49E27B0E61B39D88BDA22AE76D9D4707F41E5116B905DBE411B1418623C3679
 Bloblex_UI_Concept.png
 6DC7B02BEE87E00211BB0675A8754663EA2A3B01B442A2A9CF7ACF4DC0342C0C
 ```
+
+## PAUSED by the user, 2 October 2026 (~08:45 BST)
+
+All delegated work was stopped at the user's request; nothing is running. `main` is pushed through `31cacf0` (Phase 2b spec amended with live evidence) and builds as of the last merge (`f734129`: vitest 22 files / 115 tests).
+
+In-flight, UNFINISHED and UNCOMMITTED (do not commit as-is; resume or discard):
+- **Task 12 (Luna, Phase 2b-1 foundation: ExecOptions, migration 3, snapshots, gates, read-only RPCs)**: partial edits are in the main working tree (`crates/bloblex-agent-core/src/lib.rs`, `crates/bloblex-daemon/src/main.rs`, `crates/bloblex-storage/src/lib.rs`, `crates/bloblex-adapter-acp/tests/acp_lifecycle.rs`, `docs/ipc-contract.md`). Resume with the Codex thread `01a0fb76-5722-7880-9d7d-a24d2e11a9e9` (`relay.mjs --lane impl --session <id>`), and tell it migration 3 must match the AMENDED spec (`docs/PHASE_2B_SPEC.md` section 5: it adds `sessions.codex_thread_instruction_sha256`, `sessions.opencode_cost_total`, an applied-hash baseline for Claude and `usage_events.reported_cost_decimal`).
+- **Task 13 (Grok, Phase 4 session tree)**: partial work in the worktree branch `task13-grok` at `%TEMP%\...\scratchpad\wt-task13` (junctioned node_modules; remove junctions with `[IO.Directory]::Delete(path,$false)` before `git worktree remove`). Resume with the Cursor session `350551b7-8efa-4bb5-9822-ce162244f513` via `scripts/run-cursor-delegate.ps1 --session <id>`.
+
+Remaining queue (user wants the whole product coded by two implementers with no QA/native rounds; the user will test later): Luna: finish 2b-1, daemon orchestration + trait + Claude adapter, Codex adapter, concurrency + usage persistence, Phase 5 backend (`docs/PHASE_5_CONTRACT.md`), Phase 7 daemon bits. Grok: Phase 4, OpenCode adapter crate, live Execution card, Phase 5 analytics UI, Phase 6 settings (trimmed), Phase 7 polish. Open items for the user: native re-check of the companion drag/clamp fixes, native test of Phase 4, live-CLI gates re-run (`scripts/live-checks`) on any CLI version change.

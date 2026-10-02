@@ -2,7 +2,7 @@
 
 ## Current carry-forward (1 October 2026, evening)
 
-The implementation plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). The current delegation pipeline is in [AGENTS.md](AGENTS.md): the Director directs and reviews, `impl` and `impl-b` implement, and `qa` reports to the Director. Current pointer: **Phase 3 implemented, awaiting merge** ([docs/PHASE_3_SPEC.md](docs/PHASE_3_SPEC.md), branch `task6-grok`). Native smoke (spec section 9) is still for the Director; no temp database path is recorded because that smoke was not run in this lane. Backend work follows the revised plan order.
+The implementation plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). The current delegation pipeline is in [AGENTS.md](AGENTS.md): the Director directs and reviews, `impl` and `impl-b` implement, and `qa` reports to the Director. Current pointer: **Phases 1, 1.5, 2a and 3 are done and on main** (see [docs/DIRECTOR_LOG.md](docs/DIRECTOR_LOG.md) for reviews and scores). **Next, in order:** (1) the native smoke test from [docs/PHASE_3_SPEC.md](docs/PHASE_3_SPEC.md) section 9 (run `npm run desktop:dev` with an isolated BLOBLEX_DB_PATH; never the live inspection DB), which has NOT been run yet and needs the user at the machine; (2) Phase 4 (per-blob session tree); (3) Phase 2b (execution options; its entry gate in docs/E2E_PLAN_V2.md needs live integration checks first); then Phases 5, 6 (trimmed) and 7. Open product question: default agent for runtimes discovered after migration.
 
 `docs/E2E_PLAN_V2.md` is the current authoritative plan; [Bloblex_E2E_Windows_Desktop_Plan.md](Bloblex_E2E_Windows_Desktop_Plan.md) remains the original product plan and history. Both remain readable.
 

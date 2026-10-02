@@ -1,3 +1,9 @@
+import type { AutoResolvedAction, BypassNotice } from './approvalContract'
+import { parseAutoResolved, parseBypassActive } from './approvalContract'
+
+export type { AutoResolvedAction, BypassNotice } from './approvalContract'
+export type ApprovalMode = 'ask' | 'auto' | 'bypass'
+
 export type JsonRecord = Record<string, unknown>
 
 export interface Snapshot extends JsonRecord {
@@ -13,6 +19,8 @@ export interface Snapshot extends JsonRecord {
   usageSummary?: JsonRecord
   budgets?: JsonRecord[] | JsonRecord
   latestBudgetAlert?: JsonRecord
+  autoApprovals?: AutoResolvedAction[]
+  bypassNotices?: BypassNotice[]
 }
 
 export interface Runtime extends JsonRecord {
@@ -46,6 +54,8 @@ export interface Agent extends JsonRecord {
   archived: boolean
   createdAt: string
   updatedAt: string
+  approvalMode?: ApprovalMode | null
+  effectiveApprovalMode?: ApprovalMode | null
 }
 
 export interface ChatMessage extends JsonRecord {
@@ -156,6 +166,18 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
     const nextAgents = [...agents.filter((agent) => agent.id !== id), projected]
       .sort((a, b) => a.runtimeId.localeCompare(b.runtimeId) || a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
     return { ...snapshot, sequence, agents: nextAgents }
+  }
+
+  if (event.type === 'permission.auto_resolved') {
+    const parsed = parseAutoResolved(payload, typeof sequence === 'number' ? sequence : 0)
+    if (!parsed) return { ...snapshot, sequence }
+    const rest = (snapshot.autoApprovals ?? []).filter((item) => item.sequence !== parsed.sequence || item.permissionId !== parsed.permissionId)
+    return { ...snapshot, sequence, autoApprovals: [parsed, ...rest].sort((a, b) => b.sequence - a.sequence).slice(0, 100) }
+  }
+  if (event.type === 'permission.bypass_active') {
+    const parsed = parseBypassActive(payload, typeof sequence === 'number' ? sequence : 0)
+    if (!parsed) return { ...snapshot, sequence }
+    return { ...snapshot, sequence, bypassNotices: [parsed, ...(snapshot.bypassNotices ?? [])].sort((a, b) => b.sequence - a.sequence).slice(0, 50) }
   }
 
   if (event.type === 'permission.resolved') {

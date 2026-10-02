@@ -36,7 +36,7 @@ export function BlobOverview({ draft, runtime, session, connected, model, mode, 
     <div className="blob-facts">
       <div className="blob-fact"><span>Runtime</span><strong><i className={`status-dot ${connected ? runtimeDotClass(runtime?.status) : 'muted'}`} /> {labelize(runtime?.provider, 'No runtime')} · {derived.label}</strong></div>
       <div className="blob-fact"><span>Model</span><strong>{modelValue}</strong></div>
-      <p className="blob-help">Bloblex does not send a model until a later update.</p>
+      <p className="blob-help">The chat header shows the model from the latest applied snapshot when one exists. A missing snapshot stays unreported.</p>
       <div className="blob-fact"><span>Status</span><strong>{derived.label}</strong></div>
       <div className="blob-fact"><span>Usage</span><strong>Open the Usage tab.</strong></div>
     </div>

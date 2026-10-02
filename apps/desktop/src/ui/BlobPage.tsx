@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import type { AutoResolvedAction, BypassNotice } from '../approvalContract'
+import { visibleApprovalMode } from '../approvalContract'
 import type { Agent, Runtime, Session } from '../types'
 import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
+import type { ExecutionSendGate } from '../executionContract'
+import { ApprovalBadge, AutoApprovedList } from './approvalUi'
 import { BlobOverview } from './BlobOverview'
 import { BlobSessions } from './BlobSessions'
 import { BlobSettings } from './BlobSettings'
@@ -9,7 +13,7 @@ import { BlobUsage } from './BlobUsage'
 const TABS = ['Overview', 'Sessions', 'Usage', 'Settings'] as const
 type BlobTab = (typeof TABS)[number]
 
-export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, onDraftChange, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
+export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
   mode: 'create' | 'edit'
   agent: Agent | null
   draft: AgentDraft
@@ -27,7 +31,10 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
   remoteNotice: string | null
   errors: FieldErrors
   execution: StoredExecution
+  autoApprovals?: readonly AutoResolvedAction[]
+  bypassNotices?: readonly BypassNotice[]
   onDraftChange: (draft: AgentDraft) => void
+  onExecutionGate?: (gate: ExecutionSendGate) => void
   onBack: () => void
   onSave: () => void
   onCancel: () => void
@@ -40,6 +47,12 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
   const backRef = useRef<HTMLButtonElement>(null)
   useEffect(() => { backRef.current?.focus() }, [])
   const title = mode === 'create' ? 'New blob' : agent?.name || draft.name || 'Blob'
+  const badgeMode = visibleApprovalMode(draft.approvalMode, agent)
+  const latestSessionId = [...sessions].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))[0]?.id ?? session?.id ?? null
+  const blobActions = agent
+    ? autoApprovals.filter((action) => action.agentId === agent.id || (!action.agentId && !!latestSessionId && action.sessionId === latestSessionId))
+    : []
+  const bypassLine = bypassNotices.some((notice) => agent && (notice.agentId === agent.id || (latestSessionId && notice.sessionId === latestSessionId)))
   const leave = () => { setDiscardOpen(false); onBack() }
   const requestBack = () => { if (dirty) setDiscardOpen(true); else onBack() }
   const requestCancel = () => {
@@ -51,6 +64,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
     <header className="blob-page-header">
       <button ref={backRef} type="button" className="secondary-button" onClick={requestBack}>Back</button>
       <strong className="blob-page-heading">{title}</strong>
+      <ApprovalBadge mode={badgeMode} />
       <div className="blob-page-actions">
         {dirty && <button type="button" className="secondary-button" onClick={requestCancel}>Cancel</button>}
         <button type="button" className="primary-button" disabled={!ready || saving || (mode === 'edit' && !dirty)} onClick={onSave}>{saving ? 'Saving…' : mode === 'create' ? 'Create blob' : 'Save'}</button>
@@ -72,12 +86,16 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
           }}>{name}</button>)}
         </div>
         <div id={`blob-panel-${tab}`} role="tabpanel" aria-labelledby={`blob-tab-${tab}`}>
-          {tab === 'Overview' && <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} onColorChange={(color) => onDraftChange({ ...draft, color })} />}
+          {tab === 'Overview' && <>
+            {bypassLine && <p className="blob-page-notice" role="status">Bypass is active for this blob. New requests are approved without asking.</p>}
+            <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} onColorChange={(color) => onDraftChange({ ...draft, color })} />
+            <AutoApprovedList actions={blobActions} />
+          </>}
           {tab === 'Sessions' && (mode === 'create'
             ? <section className="blob-card"><h3>Sessions</h3><p className="blob-muted">Save this blob to start conversations.</p></section>
             : <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />)}
           {tab === 'Usage' && <BlobUsage agentId={mode === 'edit' ? agent?.id ?? null : null} sessions={sessions} agents={agent ? [agent] : []} connected={connected} />}
-          {tab === 'Settings' && <BlobSettings draft={draft} runtimes={runtimes} errors={errors} execution={execution} onDraftChange={onDraftChange} onArchive={mode === 'edit' ? onArchive : undefined} />}
+          {tab === 'Settings' && <BlobSettings draft={draft} runtimes={runtimes} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} onArchive={mode === 'edit' ? onArchive : undefined} />}
         </div>
       </div>
     </div>

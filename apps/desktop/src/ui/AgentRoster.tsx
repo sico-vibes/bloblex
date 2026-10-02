@@ -3,6 +3,8 @@ import { ChevronDown, ChevronRight, Search } from 'lucide-react'
 import type { Agent, Runtime, Session } from '../types'
 import { labelize } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
+import { effectiveApprovalMode } from '../approvalContract'
+import { ApprovalBadge } from './approvalUi'
 import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
 import { AgentContextMenu } from './AgentContextMenu'
@@ -327,7 +329,7 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, selec
       >
         <BlobCanvas color={agentColorHex(agent.color)} size={42} mood={status.mood} label={agent.name} />
         <span className="bot-row-copy">
-          <span className="bot-row-top"><strong>{agent.name}</strong>{row.latest?.updatedAt && <time>{shortTime(row.latest.updatedAt)}</time>}</span>
+          <span className="bot-row-top"><strong>{agent.name}</strong><ApprovalBadge mode={effectiveApprovalMode(agent)} />{row.latest?.updatedAt && <time>{shortTime(row.latest.updatedAt)}</time>}</span>
           <span className="bot-row-preview">{rosterPreview(row, connected, status.label)}</span>
           <span className="bot-row-meta"><i className={`status-dot ${connected ? runtimeDotClass(runtime?.status) : 'muted'}`} />{labelize(runtime?.provider, 'Runtime')} · {status.label}</span>
         </span>

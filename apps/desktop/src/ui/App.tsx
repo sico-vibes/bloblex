@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { emit, listen } from '@tauri-apps/api/event'
 import {
-  Activity, ArrowDownToLine, ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronUp, CircleHelp, Clock3, Code2, Copy, FileText, FolderOpen,
+  Activity, ArrowDownToLine, ArrowUp, ArrowUpRight, ChevronDown, ChevronUp, CircleHelp, Clock3, Code2, Copy, FileText, FolderOpen,
   Gauge, GitBranch, Home, Laptop, LoaderCircle, MessageCircle, MessageSquarePlus, MoreHorizontal, PanelRight, Paperclip, Play, Plus,
   RefreshCw, Settings2, ShieldAlert, Square, Terminal, Volume2, VolumeX, X,
 } from 'lucide-react'
@@ -17,16 +17,21 @@ import { PermissionChoiceButton } from './PermissionChoiceButton'
 import bloblexLogo from '../assets/bloblex-128.png'
 import { sessionsForPauseRequest } from './trayActions'
 import { budgetValue, findApplicableBudget } from './budgetPresentation'
-import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, providerColor, type Agent, type ConnectionState, type DaemonEvent, type PermissionRequest, type Runtime, type Session, type Snapshot } from '../types'
+import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, type Agent, type ConnectionState, type DaemonEvent, type PermissionRequest, type Runtime, type Session, type Snapshot } from '../types'
 import { agentColorHex } from './agentColor'
 import { AgentRoster } from './AgentRoster'
 import { ProjectChooser } from './ProjectChooser'
+import { effectiveApprovalMode } from '../approvalContract'
+import type { ExecutionSendGate } from '../executionContract'
+import { parseExecSnapshot } from '../executionContract'
 import { createDraft, createParams, daemonCodeOf, draftFromAgent, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
 import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicateAgentName, emptyExpandedState, garbageCollectExpanded, legacySessions, nextAgentAfterArchive, parseExpandedState, projectFolderName, projectGroups, projectKey, recentProjects, runtimeUsable, sessionDisplayTitle, sessionForSelection, sessionNewParams, sessionSelectionTarget, type ExpandedState } from './rosterSelectors'
 import { AnalyticsView } from './AnalyticsView'
+import { ApprovalPill } from './approvalUi'
 import { BlobPage, ConfirmDialog } from './BlobPage'
+import { SettingsSheet, type SettingsPageId } from './SettingsSheet'
 import { stampCompanionDragRegions } from './companionDrag'
-import { companionMonitorOptions, currentCompanionMonitor, ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectLocalFile, setActiveRuntime, setActiveSession, setCloseToTray, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream } from '../tauri'
+import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectLocalFile, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream } from '../tauri'
 
 type ContextTab = 'Details' | 'Runtime' | 'Files'
 export function App() {
@@ -58,7 +63,9 @@ export function App() {
   const [usageSheet, setUsageSheet] = useState(false)
   const [usagePeriod, setUsagePeriod] = useState<'today' | 'month'>('today')
   const [settingsSheet, setSettingsSheet] = useState(false)
-  const [settingsInitialPage, setSettingsInitialPage] = useState<'General' | 'Runtimes'>('General')
+  const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPageId>('General')
+  const executionGate = useRef<ExecutionSendGate>({ model: false, thinking: false, serviceTier: false })
+  const [appliedModel, setAppliedModel] = useState<string | null>(null)
   const [diffViewer, setDiffViewer] = useState<{ path: string; content: string } | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [usageSummary, setUsageSummary] = useState<Record<string, unknown> | null>(null)
@@ -162,6 +169,21 @@ export function App() {
   const previousPermissionCue = useRef<string | null>(null)
   const selectedBudget = findApplicableBudget(snapshot?.budgets, selectedRuntime, selectedSession, selectedRuntime?.hostId)
   const currentProjectName = selectedSession?.projectPath?.split(/[\\/]/).filter(Boolean).pop()
+  const headerAgent = selectedSession
+    ? (selectedSession.agentId ? agents.find((agent) => agent.id === selectedSession.agentId) ?? null : null)
+    : activeSelectedAgent
+  const headerMode = effectiveApprovalMode(headerAgent)
+  const companionMode = effectiveApprovalMode(companionAgent)
+
+  useEffect(() => {
+    const sessionId = selectedSession?.id
+    if (!sessionId) { setAppliedModel(null); return }
+    let cancelled = false
+    rpc('exec.snapshot.latest', { sessionId }).then((result) => {
+      if (!cancelled) setAppliedModel(parseExecSnapshot(result)?.appliedModelId ?? null)
+    }).catch(() => { if (!cancelled) setAppliedModel(null) })
+    return () => { cancelled = true }
+  }, [selectedSession?.id])
 
   useEffect(() => {
     if (!companion) return
@@ -583,7 +605,7 @@ export function App() {
     const editing = blobPage?.mode === 'edit' ? agents.find((agent) => agent.id === blobPage.agentId) ?? null : null
     try {
       if (!editing) {
-        const result = await doRpc<{ agent?: Agent }>('agent.create', createParams(draft), (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.create'))
+        const result = await doRpc<{ agent?: Agent }>('agent.create', createParams(draft, executionGate.current), (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.create'))
         const agent = result.agent
         if (!agent?.id) return
         mergeAgent(agent)
@@ -597,7 +619,7 @@ export function App() {
         setBlobPage({ mode: 'edit', agentId: agent.id })
         return
       }
-      const params = updateParams(editing.id, draft, baseline)
+      const params = updateParams(editing.id, draft, baseline, executionGate.current)
       if (Object.keys(params).length === 1) return
       const result = await doRpc<{ agent?: Agent }>('agent.update', params, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.update', { archived: editing.archived, sentName: Object.prototype.hasOwnProperty.call(params, 'name') }))
       const agent = result.agent
@@ -805,7 +827,7 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion agent={companionAgent} agents={agents} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} budgetWarning={budgetWarningFor(companionSession)} permission={companionPermission} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
+      <Companion agent={companionAgent} agents={agents} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} budgetWarning={budgetWarningFor(companionSession)} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
       {chooserView}
     </>
   }
@@ -849,7 +871,7 @@ export function App() {
       </aside>
 
       <section className="conversation-pane">
-        {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} connected={connection === 'connected'} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
+        {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} connected={connection === 'connected'} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         <header className="chat-header">
           <div className="chat-title">
             {activeSelectedAgent ? <button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} onClick={() => openEdit(activeSelectedAgent)}><BlobCanvas color={accent} size={28} mood={selectedMood} label={activeSelectedAgent.name} /><strong>{activeSelectedAgent.name}</strong></button> : <><span className="agent-placeholder"><Code2 size={15} /></span><strong>{agentName}</strong></>}
@@ -858,7 +880,8 @@ export function App() {
           </div>
           <div className="header-actions">
             <button className="pill-button" disabled={!canStartSession} onClick={(event) => newSession(undefined, event.currentTarget)}><Plus size={13} />Session</button>
-            {selectedRuntime && <div className="model-pill" role="group" title="Reported by the session. Bloblex does not choose the model until a later update."><span className="model-pill-mark" style={{ background: accent || 'transparent' }} />{labelize(selectedRuntime.provider)}<span className="model-pill-model">{selectedSession?.model?.trim() ? selectedSession.model : 'CLI default'}</span></div>}
+            {selectedRuntime && <div className="model-pill" role="group" title={appliedModel ? 'Applied on the latest turn.' : 'Reported by the session. No applied snapshot is available.'}><span className="model-pill-mark" style={{ background: accent || 'transparent' }} />{labelize(selectedRuntime.provider)}<span className="model-pill-model">{appliedModel ?? (selectedSession?.model?.trim() ? selectedSession.model : 'CLI default')}</span></div>}
+            <ApprovalPill mode={headerMode} />
             {selectedSession?.resumable && !sessionBusy && <button className="icon-button" title="Resume conversation" aria-label="Resume conversation" disabled={busy || connection !== 'connected' || !runtimeReady} onClick={() => void resumeSession()}><Play size={15} /></button>}
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Toggle details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') setMoreOpen(false) }}>
@@ -907,7 +930,7 @@ export function App() {
       </aside>
 
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} loading={busy && usageSummary === null} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onClose={() => setUsageSheet(false)} />}
-      {settingsSheet && <SettingsSheet snapshot={snapshot} runtime={selectedRuntime} session={selectedSession} initialPage={settingsInitialPage} onClose={() => setSettingsSheet(false)} onRefresh={refreshRuntimes} onError={setError} />}
+      {settingsSheet && <SettingsSheet snapshot={snapshot} initialPage={settingsInitialPage} onClose={() => setSettingsSheet(false)} onRefresh={refreshRuntimes} onError={setError} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
       {chooserView}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body="It leaves the roster. Its conversations stay saved. Restoring a blob is not available yet." confirmLabel="Archive" cancelLabel="Cancel" onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
@@ -1126,332 +1149,9 @@ function shortDate(value: unknown) {
   return Number.isNaN(date.getTime()) ? 'unknown' : date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-type SettingsPage = 'General' | 'Runtimes' | 'Agents' | 'Usage & budgets' | 'Permissions' | 'WSL' | 'Updates' | 'Developer'
-
-function SettingsSheet({ snapshot, runtime, session, initialPage, onClose, onRefresh, onError }: { snapshot: Snapshot | null; runtime: Runtime | null; session: Session | null; initialPage: 'General' | 'Runtimes'; onClose: () => void; onRefresh: () => void; onError: (error: string | null) => void }) {
-  const dialogRef = useDialogAccessibility(onClose)
-  const [page, setPage] = useState<SettingsPage>(initialPage)
-  const [loading, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [data, setData] = useState<Record<string, unknown>>({})
-  const [companionVisible, setCompanionVisible] = useState(true)
-  const [closeToTray, setCloseToTrayValue] = useState(true)
-  const [monitors, setMonitors] = useState<string[]>([])
-  const [companionMonitor, setCompanionMonitorValue] = useState<string | null>(null)
-  const [soundsEnabled, setSoundsEnabled] = useState(false)
-  const [editorExecutable, setEditorExecutable] = useState('')
-  const [editorArgs, setEditorArgs] = useState('[]')
-  const [profileName, setProfileName] = useState('')
-  const [profileProvider, setProfileProvider] = useState('codex')
-  const [profileProtocol, setProfileProtocol] = useState('codex_app_server')
-  const [profilePath, setProfilePath] = useState('')
-  const [profileArgs, setProfileArgs] = useState('[]')
-  const [budgetScope, setBudgetScope] = useState('global')
-  const [budgetPeriod, setBudgetPeriod] = useState('day')
-  const [budgetMetric, setBudgetMetric] = useState('tokens')
-  const [budgetLimit, setBudgetLimit] = useState('')
-  const [editingBudgetId, setEditingBudgetId] = useState<string | null>(null)
-  const [editingBudgetScopeId, setEditingBudgetScopeId] = useState<string | null>(null)
-  const [priceProvider, setPriceProvider] = useState('')
-  const [priceModel, setPriceModel] = useState('')
-  const [priceAliases, setPriceAliases] = useState('')
-  const [priceInput, setPriceInput] = useState('')
-  const [priceOutput, setPriceOutput] = useState('')
-  const [priceCurrency, setPriceCurrency] = useState('')
-  const [editingPricingId, setEditingPricingId] = useState<string | null>(null)
-  const [planProvider, setPlanProvider] = useState('')
-  const [planCurrency, setPlanCurrency] = useState('')
-  const [planMonthlyAmount, setPlanMonthlyAmount] = useState('')
-  const [planRenewalDay, setPlanRenewalDay] = useState('1')
-  const [editingPlanId, setEditingPlanId] = useState<string | null>(null)
-  const [formError, setFormError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    if (!inDesktop) return
-    setLoading(true)
-    setFormError(null)
-    const methods = ['settings.get', 'runtime.profile.list', 'budget.list', 'pricing.list', 'subscription.list', 'daemon.health']
-    const entries = await Promise.all(methods.map(async (method) => {
-      try { return [method, await rpc(method)] as const }
-      catch (reason) { return [method, { loadError: messageOf(reason) }] as const }
-    }))
-    const result = Object.fromEntries(entries)
-    setData(result)
-    const preferences = recordFrom(result['settings.get'])
-    const settings = recordFrom(preferences.settings ?? preferences)
-    if (typeof settings.showCompanion === 'boolean') setCompanionVisible(settings.showCompanion)
-    if (typeof settings.closeToTray === 'boolean') setCloseToTrayValue(settings.closeToTray)
-    void Promise.all([companionMonitorOptions(), currentCompanionMonitor()]).then(([available, current]) => {
-      setMonitors(available)
-      setCompanionMonitorValue(current)
-    }).catch(() => { setMonitors([]); setCompanionMonitorValue(null) })
-    if (typeof settings['companion.soundsEnabled'] === 'boolean') {
-      setSoundsEnabled(settings['companion.soundsEnabled'])
-    }
-    if (typeof settings.editorExecutable === 'string') setEditorExecutable(settings.editorExecutable)
-    if (Array.isArray(settings.editorArgs) && settings.editorArgs.every((argument) => typeof argument === 'string')) setEditorArgs(JSON.stringify(settings.editorArgs))
-    setLoading(false)
-  }, [])
-
-  useEffect(() => { void load() }, [load])
-
-  const submit = async (method: string, params: Record<string, unknown>, successMessage: string) => {
-    setSaving(true)
-    setFormError(null)
-    try {
-      const result = await rpc(method, params)
-      await load()
-      setNotice(successMessage)
-      onError(null)
-      return result
-    } catch (reason) {
-      const errorText = messageOf(reason)
-      setFormError(errorText)
-      onError(errorText)
-      return null
-    } finally { setSaving(false) }
-  }
-
-  const setCompanion = async (visible: boolean) => {
-    setSaving(true)
-    setFormError(null)
-    try {
-      await setCompanionVisibility(visible)
-      setCompanionVisible(visible)
-    } catch (reason) {
-      setFormError(messageOf(reason))
-    } finally { setSaving(false) }
-  }
-
-  const updateCloseToTray = async (enabled: boolean) => {
-    setSaving(true)
-    setFormError(null)
-    try { await setCloseToTray(enabled); setCloseToTrayValue(enabled) }
-    catch (reason) { setFormError(messageOf(reason)) }
-    finally { setSaving(false) }
-  }
-
-  const updateCompanionMonitor = async (monitorName: string) => {
-    setSaving(true)
-    setFormError(null)
-    try { await setCompanionMonitor(monitorName); setCompanionMonitorValue(monitorName); setNotice(`Companion moved to ${monitorName}.`) }
-    catch (reason) { setFormError(messageOf(reason)) }
-    finally { setSaving(false) }
-  }
-
-  const setSounds = async (enabled: boolean) => {
-    setSoundsEnabled(enabled)
-    setSaving(true)
-    setFormError(null)
-    try {
-      await rpc('settings.set', { key: 'companion.soundsEnabled', value: enabled })
-      try { await emit('bloblex-sounds-changed', enabled) } catch { /* persisted value hydrates on the companion's next connection */ }
-      setNotice(enabled ? 'Companion sounds enabled.' : 'Companion sounds muted.')
-    } catch (reason) {
-      const message = messageOf(reason)
-      setSoundsEnabled(!enabled)
-      setFormError(message)
-      onError(message)
-    } finally { setSaving(false) }
-  }
-
-  const saveProfile = async (event: React.FormEvent) => {
-    event.preventDefault()
-    let args: unknown
-    try { args = JSON.parse(profileArgs) } catch { setFormError('Fixed arguments must be a valid JSON array of strings.'); return }
-    if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) { setFormError('Fixed arguments must be a valid JSON array of strings.'); return }
-    const result = await submit('runtime.profile.save', { profile: { name: profileName, provider: profileProvider, protocolFamily: profileProtocol, executablePath: profilePath, args, workingDirectoryPolicy: 'per_session' } }, 'Profile saved.')
-    if (result) { setProfileName(''); setProfilePath(''); setProfileArgs('[]') }
-  }
-
-  const saveBudget = async (event: React.FormEvent) => {
-    event.preventDefault()
-    const enteredLimit = Number(budgetLimit)
-    if (!Number.isSafeInteger(enteredLimit) || enteredLimit <= 0) { setFormError('Enter a positive whole-number limit.'); return }
-    const selectedScopeId = budgetScope === 'host' ? snapshot?.hosts?.[0]?.id : budgetScope === 'runtime' ? runtime?.id : budgetScope === 'agent' ? runtime?.provider : budgetScope === 'project' ? session?.projectPath : budgetScope === 'session' ? session?.id : undefined
-    const scopeId = editingBudgetId ? editingBudgetScopeId ?? selectedScopeId : selectedScopeId
-    if (budgetScope !== 'global' && !scopeId) { setFormError(`Select an active ${budgetScope} before creating this budget.`); return }
-    const result = await submit('budget.set', { ...(editingBudgetId ? { id: editingBudgetId } : {}), scopeType: budgetScope, ...(scopeId ? { scopeId } : {}), period: budgetPeriod, metric: budgetMetric, hardLimit: enteredLimit, warningThresholds: [50, 80, 95], enabled: true }, editingBudgetId ? 'Budget policy updated.' : 'Budget policy saved.')
-    if (result) { setBudgetLimit(''); setEditingBudgetId(null); setEditingBudgetScopeId(null) }
-  }
-
-  const savePricing = async (event: React.FormEvent) => {
-    event.preventDefault()
-    const inputPerMillion = Number(priceInput)
-    const outputPerMillion = Number(priceOutput)
-    if (!priceProvider.trim() || !priceModel.trim() || !priceCurrency.trim() || !Number.isFinite(inputPerMillion) || !Number.isFinite(outputPerMillion) || inputPerMillion < 0 || outputPerMillion < 0) { setFormError('Enter a provider, model, currency, and non-negative input/output rates.'); return }
-    const currency = priceCurrency.trim().toUpperCase()
-    let inputMinor: number, outputMinor: number
-    try { inputMinor = toMinorUnits(inputPerMillion, currency); outputMinor = toMinorUnits(outputPerMillion, currency) } catch { setFormError('Enter valid currency amounts and a three-letter currency code.'); return }
-    const rule = { id: editingPricingId ?? crypto.randomUUID(), provider: priceProvider.trim(), canonicalModelId: priceModel.trim(), aliases: priceAliases.split(',').map((value) => value.trim()).filter(Boolean), inputPerMillion: inputMinor, outputPerMillion: outputMinor, currency, effectiveFrom: new Date().toISOString(), isUserOverride: true }
-    const result = await submit('pricing.override', { rule }, editingPricingId ? 'Pricing override updated.' : 'Pricing override saved.')
-    if (result) { setEditingPricingId(null); setPriceProvider(''); setPriceModel(''); setPriceAliases(''); setPriceInput(''); setPriceOutput(''); setPriceCurrency('') }
-  }
-
-  const savePlan = async (event: React.FormEvent) => {
-    event.preventDefault()
-    const monthlyAmount = Number(planMonthlyAmount)
-    const renewalDay = Number(planRenewalDay)
-    if (!planProvider.trim() || !planCurrency.trim() || !Number.isFinite(monthlyAmount) || monthlyAmount < 0 || !Number.isInteger(renewalDay) || renewalDay < 1 || renewalDay > 31) { setFormError('Enter provider, currency, a non-negative monthly fee, and renewal day (1–31).'); return }
-    let monthlyMinor: number
-    try { monthlyMinor = toMinorUnits(monthlyAmount, planCurrency.trim().toUpperCase()) } catch { setFormError('Enter a valid three-letter currency code.'); return }
-    const result = await submit('subscription.save', { plan: { id: editingPlanId ?? crypto.randomUUID(), provider: planProvider.trim(), billingMode: 'subscription', currency: planCurrency.trim().toUpperCase(), monthlyMinor, renewalDay, quotaState: 'unknown' } }, editingPlanId ? 'Subscription plan updated.' : 'Subscription plan saved.')
-    if (result) { setEditingPlanId(null); setPlanProvider(''); setPlanCurrency(''); setPlanMonthlyAmount(''); setPlanRenewalDay('1') }
-  }
-
-  const saveEditor = async (event: React.FormEvent) => {
-    event.preventDefault()
-    let args: unknown
-    try { args = JSON.parse(editorArgs) } catch { setFormError('Editor arguments must be a JSON array of strings.'); return }
-    if (!Array.isArray(args) || !args.every((argument) => typeof argument === 'string')) { setFormError('Editor arguments must be a JSON array of strings.'); return }
-    setSaving(true); setFormError(null)
-    try {
-      await rpc('settings.set', { key: 'editorExecutable', value: editorExecutable.trim() })
-      await rpc('settings.set', { key: 'editorArgs', value: args })
-      await load(); setNotice('Editor preference saved.'); onError(null)
-    } catch (reason) { setFormError(messageOf(reason)); onError(messageOf(reason)) }
-    finally { setSaving(false) }
-  }
-
-  const deleteBudget = (policyId: string) => submit('budget.delete', { policyId }, 'Budget policy removed.')
-  const setBudgetEnabled = (policy: Record<string, unknown>, enabled: boolean) => submit('budget.set', { ...policy, enabled }, enabled ? 'Budget policy enabled.' : 'Budget policy paused.')
-  const editBudget = (policy: Record<string, unknown>) => {
-    if (typeof policy.id !== 'string') return
-    setEditingBudgetId(policy.id)
-    setEditingBudgetScopeId(typeof policy.scopeId === 'string' ? policy.scopeId : null)
-    setBudgetScope(String(policy.scopeType ?? 'global'))
-    setBudgetPeriod(String(policy.period ?? 'day'))
-    setBudgetMetric(String(policy.metric ?? 'tokens'))
-    setBudgetLimit(String(policy.hardLimit ?? ''))
-  }
-  const editPricing = (rule: Record<string, unknown>) => {
-    if (typeof rule.id !== 'string' || typeof rule.currency !== 'string') return
-    setEditingPricingId(rule.id)
-    setPriceProvider(String(rule.provider ?? ''))
-    setPriceModel(String(rule.canonicalModelId ?? ''))
-    setPriceAliases(Array.isArray(rule.aliases) ? rule.aliases.map(String).join(', ') : '')
-    setPriceInput(String(minorToMajor(rule.inputPerMillion, rule.currency)))
-    setPriceOutput(String(minorToMajor(rule.outputPerMillion, rule.currency)))
-    setPriceCurrency(rule.currency)
-  }
-  const editPlan = (plan: Record<string, unknown>) => {
-    if (typeof plan.id !== 'string' || typeof plan.currency !== 'string') return
-    setEditingPlanId(plan.id)
-    setPlanProvider(String(plan.provider ?? ''))
-    setPlanCurrency(plan.currency)
-    setPlanMonthlyAmount(String(minorToMajor(plan.monthlyMinor, plan.currency)))
-    setPlanRenewalDay(String(plan.renewalDay ?? '1'))
-  }
-  const deleteProfile = (profileId: string) => submit('runtime.profile.delete', { profileId }, 'Runtime profile removed.')
-  const pages: SettingsPage[] = ['General', 'Runtimes', 'Agents', 'Usage & budgets', 'Permissions', 'WSL', 'Updates', 'Developer']
-  return <div className="sheet-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-    <header className="settings-header"><div><p className="eyebrow">BLOBLEX</p><h2 id="settings-title">Settings</h2></div><button className="icon-button" data-dialog-initial-focus aria-label="Close settings" onClick={onClose}><X size={17} /></button></header>
-    <div className="settings-layout"><nav className="settings-nav" aria-label="Settings pages">{pages.map((item) => <button className={page === item ? 'selected' : ''} key={item} onClick={() => { setPage(item); setFormError(null); setNotice(null) }}>{item}</button>)}</nav>
-      <div className="settings-content">
-        {formError && <div className="inline-error settings-error" role="alert"><ShieldAlert size={15} /><span>{formError}</span></div>}
-        {notice && <div className="settings-success" role="status"><Check size={14} />{notice}</div>}
-        {loading && <div className="settings-loading"><LoaderCircle size={17} className="spinning" />Loading saved settings…</div>}
-        {!loading && page === 'General' && <><section className="settings-section"><h3>Desktop behavior</h3><SettingsRow title="Desktop companion" description="Show or hide the draggable bill capsule."><button className={`toggle ${companionVisible ? 'on' : ''}`} role="switch" aria-checked={companionVisible} onClick={() => void setCompanion(!companionVisible)} disabled={saving}><i /></button></SettingsRow><SettingsRow title="Close to tray" description="When enabled, closing the main window hides Bloblex and keeps the tray controls available."><button className={`toggle ${closeToTray ? 'on' : ''}`} role="switch" aria-label="Close to tray" aria-checked={closeToTray} onClick={() => void updateCloseToTray(!closeToTray)} disabled={saving}><i /></button></SettingsRow><SettingsRow title="Companion monitor" description="Choose a connected display; the capsule moves to its bottom center and remembers the selection."><select className="settings-select" aria-label="Companion monitor" value={companionMonitor ?? ''} onChange={(event) => void updateCompanionMonitor(event.target.value)} disabled={saving || monitors.length === 0}>{monitors.length === 0 ? <option value="">No displays reported</option> : monitors.map((monitor) => <option key={monitor} value={monitor}>{monitor}</option>)}</select></SettingsRow><SettingsRow title="Start with Windows" description="Startup registration is not available in this build."><span className="setting-value">Unavailable</span></SettingsRow><SettingsRow title="Sounds" description="Optional original synthesized cues; muted unless you enable them."><button className={`toggle ${soundsEnabled ? 'on' : ''}`} role="switch" aria-label="Companion sounds" aria-checked={soundsEnabled} onClick={() => void setSounds(!soundsEnabled)} disabled={saving}><i /></button></SettingsRow><SettingsRow title="Local daemon" description="Provider authentication remains managed by its own CLI."><span className="setting-value">{snapshot?.daemon?.state ? labelize(snapshot.daemon.state) : 'Unknown'}</span></SettingsRow></section><form className="settings-form" onSubmit={(event) => void saveEditor(event)}><h3>File editor</h3><p className="settings-intro">Changed files open in the editor you configure. Leave the executable blank to use Notepad.</p><label>Editor executable<input value={editorExecutable} onChange={(event) => setEditorExecutable(event.target.value)} placeholder="C:\\Program Files\\Microsoft VS Code\\Code.exe" /></label><label>Arguments (JSON array; use {'{file}'} and {'{project}'} placeholders)<input value={editorArgs} onChange={(event) => setEditorArgs(event.target.value)} spellCheck={false} /></label><button className="primary-button" disabled={saving}><Check size={14} />Save editor</button></form></>}
-        {!loading && page === 'Runtimes' && <section className="settings-section"><h3>Detected local runtimes</h3><RuntimeSettingsList runtimes={snapshot?.runtimes ?? []} /><button className="secondary-button settings-action" onClick={onRefresh} disabled={saving}><RefreshCw size={14} />Refresh detected runtimes</button><h3>Custom runtime profiles</h3><RuntimeProfiles value={data['runtime.profile.list']} onDelete={(id) => void deleteProfile(id)} /><form className="settings-form" onSubmit={(event) => void saveProfile(event)}><h4>Add a profile</h4><label>Profile name<input value={profileName} onChange={(event) => setProfileName(event.target.value)} required /></label><div className="settings-form-row"><label>Provider<select value={profileProvider} onChange={(event) => { setProfileProvider(event.target.value); setProfileProtocol(event.target.value === 'claude' ? 'claude_stream' : event.target.value === 'opencode' ? 'acp' : 'codex_app_server') }}><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="opencode">OpenCode</option></select></label><label>Protocol<select value={profileProtocol} onChange={(event) => setProfileProtocol(event.target.value)}><option value="claude_stream">Claude stream</option><option value="codex_app_server">Codex app-server</option><option value="acp">ACP</option></select></label></div><label>Executable path<input value={profilePath} onChange={(event) => setProfilePath(event.target.value)} placeholder="C:\\Tools\\agent.exe" required /></label><label>Fixed arguments, JSON array<input value={profileArgs} onChange={(event) => setProfileArgs(event.target.value)} spellCheck={false} /></label><button className="primary-button" disabled={saving}><Plus size={14} />Save profile</button></form></section>}
-        {!loading && page === 'Agents' && <section className="settings-section"><h3>Agent defaults</h3><p className="settings-intro">Bloblex keeps the original circular character and assigns its own accent by provider. Model and authentication defaults stay with each installed CLI.</p><RuntimeSettingsList runtimes={snapshot?.runtimes ?? []} /><div className="settings-availability"><strong>Project folder</strong><span>Choose a folder when creating each session; no global default is stored.</span></div><div className="settings-availability"><strong>Default model</strong><span>Configured in the provider CLI. Bloblex does not override it.</span></div></section>}
-        {!loading && page === 'Permissions' && <section className="settings-section"><h3>Permission handling</h3><p className="settings-intro">Provider requests are shown with the choices returned by that provider. Bloblex sends the selected choice through unchanged.</p><div className="settings-availability"><strong>Global policy defaults</strong><span>Not available in this build. Each permission requires an explicit choice; Bloblex never auto-approves.</span></div><div className="settings-availability"><strong>Pending requests</strong><span>{(snapshot?.permissions ?? []).length} request{(snapshot?.permissions ?? []).length === 1 ? '' : 's'} currently waiting</span></div></section>}
-        {!loading && page === 'Usage & budgets' && <section className="settings-section"><h3>Budget policies</h3><BudgetPolicies value={data['budget.list']} onDelete={(id) => void deleteBudget(id)} onToggle={(policy, enabled) => void setBudgetEnabled(policy, enabled)} onEdit={editBudget} /><form className="settings-form" onSubmit={(event) => void saveBudget(event)}><h4>{editingBudgetId ? 'Edit admission policy' : 'Add an admission policy'}</h4><div className="settings-form-row"><label>Scope<select value={budgetScope} onChange={(event) => setBudgetScope(event.target.value)}><option value="global">All runtimes</option><option value="host">This host</option><option value="runtime">Selected runtime</option><option value="agent">Selected provider</option><option value="project">Current project</option><option value="session">Current session</option></select></label><label>Period<select value={budgetPeriod} onChange={(event) => setBudgetPeriod(event.target.value)}><option value="turn">Per turn</option><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option><option value="year">Yearly</option></select></label></div><div className="settings-form-row"><label>Measure<select value={budgetMetric} onChange={(event) => setBudgetMetric(event.target.value)}><option value="tokens">Tokens</option><option value="input_tokens">Input tokens</option><option value="turns">Turns</option><option value="runtime_minutes">Runtime minutes</option></select></label><label>{budgetMetric === 'runtime_minutes' ? 'Minutes' : budgetMetric === 'turns' ? 'Turns' : budgetMetric === 'input_tokens' ? 'Input token limit' : 'Token limit'}<input type="number" min="1" step="1" value={budgetLimit} onChange={(event) => setBudgetLimit(event.target.value)} required /></label></div><p className="form-hint">These admission limits use the daemon’s known estimates. Cost-based and concurrent-session caps are unavailable because safe admission values are not yet reported.</p><div className="settings-form-actions"><button className="primary-button" disabled={saving}><Check size={14} />{editingBudgetId ? 'Update budget policy' : 'Save budget policy'}</button>{editingBudgetId && <button type="button" className="secondary-button" onClick={() => { setEditingBudgetId(null); setBudgetLimit('') }}>Cancel edit</button>}</div></form><h3>Pricing rules</h3><PricingRules value={data['pricing.list']} onEdit={editPricing} /><form className="settings-form" onSubmit={(event) => void savePricing(event)}><h4>{editingPricingId ? 'Edit pricing override' : 'Add a pricing override'}</h4><div className="settings-form-row"><label>Provider<input value={priceProvider} onChange={(event) => setPriceProvider(event.target.value)} required /></label><label>Canonical model ID<input value={priceModel} onChange={(event) => setPriceModel(event.target.value)} required /></label></div><label>Aliases, comma-separated<input value={priceAliases} onChange={(event) => setPriceAliases(event.target.value)} /></label><div className="settings-form-row"><label>Input cost per million tokens<input type="number" min="0" step="any" value={priceInput} onChange={(event) => setPriceInput(event.target.value)} required /></label><label>Output cost per million tokens<input type="number" min="0" step="any" value={priceOutput} onChange={(event) => setPriceOutput(event.target.value)} required /></label></div><label>Currency<input value={priceCurrency} onChange={(event) => setPriceCurrency(event.target.value)} placeholder="GBP" required /></label><div className="settings-form-actions"><button className="primary-button" disabled={saving}><Plus size={14} />{editingPricingId ? 'Update pricing override' : 'Save pricing override'}</button>{editingPricingId && <button type="button" className="secondary-button" onClick={() => { setEditingPricingId(null); setPriceProvider(''); setPriceModel(''); setPriceAliases(''); setPriceInput(''); setPriceOutput(''); setPriceCurrency('') }}>Cancel edit</button>}</div></form><h3>Subscription plans</h3><SubscriptionPlans value={data['subscription.list']} onEdit={editPlan} /><form className="settings-form" onSubmit={(event) => void savePlan(event)}><h4>{editingPlanId ? 'Edit monthly subscription fee' : 'Add a monthly subscription fee'}</h4><div className="settings-form-row"><label>Provider<input value={planProvider} onChange={(event) => setPlanProvider(event.target.value)} required /></label><label>Currency<input value={planCurrency} onChange={(event) => setPlanCurrency(event.target.value.toUpperCase())} placeholder="GBP" maxLength={3} required /></label></div><div className="settings-form-row"><label>Monthly fee<input type="number" min="0" step="0.01" value={planMonthlyAmount} onChange={(event) => setPlanMonthlyAmount(event.target.value)} required /></label><label>Renewal day<input type="number" min="1" max="31" value={planRenewalDay} onChange={(event) => setPlanRenewalDay(event.target.value)} required /></label></div><div className="settings-form-actions"><button className="primary-button" disabled={saving}><Plus size={14} />{editingPlanId ? 'Update subscription' : 'Save subscription'}</button>{editingPlanId && <button type="button" className="secondary-button" onClick={() => { setEditingPlanId(null); setPlanProvider(''); setPlanCurrency(''); setPlanMonthlyAmount(''); setPlanRenewalDay('1') }}>Cancel edit</button>}</div><p className="form-hint">Fixed monthly fees are never added to API-rate estimates. Quota stays unknown unless reported.</p></form></section>}
-        {!loading && page === 'WSL' && <section className="settings-section"><h3>Windows Subsystem for Linux</h3><p className="settings-intro">WSL distributions and their installed CLIs are reported by runtime discovery. Bloblex will not start or modify a distribution from this screen.</p>{(snapshot?.hosts ?? []).filter((host) => host.kind === 'wsl').length ? (snapshot?.hosts ?? []).filter((host) => host.kind === 'wsl').map((host) => <div className="host-row" key={String(host.id)}><Laptop size={16} /><span><strong>{String(host.name ?? host.id ?? 'WSL distribution')}</strong><small>{labelize(host.status, 'Unknown')}</small></span><span className={`status-dot ${statusClass(String(host.status ?? ''))}`} /></div>) : <div className="host-empty"><Terminal size={18} /><strong>No WSL runtime reported</strong><span>The daemon has not reported a configured WSL host. Refresh discovery to check again.</span></div>}<button className="secondary-button settings-action" onClick={onRefresh} disabled={saving}><RefreshCw size={14} />Discover runtimes</button></section>}
-        {!loading && page === 'Updates' && <section className="settings-section"><h3>Updates and distribution</h3><div className="release-status"><ShieldAlert size={17} /><span><strong>Local build, unsigned</strong><small>Updater is disabled until signing keys and an update endpoint are configured.</small></span></div><p className="settings-intro">Local NSIS and MSI packaging is available. Public Windows distribution requires an approved code-signing identity or Store submission. Bloblex does not update provider CLIs.</p></section>}
-        {!loading && page === 'Developer' && <section className="settings-section"><h3>Runtime diagnostics</h3><SettingData method="daemon.health" value={data['daemon.health']} /><h4>Detected runtime state</h4><SettingData method="runtime.list" value={snapshot?.runtimes ?? []} /><p className="settings-intro">Diagnostics shown here come from the local daemon. Prompts and provider credentials are excluded by the IPC contract.</p><button className="secondary-button settings-action" onClick={() => void load()} disabled={loading}><RefreshCw size={14} />Refresh diagnostics</button></section>}
-      </div>
-    </div>
-  </section></div>
-}
-
-function SettingsRow({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
-  return <div className="settings-row"><span><strong>{title}</strong><small>{description}</small></span>{children}</div>
-}
-
-function RuntimeSettingsList({ runtimes }: { runtimes: Runtime[] }) {
-  if (!runtimes.length) return <p className="settings-data-empty">No installed runtime was reported. Use Find an agent to scan again.</p>
-  return <div className="settings-entity-list">{runtimes.map((item) => <article className="settings-entity" key={item.id}><span className="settings-entity-dot" style={{ background: providerColor(item.provider) }} /><span className="settings-entity-main"><strong>{labelize(item.provider)}</strong><small>{labelize(item.status, 'Status unknown')} · {labelize(item.authState, 'Auth unknown')} · {item.version ?? 'Version unknown'}</small><small className="settings-entity-path">{item.executablePath ?? 'Executable path unavailable'}</small></span></article>)}</div>
-}
-
-function RuntimeProfiles({ value, onDelete }: { value: unknown; onDelete: (id: string) => void }) {
-  const profiles = records(value)
-  if (!profiles.length) return <p className="settings-data-empty">No custom profiles saved.</p>
-  return <div className="settings-entity-list">{profiles.map((profile, index) => <article className="settings-entity" key={String(profile.id ?? index)}><span className="settings-entity-main"><strong>{String(profile.name ?? profile.provider ?? 'Runtime profile')}</strong><small>{labelize(profile.protocolFamily)} · {profile.hostId ? String(profile.hostId) : 'Local host'}</small><small className="settings-entity-path">{String(profile.executablePath ?? 'Executable unavailable')}</small></span>{typeof profile.id === 'string' && <button className="settings-row-action danger" onClick={() => onDelete(profile.id as string)}>Remove</button>}</article>)}</div>
-}
-
-function BudgetPolicies({ value, onDelete, onToggle, onEdit }: { value: unknown; onDelete: (id: string) => void; onToggle: (policy: Record<string, unknown>, enabled: boolean) => void; onEdit: (policy: Record<string, unknown>) => void }) {
-  const policies = records(value)
-  if (!policies.length) return <p className="settings-data-empty">No budget policies configured.</p>
-  const supported = new Set(['tokens', 'input_tokens', 'turns', 'runtime_minutes'])
-  return <div className="settings-entity-list">{policies.map((policy, index) => {
-    const metric = String(policy.metric ?? 'tokens')
-    const enabled = policy.enabled !== false
-    const limit = metric === 'cost_minor' || metric.endsWith('_cost_minor') ? moneyMinor(policy.hardLimit, policy.currency) : tokenValue(Number(policy.hardLimit))
-    const consumed = typeof policy.consumed === 'number' ? policy.consumed : null
-    const reserved = typeof policy.reserved === 'number' ? policy.reserved : null
-    const remaining = typeof policy.remaining === 'number' ? tokenValue(policy.remaining) : 'Unknown'
-    const amountLabel = ['turns', 'runtime_minutes'].includes(metric) ? metric === 'turns' ? 'turns' : 'minutes' : 'tokens'
-    return <article className="settings-entity budget-policy" key={String(policy.id ?? index)}>
-      <span className={`budget-policy-state ${enabled ? 'enabled' : ''}`} aria-label={enabled ? 'Enabled' : 'Paused'} />
-      <span className="settings-entity-main"><strong>{labelize(policy.scopeType, 'Global')} {metric === 'tokens' ? 'token cap' : labelize(metric)} · {labelize(policy.period)}</strong>
-        <small>Limit {limit} · {enabled && supported.has(metric) ? 'checked at prompt admission' : enabled ? 'cannot be safely enforced; prompts may be blocked' : 'paused'}</small>
-        {supported.has(metric) && <small>Used {consumed === null ? 'Unknown' : `${tokenValue(consumed)} ${amountLabel}`} · reserved {reserved === null ? 'Unknown' : tokenValue(reserved)} · remaining {remaining}</small>}
-        {!supported.has(metric) && <small>Unsupported admission metric: remove this policy to avoid blocking new prompts.</small>}
-      </span>
-      <span className="settings-entity-actions">{supported.has(metric) && typeof policy.id === 'string' && <><button className="settings-row-action" onClick={() => onEdit(policy)}>Edit</button><button className="settings-row-action" onClick={() => onToggle(policy, !enabled)}>{enabled ? 'Pause' : 'Enable'}</button></>}{typeof policy.id === 'string' && <button className="settings-row-action danger" onClick={() => onDelete(policy.id as string)}>Remove</button>}</span>
-    </article>
-  })}</div>
-}
-
-function PricingRules({ value, onEdit }: { value: unknown; onEdit: (rule: Record<string, unknown>) => void }) {
-  const rules = records(value)
-  if (!rules.length) return <p className="settings-data-empty">No pricing rules available. Costs will remain unknown until a rule is configured.</p>
-  return <div className="settings-entity-list">{rules.map((rule, index) => <article className="settings-entity" key={String(rule.id ?? index)}><span className="settings-entity-main"><strong>{String(rule.provider ?? 'Provider')} · {String(rule.canonicalModelId ?? 'Model')}</strong><small>Input {moneyMajor(rule.inputPerMillion, rule.currency)} / 1M · output {moneyMajor(rule.outputPerMillion, rule.currency)} / 1M</small><small>{rule.isUserOverride ? 'User override' : 'Catalog rule'} · {String(rule.effectiveFrom ?? 'effective date unknown')}</small></span>{typeof rule.id === 'string' && <span className="settings-entity-actions"><button className="settings-row-action" onClick={() => onEdit(rule)}>Edit</button></span>}</article>)}</div>
-}
-
-function SubscriptionPlans({ value, onEdit }: { value: unknown; onEdit: (plan: Record<string, unknown>) => void }) {
-  const plans = records(value)
-  if (!plans.length) return <p className="settings-data-empty">No subscription fees configured.</p>
-  return <div className="settings-entity-list">{plans.map((plan, index) => <article className="settings-entity" key={String(plan.id ?? index)}><span className="settings-entity-main"><strong>{String(plan.provider ?? 'Provider subscription')}</strong><small>{moneyMinor(plan.monthlyMinor, plan.currency)} / month · renewal day {typeof plan.renewalDay === 'number' ? plan.renewalDay : 'unknown'}</small><small>Quota {String(plan.quotaState ?? 'unknown')} · fee entered by you</small></span>{typeof plan.id === 'string' && <span className="settings-entity-actions"><button className="settings-row-action" onClick={() => onEdit(plan)}>Edit</button></span>}</article>)}</div>
-}
-
-function moneyMajor(value: unknown, currency: unknown) {
-  if (typeof value !== 'number' || !Number.isFinite(value) || typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency)) return 'Unknown'
-  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 6 }).format(value) } catch { return 'Unknown' }
-}
-
-function SettingData({ method, value }: { method: string; value: unknown }) {
-  const data = recordFrom(value)
-  if (data.loadError) return <p className="settings-data-error">{String(data.loadError)}</p>
-  const list = listFrom(value)
-  if (list.length === 0) return <p className="settings-data-empty">No {method.startsWith('pricing') ? 'pricing rules' : method.startsWith('budget') ? 'budget policies' : method.startsWith('subscription') ? 'plans' : method.startsWith('runtime.profile') ? 'saved profiles' : 'details'} reported.</p>
-  return <div className="settings-data-list">{list.slice(0, 12).map((item, index) => <div className="settings-data-row" key={String(item.id ?? item.name ?? index)}><strong>{String(item.name ?? item.title ?? item.canonicalModelId ?? item.provider ?? item.id ?? 'Runtime detail')}</strong><small>{String(item.status ?? item.state ?? item.scopeType ?? item.protocolFamily ?? item.version ?? JSON.stringify(item))}</small></div>)}</div>
-}
-
 function recordFrom(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
-function listFrom(value: unknown): Record<string, unknown>[] {
-  if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-  const record = recordFrom(value)
-  const list = Object.values(record).find((item) => Array.isArray(item))
-  return Array.isArray(list) ? list.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object') : []
-}
 
-function toMinorUnits(amount: number, currency: string) {
-  if (!/^[A-Z]{3}$/.test(currency)) throw new Error('Invalid currency code')
-  const digits = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2
-  const result = Math.round(amount * (10 ** digits))
-  if (!Number.isSafeInteger(result)) throw new Error('Amount is outside the supported range')
-  return result
-}
-
-function minorToMajor(value: unknown, currency: string) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
-  const fractionDigits = new Intl.NumberFormat(undefined, { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2
-  return value / (10 ** fractionDigits)
-}
-
-function Companion({ agent, agents, runtime, runtimes, session, usage, connected, appError, activityLabel, budgetWarning, permission, onReply, onNewSession, onOpenMain, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; budgetWarning: boolean; permission?: PermissionRequest; onReply: (permission: PermissionRequest, choice: string) => void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
+function Companion({ agent, agents, runtime, runtimes, session, usage, connected, appError, activityLabel, budgetWarning, permission, approvalMode, onReply, onNewSession, onOpenMain, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; budgetWarning: boolean; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
   const choices = permission?.choices ?? []
   const [view, setView] = useState<'overview' | 'chat' | 'activity' | 'settings'>('overview')
   const [draft, setDraft] = useState('')
@@ -1677,7 +1377,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
     <div ref={capsuleRef} className={`companion-capsule island ${mode}`} data-tauri-drag-region>
       {mode === 'petit' ? <div className="companion-compact" data-tauri-drag-region>
         <button className="compact-bot" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}>{focusBlob(40)}</button>
-        <div className="compact-copy" onClick={() => fsmRef.current?.click()}><strong>{name}</strong><span role="status" aria-live="polite" className={shimmering ? 'shimmer' : ''}>{statusLine}</span></div>
+        <div className="compact-copy" onClick={() => fsmRef.current?.click()}><strong>{name}</strong><ApprovalPill mode={approvalMode} compact /><span role="status" aria-live="polite" className={shimmering ? 'shimmer' : ''}>{statusLine}</span></div>
         {permission && <ShieldAlert className="companion-alert" size={15} aria-label="Approval required" />}
         {peers.length > 0 && <div className="mini-grid" aria-hidden="true" data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} label={item.name} /> })}</div>}
         <button className="companion-collapse" aria-label="Expand companion" onClick={() => fsmRef.current?.click()}><ChevronUp size={15} /></button>
@@ -1692,6 +1392,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
             <button className="tab" aria-label="New session" title="New session" disabled={!canStart} onClick={(event) => { openView('chat'); onNewSession(event.currentTarget) }}><Plus size={14} /></button>
           </nav>
           <span className="island-drag" data-tauri-drag-region title="Drag companion" aria-hidden="true" />
+          <ApprovalPill mode={approvalMode} compact />
           <div className="island-actions">
             <button className={view === 'settings' ? 'on' : ''} aria-label="Settings" title="Settings" onClick={() => openView('settings')}><Settings2 size={14} /></button>
             <button className={soundsEnabled ? 'on' : ''} aria-label={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} aria-pressed={soundsEnabled} title={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} onClick={toggleSounds}>{soundsEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}</button>

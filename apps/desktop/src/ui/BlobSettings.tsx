@@ -1,21 +1,151 @@
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Runtime } from '../types'
+import { labelize } from '../types'
+import { rpc } from '../tauri'
 import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
 import { runtimeDotClass, runtimeOptionLabel, scalarLength } from './rosterSelectors'
 import { SwatchGrid } from './SwatchGrid'
+import { approvalDescription } from '../approvalContract'
+import type { ApprovalMode } from '../approvalContract'
+import {
+  allowsCustomModelId, capabilityState, catalogModel, evidencePlain, instructionNote, isProviderUnavailable,
+  outcomeText, parseCapabilities, parseExecSnapshot, parseModelCatalog, rpcFailure, selectionAfterModelChange,
+  sendGateFor, settingReason, showThinkingControl, showTierControl,
+  type CapabilitySetting, type ExecutionSendGate, type ExecSnapshotView, type ModelCatalog, type RuntimeCapabilities,
+} from '../executionContract'
+import { BypassConfirmDialog } from './approvalUi'
 
-const LATER = 'Available in a later update.'
-
-export function BlobSettings({ draft, runtimes, errors, execution, onDraftChange, onArchive }: {
+export function BlobSettings({ draft, runtimes, errors, execution, agentId, sessionId, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
   runtimes: Runtime[]
   errors: FieldErrors
   execution: StoredExecution
+  agentId?: string | null
+  sessionId?: string | null
   onDraftChange: (draft: AgentDraft) => void
   onArchive?: () => void
+  onExecutionGate?: (gate: ExecutionSendGate) => void
 }) {
   const descriptionCount = scalarLength(draft.description)
   const runtime = runtimes.find((item) => item.id === draft.runtimeId) ?? null
+  const provider = runtime?.provider ?? ''
   const described = (id: string, errorId?: string) => errorId ? `${id} ${errorId}` : id
+  const [capabilities, setCapabilities] = useState<RuntimeCapabilities | null>(null)
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
+  const [catalogError, setCatalogError] = useState<string | null>(null)
+  const [catalogUnavailable, setCatalogUnavailable] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [snapshot, setSnapshot] = useState<ExecSnapshotView | null>(null)
+  const [snapshotNote, setSnapshotNote] = useState('No conversation yet, so there is no applied snapshot.')
+  const [custom, setCustom] = useState(false)
+  const [bypassOpen, setBypassOpen] = useState(false)
+
+  useEffect(() => {
+    if (!draft.runtimeId) {
+      setCapabilities(null)
+      setCatalog(null)
+      setCatalogError(null)
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setCatalogError(null)
+    setCatalogUnavailable(false)
+    const params = agentId ? { runtimeId: draft.runtimeId, agentId } : { runtimeId: draft.runtimeId }
+    Promise.all([
+      rpc('runtime.capabilities', params),
+      rpc('runtime.models', { runtimeId: draft.runtimeId }),
+    ]).then(([capsRaw, modelsRaw]) => {
+      if (cancelled) return
+      const nextCaps = parseCapabilities(capsRaw)
+      const nextCatalog = parseModelCatalog(modelsRaw)
+      setCapabilities(nextCaps)
+      setCatalog(nextCatalog)
+      if (!nextCatalog) {
+        setCatalogError('The model catalog was not reported.')
+        setCatalogUnavailable(false)
+      }
+      setLoading(false)
+    }).catch((reason) => {
+      if (cancelled) return
+      const failure = rpcFailure(reason)
+      setCapabilities(null)
+      setCatalog(null)
+      setCatalogUnavailable(isProviderUnavailable(failure))
+      setCatalogError(isProviderUnavailable(failure) ? 'The provider could not be reached.' : failure.message)
+      setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [draft.runtimeId, agentId])
+
+  useEffect(() => {
+    if (!sessionId) {
+      setSnapshot(null)
+      setSnapshotNote('No conversation yet, so there is no applied snapshot.')
+      return
+    }
+    let cancelled = false
+    rpc('exec.snapshot.latest', { sessionId }).then((result) => {
+      if (cancelled) return
+      const parsed = parseExecSnapshot(result)
+      setSnapshot(parsed)
+      setSnapshotNote(parsed ? '' : 'No applied snapshot for this conversation yet.')
+    }).catch((reason) => {
+      if (cancelled) return
+      const failure = rpcFailure(reason)
+      setSnapshot(null)
+      setSnapshotNote(failure.code === 'not_found' ? 'No applied snapshot for this conversation yet.' : failure.message)
+    })
+    return () => { cancelled = true }
+  }, [sessionId])
+
+  const selected = catalogModel(catalog, custom ? null : draft.model)
+  const gate = useMemo(() => sendGateFor(capabilities, custom), [capabilities, custom])
+  useEffect(() => { onExecutionGate?.(gate) }, [gate, onExecutionGate])
+
+  useEffect(() => {
+    if (!catalog || !draft.model || allowsCustomModelId(provider) === false) return
+    if (!catalog.models.some((model) => model.id === draft.model)) setCustom(true)
+  }, [catalog, draft.model, provider])
+
+  const refreshCatalog = async () => {
+    if (!draft.runtimeId) return
+    setLoading(true)
+    setCatalogError(null)
+    setCatalogUnavailable(false)
+    try {
+      const modelsRaw = await rpc('runtime.models', { runtimeId: draft.runtimeId, refresh: true })
+      const nextCatalog = parseModelCatalog(modelsRaw)
+      setCatalog(nextCatalog)
+      if (!nextCatalog) setCatalogError('The model catalog was not reported.')
+    } catch (reason) {
+      const failure = rpcFailure(reason)
+      setCatalogUnavailable(isProviderUnavailable(failure))
+      setCatalogError(isProviderUnavailable(failure) ? 'The provider could not be reached.' : failure.message)
+    } finally { setLoading(false) }
+  }
+
+  const applyModel = (modelId: string | null, useCustom: boolean) => {
+    const next = selectionAfterModelChange(modelId, catalog, useCustom)
+    setCustom(useCustom)
+    onDraftChange({ ...draft, model: next.model, thinking: next.thinking, serviceTier: next.serviceTier })
+  }
+
+  const modelState = capabilityState(capabilities?.settings.model ?? null)
+  const modelInteractive = modelState === 'supported' && !loading
+  const thinkingVisible = showThinkingControl(capabilities, selected, custom)
+  const tierVisible = showTierControl(capabilities, selected, custom)
+  const tierState = capabilityState(capabilities?.settings.serviceTier ?? null)
+  const tierInteractive = tierState === 'supported'
+  const instructionHelp = instructionNote(provider, capabilities?.settings.instructions ?? null)
+
+  const onApproval = (value: string) => {
+    if (value === 'bypass') { setBypassOpen(true); return }
+    const mode = value === 'ask' || value === 'auto' ? value : null
+    onDraftChange({ ...draft, approvalMode: mode })
+  }
+
   return <>
     <section className="blob-card">
       <h3>Profile</h3>
@@ -29,44 +159,110 @@ export function BlobSettings({ draft, runtimes, errors, execution, onDraftChange
       </label>
       <p id="blob-description-count" className="blob-counter" style={{ color: descriptionCount > 255 ? 'var(--bad)' : 'var(--ink-3)' }}>{descriptionCount} / 255</p>
       {errors.description && <p className="blob-error" id="blob-description-error">{errors.description}</p>}
-      <label className="blob-field">Instructions
-        <textarea aria-label="Instructions" aria-invalid={!!errors.instructions} aria-describedby={described('blob-instructions-help', errors.instructions ? 'blob-instructions-error' : undefined)} value={draft.instructions} onChange={(event) => onDraftChange({ ...draft, instructions: event.target.value })} />
-      </label>
-      <p id="blob-instructions-help" className="blob-help">Saved with this blob. Bloblex does not send instructions to the CLI until a later update.</p>
-      {errors.instructions && <p className="blob-error" id="blob-instructions-error">{errors.instructions}</p>}
     </section>
-    <section className="blob-card">
+    <section className="blob-card" aria-label="Execution">
       <h3>Execution</h3>
-      <p className="blob-help">These options apply to new sessions in a later update. This update only saves the runtime and the default project.</p>
       <label className="blob-field">Runtime
         <span className="blob-runtime-picker">
           <i className={`status-dot ${runtimeDotClass(runtime?.status)}`} />
-          <select aria-label="Runtime" value={draft.runtimeId} onChange={(event) => onDraftChange({ ...draft, runtimeId: event.target.value })}>
+          <select aria-label="Runtime" value={draft.runtimeId} onChange={(event) => { setCustom(false); onDraftChange({ ...draft, runtimeId: event.target.value, model: null, thinking: null, serviceTier: null }) }}>
             {runtimes.map((item) => <option key={item.id} value={item.id}>{runtimeOptionLabel(item, runtimes)}</option>)}
           </select>
         </span>
       </label>
       {errors.runtimeId && <p className="blob-error">{errors.runtimeId}</p>}
       <p className="blob-help">New sessions use this runtime. Existing conversations stay on the runtime that started them.</p>
-      <label className="blob-field">Model
-        <input disabled aria-describedby="execution-later" value={execution.model?.trim() ? execution.model : 'CLI default'} />
+      {loading && <p className="blob-help" role="status">Loading execution options…</p>}
+      {catalogError && <div className="blob-error" role="alert">
+        <p>{catalogError}</p>
+        {catalogUnavailable && <button type="button" className="secondary-button" onClick={() => void refreshCatalog()}>Retry</button>}
+      </div>}
+      {!loading && catalog && catalog.models.length === 0 && <p className="blob-help">No models were reported for this runtime.</p>}
+      {catalog?.fallback && <p className="blob-help">These models are suggestions only. Bloblex has not validated that this runtime can run them.</p>}
+      <CapabilityField label="Model" state={modelState} setting={capabilities?.settings.model ?? null}>
+        <select aria-label="Model" value={custom ? '__custom__' : (draft.model ?? '')} disabled={!modelInteractive} onChange={(event) => {
+          if (event.target.value === '__custom__') applyModel(draft.model, true)
+          else applyModel(event.target.value || null, false)
+        }}>
+          <option value="">Runtime default</option>
+          {(catalog?.models ?? []).map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}
+          {draft.model && !custom && !(catalog?.models ?? []).some((model) => model.id === draft.model) && <option value={draft.model}>{draft.model}</option>}
+          {allowsCustomModelId(provider) && <option value="__custom__">Custom model id</option>}
+        </select>
+        {custom && allowsCustomModelId(provider) && <>
+          <input aria-label="Custom model id" aria-describedby="custom-model-note" value={draft.model ?? ''} disabled={!modelInteractive} onChange={(event) => onDraftChange({ ...draft, model: event.target.value || null, thinking: null, serviceTier: null })} />
+          <p id="custom-model-note" className="blob-help">Not validated</p>
+        </>}
+      </CapabilityField>
+      {thinkingVisible && <label className="blob-field">Thinking
+        <select aria-label="Thinking" value={draft.thinking ?? ''} onChange={(event) => onDraftChange({ ...draft, thinking: event.target.value || null })}>
+          <option value="">Runtime default</option>
+          {(selected?.supportedThinking ?? []).map((level) => <option key={level} value={level}>{level}</option>)}
+        </select>
+      </label>}
+      {tierVisible && <CapabilityField label="Speed" state={tierState} setting={capabilities?.settings.serviceTier ?? null}>
+        <select aria-label="Speed" value={draft.serviceTier ?? ''} disabled={!tierInteractive} onChange={(event) => onDraftChange({ ...draft, serviceTier: event.target.value || null })}>
+          <option value="">Runtime default</option>
+          {(selected?.serviceTiers ?? []).map((tier) => <option key={tier.id} value={tier.id}>{tier.name}</option>)}
+        </select>
+      </CapabilityField>}
+      <div className="blob-field-actions">
+        <button type="button" className="secondary-button" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}>Refresh models</button>
+      </div>
+      <label className="blob-field">Instructions
+        <textarea aria-label="Instructions" aria-invalid={!!errors.instructions} aria-describedby={described('blob-instructions-help', errors.instructions ? 'blob-instructions-error' : undefined)} value={draft.instructions} onChange={(event) => onDraftChange({ ...draft, instructions: event.target.value })} />
       </label>
-      <label className="blob-field">Thinking
-        <input disabled aria-describedby="execution-later" value={execution.thinking?.trim() ? execution.thinking : 'Runtime default'} />
-      </label>
-      <label className="blob-field">Speed
-        <input disabled aria-describedby="execution-later" value={execution.serviceTier?.trim() ? execution.serviceTier : 'Runtime default'} />
-      </label>
-      <label className="blob-field">Concurrency
-        <input disabled type="number" aria-describedby="execution-later" value={execution.maxConcurrency ?? 1} />
-      </label>
-      <p id="execution-later" className="blob-help">{LATER}</p>
+      <p id="blob-instructions-help" className="blob-help">{instructionHelp}</p>
+      {errors.instructions && <p className="blob-error" id="blob-instructions-error">{errors.instructions}</p>}
+      <div className="blob-fact"><span>Concurrency</span><strong>{concurrencyText(capabilities, execution.maxConcurrency)}</strong></div>
+      {capabilities?.settings.customEnv && <p className="blob-help">{envNote(capabilities.settings.customEnv)}</p>}
+      <div aria-label="Last applied snapshot">
+        <h4 className="blob-subhead">Last applied snapshot</h4>
+        {snapshot ? <ul className="snapshot-outcomes">{snapshot.outcomes.map((outcome) => <li key={outcome.setting} data-outcome={outcome.label}><span>{labelize(outcome.setting)}</span><strong>{outcomeText(outcome)}</strong></li>)}</ul> : <p className="blob-help">{snapshotNote}</p>}
+      </div>
       <label className="blob-field">Default project
         <input aria-label="Default project" aria-describedby="blob-project-help" value={draft.defaultProject ?? ''} onChange={(event) => onDraftChange({ ...draft, defaultProject: event.target.value })} />
       </label>
       <p id="blob-project-help" className="blob-help">Shown first when you start a session. Leave blank to pick from recent folders.</p>
-      <p className="blob-help">Custom arguments and environment are not available yet.</p>
+      <p className="blob-help">Custom arguments are not accepted. Environment values are limited to the keys this runtime reports.</p>
       {onArchive && <button type="button" className="secondary-button" onClick={onArchive}>Archive blob</button>}
     </section>
+    <section className="blob-card" aria-label="Permissions">
+      <h3>Permissions</h3>
+      <label className="blob-field">Approval mode
+        <select aria-label="Approval mode" value={draft.approvalMode ?? ''} onChange={(event) => onApproval(event.target.value)}>
+          <option value="">Inherit default</option>
+          <option value="ask">Ask</option>
+          <option value="auto">Auto-approve</option>
+          <option value="bypass">Bypass</option>
+        </select>
+      </label>
+      <p className="blob-help">{approvalDescription(draft.approvalMode)}</p>
+    </section>
+    {bypassOpen && <BypassConfirmDialog blobName={draft.name} onCancel={() => setBypassOpen(false)} onConfirm={() => { setBypassOpen(false); onDraftChange({ ...draft, approvalMode: 'bypass' satisfies ApprovalMode }) }} />}
   </>
+}
+
+function CapabilityField({ label, state, setting, children }: { label: string; state: ReturnType<typeof capabilityState>; setting: CapabilitySetting | null; children: ReactNode }) {
+  const reason = state === 'supported' ? '' : settingReason(setting, state)
+  return <label className="blob-field" data-capability={state}>
+    {label}
+    {children}
+    {reason && <span className="blob-help">{reason}</span>}
+  </label>
+}
+
+function concurrencyText(capabilities: RuntimeCapabilities | null, stored: number) {
+  const agent = capabilities?.agentConcurrency
+  if (!agent) return `Saved cap ${stored}. Effective cap not reported.`
+  const configured = agent.configuredMaxConcurrency === null ? 'not reported' : String(agent.configuredMaxConcurrency)
+  return `Configured ${configured} · effective ${agent.effectiveMaxConcurrency} · active ${agent.active}`
+}
+
+function envNote(setting: CapabilitySetting) {
+  const state = capabilityState(setting)
+  if (state !== 'supported') return settingReason(setting, state)
+  const keys = setting.allowedKeys ?? []
+  if (!keys.length) return 'Custom environment keys were not reported.'
+  return `Allowed environment keys: ${keys.join(', ')}. Evidence: ${evidencePlain(setting.evidence)}.`
 }

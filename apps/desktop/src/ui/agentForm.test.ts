@@ -73,4 +73,20 @@ describe('agent draft validation', () => {
     })
     expect(duplicateParams(source, 'Copy of Claude')).not.toHaveProperty('archived')
   })
+
+  it('sends execution fields only when the gate is open and clears approval with null', () => {
+    const baseline = draftFromAgent(agent())
+    const changed = { ...baseline, model: 'other-model', thinking: 'max', serviceTier: 'priority', approvalMode: 'auto' as const }
+    expect(updateParams('agent-claude', changed, baseline)).toEqual({ agentId: 'agent-claude', approvalMode: 'auto' })
+    expect(updateParams('agent-claude', changed, baseline)).not.toHaveProperty('model')
+    expect(updateParams('agent-claude', changed, baseline)).not.toHaveProperty('thinking')
+    expect(updateParams('agent-claude', changed, baseline)).not.toHaveProperty('serviceTier')
+    expect(updateParams('agent-claude', changed, baseline, { model: true, thinking: false, serviceTier: true })).toEqual({
+      agentId: 'agent-claude', model: 'other-model', serviceTier: 'priority', approvalMode: 'auto',
+    })
+    expect(updateParams('agent-claude', { ...baseline, approvalMode: null }, { ...baseline, approvalMode: 'ask' })).toEqual({ agentId: 'agent-claude', approvalMode: null })
+    expect(createParams(changed)).not.toHaveProperty('model')
+    expect(createParams(changed, { model: true, thinking: true, serviceTier: false })).toMatchObject({ model: 'other-model', thinking: 'max', approvalMode: 'auto' })
+    expect(createParams(changed, { model: true, thinking: true, serviceTier: false })).not.toHaveProperty('serviceTier')
+  })
 })

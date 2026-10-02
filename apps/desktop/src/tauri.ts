@@ -1,7 +1,11 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { UsageAnalytics, UsageAnalyticsRequest } from './analyticsTypes'
+import { parsePermissionsPolicy, type PermissionsPolicy } from './approvalContract'
 import type { DaemonEvent, JsonRecord, Snapshot } from './types'
+
+export { parseAutoResolved, parseBypassActive, parsePermissionsPolicy } from './approvalContract'
+export type { AutoResolvedAction, BypassNotice, PermissionsPolicy } from './approvalContract'
 
 export const inDesktop = isTauri()
 
@@ -136,6 +140,22 @@ export async function listenForDaemonConnection(handler: (connected: boolean) =>
 
 export async function fetchSnapshot() {
   return rpc<Snapshot>('app.snapshot')
+}
+
+export async function permissionsPolicyGet(): Promise<PermissionsPolicy> {
+  return parsePermissionsPolicy(await rpc('permissions.policy.get'))
+}
+
+export async function runtimeCapabilities(runtimeId: string, agentId?: string) {
+  return rpc('runtime.capabilities', agentId ? { runtimeId, agentId } : { runtimeId })
+}
+
+export async function runtimeModels(runtimeId: string, refresh = false) {
+  return rpc('runtime.models', refresh ? { runtimeId, refresh: true } : { runtimeId })
+}
+
+export async function execSnapshotLatest(sessionId: string) {
+  return rpc('exec.snapshot.latest', { sessionId })
 }
 
 export async function fetchUsageAnalytics(request: UsageAnalyticsRequest): Promise<UsageAnalytics> {

@@ -299,6 +299,29 @@ export function projectGroups(sessions: readonly Session[] | null | undefined, a
     .map((bucket) => ({ key: bucket.key, path: bucket.path, label: bucket.label, sessions: bucket.sessions }))
 }
 
+export interface AnalyticsProjectChoice {
+  key: string
+  path: string
+  label: string
+}
+
+/** Projects for the analytics filter. Representative `path` is the newest stored string, not the grouping key. */
+export function analyticsProjectChoices(sessions: readonly Session[] | null | undefined): AnalyticsProjectChoice[] {
+  const buckets = new Map<string, { key: string; path: string; newest: string; id: string }>()
+  for (const session of sessions ?? []) {
+    const key = projectKey(session.projectPath)
+    if (!key) continue
+    const newest = session.updatedAt ?? ''
+    const existing = buckets.get(key)
+    const time = existing ? newest.localeCompare(existing.newest) : 1
+    const newer = !existing || time > 0 || (time === 0 && session.id.localeCompare(existing.id) < 0)
+    if (newer) buckets.set(key, { key, path: session.projectPath ?? '', newest, id: session.id })
+  }
+  const named = [...buckets.values()].sort((left, right) => right.newest.localeCompare(left.newest) || left.key.localeCompare(right.key) || left.path.localeCompare(right.path))
+  const labels = disambiguateLabels(named.map((bucket) => ({ path: bucket.path })))
+  return named.map((bucket, index) => ({ key: bucket.key, path: bucket.path, label: labels[index] ?? projectFolderName(bucket.path) }))
+}
+
 export interface RecentProject {
   key: string
   path: string

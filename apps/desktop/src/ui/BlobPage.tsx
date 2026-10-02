@@ -76,7 +76,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
           {tab === 'Sessions' && (mode === 'create'
             ? <section className="blob-card"><h3>Sessions</h3><p className="blob-muted">Save this blob to start conversations.</p></section>
             : <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />)}
-          {tab === 'Usage' && <BlobUsage />}
+          {tab === 'Usage' && <BlobUsage agentId={mode === 'edit' ? agent?.id ?? null : null} sessions={sessions} agents={agent ? [agent] : []} connected={connected} />}
           {tab === 'Settings' && <BlobSettings draft={draft} runtimes={runtimes} errors={errors} execution={execution} onDraftChange={onDraftChange} onArchive={mode === 'edit' ? onArchive : undefined} />}
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Session } from '../types'
-import { activeAgents, duplicateAgentName, garbageCollectExpanded, nextAgentAfterArchive, parseExpandedState, projectGroups, projectKey, recentProjects, rosterGroups, rosterRows, scalarLength, sessionDotClass, sessionNewParams, sessionSelectionTarget, treeModel } from './rosterSelectors'
+import { activeAgents, analyticsProjectChoices, duplicateAgentName, garbageCollectExpanded, nextAgentAfterArchive, parseExpandedState, projectGroups, projectKey, recentProjects, rosterGroups, rosterRows, scalarLength, sessionDotClass, sessionNewParams, sessionSelectionTarget, treeModel } from './rosterSelectors'
 
 function agent(partial: Pick<Agent, 'id' | 'name' | 'runtimeId' | 'sortOrder'> & Partial<Agent>): Agent {
   return {
@@ -192,6 +192,20 @@ describe('phase 4 project tree selectors', () => {
     expect(parser.groups[0]?.rows[0]?.forceOpen.blob).toBe(true)
     expect(parser.groups[0]?.rows[0]?.forceOpen.projects['c:\\work\\korus']).toBe(true)
     expect(treeModel(agents, sessions, 'Invoice').groups.flatMap((group) => group.rows).find((row) => row.agent.id === 'agent-invoice')?.forceOpen.blob).toBe(false)
+  })
+
+  it('groups analytics projects with the same key and collision labels, keeping the newest stored path', () => {
+    const choices = analyticsProjectChoices([
+      session({ id: 'older', runtimeId: 'runtime-claude', projectPath: 'C:/work/site', updatedAt: '2026-10-01T00:00:00.000Z' }),
+      session({ id: 'newer', runtimeId: 'runtime-claude', projectPath: 'c:\\work\\site\\', updatedAt: '2026-10-02T00:00:00.000Z' }),
+      session({ id: 'other', runtimeId: 'runtime-codex', projectPath: 'D:\\other\\site', updatedAt: '2026-09-01T00:00:00.000Z' }),
+      session({ id: 'blank', runtimeId: 'runtime-claude', projectPath: '   ', updatedAt: '2026-10-03T00:00:00.000Z' }),
+    ])
+    expect(choices.map((choice) => choice.key)).toEqual(['c:\\work\\site', 'd:\\other\\site'])
+    expect(choices[0]?.path).toBe('c:\\work\\site\\')
+    expect(choices[0]?.path).not.toBe(choices[0]?.key)
+    expect(choices.map((choice) => choice.label).sort()).toEqual(['site · other', 'site · work'])
+    expect(projectKey(choices[0]?.path)).toBe(choices[0]?.key)
   })
 
   it('returns null when a legacy session has no active agent on its runtime', () => {

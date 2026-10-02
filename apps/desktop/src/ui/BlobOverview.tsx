@@ -38,7 +38,7 @@ export function BlobOverview({ draft, runtime, session, connected, model, mode, 
       <div className="blob-fact"><span>Model</span><strong>{modelValue}</strong></div>
       <p className="blob-help">Bloblex does not send a model until a later update.</p>
       <div className="blob-fact"><span>Status</span><strong>{derived.label}</strong></div>
-      <div className="blob-fact"><span>Usage</span><strong>Not available yet.</strong></div>
+      <div className="blob-fact"><span>Usage</span><strong>Open the Usage tab.</strong></div>
     </div>
     <SwatchGrid value={draft.color} onChange={onColorChange} />
   </div>

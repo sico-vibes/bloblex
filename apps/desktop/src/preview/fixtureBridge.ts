@@ -2,6 +2,7 @@
 // so the real App can be inspected in a browser without the daemon. Every
 // value below is a visual fixture, not product data.
 import type { Agent, DaemonEvent, Runtime, Session, Snapshot } from '../types'
+import { answerUsageAnalytics } from '../ui/analyticsFixtures'
 
 type Unlisten = () => void
 const noop: Unlisten = () => undefined
@@ -178,6 +179,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     sequence += 1
     return { session } as T
   }
+  if (method === 'usage.analytics') return answerUsageAnalytics(params, flags().get('analytics')) as T
   return {} as T
 }
 export async function fetchSnapshot() { return currentSnapshot() }

@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { UsageAnalytics, UsageAnalyticsRequest } from './analyticsTypes'
 import type { DaemonEvent, JsonRecord, Snapshot } from './types'
 
 export const inDesktop = isTauri()
@@ -135,4 +136,11 @@ export async function listenForDaemonConnection(handler: (connected: boolean) =>
 
 export async function fetchSnapshot() {
   return rpc<Snapshot>('app.snapshot')
+}
+
+export async function fetchUsageAnalytics(request: UsageAnalyticsRequest): Promise<UsageAnalytics> {
+  const params: JsonRecord = { from: request.from, to: request.to, bucket: request.bucket, tz: request.tz }
+  if (request.projectPath) params.projectPath = request.projectPath
+  if (request.agentId) params.agentId = request.agentId
+  return rpc<UsageAnalytics>('usage.analytics', params)
 }

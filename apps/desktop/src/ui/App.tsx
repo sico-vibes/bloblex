@@ -23,6 +23,7 @@ import { AgentRoster } from './AgentRoster'
 import { ProjectChooser } from './ProjectChooser'
 import { createDraft, createParams, daemonCodeOf, draftFromAgent, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
 import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicateAgentName, emptyExpandedState, garbageCollectExpanded, legacySessions, nextAgentAfterArchive, parseExpandedState, projectFolderName, projectGroups, projectKey, recentProjects, runtimeUsable, sessionDisplayTitle, sessionForSelection, sessionNewParams, sessionSelectionTarget, type ExpandedState } from './rosterSelectors'
+import { AnalyticsView } from './AnalyticsView'
 import { BlobPage, ConfirmDialog } from './BlobPage'
 import { stampCompanionDragRegions } from './companionDrag'
 import { companionMonitorOptions, currentCompanionMonitor, ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectLocalFile, setActiveRuntime, setActiveSession, setCloseToTray, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream } from '../tauri'
@@ -42,6 +43,7 @@ export function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [blobPage, setBlobPage] = useState<{ mode: 'create' | 'edit'; agentId: string | null } | null>(null)
+  const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [draft, setDraft] = useState<AgentDraft | null>(null)
   const [baseline, setBaseline] = useState<AgentDraft | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -114,6 +116,7 @@ export function App() {
   const selectedRuntimeIdRef = useRef<string | null>(null)
   const activeSessionIdRef = useRef<string | null>(null)
   const blobPageRef = useRef(blobPage)
+  const usageLinkRef = useRef<HTMLButtonElement>(null)
   const draftDirtyRef = useRef(false)
   const rosterOrderRef = useRef<Agent[]>([])
   const selectionBooted = useRef(false)
@@ -533,6 +536,7 @@ export function App() {
   }
 
   const openEdit = (agent: Agent) => {
+    setAnalyticsOpen(false)
     const next = draftFromAgent(agent)
     setDraft(next)
     setBaseline(next)
@@ -549,12 +553,18 @@ export function App() {
   }
 
   const openCreate = () => {
+    setAnalyticsOpen(false)
     const next = createDraft(runtimes, activeSelectedAgent?.runtimeId ?? selectedRuntime?.id ?? null)
     setDraft(next)
     setBaseline(next)
     setFormError(null)
     setRemoteNotice(null)
     setBlobPage({ mode: 'create', agentId: null })
+  }
+
+  const closeAnalytics = () => {
+    setAnalyticsOpen(false)
+    window.setTimeout(() => usageLinkRef.current?.focus(), 0)
   }
 
   const closeBlobPage = (focusId: string | null) => {
@@ -738,6 +748,7 @@ export function App() {
   }
 
   const selectAgent = (agent: Agent) => {
+    setAnalyticsOpen(false)
     const latest = agentSessions(sessions, agent.id)[0] ?? null
     setSelectedAgentId(agent.id)
     setSelectedRuntimeId(agent.runtimeId)
@@ -747,6 +758,7 @@ export function App() {
     setBlobPage((page) => page && page.agentId !== agent.id ? null : page)
   }
   const selectSession = (session: Session) => {
+    setAnalyticsOpen(false)
     const target = sessionSelectionTarget(agents, activeSelectedAgent, session)
     if (!target) return
     const owner = activeAgents(agents).find((item) => item.id === target.agentId)
@@ -826,7 +838,7 @@ export function App() {
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
         <AgentRoster agents={agents} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} busy={busy} selectedAgentId={activeSelectedAgent?.id ?? null} selectedSessionId={selectedSession?.id ?? null} query={search} expanded={expanded} onQueryChange={setSearch} onSelect={selectAgent} onCreate={openCreate} onScan={() => void refreshRuntimes()} onNewSession={(agent) => newSession(agent.id)} onEdit={openEdit} onDuplicate={(agent) => void duplicateAgent(agent)} onArchive={setArchiveTarget} onToggleBlob={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, open: !entry.open }))} onToggleProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, projects: { ...entry.projects, [key]: entry.projects[key] !== true } }))} onToggleOther={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, other: !entry.other }))} onSelectSession={selectSession} onNewSessionInProject={(agent, path) => void createSession(agent, path, 'project')} onResumeSession={(session) => { selectSession(session); void resumeSession(session) }} onCancelSession={(session) => { selectSession(session); void cancelTurn(session) }} />
         <div className="sidebar-foot">
-          <button className="sidebar-link" onClick={() => void showUsage()} disabled={connection !== 'connected'}><Gauge size={15} />Usage</button>
+          <button ref={usageLinkRef} className="sidebar-link" aria-current={analyticsOpen ? 'page' : undefined} onClick={() => setAnalyticsOpen(true)} disabled={connection !== 'connected'}><Gauge size={15} />Usage</button>
           <button className="sidebar-link" onClick={() => void refreshRuntimes()} disabled={connection !== 'connected' || refreshing}><RefreshCw size={15} className={refreshing ? 'spinning' : ''} />Find agents</button>
           <div className="sidebar-profile">
             <span className={`presence-ring ${connection}`}><i /></span>
@@ -837,7 +849,7 @@ export function App() {
       </aside>
 
       <section className="conversation-pane">
-        {blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
+        {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} connected={connection === 'connected'} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         <header className="chat-header">
           <div className="chat-title">
             {activeSelectedAgent ? <button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} onClick={() => openEdit(activeSelectedAgent)}><BlobCanvas color={accent} size={28} mood={selectedMood} label={activeSelectedAgent.name} /><strong>{activeSelectedAgent.name}</strong></button> : <><span className="agent-placeholder"><Code2 size={15} /></span><strong>{agentName}</strong></>}

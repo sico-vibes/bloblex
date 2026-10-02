@@ -9,6 +9,10 @@
     "qa": {
       "implementer": "opencode",
       "model": "opencode-go/deepseek-v4.1-flash"
+    },
+    "impl-b": {
+      "implementer": "cursor",
+      "model": "grok-4.7-high"
     }
   }
 }

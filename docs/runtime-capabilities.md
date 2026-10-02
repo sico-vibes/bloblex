@@ -198,3 +198,54 @@ Commands ran from the repo unless marked. Temp output was under `$env:TEMP`. **C
 - OpenCode ACP `session/set_config_option` on `model` adds `effort`. Values for `ling-3.0-flash-fin-free`: `low`, `medium`, `high`, `default`.
 - `initialized` logs `Method not found` on stderr, no JSON-RPC response, `session/new` still works.
 - `codex debug models` description text for the Fast tier: `1.5x speed` in the Director's runs; another run saw `2x speed, increased usage`.
+
+## Live entry-gate results (Director-run, 2 October 2026, real profile)
+
+Method: trivial prompts against the user's real, authenticated CLIs in throwaway temp directories, with non-secret sentinel instructions; scripts in [scripts/live-checks/](../scripts/live-checks/). Evidence kind for everything below is **successful live turn** unless marked otherwise. Versions: Claude Code 2.1.286, codex-cli 0.159.3, OpenCode 1.18.34. Cost of the whole run was a few tenths of a dollar of CLI-reported usage. These results supersede the PARTIAL statuses in the tables above where listed in the delta table.
+
+### Claude Code (haiku and sonnet, headless `-p --output-format stream-json`)
+
+| Check | Result |
+| --- | --- |
+| Successful turn with `--model haiku --effort low --append-system-prompt-file <file>` | Success result. `result` keys include `usage`, `total_cost_usd`, `modelUsage`, `session_id`, `num_turns`, `stop_reason`, `fast_mode_state`; **no top-level `model`**. `modelUsage` has the resolved model (`claude-haiku-4-5-20251001`); `usage` has input/output/cache-read/cache-creation tokens, `service_tier`, `speed`, `output_tokens_details.thinking_tokens`. Instruction file BODY honoured (sentinel in the reply). |
+| Unknown model id (`--model not-a-real-model-xyz`) on a real turn | Exit 1; result `is_error: true` with an error text, **zero usage and empty `modelUsage`**; the `system/init` event echoes the REQUESTED model name, so an init echo is never proof of success. Zeros here must be recorded as unreported, never as zero usage. |
+| Resume with a CHANGED instruction file, default snapshot | The new rule is **ignored** (old prompt snapshot reused). |
+| Resume with the same change and `--system-prompt-snapshot off` | The new rule is **applied** (`PINEAPPLE`-style additive rule followed). A fresh session with the changed file also applies it. Cost note: with snapshot off the system prompt is re-sent, so a prompt-cache write of roughly 9k tokens occurred on that turn; use snapshot off only when the instruction hash changed. |
+| Effort evidence (sonnet) | `--effort low` -> 0 thinking tokens; `--effort max` -> 45 thinking tokens, same answer. `usage.output_tokens_details.thinking_tokens` is provider-side evidence (indirect). haiku lists no effort levels. |
+
+### Codex app-server (gpt-6-luna)
+
+| Check | Result |
+| --- | --- |
+| `model/list` (`includeHidden:false`, limit 100) | 1 page, 8 models; per model `supportedReasoningEfforts`, `defaultReasoningEffort`, `serviceTiers` (id `priority`), `defaultServiceTier` (null). `codex debug models` shows 10 (it includes hidden entries); do not assume they match. |
+| `thread/start` with `developerInstructions` | Honoured on the first turn (sentinel). **Persisted across `thread/resume` without the field.** `thread/resume` with CHANGED `developerInstructions` was **ignored** (the original text still applied): instruction changes apply only to a new thread. |
+| `thread/start` echo | Response echoes `model`, `reasoningEffort`, `serviceTier`. Requested `serviceTier:"priority"` echoes `"priority"`; the old plan's string `"fast"` is normalised by the server to `"priority"` (a real server-side resolution, not a parrot). `config.model_reasoning_effort:"low"` is accepted and echoed as `reasoningEffort:"low"`. |
+| Validation | The server does **not** reject unlisted values: effort `ultra` on a model that does not list it, an unknown model id at `thread/start`, and unknown tiers all start without error (an unlisted effort ran with 28 reasoning tokens vs 0 at `low`). Bloblex must validate against the catalog itself. Echoed values are request echoes, not application proof (except the tier normalisation). |
+| Per-turn usage | `thread/tokenUsage/updated` carries `tokenUsage.last` (`inputTokens`, `cachedInputTokens`, `outputTokens`, `reasoningOutputTokens`, `totalTokens`) for the turn; no model, no cost. On resume a replayed usage notification can precede the new turn's: always scope by `turnId`. `turn/completed` params: `threadId`, `turn{id,status,error,startedAt,completedAt,durationMs,items,itemsView}`. |
+
+### OpenCode ACP (opencode-go/deepseek-v4.1-flash, real profile)
+
+| Check | Result |
+| --- | --- |
+| `session/new` options | `model` (52 values on this host), `effort` (appears once the model has variants: low/high/max/default), `mode` (build, plan and the custom agent from `OPENCODE_CONFIG_CONTENT`). `set_config_option` for `model`, `effort`, `mode` all stick. |
+| Custom agent instructions | With mode set to the custom agent the instruction is followed on both turns of the session (persists across turns). A second session in the same process with the mode NOT selected ignores it (control). |
+| Prompt result usage | `session/prompt` result carries `usage{inputTokens,outputTokens,totalTokens,thoughtTokens,cachedReadTokens}` per turn (cache-read only on later turns): real token buckets exist. |
+| `usage_update` | Per turn: `used` (context tokens, cumulative), `size` (context window), `cost{amount,currency:"USD"}`. **Cost is cumulative per session**: turn 1 = 0.0015894, turn 2 = 0.001637988 (a difference of about 0.00005, consistent with 30 new input tokens plus cached reads); a per-turn value would have been about 0.0016 again. A turn's cost is the difference of successive totals. |
+| Effort effect | Option selectable and echoed, but thought tokens on one trivial prompt were 23 at `low` vs 2 at `max`: **no behavioural proof**; keep the thinking gate off for OpenCode. |
+
+### Status delta and gate decisions
+
+| Item | Was | Now | Gate (`exec_gate.*`) recommendation |
+| --- | --- | --- | --- |
+| C1 Claude model | PARTIAL | CONFIRMED (resolved via `modelUsage`; unknown id fails the turn with `is_error`) | `claude.model` ready |
+| C2 Claude effort | PARTIAL | CONFIRMED for models that list levels (thinking-token evidence); not applicable to haiku | `claude.thinking` ready, only for catalog rows with effort levels |
+| C3 Claude instructions | PARTIAL | CONFIRMED (file body honoured; snapshot off applies changes on resume; default snapshot ignores them) | `claude.instructions` ready with the "snapshot off only when the instruction hash changed" rule |
+| C7 Claude usage | PARTIAL | CONFIRMED (success semantics observed; error result zeros are not usage) | n/a |
+| X1/X2 Codex shapes | CONFIRMED (schema) | CONFIRMED live; `config.model_reasoning_effort` accepted | n/a |
+| X3 Codex catalog | PARTIAL | `model/list` live: CONFIRMED; differs from `debug models` (hidden entries) | `codex.model` ready |
+| X4 Codex effort | PARTIAL | CONFIRMED accepted; NOT validated server-side (validate in Bloblex); effect visible in reasoning tokens | `codex.thinking` ready with catalog validation |
+| X5 Codex tier | CONFIRMED (ids) | CONFIRMED live (echo; `fast` normalised to `priority`) | `codex.serviceTier` ready with catalog validation |
+| X6 Codex instructions | PARTIAL | CONFIRMED: persist across resume; changes on resume ignored | `codex.instructions` ready, applies to NEW threads only (UI must say so) |
+| O3/O6 OpenCode options | PARTIAL | CONFIRMED model/effort/mode selection; behavioural effort proof absent | `opencode.model` ready; `opencode.thinking` stays OFF |
+| O4 OpenCode instructions | PARTIAL | CONFIRMED (mode must be selected; persists across turns) | `opencode.instructions` ready |
+| O5 OpenCode usage | REFUTED claim; semantics open | token buckets in the prompt result; `usage_update` cost cumulative per session | n/a (usage mapping updates the spec) |

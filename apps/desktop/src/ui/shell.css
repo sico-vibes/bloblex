@@ -39,8 +39,8 @@
 .sidebar-search:focus-within { box-shadow: 0 0 0 1px var(--blue-border); }
 .bot-list { min-height: 0; flex: 1; padding: 0 6px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #2f2f2f transparent; }
 .bot-row { width: 100%; min-width: 0; min-height: 62px; padding: 8px 10px; display: flex; align-items: center; gap: 11px; color: var(--ink); text-align: left; border: 0; border-radius: 10px; background: transparent; transition: background 140ms ease; }
-.bot-row:hover { background: #ffffff0a; }
-.bot-row.selected { background: var(--raised); }
+.bot-row:hover, .tree-project-item:hover, .tree-session:hover, .tree-more:hover { background: #ffffff0a; }
+.bot-row.selected, .tree-session[aria-selected="true"] { background: var(--raised); }
 .bot-row-copy { min-width: 0; flex: 1; display: grid; gap: 3px; }
 .bot-row-top { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
 .bot-row-top strong { min-width: 0; flex: 1; overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
@@ -48,7 +48,26 @@
 .bot-row-preview { overflow: hidden; color: var(--ink-3); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
 .bot-row-meta { min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
 .roster-group-label { margin: 10px 8px 2px; color: var(--ink-3); font-size: 11px; font-weight: 650; letter-spacing: 0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rail-empty { margin: 8px 6px; padding: 12px; color: var(--ink-2); font-size: 13px; line-height: 1.55; }
+.rail-empty, .tree-empty { margin: 8px 6px; padding: 12px; color: var(--ink-2); font-size: 13px; line-height: 1.55; }
+.tree-group { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tree-project { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; }
+.tree-project > .tree-group { flex: 1 0 100%; }
+.tree-chevron { width: 28px; height: 28px; flex: 0 0 28px; display: grid; place-items: center; opacity: 0; color: var(--ink-2); }
+.tree-project-item, .tree-session, .tree-more { min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; border: 0; border-radius: 10px; background: transparent; color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
+.tree-project-item { flex: 1; padding: 4px 4px 4px 16px; }
+.tree-session { width: 100%; padding: 4px 10px 4px 32px; }
+.tree-more { width: 100%; color: var(--ink-2); }
+.tree-more[aria-level="2"] { padding: 4px 10px 4px 16px; }
+.tree-more[aria-level="3"] { padding: 4px 10px 4px 32px; }
+.tree-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-session-state { flex: 0 0 auto; color: var(--ink-3); font-size: 12px; }
+.tree-session time { flex: 0 0 auto; color: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tree-new { width: 28px; height: 28px; flex: 0 0 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--ink-2); opacity: 0; }
+.bot-row:hover .tree-chevron, .bot-row:focus-within .tree-chevron, .bot-row[aria-expanded="true"] .tree-chevron,
+.tree-project:hover .tree-chevron, .tree-project:focus-within .tree-chevron, .tree-project-item[aria-expanded="true"] .tree-chevron,
+.tree-project:hover .tree-new, .tree-project:focus-within .tree-new, .tree-project-item[aria-expanded="true"] ~ .tree-new { opacity: 1; }
+.tree-project-item:focus-visible, .tree-session:focus-visible, .tree-more:focus-visible { outline: 2px solid var(--blue-border); outline-offset: 2px; }
+@media (hover: none) { .tree-chevron, .tree-new { opacity: 1; } }
 .rail-empty button { display: block; margin-top: 7px; padding: 0; color: #7fc0ff; border: 0; background: none; font-size: 13px; }
 .sidebar-foot { padding: 8px 8px 10px; display: grid; gap: 1px; }
 .sidebar-link { height: 34px; padding: 0 10px; display: flex; align-items: center; gap: 10px; color: var(--ink); border: 0; border-radius: 8px; background: transparent; font-size: 13px; text-align: left; }

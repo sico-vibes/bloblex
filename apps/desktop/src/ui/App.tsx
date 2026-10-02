@@ -20,8 +20,9 @@ import { budgetValue, findApplicableBudget } from './budgetPresentation'
 import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, providerColor, type Agent, type ConnectionState, type DaemonEvent, type PermissionRequest, type Runtime, type Session, type Snapshot } from '../types'
 import { agentColorHex } from './agentColor'
 import { AgentRoster } from './AgentRoster'
+import { ProjectChooser } from './ProjectChooser'
 import { createDraft, createParams, daemonCodeOf, draftFromAgent, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
-import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicateAgentName, legacySessions, nextAgentAfterArchive, runtimeUsable, sessionForSelection, sessionNewParams } from './rosterSelectors'
+import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicateAgentName, emptyExpandedState, garbageCollectExpanded, legacySessions, nextAgentAfterArchive, parseExpandedState, projectFolderName, projectGroups, projectKey, recentProjects, runtimeUsable, sessionDisplayTitle, sessionForSelection, sessionNewParams, sessionSelectionTarget, type ExpandedState } from './rosterSelectors'
 import { BlobPage, ConfirmDialog } from './BlobPage'
 import { stampCompanionDragRegions } from './companionDrag'
 import { companionMonitorOptions, currentCompanionMonitor, ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectLocalFile, setActiveRuntime, setActiveSession, setCloseToTray, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream } from '../tauri'
@@ -99,6 +100,8 @@ export function App() {
   const [runtimeExplainerDismissed, setRuntimeExplainerDismissed] = useState(() => storageFlag('bloblex.runtimeExplainer.dismissed'))
   const [inspectorOpen, setInspectorOpen] = useState(() => storageFlag('bloblex.inspector.open'))
   const [search, setSearch] = useState('')
+  const [expanded, setExpanded] = useState<ExpandedState>(() => companion ? emptyExpandedState() : readRosterExpanded())
+  const [chooser, setChooser] = useState<{ agentId: string; x: number; y: number } | null>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const messageListRef = useRef<HTMLElement>(null)
   const stickToBottom = useRef(true)
@@ -114,6 +117,8 @@ export function App() {
   const draftDirtyRef = useRef(false)
   const rosterOrderRef = useRef<Agent[]>([])
   const selectionBooted = useRef(false)
+  const pendingTreeFocus = useRef<string | null>(null)
+  const chooserAnchor = useRef<HTMLElement | null>(null)
   const handledArchiveRef = useRef<string | null>(null)
   snapshotRef.current = snapshot
   selectedAgentIdRef.current = selectedAgentId
@@ -443,6 +448,7 @@ export function App() {
   }, [selectedAgentId, snapshot])
 
   useEffect(() => {
+    let focusTimer = 0
     const list = snapshot?.agents ?? []
     const active = activeAgents(list)
     const editorId = blobPage?.mode === 'edit' ? blobPage.agentId : null
@@ -461,6 +467,12 @@ export function App() {
           setSelectedAgentId(next?.id ?? null)
           setSelectedSessionId(nextSession?.id ?? null)
           if (next) setSelectedRuntimeId(next.runtimeId)
+          focusTimer = window.setTimeout(() => {
+            const node = next
+              ? document.querySelector<HTMLElement>(`[data-agent-id="${CSS.escape(next.id)}"]`)
+              : document.querySelector<HTMLElement>('[aria-label="Create blob"]')
+            node?.focus()
+          }, 0)
           if (blobPage && blobPage.agentId === selectedAgentId) {
             setArchiveNotice(`Archived “${name}”. Its conversations stay saved. Restoring a blob is not available yet.`)
             setBlobPage(null)
@@ -476,7 +488,27 @@ export function App() {
       }
     }
     rosterOrderRef.current = active
+    return () => window.clearTimeout(focusTimer)
   }, [snapshot, selectedAgentId, blobPage])
+
+  useEffect(() => {
+    if (companion || !snapshot) return
+    setExpanded((current) => {
+      const next = garbageCollectExpanded(current, snapshot.agents, snapshot.sessions)
+      if (next === current) return current
+      writeRosterExpanded(next)
+      return next
+    })
+  }, [companion, snapshot])
+
+  useEffect(() => {
+    const id = pendingTreeFocus.current
+    if (!id) return
+    const node = document.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(id)}"]`)
+    if (!node) return
+    node.focus()
+    pendingTreeFocus.current = null
+  })
 
   const doRpc = useCallback(async <T,>(method: string, params: Record<string, unknown> = {}, mapError?: (reason: unknown) => string) => {
     setBusy(true)
@@ -601,27 +633,21 @@ export function App() {
     }
   }
 
-  const newSession = async (agentId?: string) => {
-    const agent = agents.find((item) => item.id === (agentId ?? activeSelectedAgent?.id) && !item.archived)
-    const runtime = agent ? runtimes.find((item) => item.id === agent.runtimeId) : null
-    if (!agent || connection !== 'connected' || busy || !runtimeUsable(runtime)) return
-    const storedProject = agent.defaultProject?.trim() ?? ''
+  const createSession = async (agent: Agent, projectPath: string, source: 'pinned' | 'recent' | 'browse' | 'project') => {
     const mapError = (reason: unknown) => messageForDaemonCode(daemonCodeOf(reason), 'session.new')
+    const trimmedDefault = typeof agent.defaultProject === 'string' ? agent.defaultProject.trim() : ''
     try {
-      let projectPath = storedProject
-      if (!projectPath) {
-        const picked = await openProjectFolder()
-        if (!picked) return
-        projectPath = picked
-      }
+      let path = projectPath
       let result: Session | { session?: Session }
       try {
-        result = await doRpc<Session | { session?: Session }>('session.new', sessionNewParams(agent.id, projectPath), mapError)
+        result = await doRpc<Session | { session?: Session }>('session.new', sessionNewParams(agent.id, path), mapError)
       } catch (reason) {
-        if (daemonCodeOf(reason) !== 'invalid_argument' || !storedProject) return
+        const retryDefault = source === 'pinned' && daemonCodeOf(reason) === 'invalid_argument' && !!trimmedDefault && path === trimmedDefault
+        if (!retryDefault) return
         const picked = await openProjectFolder()
         if (!picked) return
-        result = await doRpc<Session | { session?: Session }>('session.new', sessionNewParams(agent.id, picked), mapError)
+        path = picked
+        result = await doRpc<Session | { session?: Session }>('session.new', sessionNewParams(agent.id, path), mapError)
       }
       const session = unwrapSession(result)
       if (!session?.id) return
@@ -630,9 +656,36 @@ export function App() {
         if (owner) { setSelectedAgentId(owner.id); setSelectedRuntimeId(owner.runtimeId) }
       }
       setSelectedSessionId(session.id)
+      const ownerId = session.agentId && agents.some((item) => item.id === session.agentId && !item.archived) ? session.agentId : agent.id
+      const key = projectKey(session.projectPath ?? path) ?? ''
+      if (!companion) {
+        setExpanded((current) => {
+          const prev = current.blobs[ownerId] ?? { open: false, projects: {}, other: false }
+          const next: ExpandedState = { v: 1, blobs: { ...current.blobs, [ownerId]: { open: true, projects: { ...prev.projects, [key]: true }, other: prev.other } } }
+          writeRosterExpanded(next)
+          return next
+        })
+      }
+      const label = projectGroups(sessions, ownerId).find((group) => group.key === key)?.label ?? projectFolderName(session.projectPath ?? path)
+      setRosterAnnouncement(`Started ${sessionDisplayTitle(session)} in ${label}.`)
+      pendingTreeFocus.current = session.id
       void refreshTrayMenu().catch(() => undefined)
       await refresh()
     } catch { /* The mapped error is shown inline. */ }
+  }
+
+  const newSession = (agentId?: string, anchor?: HTMLElement | null) => {
+    const agent = agents.find((item) => item.id === (agentId ?? activeSelectedAgent?.id) && !item.archived)
+    const runtime = agent ? runtimes.find((item) => item.id === agent.runtimeId) : null
+    if (!agent || connection !== 'connected' || busy || !runtimeUsable(runtime)) return
+    if (recentProjects(sessions, agent, 8).length === 0) {
+      void openProjectFolder().then((picked) => { if (picked) void createSession(agent, picked, 'browse') })
+      return
+    }
+    const node = anchor ?? document.querySelector<HTMLElement>(`[data-agent-id="${CSS.escape(agent.id)}"]`)
+    chooserAnchor.current = node
+    const rect = node?.getBoundingClientRect()
+    setChooser({ agentId: agent.id, x: rect?.left ?? 24, y: rect?.bottom ?? 24 })
   }
 
   const sendPrompt = async () => {
@@ -645,14 +698,14 @@ export function App() {
     } catch { /* The actionable error is shown inline. */ }
   }
 
-  const cancelTurn = async () => {
-    if (!selectedSession) return
-    try { await doRpc('session.cancel', { sessionId: selectedSession.id }); void refreshTrayMenu().catch(() => undefined); await refresh() } catch { /* inline */ }
+  const cancelTurn = async (session: Session | null = selectedSession) => {
+    if (!session) return
+    try { await doRpc('session.cancel', { sessionId: session.id }); void refreshTrayMenu().catch(() => undefined); await refresh() } catch { /* inline */ }
   }
 
-  const resumeSession = async () => {
-    if (!selectedSession?.resumable || busy) return
-    try { await doRpc('session.resume', { sessionId: selectedSession.id }); void refreshTrayMenu().catch(() => undefined); await refresh() } catch { /* inline */ }
+  const resumeSession = async (session: Session | null = selectedSession) => {
+    if (!session?.resumable || busy) return
+    try { await doRpc('session.resume', { sessionId: session.id }); void refreshTrayMenu().catch(() => undefined); await refresh() } catch { /* inline */ }
   }
 
   const answerPermission = async (permission: PermissionRequest, choice: string) => {
@@ -684,16 +737,6 @@ export function App() {
     } catch { setUsageSummary(null) }
   }
 
-  if (companion) {
-    return <Companion agent={companionAgent} agents={agents} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} budgetWarning={budgetWarningFor(companionSession)} permission={companionPermission} onReply={answerPermission} onNewSession={() => void newSession(companionAgent?.id)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={(agentId) => { const agent = activeAgents(agents).find((item) => item.id === agentId); if (!agent) return; const latest = agentSessions(sessions, agent.id)[0] ?? null; setSelectedAgentId(agent.id); setSelectedRuntimeId(agent.runtimeId); setSelectedSessionId(latest?.id ?? null); void setActiveRuntime(agent.runtimeId); void setActiveSession(latest?.id ?? null) }} />
-  }
-
-  const selectedMood = deriveCompanionStatus({ connected: connection === 'connected', runtime: selectedRuntime, session: selectedSession, budgetWarning: budgetWarningFor(selectedSession), composing: !!composer.trim() }).mood
-  const sessionBusy = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
-  const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
-  const runtimeReady = runtimeUsable(selectedRuntime)
-  const canStartSession = connection === 'connected' && !busy && !!activeSelectedAgent && runtimeReady
-  const lastAgentIndex = conversationItems.reduce((last, item, index) => item.kind === 'message' && !isUserMessage(item.value) ? index : last, -1)
   const selectAgent = (agent: Agent) => {
     const latest = agentSessions(sessions, agent.id)[0] ?? null
     setSelectedAgentId(agent.id)
@@ -703,6 +746,64 @@ export function App() {
     void setActiveSession(latest?.id ?? null)
     setBlobPage((page) => page && page.agentId !== agent.id ? null : page)
   }
+  const selectSession = (session: Session) => {
+    const target = sessionSelectionTarget(agents, activeSelectedAgent, session)
+    if (!target) return
+    const owner = activeAgents(agents).find((item) => item.id === target.agentId)
+    if (!owner) return
+    if (owner.id !== activeSelectedAgent?.id) {
+      setSelectedAgentId(owner.id)
+      setSelectedRuntimeId(owner.runtimeId)
+      void setActiveRuntime(owner.runtimeId)
+      setBlobPage((page) => page && page.agentId !== owner.id ? null : page)
+    }
+    setSelectedSessionId(target.sessionId)
+    void setActiveSession(target.sessionId)
+  }
+  const patchExpanded = (agentId: string, patch: (entry: { open: boolean; projects: Record<string, boolean>; other: boolean }) => { open: boolean; projects: Record<string, boolean>; other: boolean }) => {
+    setExpanded((current) => {
+      const prev = current.blobs[agentId] ?? { open: false, projects: {}, other: false }
+      const next: ExpandedState = { v: 1, blobs: { ...current.blobs, [agentId]: patch(prev) } }
+      if (!companion) writeRosterExpanded(next)
+      return next
+    })
+  }
+  const chooserAgent = chooser ? agents.find((item) => item.id === chooser.agentId && !item.archived) ?? null : null
+  const closeChooser = () => {
+    const node = chooserAnchor.current
+    chooserAnchor.current = null
+    setChooser(null)
+    window.setTimeout(() => node?.focus(), 0)
+  }
+  const chooserView = chooser && chooserAgent ? <ProjectChooser
+    agentName={chooserAgent.name}
+    options={recentProjects(sessions, chooserAgent, 8)}
+    position={chooser}
+    onChoose={(path) => {
+      const pinned = typeof chooserAgent.defaultProject === 'string' ? chooserAgent.defaultProject.trim() : ''
+      setChooser(null)
+      void createSession(chooserAgent, path, path === pinned && pinned ? 'pinned' : 'recent')
+    }}
+    onBrowse={() => {
+      setChooser(null)
+      void openProjectFolder().then((picked) => { if (picked) void createSession(chooserAgent, picked, 'browse') })
+    }}
+    onClose={closeChooser}
+  /> : null
+
+  if (companion) {
+    return <>
+      <Companion agent={companionAgent} agents={agents} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} budgetWarning={budgetWarningFor(companionSession)} permission={companionPermission} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
+      {chooserView}
+    </>
+  }
+
+  const selectedMood = deriveCompanionStatus({ connected: connection === 'connected', runtime: selectedRuntime, session: selectedSession, budgetWarning: budgetWarningFor(selectedSession), composing: !!composer.trim() }).mood
+  const sessionBusy = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
+  const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
+  const runtimeReady = runtimeUsable(selectedRuntime)
+  const canStartSession = connection === 'connected' && !busy && !!activeSelectedAgent && runtimeReady
+  const lastAgentIndex = conversationItems.reduce((last, item, index) => item.kind === 'message' && !isUserMessage(item.value) ? index : last, -1)
   const toggleInspector = () => setInspectorOpen((open) => { localStorage.setItem('bloblex.inspector.open', open ? '0' : '1'); return !open })
   const editingAgent = blobPage?.mode === 'edit' ? agents.find((agent) => agent.id === blobPage.agentId) ?? null : null
   const otherNames = activeAgents(agents).filter((agent) => agent.id !== editingAgent?.id).map((agent) => agent.name)
@@ -723,7 +824,7 @@ export function App() {
           <button className="icon-button" title="Create blob" aria-label="Create blob" disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={openCreate}><Plus size={18} /></button>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <AgentRoster agents={agents} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} busy={busy} selectedAgentId={activeSelectedAgent?.id ?? null} query={search} onQueryChange={setSearch} onSelect={selectAgent} onCreate={openCreate} onScan={() => void refreshRuntimes()} onNewSession={(agent) => void newSession(agent.id)} onEdit={openEdit} onDuplicate={(agent) => void duplicateAgent(agent)} onArchive={setArchiveTarget} />
+        <AgentRoster agents={agents} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} busy={busy} selectedAgentId={activeSelectedAgent?.id ?? null} selectedSessionId={selectedSession?.id ?? null} query={search} expanded={expanded} onQueryChange={setSearch} onSelect={selectAgent} onCreate={openCreate} onScan={() => void refreshRuntimes()} onNewSession={(agent) => newSession(agent.id)} onEdit={openEdit} onDuplicate={(agent) => void duplicateAgent(agent)} onArchive={setArchiveTarget} onToggleBlob={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, open: !entry.open }))} onToggleProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, projects: { ...entry.projects, [key]: entry.projects[key] !== true } }))} onToggleOther={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, other: !entry.other }))} onSelectSession={selectSession} onNewSessionInProject={(agent, path) => void createSession(agent, path, 'project')} onResumeSession={(session) => { selectSession(session); void resumeSession(session) }} onCancelSession={(session) => { selectSession(session); void cancelTurn(session) }} />
         <div className="sidebar-foot">
           <button className="sidebar-link" onClick={() => void showUsage()} disabled={connection !== 'connected'}><Gauge size={15} />Usage</button>
           <button className="sidebar-link" onClick={() => void refreshRuntimes()} disabled={connection !== 'connected' || refreshing}><RefreshCw size={15} className={refreshing ? 'spinning' : ''} />Find agents</button>
@@ -736,7 +837,7 @@ export function App() {
       </aside>
 
       <section className="conversation-pane">
-        {blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) void newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
+        {blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         <header className="chat-header">
           <div className="chat-title">
             {activeSelectedAgent ? <button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} onClick={() => openEdit(activeSelectedAgent)}><BlobCanvas color={accent} size={28} mood={selectedMood} label={activeSelectedAgent.name} /><strong>{activeSelectedAgent.name}</strong></button> : <><span className="agent-placeholder"><Code2 size={15} /></span><strong>{agentName}</strong></>}
@@ -744,13 +845,13 @@ export function App() {
             {(headerOwned.length > 0 || headerLegacy.length > 0) && (activeSelectedAgent || selectedRuntime) && <div className="session-switcher-wrap"><select aria-label="Current conversation" value={selectedSession?.id ?? ''} onChange={(event) => setSelectedSessionId(event.target.value)}><option value="" disabled>Select a conversation</option>{headerOwned.map((session) => <option value={session.id} key={session.id}>{formatUnknownSafe(session.title, session.projectPath?.split(/[\\/]/).pop() ?? 'New session')}</option>)}{headerLegacy.length > 0 && <option disabled>Not linked to a blob</option>}{headerLegacy.map((session) => <option value={session.id} key={session.id}>{formatUnknownSafe(session.title, session.projectPath?.split(/[\\/]/).pop() ?? 'New session')}</option>)}</select><ChevronDown size={13} /></div>}
           </div>
           <div className="header-actions">
-            <button className="pill-button" disabled={!canStartSession} onClick={() => void newSession()}><Plus size={13} />Session</button>
+            <button className="pill-button" disabled={!canStartSession} onClick={(event) => newSession(undefined, event.currentTarget)}><Plus size={13} />Session</button>
             {selectedRuntime && <div className="model-pill" role="group" title="Reported by the session. Bloblex does not choose the model until a later update."><span className="model-pill-mark" style={{ background: accent || 'transparent' }} />{labelize(selectedRuntime.provider)}<span className="model-pill-model">{selectedSession?.model?.trim() ? selectedSession.model : 'CLI default'}</span></div>}
             {selectedSession?.resumable && !sessionBusy && <button className="icon-button" title="Resume conversation" aria-label="Resume conversation" disabled={busy || connection !== 'connected' || !runtimeReady} onClick={() => void resumeSession()}><Play size={15} /></button>}
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Toggle details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') setMoreOpen(false) }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
-              {moreOpen && <div className="more-menu" role="menu"><button role="menuitem" disabled={!canStartSession} onClick={() => { setMoreOpen(false); void newSession() }}><MessageSquarePlus size={15} />New session</button><button role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><span className="more-menu-separator" /><button role="menuitem" className="danger-menu-item" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
+              {moreOpen && <div className="more-menu" role="menu"><button role="menuitem" disabled={!canStartSession} onClick={(event) => { setMoreOpen(false); newSession(undefined, event.currentTarget) }}><MessageSquarePlus size={15} />New session</button><button role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><span className="more-menu-separator" /><button role="menuitem" className="danger-menu-item" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
             </div>
           </div>
         </header>
@@ -760,7 +861,7 @@ export function App() {
 
         {selectedSession && !runtimeExplainerDismissed && <RuntimeExplainer onDismiss={() => { localStorage.setItem('bloblex.runtimeExplainer.dismissed', '1'); setRuntimeExplainerDismissed(true) }} />}
 
-        {!selectedSession ? <>{activePermission && <PermissionCard permission={activePermission} onReply={(choice) => void answerPermission(activePermission, choice)} />}<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} accent={accent} mood={selectedMood} agentName={agentName} onNewSession={() => void newSession()} onCreate={openCreate} onRefresh={() => void refreshRuntimes()} /></> : <>
+        {!selectedSession ? <>{activePermission && <PermissionCard permission={activePermission} onReply={(choice) => void answerPermission(activePermission, choice)} />}<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} accent={accent} mood={selectedMood} agentName={agentName} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={openCreate} onRefresh={() => void refreshRuntimes()} /></> : <>
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
             <div className="chat-column">
               <div className="conversation-meta"><span><FolderOpen size={13} />{selectedSession.projectPath ?? 'Project path unavailable'}</span><span className="meta-divider" /><span><Clock3 size={13} />{labelize(selectedSession.state, 'Unknown state')}</span></div>
@@ -796,18 +897,18 @@ export function App() {
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} loading={busy && usageSummary === null} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onClose={() => setUsageSheet(false)} />}
       {settingsSheet && <SettingsSheet snapshot={snapshot} runtime={selectedRuntime} session={selectedSession} initialPage={settingsInitialPage} onClose={() => setSettingsSheet(false)} onRefresh={refreshRuntimes} onError={setError} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
+      {chooserView}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body="It leaves the roster. Its conversations stay saved. Restoring a blob is not available yet." confirmLabel="Archive" cancelLabel="Cancel" onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
     </main>
   )
 }
 
-function EmptyConversation({ connected, hasRuntime, hasAgent, accent, mood, agentName, onNewSession, onCreate, onRefresh }: { connected: boolean; hasRuntime: boolean; hasAgent: boolean; accent: string; mood: BlobMood; agentName: string; onNewSession: () => void; onCreate: () => void; onRefresh: () => void }) {
+function EmptyConversation({ connected, hasRuntime, hasAgent, accent, mood, agentName, onNewSession, onCreate, onRefresh }: { connected: boolean; hasRuntime: boolean; hasAgent: boolean; accent: string; mood: BlobMood; agentName: string; onNewSession: (anchor?: HTMLElement | null) => void; onCreate: () => void; onRefresh: () => void }) {
   const canvas = hasAgent ? <BlobCanvas color={accent} size={128} mood={connected ? mood : 'offline'} label={agentName} /> : <BlobCanvas color="#e6e9ee" size={128} mood={connected ? 'idle' : 'offline'} label="Bloblex" />
   const heading = !connected ? 'Connect to your local runtime' : hasAgent ? `Start a conversation with ${agentName}` : hasRuntime ? 'No blobs yet.' : 'Find your coding agent'
   const description = !connected ? 'Bloblex keeps its daemon and agent sessions on this device. Reconnect to load the latest state.' : hasAgent ? 'Choose a project folder. Your selected CLI starts a real session there.' : hasRuntime ? 'Create a blob for one of the coding CLIs on this device.' : 'We only show agents installed on this device. Refresh to scan for Claude Code, Codex, or OpenCode.'
-  const action = !connected ? onRefresh : hasAgent ? onNewSession : hasRuntime ? onCreate : onRefresh
   const label = !connected ? 'Try again' : hasAgent ? 'Choose a project' : hasRuntime ? 'Create blob' : 'Scan for agents'
-  return <div className="empty-conversation"><div className="empty-art">{canvas}</div><h1>{heading}</h1><p className="empty-description">{description}</p><button className="primary-button" onClick={action} disabled={!connected && !hasRuntime}><FolderOpen size={15} />{label}</button></div>
+  return <div className="empty-conversation"><div className="empty-art">{canvas}</div><h1>{heading}</h1><p className="empty-description">{description}</p><button className="primary-button" onClick={(event) => { if (!connected || !hasAgent && !hasRuntime) onRefresh(); else if (hasAgent) onNewSession(event.currentTarget); else onCreate() }} disabled={!connected && !hasRuntime}><FolderOpen size={15} />{label}</button></div>
 }
 
 function MessageItem({ message, accent, agentName, showAvatar, mood }: { message: Record<string, unknown>; accent: string; agentName: string; showAvatar: boolean; mood: BlobMood }) {
@@ -843,6 +944,16 @@ function writeStoredAgentId(id: string | null) {
     if (id) localStorage.setItem('bloblex.selectedAgentId', id)
     else localStorage.removeItem('bloblex.selectedAgentId')
   } catch { /* A blocked Storage API must not break in-memory selection. */ }
+}
+
+function readRosterExpanded(): ExpandedState {
+  try { return parseExpandedState(localStorage.getItem('bloblex.roster.expanded')) }
+  catch { return emptyExpandedState() }
+}
+
+function writeRosterExpanded(state: ExpandedState) {
+  try { localStorage.setItem('bloblex.roster.expanded', JSON.stringify(state)) }
+  catch { /* A blocked Storage API must not break the tree. */ }
 }
 
 function unwrapSession(result: Session | { session?: Session }): Session | null {
@@ -1328,7 +1439,7 @@ function minorToMajor(value: unknown, currency: string) {
   return value / (10 ** fractionDigits)
 }
 
-function Companion({ agent, agents, runtime, runtimes, session, usage, connected, appError, activityLabel, budgetWarning, permission, onReply, onNewSession, onOpenMain, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; budgetWarning: boolean; permission?: PermissionRequest; onReply: (permission: PermissionRequest, choice: string) => void; onNewSession: () => void; onOpenMain: () => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agentId: string) => void }) {
+function Companion({ agent, agents, runtime, runtimes, session, usage, connected, appError, activityLabel, budgetWarning, permission, onReply, onNewSession, onOpenMain, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; budgetWarning: boolean; permission?: PermissionRequest; onReply: (permission: PermissionRequest, choice: string) => void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
   const choices = permission?.choices ?? []
   const [view, setView] = useState<'overview' | 'chat' | 'activity' | 'settings'>('overview')
   const [draft, setDraft] = useState('')
@@ -1566,7 +1677,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
             <button className={`tab ${view === 'overview' ? 'on' : ''}`} aria-label="Home" title="Home" onClick={() => openView('overview')}><Home size={13} /></button>
             <button className={`tab ${view === 'chat' ? 'on' : ''}`} aria-label="Chat" title="Chat" onClick={() => openView('chat')}><MessageCircle size={13} /></button>
             <button className={`tab ${view === 'activity' ? 'on' : ''}`} aria-label="Activity" title="Activity" onClick={() => openView('activity')}><Activity size={13} /></button>
-            <button className="tab" aria-label="New session" title="New session" disabled={!canStart} onClick={() => { openView('chat'); onNewSession() }}><Plus size={14} /></button>
+            <button className="tab" aria-label="New session" title="New session" disabled={!canStart} onClick={(event) => { openView('chat'); onNewSession(event.currentTarget) }}><Plus size={14} /></button>
           </nav>
           <span className="island-drag" data-tauri-drag-region title="Drag companion" aria-hidden="true" />
           <div className="island-actions">
@@ -1602,13 +1713,13 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
               </div>
             </div>
             <div className="island-card pills-card">
-              {runtimes.length === 0 ? <p className="companion-empty">No coding agents discovered yet.</p> : pills.length === 0 ? <p className="companion-empty">No blobs yet.</p> : <div className="pills">{pills.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <button key={item.id} className={`pill ${item.id === agent?.id ? 'on' : ''}`} style={{ '--pill': agentColorHex(item.color) } as React.CSSProperties} onClick={() => onSelectAgent(item.id)}><BlobCanvas color={agentColorHex(item.color)} size={22} mini mood={offline ? 'offline' : 'idle'} label={item.name} /><span className="lbl">{item.name}</span></button> })}</div>}
+              {runtimes.length === 0 ? <p className="companion-empty">No coding agents discovered yet.</p> : pills.length === 0 ? <p className="companion-empty">No blobs yet.</p> : <div className="pills">{pills.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <button key={item.id} className={`pill ${item.id === agent?.id ? 'on' : ''}`} style={{ '--pill': agentColorHex(item.color) } as React.CSSProperties} onClick={() => onSelectAgent(item)}><BlobCanvas color={agentColorHex(item.color)} size={22} mini mood={offline ? 'offline' : 'idle'} label={item.name} /><span className="lbl">{item.name}</span></button> })}</div>}
             </div>
           </div> : view === 'chat' ? <div className="island-card chat-card companion-chat-view">
             <span className="card-bot small">{focusBlob(44)}</span>
             <div className="chat-body">
               <div className="chat-log" ref={chatLogRef} data-companion-no-drag="">
-                {!session && <p className="companion-empty companion-no-session">Open or create a session to chat here. <button type="button" disabled={!canStart} onClick={() => void onNewSession()}>New session</button></p>}
+                {!session && <p className="companion-empty companion-no-session">Open or create a session to chat here. <button type="button" disabled={!canStart} onClick={(event) => onNewSession(event.currentTarget)}>New session</button></p>}
                 {recentMessages.map((message, index) => <div key={String(message.id ?? index)} className={`chat-row ${message.role === 'user' ? 'user' : ''}`}>{message.role === 'user' ? <div className="bubble">{String(message.content ?? message.text ?? '')}</div> : <div className="reply">{plainText(String(message.content ?? message.text ?? '')) || 'Message content unavailable.'}</div>}</div>)}
                 {session && recentMessages.length === 0 && <p className="companion-empty">No messages in this conversation yet.</p>}
                 {sessionBusy && session?.state !== 'waiting_permission' && <div className="typing" aria-label={`${name} is working`}><i /><i /><i /></div>}

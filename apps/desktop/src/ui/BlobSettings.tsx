@@ -64,7 +64,7 @@ export function BlobSettings({ draft, runtimes, errors, execution, onDraftChange
       <label className="blob-field">Default project
         <input aria-label="Default project" aria-describedby="blob-project-help" value={draft.defaultProject ?? ''} onChange={(event) => onDraftChange({ ...draft, defaultProject: event.target.value })} />
       </label>
-      <p id="blob-project-help" className="blob-help">New sessions start in this folder when it exists. Leave blank to choose a folder each time.</p>
+      <p id="blob-project-help" className="blob-help">Shown first when you start a session. Leave blank to pick from recent folders.</p>
       <p className="blob-help">Custom arguments and environment are not available yet.</p>
       {onArchive && <button type="button" className="secondary-button" onClick={onArchive}>Archive blob</button>}
     </section>

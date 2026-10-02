@@ -2,7 +2,9 @@
 
 Local Windows desktop control plane for Claude Code, Codex and OpenCode. A React/Tauri desktop shell and a draggable companion share state from a separate Rust daemon. Provider authentication stays with each CLI.
 
-**Status: paused at the user's request, 1 October 2026.** All agents and identified Bloblex development processes were stopped. The UI and wider application remain unfinished; this is not a completed v1 or a signed release. Read [the stopped checkpoint](docs/STOPPED_CHECKPOINT.md) for what exists, what was borrowed from Coucou/Multica/Magpie, evidence and remaining work. Do not automatically resume.
+**Status: under active development (resumed 2 October 2026).** Not a completed v1 or a signed release. See [SESSION_HANDOFF.md](SESSION_HANDOFF.md), [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md) and [docs/DIRECTOR_LOG.md](docs/DIRECTOR_LOG.md) for the current plan and progress; [docs/STOPPED_CHECKPOINT.md](docs/STOPPED_CHECKPOINT.md) is the historical pre-resume snapshot.
+
+Bloblex is built in part on [Multica](https://github.com/multica-ai/multica) (Multica License): its provider-runtime and analytics logic is adapted here. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [docs/MULTICA_DERIVED.md](docs/MULTICA_DERIVED.md).
 
 ## Continue this project
 

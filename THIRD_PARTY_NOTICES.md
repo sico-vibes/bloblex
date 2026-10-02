@@ -34,6 +34,10 @@ The main window layout and its "Midnight" colour tokens (sidebar roster, slim he
 
 The character's proportions (capsule eyes, ring badge, spherical body, state tints) were measured from Novra's public Grok Bot case study images for personal use. No images or Rive files from that study are included.
 
-## Multica (clean-room behavioural reference)
+## Multica (adapted provider-runtime and analytics logic)
 
-Bloblex reimplements selected analytics behaviour clean-room. It includes no Multica code, text, assets, layout or other copied material. Multica is Apache-2.0 with additional conditions that forbid embedding it in distributed products and require Multica branding on derived UI; Bloblex uses it only as a behavioural reference and designs its UI independently.
+Copyright 2025-2026 Index Labs (Hong Kong) Limited. Multica is licensed under the Multica License (Apache License 2.0 plus additional conditions): https://github.com/multica-ai/multica
+
+Since 2 October 2026 Bloblex deliberately adapts hardened logic from Multica's provider runtime layer (`server/pkg/agent`) and its usage/analytics implementation, re-implemented in Rust/TypeScript. Bloblex is built in part on Multica. The adapted files carry a header naming Multica and the change made, and are listed in [docs/MULTICA_DERIVED.md](docs/MULTICA_DERIVED.md). No Multica logo, product name, copyright text or brand assets are used in Bloblex's UI.
+
+Licence conditions that apply to this use (summarised from the Multica LICENSE; read the original): Bloblex is for the owner's personal, non-commercial use; Multica's conditions forbid offering a hosted service to third parties and embedding the covered code in a commercially distributed product, and require retained notices, a statement that the product is built on Multica with a link, and unmodified Multica branding in any UI derived from its application code. If Bloblex is ever distributed, sold or hosted, the derived parts listed in docs/MULTICA_DERIVED.md need a commercial licence from Index Labs or a rewrite.

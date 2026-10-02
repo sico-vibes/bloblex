@@ -1,10 +1,10 @@
 # V1 coverage audit
 
-Authority: the supplied plan, especially sections 3.1, 31, 35 and 37. The user's bottom-center, freely draggable bill overlay replaces top-edge notch placement. Coucou interaction fidelity is required. The concept image supplies direction, not acceptance evidence. Computer Use testing is deferred until the final implementation stage.
+Authority: the supplied plan, especially sections 3.1, 31, 35 and 37. The user's bottom-center, freely draggable bill overlay replaces top-edge notch placement. island interaction fidelity is required. The concept image supplies direction, not acceptance evidence. Computer Use testing is deferred until the final implementation stage.
 
 This is an in-progress audit, not a release verdict. A requirement closes only when its proof covers the entire behavior. Agent reports are not independent verification.
 
-Current priority: UI behavior and polish. The user has rejected the running companion's stadium shell and simplified expressions; both Luna implementers are working on the UI. Backend development is temporarily deferred, with its open gates preserved. See `qa-ui-fidelity.md` for the new concrete UI checkpoint.
+Current priority: UI behavior and polish. The user has rejected the running companion's stadium shell and simplified expressions; both Luna implementers are working on the UI. Backend development is temporarily deferred, with its open gates preserved.
 
 ## Section 35 acceptance criteria
 
@@ -12,7 +12,7 @@ Current priority: UI behavior and polish. The user has rejected the running comp
 | --- | --- | --- |
 | One installer launches Windows app | Built installer, install/launch/uninstall on fresh Windows | Native debug app builds and launches; installer/clean install remain unverified |
 | Main and companion simultaneously | Native windows and enable/hide controls | Earlier native observation showed both; revised companion needs final native check |
-| Coucou procedural interactions | Pinned source mapping, motion/state tests, native input/visual check | Direct-source FSM/primitives and greeting port documented; latest independent UI checkpoint has 32 passing tests plus production build. Final later accessibility attribute is implementer-checked; revised native behavior unverified |
+| island procedural interactions | Pinned source mapping, motion/state tests, native input/visual check | Direct-source FSM/primitives and greeting port documented; latest independent UI checkpoint has 32 passing tests plus production build. Final later accessibility attribute is implementer-checked; revised native behavior unverified |
 | Discover all three installed CLIs | Native executable resolution and version/protocol/auth probes | Installed discovery and wrapper fixtures pass; custom profiles and compatibility details remain open |
 | CLI owns authentication | Source audit and real provider session using existing CLI login | No copied credentials found in reviewed paths; Codex basic turn verified; other provider paths incomplete |
 | Separate resumable conversations | All three provider lifecycle contract tests and real supported resume | Separate session architecture exists; live resume/contract coverage incomplete |
@@ -41,7 +41,7 @@ Current priority: UI behavior and polish. The user has rejected the running comp
 - Packaging must include the daemon, hook and third-party notices, with signing/updater configuration and cleanup behavior.
 - Final UI checks must cover accessibility, reduced motion, display scaling, monitor changes, long histories, token batching and responsive layouts. Unit/build passes do not prove these behaviors.
 
-Remote runtimes (phase 11) and an inference gateway are explicitly outside v1. The optional Magpie assessment does not alter the authorized plan.
+Remote runtimes (phase 11) and an inference gateway are explicitly outside v1. The optional gateway assessment does not alter the authorized plan.
 
 For the current work-package checklist and safe resume instructions, read [implementation-status.md](implementation-status.md) and [SESSION_HANDOFF.md](../SESSION_HANDOFF.md). The three authorized Luna lanes have delivered their present UI/source-check checkpoint; final native and broader backend acceptance remains open.
 

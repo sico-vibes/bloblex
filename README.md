@@ -2,15 +2,14 @@
 
 Local Windows desktop control plane for Claude Code, Codex and OpenCode. A React/Tauri desktop shell and a draggable companion share state from a separate Rust daemon. Provider authentication stays with each CLI.
 
-**Status: under active development (resumed 2 October 2026).** Not a completed v1 or a signed release. See [SESSION_HANDOFF.md](SESSION_HANDOFF.md), [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md) and [docs/DIRECTOR_LOG.md](docs/DIRECTOR_LOG.md) for the current plan and progress; [docs/STOPPED_CHECKPOINT.md](docs/STOPPED_CHECKPOINT.md) is the historical pre-resume snapshot.
+**Status: under active development (resumed 2 October 2026).** Not a completed v1 or a signed release. See [SESSION_HANDOFF.md](SESSION_HANDOFF.md), [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md) and [docs/DIRECTOR_LOG.md](docs/DIRECTOR_LOG.md) for the current plan and progress.
 
-Bloblex is built in part on [Multica](https://github.com/multica-ai/multica) (Multica License): its provider-runtime and analytics logic is adapted here. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [docs/MULTICA_DERIVED.md](docs/MULTICA_DERIVED.md).
 
 ## Continue this project
 
-Start with [STOPPED_CHECKPOINT.md](docs/STOPPED_CHECKPOINT.md), then [SESSION_HANDOFF.md](SESSION_HANDOFF.md). They record the explicit stop, current UI, borrowed-source boundaries, evidence and unfinished work. [implementation-status.md](docs/implementation-status.md) preserves the checklist against the full plan. The commands below are reference information for a future user-authorized run; they were not executed after the stop.
+Start with [SESSION_HANDOFF.md](SESSION_HANDOFF.md). It records the current UI, evidence and unfinished work. [implementation-status.md](docs/implementation-status.md) preserves the checklist against the full plan. The commands below are reference information for a future user-authorized run; they were not executed after the stop.
 
-The authoritative scope is [Bloblex_E2E_Windows_Desktop_Plan.md](Bloblex_E2E_Windows_Desktop_Plan.md). [Bloblex_UI_Concept.png](Bloblex_UI_Concept.png) supplies main-window design direction. The user requires Coucou-derived behavior in an original Bloblex character and a rounded rectangular floating bill, bottom-center by default and freely draggable.
+The authoritative plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). [Bloblex_UI_Concept.png](Bloblex_UI_Concept.png) supplies main-window design direction. The user requires island behavior in an original Bloblex character and a rounded rectangular floating bill, bottom-center by default and freely draggable.
 
 ## Local development
 
@@ -66,10 +65,9 @@ This is the configured local NSIS/MSI build path, including daemon and hook side
 
 ## Evidence and references
 
-- [Independent QA report](docs/qa-report.md) and [current QA agent log](docs/qa-ui-execution.md)
-- [Full acceptance scenarios](docs/qa-acceptance.md), [findings register](docs/qa-findings.md), [v1 coverage audit](docs/v1-coverage.md)
-- [Coucou UI fidelity criteria](docs/qa-ui-fidelity.md) and [motion/source mapping](docs/companion-motion.md)
-- [Preserved user reference screenshots](docs/ui-reference-images.md), including the rejected earlier Bloblex pill
+- Independent QA report and current QA agent log
+- Full acceptance scenarios, findings register, [v1 coverage audit](docs/v1-coverage.md)
+- island UI fidelity criteria and motion/source mapping
+- Preserved user reference screenshots, including the rejected earlier Bloblex pill
 - [IPC contract](docs/ipc-contract.md), [product](PRODUCT.md), [design](DESIGN.md)
-- [Third-party notices](THIRD_PARTY_NOTICES.md)
-- [Optional Magpie assessment](docs/magpie-assessment.md), which has not expanded the authorized v1 scope
+- Optional gateway assessment, which has not expanded the authorized v1 scope

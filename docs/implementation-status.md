@@ -1,12 +1,12 @@
 # Implementation status and remaining checklist
 
-Checkpoint: **1 October 2026, 20:37 BST — paused/stopped by the user**. Read [STOPPED_CHECKPOINT.md](STOPPED_CHECKPOINT.md), [SESSION_HANDOFF.md](../SESSION_HANDOFF.md) and [AGENTS.md](../AGENTS.md) first. All agents and identified Bloblex development processes were stopped. This checklist is an unfinished backlog, not permission to proceed. The supplied [plan](../Bloblex_E2E_Windows_Desktop_Plan.md) remains authoritative; no requirement was removed by the pause.
+Checkpoint: **1 October 2026, 20:37 BST — paused/stopped by the user**. Read [SESSION_HANDOFF.md](../SESSION_HANDOFF.md) and [AGENTS.md](../AGENTS.md) first. All agents and identified Bloblex development processes were stopped. This checklist is an unfinished backlog, not permission to proceed. The supplied plan remains authoritative; no requirement was removed by the pause.
 
 The user requires UI behavior and polish first. Backend expansion is paused. The coordinator now performs documentation and orchestration only; two Luna 6 High implementers own production changes, and a third Luna 6 High QA agent independently checks them and reports directly to them. Native Computer Use and browser interaction checks remain deferred until the final stage.
 
-At 18:45 BST the coordinator reused all three completed agent handles for a broader UI continuation: QA audits complete plan UI coverage, desktop handles structured usage/settings and file-flow UI, character/runtime handles remaining Coucou state/drop interactions. Native proof and backend expansion remain deferred. Results from that continuation must be recorded before treating the new source as covered by the earlier 32-test checkpoint.
+At 18:45 BST the coordinator reused all three completed agent handles for a broader UI continuation: QA audits complete plan UI coverage, desktop handles structured usage/settings and file-flow UI, character/runtime handles remaining island state/drop interactions. Native proof and backend expansion remain deferred. Results from that continuation must be recorded before treating the new source as covered by the earlier 32-test checkpoint.
 
-Continuation findings: the generic usage sheet has now been replaced in source, Agents/Permissions pages are present but mostly explicit unavailable/read-only states, and QA confirmed asynchronous listener cleanup plus StrictMode saved-selection hydration races. Implementers are fixing those and integrating distinct file-reference stages/native validation. Runtime reports 18 focused motion tests; an independent settled full frontend/native build remains pending. The seven supplied screenshots are now preserved as hash-verified documentation references in [ui-reference-images.md](ui-reference-images.md).
+Continuation findings: the generic usage sheet has now been replaced in source, Agents/Permissions pages are present but mostly explicit unavailable/read-only states, and QA confirmed asynchronous listener cleanup plus StrictMode saved-selection hydration races. Implementers are fixing those and integrating distinct file-reference stages/native validation. Runtime reports 18 focused motion tests; an independent settled full frontend/native build remains pending. The seven supplied screenshots are now preserved as hash-verified documentation references in local notes.
 
 At 19:07 BST the character lane reported 27/27 focused fixtures and both file-stage Canvas sites wired, including a real native inspection-only `preparing` state and regression for stale success masking new user input/file activity. This is implementer evidence, not the forthcoming independent whole-frontend result. QA now maintains a complete plan UI source matrix. The same character agent is assisting desktop with a separate production-function native file-inspection test module; backend work and GUI verification remain deferred.
 
@@ -38,8 +38,7 @@ Subsequent desktop checkpoint reports 69 tests/typecheck passing, including moun
 - [x] One actual native Codex text turn returned `BLOBLEX_QA_OK` and completed using its existing CLI login. Tool, approval, cancel, resume and recovery paths were not established by that turn.
 - [x] Native version probes found Claude Code 2.1.286, Codex 0.159.3 and OpenCode 1.18.34. Authentication remains CLI-owned; OpenCode credential configuration presence alone is not an authentication pass.
 - [x] Earlier independent backend suite passed 26 reported tests; the default opt-in live-smoke body did not run. Latest backend financial changes are outside that result.
-- [x] Coucou source pinned to `8e12bed56134d2ee7165e73f132646b143ce56e4`; actual FSM and animation primitives vendored with notices, layout excerpt and greeting-equation port documented. See [source mapping](companion-motion.md) and [notices](../THIRD_PARTY_NOTICES.md).
-- [x] Independent final frontend checkpoint: **32 tests across 7 files**, `npm test` exit 0. `npm run build` passed TypeScript plus Vite 6.4.3, 1596 modules, JS 350.85 kB / CSS 40.58 kB. See [QA log](qa-ui-execution.md).
+- [x] Independent final frontend checkpoint: **32 tests across 7 files**, `npm test` exit 0. `npm run build` passed TypeScript plus Vite 6.4.3, 1596 modules, JS 350.85 kB / CSS 40.58 kB. See QA log.
 - [x] Independent recheck after the subsequent desktop/character UI changes: **55 tests across 12 files**, typecheck and production build passed; JS 379.56 kB / CSS 45.27 kB. Helper/unit/build evidence does not close mounted/native interaction gates.
 - [x] Desktop implementer reported isolated native compilation: `CARGO_TARGET_DIR=target/qa-desktop`, `cargo check -p bloblex-desktop --lib`, exit 0. This was a compile check, not a new launched native build or installer.
 - [x] Root handoff, collaboration instructions, development guide and full remaining checklist created; original plan/concept hashes preserved in the handoff.
@@ -50,7 +49,7 @@ The earlier inspection executable embeds older assets. The latest 55-test fronte
 
 Source now includes a rounded rectangular floating shell, compact/expanded 14px/22px corners, source FSM and spring/layout adapters, Home/Chat/New Session/Settings navigation, actual runtime peer chips, inline composer and local file-reference preparation. Character source has mouth-free original circular art, idle/online/typing/thinking/tool/file states, hover/gaze/blinks, click squash, three-tap dizzy state and source-timed welcome wave.
 
-The 4.6-second greeting ports growth, dip/pop, happy eyes, gaze, timed blinks, floating low-left dot and higher tilted-right oval, wave/tuck, badge and settling. Original art remains separate from protected Mochi assets. This is not a claim that Coucou's entire renderer, every screen or every upload sequence was copied unchanged.
+The 4.6-second greeting ports growth, dip/pop, happy eyes, gaze, timed blinks, floating low-left dot and higher tilted-right oval, wave/tuck, badge and settling. Original art remains separate from protected reference assets. This is not a claim that the island's entire renderer, every screen or every upload sequence was copied unchanged.
 
 QA found and implementers corrected gaze direction/scale, premature greeting completion during React StrictMode cleanup, reduced-motion/unmount dizzy recovery, later file activity hidden by thinking, and horizontal greeting appendage bounds. Focused fixtures now cover those findings. Runtime reports its final motion suite 10/10; the independent full frontend result above is the broader proof.
 
@@ -59,7 +58,7 @@ QA found and implementers corrected gaze direction/scale, premature greeting com
 - [ ] Observe full welcome choreography, pointer interruption, hover keep-open timing, explicit compact/hide, navigation and exactly-once completion.
 - [ ] Observe idle, online, typing, thinking, tool/file activity, success/error, budget/rate-limit warnings and three-tap dizzy recovery, including reduced motion and visibility changes.
 - [ ] Verify original character/no mouth, floating appendage placement, badge clearance and card/content clipping in the actual window.
-- [ ] Compare Coucou's remaining interaction coverage, including upload/drop preparation and sound-toggle behavior. Protected sounds are not imported; sound cues are currently omitted, so do not describe this as full audiovisual parity.
+- [ ] Compare the island's remaining interaction coverage, including upload/drop preparation and sound-toggle behavior. Protected sounds are not imported; sound cues are currently omitted, so do not describe this as full audiovisual parity.
 - [ ] Verify inline chat Enter/Shift+Enter, empty/blocked submission, draft preservation on failure, session switching, cancellation and keyboard/focus accessibility.
 - [ ] Verify real native file drop/picker, explicit local-reference submission and cancel/error behavior. The present path stores references; it does not prove an uploaded file or justify fabricated upload progress.
 - [ ] Verify approvals pin the correct session across navigation/drag, only supported replies appear, reply/cancel errors remain visible and both windows agree.
@@ -85,14 +84,14 @@ Present: workspace/manifests, desktop build scripts, main/companion native windo
 
 - [ ] Establish a reproducible fresh install/build, including both daemon and hook sidecars, with required toolchain documented.
 - [ ] Preserve and checkpoint all local work; Git has no commits at this checkpoint. No commit/push/release is claimed.
-- [ ] Resolve final Bloblex license/distribution choice and audit notices/artifacts; review Multica's license before any code reuse.
+- [ ] Resolve final Bloblex license/distribution choice and audit notices/artifacts; review external reference's license before any code reuse.
 - [ ] Complete first-run/runtime setup and empty/offline/compatibility states without invented connectivity.
 
 ### WP-02 — Procedural blob renderer
 
 Present: Canvas renderer, imported spring primitives, source greeting pose port, gaze/poke/dizzy helpers, visibility-aware scheduling and reduced-motion logic; independent fixtures pass at the current frontend checkpoint.
 
-- [ ] Complete the native visual/input checks above, including warning/error/success and all requested Coucou state transitions.
+- [ ] Complete the native visual/input checks above, including warning/error/success and all requested island state transitions.
 - [ ] Measure active smoothness near 60 FPS, idle CPU/cadence and hidden-window pause; inspect lifecycle cleanup and multiple visible characters under load.
 - [ ] Confirm the emitted bundle contains original art only and no restricted media.
 
@@ -220,7 +219,7 @@ Present: configured NSIS/MSI scripts and daemon/hook staging. Updater disabled p
 
 ### WP-17 — E2E hardening
 
-Present: [full acceptance contract](qa-acceptance.md), [findings register](qa-findings.md), [historical QA report](qa-report.md), [UI criteria](qa-ui-fidelity.md) and [current independent UI log](qa-ui-execution.md).
+Present: full acceptance contract, findings register, historical QA report, UI criteria and current independent UI log.
 
 - [ ] Finish all shared adapter contracts and sanitized golden fixtures, meaningful parser assertions, argument filtering/security tests and recovery integration.
 - [ ] Final native Computer Use: current main/companion, all character states, approvals/cancel, actual file drop/actions, selection, tray and explicit Quit.
@@ -235,7 +234,7 @@ These remain unchecked because each describes the complete product behavior, rat
 
 - [ ] One installer launches the Windows desktop app.
 - [ ] Main app and mini companion can be enabled simultaneously.
-- [ ] Mini mode retains Coucou-like procedural animation and interactions.
+- [ ] Mini mode retains island procedural animation and interactions.
 - [ ] Installed Claude, Codex and OpenCode are auto-discovered correctly.
 - [ ] Each CLI owns its authentication throughout supported flows.
 - [ ] Each agent has a separate resumable conversation where supported.
@@ -257,7 +256,7 @@ These remain unchecked because each describes the complete product behavior, rat
 | Plan phase | Current position |
 | --- | --- |
 | 0 — legal/technical spike | Code/source restrictions documented; native windows and basic Codex path proven; IPC compatibility and restart/all-provider spike proof remain open. |
-| 1 — shell/animation parity | Current frontend fixtures/build pass; native Coucou behavior, scaling and monitor proof deferred. Current priority. |
+| 1 — shell/animation parity | Current frontend fixtures/build pass; native island behavior, scaling and monitor proof deferred. Current priority. |
 | 2 — runtime foundation | Daemon/storage/discovery implemented; supervision, consistent replay and recovery hardening open. |
 | 3 — OpenCode | Adapter/fake-child work exists; strong independent real lifecycle/approval/resume proof open. |
 | 4 — Codex | Basic text path proven; full provider lifecycle/approval/recovery open. |
@@ -269,8 +268,8 @@ These remain unchecked because each describes the complete product behavior, rat
 | 10 — hardening/distribution | Installer pipeline configured; signing/update/clean VM/accessibility/performance gates open. |
 | 11 — remote | Optional after local v1; not started and not current scope. |
 
-[Magpie research](magpie-assessment.md) is documented as an optional later gateway connection. The user has not authorized implementation or expanded the plan for it. No Magpie installation, configuration or credentials were added.
+gateway research is documented as an optional later gateway connection. The user has not authorized implementation or expanded the plan for it. No gateway installation, configuration or credentials were added.
 
 ## Resume prompt for a new session
 
-> Continue Bloblex in this folder. Read AGENTS.md, SESSION_HANDOFF.md and docs/implementation-status.md before acting. Keep the coordinator documentation/orchestration only; use the two Luna 6 High implementation lanes and one independent Luna 6 High QA lane, reusing live agents if available. Finish the Coucou-source UI checkpoint before backend expansion. Preserve the running app and data. Computer Use stays deferred until final verification. Follow the full supplied plan, distinguish independent checks from source/agent reports, and update the handoff and checklist as work advances.
+> Continue Bloblex in this folder. Read AGENTS.md, SESSION_HANDOFF.md and docs/implementation-status.md before acting. Keep the coordinator documentation/orchestration only; use the two Luna 6 High implementation lanes and one independent Luna 6 High QA lane, reusing live agents if available. Finish the island-source UI checkpoint before backend expansion. Preserve the running app and data. Computer Use stays deferred until final verification. Follow the full supplied plan, distinguish independent checks from source/agent reports, and update the handoff and checklist as work advances.

@@ -1,6 +1,6 @@
 # Phase 5 contract: cost and usage analytics (daemon RPC + UI)
 
-Shared contract so the daemon lane and the UI lane can build in parallel. Clean-room behavioural design (see THIRD_PARTY_NOTICES.md Multica note): no third-party layout, text or assets. Builds on Phase 2a (`agent_id` on sessions and usage events) and Phase 2b-1 (migration 3 columns: `usage_events.exec_snapshot_id`, `provider_update_id`, `usage_status`, `context_used`, `context_size`, `sessions.cumulative_cost_micros`). Where Phase 2b usage capture is not implemented yet, rows simply carry `usage_status='unreported'` and null buckets; analytics must handle that honestly.
+Shared contract so the daemon lane and the UI lane can build in parallel. Original design: no third-party layout, text or assets. Builds on Phase 2a (`agent_id` on sessions and usage events) and Phase 2b-1 (migration 3 columns: `usage_events.exec_snapshot_id`, `provider_update_id`, `usage_status`, `context_used`, `context_size`, `sessions.cumulative_cost_micros`). Where Phase 2b usage capture is not implemented yet, rows simply carry `usage_status='unreported'` and null buckets; analytics must handle that honestly.
 
 ## Definitions
 

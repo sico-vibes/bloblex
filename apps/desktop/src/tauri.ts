@@ -93,7 +93,7 @@ export async function refreshTrayMenu(): Promise<void> {
   if (inDesktop) await invoke('refresh_tray_menu')
 }
 
-export async function setCompanionMode(mode: 'hidden' | 'petit' | 'home' | 'home-chat' | 'coucou', animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches): Promise<void> {
+export async function setCompanionMode(mode: 'hidden' | 'petit' | 'home' | 'home-chat' | 'welcome', animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches): Promise<void> {
   if (inDesktop) await invoke('set_companion_mode', { mode, animate })
 }
 

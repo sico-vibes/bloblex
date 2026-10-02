@@ -1,6 +1,6 @@
-/* Main window shell. Layout and tokens follow OpenMausBot's "Midnight" skin
-   (sidebar roster, slim header with a model pill, centred chat column, pill
-   composer); Bloblex's blobs, inspector and approval cards sit on top. */
+/* Main window shell: the "Midnight" skin (sidebar roster, slim header with a
+   model pill, centred chat column, pill composer); Bloblex's blobs, inspector
+   and approval cards sit on top. */
 
 :root {
   --app: #070707;

@@ -234,10 +234,10 @@ describe('companion drag and usage labels', () => {
   it('marks every non-interactive companion target in welcome, compact, home, chat, activity, settings, and approval', async () => {
     const view = startApp('?companion=1')
     await view.settle()
-    expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('coucou')
+    expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('welcome')
     const welcomeFace = view.host.querySelector('.companion-welcome canvas.blob-canvas')
     expect(resolvesToDrag(welcomeFace), 'welcome face').toBe(true)
-    assertIsland(view.host, 'coucou')
+    assertIsland(view.host, 'welcome')
 
     await press(view.host, 'Complete greeting fixture')
     await act(async () => { await vi.advanceTimersByTimeAsync(700); await settleMicrotasks() })

@@ -50,7 +50,7 @@ const STATE_FOR_MOOD: Record<BlobMood, EngineState> = {
 
 export function engineStateFor(mood: BlobMood): EngineState { return STATE_FOR_MOOD[mood] ?? 'idle' }
 
-/** Canvas size in CSS pixels; the greeting uses Coucou's 640×150 stage ratio. */
+/** Canvas size in CSS pixels; the greeting uses the 640×150 stage ratio. */
 export function blobCanvasSize(size: number, greeting: boolean) {
   return greeting
     ? { width: size * GREETING_REFERENCE.width / 100, height: size * GREETING_REFERENCE.height / 100 }
@@ -177,7 +177,7 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
     }
     scheduleRef.current = schedule
 
-    // Coucou's gaze: tanh of the cursor's distance from the character.
+    // Gaze: tanh of the cursor's distance from the character.
     const onWindowPointerMove = (event: PointerEvent) => {
       if (greeting || engine.isMini) return
       const rect = element.getBoundingClientRect()

@@ -203,7 +203,7 @@ export async function companionMonitorOptions() { return [] as string[] }
 export async function currentCompanionMonitor() { return null }
 export async function setCompanionMonitor() {}
 export async function refreshTrayMenu() {}
-const companionSizes: Record<string, [number, number]> = { petit: [344, 62], hidden: [344, 62], coucou: [640, 160], home: [640, 160], 'home-chat': [640, 264] }
+const companionSizes: Record<string, [number, number]> = { petit: [344, 62], hidden: [344, 62], welcome: [640, 160], home: [640, 160], 'home-chat': [640, 264] }
 export async function setCompanionMode(mode: string) {
   const [width, height] = companionSizes[mode] ?? [640, 160]
   let style = document.getElementById('fixture-companion-size')

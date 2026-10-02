@@ -39,7 +39,7 @@ describe('Bloblex character engine', () => {
     expect(y - ring).toBeGreaterThan(-size / 2)
   })
 
-  it('follows the cursor by turning the eyes toward it, like Coucou', () => {
+  it('follows the cursor by turning the eyes toward it', () => {
     const engine = new BlobEngine()
     engine.lookX = 0.8
     engine.lookY = 0.6
@@ -97,7 +97,7 @@ describe('Bloblex character engine', () => {
     expect(engine.busy).toBe(false)
   })
 
-  it('sizes the greeting stage to Coucou’s 640×150 reference', () => {
+  it('sizes the greeting stage to the 640×150 reference', () => {
     expect(blobCanvasSize(100, true)).toEqual({ width: 640, height: 150 })
     expect(blobCanvasSize(40, false)).toEqual({ width: 40, height: 40 })
   })

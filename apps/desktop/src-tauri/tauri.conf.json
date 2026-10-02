@@ -40,7 +40,7 @@
       "../../../assets/icon/bloblex.ico",
       "../../../assets/icon/bloblex-master.png"
     ],
-    "resources": ["../../../THIRD_PARTY_NOTICES.md"],
+    "resources": [],
     "externalBin": ["binaries/bloblexd", "binaries/bloblex-hook"],
     "targets": ["nsis", "msi"],
     "windows": {

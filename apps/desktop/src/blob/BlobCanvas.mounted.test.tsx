@@ -238,7 +238,7 @@ describe('BlobCanvas mounted lifecycle', () => {
     view.rerender(<BlobCanvas color="#e67f72" label="Agent" mood="success" fileStage="error" />)
     expect(canvas.getAttribute('aria-label')).toBe('Agent file_error')
     // The badge returns once the mailbox morph from the drop stages has
-    // relaxed and the previous badge has shrunk away (Coucou's 100 ms swap).
+    // relaxed and the previous badge has shrunk away (100 ms swap).
     flushFrame(clock + 16)
     flushFrame(clock + 700)
     flushFrame(clock + 60)

@@ -30,8 +30,8 @@ At desktop size, use a narrow agent rail, flexible conversation pane, and contex
 - Conversation uses clear user/agent alignment and compact cards only for tools, changed files, commands, and permissions.
 - Composer stays anchored to the conversation bottom.
 - Usage is a compact summary that opens a focused sheet for detail.
-- Companion follows the Coucou home/chat/navigation structure: selected session/activity glance, real local runtime peers, an inline conversation, file-drop preparation and permission controls. Its compact form stays slim; its separate welcome view centers the waving character.
+- Companion follows the island home/chat/navigation structure: selected session/activity glance, real local runtime peers, an inline conversation, file-drop preparation and permission controls. Its compact form stays slim; its separate welcome view centers the waving character.
 
 ## Motion
 
-Use Coucou's source-informed spring growth and 340ms collapse. The separate launch greeting follows its 4.6-second growth, dip/pop, hand wave, tuck and settling choreography. Procedural blob motion may spring and deform while communicating state; keep its original base form circular and expressions mouth-free. Distinguish idle, typing, thinking, activity, approval, completion, error, rate limit and sleeping. Honor reduced motion, pause when hidden, and reduce idle work. The bill position persists across launches and is clamped to a usable area after display changes.
+Use the island's source-informed spring growth and 340ms collapse. The separate launch greeting follows its 4.6-second growth, dip/pop, hand wave, tuck and settling choreography. Procedural blob motion may spring and deform while communicating state; keep its original base form circular and expressions mouth-free. Distinguish idle, typing, thinking, activity, approval, completion, error, rate limit and sleeping. Honor reduced motion, pause when hidden, and reduce idle work. The bill position persists across launches and is clamped to a usable area after display changes.

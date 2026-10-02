@@ -5,3 +5,6 @@ apps/desktop/src-tauri/binaries/bloblexd-*.exe
 target/
 *.log
 *.tsbuildinfo
+
+# Local-only references and notes (never committed)
+/.local/

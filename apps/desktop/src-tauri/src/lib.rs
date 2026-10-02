@@ -772,7 +772,7 @@ fn set_companion_mode(
         .get_webview_window("companion")
         .ok_or_else(|| "The companion window is unavailable.".to_string())?;
     let (desired_width, desired_height) = match mode.as_str() {
-        "coucou" | "home" => (640.0, 160.0),
+        "welcome" | "home" => (640.0, 160.0),
         "home-chat" => (640.0, 264.0),
         "petit" | "hidden" => (344.0, 62.0),
         _ => return Err("Unknown companion presentation state.".to_string()),
@@ -817,8 +817,8 @@ fn set_companion_mode(
         });
         return Ok(());
     }
-    let expand = mode == "home" || mode == "home-chat" || mode == "coucou";
-    let grow_duration = if mode == "coucou" { 0.5 } else { 1.2 };
+    let expand = mode == "home" || mode == "home-chat" || mode == "welcome";
+    let grow_duration = if mode == "welcome" { 0.5 } else { 1.2 };
     thread::spawn(move || {
         let began = std::time::Instant::now();
         let mut last_width = initial.width as i32;

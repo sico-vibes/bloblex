@@ -1,17 +1,11 @@
-// Adapted from Coucou windows/src/mochi/engine.ts at commit
-// 8e12bed56134d2ee7165e73f132646b143ce56e4 (https://github.com/Louis-CFM/coucou).
-// Copyright (c) 2026 Louis Raillé. MIT licensed; see THIRD_PARTY_NOTICES.md.
-//
-// Kept from the source: the tween/lock system, state table semantics, eye
-// shapes, blink cadence, squash/slap, roll, badge swap, particles, mailbox
-// morph and the yaw/pitch projection of the eyes onto the body.
-// Bloblex changes: a spherical body tinted with the agent colour instead of
-// the Mochi squircle, tall capsule eyes, a ring badge, Bloblex-specific states
-// (online, listening, offline, budget, file stages), scheduled actions run
-// inside update() instead of setTimeout, and a reduced-motion mode. No Coucou
-// artwork, name or sounds are included.
+// Bloblex character engine: a spherical body tinted with the agent colour,
+// tall capsule eyes, a ring badge and a state table (idle, online, listening,
+// typing, tool, file stages, offline, budget). Tween/lock system, blink cadence,
+// squash/slap, roll, badge swap, particles, mailbox morph and the yaw/pitch
+// projection of the eyes onto the body. Scheduled actions run inside update()
+// instead of setTimeout, and a reduced-motion mode is supported.
 
-import { Ease, lerp, type EaseFn } from './coucou/core/anim'
+import { Ease, lerp, type EaseFn } from './engine/core/anim'
 
 export type RGB = readonly [number, number, number]
 
@@ -58,7 +52,7 @@ interface Particle {
   age: number; life: number; rot: number; size: number
 }
 
-// Capsule eyes measured from the Grok Bot reference: 0.24R × 0.56R, ±0.31R
+// Capsule eyes measured: 0.24R × 0.56R, ±0.31R
 // apart, centred 0.13R above the middle of the sphere.
 const EYE_W = 0.24
 const EYE_H = 0.56

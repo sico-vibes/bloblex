@@ -21,8 +21,8 @@ Calm, capable, characterful. The voice is concise and honest about unknown or un
 - Three embedded terminal windows as the primary interface.
 - Dashboard overload, permanent charts, and nested navigation trees.
 - Fabricated agent conversations, authentication, pricing, or successful actions.
-- Provider logos or copied Coucou/Mochi assets.
-- A top-edge notch companion. The Bloblex companion is a draggable rounded rectangular bill, bottom-center by default, with Coucou-informed behavior and corner geometry.
+- Provider logos or copied reference assets.
+- A top-edge notch companion. The Bloblex companion is a draggable rounded rectangular bill, bottom-center by default, with island behavior and corner geometry.
 - A generic status pill or mouth-based character expressions. Preserve the welcome wave, stateful home/chat views, and mouth-free expressions requested in the reference feedback.
 
 ## Design Principles

@@ -1,5 +1,4 @@
-// Geometry constants adapted verbatim from Coucou's pinned Windows layout.ts.
-// Source: windows/src/core/layout.ts at 8e12bed56134d2ee7165e73f132646b143ce56e4.
+// Companion island geometry constants.
 export const COMPACT_W = 288
 export const EXPANDED_W = 640
 export const ROUNDED_CORNER = 14

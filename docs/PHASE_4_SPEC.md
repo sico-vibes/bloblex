@@ -2,7 +2,7 @@
 
 This is the implementation contract for Phase 4 of [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Phase 4 adds an expandable project and session tree under each blob row in the sidebar. It depends on Phase 2a and on the Phase 3 roster. It does not depend on Phase 2b. Line citations are the committed tree this spec was written against. Re-open a cited line before treating it as current if a later edit moves it.
 
-Do not edit Rust. Do not add a projects table, a session-list RPC, or an expanded-state RPC. Projects are groups derived from `snapshot.sessions`. Expanded state is `localStorage`. Multica and Claude Desktop are behavioural references only: folder-then-session grouping is the behaviour; the paint stays Bloblex Midnight ([THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) lines 37–39, [E2E_PLAN_V2.md](E2E_PLAN_V2.md) lines 13 and 194). Copy no third-party layout, label set, icon, or asset.
+Do not edit Rust. Do not add a projects table, a session-list RPC, or an expanded-state RPC. Projects are groups derived from `snapshot.sessions`. Expanded state is `localStorage`. Claude Desktop is a behavioural reference only: folder-then-session grouping is the behaviour; the paint stays Bloblex Midnight ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) lines 13 and 194). Copy no third-party layout, label set, icon, or asset.
 
 ## 1. Scope and non-scope
 
@@ -553,5 +553,5 @@ Open questions for the Director: none that block Phase 4. The choices above are 
 - Assigning a legacy session to a blob, or showing archived agents' sessions under a living blob.
 - A virtualisation dependency, Testing Library, or any new npm package.
 - Per-blob remembered sessions beyond the single `selectedSessionId`.
-- A "minutes ago" clock, a third tree level, and copied Claude Desktop or Multica layout, copy, or assets.
+- A "minutes ago" clock, a third tree level, and copied Claude Desktop or external reference layout, copy, or assets.
 - The live inspection database.

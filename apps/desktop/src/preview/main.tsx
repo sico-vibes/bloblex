@@ -9,7 +9,7 @@ import { AGENT_SWATCHES, agentColorHex, swatchLabel } from '../ui/agentColor'
 
 const moods: BlobMood[] = ['idle', 'online', 'listening', 'thinking', 'working', 'tool_activity', 'permission', 'success', 'error', 'rate_limited', 'budget_warning', 'sleeping', 'offline', 'file_drop', 'file_preparing', 'file_ready', 'file_sending', 'file_error']
 const palette = [
-  { name: 'Mochi white', color: '#e6e9ee' },
+  { name: 'Soft white', color: '#e6e9ee' },
   ...AGENT_SWATCHES.map((swatch) => ({ name: swatchLabel(swatch.key), color: agentColorHex(swatch.key) })),
 ]
 

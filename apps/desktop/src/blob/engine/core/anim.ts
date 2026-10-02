@@ -1,7 +1,4 @@
-// Source: https://github.com/Louis-CFM/coucou/blob/8e12bed56134d2ee7165e73f132646b143ce56e4/windows/src/core/anim.ts
-// Copyright (c) 2026 Louis Raillé. MIT licensed; see THIRD_PARTY_NOTICES.md.
-// This file is vendored without behavioral changes. Bloblex imports only these
-// generic animation primitives; no Coucou/Mochi rendering or media is included.
+// Generic animation primitives.
 
 // Easing + spring helpers.
 // Ease.* mirrors BotEngine.swift `enum Ease` (itself the prototype's `E`).

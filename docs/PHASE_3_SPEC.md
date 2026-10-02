@@ -2,7 +2,7 @@
 
 This is the implementation contract for Phase 3 of [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Phase 3 replaces the runtime-per-row sidebar with one row per blob, and adds the blob editor. It depends only on Phase 2a, as specified in [PHASE_2A_SPEC.md](PHASE_2A_SPEC.md). Execution fields may be displayed. They must not be described as working.
 
-Line citations are the source this spec was written against. Phase 2a may land beside this document; where this spec names a type, RPC, or event, implement that shape from PHASE_2A_SPEC.md rather than from an older TypeScript file. Do not edit Rust. Do not copy another product's layout, labels, or assets. Multica is a clean-room behavioural reference only ([THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) lines 37–39, [E2E_PLAN_V2.md](E2E_PLAN_V2.md) line 13). The shell to extend is the one already in the repo: OpenMausBot / Midnight chat chrome in [apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) lines 1–4, with Bloblex's own circular faces.
+Line citations are the source this spec was written against. Phase 2a may land beside this document; where this spec names a type, RPC, or event, implement that shape from PHASE_2A_SPEC.md rather than from an older TypeScript file. Do not edit Rust. Do not copy another product's layout, labels, or assets ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) line 13). The shell to extend is the one already in the repo: Midnight chat chrome in [apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) lines 1–4, with Bloblex's own circular faces.
 
 ## 1. Scope and non-scope
 
@@ -602,7 +602,7 @@ Open questions for the Director: none that block Phase 3. The choices in this sp
 - `agent.reorder` UI, `agent.restore`, and any edit of an archived row.
 - Changing `providerColor`, `hexToRGB`, the engine mood palette, or the tray icon.
 - Rust, migrations, and the live inspection database.
-- Multica layout, copy, or assets.
+- external reference layout, copy, or assets.
 - New npm dependencies, including a chart library or Testing Library.
 - A Tauri command for the selected agent.
 

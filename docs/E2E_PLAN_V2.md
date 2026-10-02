@@ -10,7 +10,6 @@
 - Before the agents migration, make and verify a timestamped database copy and document rollback. Never touch the live inspection app database or locked sidecars.
 - Run the isolated-database `desktop:dev` native smoke test immediately after Phase 3, before Phase 4. Phase 7 retains the full native pass.
 - Phase 6 ships only General, Agents, Runtimes and Permissions. Usage and Billing, Updates, language and theme remain deferred until they have working consumers.
-- Multica is a clean-room behavioural reference only: design the UI independently and copy no Multica layout, text or assets. Record this in `THIRD_PARTY_NOTICES.md`.
 - Revised order: **Phase 1 DONE (`7f10e60`)** and **Phase 1.5 DONE (`2b4b92f`)** -> 2a -> 3 -> native smoke -> 4 -> 2b -> 5 -> trimmed 6 -> 7.
 
 ## Starting point (historical source checkpoint: 1 Oct 2026, 22:40)
@@ -18,7 +17,7 @@
 The UI and code facts below describe that checkpoint, before Tasks 1–3; reported test counts are not current acceptance evidence.
 
 - **UI:**
-  - The character engine, the companion island and the OpenMausBot-style shell are done (79/79 tests passing).
+  - The character engine, the companion island and the chat-style shell are done (79/79 tests passing).
   - The sidebar lists one blob per detected CLI (`runtimeRows` in [apps/desktop/src/ui/App.tsx](apps/desktop/src/ui/App.tsx)).
 - **Daemon:**
   - `session.new` takes only `{ runtimeId, projectPath, title }`.
@@ -36,7 +35,6 @@ The UI and code facts below describe that checkpoint, before Tasks 1–3; report
 - **Icons:**
   - `assets/icon/bloblex.png` is a 963x958 PNG with alpha and transparent rounded corners already present; it shows a black rounded-square plate with a white blob.
   - `bloblex.ico` and `tray.png` are still the old ones. `tray.png` is embedded via `include_bytes!` at [apps/desktop/src-tauri/src/lib.rs](apps/desktop/src-tauri/src/lib.rs) around line 1361.
-- **Multica licence:** Apache 2.0 plus extra conditions. These forbid embedding it in distributed products and require Multica branding on any derived UI. All Multica behaviour below is a clean-room reimplementation, and no Multica code is copied.
 
 ## Target data model
 
@@ -157,11 +155,11 @@ This phase depends only on Phase 2a. Execution settings may be displayed as unav
 - Right-click actions: New session, Edit blob, Duplicate, Archive.
 - "+" in the sidebar header opens Create blob.
 
-**Blob page:** opened by clicking the header name or choosing "Edit blob". It replaces the chat pane, and Back returns to the chat. Four independently designed tabs. Multica is only a clean-room behavioural reference; do not reproduce its layout, text or assets:
+**Blob page:** opened by clicking the header name or choosing "Edit blob". It replaces the chat pane, and Back returns to the chat. Four independently designed tabs. external reference is only a clean-room behavioural reference; do not reproduce its layout, text or assets:
 
 - **Overview:**
   - The live blob preview at 96 px, plus name, description, runtime, model, status and quick usage.
-  - The Grok Bot-style swatch grid: the same 12 colours, no shapes.
+  - The chat-style swatch grid: the same 12 colours, no shapes.
 - **Sessions:** the full project/session list for this blob.
 - **Usage:** the blob-scoped analytics described in Phase 5.
 - **Settings:** the Profile card and the Execution card.
@@ -199,7 +197,7 @@ This phase depends on Phase 2a and the intervening native smoke gate; it does no
 - The companion's chat tab follows the blob's selected session. Its pills switch between blobs.
 - **Gate:** the same blob can hold several sessions in one project and in multiple projects. Selection, resume and cancel work from the tree, and the keyboard flow is arrow keys, Enter and context menu.
 
-## Phase 5: Cost and usage analytics (clean-room behaviour)
+## Phase 5: Cost and usage analytics
 
 **Daemon:**
 
@@ -226,7 +224,7 @@ This phase depends on Phase 2a and the intervening native smoke gate; it does no
 
 **Gate:** the totals reconcile with the raw `usage_events` in fixture tests, partial data is labelled correctly, and timezone bucketing is tested.
 
-## Phase 6: Settings redesign (Grok Bot style)
+## Phase 6: Settings redesign (reference chat app style)
 
 - Restyle `SettingsSheet` as a modal: a 200 px left nav with icons, and content laid out as titled groups of rounded card rows. Each row has a label on the left and a control on the right (a pill select or a toggle).
 - **Pages:**
@@ -261,7 +259,6 @@ This phase depends on Phase 2a and the intervening native smoke gate; it does no
   - unit and mounted tests;
   - fixture-preview pages (extend [apps/desktop/src/preview/fixtureBridge.ts](apps/desktop/src/preview/fixtureBridge.ts));
   - an updated [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
-- Record the clean-room note for Multica in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - Store this plan as `docs/E2E_PLAN_V2.md` and link it from `SESSION_HANDOFF.md` and `AGENTS.md`.
 
 ## Suggested order

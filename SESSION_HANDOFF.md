@@ -4,20 +4,20 @@
 
 The implementation plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). The current delegation pipeline is in [AGENTS.md](AGENTS.md): the Director directs and reviews, `impl` and `impl-b` implement, and `qa` reports to the Director. Current pointer: **Phases 1, 1.5, 2a and 3 are done and on main, and the native smoke test has been run** (results and screenshots: [docs/NATIVE_SMOKE_RESULTS.md](docs/NATIVE_SMOKE_RESULTS.md); reviews and scores: [docs/DIRECTOR_LOG.md](docs/DIRECTOR_LOG.md)). Native defects to fix first: N1 (companion cannot be dragged by its face or text), N2 (expanded companion not clamped to the monitor), N3 (companion card shows daemon-wide totals under a blob), N4 (backup sidecar files). **Next, in order:** Phase 4 implementation per [docs/PHASE_4_SPEC.md](docs/PHASE_4_SPEC.md); Phase 2b per [docs/PHASE_2B_SPEC.md](docs/PHASE_2B_SPEC.md) after the live CLI entry-gate checks; then Phases 5, 6 (trimmed) and 7.
 
-`docs/E2E_PLAN_V2.md` is the current authoritative plan; [Bloblex_E2E_Windows_Desktop_Plan.md](Bloblex_E2E_Windows_Desktop_Plan.md) remains the original product plan and history. Both remain readable.
+`docs/E2E_PLAN_V2.md` is the current authoritative plan.
 
 ## Resume, 1 October 2026, 21:35–22:30 BST (direct UI work)
 
 The user resumed UI work after a failed attempt by another assistant (Grok) at 21:19–21:27, which had edited `App.tsx`, `styles.css`, `BlobCanvas.tsx`, `main.tsx` and `characterMotion.test.ts` with no git history to diff. At that point 77/78 tests passed (companion sound toggle failing). This session replaced the affected surfaces:
 
-- **Character**: `blob/blobEngine.ts` (port of Coucou `mochi/engine.ts` on a sphere with Grok Bot proportions) and `blob/greetingScene.ts` (port of `mochi/greeting.ts`). `BlobCanvas.tsx` keeps its props and lifecycle guarantees and now drives the engine. The old hand-written greeting/ambient approximation in `motion.ts` was removed; only `GreetingLifecycle` and `DizzyRecoveryDeadline` remain. Details: [companion-motion.md](docs/companion-motion.md).
-- **Main window**: OpenMausBot-style shell (sidebar roster with search and live blob rows, slim header with conversation switcher and model pill, centred chat column with grouped bubbles and the blob face on agent groups, pill composer). Details/Runtime/Files is now a toggleable inspector (`bloblex.inspector.open` in localStorage). New `ui/shell.css`; obsolete rail/header/message/composer rules removed from `styles.css` (settings, usage, dialogs and inspector pane rules kept).
-- **Companion**: Coucou island structure and CSS (`ui/companion.css`): compact floating bar with face, live status and peer minis; expanded tab header; overview focus card + agent pills; approval, confused, drop, chat, activity and settings views. Window sizes changed to compact 344×62, greeting/home 640×160, chat/activity 640×264 (`companionLayout.ts`, `tauri.ts`, `set_companion_mode` in `src-tauri/src/lib.rs`).
+- **Character**: `blob/blobEngine.ts` (Bloblex character engine on a sphere with measured proportions) and `blob/greetingScene.ts` (greeting choreography). `BlobCanvas.tsx` keeps its props and lifecycle guarantees and now drives the engine. The old hand-written greeting/ambient approximation in `motion.ts` was removed; only `GreetingLifecycle` and `DizzyRecoveryDeadline` remain. Details: local notes.
+- **Main window**: chat-style shell (sidebar roster with search and live blob rows, slim header with conversation switcher and model pill, centred chat column with grouped bubbles and the blob face on agent groups, pill composer). Details/Runtime/Files is now a toggleable inspector (`bloblex.inspector.open` in localStorage). New `ui/shell.css`; obsolete rail/header/message/composer rules removed from `styles.css` (settings, usage, dialogs and inspector pane rules kept).
+- **Companion**: island island structure and CSS (`ui/companion.css`): compact floating bar with face, live status and peer minis; expanded tab header; overview focus card + agent pills; approval, confused, drop, chat, activity and settings views. Window sizes changed to compact 344×62, greeting/home 640×160, chat/activity 640×264 (`companionLayout.ts`, `tauri.ts`, `set_companion_mode` in `src-tauri/src/lib.rs`).
 - **Preview harness (dev only)**: `vite.preview.config.ts` aliases the Tauri bridge to `src/preview/fixtureBridge.ts`; `preview.html` is a character sheet. Not part of the production build.
 
 Evidence at 22:28: `tsc -b` clean; `vitest run` 78/78 across 17 files (4 tests for deleted approximation code removed; character tests rewritten for the engine; two mounted-test timing adjustments documented inline); `vite build` 402.72 kB JS / 50.40 kB CSS; `cargo check -p bloblex-desktop --lib` with `CARGO_TARGET_DIR=target/qa-desktop-ui` passed. Browser checks used the fixture preview only. **Not yet done:** a native `npm run desktop:dev` run of this build (transparency, drag, DPI, real resize timing, file drop), and per-blob model/effort/speed configuration, which needs daemon support (the daemon's `runtime.profile.*` are launcher profiles; `session.new` takes no model or effort). The header model pill shows the session's reported model or "CLI default" and opens Runtime settings; it does not change the model.
 
-Checkpoint: **1 October 2026, 20:37 BST — STOPPED at the user's request**. The goal is paused; all three agents and identified Bloblex development processes were stopped. Only documentation was completed afterward. Read [STOPPED_CHECKPOINT.md](docs/STOPPED_CHECKPOINT.md) first for the consolidated UI/source-borrowing/evidence snapshot. Do not automatically resume. Earlier “in progress” statements below are chronology, not current running tasks.
+Checkpoint: **1 October 2026, 20:37 BST — STOPPED at the user's request**. The goal is paused; all three agents and identified Bloblex development processes were stopped. Only documentation was completed afterward. Do not automatically resume. Earlier “in progress” statements below are chronology, not current running tasks.
 
 Workspace: `C:\Users\jbmst\OneDrive\Documents\ChatGPT\Bloblex`. Windows PowerShell. Git branch `master` currently has **no commits**; the implementation files are local/untracked. There has been no push or release. Preserve the complete working folder, not just a Git ref.
 
@@ -25,16 +25,16 @@ Workspace: `C:\Users\jbmst\OneDrive\Documents\ChatGPT\Bloblex`. Windows PowerShe
 
 1. This handoff and `AGENTS.md` for current user instructions.
 2. [Implementation status and open checklist](docs/implementation-status.md).
-3. Current plan: [E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Original product plan/history: [Bloblex_E2E_Windows_Desktop_Plan.md](Bloblex_E2E_Windows_Desktop_Plan.md), especially sections 31, 32, 35, 36 and 37.
-4. [Current independent UI QA log](docs/qa-ui-execution.md), [UI fidelity criteria](docs/qa-ui-fidelity.md), [full QA report](docs/qa-report.md) and [findings register](docs/qa-findings.md).
-5. [Coucou source mapping](docs/companion-motion.md), [IPC contract](docs/ipc-contract.md), `PRODUCT.md` and `DESIGN.md`.
-6. [Preserved user screenshots](docs/ui-reference-images.md). Exact copies and hashes are retained in documentation, including the negative reference for the old pill; temporary clipboard paths are no longer required.
+3. Current plan: [E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md).
+4. Current independent UI QA log, UI fidelity criteria, full QA report and findings register.
+5. island source mapping, [IPC contract](docs/ipc-contract.md), `PRODUCT.md` and `DESIGN.md`.
+6. Preserved user screenshots. Exact copies and hashes are retained in documentation, including the negative reference for the old pill; temporary clipboard paths are no longer required.
 
 ## Current user instructions
 
 - Build the complete local Windows desktop app from the supplied plan, in this folder. The main concept image is design direction, not an exact acceptance screenshot.
-- Keep Coucou's interaction behavior, adapted to a bottom-middle, freely draggable floating bill. The user rejected the first generic capsule/status row, mouths and missing welcome/idle/typing/online/file-upload behavior.
-- Use Coucou's MIT interaction, layout and animation source directly where practical; do not merely approximate it from screenshots. Maintain original Bloblex art and the plan's protected-asset boundary.
+- Keep the island's interaction behavior, adapted to a bottom-middle, freely draggable floating bill. The user rejected the first generic capsule/status row, mouths and missing welcome/idle/typing/online/file-upload behavior.
+- Use the island's MIT interaction, layout and animation source directly where practical; do not merely approximate it from screenshots. Maintain original Bloblex art and the plan's protected-asset boundary.
 - Finish UI behavior and polish before returning to backend expansion.
 - Computer Use and browser interaction tests stay deferred until the final implementation stage.
 - **The root/coordinator must not touch code anymore.** Its task is documentation and orchestration. A third Luna QA agent now tests independently and sends findings to the two implementers.
@@ -46,7 +46,7 @@ Current agents in this chat:
 | --- | --- |
 | `/root/desktop` | App/styles, companion FSM/layout and native shell; source mapping document |
 | `/root/runtime` | Currently character/motion/helpers/tests and upstream animation primitives; backend lane paused |
-| `/root/qa` | Independent tests/review, direct findings to implementers, `docs/qa-ui-execution.md` |
+| `/root/qa` | Independent tests/review, direct findings to implementers |
 | `/root` | Documentation, handoff/checklist and coordination only |
 
 ## What exists now
@@ -59,7 +59,6 @@ The main UI has an agent rail, conversation, Details/Runtime/Files context, comp
 
 The companion is being revised into a rounded rectangular floating shell with Home/Chat/New Session/Settings navigation, a selected-session glance and real runtime peers. The latest source includes inline chat and local file-reference preparation. These changes are not in the old running executable until it is rebuilt and relaunched.
 
-Coucou source is pinned to `8e12bed56134d2ee7165e73f132646b143ce56e4`. Root verified the vendored FSM exactly after newline normalization and the animation primitives after excluding whitespace/provenance headers. `CompanionFsm` wraps the imported FSM; `DampedSpring` extends its imported `Spring`. The greeting is a source-equation port adapted to Bloblex's original circular rendering, with a 4.6s timeline, gaze/blinks, growth, dip/pop, floating hands, wave, tuck, badge and settling. Current provenance/layout work is still evolving; consult the mapping document and QA log.
 
 ## Evidence and chronology
 
@@ -75,12 +74,12 @@ Coucou source is pinned to `8e12bed56134d2ee7165e73f132646b143ce56e4`. Root veri
 | ACP fake child | Implementer reported 4 passing lifecycle fixtures for RPC ID collision, session-scoped permissions, cancel and pending-approval cancel. Remaining opaque option/EOF/error/resume coverage and independent rerun are open. |
 | Independent frontend checkpoint | Earlier 15 tests passed. Later 7 focused greeting/motion tests passed before direct-source integration. These do not establish revised native fidelity. |
 | Last native inspection build | Daemon and production frontend built; native build initially needed three small monitor-selection compile fixes, then succeeded. Assets: 301.34 kB JS / 30.31 kB CSS. Native app launched successfully. |
-| UI reprioritization | User supplied seven Coucou/current-app screenshots and rejected the pill and stripped behavior. Both implementers moved to UI; direct source reuse replaced the handwritten FSM/spring approach. |
+| UI reprioritization | User supplied seven reference/current-app screenshots and rejected the pill and stripped behavior. Both implementers moved to UI; direct source reuse replaced the handwritten FSM/spring approach. |
 | Independent UI QA checkpoint | QA agent independently passed 32/32 tests across 7 files and TypeScript/Vite production build: 1596 modules, JS 350.85 kB / CSS 40.58 kB. Gaze, StrictMode cleanup, reduced-motion dizzy recovery, file-after-thinking and greeting bounds findings were corrected with fixtures. Native behavior remains unobserved. |
 | Latest implementer source after independent checkpoint | Desktop subsequently added an inert accessibility guard, reporting typecheck, 32/32 tests and production build passing (JS 350.87 kB / CSS 40.58 kB). Independent rerun after that final attribute remains pending. Runtime reports final focused motion tests 10/10. |
 | Isolated native compile | Desktop reports `CARGO_TARGET_DIR=target/qa-desktop; cargo check -p bloblex-desktop --lib` exit 0. No new executable was launched or inspected. |
 | Latest backend source checkpoint | Storage/daemon compile passed in `target/qa-runtime` after metric-demand/valuation changes. Those latest budget changes have not had a full independent test rerun. Backend work is paused. |
-| QA ownership and status | Third Luna 6 High QA reports directly to both implementers and owns `docs/qa-ui-execution.md`. Its source findings are closed at the fixture level; native shape/morph/clipping, input/focus, approvals, file drop and provider acceptance remain open. |
+| QA ownership and status | Third Luna 6 High QA reports directly to both implementers. Its source findings are closed at the fixture level; native shape/morph/clipping, input/focus, approvals, file drop and provider acceptance remain open. |
 
 No current full E2E acceptance, installer/VM pass, signed release or trusted updater is established.
 
@@ -90,9 +89,9 @@ All three agents delivered their current UI/QA checkpoint reports. Backend remai
 
 Root revalidated all three agent handles as completed, then dispatched follow-up work to those same agents; no additional workers were created. The completed documentation turn was concrete progress. Current next work is a broader UI source audit rather than closing fidelity based on helper tests:
 
-- QA independently rechecks the final accessibility edit and audits plan sections 4/5/6/23/26/27/28 plus the Coucou fidelity matrix. Findings go directly to the owning implementers; native interaction stays deferred.
+- QA independently rechecks the final accessibility edit and audits plan sections 4/5/6/23/26/27/28 plus the island fidelity matrix. Findings go directly to the owning implementers; native interaction stays deferred.
 - Desktop replaces generic summary-field/JSON presentation with structured real usage/cost/budget UI and reviews usable settings, focus and local-file reference lifecycle.
-- Character/runtime compares the remaining idle/online/typing/tool/file-receive/drop behavior to pinned Coucou source and coordinates honest file preparation states with desktop. Backend expansion remains paused.
+- Character/runtime compares the remaining idle/online/typing/tool/file-receive/drop behavior to pinned island source and coordinates honest file preparation states with desktop. Backend expansion remains paused.
 - Root maintains documentation only. Open app PIDs `27896`, `21716`, `28828` were read-only revalidated at 18:45; no UI interaction or process action occurred.
 
 Source review found the usage sheet still showing arbitrary first-six fields and JSON objects, and settings missing parts of the plan's Agents/Permissions/General controls. Those are UI implementation gaps, separate from deferred native proof. Missing backend capabilities must be documented honestly, not simulated by a working-looking control.
@@ -115,7 +114,7 @@ At 19:12 desktop reports TypeScript passing after integrated permission selectio
 
 ### User launch blocker and repair, 19:18–19:28 BST
 
-The user tried `npm run desktop:dev` and supplied a screenshot of `failed to remove target\debug\bloblexd.exe: Access is denied (os error 5)`. Root read-only verified daemon PIDs `21716` and `28828` executing that exact file, with no desktop process present. The screenshot is preserved as [reference image 8](docs/ui-reference-images.md). This was a real running-executable lock, not a request to elevate or delete user files.
+The user tried `npm run desktop:dev` and supplied a screenshot of `failed to remove target\debug\bloblexd.exe: Access is denied (os error 5)`. Root read-only verified daemon PIDs `21716` and `28828` executing that exact file, with no desktop process present. The screenshot is preserved as reference image 8. This was a real running-executable lock, not a request to elevate or delete user files.
 
 Desktop paused optional settings polish and changed:
 
@@ -143,7 +142,7 @@ The supported `npm run desktop:dev` command successfully built and launched `tar
 
 QA then performed a **forced** isolated rebuild while this private daemon remained live: with desktop confirming Cargo idle, `CARGO_TARGET_DIR=target/desktop-dev cargo clean -p bloblex-daemon` removed only that package's isolated outputs, and the daemon/hook rebuild succeeded in 32.05s. QA staged into `target/qa-rebuild-staged`; rebuilt/staged hashes matched (`8A6F6AF0…4A4C60C2`) with a new 19:48:43 timestamp. The private running copy retained its earlier hash/timestamp and stayed listening on the same port. PIDs `21716`/`28828` and their old executable were preserved.
 
-This closes the reported compiler-output lock regression for this observed instance and establishes a supported-command native startup checkpoint. It does **not** close full GUI/Coucou fidelity, cross-window IPC flows, concurrent-start stress, owned process-tree shutdown, installer or full product acceptance. Smoke-process cleanup is coordinated with desktop; re-check processes rather than assuming these historical PIDs still exist. Root only edited documentation and read processes/hashes.
+This closes the reported compiler-output lock regression for this observed instance and establishes a supported-command native startup checkpoint. It does **not** close full GUI/island fidelity, cross-window IPC flows, concurrent-start stress, owned process-tree shutdown, installer or full product acceptance. Smoke-process cleanup is coordinated with desktop; re-check processes rather than assuming these historical PIDs still exist. Root only edited documentation and read processes/hashes.
 
 Cleanup outcome: desktop's command to stop only smoke daemon `19184` and app `18860` was rejected before execution with `rejected: blocked by policy`. It was not retried through another mechanism. At the reported checkpoint those two smoke processes remain running, using `target/desktop-dev/isolated-smoke.sqlite`; the original daemons remain untouched. Treat this as a cleanup limitation, not graceful Quit/lifecycle proof. Revalidate ownership and respect the rejection before any later process-control action.
 
@@ -195,14 +194,13 @@ The inspection executable is `target\debug\bloblex-desktop.exe`. It embeds produ
 
 - WSL inventory was only `docker-desktop`; no ordinary development distro was available. Do not modify Docker's internal distro to manufacture a WSL acceptance pass.
 - Signing identity, trusted distribution, updater keys/endpoint and a clean Windows VM are not configured/proven. Implement the pipeline, but do not invent successful signing or VM evidence.
-- [Magpie assessment](docs/magpie-assessment.md) recommends an optional later gateway connection after native v1. The user asked for research, not implementation or a plan expansion. No Magpie code/configuration/credentials were installed.
+- gateway assessment recommends an optional later gateway connection after native v1. The user asked for research, not implementation or a plan expansion. No gateway code/configuration/credentials were installed.
 - Remote runtimes are optional phase 11. Do not spend current v1 effort on them.
 - Memory was searched for Bloblex context; no relevant saved project entry was found. These workspace documents are the durable handoff. Do not write global memories unless the user explicitly asks.
 
 Original artifact integrity, independently rechecked at this checkpoint:
 
 ```text
-Bloblex_E2E_Windows_Desktop_Plan.md
 B49E27B0E61B39D88BDA22AE76D9D4707F41E5116B905DBE411B1418623C3679
 
 Bloblex_UI_Concept.png

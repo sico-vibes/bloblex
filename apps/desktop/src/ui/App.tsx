@@ -1484,7 +1484,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
   const fsmRef = useRef<CompanionFsm | null>(null)
   const capsuleRef = useRef<HTMLDivElement>(null)
   const chatLogRef = useRef<HTMLDivElement>(null)
-  const [mode, setMode] = useState<CompanionMode>('coucou')
+  const [mode, setMode] = useState<CompanionMode>('welcome')
   if (!fsmRef.current) fsmRef.current = new CompanionFsm()
   const tall = mode === 'home' && !permission && (view === 'chat' || view === 'activity')
   const presentation = mode === 'home' && tall ? 'home-chat' : mode
@@ -1554,7 +1554,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
     if (session.state === 'waiting_permission') fsm.forceHome(true)
     else if (['working', 'starting', 'completed', 'error'].includes(session.state ?? '')) fsm.reveal()
   }, [session?.id, session?.state])
-  // The native window springs open / curves shut (Coucou's openSpring and
+  // The native window springs open / curves shut (open spring and
   // 340 ms close curve); the island content cross-fades with it.
   useEffect(() => {
     const element = capsuleRef.current
@@ -1681,7 +1681,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
         {permission && <ShieldAlert className="companion-alert" size={15} aria-label="Approval required" />}
         {peers.length > 0 && <div className="mini-grid" aria-hidden="true" data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} label={item.name} /> })}</div>}
         <button className="companion-collapse" aria-label="Expand companion" onClick={() => fsmRef.current?.click()}><ChevronUp size={15} /></button>
-      </div> : mode === 'coucou' ? <section className="companion-welcome" aria-label="Bloblex welcome animation" data-tauri-drag-region>
+      </div> : mode === 'welcome' ? <section className="companion-welcome" aria-label="Bloblex welcome animation" data-tauri-drag-region>
         <BlobCanvas color={color} size={100} mood="idle" soundCues={soundsEnabled} label="Bloblex" greeting onGreetingComplete={() => fsmRef.current?.greetComplete()} />
       </section> : <>
         <header className="island-header" data-tauri-drag-region>

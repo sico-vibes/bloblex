@@ -1,12 +1,7 @@
-// Adapted from Coucou windows/src/mochi/greeting.ts at commit
-// 8e12bed56134d2ee7165e73f132646b143ce56e4 (https://github.com/Louis-CFM/coucou).
-// Copyright (c) 2026 Louis Raillé. MIT licensed; see THIRD_PARTY_NOTICES.md.
-//
-// The timeline, pose equations, seeded particle rings/streaks, halo, hands and
-// badge are kept in the source's 640×150 reference space. Bloblex draws its own
-// spherical body with capsule eyes in the agent colour instead of the Mochi
-// squircle, and omits the notch collapse/mini-bot strip because the companion
-// window shell owns that transition.
+// Bloblex welcome greeting: timeline, pose equations, seeded particle
+// rings/streaks, halo, hands and badge in a 640×150 reference space. The body is
+// a sphere with capsule eyes in the agent colour; the notch collapse strip is
+// omitted because the companion window shell owns that transition.
 
 import { BADGE_OFFSET, type RGB } from './blobEngine'
 

@@ -1,7 +1,7 @@
 # Runs the cursor-delegate relay with Cursor's CLI isolated from other tools' hooks.
 #
 # Why: cursor-agent imports Claude-format hooks from <home>\.claude\settings.json and runs them
-# on every tool call. Third-party tools (Orca, Codenotch) install their own hooks there, and under
+# on every tool call. Other tools install their own hooks there, and under
 # a delegated run those hooks fail (Git Bash) or hang forever (PowerShell), so no tool call completes.
 #
 # How: this process (and its children only) gets a home directory that contains a junction to the

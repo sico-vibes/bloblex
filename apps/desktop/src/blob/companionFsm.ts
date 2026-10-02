@@ -1,9 +1,9 @@
-import { IslandStateMachine, type FsmState } from './coucou/island/fsm'
+import { IslandStateMachine, type FsmState } from './engine/island/fsm'
 
 export type CompanionMode = FsmState
 
 /**
- * Thin Bloblex adapter around the pinned Coucou FSM. Its only behavior override
+ * Thin Bloblex adapter around the island FSM. Its only behavior override
  * is approval pinning; shell placement and floating visibility are handled by
  * the companion window adapter.
  */

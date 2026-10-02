@@ -485,6 +485,40 @@ impl Storage {
         tx.execute("UPDATE sessions SET first_exec_snapshot_id=COALESCE(first_exec_snapshot_id,?2),latest_exec_snapshot_id=?2 WHERE id=?1",params![session_id,id])?;
         let value=exec_snapshot_read(&tx,id)?.ok_or(StorageError::InvalidAgent)?;tx.commit()?;Ok(value)
     }
+    /// Atomically records a preflight-rejected turn, user message, rejected
+    /// snapshot and rejection event. This path intentionally creates no capacity reservation.
+    pub fn reject_exec_turn(&self,session_id:&str,turn_id:&str,snapshot_id:&str,text:&str,requested:&Value,applied:&Value,evidence:&Value,instruction_sha256:Option<&str>,adapter_flags:&Value,event_payload:&Value)->Result<(Value,Value),StorageError>{
+        let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (runtime,provider,agent):(String,String,Option<String>)=tx.query_row("SELECT runtime_id,provider,agent_id FROM sessions WHERE id=?1",[session_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
+        tx.execute("INSERT INTO turns(id,session_id,state,created_at,completed_at) VALUES(?1,?2,'error',?3,?3)",params![turn_id,session_id,now])?;
+        let sequence:i64=tx.query_row("SELECT COALESCE(MAX(sequence),0)+1 FROM messages WHERE session_id=?1",[session_id],|r|r.get(0))?;
+        let message_id=Uuid::new_v4().to_string();tx.execute("INSERT INTO messages(id,session_id,turn_id,sequence,role,content,created_at) VALUES(?1,?2,?3,?4,'user',?5,?6)",params![message_id,session_id,turn_id,sequence,text,now])?;
+        let requested=snapshot_requested(requested);let applied=snapshot_outcomes(applied);let evidence=snapshot_evidence(evidence);let flags=snapshot_flags(adapter_flags);
+        let hash=instruction_sha256.filter(|h|h.len()==64&&h.bytes().all(|b|b.is_ascii_hexdigit()));
+        tx.execute("INSERT INTO exec_snapshots(id,session_id,turn_id,agent_id,runtime_id,provider,created_at,requested_json,applied_json,evidence_json,instruction_sha256,adapter_flags_json,status) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'rejected')",params![snapshot_id,session_id,turn_id,agent,runtime,provider,now,requested.to_string(),applied.to_string(),evidence.to_string(),hash,flags.to_string()])?;
+        tx.execute("UPDATE sessions SET first_exec_snapshot_id=COALESCE(first_exec_snapshot_id,?2),latest_exec_snapshot_id=?2 WHERE id=?1",params![session_id,snapshot_id])?;
+        let mut payload=event_payload.clone();payload["sessionId"]=json!(session_id);payload["turnId"]=json!(turn_id);payload["snapshotId"]=json!(snapshot_id);
+        let event_id=Uuid::new_v4().to_string();tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'exec.options.rejected',?3)",params![event_id,now,payload.to_string()])?;
+        let event=json!({"v":1,"eventId":event_id,"sequence":tx.last_insert_rowid(),"timestamp":now,"type":"exec.options.rejected","payload":payload});
+        let snapshot=exec_snapshot_read(&tx,snapshot_id)?.ok_or(StorageError::InvalidAgent)?;tx.commit()?;Ok((snapshot,event))
+    }
+    /// Adds normalized adapter evidence to an admitted snapshot and persists
+    /// the corresponding options event in the same transaction.
+    pub fn update_exec_snapshot_evidence(&self,turn_id:&str,outcomes:&Value)->Result<(Value,Value),StorageError>{
+        let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id:Option<String>=tx.query_row("SELECT id FROM exec_snapshots WHERE turn_id=?1",[turn_id],|r|r.get(0)).optional()?;let id=id.ok_or(StorageError::AgentNotFound)?;
+        let snapshot=exec_snapshot_read(&tx,&id)?.ok_or(StorageError::AgentNotFound)?;
+        let applied=snapshot_outcomes(outcomes);let evidence=snapshot_evidence(outcomes);
+        let failed=outcomes.as_object().is_some_and(|m|m.values().any(|v|v["applied"]==false));
+        let pending=outcomes.as_object().is_some_and(|m|m.values().any(|v|v["applied"].is_null()));
+        let status=if failed||pending{"partial"}else{"applied"};
+        tx.execute("UPDATE exec_snapshots SET applied_json=?2,evidence_json=?3,status=?4 WHERE id=?1",params![id,applied.to_string(),evidence.to_string(),status])?;
+        let payload=json!({"sessionId":snapshot["sessionId"],"turnId":turn_id,"agentId":snapshot["agentId"],"runtimeId":snapshot["runtimeId"],"requested":snapshot["requested"],"applied":outcomes,"snapshotId":id});
+        let event_id=Uuid::new_v4().to_string();let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'exec.options.changed',?3)",params![event_id,now,payload.to_string()])?;
+        let event=json!({"v":1,"eventId":event_id,"sequence":tx.last_insert_rowid(),"timestamp":now,"type":"exec.options.changed","payload":payload});
+        let updated=exec_snapshot_read(&tx,&id)?.ok_or(StorageError::InvalidAgent)?;tx.commit()?;Ok((updated,event))
+    }
     pub fn exec_snapshot_get(&self,id:&str)->Result<Option<Value>,StorageError>{let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;exec_snapshot_read(&c,id)}
     pub fn exec_snapshot_latest(&self,session_id:&str)->Result<Option<Value>,StorageError>{let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let id:Option<String>=c.query_row("SELECT latest_exec_snapshot_id FROM sessions WHERE id=?1",[session_id],|r|r.get(0)).optional()?.flatten();match id{Some(id)=>exec_snapshot_read(&c,&id),None=>Ok(None)}}
     pub fn exec_snapshot_list(&self,session_id:&str,after:Option<&str>,limit:u32)->Result<(Vec<Value>,Option<String>),StorageError>{
@@ -1171,13 +1205,13 @@ fn nullable(v:&Value)->Option<&str>{ if v.is_null(){None}else{v.as_str()} }
 fn trimmed(v:&Value,key:&str)->String{v[key].as_str().unwrap_or("").trim().to_owned()}
 fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
     for key in ["name","runtimeId","description","instructions","color"] {if v.get(key).is_some_and(|x|!x.is_string()){return Err(StorageError::InvalidAgent)}}
-    if v.get("customArgs").is_some_and(|x|!x.is_array()||!x.as_array().unwrap().iter().all(Value::is_string))||v.get("customEnv").is_some_and(|x|!x.is_object()||!x.as_object().unwrap().values().all(Value::is_string))||v.get("maxConcurrency").is_some_and(|x|!x.as_i64().is_some_and(|n|(1..=50).contains(&n))){return Err(StorageError::InvalidAgent)}
+    if v.get("customArgs").is_some_and(|x|!x.is_array()||!x.as_array().unwrap().is_empty())||v.get("customEnv").is_some_and(|x|!x.is_object()||!x.as_object().unwrap().values().all(Value::is_string))||v.get("maxConcurrency").is_some_and(|x|!x.as_i64().is_some_and(|n|(1..=50).contains(&n))){return Err(StorageError::InvalidAgent)}
     for key in ["model","thinking","serviceTier","defaultProject"] { if v.get(key).is_some_and(|x|!x.is_null()&&!x.is_string()){return Err(StorageError::InvalidAgent)} }
     if create && (!v["name"].is_string()||!v["runtimeId"].is_string()){return Err(StorageError::InvalidAgent)}
     if let Some(name)=v["name"].as_str(){let n=name.trim();if n.chars().count()==0||n.chars().count()>60{return Err(StorageError::InvalidAgent)}}
     if v["description"].as_str().is_some_and(|x|x.chars().count()>255)||v["instructions"].as_str().is_some_and(|x|x.contains('\0')){return Err(StorageError::InvalidAgent)}
     if let Some(color)=v["color"].as_str(){let named=["coral","orange","amber","lemon","lime","mint","teal","cyan","sky","blue","violet","pink"].contains(&color);let b=color.as_bytes();let hex=b.len()==7&&b[0]==b'#'&&b[1..].iter().all(u8::is_ascii_hexdigit);if !named&&!hex{return Err(StorageError::InvalidAgent)}}
-    if let Some(env)=v["customEnv"].as_object(){for(k,val)in env{let valid=!k.is_empty()&&k.chars().enumerate().all(|(i,c)|if i==0{c=='_'||c.is_ascii_alphabetic()}else{c=='_'||c.is_ascii_alphanumeric()});let upper=k.to_ascii_uppercase();if !valid||["TOKEN","SECRET","PASSWORD","PASSWD","API_KEY","ACCESS_KEY","PRIVATE_KEY","CREDENTIAL","AUTHORIZATION","AUTH_TOKEN","COOKIE"].iter().any(|needle|upper.contains(needle))||!val.is_string(){return Err(StorageError::InvalidAgent)}}}
+    if let Some(env)=v["customEnv"].as_object(){for(k,val)in env{let valid=!k.is_empty()&&k.chars().enumerate().all(|(i,c)|if i==0{c=='_'||c.is_ascii_alphabetic()}else{c=='_'||c.is_ascii_alphanumeric()});let upper=k.to_ascii_uppercase();if !valid||!["LANG","LC_ALL","TZ","NO_COLOR","TERM"].contains(&upper.as_str())||["TOKEN","SECRET","PASSWORD","PASSWD","KEY","AUTH","CREDENTIAL","COOKIE"].iter().any(|needle|upper.contains(needle))||val.as_str().is_none_or(|s|s.contains('\0')){return Err(StorageError::InvalidAgent)}}}
     Ok(())
 }
 fn runtime_exists(c:&Connection,id:&str)->Result<bool,StorageError>{Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM runtimes WHERE id=?1)",[id],|r|r.get(0))?)}
@@ -1191,7 +1225,7 @@ fn snapshot_requested(v:&Value)->Value{
     result
 }
 fn snapshot_outcomes(v:&Value)->Value{
-    let mut out=serde_json::Map::new();for key in ["model","thinking","serviceTier","instructions","customEnv"]{if let Some(item)=v.get(key){let value=if key=="instructions"||key=="customEnv"{Value::Null}else{item["appliedValue"].as_str().map(|s|json!(s.chars().take(256).collect::<String>())).unwrap_or(Value::Null)};out.insert(key.into(),json!({"applied":item["applied"].as_bool(),"value":value}));}}Value::Object(out)
+    let mut out=serde_json::Map::new();for key in ["model","thinking","serviceTier","instructions","customEnv"]{if let Some(item)=v.get(key){let value=if key=="instructions"||key=="customEnv"{Value::Null}else{item["appliedValue"].as_str().or_else(||item["value"].as_str()).or_else(||item["evidenceValue"].as_str()).map(|s|json!(s.chars().take(256).collect::<String>())).unwrap_or(Value::Null)};out.insert(key.into(),json!({"applied":item["applied"].as_bool(),"value":value}));}}Value::Object(out)
 }
 fn snapshot_evidence(v:&Value)->Value{
     let mut out=serde_json::Map::new();for key in ["model","thinking","serviceTier","instructions","customEnv"]{if let Some(item)=v.get(key){out.insert(key.into(),json!({"kind":item["kind"].as_str().or_else(||item["evidenceKind"].as_str()),"value":item["value"].as_str().or_else(||item["evidenceValue"].as_str()).map(|s|s.chars().take(256).collect::<String>())}));}}Value::Object(out)
@@ -1413,7 +1447,7 @@ mod tests {
     fn agents_reorder_rotate_archive_and_usage_follow_session_owner() {
         let db=Storage::open_in_memory().unwrap();
         db.upsert_runtime(&json!({"id":"rt-agent","provider":"codex","status":"offline"})).unwrap();
-        let make=|name:&str|db.agent_create(&json!({"name":name,"runtimeId":"rt-agent","instructions":"private instructions","customEnv":{"SAFE_MODE":"yes"}})).unwrap().0;
+        let make=|name:&str|db.agent_create(&json!({"name":name,"runtimeId":"rt-agent","instructions":"private instructions","customEnv":{"TERM":"xterm-256color"}})).unwrap().0;
         let a=make("Alpha");let b=make("Beta");let c=make("Gamma");
         let ids=vec![c["id"].as_str().unwrap().to_owned(),a["id"].as_str().unwrap().to_owned(),b["id"].as_str().unwrap().to_owned()];
         let (swapped,ev)=db.agent_reorder("rt-agent",&ids).unwrap();assert_eq!(swapped.iter().map(|x|x["id"].as_str().unwrap()).collect::<Vec<_>>(),ids.iter().map(String::as_str).collect::<Vec<_>>());assert_eq!(ev.len(),3);
@@ -1451,6 +1485,9 @@ mod tests {
         let active=db.agent_list(false,None).unwrap().remove(0);db.agent_archive(active["id"].as_str().unwrap()).unwrap();assert!(db.agent_create(&json!({"name":"NAME","runtimeId":"rt"})).is_ok());
         assert!(matches!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt","color":"#abc"})),Err(StorageError::InvalidAgent)));
         assert!(matches!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt","customEnv":{"API_TOKEN":"x"}})),Err(StorageError::InvalidAgent)));
+        assert!(matches!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt","customArgs":["--dangerous"]})),Err(StorageError::InvalidAgent)));
+        assert!(matches!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt","customEnv":{"LANG":"nul\u{0000}value"}})),Err(StorageError::InvalidAgent)));
+        assert!(matches!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt","customEnv":{"SAFE_MODE":"yes"}})),Err(StorageError::InvalidAgent)));
         assert!(matches!(db.agent_create(&json!({"name":"x".repeat(61),"runtimeId":"rt"})),Err(StorageError::InvalidAgent)));
         assert!(matches!(db.agent_create(&json!({"name":"Bad","runtimeId":"missing"})),Err(StorageError::AgentNotFound)));
         assert!(matches!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt","description":"x".repeat(256)})),Err(StorageError::InvalidAgent)));
@@ -1504,7 +1541,14 @@ mod tests {
         let stored=first.to_string();assert!(!stored.contains("do-not-store-this"));assert!(!stored.contains("private-value"));assert!(!stored.contains("provider-json-must-not-be-here"));assert_eq!(first["requested"]["envKeys"][0],"LANG");assert_eq!(first["requested"]["extraArgs"],json!([]));
         db.insert_usage(&json!({"id":"u1","runtimeId":"rt","sessionId":"s","turnId":"t1","provider":"codex","timestamp":"2026-10-02T00:00:00Z","providerUpdateId":"update-1","usageStatus":"reported","contextUsed":12,"contextSize":100,"reportedCostDecimal":"0.000048588","raw":{"private":"raw-provider-data"}})).unwrap();
         let c=db.conn.lock().unwrap();let row:(Option<String>,Option<String>,String,Option<i64>,Option<i64>,Option<String>,String)=c.query_row("SELECT exec_snapshot_id,provider_update_id,usage_status,context_used,context_size,reported_cost_decimal,raw FROM usage_events WHERE id='u1'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).unwrap();assert_eq!(row,(Some("snap1".into()),Some("update-1".into()),"reported".into(),Some(12),Some(100),Some("0.000048588".into()),"{}".into()));drop(c);
-        db.create_turn("t2","s").unwrap();db.create_exec_snapshot("s","t2","snap2",&json!({"maxConcurrency":1}),&json!({}),&json!({}),None,&json!({}),"runtime_default").unwrap();assert_eq!(db.exec_snapshot_latest("s").unwrap().unwrap()["id"],"snap2");let (items,next)=db.exec_snapshot_list("s",Some("snap1"),10).unwrap();assert_eq!(items.len(),1);assert_eq!(items[0]["id"],"snap2");assert!(next.is_none());db.set_session_exec_snapshot("s","snap2",true).unwrap();let c=db.conn.lock().unwrap();let ptrs:(String,String)=c.query_row("SELECT first_exec_snapshot_id,latest_exec_snapshot_id FROM sessions WHERE id='s'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(ptrs,("snap1".into(),"snap2".into()));
+        db.create_turn("t2","s").unwrap();db.create_exec_snapshot("s","t2","snap2",&json!({"maxConcurrency":1}),&json!({}),&json!({}),None,&json!({}),"runtime_default").unwrap();assert_eq!(db.exec_snapshot_latest("s").unwrap().unwrap()["id"],"snap2");let (items,next)=db.exec_snapshot_list("s",Some("snap1"),10).unwrap();assert_eq!(items.len(),1);assert_eq!(items[0]["id"],"snap2");assert!(next.is_none());db.set_session_exec_snapshot("s","snap2",true).unwrap();let (_,event)=db.update_exec_snapshot_evidence("t2",&json!({"model":{"requested":"gpt-6","applied":true,"evidenceKind":"provider_echo","evidenceValue":"gpt-6"}})).unwrap();assert_eq!(event["type"],"exec.options.changed");let updated=db.exec_snapshot_get("snap2").unwrap().unwrap();assert_eq!(updated["applied"]["model"]["applied"],true);assert_eq!(updated["evidence"]["model"]["kind"],"provider_echo");let c=db.conn.lock().unwrap();let ptrs:(String,String)=c.query_row("SELECT first_exec_snapshot_id,latest_exec_snapshot_id FROM sessions WHERE id='s'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(ptrs,("snap1".into(),"snap2".into()));
+    }
+    #[test]
+    fn rejected_turn_writes_error_message_snapshot_and_event_atomically_without_reservation(){
+        let db=Storage::open_in_memory().unwrap();db.upsert_runtime(&json!({"id":"rt","provider":"claude"})).unwrap();db.create_session("s","rt","claude",".","test").unwrap();
+        let (snapshot,event)=db.reject_exec_turn("s","t","snap","user turn text",&json!({"model":"custom","instructions":"secret instruction text","instructionsPresent":true,"customEnv":{"LANG":"secret env"},"customEnvKeys":["LANG"],"maxConcurrency":1}),&json!({"model":{"applied":false}}),&json!({"raw":"must-not-persist"}),None,&json!({"adapter":"claude"}),&json!({"agentId":null,"runtimeId":"rt","setting":"model","code":"unsupported","reason":"safe"})).unwrap();
+        assert_eq!(snapshot["status"],"rejected");assert_eq!(snapshot["requested"]["instructionsPresent"],true);assert!(!snapshot.to_string().contains("secret instruction text"));assert!(!snapshot.to_string().contains("secret env"));assert!(!snapshot.to_string().contains("must-not-persist"));assert_eq!(event["type"],"exec.options.rejected");
+        let c=db.conn.lock().unwrap();assert_eq!(c.query_row("SELECT state FROM turns WHERE id='t'",[],|r|r.get::<_,String>(0)).unwrap(),"error");assert_eq!(c.query_row("SELECT content FROM messages WHERE turn_id='t'",[],|r|r.get::<_,String>(0)).unwrap(),"user turn text");assert_eq!(c.query_row("SELECT count(*) FROM active_turn_reservations",[],|r|r.get::<_,i64>(0)).unwrap(),0);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='exec.options.rejected'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
     #[test]
     fn exec_gate_setting_audit_is_atomic_and_suppresses_noop_events(){

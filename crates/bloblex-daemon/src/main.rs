@@ -24,7 +24,7 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap, future::IntoFuture, net::SocketAddr, path::PathBuf, sync::Arc,
+    collections::HashMap, future::IntoFuture, net::SocketAddr, path::PathBuf, sync::{Arc, OnceLock, Mutex as StdMutex},
     time::Instant,
 };
 use tokio::{
@@ -32,6 +32,8 @@ use tokio::{
     sync::{broadcast, Mutex, RwLock},
 };
 use uuid::Uuid;
+
+static MODEL_CATALOG_CACHE: OnceLock<StdMutex<HashMap<String, (Instant, Value)>>> = OnceLock::new();
 
 #[derive(Clone)]
 struct AppState {
@@ -190,14 +192,15 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.db.exec_snapshot_latest(sid).map(|v|v.unwrap_or(Value::Null)).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))
         }
         "runtime.capabilities" => runtime_capabilities(st,&p).await,
+        "runtime.models" => runtime_models(st, &p).await,
         "agent.list" => {
             let include=match p.get("includeArchived"){None=>false,Some(v)=>v.as_bool().ok_or_else(||derr("invalid_argument","includeArchived must be a boolean",StatusCode::BAD_REQUEST))?};
             let runtime=match p.get("runtimeId"){None=>None,Some(v)=>Some(v.as_str().ok_or_else(||derr("invalid_argument","runtimeId must be a string",StatusCode::BAD_REQUEST))?)};
             st.db.agent_list(include,runtime).map(|agents|json!({"agents":agents})).map_err(agent_error)
         }
         "agent.get" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?; st.db.agent_get(id).map(|agent|json!({"agent":agent})).map_err(agent_error) }
-        "agent.create" => { let (agent,events)=st.db.agent_create(&p).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
-        "agent.update" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let mut fields=p.clone();fields.as_object_mut().unwrap().remove("agentId");let (agent,events)=st.db.agent_update(id,&fields).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
+        "agent.create" => { let runtime_id=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;validate_agent_catalog(st,runtime_id,&p).await?;let (agent,events)=st.db.agent_create(&p).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
+        "agent.update" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let existing=st.db.agent_get(id).map_err(agent_error)?;let mut fields=p.clone();fields.as_object_mut().unwrap().remove("agentId");let runtime_id=fields["runtimeId"].as_str().unwrap_or(existing["runtimeId"].as_str().unwrap_or(""));let mut effective=existing.clone();if let (Some(dst),Some(src))=(effective.as_object_mut(),fields.as_object()){for(k,v)in src{dst.insert(k.clone(),v.clone());}}validate_agent_catalog(st,runtime_id,&effective).await?;let (agent,events)=st.db.agent_update(id,&fields).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
         "agent.delete" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
         "agent.reorder" => { let rt=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;let ids=p["agentIds"].as_array().filter(|a|a.iter().all(Value::is_string)).ok_or_else(||derr("invalid_argument","agentIds must be an array of strings",StatusCode::BAD_REQUEST))?.iter().map(|v|v.as_str().unwrap().to_owned()).collect::<Vec<_>>();let (agents,events)=st.db.agent_reorder(rt,&ids).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agents":agents})) }
         "app.snapshot" => st.db.snapshot().map_err(|e| {
@@ -502,6 +505,86 @@ async fn active_for_agent(st:&AppState,agent_id:&str)->u32{
     let sessions=st.active_turns.lock().await.keys().cloned().collect::<Vec<_>>();let mut n=0;
     for sid in sessions{if st.db.session_detail(&sid).is_ok_and(|v|v["agentId"]==agent_id){n+=1;}}n
 }
+fn catalog_key(runtime: &Value) -> String {
+    format!("{}|{}|{}|{}|{}", runtime["id"].as_str().unwrap_or(""), runtime["executablePath"].as_str().unwrap_or(""), runtime["version"].as_str().unwrap_or(""), serde_json::to_string(&runtime["launchArgs"]).unwrap_or_default(), runtime["profileId"].as_str().unwrap_or(""))
+}
+async fn fetch_model_catalog(st: &AppState, runtime: &Value, refresh: bool) -> Result<Value, DispatchError> {
+    let spec = runtime_from(runtime);
+    let key = catalog_key(runtime);
+    let cache = MODEL_CATALOG_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
+    if !refresh { if let Ok(cache) = cache.lock() { if let Some((at, value)) = cache.get(&key) { if at.elapsed() < std::time::Duration::from_secs(60) { return Ok(value.clone()); } } } }
+    let provider = runtime["provider"].as_str().unwrap_or("");
+    let adapter = adapter_for(&st.adapters, provider).ok_or_else(|| derr("unsupported", "model catalogs are unsupported for this runtime", StatusCode::BAD_REQUEST))?;
+    let catalog = adapter.model_catalog(&spec).await.map_err(|e| match e {
+        bloblex_agent_core::AdapterError::Unsupported(_) => derr("unsupported", "model catalogs are unsupported for this runtime", StatusCode::BAD_REQUEST),
+        bloblex_agent_core::AdapterError::Process(_) => derr("provider_unavailable", "runtime model catalog is unavailable", StatusCode::BAD_GATEWAY),
+        _ => derr("provider_error", "runtime returned an invalid model catalog", StatusCode::BAD_GATEWAY),
+    })?;
+    let value = json!({"runtimeId":spec.runtime_id,"provider":provider,"models":catalog.models,"fetchedAt":catalog.fetched_at,"expiresAt":catalog.expires_at,"fallback":catalog.fallback,"source":catalog.source});
+    if let Ok(mut cache) = cache.lock() { cache.insert(key, (Instant::now(), value.clone())); }
+    Ok(value)
+}
+async fn runtime_models(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
+    let id = p["runtimeId"].as_str().filter(|s| !s.is_empty()).ok_or_else(|| derr("invalid_argument", "runtimeId is required", StatusCode::BAD_REQUEST))?;
+    let refresh = p.get("refresh").map(|v| v.as_bool().ok_or_else(|| derr("invalid_argument", "refresh must be a boolean", StatusCode::BAD_REQUEST))).transpose()?.unwrap_or(false);
+    let runtime = st.runtimes.read().await.iter().find(|r| r["id"] == id).cloned().ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
+    fetch_model_catalog(st, &runtime, refresh).await
+}
+async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) -> Result<(), DispatchError> {
+    for key in ["model", "thinking", "serviceTier"] {
+        if value.get(key).is_some_and(|v| v.is_string() && v.as_str().unwrap().is_empty()) { return Err(derr("invalid_argument", &format!("{key} must be a non-empty identifier"), StatusCode::BAD_REQUEST)); }
+    }
+    if value["customArgs"].as_array().is_some_and(|a| !a.is_empty()) { return Err(derr("invalid_argument", "customArgs must be empty", StatusCode::BAD_REQUEST)); }
+    if let Some(env) = value["customEnv"].as_object() {
+        const ALLOWED: [&str; 5] = ["LANG", "LC_ALL", "TZ", "NO_COLOR", "TERM"];
+        for (key, val) in env {
+            let upper = key.to_ascii_uppercase();
+            let secret = ["TOKEN", "SECRET", "PASSWORD", "KEY", "AUTH", "CREDENTIAL", "COOKIE"].iter().any(|p| upper.contains(p));
+            if secret || !ALLOWED.contains(&upper.as_str()) || val.as_str().is_none_or(|s| s.contains('\0')) { return Err(derr("invalid_argument", "customEnv contains an unsupported key or value", StatusCode::BAD_REQUEST)); }
+        }
+    }
+    let runtime = st.runtimes.read().await.iter().find(|r| r["id"] == runtime_id).cloned().ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
+    let catalog = match fetch_model_catalog(st, &runtime, false).await { Ok(c) => c, Err(_) => return Ok(()) };
+    if catalog["fallback"] == true { return Ok(()); }
+    if let Some(model_id) = value["model"].as_str() {
+        let model = catalog["models"].as_array().and_then(|models| models.iter().find(|m| m["id"] == model_id)).ok_or_else(|| derr("invalid_argument", "model is not available in this runtime catalog", StatusCode::BAD_REQUEST))?;
+        if let Some(thinking) = value["thinking"].as_str() { if !model["supportedThinking"].as_array().is_some_and(|a| a.iter().any(|v| v.as_str() == Some(thinking))) { return Err(derr("invalid_argument", "thinking is not supported by the selected model", StatusCode::BAD_REQUEST)); } }
+        if let Some(tier) = value["serviceTier"].as_str() { if !model["serviceTiers"].as_array().is_some_and(|a| a.iter().any(|v| v["id"] == tier)) { return Err(derr("invalid_argument", "serviceTier is not supported by the selected model", StatusCode::BAD_REQUEST)); } }
+    }
+    Ok(())
+}
+async fn validate_exec_catalog(st:&AppState,runtime:&Value,options:&ExecOptions)->Result<(),DispatchError>{
+    if options.model.is_none()&&options.thinking.is_none()&&options.service_tier.is_none(){return Ok(())}
+    let catalog=fetch_model_catalog(st,runtime,false).await.map_err(|_|derr("provider_unavailable","authoritative model catalog is required before applying this setting",StatusCode::BAD_GATEWAY))?;
+    if catalog["fallback"]==true{return Err(derr("provider_unavailable","authoritative model catalog is required before applying this setting",StatusCode::BAD_GATEWAY))}
+    let models=catalog["models"].as_array().ok_or_else(||derr("provider_error","runtime returned an invalid model catalog",StatusCode::BAD_GATEWAY))?;
+    if let Some(model_id)=options.model.as_deref(){let model=models.iter().find(|m|m["id"]==model_id).ok_or_else(||derr("invalid_argument","model is not available in this runtime catalog",StatusCode::BAD_REQUEST))?;
+        if let Some(thinking)=options.thinking.as_deref(){if !model["supportedThinking"].as_array().is_some_and(|a|a.iter().any(|v|v.as_str()==Some(thinking))){return Err(derr("invalid_argument","thinking is not supported by the selected model",StatusCode::BAD_REQUEST))}}
+        if let Some(tier)=options.service_tier.as_deref(){if !model["serviceTiers"].as_array().is_some_and(|a|a.iter().any(|v|v["id"]==tier)){return Err(derr("invalid_argument","serviceTier is not supported by the selected model",StatusCode::BAD_REQUEST))}}
+    } else if options.thinking.as_deref().is_some_and(|t|!models.iter().any(|m|m["supportedThinking"].as_array().is_some_and(|a|a.iter().any(|v|v.as_str()==Some(t))))) { return Err(derr("invalid_argument","thinking is not supported by the runtime catalog",StatusCode::BAD_REQUEST)); }
+    Ok(())
+}
+const EXEC_UNAVAILABLE: &str = "The requested setting is unavailable for this runtime until its execution check passes.";
+fn safe_requested_options(options: &ExecOptions) -> Value {
+    json!({"model":options.model,"thinking":options.thinking,"serviceTier":options.service_tier,"instructionsPresent":options.instructions.is_some(),"extraArgs":[],"maxConcurrency":options.max_concurrency,"customEnvKeys":options.env.keys().collect::<Vec<_>>()})
+}
+fn exec_option_rejection(st: &AppState, provider: &str, options: &ExecOptions) -> Result<Option<(&'static str, &'static str)>, DispatchError> {
+    let capabilities: &[(&str, bool)] = match provider {
+        "claude" => &[("model",true),("thinking",true),("serviceTier",false),("instructions",true)],
+        "codex" => &[("model",true),("thinking",true),("serviceTier",true),("instructions",true)],
+        "opencode" => &[("model",true),("thinking",false),("serviceTier",false),("instructions",true)],
+        _ => &[],
+    };
+    let settings = st.db.settings().map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+    for (name, value) in [("model",options.model.is_some()),("thinking",options.thinking.is_some()),("serviceTier",options.service_tier.is_some()),("instructions",options.instructions.is_some())] {
+        if !value { continue; }
+        let supported = capabilities.iter().find(|(key,_)| *key == name).is_some_and(|(_,yes)| *yes);
+        let gate_name = if name == "serviceTier" { "serviceTier" } else { name };
+        let enabled = if name == "serviceTier" && provider == "claude" { false } else { supported && settings[&format!("exec_gate.{provider}.{gate_name}")].as_bool().unwrap_or(false) };
+        if !enabled { return Ok(Some((name, EXEC_UNAVAILABLE))); }
+    }
+    Ok(None)
+}
 async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError>{
     let runtime_id=p["runtimeId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;
     let runtime=st.runtimes.read().await.iter().find(|r|r["id"]==runtime_id).cloned().ok_or_else(||derr("not_found","runtime not found",StatusCode::NOT_FOUND))?;
@@ -566,6 +649,11 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let options_session=if let Some(agent_id)=agent_id.as_deref(){st.db.agent_get(agent_id).map_err(agent_error)?}else{json!({"agentId":null})};
     let exec_options=exec_options_for_session(st,&options_session)?;
     let id = Uuid::new_v4().to_string();
+    if let Some((setting, reason)) = exec_option_rejection(st, &provider, &exec_options)? {
+        st.emit("exec.options.rejected", json!({"sessionId":id,"agentId":agent_id,"runtimeId":runtime_id,"setting":setting,"code":"unsupported","reason":reason})).await;
+        return Err(derr("unsupported", reason, StatusCode::BAD_REQUEST));
+    }
+    validate_exec_catalog(st,&runtime,&exec_options).await?;
     let title = p["title"]
         .as_str()
         .filter(|s| !s.trim().is_empty())
@@ -674,6 +762,11 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         )
     })?;
     let exec_options=exec_options_for_session(st,&row)?;
+    if let Some((setting, reason)) = exec_option_rejection(st, &provider, &exec_options)? {
+        st.emit("exec.options.rejected", json!({"sessionId":sid,"agentId":row["agentId"],"runtimeId":runtime,"setting":setting,"code":"unsupported","reason":reason})).await;
+        return Err(derr("unsupported", reason, StatusCode::BAD_REQUEST));
+    }
+    validate_exec_catalog(st,&rt,&exec_options).await?;
     let (tx, rx) = tokio::sync::mpsc::channel(256);
     let handle = adapter
         .resume_session(
@@ -754,6 +847,13 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
     let session_options=st.db.session_detail(&sid).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
     let exec_options=exec_options_for_session(st,&session_options)?;
     let turn = Uuid::new_v4().to_string();
+    if let Some((setting, reason)) = exec_option_rejection(st, &active.runtime.provider, &exec_options)? {
+        let snapshot_id = Uuid::new_v4().to_string();
+        let requested=safe_requested_options(&exec_options);let applied=json!({setting:{"applied":false,"reason":"execution_gate_or_capability_unavailable"}});
+        let (_,event)=st.db.reject_exec_turn(&sid,&turn,&snapshot_id,&text,&requested,&applied,&json!({}),None,&json!({"adapter":active.runtime.provider}),&json!({"agentId":session_options["agentId"],"runtimeId":active.runtime.runtime_id,"setting":setting,"code":"unsupported","reason":reason})).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+        st.broadcast_persisted(vec![event]);
+        return Err(derr("unsupported", reason, StatusCode::BAD_REQUEST));
+    }
     {
         let mut turns = st.active_turns.lock().await;
         if turns.contains_key(&sid) {
@@ -820,6 +920,13 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
                     StatusCode::INTERNAL_SERVER_ERROR,
                 )
             })?;
+        let snapshot_id = Uuid::new_v4().to_string();
+        let requested = safe_requested_options(&exec_options);
+        let requested_any = exec_options.model.is_some() || exec_options.thinking.is_some() || exec_options.service_tier.is_some() || exec_options.instructions.is_some() || !exec_options.env.is_empty();
+        let settings = st.db.settings().unwrap_or(Value::Null);
+        let gates = json!({"model":settings[format!("exec_gate.{}.model",active.runtime.provider)],"thinking":settings[format!("exec_gate.{}.thinking",active.runtime.provider)],"serviceTier":settings[format!("exec_gate.{}.serviceTier",active.runtime.provider)],"instructions":settings[format!("exec_gate.{}.instructions",active.runtime.provider)]});
+        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({}),&json!({}),None,&json!({"adapter":active.runtime.provider,"gates":gates}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+        st.emit("exec.options.changed", json!({"sessionId":sid,"turnId":turn,"agentId":session["agentId"],"runtimeId":active.runtime.runtime_id,"requested":snapshot["requested"],"applied":snapshot["applied"],"snapshotId":snapshot_id})).await;
         st.db.update_session_state(&sid, "working").map_err(|e| {
             derr(
                 "internal",
@@ -1022,6 +1129,22 @@ async fn forward_events(
                     json!({"id":usage["id"],"runtimeId":runtime_id,"sessionId":sid,"turnId":turn,"provider":provider,"model":model,"timestamp":usage["timestamp"],"inputTokens":input_tokens,"outputTokens":output_tokens,"cacheReadTokens":cache_read_tokens,"cacheWriteTokens":cache_write_tokens,"reasoningTokens":null,"providerReportedCostMinor":record.reported_cost_minor,"providerReportedCurrency":record.currency,"source":"stream","valuation":valuation}),
                 )
             }
+            AgentEvent::ExecApplied { turn_id, outcomes } => {
+                if let Ok((_snapshot,event))=st.db.update_exec_snapshot_evidence(&turn_id,&serde_json::to_value(&outcomes).unwrap_or(Value::Null)) {
+                    st.broadcast_persisted(vec![event.clone()]);
+                    ("exec.options.changed",event["payload"].clone())
+                } else {
+                    let session = st.db.session_detail(&sid).unwrap_or(Value::Null);
+                    ("exec.options.changed", json!({"sessionId":sid,"turnId":turn_id,"agentId":session["agentId"],"runtimeId":runtime_id,"applied":outcomes}))
+                }
+            }
+            AgentEvent::UsageReport { turn_id, report } => {
+                let timestamp = Utc::now().to_rfc3339();
+                let model = report.model.clone();
+                let usage = json!({"id":Uuid::new_v4().to_string(),"runtimeId":runtime_id,"sessionId":sid,"turnId":turn_id,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":report.input_tokens,"outputTokens":report.output_tokens,"cacheReadTokens":report.cache_read_tokens,"cacheWriteTokens":report.cache_write_tokens,"reasoningTokens":report.reasoning_tokens,"source":"stream","raw":{},"providerReportedCostMinor":report.cost_minor,"providerReportedCurrency":report.cost_currency,"providerUpdateId":report.provider_update_id,"usageStatus":report.usage_status,"contextUsed":report.context_used,"contextSize":report.context_size,"reportedCostDecimal":report.reported_cost_decimal,"valuation":null});
+                let _ = st.db.insert_usage(&usage);
+                ("usage.updated", json!({"id":usage["id"],"runtimeId":runtime_id,"sessionId":sid,"turnId":turn_id,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":report.input_tokens,"outputTokens":report.output_tokens,"cacheReadTokens":report.cache_read_tokens,"cacheWriteTokens":report.cache_write_tokens,"reasoningTokens":report.reasoning_tokens,"providerReportedCostMinor":report.cost_minor,"providerReportedCurrency":report.cost_currency,"source":"stream","usageStatus":report.usage_status,"contextUsed":report.context_used,"contextSize":report.context_size}))
+            }
             AgentEvent::TurnCompleted => {
                 if let Some(t) = turn.as_deref() {
                     let _ = st.db.update_turn_state(t, "completed");
@@ -1085,6 +1208,7 @@ async fn forward_events(
                 ("session.changed", session)
             }
         };
+        if ty == "exec.options.changed" && payload.get("snapshotId").is_some() { continue; }
         st.emit(ty, payload).await;
     }
 }
@@ -1245,7 +1369,7 @@ mod phase2a_tests {
     #[tokio::test]
     async fn agent_rpc_crud_reorder_archive_errors_and_persisted_event_sequence(){
         let(st,mut events)=state();
-        let created=dispatch(&st,"agent.create",json!({"name":"Alpha","runtimeId":"rt-test","instructions":"keep private","customEnv":{"SAFE_VALUE":"do-not-broadcast"}})).await.unwrap()["agent"].clone();let id=created["id"].as_str().unwrap().to_owned();
+        let created=dispatch(&st,"agent.create",json!({"name":"Alpha","runtimeId":"rt-test","instructions":"keep private","customEnv":{"TERM":"xterm-256color"}})).await.unwrap()["agent"].clone();let id=created["id"].as_str().unwrap().to_owned();
         let ev=events.recv().await.unwrap();assert_eq!(ev.event_type,"agent.changed");assert_eq!(ev.payload["action"],"created");assert!(ev.payload.get("instructions").is_none());assert!(ev.payload.get("customEnv").is_none());assert!(ev.payload.get("customArgs").is_none());
         assert_eq!(dispatch(&st,"agent.get",json!({"agentId":id})).await.unwrap()["agent"]["name"],"Alpha");assert_eq!(dispatch(&st,"agent.list",json!({})).await.unwrap()["agents"].as_array().unwrap().len(),1);
         let second=dispatch(&st,"agent.create",json!({"name":"Beta","runtimeId":"rt-test"})).await.unwrap()["agent"]["id"].as_str().unwrap().to_owned();let _=events.recv().await.unwrap();
@@ -1302,6 +1426,12 @@ mod phase2a_tests {
         let claude=json!({"id":"rt-claude","provider":"claude"});*st.runtimes.write().await=vec![claude];let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-claude"})).await.unwrap();assert_eq!(caps["settings"]["serviceTier"]["supported"],false);assert_eq!(caps["settings"]["serviceTier"]["enabled"],false);assert_eq!(caps["settings"]["thinking"]["evidence"],"usage_effect");
         *st.runtimes.write().await=vec![json!({"id":"rt-opencode","provider":"opencode"})];st.db.upsert_runtime(&json!({"id":"rt-opencode","provider":"opencode"})).unwrap();let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(caps["settings"]["thinking"]["supported"],true);assert_eq!(caps["settings"]["thinking"]["enabled"],false);assert_eq!(caps["settings"]["serviceTier"]["supported"],false);
         let agent=st.db.agent_create(&json!({"name":"Capped","runtimeId":"rt-opencode","maxConcurrency":8})).unwrap().0;let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode","agentId":agent["id"]})).await.unwrap();assert_eq!(caps["agentConcurrency"]["configuredMaxConcurrency"],8);assert_eq!(caps["agentConcurrency"]["effectiveMaxConcurrency"],4);
+    }
+    #[test]
+    fn requested_options_fail_closed_when_the_setting_gate_is_off(){
+        let(st,_)=state();let events=st.db.set_setting("exec_gate.codex.model",&json!(false)).unwrap();st.broadcast_persisted(events);
+        let requested=ExecOptions{model:Some("gpt-test".into()),..ExecOptions::default()};let rejection=exec_option_rejection(&st,"codex",&requested).unwrap().unwrap();assert_eq!(rejection.0,"model");assert_eq!(rejection.1,EXEC_UNAVAILABLE);
+        assert!(exec_option_rejection(&st,"codex",&ExecOptions::default()).unwrap().is_none());
     }
     #[tokio::test]
     async fn agent_list_without_capability_is_rejected_before_dispatch(){

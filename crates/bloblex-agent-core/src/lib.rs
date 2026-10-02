@@ -64,6 +64,62 @@ impl Default for ExecOptions {
     }
 }
 
+/// A normalized provider catalog. `fallback` catalogs are suggestions only and
+/// must never be treated as authoritative validation for execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCatalog {
+    pub models: Vec<ModelInfo>,
+    pub fetched_at: String,
+    pub expires_at: String,
+    pub fallback: bool,
+    pub source: String,
+}
+
+/// One profile-visible model and the settings that model accepts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    pub id: String,
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    pub supported_thinking: Vec<String>,
+    pub default_thinking: Option<String>,
+    pub service_tiers: Vec<ServiceTier>,
+    pub default_service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variants: Option<Vec<String>>,
+    pub host_dependent: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceTier {
+    pub id: String,
+    pub name: String,
+}
+
+/// Normalized successful or partial usage; every metric remains nullable when
+/// the provider did not report it. Raw provider payloads must not be attached.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReport {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
+    pub usage_status: String,
+    pub provider_update_id: Option<String>,
+    pub context_used: Option<u64>,
+    pub context_size: Option<u64>,
+    pub model: Option<String>,
+    pub cost_minor: Option<i64>,
+    pub cost_currency: Option<String>,
+    pub reported_cost_decimal: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceKind { None, RequestShape, ProviderEcho, UsageEffect, SuccessfulTurn }
@@ -164,6 +220,10 @@ pub enum AgentEvent {
         cache_write_tokens: Option<u64>,
         model: Option<String>,
     },
+    /// Provider has evaluated execution settings; values are normalized evidence.
+    ExecApplied { turn_id: String, outcomes: BTreeMap<String, SettingOutcome> },
+    /// Normalized usage with nullable buckets; emitted only for valid provider reports.
+    UsageReport { turn_id: String, report: UsageReport },
     TurnCompleted,
     TurnCancelled,
     Error {
@@ -176,6 +236,11 @@ pub type EventSender = mpsc::Sender<AgentEvent>;
 
 #[async_trait]
 pub trait AgentAdapter: Send + Sync {
+    /// Return a profile-scoped model catalog. Adapters that do not support
+    /// discovery keep source compatibility and report `Unsupported` by default.
+    async fn model_catalog(&self, _runtime: &RuntimeSpec) -> Result<ModelCatalog, AdapterError> {
+        Err(AdapterError::Unsupported("model catalog is unavailable".into()))
+    }
     async fn probe(&self, runtime: &RuntimeSpec) -> Result<ProbeResult, AdapterError>;
     async fn new_session(
         &self,

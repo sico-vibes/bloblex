@@ -3,6 +3,7 @@
 // value below is a visual fixture, not product data.
 import type { Agent, DaemonEvent, Runtime, Session, Snapshot } from '../types'
 import { answerUsageAnalytics } from '../ui/analyticsFixtures'
+import { parseUpdateChannel, type UpdateChannel, type UpdateInfo, type UpdateProgress, type UpdatesState } from '../updatesContract'
 
 type Unlisten = () => void
 const noop: Unlisten = () => undefined
@@ -222,4 +223,99 @@ export async function listenForDaemonEvents(_handler: (event: DaemonEvent) => vo
 export async function listenForDaemonConnection(handler: (connected: boolean) => void): Promise<Unlisten> {
   if (flags().has('disconnected')) handler(false)
   return noop
+}
+
+const updateAvailableHandlers = new Set<(info: UpdateInfo) => void>()
+const updateProgressHandlers = new Set<(progress: UpdateProgress) => void>()
+
+function fixtureUpdateChannel(): UpdateChannel {
+  return flags().get('channel') === 'stable' ? 'stable' : 'beta'
+}
+
+function fixtureUpdateInfo(channel: UpdateChannel): UpdateInfo {
+  return { version: '0.2.0', notes: 'Preview notes for this release.', pubDate: '2026-10-01T12:00:00.000Z', channel }
+}
+
+function fixtureUpdatesState(): UpdatesState {
+  const mode = flags().get('updates') ?? 'up_to_date'
+  const channel = fixtureUpdateChannel()
+  return {
+    currentVersion: '0.1.0',
+    channel,
+    autoCheck: flags().get('autoCheck') !== '0',
+    lastCheckedAt: mode === 'idle' ? null : '2026-10-02T08:00:00.000Z',
+    available: mode === 'available' || mode === 'progress' ? fixtureUpdateInfo(channel) : null,
+    devBuild: mode === 'dev',
+  }
+}
+
+let previewUpdates = fixtureUpdatesState()
+
+export async function updatesGetState(): Promise<UpdatesState> {
+  previewUpdates = { ...previewUpdates, ...fixtureUpdatesState(), channel: previewUpdates.channel, autoCheck: previewUpdates.autoCheck }
+  return { ...previewUpdates, available: previewUpdates.available ? { ...previewUpdates.available } : null }
+}
+
+export async function updatesSetPreferences(preferences: { channel?: string; autoCheck?: boolean }): Promise<UpdatesState> {
+  const channel = parseUpdateChannel(preferences.channel)
+  if (preferences.channel != null && !channel) throw new Error('invalid_argument')
+  previewUpdates = {
+    ...previewUpdates,
+    ...(channel ? { channel } : {}),
+    ...(typeof preferences.autoCheck === 'boolean' ? { autoCheck: preferences.autoCheck } : {}),
+  }
+  return updatesGetState()
+}
+
+export async function updatesCheck() {
+  const mode = flags().get('updates') ?? 'up_to_date'
+  if (mode === 'checking') await new Promise((resolve) => setTimeout(resolve, 1200))
+  const checkedAt = new Date().toISOString()
+  if (previewUpdates.devBuild || mode === 'dev') return { status: 'error' as const, checkedAt, error: 'unavailable' as const }
+  if (mode === 'error') {
+    const error = flags().get('updateError')
+    const code = error === 'signature' || error === 'manifest' || error === 'unavailable' || error === 'network' ? error : 'network'
+    return { status: 'error' as const, checkedAt, error: code }
+  }
+  if (mode === 'no_stable_release') {
+    previewUpdates = { ...previewUpdates, available: null, lastCheckedAt: checkedAt }
+    return { status: 'no_stable_release' as const, checkedAt }
+  }
+  if (mode === 'available' || mode === 'progress') {
+    const update = fixtureUpdateInfo(previewUpdates.channel)
+    previewUpdates = { ...previewUpdates, available: update, lastCheckedAt: checkedAt }
+    for (const handler of updateAvailableHandlers) handler({ ...update })
+    return { status: 'available' as const, checkedAt, update }
+  }
+  previewUpdates = { ...previewUpdates, available: null, lastCheckedAt: checkedAt }
+  return { status: 'up_to_date' as const, checkedAt }
+}
+
+export async function updatesInstall() {
+  if (!previewUpdates.available) throw new Error('no_update')
+  const known = flags().get('updateProgress') !== 'unknown'
+  const steps: UpdateProgress[] = known
+    ? [
+      { phase: 'downloading', downloadedBytes: 256, totalBytes: 1024 },
+      { phase: 'downloading', downloadedBytes: 1024, totalBytes: 1024 },
+      { phase: 'installing', downloadedBytes: 1024, totalBytes: 1024 },
+    ]
+    : [
+      { phase: 'downloading', downloadedBytes: 256, totalBytes: null },
+      { phase: 'installing', downloadedBytes: 256, totalBytes: null },
+    ]
+  for (const step of steps) {
+    for (const handler of updateProgressHandlers) handler({ ...step })
+    await new Promise((resolve) => setTimeout(resolve, 280))
+  }
+}
+
+export async function listenForUpdateAvailable(handler: (info: UpdateInfo) => void): Promise<Unlisten> {
+  updateAvailableHandlers.add(handler)
+  return () => { updateAvailableHandlers.delete(handler) }
+}
+
+export async function listenForUpdateProgress(handler: (progress: UpdateProgress) => void): Promise<Unlisten> {
+  updateProgressHandlers.add(handler)
+  return () => { updateProgressHandlers.delete(handler) }
 }

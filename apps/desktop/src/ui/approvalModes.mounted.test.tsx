@@ -19,6 +19,12 @@ vi.mock('../tauri', () => ({
   setCompanionMonitor: vi.fn(),
   companionMonitorOptions: async () => [],
   currentCompanionMonitor: async () => null,
+  updatesGetState: async () => ({ currentVersion: '0.1.0', channel: 'beta' as const, autoCheck: true, lastCheckedAt: null, available: null, devBuild: false }),
+  updatesSetPreferences: async () => ({ currentVersion: '0.1.0', channel: 'beta' as const, autoCheck: true, lastCheckedAt: null, available: null, devBuild: false }),
+  updatesCheck: async () => ({ status: 'up_to_date' as const, checkedAt: '2026-10-02T00:00:00.000Z' }),
+  updatesInstall: async () => undefined,
+  listenForUpdateAvailable: async () => () => undefined,
+  listenForUpdateProgress: async () => () => undefined,
 }))
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn() }))
 
@@ -130,11 +136,12 @@ describe('settings modal', () => {
     expect(nav.join('\n')).not.toContain('Updates')
     expect(view.host.textContent).not.toContain('Usage & budgets')
     const about = view.host.querySelector('[data-settings-about]')
-    expect(about?.textContent).toContain('Updates: not configured')
+    expect(about?.textContent).not.toContain('Updates: not configured')
     expect(about?.textContent).toContain('Signing: not configured')
     expect(about?.textContent).toContain('Channel: local build')
     expect(about?.textContent).toContain('Version:')
     expect(about?.querySelector('button, input, select, textarea')).toBeNull()
+    expect(view.host.querySelector('[data-settings-section="updates"]')).not.toBeNull()
     const start = view.host.querySelector<HTMLButtonElement>('[aria-label="Start with Windows"]')!
     expect(start.disabled).toBe(true)
     expect(view.host.textContent).toContain('Unavailable')

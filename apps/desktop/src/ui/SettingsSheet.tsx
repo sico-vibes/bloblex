@@ -7,6 +7,7 @@ import { parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
 import { companionMonitorOptions, currentCompanionMonitor, inDesktop, permissionsPolicyGet, rpc, setCloseToTray, setCompanionMonitor, setCompanionVisibility } from '../tauri'
 import { appVersion } from '../appRelease'
 import { useDialogAccessibility } from './dialogFocus'
+import { UpdatesPanel } from './UpdatesPanel'
 
 export type SettingsPageId = 'General' | 'Agents' | 'Runtimes' | 'Permissions'
 
@@ -17,13 +18,14 @@ const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHori
   { id: 'Permissions', label: 'Permissions', icon: Shield },
 ]
 
-export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onError, onOpenAgent }: {
+export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onError, onOpenAgent, focusUpdates = false }: {
   snapshot: Snapshot | null
   initialPage: SettingsPageId
   onClose: () => void
   onRefresh: () => void
   onError: (error: string | null) => void
   onOpenAgent: (agentId: string) => void
+  focusUpdates?: boolean
 }) {
   const dialogRef = useDialogAccessibility(onClose)
   const [page, setPage] = useState<SettingsPageId>(initialPage)
@@ -83,6 +85,14 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    if (!focusUpdates || loading || page !== 'General') return
+    const frame = requestAnimationFrame(() => {
+      dialogRef.current?.querySelector<HTMLElement>('[data-settings-section="updates"]')?.scrollIntoView?.({ block: 'nearest' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusUpdates, loading, page])
 
   const setCompanion = async (visible: boolean) => {
     setSaving(true)
@@ -218,10 +228,10 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
             <div className="settings-about" data-settings-about>
               <p>Version: {appVersion || 'Unknown'}</p>
               <p>Channel: local build</p>
-              <p>Updates: not configured</p>
               <p>Signing: not configured</p>
             </div>
           </SettingsGroup>
+          <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />
           <SettingsGroup title="Editor">
             <form className="settings-card-form" onSubmit={(event) => void saveEditor(event)}>
               <label>Editor executable<input aria-label="Editor executable" value={editorExecutable} onChange={(event) => setEditorExecutable(event.target.value)} placeholder="C:\\Program Files\\Microsoft VS Code\\Code.exe" /></label>

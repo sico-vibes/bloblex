@@ -5,6 +5,10 @@ import { parsePermissionsPolicy, type PermissionsPolicy } from './approvalContra
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from './executionContract'
 import type { DaemonEvent, JsonRecord, Snapshot } from './types'
 import { normalizeAnalytics } from './ui/analyticsFormat'
+import {
+  knownUpdateError, parseUpdateCheck, parseUpdateInfo, parseUpdatePreferences, parseUpdateProgress, parseUpdatesState, safeUpdateFailureMessage, updateFailureCode,
+  type UpdateCheckResult, type UpdateInfo, type UpdatePreferences, type UpdateProgress, type UpdatesState,
+} from './updatesContract'
 
 export { parseAutoResolved, parseBypassActive, parsePermissionsPolicy } from './approvalContract'
 export type { AutoResolvedAction, BypassNotice, PermissionsPolicy } from './approvalContract'
@@ -158,6 +162,57 @@ export async function runtimeModels(runtimeId: string, refresh = false) {
 
 export async function execSnapshotLatest(sessionId: string) {
   return parseExecSnapshot(await rpc('exec.snapshot.latest', { sessionId }))
+}
+
+export async function updatesGetState(): Promise<UpdatesState | null> {
+  if (!inDesktop) return null
+  try { return parseUpdatesState(await invoke('updates_get_state')) } catch { return null }
+}
+
+export async function updatesSetPreferences(preferences: UpdatePreferences): Promise<UpdatesState> {
+  if (!inDesktop) throw new Error(safeUpdateFailureMessage('unavailable'))
+  const args = parseUpdatePreferences(preferences)
+  const preferencesArgs: Record<string, unknown> = {}
+  if (args.channel) preferencesArgs.channel = args.channel
+  if (typeof args.autoCheck === 'boolean') preferencesArgs.autoCheck = args.autoCheck
+  try {
+    const parsed = parseUpdatesState(await invoke('updates_set_preferences', preferencesArgs))
+    if (!parsed) throw new Error(safeUpdateFailureMessage(null))
+    return parsed
+  } catch (reason) {
+    throw new Error(safeUpdateFailureMessage(reason))
+  }
+}
+
+export async function updatesCheck(): Promise<UpdateCheckResult> {
+  if (!inDesktop) return { status: 'error', checkedAt: '', error: 'unavailable' }
+  try {
+    return parseUpdateCheck(await invoke('updates_check')) ?? { status: 'error', checkedAt: '' }
+  } catch (reason) {
+    const code = knownUpdateError(updateFailureCode(reason))
+    return { status: 'error', checkedAt: '', ...(code ? { error: code } : {}) }
+  }
+}
+
+export async function updatesInstall(): Promise<void> {
+  if (!inDesktop) throw new Error(safeUpdateFailureMessage('unavailable'))
+  try { await invoke('updates_install') } catch (reason) { throw new Error(safeUpdateFailureMessage(reason)) }
+}
+
+export async function listenForUpdateAvailable(handler: (info: UpdateInfo) => void): Promise<UnlistenFn> {
+  if (!inDesktop) return () => undefined
+  return listen('bloblex-update-available', (event) => {
+    const info = parseUpdateInfo(event.payload)
+    if (info) handler(info)
+  })
+}
+
+export async function listenForUpdateProgress(handler: (progress: UpdateProgress) => void): Promise<UnlistenFn> {
+  if (!inDesktop) return () => undefined
+  return listen('bloblex-update-progress', (event) => {
+    const progress = parseUpdateProgress(event.payload)
+    if (progress) handler(progress)
+  })
 }
 
 export async function fetchUsageAnalytics(request: UsageAnalyticsRequest) {

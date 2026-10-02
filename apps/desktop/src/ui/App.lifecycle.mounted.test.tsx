@@ -41,6 +41,12 @@ vi.mock('../tauri', () => ({
   openProjectFolder: vi.fn(), selectLocalFile: vi.fn(), inspectLocalFile: vi.fn(),
   openInEditor: vi.fn(), revealInExplorer: vi.fn(), resolveProjectFile: vi.fn(),
   quitBloblex: vi.fn(), setCloseToTray: vi.fn(),
+  updatesGetState: async () => ({ currentVersion: '0.1.0', channel: 'beta' as const, autoCheck: true, lastCheckedAt: null, available: null, devBuild: false }),
+  updatesSetPreferences: async () => ({ currentVersion: '0.1.0', channel: 'beta' as const, autoCheck: true, lastCheckedAt: null, available: null, devBuild: false }),
+  updatesCheck: async () => ({ status: 'up_to_date' as const, checkedAt: '2026-10-02T00:00:00.000Z' }),
+  updatesInstall: async () => undefined,
+  listenForUpdateAvailable: async () => () => undefined,
+  listenForUpdateProgress: async () => () => undefined,
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({ listen: h.directListen, emit: h.emit }))

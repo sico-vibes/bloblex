@@ -5,7 +5,8 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke, isTauri: () => true }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(), emit: vi.fn() }))
 
 import { daemonAnalyticsWire } from './ui/analyticsFixtures'
-import { execSnapshotLatest, fetchUsageAnalytics, permissionsPolicyGet, runtimeCapabilities, runtimeModels } from './tauri'
+import { execSnapshotLatest, fetchUsageAnalytics, listenForUpdateAvailable, listenForUpdateProgress, permissionsPolicyGet, runtimeCapabilities, runtimeModels, updatesCheck, updatesGetState, updatesInstall, updatesSetPreferences } from './tauri'
+import { listen } from '@tauri-apps/api/event'
 
 beforeEach(() => invoke.mockReset())
 
@@ -64,5 +65,71 @@ describe('permissions policy bridge', () => {
     expect(JSON.stringify(analytics)).not.toContain('SECRET_PROMPT')
     invoke.mockResolvedValueOnce({ nope: true })
     await expect(fetchUsageAnalytics({ from: '2026-03-28T00:00:00.000Z', to: '2026-03-31T00:00:00.000Z', bucket: 'day', tz: 'Europe/London' })).rejects.toThrow(/internal/)
+  })
+})
+
+describe('updates bridge', () => {
+  beforeEach(() => { vi.mocked(listen).mockReset() })
+
+  it('calls the four updater commands with exact arguments and drops unknown fields', async () => {
+    invoke.mockResolvedValueOnce({
+      currentVersion: '0.1.0', channel: 'beta', autoCheck: true, lastCheckedAt: null, available: null, devBuild: false, token: 'SECRET_STATE',
+    })
+    const state = await updatesGetState()
+    expect(invoke).toHaveBeenCalledWith('updates_get_state')
+    expect(state).toEqual({ currentVersion: '0.1.0', channel: 'beta', autoCheck: true, lastCheckedAt: null, available: null, devBuild: false })
+    expect(JSON.stringify(state)).not.toContain('SECRET_STATE')
+
+    invoke.mockResolvedValueOnce(null)
+    expect(await updatesGetState()).toBeNull()
+
+    invoke.mockResolvedValueOnce({ currentVersion: '0.1.0', channel: 'stable', autoCheck: true, lastCheckedAt: null, available: null, devBuild: false, password: 'SECRET_PREF' })
+    await updatesSetPreferences({ channel: 'stable' })
+    expect(invoke).toHaveBeenLastCalledWith('updates_set_preferences', { channel: 'stable' })
+
+    invoke.mockResolvedValueOnce({ currentVersion: '0.1.0', channel: 'stable', autoCheck: false, lastCheckedAt: null, available: null, devBuild: false })
+    await updatesSetPreferences({ autoCheck: false })
+    expect(invoke).toHaveBeenLastCalledWith('updates_set_preferences', { autoCheck: false })
+
+    invoke.mockResolvedValueOnce({ currentVersion: '0.1.0', channel: 'beta', autoCheck: true, lastCheckedAt: null, available: null, devBuild: false })
+    await updatesSetPreferences({ channel: 'nightly' as 'beta' })
+    expect(invoke).toHaveBeenLastCalledWith('updates_set_preferences', {})
+
+    invoke.mockResolvedValueOnce({ status: 'error', checkedAt: '2026-10-02T00:00:00.000Z', error: 'disk SECRET_STACK', message: 'SECRET_STACK' })
+    const failed = await updatesCheck()
+    expect(invoke).toHaveBeenCalledWith('updates_check')
+    expect(failed).toEqual({ status: 'error', checkedAt: '2026-10-02T00:00:00.000Z' })
+    expect(JSON.stringify(failed)).not.toContain('SECRET')
+
+    invoke.mockRejectedValueOnce({ code: 'signature', message: 'bad sig SECRET_PATH' })
+    const rejection = await updatesInstall().then(() => null, (error: unknown) => error)
+    expect(invoke).toHaveBeenCalledWith('updates_install')
+    expect(rejection).toBeInstanceOf(Error)
+    expect((rejection as Error).message).toBe('The update signature could not be verified.')
+    expect((rejection as Error).message).not.toContain('SECRET_PATH')
+  })
+
+  it('listens for update events and ignores payloads that are not updates', async () => {
+    let available: ((event: { payload: unknown }) => void) | undefined
+    let progress: ((event: { payload: unknown }) => void) | undefined
+    vi.mocked(listen).mockImplementation(((name: string, handler: (event: { payload: unknown }) => void) => {
+      if (name === 'bloblex-update-available') available = handler
+      if (name === 'bloblex-update-progress') progress = handler
+      return Promise.resolve(() => undefined)
+    }) as typeof listen)
+    const seenInfo: unknown[] = []
+    const seenProgress: unknown[] = []
+    await listenForUpdateAvailable((info) => seenInfo.push(info))
+    await listenForUpdateProgress((item) => seenProgress.push(item))
+    expect(vi.mocked(listen).mock.calls.map((call) => call[0])).toEqual(['bloblex-update-available', 'bloblex-update-progress'])
+    available?.({ payload: { version: '1.2.0', notes: null, pubDate: null, channel: 'stable', token: 'SECRET_EVENT' } })
+    available?.({ payload: { nope: true } })
+    available?.({ payload: null })
+    progress?.({ payload: { phase: 'downloading', downloadedBytes: 5, totalBytes: null, token: 'SECRET_PROGRESS' } })
+    progress?.({ payload: { phase: 'extracting', downloadedBytes: 1, totalBytes: 2 } })
+    expect(seenInfo).toEqual([{ version: '1.2.0', notes: null, pubDate: null, channel: 'stable' }])
+    expect(seenProgress).toEqual([{ phase: 'downloading', downloadedBytes: 5, totalBytes: null }])
+    expect(JSON.stringify(seenInfo)).not.toContain('SECRET_EVENT')
+    expect(JSON.stringify(seenProgress)).not.toContain('SECRET_PROGRESS')
   })
 })

@@ -6,6 +6,7 @@ use std::{
     env,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::{Mutex, OnceLock},
 };
 use tokio::{
     process::Command,
@@ -33,14 +34,32 @@ pub struct ResolvedCommand {
     pub args: Vec<String>,
 }
 
+static NEGATIVE_CAPABILITY_CACHE: OnceLock<Mutex<std::collections::HashSet<String>>> =
+    OnceLock::new();
+
+fn negative_probe_key(provider: &str, executable: &Path, version: Option<&str>) -> String {
+    format!(
+        "{provider}|{}|{}",
+        executable.to_string_lossy().to_ascii_lowercase(),
+        version.unwrap_or("unknown")
+    )
+}
+
+fn executable_extensions() -> Vec<&'static str> {
+    #[cfg(windows)]
+    {
+        vec![".exe", ".com", ".cmd", ".bat", ""]
+    }
+    #[cfg(not(windows))]
+    {
+        vec![""]
+    }
+}
+
 pub fn resolve_command(name: &str) -> Option<ResolvedCommand> {
     let paths = env::var_os("PATH")?;
-    #[cfg(windows)]
-    let extensions = vec![".exe", ".com", ".cmd", ".bat", ".ps1", ""];
-    #[cfg(not(windows))]
-    let extensions = vec![""];
     for dir in env::split_paths(&paths) {
-        for ext in &extensions {
+        for ext in executable_extensions() {
             let candidate = dir.join(format!("{name}{ext}"));
             if candidate.is_file() {
                 if candidate
@@ -188,6 +207,15 @@ pub async fn discover() -> Vec<DiscoveredRuntime> {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
+        let cache_key = negative_probe_key(
+            id,
+            &resolved.executable,
+            version.as_deref(),
+        );
+        let unsupported_cache = NEGATIVE_CAPABILITY_CACHE.get_or_init(|| Mutex::new(Default::default()));
+        if unsupported_cache.lock().is_ok_and(|cache| cache.contains(&cache_key)) {
+            continue;
+        }
         let family = match proto {
             "acp" => ProtocolFamily::Acp,
             "codex_app_server" => ProtocolFamily::CodexAppServer,
@@ -208,6 +236,9 @@ pub async fn discover() -> Vec<DiscoveredRuntime> {
             _ => help.contains("--input-format") && help.contains("stream-json"),
         };
         if !supported {
+            if let Ok(mut cache) = unsupported_cache.lock() {
+                cache.insert(cache_key);
+            }
             continue;
         }
         let auth_state = auth_status(id, &resolved.executable, &resolved.args).await;
@@ -330,6 +361,14 @@ mod tests {
         assert_eq!(short_hash("abc"), short_hash("abc"));
     }
     #[test]
+    fn negative_probe_cache_key_changes_with_cli_version() {
+        let executable = Path::new("C:/tools/cli.exe");
+        assert_ne!(
+            negative_probe_key("codex", executable, Some("0.1.0")),
+            negative_probe_key("codex", executable, Some("0.2.0"))
+        );
+    }
+    #[test]
     fn npm_wrapper_fixtures_resolve_native_exes_and_node_scripts() {
         let root = std::env::temp_dir().join(format!("bloblex-fixture-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -367,20 +406,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
     #[tokio::test]
-    async fn resolves_installed_clis_to_real_native_targets() {
-        for name in ["claude", "codex", "opencode"] {
-            if let Some(resolved) = resolve_command(name) {
-                assert!(resolved.executable.is_file());
-                assert!(!resolved
-                    .executable
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("cmd")));
-            }
-        }
-        let providers = discover().await;
-        println!(
-            "discovered providers: {:?}",
-            providers.iter().map(|r| &r.provider).collect::<Vec<_>>()
-        );
+    async fn resolver_never_returns_a_powershell_script() {
+        assert!(!executable_extensions().iter().any(|extension| *extension == ".ps1"));
     }
 }

@@ -56,3 +56,13 @@ Response:
 
 - Daemon: reconciliation of totals with the raw `usage_events` on a fixture, partial/unreported data labelled with `lowerBound`, unknown prices stay null (never 0), subscriptions excluded from cost, timezone bucketing incl. a DST transition week, week-start Monday, project and agent filters, null-agent row, failed-run list safety (no prompt text), range validation.
 - UI: summary cards and "≥" rendering for lower bounds, "Unknown" rendering, chart bar values and metric/bucket toggles, filters sending the right request, accessibility roles/labels, the Blob Usage tab reuse with a fixed agent, empty state.
+
+## Runtime hardening additions
+
+`failureClass` may additionally be `context`. The daemon uses this only after positive provider evidence of context exhaustion. Its safe user-facing message is `Context window is full. Start a new conversation.` and the turn error carries `canRetireSession: true`. Context exhaustion alone does not clear the provider session ID.
+
+`runtime.capabilities` additionally returns `versionRecognized: boolean`. This indicates that the discovered CLI version matches a version format the runtime knows; it does not imply that every capability has been verified. Runtime children receive only allowlisted `LANG`, `LC_ALL`, `TZ`, `NO_COLOR`, and `TERM` overrides. Environment values are never logged or emitted.
+
+On positive evidence that a provider rejected its stored session ID as missing or expired, the daemon emits `session.resume_rejected`, clears that provider ID, and starts a fresh provider session. Generic resume failures retain the stored ID.
+
+- Resume-time context overflow emits `session.context_exhausted` with the same safe message and retirement offer; it does not clear the provider-session ID.

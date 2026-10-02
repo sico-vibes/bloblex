@@ -253,6 +253,158 @@ async fn catalog_paginates_visible_models_on_one_short_lived_process() {
 }
 
 #[tokio::test]
+async fn resumed_thread_replay_is_filtered_until_the_new_turn_starts() {
+    let (runtime, _) = setup(Some("replay"));
+    let adapter = CodexAdapter::default();
+    let (tx, _rx) = tokio::sync::mpsc::channel(32);
+    let created = adapter
+        .new_session(
+            &runtime,
+            NewSessionRequest {
+                session_id: "replay-session".into(),
+                project_path: runtime.cwd.clone().unwrap(),
+                exec_options: ExecOptions::default(),
+            },
+            tx,
+        )
+        .await
+        .unwrap();
+    adapter.close_session(&created).await.unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    let resumed = adapter
+        .resume_session(
+            &runtime,
+            ResumeSessionRequest {
+                session_id: "replay-session".into(),
+                provider_session_id: created.provider_session_id,
+                project_path: runtime.cwd.clone().unwrap(),
+                exec_options: ExecOptions::default(),
+            },
+            tx,
+        )
+        .await
+        .unwrap();
+    adapter
+        .prompt(
+            &resumed,
+            PromptRequest {
+                turn_id: "fresh-turn".into(),
+                text: "new prompt".into(),
+                exec_options: ExecOptions::default(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut events = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let completed = matches!(event, AgentEvent::TurnCompleted);
+        events.push(event);
+        if completed {
+            break;
+        }
+    }
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::AssistantDelta { text } if text == "new answer"
+    )));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        AgentEvent::AssistantDelta { text } if text == "stale answer"
+    )));
+    adapter.close_session(&resumed).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+#[tokio::test]
+async fn stored_thread_is_rejected_only_when_provider_reports_missing_identity() {
+    let (runtime, _) = setup(Some("resume-reject"));
+    let adapter = CodexAdapter::default();
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let created = adapter
+        .new_session(
+            &runtime,
+            NewSessionRequest {
+                session_id: "resume-session".into(),
+                project_path: runtime.cwd.clone().unwrap(),
+                exec_options: ExecOptions::default(),
+            },
+            tx,
+        )
+        .await
+        .unwrap();
+    adapter.close_session(&created).await.unwrap();
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let result = adapter
+        .resume_session(
+            &runtime,
+            ResumeSessionRequest {
+                session_id: "resume-session".into(),
+                provider_session_id: created.provider_session_id,
+                project_path: runtime.cwd.clone().unwrap(),
+                exec_options: ExecOptions::default(),
+            },
+            tx,
+        )
+        .await;
+    assert!(matches!(result, Err(AdapterError::ResumeRejected)));
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+#[tokio::test]
+async fn context_overflow_is_reported_as_a_typed_adapter_event() {
+    let (runtime, _) = setup(Some("context"));
+    let adapter = CodexAdapter::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let handle = adapter
+        .new_session(
+            &runtime,
+            NewSessionRequest {
+                session_id: "context-session".into(),
+                project_path: runtime.cwd.clone().unwrap(),
+                exec_options: ExecOptions::default(),
+            },
+            tx,
+        )
+        .await
+        .unwrap();
+    adapter
+        .prompt(
+            &handle,
+            PromptRequest {
+                turn_id: "context-turn".into(),
+                text: "large prompt".into(),
+                exec_options: ExecOptions::default(),
+            },
+        )
+        .await
+        .unwrap();
+    let mut observed_context = false;
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if matches!(event, AgentEvent::ContextExhausted) {
+            observed_context = true;
+            break;
+        }
+        if matches!(event, AgentEvent::TurnCompleted | AgentEvent::Error { .. }) {
+            break;
+        }
+    }
+    assert!(observed_context);
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+#[tokio::test]
 async fn catalog_timeout_is_bounded_and_reported_unavailable() {
     let (r, record) = setup(Some("stall"));
     let started = tokio::time::Instant::now();

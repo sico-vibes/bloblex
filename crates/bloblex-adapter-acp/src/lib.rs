@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use bloblex_agent_core::*;
-use bloblex_process::{prepare_command, ProcessTree};
+use bloblex_process::{prepare_command, ProcessTree, StdinWriter};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -13,8 +13,8 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStdin, Command},
+    io::{AsyncBufReadExt, BufReader},
+    process::{Child, Command},
     sync::{oneshot, Mutex},
 };
 
@@ -26,7 +26,7 @@ mod sha256;
 pub use sha256::sha256_hex;
 
 struct Conn {
-    stdin: Mutex<ChildStdin>,
+    stdin: Mutex<StdinWriter>,
     child: Mutex<Child>,
     process_tree: ProcessTree,
     pending: Mutex<HashMap<String, oneshot::Sender<Result<Value, AdapterError>>>>,
@@ -120,7 +120,7 @@ impl AcpAdapter {
             }
         });
         let c = Arc::new(Conn {
-            stdin: Mutex::new(stdin),
+            stdin: Mutex::new(StdinWriter::new(stdin)),
             child: Mutex::new(child),
             process_tree,
             pending: Mutex::new(HashMap::new()),
@@ -163,7 +163,7 @@ impl AcpAdapter {
                             });
                             let mut bytes = serde_json::to_vec(&response).unwrap_or_default();
                             bytes.push(b'\n');
-                            let _ = reader.stdin.lock().await.write_all(&bytes).await;
+                            let _ = reader.stdin.lock().await.write(&bytes).await;
                         }
                     } else if let Some(tx) = reader.pending.lock().await.remove(&key) {
                         if let Some(err) = msg.get("error") {
@@ -197,14 +197,12 @@ impl AcpAdapter {
         let (tx, rx) = oneshot::channel();
         c.pending.lock().await.insert(id.clone(), tx);
         let msg = json!({"jsonrpc":"2.0","id":id,"method":method,"params":params});
-        let mut stdin = c.stdin.lock().await;
         let mut bytes = serde_json::to_vec(&msg).map_err(|e| AdapterError::Protocol(e.to_string()))?;
         bytes.push(b'\n');
-        if let Err(e) = stdin.write_all(&bytes).await {
+        if let Err(e) = c.stdin.lock().await.write(&bytes).await {
             c.pending.lock().await.remove(&id);
             return Err(AdapterError::Process(e.to_string()));
         }
-        drop(stdin);
         let request_timeout = if method == "session/prompt" {
             Duration::from_secs(30 * 60)
         } else {
@@ -227,7 +225,7 @@ impl AcpAdapter {
         c.stdin
             .lock()
             .await
-            .write_all(&bytes)
+            .write(&bytes)
             .await
             .map_err(|e| AdapterError::Process(e.to_string()))
     }
@@ -612,7 +610,13 @@ impl AgentAdapter for AcpAdapter {
                 "session/load",
                 json!({"sessionId": req.provider_session_id, "cwd": req.project_path, "mcpServers": []}),
             )
-            .await?;
+            .await
+            .map_err(|error| match error {
+                AdapterError::Protocol(message) if resume_rejected_evidence(&message) => {
+                    AdapterError::ResumeRejected
+                }
+                other => other,
+            })?;
             *c.session_id.lock().await = Some(req.provider_session_id.clone());
             *c.config_options.lock().await = exec::options_from_result(&result);
             Self::apply_options(&c, &req.provider_session_id, &req.exec_options, None).await?;
@@ -698,7 +702,7 @@ impl AgentAdapter for AcpAdapter {
             c.stdin
                 .lock()
                 .await
-                .write_all(&bytes)
+                .write(&bytes)
                 .await
                 .map_err(|e| AdapterError::Process(e.to_string()))?;
             c.permission_options.lock().await.remove(&key);
@@ -744,7 +748,7 @@ impl AgentAdapter for AcpAdapter {
                 c.stdin
                     .lock()
                     .await
-                    .write_all(&bytes)
+                    .write(&bytes)
                     .await
                     .map_err(|e| AdapterError::Process(e.to_string()))?;
                 incoming.remove(id);
@@ -763,11 +767,18 @@ impl AgentAdapter for AcpAdapter {
                 Self::request(&c, "session/close", json!({"sessionId": handle.provider_session_id})),
             )
             .await;
-            let _ = c.process_tree.terminate();
-            let _ = c.child.lock().await.kill().await;
+            c.stdin.lock().await.close(&mut *c.child.lock().await, &c.process_tree).await;
         }
         Ok(())
     }
+}
+
+fn resume_rejected_evidence(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    (message.contains("session") || message.contains("resume"))
+        && ["not found", "expired", "does not exist", "unknown id"]
+            .iter()
+            .any(|evidence| message.contains(evidence))
 }
 
 #[cfg(test)]

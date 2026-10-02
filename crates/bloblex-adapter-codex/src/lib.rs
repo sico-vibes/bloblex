@@ -1,7 +1,7 @@
 //! Codex app-server adapter over JSON-RPC stdio; never reads terminal UI output.
 use async_trait::async_trait;
 use bloblex_agent_core::*;
-use bloblex_process::{prepare_command, ProcessTree};
+use bloblex_process::{prepare_command, ProcessTree, StdinWriter};
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
 use std::{
@@ -14,15 +14,15 @@ use std::{
     },
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStdin, Command},
+    io::{AsyncBufReadExt, BufReader},
+    process::{Child, Command},
     sync::{oneshot, Mutex},
 };
 
 const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const CATALOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 struct Conn {
-    stdin: Mutex<ChildStdin>,
+    stdin: Mutex<StdinWriter>,
     child: Mutex<Child>,
     process_tree: ProcessTree,
     pending: Mutex<HashMap<String, oneshot::Sender<Result<Value, AdapterError>>>>,
@@ -36,6 +36,8 @@ struct Conn {
 #[derive(Default)]
 struct TurnState {
     id: Option<String>,
+    thread_id: Option<String>,
+    replay_gate: bool,
     options: ExecOptions,
     usage: Option<Value>,
     completed: bool,
@@ -66,6 +68,7 @@ impl CodexAdapter {
         r: &RuntimeSpec,
         cwd: &Path,
         events: EventSender,
+        options: &ExecOptions,
     ) -> Result<Arc<Conn>, AdapterError> {
         let mut c = Command::new(&r.executable);
         prepare_command(&mut c);
@@ -76,6 +79,14 @@ impl CodexAdapter {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        for (key, value) in &options.env {
+            if !["LANG", "LC_ALL", "TZ", "NO_COLOR", "TERM"].contains(&key.as_str())
+                || value.contains('\0')
+            {
+                return Err(AdapterError::Unsupported("custom environment contains an unsupported key".into()));
+            }
+            c.env(key, value);
+        }
         let mut child = c
             .spawn()
             .map_err(|e| AdapterError::Process(e.to_string()))?;
@@ -89,7 +100,7 @@ impl CodexAdapter {
             .take()
             .ok_or_else(|| AdapterError::Process("app-server stdout unavailable".into()))?;
         let conn = Arc::new(Conn {
-            stdin: Mutex::new(stdin),
+            stdin: Mutex::new(StdinWriter::new(stdin)),
             child: Mutex::new(child),
             process_tree,
             pending: Mutex::new(HashMap::new()),
@@ -149,6 +160,24 @@ impl CodexAdapter {
                 if let Some(method) = v["method"].as_str() {
                     let p = &v["params"];
                     let expected = r.turn.lock().await.id.clone();
+                    if method == "turn/started" {
+                        let thread_id = r.turn.lock().await.thread_id.clone();
+                        if thread_id.as_deref() == p["threadId"].as_str() {
+                            let mut state = r.turn.lock().await;
+                            state.id = p["turn"]["id"].as_str().map(str::to_owned);
+                            state.replay_gate = false;
+                        }
+                        continue;
+                    }
+                    if method.starts_with("item/") {
+                        let state = r.turn.lock().await;
+                        if state.replay_gate
+                            || state.thread_id.as_deref() != p["threadId"].as_str()
+                            || state.id.as_deref() != p["turnId"].as_str()
+                        {
+                            continue;
+                        }
+                    }
                     match method {
                         "thread/tokenUsage/updated"
                             if expected.as_deref() == p["turnId"].as_str() =>
@@ -187,6 +216,10 @@ impl CodexAdapter {
                                 let _ = r.events.send(AgentEvent::TurnCompleted).await;
                             } else if status == "interrupted" {
                                 let _ = r.events.send(AgentEvent::TurnCancelled).await;
+                            } else if context_exhausted_evidence(
+                                &p["turn"]["error"].to_string(),
+                            ) {
+                                let _ = r.events.send(AgentEvent::ContextExhausted).await;
                             } else {
                                 let _ = r
                                     .events
@@ -217,7 +250,7 @@ impl CodexAdapter {
         let mut b = serde_json::to_vec(&json!({"jsonrpc":"2.0","id":id,"method":m,"params":p}))
             .map_err(|e| AdapterError::Protocol(e.to_string()))?;
         b.push(b'\n');
-        if let Err(e) = c.stdin.lock().await.write_all(&b).await {
+        if let Err(e) = c.stdin.lock().await.write(&b).await {
             c.pending.lock().await.remove(&id);
             return Err(AdapterError::Process(e.to_string()));
         }
@@ -237,7 +270,7 @@ impl CodexAdapter {
         c.stdin
             .lock()
             .await
-            .write_all(&b)
+            .write(&b)
             .await
             .map_err(|e| AdapterError::Process(e.to_string()))
     }
@@ -254,7 +287,19 @@ impl CodexAdapter {
             let _ = c.process_tree.terminate();
             let _ = c.child.lock().await.kill().await;
         }
-        result
+        match result {
+            Err(AdapterError::Rejected(message))
+                if method == "thread/resume" && context_exhausted_evidence(&message) =>
+            {
+                Err(AdapterError::ContextExhausted)
+            }
+            Err(AdapterError::Rejected(message))
+                if method == "thread/resume" && resume_rejected_evidence(&message) =>
+            {
+                Err(AdapterError::ResumeRejected)
+            }
+            other => other,
+        }
     }
     fn start_params(cwd: &Path, options: &ExecOptions) -> Value {
         let (approval,sandbox)=if options.approval_mode==bloblex_agent_core::ApprovalMode::Bypass {("never","danger-full-access")}else{("on-request","workspace-write")};
@@ -305,6 +350,28 @@ impl CodexAdapter {
             first_success_pending,
         };
     }
+}
+
+fn resume_rejected_evidence(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    (message.contains("thread") || message.contains("session"))
+        && ["not found", "expired", "does not exist", "unknown id"]
+            .iter()
+            .any(|evidence| message.contains(evidence))
+}
+
+fn context_exhausted_evidence(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "context window is full",
+        "prompt is too long",
+        "maximum context length",
+        "resume overflow",
+        "compaction failed: context",
+        "thread context overflow",
+    ]
+        .iter()
+        .any(|evidence| message.contains(evidence))
 }
 
 fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
@@ -553,7 +620,7 @@ async fn read_reply(
     }
 }
 async fn write_rpc(
-    stdin: &mut tokio::process::ChildStdin,
+    stdin: &StdinWriter,
     id: u64,
     method: &str,
     params: Value,
@@ -563,7 +630,7 @@ async fn write_rpc(
             .map_err(|e| AdapterError::Protocol(e.to_string()))?;
     b.push(b'\n');
     stdin
-        .write_all(&b)
+        .write(&b)
         .await
         .map_err(|e| AdapterError::Process(e.to_string()))
 }
@@ -584,23 +651,24 @@ async fn catalog_pages(r: &RuntimeSpec) -> Result<Vec<Value>, AdapterError> {
         .map_err(|_| AdapterError::Process("Codex app-server catalog could not start".into()))?;
     let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
     let result = async {
-        let mut stdin = child
+        let stdin = child
             .stdin
             .take()
             .ok_or_else(|| AdapterError::Process("catalog stdin unavailable".into()))?;
+        let stdin = StdinWriter::new(stdin);
         let stdout = child
             .stdout
             .take()
             .ok_or_else(|| AdapterError::Process("catalog stdout unavailable".into()))?;
         let mut lines = BufReader::new(stdout).lines();
-        write_rpc(&mut stdin,1,"initialize",json!({"clientInfo":{"name":"Bloblex","version":"0.1.0"},"capabilities":{"experimentalApi":false}})).await?;
+        write_rpc(&stdin,1,"initialize",json!({"clientInfo":{"name":"Bloblex","version":"0.1.0"},"capabilities":{"experimentalApi":false}})).await?;
         let _ = read_reply(&mut lines, 1).await?;
         let mut b =
             serde_json::to_vec(&json!({"jsonrpc":"2.0","method":"initialized","params":{}}))
                 .unwrap();
         b.push(b'\n');
         stdin
-            .write_all(&b)
+            .write(&b)
             .await
             .map_err(|e| AdapterError::Process(e.to_string()))?;
         let mut cursor = Value::Null;
@@ -610,7 +678,7 @@ async fn catalog_pages(r: &RuntimeSpec) -> Result<Vec<Value>, AdapterError> {
         loop {
             id += 1;
             write_rpc(
-                &mut stdin,
+                &stdin,
                 id,
                 "model/list",
                 json!({"cursor":cursor,"includeHidden":false,"limit":100}),
@@ -721,7 +789,7 @@ impl AgentAdapter for CodexAdapter {
         q: NewSessionRequest,
         events: EventSender,
     ) -> Result<SessionHandle, AdapterError> {
-        let c = self.spawn(r, &q.project_path, events).await?;
+        let c = self.spawn(r, &q.project_path, events, &q.exec_options).await?;
         let t = Self::startup_call(
             &c,
             "thread/start",
@@ -739,6 +807,7 @@ impl AgentAdapter for CodexAdapter {
                 "thread/start returned no thread id".into(),
             ));
         };
+        c.turn.lock().await.thread_id = Some(tid.clone());
         let hash = instruction_sha256(q.exec_options.instructions.as_deref().unwrap_or(""));
         Self::set_thread_meta(&c, &t, hash.clone(), hash.clone(), true).await;
         self.thread_instruction_hashes
@@ -764,7 +833,7 @@ impl AgentAdapter for CodexAdapter {
         q: ResumeSessionRequest,
         events: EventSender,
     ) -> Result<SessionHandle, AdapterError> {
-        let c = self.spawn(r, &q.project_path, events).await?;
+        let c = self.spawn(r, &q.project_path, events, &q.exec_options).await?;
         let t = Self::startup_call(
             &c,
             "thread/resume",
@@ -775,6 +844,7 @@ impl AgentAdapter for CodexAdapter {
             .as_str()
             .unwrap_or(&q.provider_session_id)
             .to_owned();
+        c.turn.lock().await.thread_id = Some(id.clone());
         let (desired, baseline) = self
             .instruction_context
             .lock()
@@ -860,6 +930,8 @@ impl AgentAdapter for CodexAdapter {
         let request_options = q.exec_options.clone();
         *c.turn.lock().await = TurnState {
             id: None,
+            thread_id: Some(h.provider_session_id.clone()),
+            replay_gate: true,
             options: q.exec_options,
             usage: None,
             completed: false,
@@ -969,7 +1041,7 @@ impl AgentAdapter for CodexAdapter {
                 c.stdin
                     .lock()
                     .await
-                    .write_all(&b)
+                    .write(&b)
                     .await
                     .map_err(|e| AdapterError::Process(e.to_string()))?;
                 return Ok(());
@@ -981,8 +1053,7 @@ impl AgentAdapter for CodexAdapter {
     }
     async fn close_session(&self, h: &SessionHandle) -> Result<(), AdapterError> {
         if let Some(c) = self.sessions.lock().await.remove(&h.session_id) {
-            let _ = c.process_tree.terminate();
-            let _ = c.child.lock().await.kill().await;
+            c.stdin.lock().await.close(&mut *c.child.lock().await, &c.process_tree).await;
         }
         Ok(())
     }

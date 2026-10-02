@@ -1,5 +1,11 @@
 use std::io;
-use tokio::process::{Child, Command};
+use tokio::{
+    io::AsyncWriteExt,
+    process::{Child, ChildStdin, Command},
+    sync::mpsc,
+    task::JoinHandle,
+    time::{timeout, Duration},
+};
 use std::process::Command as StdCommand;
 
 /// Starts each child in an isolated process group where the platform supports it.
@@ -39,6 +45,66 @@ pub struct ProcessTree {
     process_group: i32,
     #[cfg(windows)]
     job: isize,
+}
+
+/// Serializes child stdin through an independent writer task so adapter event
+/// readers continue draining stdout and stderr while a child is not reading.
+pub struct StdinWriter {
+    sender: Option<mpsc::Sender<Vec<u8>>>,
+    task: JoinHandle<()>,
+}
+
+impl StdinWriter {
+    pub fn new(mut stdin: ChildStdin) -> Self {
+        let (sender, mut receiver) = mpsc::channel::<Vec<u8>>(32);
+        let task = tokio::spawn(async move {
+            while let Some(bytes) = receiver.recv().await {
+                if stdin.write_all(&bytes).await.is_err() {
+                    break;
+                }
+                if stdin.flush().await.is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            sender: Some(sender),
+            task,
+        }
+    }
+
+    /// Queue a write without waiting on a potentially blocked OS pipe.
+    pub async fn write(&self, bytes: &[u8]) -> io::Result<()> {
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::BrokenPipe, "child stdin is closed")
+        })?;
+        sender.try_send(bytes.to_vec()).map_err(|error| {
+            io::Error::new(io::ErrorKind::WouldBlock, error.to_string())
+        })
+    }
+
+    /// Close stdin, allow the child a short graceful exit, then kill its whole
+    /// owned tree and wait for the direct child if it does not exit in time.
+    pub async fn close(&mut self, child: &mut Child, tree: &ProcessTree) {
+        self.sender.take();
+        if timeout(Duration::from_millis(500), &mut self.task)
+            .await
+            .is_err()
+        {
+            let _ = tree.terminate();
+            let _ = child.kill().await;
+            let _ = timeout(Duration::from_secs(2), child.wait()).await;
+            return;
+        }
+        if timeout(Duration::from_millis(500), child.wait())
+            .await
+            .is_err()
+        {
+            let _ = tree.terminate();
+            let _ = child.kill().await;
+            let _ = timeout(Duration::from_secs(2), child.wait()).await;
+        }
+    }
 }
 
 impl ProcessTree {

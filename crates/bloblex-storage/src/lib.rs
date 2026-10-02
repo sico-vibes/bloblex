@@ -135,6 +135,32 @@ fn migrate_turn_analytics(c: &mut Connection, path: Option<&Path>, backup_done: 
     if !schema_v5_valid(c)? { return Err(StorageError::InvalidAgent); }
     Ok(())
 }
+
+fn migrate_context_failure_class(c: &mut Connection) -> Result<(), StorageError> {
+    let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+    if ledger < 5 {
+        return Err(StorageError::InvalidAgent);
+    }
+    let exists: bool = c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('turns') WHERE name='failure_class_v2')",
+        [],
+        |r| r.get(0),
+    )?;
+    if exists {
+        return Ok(());
+    }
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let has_v2: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('turns') WHERE name='failure_class_v2')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_v2 {
+        tx.execute("ALTER TABLE turns ADD COLUMN failure_class_v2 TEXT", [])?;
+    }
+    tx.commit()?;
+    Ok(())
+}
 fn migrate_approval_modes(c:&mut Connection,path:Option<&Path>,backup_done:bool)->Result<(),StorageError>{
     let ledger:i64=c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
     let pragma:i64=c.query_row("PRAGMA user_version",[],|r|r.get(0))?;
@@ -377,6 +403,7 @@ impl Storage {
             if ledger == 4 { verified_backup(&conn, path.unwrap(), 4)?; backup_v4_done = true; }
         }
         migrate_turn_analytics(&mut conn, path, backup_v4_done)?;
+        migrate_context_failure_class(&mut conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -874,6 +901,14 @@ impl Storage {
         )?;
         Ok(())
     }
+    pub fn clear_session_provider_id(&self, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute(
+            "UPDATE sessions SET provider_session_id=NULL,resumable=0,updated_at=?2 WHERE id=?1",
+            params![id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
     pub fn record_budget_stopped_turn(&self, id: &str, session: &str) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -1024,7 +1059,7 @@ impl Storage {
     pub fn update_turn_outcome(&self, id: &str, state: &str, failure_class: Option<&str>) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         c.execute(
-            "UPDATE turns SET state=?2,completed_at=?3,failure_class=?4 WHERE id=?1",
+            "UPDATE turns SET state=?2,completed_at=?3,failure_class=?4,failure_class_v2=?5 WHERE id=?1",
             params![
                 id,
                 state,
@@ -1033,7 +1068,8 @@ impl Storage {
                 } else {
                     Some(Utc::now().to_rfc3339())
                 },
-                failure_class.filter(|class| matches!(*class, "provider_error" | "permission_denied" | "cancelled" | "timeout" | "budget_stop" | "config_unsupported" | "other"))
+                failure_class.filter(|class| matches!(*class, "provider_error" | "permission_denied" | "cancelled" | "timeout" | "budget_stop" | "config_unsupported" | "other")),
+                failure_class.filter(|class| *class == "context")
             ],
         )?;
         if matches!(state, "completed" | "error" | "cancelled") {
@@ -1043,7 +1079,7 @@ impl Storage {
     }
     pub fn turn_failure_class(&self, id: &str) -> Result<Option<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        c.query_row("SELECT failure_class FROM turns WHERE id=?1", [id], |row| row.get(0))
+        c.query_row("SELECT COALESCE(failure_class_v2,failure_class) FROM turns WHERE id=?1", [id], |row| row.get(0))
             .map_err(StorageError::from)
     }
     pub fn upsert_tool(
@@ -1501,6 +1537,7 @@ fn analytics_failure_class(class: Option<&str>) -> &'static str {
         "timeout" => "timeout",
         "budget_stop" => "budget",
         "config_unsupported" => "config",
+        "context" => "context",
         _ => "other",
     }
 }
@@ -1512,6 +1549,7 @@ fn analytics_failure_message(class: &str) -> &'static str {
         "timeout" => "Turn timed out.",
         "budget" => "Turn stopped by a budget limit.",
         "config" => "Configuration or capability was unsupported.",
+        "context" => "Context window is full. Start a new conversation.",
         _ => "Turn ended with an error.",
     }
 }
@@ -1592,7 +1630,7 @@ impl Storage {
         let mut series: Vec<(DateTime<Utc>, AnalyticsAccumulator)> = buckets.drain(..).map(|start| (start, AnalyticsAccumulator::default())).collect();
         let mut leaders: std::collections::BTreeMap<(Option<String>, String), (Option<String>, AnalyticsAccumulator)> = std::collections::BTreeMap::new();
         let mut errors = Vec::new();
-        let mut query = c.prepare("SELECT t.id,t.session_id,t.state,t.created_at,t.started_at,t.completed_at,t.failure_class,s.agent_id,s.project_path,s.runtime_id,COALESCE(a.name,''),s.provider FROM turns t JOIN sessions s ON s.id=t.session_id LEFT JOIN agents a ON a.id=s.agent_id ORDER BY COALESCE(t.completed_at,t.started_at,t.created_at)")?;
+        let mut query = c.prepare("SELECT t.id,t.session_id,t.state,t.created_at,t.started_at,t.completed_at,COALESCE(t.failure_class_v2,t.failure_class),s.agent_id,s.project_path,s.runtime_id,COALESCE(a.name,''),s.provider FROM turns t JOIN sessions s ON s.id=t.session_id LEFT JOIN agents a ON a.id=s.agent_id ORDER BY COALESCE(t.completed_at,t.started_at,t.created_at)")?;
         let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, Option<String>>(5)?, row.get::<_, Option<String>>(6)?, row.get::<_, Option<String>>(7)?, row.get::<_, String>(8)?, row.get::<_, String>(9)?, row.get::<_, String>(10)?, row.get::<_, String>(11)?)))?.collect::<Result<Vec<_>, _>>()?;
         for (turn_id, session_id, state, created, started, completed, failure_class, agent_id, project_path, runtime_id, agent_name, provider) in rows {
             if agent_filter.is_some_and(|filter| agent_id.as_deref() != Some(filter)) { continue; }
@@ -2189,6 +2227,29 @@ mod tests {
     #[test]
     fn exec_gate_setting_audit_is_atomic_and_suppresses_noop_events(){
         let db=Storage::open_in_memory().unwrap();let initial=db.set_setting("exec_gate.codex.model",&json!(false)).unwrap();assert_eq!(initial.len(),1);assert_eq!(initial[0]["type"],"settings.changed");assert_eq!(initial[0]["payload"],json!({"key":"exec_gate.codex.model","enabled":false}));assert!(db.set_setting("exec_gate.codex.model",&json!(false)).unwrap().is_empty());assert!(db.set_setting("ui.theme",&json!("dark")).unwrap().is_empty());assert_eq!(db.replay_events(initial[0]["sequence"].as_u64().unwrap()-1,5).unwrap().len(),1);
+    }
+    #[test]
+    fn context_failure_class_round_trips_in_additive_storage_column() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"runtime","provider":"codex"})).unwrap();
+        db.create_session("session", "runtime", "codex", ".", "Context").unwrap();
+        db.create_turn("turn", "session").unwrap();
+        db.update_turn_outcome("turn", "error", Some("context")).unwrap();
+        assert_eq!(db.turn_failure_class("turn").unwrap().as_deref(), Some("context"));
+        assert_eq!(analytics_failure_class(Some("context")), "context");
+    }
+
+    #[test]
+    fn provider_session_pointer_clears_only_when_explicitly_requested() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"runtime","provider":"codex"})).unwrap();
+        db.create_session("session", "runtime", "codex", ".", "Resume").unwrap();
+        db.set_session_provider_id("session", "native-id", true).unwrap();
+        assert_eq!(db.session_detail("session").unwrap()["providerSessionId"], "native-id");
+        db.clear_session_provider_id("session").unwrap();
+        let row = db.session_detail("session").unwrap();
+        assert!(row["providerSessionId"].is_null());
+        assert_eq!(row["resumable"], false);
     }
     #[test]
     fn v2_backup_failure_and_corrupt_backup_both_fail_before_schema_changes(){

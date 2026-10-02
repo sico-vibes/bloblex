@@ -168,3 +168,11 @@ The execution snapshot RPCs use `invalid_argument` for malformed IDs, cursors, o
 - Claude hook bridge has a bounded request and timeout and fails open when daemon IPC is unavailable.
 - Permission replies use a pending→resolved conditional update; duplicate replies return `conflict` and never reach the provider twice.
 - Budget admission reads applicable usage and reservations, then inserts a reservation in one `BEGIN IMMEDIATE` transaction. The strictest applicable hard policy governs; simultaneous prompts cannot share the same remaining allowance.
+
+## Runtime hardening additions
+
+- `runtime.capabilities` adds `versionRecognized: boolean`, the runtime's version-format recognition result.
+- `turn.error.failureClass` may be `context`; its safe message is `Context window is full. Start a new conversation.` and `canRetireSession` is true. The provider-session ID remains intact on context exhaustion.
+- `session.resume_rejected` reports positive evidence that a stored provider session is missing or expired. The daemon clears that provider ID and starts a fresh session; generic resume errors do not clear it.
+- The daemon's startup/no-progress watchdog is 45 seconds; after the first semantic activity, its semantic-inactivity watchdog is 300 seconds. These are Bloblex product choices, not provider CLI facts. Expiry fails the turn with `failureClass: timeout` and closes the adapter session, which kills its owned process tree.
+- Resume-time context overflow emits `session.context_exhausted` with the safe message and retirement offer; it does not clear the provider-session ID.

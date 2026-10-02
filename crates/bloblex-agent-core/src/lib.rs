@@ -584,6 +584,10 @@ pub enum AdapterError {
     Protocol(String),
     #[error("operation timed out")]
     Timeout,
+    #[error("context window is full")]
+    ContextExhausted,
+    #[error("provider rejected the stored session id")]
+    ResumeRejected,
     #[error("provider rejected execution settings: {0}")]
     Rejected(String),
     #[error("provider process unavailable: {0}")]
@@ -823,6 +827,8 @@ pub enum AgentEvent {
     UsageReport { turn_id: String, report: UsageReport },
     TurnCompleted,
     TurnCancelled,
+    /// Positive provider evidence that the current context cannot accept more input.
+    ContextExhausted,
     Error {
         message: String,
     },

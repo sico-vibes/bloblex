@@ -51,6 +51,16 @@ fn main() {
             let _ = io::stdout().flush();
             continue;
         }
+        if method == "thread/resume" && mode.starts_with("resume-") {
+            let message = if mode == "resume-reject" {
+                "thread not found"
+            } else {
+                "requested startup option rejected"
+            };
+            println!("{}", json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":message}}));
+            let _ = io::stdout().flush();
+            continue;
+        }
         let params = &v["params"];
         let (result, notes) = match method {
             "initialize" => (json!({"serverInfo":{"name":"fake","version":"1"}}), vec![]),
@@ -66,9 +76,12 @@ fn main() {
                 )
             }
             "thread/resume" => {
-                let notes = vec![
+                let mut notes = vec![
                     json!({"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"stale-turn","tokenUsage":{"last":{"inputTokens":900,"outputTokens":99}}}}),
                 ];
+                if mode == "replay" {
+                    notes.push(json!({"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"old-turn","delta":"stale answer"}}));
+                }
                 (
                     json!({"thread":{"id":"thread-1"},"model":params["model"].as_str().unwrap_or("model-default"),"reasoningEffort":"low","serviceTier":params["serviceTier"]}),
                     notes,
@@ -80,10 +93,16 @@ fn main() {
                 let result = json!({"turn":{"id":tid}});
                 let notes = if mode == "stall" {
                     Vec::new()
+                } else if mode == "replay" {
+                    vec![
+                        json!({"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-1","turn":{"id":tid}}}),
+                        json!({"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":tid,"delta":"new answer"}}),
+                        json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":tid,"status":"completed"}}}),
+                    ]
                 } else {
                     vec![
                         json!({"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":tid,"tokenUsage":{"last":{"inputTokens":10,"cachedInputTokens":2,"cacheWriteInputTokens":1,"outputTokens":4,"reasoningOutputTokens":3,"totalTokens":17}}}}),
-                        json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":tid,"status":if mode=="fail"{"failed"}else{"completed"},"error":if mode=="fail"{json!({"message":"fake failure"})}else{Value::Null}}}}),
+                        json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":tid,"status":if mode=="fail"||mode=="context"{"failed"}else{"completed"},"error":if mode=="context"{json!({"message":"maximum context length exceeded"})}else if mode=="fail"{json!({"message":"fake failure"})}else{Value::Null}}}}),
                     ]
                 };
                 (result, notes)

@@ -1,6 +1,6 @@
-use bloblex_process::{prepare_command, ProcessTree};
+use bloblex_process::{prepare_command, ProcessTree, StdinWriter};
 use std::{fs, path::PathBuf, time::{Duration, SystemTime, UNIX_EPOCH}};
-use tokio::process::Command;
+use tokio::{io::AsyncReadExt, process::Command};
 
 fn child_is_alive(pid: u32) -> bool {
     #[cfg(windows)]
@@ -48,4 +48,39 @@ async fn cancellation_terminates_the_parent_and_long_lived_grandchild() {
     assert!(!child_is_alive(grandchild_pid), "grandchild process {grandchild_pid} remained alive");
     drop(owner);
     let _ = fs::remove_dir_all(PathBuf::from(root));
+}
+
+#[tokio::test]
+async fn stdin_writer_and_stderr_drain_bound_a_nonreading_child() {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fake_pipe_child"));
+    command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    prepare_command(&mut command);
+    let mut child = command.spawn().unwrap();
+    let tree = ProcessTree::attach(&mut child).unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let drain = tokio::spawn(async move {
+        let mut stderr = stderr;
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).await.unwrap();
+        bytes
+    });
+    let stdin = child.stdin.take().unwrap();
+    let mut writer = StdinWriter::new(stdin);
+    let payload = vec![b'p'; 1024 * 1024];
+    writer.write(&payload).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(4), writer.close(&mut child, &tree))
+        .await
+        .expect("close must finish within the bounded grace and kill window");
+    tokio::time::timeout(Duration::from_secs(2), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    let drained = tokio::time::timeout(Duration::from_secs(3), drain)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(drained.len(), 8 * 1024 * 1024);
 }

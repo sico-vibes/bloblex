@@ -89,10 +89,12 @@ fn adapter_failure_class(error: &bloblex_agent_core::AdapterError, permission_de
         return "permission_denied";
     }
     match error {
+        bloblex_agent_core::AdapterError::ContextExhausted => "context",
         bloblex_agent_core::AdapterError::Timeout => "timeout",
         bloblex_agent_core::AdapterError::Rejected(_)
         | bloblex_agent_core::AdapterError::Unsupported(_) => "config_unsupported",
         bloblex_agent_core::AdapterError::Protocol(_) => "provider_error",
+        bloblex_agent_core::AdapterError::ResumeRejected => "other",
         bloblex_agent_core::AdapterError::Process(_)
         | bloblex_agent_core::AdapterError::Other(_) => "other",
     }
@@ -525,6 +527,31 @@ fn runtime_from(v: &Value) -> RuntimeSpec {
         cwd: None,
     }
 }
+
+fn validate_spawn_target(runtime: &RuntimeSpec) -> Result<(), DispatchError> {
+    if runtime.executable.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("ps1")) {
+        return Err(derr("invalid_argument", "runtime executable must resolve to a native executable", StatusCode::BAD_REQUEST));
+    }
+    if runtime.args.iter().any(|argument| argument.contains('\0')) {
+        return Err(derr("invalid_argument", "stored launch arguments are invalid", StatusCode::BAD_REQUEST));
+    }
+    if runtime.args.is_empty() {
+        return Ok(());
+    }
+    let is_node = runtime.executable.file_stem().is_some_and(|name| {
+        name.to_string_lossy().eq_ignore_ascii_case("node")
+    });
+    let script = runtime.args.len() == 1
+        && PathBuf::from(&runtime.args[0]).is_file()
+        && PathBuf::from(&runtime.args[0]).extension().is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("js") || extension.eq_ignore_ascii_case("cjs")
+        });
+    if is_node && script {
+        Ok(())
+    } else {
+        Err(derr("invalid_argument", "stored launch arguments are outside the runtime allowlist", StatusCode::BAD_REQUEST))
+    }
+}
 fn adapter_for(a: &Adapters, provider: &str) -> Option<Arc<dyn AgentAdapter>> {
     match provider {
         "opencode" => Some(a.acp.clone()),
@@ -675,7 +702,30 @@ async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError
     }else{None};
     let mut agents=Vec::new();
     if agent_id.is_none(){for a in st.db.agent_list(false,Some(runtime_id)).map_err(agent_error)?{let id=a["id"].as_str().unwrap_or("");let configured=a["maxConcurrency"].as_u64().unwrap_or(1) as u32;agents.push(json!({"agentId":id,"configuredMaxConcurrency":configured,"effectiveMaxConcurrency":configured.min(4),"active":active_for_agent(st,id).await}));}}
-    Ok(json!({"runtimeId":runtime_id,"settings":reported,"globalConcurrency":{"limit":4,"active":active},"agentConcurrency":agent_concurrency,"agentConcurrencies":agents,"hostDependent":true}))
+    let provider_version = runtime["version"].as_str().unwrap_or("");
+    let version_recognized = recognized_cli_version(provider, provider_version);
+    Ok(json!({"runtimeId":runtime_id,"versionRecognized":version_recognized,"settings":reported,"globalConcurrency":{"limit":4,"active":active},"agentConcurrency":agent_concurrency,"agentConcurrencies":agents,"hostDependent":true}))
+}
+
+fn recognized_cli_version(provider: &str, version: &str) -> bool {
+    let lower = version.to_ascii_lowercase();
+    let token = lower
+        .split_whitespace()
+        .find(|part| part.bytes().next().is_some_and(|byte| byte.is_ascii_digit()))
+        .unwrap_or("");
+    let mut parts = token.split('.');
+    let Some(major) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
+        return false;
+    };
+    if parts.next().and_then(|part| part.parse::<u32>().ok()).is_none() {
+        return false;
+    }
+    match provider {
+        "claude" => major >= 2,
+        "codex" => major <= 1,
+        "opencode" => major >= 1,
+        _ => false,
+    }
 }
 async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let agent_supplied=p.get("agentId").is_some(); let runtime_supplied=p.get("runtimeId").is_some();
@@ -699,6 +749,7 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         .cloned()
         .ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
     let spec = runtime_from(&runtime);
+    validate_spawn_target(&spec)?;
     let provider = runtime["provider"].as_str().unwrap_or("").to_owned();
     let adapter = adapter_for(&st.adapters, &provider).ok_or_else(|| {
         derr(
@@ -817,6 +868,7 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
             )
         })?;
     let spec = runtime_from(&rt);
+    validate_spawn_target(&spec)?;
     let provider = row["provider"].as_str().unwrap_or("").to_owned();
     let runtime = row["runtimeId"].as_str().unwrap_or("").to_owned();
     let native_id = row["providerSessionId"].as_str().unwrap_or("").to_owned();
@@ -836,21 +888,51 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
     let desired_instruction_hash=bloblex_agent_core::instruction_sha256(exec_options.instructions.as_deref().unwrap_or(""));
     if provider=="codex" {let baseline=st.db.codex_thread_instruction_sha256(&sid).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;adapter.set_instruction_hash_context(&sid,desired_instruction_hash,baseline).await;}
     let startup_options=exec_options.clone();
-    let (tx, rx) = tokio::sync::mpsc::channel(256);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let handle_result = adapter
         .resume_session(
             &spec,
             ResumeSessionRequest {
                 session_id: sid.clone(),
                 provider_session_id: native_id,
-                project_path: project,
+                project_path: project.clone(),
                 exec_options,
             },
             tx,
         )
         .await;
+    let mut resume_fallback = false;
     let handle=match handle_result {
         Ok(handle)=>handle,
+        Err(bloblex_agent_core::AdapterError::ContextExhausted) => {
+            st.emit("session.context_exhausted", json!({
+                "sessionId": sid,
+                "canRetireSession": true,
+                "message": "Context window is full. Start a new conversation."
+            })).await;
+            return Err(derr("provider_error", "Context window is full. Start a new conversation.", StatusCode::BAD_GATEWAY));
+        }
+        Err(bloblex_agent_core::AdapterError::ResumeRejected) => {
+            st.db.clear_session_provider_id(&sid).map_err(|e| {
+                derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+            })?;
+            st.emit("session.resume_rejected", json!({
+                "sessionId": sid,
+                "outcomeNote": "The saved provider session expired. A new provider session was started."
+            })).await;
+            let (fresh_tx, fresh_rx) = tokio::sync::mpsc::channel(256);
+            rx = fresh_rx;
+            resume_fallback = true;
+            adapter.new_session(
+                &spec,
+                NewSessionRequest {
+                    session_id: sid.clone(),
+                    project_path: project,
+                    exec_options: startup_options.clone(),
+                },
+                fresh_tx,
+            ).await.map_err(|e| derr("provider_error", &e.to_string(), StatusCode::BAD_GATEWAY))?
+        }
         Err(e)=>{
             if provider=="codex"&&matches!(&e,bloblex_agent_core::AdapterError::Rejected(_)) {emit_codex_startup_rejections(st,&sid,row["agentId"].as_str(),&runtime,&startup_options).await;}
             return Err(derr("provider_error",&e.to_string(),StatusCode::BAD_GATEWAY));
@@ -902,7 +984,12 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         ),
     )
     .await;
-    Ok(json!({"sessionId":p["sessionId"],"resumed":true,"state":"idle"}))
+    Ok(json!({
+        "sessionId": p["sessionId"],
+        "resumed": !resume_fallback,
+        "state": "idle",
+        "outcomeNote": resume_fallback.then_some("The saved provider session expired. A new provider session was started.")
+    }))
 }
 async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
@@ -1061,6 +1148,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             let permission_denied = state.denied_turns.lock().await.remove(&turn2);
             let failure_class = adapter_failure_class(&e, permission_denied);
             let public_message = match failure_class {
+                "context" => "Context window is full. Start a new conversation.",
                 "config_unsupported" => "Requested execution settings were unsupported.",
                 "provider_error" => "The provider reported a turn error.",
                 "permission_denied" => "A required permission was denied.",
@@ -1093,7 +1181,68 @@ async fn forward_events(
     runtime_id: String,
     mut rx: tokio::sync::mpsc::Receiver<AgentEvent>,
 ) {
-    while let Some(ev) = rx.recv().await {
+    const STARTUP_NO_PROGRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+    const SEMANTIC_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+    let mut watched_turn: Option<String> = None;
+    let mut last_semantic_progress = Instant::now();
+    let mut saw_semantic_progress = false;
+    loop {
+        let active_turn = st.active_turns.lock().await.get(&sid).cloned();
+        let received = if let Some(turn_id) = active_turn.as_ref() {
+            if watched_turn.as_deref() != Some(turn_id.as_str()) {
+                watched_turn = Some(turn_id.clone());
+                last_semantic_progress = Instant::now();
+                saw_semantic_progress = false;
+            }
+            let limit = if saw_semantic_progress {
+                SEMANTIC_INACTIVITY_TIMEOUT
+            } else {
+                STARTUP_NO_PROGRESS_TIMEOUT
+            };
+            let remaining = limit.saturating_sub(last_semantic_progress.elapsed());
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(event) => event,
+                Err(_) => {
+                    let active = st.sessions.lock().await.get(&sid).cloned();
+                    if let Some(active) = active {
+                        let _ = active.adapter.close_session(&active.handle).await;
+                    }
+                    st.sessions.lock().await.remove(&sid);
+                    let _ = st.db.update_turn_outcome(turn_id, "error", Some("timeout"));
+                    let _ = st.db.update_session_state(&sid, "error");
+                    st.active_turns.lock().await.remove(&sid);
+                    st.emit("turn.error", json!({
+                        "sessionId": sid,
+                        "turnId": turn_id,
+                        "failureClass": "timeout",
+                        "message": "The provider stopped making progress before the turn completed."
+                    })).await;
+                    watched_turn = None;
+                    continue;
+                }
+            }
+        } else {
+            watched_turn = None;
+            match tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await {
+                Ok(event) => event,
+                Err(_) => continue,
+            }
+        };
+        let Some(ev) = received else { break; };
+        if matches!(
+            &ev,
+            AgentEvent::AssistantDelta { .. }
+                | AgentEvent::AssistantMessage { .. }
+                | AgentEvent::ThinkingDelta { .. }
+                | AgentEvent::ToolStarted { .. }
+                | AgentEvent::ToolUpdated { .. }
+                | AgentEvent::ToolCompleted { .. }
+                | AgentEvent::FileChanged { .. }
+                | AgentEvent::PermissionRequested { .. }
+        ) {
+            saw_semantic_progress = true;
+            last_semantic_progress = Instant::now();
+        }
         let turn = st.active_turns.lock().await.get(&sid).cloned();
         let (ty, payload) = match ev {
             AgentEvent::SessionStarted {
@@ -1354,6 +1503,23 @@ async fn forward_events(
                     json!({"sessionId":sid,"turnId":turn,"state":"cancelled"}),
                 )
             }
+            AgentEvent::ContextExhausted => {
+                if let Some(t) = turn.as_deref() {
+                    let _ = st.db.update_turn_outcome(t, "error", Some("context"));
+                }
+                let _ = st.db.update_session_state(&sid, "error");
+                st.active_turns.lock().await.remove(&sid);
+                (
+                    "turn.error",
+                    json!({
+                        "sessionId": sid,
+                        "turnId": turn,
+                        "message": "Context window is full. Start a new conversation.",
+                        "failureClass": "context",
+                        "canRetireSession": true
+                    }),
+                )
+            }
             AgentEvent::Error { message: _ } => {
                 let denied = if let Some(t) = turn.as_deref() {
                     let denied = st.denied_turns.lock().await.remove(t);
@@ -1571,6 +1737,41 @@ mod phase2a_tests {
     #[test]
     fn authoritative_timeout_errors_map_to_the_timeout_failure_class() {
         assert_eq!(adapter_failure_class(&bloblex_agent_core::AdapterError::Timeout, false), "timeout");
+    }
+    #[test]
+    fn cli_version_recognition_is_provider_specific_and_conservative() {
+        assert!(recognized_cli_version("claude", "2.1.286"));
+        assert!(recognized_cli_version("codex", "codex-cli 0.159.3"));
+        assert!(recognized_cli_version("opencode", "1.18.34"));
+        assert!(!recognized_cli_version("claude", "unknown"));
+        assert!(!recognized_cli_version("codex", "9.0.0"));
+    }
+    #[test]
+    fn stored_launch_arguments_allow_only_native_script_wrappers() {
+        let dir = std::env::temp_dir().join(format!("bloblex-launch-args-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("cli.js");
+        std::fs::write(&script, "fixture").unwrap();
+        let valid = RuntimeSpec {
+            runtime_id: "runtime".into(),
+            provider: "codex".into(),
+            executable: PathBuf::from("node.exe"),
+            args: vec![script.to_string_lossy().into_owned()],
+            cwd: None,
+        };
+        assert!(validate_spawn_target(&valid).is_ok());
+        let powershell = RuntimeSpec {
+            executable: PathBuf::from("cli.ps1"),
+            args: vec![],
+            ..valid.clone()
+        };
+        assert!(validate_spawn_target(&powershell).is_err());
+        let extra = RuntimeSpec {
+            args: vec!["--profile".into(), "work".into()],
+            ..valid
+        };
+        assert!(validate_spawn_target(&extra).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);

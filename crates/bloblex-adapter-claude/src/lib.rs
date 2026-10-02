@@ -1,7 +1,7 @@
 //! Claude Code's documented print/stream-json mode, never interactive TUI scraping.
 use async_trait::async_trait;
 use bloblex_agent_core::*;
-use bloblex_process::{prepare_command, prepare_std_command, ProcessTree};
+use bloblex_process::{prepare_command, prepare_std_command, ProcessTree, StdinWriter};
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
 use std::{
@@ -15,8 +15,9 @@ use std::{
     },
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStdin, Command},
+    io::{AsyncBufReadExt, BufReader},
+    process::Child,
+    process::Command,
     sync::Mutex,
 };
 use uuid::Uuid;
@@ -75,7 +76,14 @@ fn parse_model_catalog(value: &Value) -> Result<Vec<ModelInfo>, AdapterError> {
     let models = value["models"].as_array().ok_or_else(|| AdapterError::Protocol("Claude catalog has no models array".into()))?;
     let mut normalized = Vec::new();
     for model in models {
-        let id = model["value"].as_str().or_else(|| model["id"].as_str()).ok_or_else(|| AdapterError::Protocol("Claude catalog model id is missing".into()))?;
+        if model["disabled"].as_bool() == Some(true) {
+            continue;
+        }
+        let id = model["resolvedModel"]
+            .as_str()
+            .or_else(|| model["value"].as_str())
+            .or_else(|| model["id"].as_str())
+            .ok_or_else(|| AdapterError::Protocol("Claude catalog model id is missing".into()))?;
         let levels = model["supportedEffortLevels"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
         normalized.push(ModelInfo {
             id: id.into(), display_name: model["displayName"].as_str().or_else(|| model["name"].as_str()).unwrap_or(id).into(),
@@ -84,7 +92,37 @@ fn parse_model_catalog(value: &Value) -> Result<Vec<ModelInfo>, AdapterError> {
             default_service_tier: None, variants: None, host_dependent: true,
         });
     }
+    let resolved = value["resolvedModel"].as_str();
+    let default = value["default"].as_str();
+    if let Some(default_id) = default.filter(|id| !normalized.iter().any(|model| model.id == *id)) {
+        normalized.push(ModelInfo {
+            id: default_id.to_owned(),
+            display_name: "Default".into(),
+            provider_id: None,
+            supported_thinking: value["supportedEffortLevels"]
+                .as_array()
+                .map(|levels| levels.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                .unwrap_or_default(),
+            default_thinking: value["defaultEffort"].as_str().map(str::to_owned),
+            service_tiers: vec![],
+            default_service_tier: None,
+            variants: None,
+            host_dependent: true,
+        });
+    }
     if normalized.is_empty() { return Err(AdapterError::Protocol("Claude catalog is empty".into())); }
+    for model in &mut normalized {
+        let mut markers = Vec::new();
+        if Some(model.id.as_str()) == resolved {
+            markers.push("resolved");
+        }
+        if Some(model.id.as_str()) == default {
+            markers.push("default");
+        }
+        if !markers.is_empty() {
+            model.display_name = format!("{} ({})", model.display_name, markers.join(", "));
+        }
+    }
     Ok(normalized)
 }
 
@@ -114,7 +152,7 @@ fn exact_usd_minor(decimal: &str) -> Option<i64> {
 }
 
 struct Conn {
-    stdin: Mutex<ChildStdin>,
+    stdin: Mutex<StdinWriter>,
     child: Mutex<Child>,
     process_tree: ProcessTree,
     events: EventSender,
@@ -226,6 +264,15 @@ async fn parse_line(
             }
         }
         "result" if v["is_error"].as_bool().unwrap_or(false) => {
+            let terminal_reason = v["terminal_reason"].as_str().unwrap_or("");
+            let error_text = v["result"].as_str().unwrap_or("").to_ascii_lowercase();
+            if terminal_reason == "prompt_too_long"
+                || error_text.contains("prompt_too_long")
+                || error_text.contains("context window is full")
+            {
+                let _ = tx.send(AgentEvent::ContextExhausted).await;
+                return;
+            }
             let turn_id = active_turn_id.lock().await.clone().unwrap_or_default();
             let _ = tx.send(AgentEvent::UsageReport { turn_id, report: UsageReport {
                 input_tokens: None, output_tokens: None, cache_read_tokens: None, cache_write_tokens: None, reasoning_tokens: None,
@@ -344,6 +391,14 @@ impl ClaudeAdapter {
             "--include-hook-events",
         ]);
         c.args(permission_args(options.approval_mode));
+        for (key, value) in &options.env {
+            if !["LANG", "LC_ALL", "TZ", "NO_COLOR", "TERM"].contains(&key.as_str())
+                || value.contains('\0')
+            {
+                return Err(AdapterError::Unsupported("custom environment contains an unsupported key".into()));
+            }
+            c.env(key, value);
+        }
         let instruction_file = if let Some(instructions) = options.instructions.as_deref().filter(|s| !s.is_empty()) {
             Some(self.create_instruction_file(instructions).map_err(|e| AdapterError::Process(format!("private instruction file unavailable: {e}")))?)
         } else { None };
@@ -363,7 +418,7 @@ impl ClaudeAdapter {
         let Some(stdin)=child.stdin.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdin unavailable".into()))};
         let Some(stdout)=child.stdout.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdout unavailable".into()))};
         let conn = Arc::new(Conn {
-            stdin: Mutex::new(stdin),
+            stdin: Mutex::new(StdinWriter::new(stdin)),
             child: Mutex::new(child),
             process_tree,
             events: events.clone(),
@@ -444,11 +499,12 @@ impl AgentAdapter for ClaudeAdapter {
         let result = async {
             let mut child = command.spawn().map_err(|e| AdapterError::Process(e.to_string()))?;
             let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
-            let mut stdin = child.stdin.take().ok_or_else(|| AdapterError::Process("Claude catalog stdin unavailable".into()))?;
+            let stdin = child.stdin.take().ok_or_else(|| AdapterError::Process("Claude catalog stdin unavailable".into()))?;
             let stdout = child.stdout.take().ok_or_else(|| AdapterError::Process("Claude catalog stdout unavailable".into()))?;
             let request = json!({"type":"control_request","request_id":"bloblex-list-models","request":{"subtype":"list_models"}});
             let mut bytes = serde_json::to_vec(&request).map_err(|e| AdapterError::Protocol(e.to_string()))?; bytes.push(b'\n');
-            stdin.write_all(&bytes).await.map_err(|e| AdapterError::Process(e.to_string()))?; stdin.flush().await.map_err(|e| AdapterError::Process(e.to_string()))?; drop(stdin);
+            let stdin = StdinWriter::new(stdin);
+            stdin.write(&bytes).await.map_err(|e| AdapterError::Process(e.to_string()))?;
             let mut lines = BufReader::new(stdout).lines();
             let mut found = None;
             while let Some(line) = tokio::time::timeout(std::time::Duration::from_secs(8), lines.next_line()).await.map_err(|_| AdapterError::Process("Claude catalog timed out".into()))?.map_err(|e| AdapterError::Process(e.to_string()))? {
@@ -581,18 +637,14 @@ impl AgentAdapter for ClaudeAdapter {
             c = self.start(&runtime, &cwd, Some(&provider_id), events, &h.session_id, &q.exec_options, instruction_changed, desired_hash.clone()).await.map_err(|_| AdapterError::Unsupported("Claude could not resume with the requested execution options".into()))?;
             self.sessions.lock().await.insert(h.session_id.clone(), c.clone());
         }
-        let bytes =
+        let mut bytes =
             serde_json::to_vec(&json!({"type":"user","message":{"role":"user","content":q.text}}))
                 .map_err(|e| AdapterError::Protocol(e.to_string()))?;
+        bytes.push(b'\n');
         c.cancellation_requested.store(false, Ordering::SeqCst);
         *c.active_turn_id.lock().await = Some(q.turn_id.clone());
         c.active_turn.store(true, Ordering::SeqCst);
-        let mut stdin = c.stdin.lock().await;
-        if let Err(error) = stdin.write_all(&bytes).await {
-            c.active_turn.store(false, Ordering::SeqCst);
-            return Err(AdapterError::Process(error.to_string()));
-        }
-        if let Err(error) = stdin.write_all(b"\n").await {
+        if let Err(error) = c.stdin.lock().await.write(&bytes).await {
             c.active_turn.store(false, Ordering::SeqCst);
             return Err(AdapterError::Process(error.to_string()));
         }
@@ -631,7 +683,7 @@ impl AgentAdapter for ClaudeAdapter {
                 let mut bytes =
                     serde_json::to_vec(&wire).map_err(|e| AdapterError::Protocol(e.to_string()))?;
                 bytes.push(b'\n');
-                c.stdin.lock().await.write_all(&bytes).await.map_err(|e| {
+                c.stdin.lock().await.write(&bytes).await.map_err(|e| {
                     AdapterError::Process(format!("writing Claude permission reply: {e}"))
                 })?;
                 c.permission_requests.lock().await.remove(id);
@@ -644,8 +696,7 @@ impl AgentAdapter for ClaudeAdapter {
     }
     async fn close_session(&self, h: &SessionHandle) -> Result<(), AdapterError> {
         if let Some(c) = self.sessions.lock().await.remove(&h.session_id) {
-            let _ = c.process_tree.terminate();
-            let _ = c.child.lock().await.kill().await;
+            c.stdin.lock().await.close(&mut *c.child.lock().await, &c.process_tree).await;
         }
         Ok(())
     }
@@ -681,6 +732,42 @@ mod tests {
         let options=ExecOptions{model:Some("claude-sonnet-5-5".into()),thinking:Some("low".into()),instructions:Some("sentinel only".into()),..ExecOptions::default()};
         assert_eq!(typed_args(&options,Some(std::path::Path::new("C:\\private\\instruction.txt")),true),vec!["--model","claude-sonnet-5-5","--effort","low","--append-system-prompt-file","C:\\private\\instruction.txt","--system-prompt-snapshot","off"]);
         assert!(!typed_args(&options,None,false).iter().any(|v|v=="--system-prompt"));
+    }
+
+    #[test]
+    fn catalog_skips_disabled_models_and_marks_resolved_and_default_entries() {
+        let rows = parse_model_catalog(&json!({
+            "resolvedModel": "model-current",
+            "default": "model-default",
+            "models": [
+                {"value":"model-disabled","disabled":true},
+                {"value":"model-current","displayName":"Current"},
+                {"value":"model-default","displayName":"Default"}
+            ]
+        })).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].display_name.contains("resolved"));
+        assert!(rows[1].display_name.contains("default"));
+        assert!(!rows.iter().any(|model| model.id == "model-disabled"));
+    }
+
+    #[test]
+    fn prompt_too_long_is_a_typed_context_event() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        let provider_id = Mutex::new(None);
+        let requests = Mutex::new(HashMap::new());
+        let active_turn = Mutex::new(Some("turn-context".to_owned()));
+        let message = json!({
+            "type": "result",
+            "is_error": true,
+            "terminal_reason": "prompt_too_long",
+            "result": "Prompt rejected"
+        });
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            parse_line(&tx, &message, &provider_id, &requests, "session", &active_turn).await;
+            assert!(matches!(rx.recv().await, Some(AgentEvent::ContextExhausted)));
+            assert!(rx.try_recv().is_err());
+        });
     }
 
     #[test]

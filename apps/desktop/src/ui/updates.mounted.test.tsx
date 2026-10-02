@@ -66,7 +66,14 @@ const views: Array<{ unmount: () => void }> = []
 afterEach(() => { for (const view of views.splice(0)) view.unmount(); vi.restoreAllMocks() })
 
 beforeEach(() => {
-  localStorage.clear()
+  // In-memory storage so the tests do not depend on the runtime's own localStorage.
+  const store = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => { store.set(key, String(value)) },
+    removeItem: (key: string) => { store.delete(key) },
+    clear: () => store.clear(),
+  })
   for (const mock of Object.values(h)) mock.mockReset()
   h.updatesGetState.mockResolvedValue(state())
   h.updatesSetPreferences.mockImplementation(async (patch: Partial<UpdatesState>) => state(patch))

@@ -15,7 +15,7 @@ In scope:
 - Session rows with a status dot, a visible state word, a title, and `shortTime`.
 - The resolved selected session highlighted when its row is rendered.
 - "New session" from the blob context menu, from a project "+", and from the header, offering recent projects and then "Choose folder...".
-- Expanded and collapsed state per blob and per project in `localStorage` key `bloblex.roster.expanded`. Phase 3 reserved that key ([docs/PHASE_3_SPEC.md](PHASE_3_SPEC.md) line 393).
+- Expanded and collapsed state per blob and per project in `localStorage` key `bloblex.roster.expanded`. Phase 3 reserved that key ([docs/PHASE_3_SPEC.md](PHASE_3_SPEC.md) line 394).
 - The header `<select>` stays, including the disabled option "Not linked to a blob" ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 743).
 - The companion chat follows the selected session. Companion pills still switch blobs.
 - Pure selectors, fixture sessions, and tests. No daemon process.
@@ -65,11 +65,14 @@ Worked keys:
 | `C:\\work\\\\site` | `c:\work\site` |
 | `C:\` | `c:\` |
 | `C:\work\site\..\site` | `c:\work\site\..\site` |
+| `C:\work\site\.` | `c:\work\site\.` |
+| `C:` | `c:` |
 | `\\?\C:\work\site` | `\\?\c:\work\site` |
 | `\\server\share\site\` | `\\server\share\site` |
+| `//server/share/site` | `\\server\share\site` |
 | `  ` or missing | `null` |
 
-Case-folding is a Windows UI decision ([PRODUCT.md](../PRODUCT.md) line 9). NTFS lookups are case-insensitive, and the daemon will have stored whatever string the picker or an older client sent. Two different folders that differ only by case on a case-sensitive volume would share a row. That risk is accepted. The stored string sent back to `session.new` keeps its original casing, slashes, and trailing slash.
+Case-folding is a product choice for Bloblex on Windows ([PRODUCT.md](../PRODUCT.md) line 9 names the Windows audience; it does not define path keys). NTFS lookups are case-insensitive, and the daemon will have stored whatever string the picker or an older client sent. Two different folders that differ only by case on a case-sensitive volume would share a row. That risk is accepted. A `.` or `..` segment stays in the key, so `C:\work\site\.` and `C:\work\site\..\site` are different projects from `C:\work\site`. `C:` and `C:\` are different keys (`c:` and `c:\`). The stored string sent back to `session.new` keeps its original casing, slashes, and trailing slash.
 
 ### Projects
 
@@ -81,9 +84,14 @@ Project order: the group's newest `updatedAt` descending (empty string when miss
 
 ### Colliding folder names
 
-The base label is `projectFolderName(representativePath)` ([apps/desktop/src/ui/rosterSelectors.ts](../apps/desktop/src/ui/rosterSelectors.ts) lines 109–112). Within one blob, compare those labels with `toLocaleLowerCase('en')`. When two groups share a label, append ` · ` and the nearest ancestor segment from the representative path, using that path's own casing. Split the representative path on `/` or `\`, drop empty segments, and walk from the parent toward the root until every label in the blob is unique. If ancestors run out, append the full representative path in parentheses.
+The base label is `projectFolderName(representativePath)` ([apps/desktop/src/ui/rosterSelectors.ts](../apps/desktop/src/ui/rosterSelectors.ts) lines 109–112). Compare labels inside one blob with `toLocaleLowerCase('en')`. Build each label from the representative path as follows.
 
-`C:\client\site` and `D:\other\site` render `site · client` and `site · other`. `C:\work\site` and `D:\work\site` render `site · work · C:` and `site · work · D:`. `C:/work/site` and `c:\work\site\` are one group, so they have one label. The `title` attribute on the project row is the representative path. The accessible name is `{label}, project`.
+1. Split that path on `/` or `\`, then drop empty segments. `C:\client\work\site` yields `C:`, `client`, `work`, `site`. `\\server\share\site` and `//server/share/site` both yield `server`, `share`, `site`. There is no synthetic `\\` segment.
+2. Start every group at its last segment (the folder name). A drive-root path whose only segment matches `^[A-Za-z]:$` starts as that segment (`C:`). The null-key group is not in this comparison.
+3. Repeat while two or more groups in the blob still share a label: each group that is still in a colliding set appends ` · ` and its next unused ancestor, parent first and then toward the root, using that path's own casing. A group whose label is already unique does not take another ancestor. A drive segment is the segment that matches `^[A-Za-z]:$`. A UNC path's furthest ancestor is its first segment (`server`). Stop a group when it has no further ancestor.
+4. If a group still shares a label after its ancestors are exhausted, append ` (` plus the full representative path plus `)`.
+
+`C:\client\site` and `D:\other\site` render `site · client` and `site · other`. `C:\work\site` and `D:\work\site` render `site · work · C:` and `site · work · D:`. Three paths whose folder and first ancestor both collide, `C:\client\work\site`, `D:\client\work\site`, and `E:\other\work\site`, render `site · work · client · C:`, `site · work · client · D:`, and `site · work · other`. The third label stops at `other` because that label is already unique; the first two continue to the drive segment. `C:/work/site` and `c:\work\site\` are one group, so they have one label. The `title` attribute on the project row is the representative path. The accessible name is `{label}, project`.
 
 ### Sessions inside a project
 
@@ -91,7 +99,7 @@ The base label is `projectFolderName(representativePath)` ([apps/desktop/src/ui/
 
 ### Legacy sessions
 
-Show them once, under a level-2 node labelled "Other sessions", as a sibling after that blob's project rows. The host blob is `agentsForRuntime(agents, runtimeId)[0]` ([apps/desktop/src/ui/rosterSelectors.ts](../apps/desktop/src/ui/rosterSelectors.ts) lines 24–26), the first active agent of that runtime in roster order. Codex is the host for `runtime-codex`; Invoice helper is not. A second blob on the same CLI does not repeat the rows.
+Show them once, under a level-2 node labelled "Other sessions", as a sibling after that blob's project rows. The host blob is `agentsForRuntime(agents, runtimeId)[0]` ([apps/desktop/src/ui/rosterSelectors.ts](../apps/desktop/src/ui/rosterSelectors.ts) lines 24–26), the first active agent of that runtime in roster order. Codex is the host for `runtime-codex`; Invoice helper is not. A second blob on the same CLI does not repeat the rows. The host is recomputed on every render. When the current host is archived, the next active agent of that runtime becomes the host. The expanded `other` bit stays on the agent id that stored it and does not move, so the new host starts collapsed unless its own bit is true.
 
 This node is not a project and is not merged into the host's projects. Phase 2a leaves `agentId` null on purpose so a runtime-only session is not attached to one of several agents on that runtime ([docs/PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) lines 75 and 165). Merging the rows into the default agent would present them as that blob's conversations. The header already separates them with "Not linked to a blob" ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 743). The tree uses the same split, drawn once.
 
@@ -142,7 +150,7 @@ The sidebar column is 272px ([apps/desktop/src/ui/shell.css](../apps/desktop/src
 
 ### Blob row
 
-Keep `<button class="bot-row">` with `data-agent-id`, `aria-current="true"` on the selected agent, and the roving `tabIndex` ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 107–114). Add `role="treeitem"`, `aria-level="1"`, `aria-expanded`, `aria-setsize`, `aria-posinset`, and `aria-selected="false"`. `aria-current` remains the roster's selected-blob signal so the existing mounted query `.bot-row` ([apps/desktop/src/ui/App.agent.mounted.test.tsx](../apps/desktop/src/ui/App.agent.mounted.test.tsx) lines 233–234) still means blob rows only. Project and session rows must not use the class `bot-row`.
+Keep `<button class="bot-row">` with `data-agent-id`, `aria-current="true"` on the selected agent, and the roving `tabIndex` from section 7 ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 107–114). Add `role="treeitem"`, `aria-level="1"`, `aria-expanded`, `aria-setsize`, `aria-posinset`, and `aria-selected="false"`. `aria-current` remains the roster's selected-blob signal so the existing mounted query `.bot-row` ([apps/desktop/src/ui/App.agent.mounted.test.tsx](../apps/desktop/src/ui/App.agent.mounted.test.tsx) lines 233–234) still means blob rows only. Project and session rows must not use the class `bot-row`. The button's `onClick` (line 115) and pointer `onContextMenu` (line 116) stay. Its `onKeyDown` (lines 117–130) loses every tree key; section 7's nav handler is the only owner.
 
 Contents, left to right:
 
@@ -162,7 +170,7 @@ Empty expanded blob: the group contains one non-treeitem paragraph, "No conversa
 
 A wrapper `div.tree-project` holds:
 
-- `div.tree-project-item` with `role="treeitem"`, `aria-level="2"`, `aria-expanded`, `aria-selected="false"`, `data-project-key` set to the `projectKey` (the null-key group uses `data-project-key=""`), `data-tree-kind="project"`. Padding-left 16px. Contents: the same chevron span, then the disambiguated label in an ellipsis element. Accessible name `{label}, project`.
+- A `div` with `role="treeitem"`, `aria-level="2"`, `aria-expanded`, `aria-selected="false"`, `data-project-key` set to the `projectKey` (the null-key group uses `data-project-key=""`), `data-tree-kind="project"`, and the roving `tabIndex` from section 7. Padding-left 16px. Contents: the same chevron span, then the disambiguated label in an ellipsis element. Accessible name `{label}, project`.
 - `button.tree-new` with `type="button"`, `tabIndex={-1}`, `aria-label="New session in {label}"`, a lucide `Plus`. It is a sibling of the treeitem, not inside it. It is absent on the null-key group. Opacity follows the same hover, focus-within, expanded, and `(hover: none)` rules as the chevron. It is not in the roving tabindex. A pointer click calls the project create flow. If keyboard focus is on the button because it was clicked, Arrow keys move the tree (section 7) so focus is not trapped.
 
 The project's session group is a sibling `role="group"` owned via `aria-owns` when expanded.
@@ -173,7 +181,7 @@ Same anatomy as a project row with `data-tree-kind="other"`, `aria-level="2"`, a
 
 ### Session row
 
-`div.tree-session` with `role="treeitem"`, `aria-level="3"`, `data-session-id`, `data-tree-kind="session"`, padding-left 32px. Contents, left to right, all `min-width: 0` where text can grow:
+`div.tree-session` with `role="treeitem"`, `aria-level="3"`, `data-session-id`, `data-tree-kind="session"`, the roving `tabIndex` from section 7, padding-left 32px. Contents, left to right, all `min-width: 0` where text can grow:
 
 1. `<i class="status-dot {sessionDotClass}">`.
 2. The state word in `.tree-session-state`, colour `var(--ink-3)`.
@@ -186,7 +194,7 @@ Accessible name: `{title}, {state word}, {shortTime or "time unavailable"}`.
 
 ### Show-more rows
 
-`role="treeitem"`, `data-tree-kind="more"`, `aria-selected="false"`, `aria-level` 2 for projects and 3 for sessions. The accessible name is the visible sentence ("Show 4 more projects", "Show 1 more conversation", with the count and the singular "conversation" when the count is 1).
+`role="treeitem"`, `data-tree-kind="more"`, `aria-selected="false"`, the roving `tabIndex` from section 7, `aria-level` 2 for projects and 3 for sessions. The accessible name is the visible sentence ("Show 4 more projects", "Show 1 more conversation", with the count and the singular "conversation" when the count is 1).
 
 ### Reduced motion
 
@@ -208,7 +216,7 @@ Enabled when the daemon is connected, `busy` is false, and `runtimeUsable` is tr
 
 ### Recent projects
 
-`recentProjects(sessions, agent, limit)` takes owned sessions only. Group by `projectKey`, drop `null` keys, order like project groups, and return at most `limit` entries. Each entry is `{ key, path, label }` where `path` is the representative stored string and `label` is the disambiguated folder label. The chooser uses limit 8. The tree uses the section 2 caps, not this limit.
+`recentProjects(sessions, agent, limit)` takes owned sessions only. Group by `projectKey`, drop `null` keys, and order like project groups. Each entry is `{ key, path, label }` where `path` is the representative stored string and `label` is the disambiguated folder label. The return value contains at most `limit` path rows. When `defaultProject` trims to a non-empty string and its key is not already in those groups, the result is that pinned path plus at most `limit - 1` recent groups. A chooser limit of 8 is therefore the pinned default plus at most 7 other recents, never 9 rows. When the default's key is already a recent group, that row moves to the front and is not added again, and the list is still capped at `limit`. The chooser calls `recentProjects(..., 8)`. The tree uses the section 2 caps, not this limit.
 
 When `agent.defaultProject` trims to a non-empty string, pin that path as the first chooser row. Send the trimmed `defaultProject` string, not a rewritten key. If some session group has the same `projectKey`, that row is the pinned one and it is not repeated. Its label gains the suffix ` · Default`. The settings helper changes to: "Shown first when you start a session. Leave blank to pick from recent folders." The current sentence says a new session starts in that folder immediately ([apps/desktop/src/ui/BlobSettings.tsx](../apps/desktop/src/ui/BlobSettings.tsx) line 67). Phase 4 shows the folder first and still requires a click, so the helper matches the chooser. `defaultProject` stays a UI hint. Phase 2a does not read it inside `session.new` ([docs/PHASE_3_SPEC.md](PHASE_3_SPEC.md) line 386).
 
@@ -220,7 +228,7 @@ The chooser is a `role="menu"` using the existing `.runtime-context-menu` ([apps
 
 When the trimmed default is empty and `recentProjects` is empty, skip the menu and call `openProjectFolder()` directly. That is the zero-history path.
 
-On `invalid_argument`, if the path that was sent is the trimmed `defaultProject`, show the mapped sentence and then open `openProjectFolder()` for one second `session.new`, and do not clear `defaultProject`. That is today's fallback ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 619–623). On `invalid_argument` for a recent path or a picked path, show the mapped sentence and do not open the picker again.
+On `invalid_argument`, if the path that was sent is the trimmed `defaultProject`, show the mapped sentence and then call `openProjectFolder()` once. When the user picks a folder, send one further `session.new` with that path. Do not clear `defaultProject`. That is today's fallback ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 619–623). On `invalid_argument` for a recent path or a picked path, show the mapped sentence and do not open the picker again.
 
 ### Project "+"
 
@@ -281,7 +289,8 @@ Put the new functions in `rosterSelectors.ts`. Leave `rosterRows` behaviour as i
 | `projectKey` | `path: string \| null \| undefined` | `string \| null` |
 | `sessionDotClass` | `state?: string` | `'good' \| 'busy' \| 'bad' \| 'muted'` |
 | `projectGroups` | `sessions`, `agentId` | `{ key, path, label, sessions }[]` in section 2 order, labels already disambiguated |
-| `recentProjects` | `sessions`, `agent`, `limit` | `{ key, path, label }[]` |
+| `recentProjects` | `sessions`, `agent`, `limit` | at most `limit` `{ key, path, label }` rows; a new default consumes one of those slots |
+| `sessionSelectionTarget` | `agents`, `currentAgent`, `session` | `{ agentId, sessionId }` or `null` when the click must change nothing |
 | `treeModel` | `agents`, `sessions`, `query` | `{ groups: { runtimeId, rows: TreeRow[] }[] }` |
 | `parseExpandedState` | `raw: string \| null` | `ExpandedState` |
 | `garbageCollectExpanded` | `state`, `agents`, `sessions` | `ExpandedState` |
@@ -308,13 +317,14 @@ Keep `selectedAgentId` and `selectedSessionId`. The chat's session is `sessionFo
 
 `selectAgent` ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 696–704) stays the blob-row click: that agent, its latest owned session, `setActiveRuntime`, `setActiveSession`, and close the blob page when it is open for a different agent. A blob click does not toggle the chevron.
 
-`selectSession(session)`:
+`selectSession(session)` calls `sessionSelectionTarget(agents, activeSelectedAgent, session)` and applies the result. `null` leaves `selectedAgentId` and `selectedSessionId` unchanged and does not call `setActiveSession`.
 
-- When `session.agentId` is an active agent's id, select that agent and this session. Do not replace the session with that agent's latest. Close the blob page when it is open for a different agent. Call `setActiveRuntime(agent.runtimeId)` and `setActiveSession(session.id)`.
+- When `session.agentId` is an active agent's id, the result is that agent and this session. Do not replace the session with that agent's latest. Close the blob page when it is open for a different agent. Call `setActiveRuntime(agent.runtimeId)` and `setActiveSession(session.id)`.
 - When `session.agentId` is an active id equal to the current agent, set `selectedSessionId` only, plus `setActiveSession`.
 - When `agentId` is null or missing and the current agent shares `session.runtimeId`, keep the agent and set the session.
-- When `agentId` is null or missing and the current agent does not share the runtime, select `agentsForRuntime(...)[0]` and set the session.
-- When `agentId` points at an archived or unknown agent, do nothing. Those rows are not rendered.
+- When `agentId` is null or missing and the current agent does not share the runtime, and `agentsForRuntime(agents, session.runtimeId)[0]` exists, select that host and set the session.
+- When `agentId` is null or missing, the current agent does not share the runtime, and that runtime has no active agent, return `null`. The agent selection stays, and the session is not selected in the tree.
+- When `agentId` points at an archived or unknown agent, return `null`. Those rows are not rendered.
 
 The header `<select>` keeps `onChange` setting `selectedSessionId` only ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 743). The effect at lines 407–416 calls `setActiveSession` when the resolved session id changes. Choosing a header option does not expand the tree.
 
@@ -338,11 +348,21 @@ Clicking the pill for the agent that is already selected still runs `selectAgent
 
 ## 7. Accessibility and keyboard
 
-Use the ARIA tree pattern with roving tabindex, one tab stop, on real elements. Do not use `aria-activedescendant`. Phase 3 already moves DOM focus ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 53–64), and the mounted test asserts `document.activeElement` (lines 320–328). `aria-activedescendant` would throw that test away.
+Use the ARIA tree pattern with roving tabindex on the treeitem elements themselves. Do not use `aria-activedescendant`. Phase 3 already moves DOM focus ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 53–64), and the mounted test asserts `document.activeElement` ([apps/desktop/src/ui/App.agent.mounted.test.tsx](../apps/desktop/src/ui/App.agent.mounted.test.tsx) lines 320–328). `aria-activedescendant` would throw that test away.
 
-Selection does not follow arrow focus. Arrows move the roving tabindex. Enter and Space activate. That is the Phase 3 contract (lines 124–129) carried into the tree. The tree pattern supplies `aria-expanded`, levels, set size, and position. The blob's selected state stays `aria-current` because that is what the roster tests assert. The session's selected state is `aria-selected`. Project rows and blob rows set `aria-selected="false"`. A collapsed tree can have a selected session that is not mounted; the header `<select>` still exposes it.
+One treeitem has `tabIndex={0}`. Every other treeitem, including project, session, Other, and show-more `div`s, has `tabIndex={-1}`. The `0` item is `focusId` when that id is visible, otherwise the selected blob when that row is visible, otherwise the first visible treeitem. Replace the blob-only `rowRefs` map ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) line 32) with `treeItemRefs`, a `Map` from a stable id to `HTMLElement`. Ids are `blob:${agentId}`, `project:${agentId}:${key}`, `other:${agentId}`, `session:${sessionId}`, and `more:${agentId}:${key}`. The nav handler calls `treeItemRefs.current.get(nextId)?.focus()` after it sets `focusId`. Tests that assert focus read `document.activeElement` and that element's `tabIndex` (`0` on the landed row, `-1` on the row that was left).
 
-`aria-setsize` and `aria-posinset` count siblings at that level. Blob items count visible blob treeitems across the whole tree, runtime headings excluded. Project-level items count that blob's rendered projects, its show-more-projects item when present, and "Other sessions" when present. Session-level items count the rendered sessions in that group plus its show-more item when present.
+Arrow, Home, End, Left, Right, Enter, Space, type-ahead, ContextMenu, and Shift+F10 have one owner: the `keydown` listener on the nav. Remove those branches from the blob button. Today the button handles ArrowDown, ArrowUp, Home, and End itself ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 117–130) by calling `move` (lines 53–64), and it does not stop propagation. A second listener on the nav would run for the same bubbling key and move two treeitems. Delete that arrow branch and `move`. The button keeps pointer `onClick` and pointer `onContextMenu`. The nav handler calls `preventDefault` for Enter and Space so the button's native activation does not also run `onSelect`.
+
+The existing Arrow Down test still passes for four reasons. Blobs start collapsed, so no project or session sits between blob buttons. `.bot-row` is still only those buttons, in roster order. `press` dispatches one bubbling `ArrowDown` on the first button ([apps/desktop/src/ui/App.agent.mounted.test.tsx](../apps/desktop/src/ui/App.agent.mounted.test.tsx) lines 320–328), and only the nav handles it, moving once to the next visible treeitem, which is the second blob. `aria-current` stays on the first blob until Enter. Enter is also handled once, so `aria-current` then moves to the second blob.
+
+Selection does not follow arrow focus. Arrows move the roving tabindex. Enter and Space activate. That is the Phase 3 contract in [apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 124–129, carried into the tree. The tree pattern supplies `aria-expanded`, levels, set size, and position. The blob's selected state stays `aria-current` because that is what the roster tests assert. The session's selected state is `aria-selected`. Project rows and blob rows set `aria-selected="false"`. A collapsed tree can have a selected session that is not mounted; the header `<select>` still exposes it.
+
+`aria-setsize` and `aria-posinset` are the sibling count at that level. Runtime headings are not treeitems and do not reset the count.
+
+- Level 1, every blob treeitem: `aria-setsize` is the number of blob treeitems in the tree, and `aria-posinset` is that blob's position in roster order, starting at 1. Two runtime headings do not split this count.
+- Level 2, each project row, each "Show N more projects" row, and "Other sessions" when it is rendered: `aria-setsize` is how many of those rows are rendered under that blob, and `aria-posinset` is the position in that list.
+- Level 3, each session row and that group's "Show N more conversations" row when it is rendered: `aria-setsize` is how many of those rows are rendered in that group, and `aria-posinset` is the position in that group.
 
 The key handler is on the tree (`keydown` on the nav), not on `document`. If `event.target` is an `input`, `textarea`, or `select`, return without handling. The search field is outside the nav ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) line 75). The chat composer is a textarea in the conversation pane ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 776) and already consumes Enter to send. The companion composer does the same (line 1616). Typing in either must not move the tree. Do not register a window listener for arrows, letters, or Space.
 
@@ -362,7 +382,7 @@ Visible treeitems, in order: each blob, and when that blob is expanded (stored o
 | Type-ahead | A printable character with no Ctrl, Alt, or Meta appends to a prefix. After 700ms of quiet the prefix clears. Focus moves to the next visible treeitem, wrapping, whose primary label starts with the prefix under `toLocaleLowerCase('en')`. Primary labels are the agent name, the project label, "Other sessions", the session title, and the show-more sentence. Type-ahead does not change selection. |
 | Escape | Closes an open menu and returns focus to the treeitem. It does not collapse the tree. |
 
-Up and Down keep the wrap Phase 3 uses ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 57–59) so the roster and the tree are one list. While every blob is collapsed, Arrow Down from the first blob still lands on the second blob, which is the existing test.
+Up and Down wrap across the visible treeitem list, the same wrap `move` uses today ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 57–59), reimplemented once in the nav handler. While every blob is collapsed, Arrow Down from the first blob still lands on the second blob, which is the existing test.
 
 Context menus reuse `.runtime-context-menu` and the existing key pattern ([apps/desktop/src/ui/AgentContextMenu.tsx](../apps/desktop/src/ui/AgentContextMenu.tsx) lines 15–39): focus the first enabled item, arrows, Home, End, Escape, outside pointer.
 
@@ -380,7 +400,7 @@ Focus restoration:
 - Search hides the focused id: move focus to the first visible treeitem, or to Create blob when none remain. Generalise the effect at [apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 42–51 from blob ids to visible treeitem ids.
 - After `session.new` succeeds: focus the new session row (section 4).
 - After archive: focus the next blob row, or Create blob (section 6).
-- After collapse: focus stays on the row that collapsed, or moves there from a child that unmounted.
+- After collapse: if the focused treeitem stays mounted, focus stays there. If the focused child unmounts because its parent collapsed, `treeItemRefs` focuses that parent, which then has `tabIndex={0}`.
 - Opening the blob page still focuses Back. Closing it still focuses `[data-agent-id]` ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 527–533).
 
 Screen-reader names are the ones in section 3. The chevron and the decorative plus glyph are `aria-hidden` on the span; the "+" button's name is its `aria-label`. The polite region at [apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 724 keeps the archive sentence and gains the "Started {title} in {label}." sentence. Do not also announce every chevron toggle; `aria-expanded` carries that.
@@ -435,6 +455,7 @@ Add these sessions in [apps/desktop/src/preview/fixtureBridge.ts](../apps/deskto
 | `session-claude-2` | `agent-claude` | `runtime-claude` | `c:\work\site\` | `Hero follow-up` | `idle` | Same folder as `session-claude` (`C:/work/site`) after normalisation, second session |
 | `session-claude-web` | `agent-claude` | `runtime-claude` | `C:\work\web` | `Pricing page` | `completed` | A second project on Claude |
 | `session-claude-dotdot` | `agent-claude` | `runtime-claude` | `C:\work\site\..\site` | `Dotdot path` | `idle` | Must stay its own project |
+| `session-claude-dot` | `agent-claude` | `runtime-claude` | `C:\work\site\.` | `Dot path` | `idle` | A `.` segment stays its own project |
 | `session-invoice-a` | `agent-invoice` | `runtime-codex` | `C:\client\site` | `North site` | `idle` | Collides on the folder name `site` |
 | `session-invoice-b` | `agent-invoice` | `runtime-codex` | `D:\other\site` | `South site` | `working` | The other `site` |
 | `session-retired` | `agent-old` | `runtime-codex` | `C:\old\repo` | `Archived chat` | `idle` | Archived owner's session, hidden |
@@ -452,18 +473,24 @@ Pure tests in `rosterSelectors.test.ts`:
 
 - Grouping and ordering. Claude's `C:/work/site` and `c:\work\site\` are one group whose sessions are `session-claude-2` then `session-claude`. The web project sorts after that group when its `updatedAt` is older. Bug: alphabetical project order, or a session sort that puts the older session first.
 - Collision. Invoice's two groups render `site · client` and `site · other`. Bug: both labels are `site`.
-- Path normalisation. The three strings in the worked-key table that share `c:\work\site` are one group. `C:\work\site\..\site` is a second group. `\\?\C:\work\site` is a third. `C:\` stays `c:\` and does not become `c:`. A blank path is `null`. Bug: resolving `..`, stripping `\\?\`, or splitting one folder into three because of slash or case differences.
-- Expand state. `parseExpandedState` of a valid v1 document returns the blob open bit. `parseExpandedState('{"v":2,"blobs":{"agent-claude":{"open":true}}}')` returns no open blobs. `parseExpandedState('{')` returns empty. `garbageCollectExpanded` drops an archived id and a project key with no current session, and keeps a live project key. Bug: honouring `v: 2`, throwing on bad JSON, or retaining `agent-old`.
-- `recentProjects` pins a trimmed `defaultProject` first, does not duplicate it when a session shares the key, and returns the stored session string rather than the key. Limit 8 drops the ninth. Bug: sending the lowercased key, or listing the default twice.
-- `sessionDotClass('working')` is `busy`, `sessionDotClass('idle')` is `muted`, `sessionDotClass('error')` is `bad`, `sessionDotClass('completed')` is `good`. Bug: the Sessions-tab mapping that paints idle as online.
-- `treeModel` with query `untied` returns the Codex row, `forceOpen.other` true, and does not return Invoice helper. Query `C:/work/korus` returns no rows. Query `parser` still returns Codex through the owned title and sets `forceOpen` on that project. A name query `Invoice` sets `forceOpen.blob` false. Bug: legacy rows under every Codex blob, a path match, or persisting a force-open bit into `ExpandedState` (assert `forceOpen` is on the model and `parseExpandedState` was not involved).
+- Three-way collision. `C:\client\work\site`, `D:\client\work\site`, and `E:\other\work\site` on one blob render `site · work · client · C:`, `site · work · client · D:`, and `site · work · other`. Bug: stopping after the nearest ancestor leaves three labels of `site · work`.
+- Path normalisation. Every worked-key row that maps to `c:\work\site` is one group. `C:\work\site\..\site` is a second group. `C:\work\site\.` is a third group, not merged with `c:\work\site`. `\\?\C:\work\site` is a fourth. `C:\` is `c:\` and `C:` is `c:`, and those two keys are not equal. `//server/share/site` and `\\server\share\site` are one key, `\\server\share\site`. A blank path is `null`. Bug: resolving `.` or `..`, stripping `\\?\`, folding `C:` into `C:\`, or leaving a forward-slash UNC as its own key.
+- Expand state. `parseExpandedState` of a valid v1 document returns the blob open bit. `parseExpandedState('{"v":2,"blobs":{"agent-claude":{"open":true}}}')` returns no open blobs. `parseExpandedState('{')` returns empty. `garbageCollectExpanded` drops an archived id and a project key with no current session, and keeps a live project key. A still-active `agent-claude` whose stored entry is `{ open: true, projects: { 'c:\\gone': true }, other: false }`, and whose sessions use none of that key, comes back with `open: true` and `projects` equal to `{}`. Bug: honouring `v: 2`, throwing on bad JSON, retaining `agent-old`, or deleting the blob entry because its projects map became empty.
+- `recentProjects` pins a trimmed `defaultProject` first, does not duplicate it when a session shares the key, and returns the stored session string rather than the key. With limit 8, eight session projects plus a default whose key matches none of them return length 8: the default first, then seven recents, and the oldest session project is absent. Bug: sending the lowercased key, listing the default twice, or returning 9 rows.
+- `sessionDotClass('working')` is `busy`, `sessionDotClass('idle')` is `muted`, `sessionDotClass('error')` is `bad`, `sessionDotClass('completed')` is `good`. `sessionDotClass('failed')` is `bad`. `sessionDotClass('canceled')` is `muted`. `sessionDotClass('cancelled')` is `muted`. Bug: the Sessions-tab mapping that paints idle as online, or treating `canceled` as a different bucket from `cancelled`.
+- `treeModel` with query `untied` returns the Codex row, `forceOpen.other` true, and does not return Invoice helper. With an empty query, Codex's `other` lists `Untied notes` and Invoice helper's `other` is `null`. After Codex is archived, Invoice helper is the host and its `other` lists that legacy session. Query `C:/work/korus` returns no rows. Query `parser` still returns Codex through the owned title and sets `forceOpen` on that project. A name query `Invoice` sets `forceOpen.blob` false. Bug: legacy rows under every Codex blob, a path match, or persisting a force-open bit into `ExpandedState` (assert `forceOpen` is on the model and `parseExpandedState` was not involved).
+- `sessionSelectionTarget` with a legacy session on a runtime that has no active agent, and a current agent on a different runtime, returns `null`. Bug: selecting that session under the current agent, or clearing the current agent.
 
 Mounted tests in `App.agent.mounted.test.tsx`:
 
 - Collapsed roster. On first paint, blob buttons have `aria-expanded="false"` and no `[data-session-id]` is mounted. Bug: boot auto-expand, which also breaks Arrow Down onto a project row.
-- Keyboard. Right on Claude sets `aria-expanded="true"` and leaves `aria-current` on Claude. Arrow Down focuses the first project treeitem and leaves `aria-current` on Claude. Enter on that project expands it. Enter on a session sets `aria-selected="true"` on that `data-session-id` and `aria-current` on that session's blob. Left collapses the project and leaves focus on the project. Bug: arrows changing `aria-current`, or Right moving focus into the child instead of expanding in place.
+- Keyboard. Right on Claude sets `aria-expanded="true"` and leaves `aria-current` on Claude. Arrow Down focuses the first project treeitem, that element's `tabIndex` is `0`, the Claude button's `tabIndex` is `-1`, and `aria-current` stays on Claude. Enter on that project expands it. Enter on a session sets `aria-selected="true"` on that `data-session-id` and `aria-current` on that session's blob. Left collapses the project and leaves focus on the project. One Arrow Down dispatched on the first blob, with every blob collapsed, still focuses the second `.bot-row` and does not move a second time. Bug: arrows changing `aria-current`, the button and the nav both handling Arrow Down, or Right moving focus into the child instead of expanding in place.
+- Type-ahead. With every blob collapsed, focus the Claude blob and dispatch `o` on it. `document.activeElement` is the OpenCode blob, its `tabIndex` is `0`, and Claude keeps `aria-current`. Bug: the letter changing selection, or the blob button consuming the key so focus never moves.
+- Focus after collapse. Expand Claude and its site project, focus a session row (`tabIndex` `0`), then collapse that project while the session is focused. The session node is gone and `document.activeElement` is the site project treeitem with `tabIndex` `0`. Bug: focus left on `document.body`, or the session staying mounted.
+- Sibling counts. On the default roster, every blob's `aria-setsize` is `4` and `aria-posinset` is 1 through 4 in roster order, including across the runtime headings. Expand Codex: the level-2 `aria-setsize` equals the rendered project rows plus "Other sessions" (and plus "Show N more projects" when that row is rendered). A project expanded to two sessions has level-3 `aria-setsize` `2` and `aria-posinset` `1` and `2`. Bug: resetting blob `posinset` at each runtime heading, or counting headings as treeitems.
+- Project cap. A snapshot override with 13 projects on one blob, expanded, mounts 12 project rows and one "Show 1 more project" treeitem, and the newest project is among the 12. Enter on that treeitem mounts the 13th. Bug: rendering all 13 immediately, or hiding the newest project.
 - Selection sync. Expand Invoice helper, activate `session-invoice-b`. `aria-current` is on Invoice helper and `aria-selected` is on that session, while `session-invoice-a` is `aria-selected="false"`. `setActiveSession` is called with `session-invoice-b`. Bug: the blob click path that substitutes the latest session.
-- Legacy selection. Expand Codex, activate `Untied notes`. The session is selected and Codex stays current when Codex was already current. Invoice helper's tree has no "Other sessions" node. Bug: duplicating the legacy row under Invoice helper, or calling an RPC that sets `agentId`.
+- Legacy selection. Expand Codex, activate `Untied notes`. The session is selected and Codex stays current when Codex was already current. Invoice helper's expanded tree has no "Other sessions" node and no "Untied notes" row. A snapshot where Codex is archived shows that node under Invoice helper instead. A legacy session whose runtime has no active agent is absent from every tree, and `sessionSelectionTarget` returning `null` leaves Claude's `aria-current` in place. Bug: duplicating the legacy row under Invoice helper while Codex is active, dropping the row after Codex is archived, or calling an RPC that sets `agentId`.
 - New-session payload. In the mounted snapshot the Claude session path is `C:/work/site` ([apps/desktop/src/ui/App.agent.mounted.test.tsx](../apps/desktop/src/ui/App.agent.mounted.test.tsx) line 85). Project "+" on that group calls `session.new` with exactly `{ agentId: 'agent-claude', projectPath: 'C:/work/site' }`. The header chooser's "Choose folder..." uses the picker result and the same two keys. A pure test on the fixture pair asserts the representative is the newer stored string `c:\work\site\`, not the key `c:\work\site`. Bug: a third key `runtimeId`, or sending the normalised key.
 - Default project. Set Claude's `defaultProject` to `C:/work/site`. The chooser's first item label ends with `Default`. Activating it sends that trimmed string. A fixture `invalid_argument` on that call shows "Choose a project folder that exists on this device." and then calls `openProjectFolder`. Bug: skipping the mapped sentence, or clearing `defaultProject`.
 - Search auto-expand. Query `follow-up` sets Claude's `aria-expanded="true"` and the site project's `aria-expanded="true"` without `localStorage.setItem` having been called with `bloblex.roster.expanded`. Clearing the query removes those session rows when stored state is collapsed. Query `Invoice` leaves Invoice helper `aria-expanded="false"`. Bug: writing the search expansion, or failing to expand a title hit.
@@ -504,7 +531,8 @@ Run the Phase 3 checklist in [docs/PHASE_3_SPEC.md](PHASE_3_SPEC.md) section 9 f
 Risks:
 
 - Case-folding merges two real directories that differ only by case. The product is Windows, and the alternative is duplicate rows for `C:/Work` and `c:\work` that the daemon treats as one directory check.
-- `C:\work\site\..\site` stays a separate project because the daemon did not canonicalise the stored string. A user can see two rows for what Explorer shows as one folder. Sending the stored string still passes the daemon's directory check when that path exists.
+- Accepted host rule: archiving the "Other sessions" host makes the next active agent of that runtime the host on the next render. The tree does not pin the old host id.
+- `C:\work\site\..\site` stays a separate project because the daemon did not canonicalise the stored string. The same rule applies to a `.` segment: `C:\work\site\.` is not `C:\work\site`. A user can see two rows for what Explorer shows as one folder. Sending the stored string still passes the daemon's directory check when that path exists.
 - `aria-owns` pointing at a missing id breaks the screen-reader tree. The group element and the attribute appear and disappear together.
 - Moving `selectAgent` above the companion return is a behaviour-preserving move only when the function body stays the latest-session selection. Folding `selectSession` into it would make a blob click keep an older session.
 - The header "Session" tests click straight through to `session.new` today. Leaving them unchanged fails the gate once the chooser exists.

@@ -1,8 +1,10 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import type { UsageAnalytics, UsageAnalyticsRequest } from './analyticsTypes'
+import type { UsageAnalyticsRequest } from './analyticsTypes'
 import { parsePermissionsPolicy, type PermissionsPolicy } from './approvalContract'
+import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from './executionContract'
 import type { DaemonEvent, JsonRecord, Snapshot } from './types'
+import { normalizeAnalytics } from './ui/analyticsFormat'
 
 export { parseAutoResolved, parseBypassActive, parsePermissionsPolicy } from './approvalContract'
 export type { AutoResolvedAction, BypassNotice, PermissionsPolicy } from './approvalContract'
@@ -147,20 +149,22 @@ export async function permissionsPolicyGet(): Promise<PermissionsPolicy> {
 }
 
 export async function runtimeCapabilities(runtimeId: string, agentId?: string) {
-  return rpc('runtime.capabilities', agentId ? { runtimeId, agentId } : { runtimeId })
+  return parseCapabilities(await rpc('runtime.capabilities', agentId ? { runtimeId, agentId } : { runtimeId }))
 }
 
 export async function runtimeModels(runtimeId: string, refresh = false) {
-  return rpc('runtime.models', refresh ? { runtimeId, refresh: true } : { runtimeId })
+  return parseModelCatalog(await rpc('runtime.models', refresh ? { runtimeId, refresh: true } : { runtimeId }))
 }
 
 export async function execSnapshotLatest(sessionId: string) {
-  return rpc('exec.snapshot.latest', { sessionId })
+  return parseExecSnapshot(await rpc('exec.snapshot.latest', { sessionId }))
 }
 
-export async function fetchUsageAnalytics(request: UsageAnalyticsRequest): Promise<UsageAnalytics> {
+export async function fetchUsageAnalytics(request: UsageAnalyticsRequest) {
   const params: JsonRecord = { from: request.from, to: request.to, bucket: request.bucket, tz: request.tz }
   if (request.projectPath) params.projectPath = request.projectPath
   if (request.agentId) params.agentId = request.agentId
-  return rpc<UsageAnalytics>('usage.analytics', params)
+  const parsed = normalizeAnalytics(await rpc('usage.analytics', params))
+  if (!parsed) throw new Error('internal: Usage analytics could not be loaded.')
+  return parsed
 }

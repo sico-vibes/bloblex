@@ -9,6 +9,13 @@ export interface CapabilitySetting {
   allowedKeys?: string[]
 }
 
+export interface AgentConcurrencyRow {
+  agentId: string
+  configuredMaxConcurrency: number | null
+  effectiveMaxConcurrency: number
+  active: number
+}
+
 export interface RuntimeCapabilities {
   runtimeId: string
   settings: {
@@ -20,6 +27,7 @@ export interface RuntimeCapabilities {
   }
   globalConcurrency: { limit: number; active: number } | null
   agentConcurrency: { configuredMaxConcurrency: number | null; effectiveMaxConcurrency: number; active: number } | null
+  agentConcurrencies: AgentConcurrencyRow[]
   hostDependent: boolean
 }
 
@@ -53,7 +61,7 @@ export interface ModelCatalog {
 export type OutcomeLabel = 'Applied' | 'Not applied' | 'Unsupported' | 'Unknown'
 
 export interface SettingOutcomeView {
-  setting: 'model' | 'thinking' | 'serviceTier' | 'instructions'
+  setting: 'model' | 'thinking' | 'serviceTier' | 'instructions' | 'approvalMode'
   label: OutcomeLabel
   evidence: string
 }
@@ -147,12 +155,27 @@ export function parseCapabilities(value: unknown): RuntimeCapabilities | null {
       active: root.agentConcurrency.active,
     }
   }
+  const agentConcurrencies = Array.isArray(root.agentConcurrencies)
+    ? root.agentConcurrencies.map(parseAgentConcurrencyRow).filter((row): row is AgentConcurrencyRow => !!row)
+    : []
   return {
     runtimeId: root.runtimeId,
     settings,
     globalConcurrency: global,
     agentConcurrency,
+    agentConcurrencies,
     hostDependent: root.hostDependent === true,
+  }
+}
+
+function parseAgentConcurrencyRow(value: unknown): AgentConcurrencyRow | null {
+  if (!isRecord(value) || typeof value.agentId !== 'string' || !value.agentId.trim()) return null
+  if (typeof value.effectiveMaxConcurrency !== 'number' || typeof value.active !== 'number') return null
+  return {
+    agentId: value.agentId,
+    configuredMaxConcurrency: typeof value.configuredMaxConcurrency === 'number' ? value.configuredMaxConcurrency : null,
+    effectiveMaxConcurrency: value.effectiveMaxConcurrency,
+    active: value.active,
   }
 }
 
@@ -265,16 +288,22 @@ export function showTierControl(capabilities: RuntimeCapabilities | null, model:
   return state === 'supported' || state === 'gated' || state === 'disabled'
 }
 
+function outcomeReason(entry: unknown, evidenceEntry: unknown) {
+  if (isRecord(entry) && typeof entry.reason === 'string' && entry.reason.trim()) return entry.reason
+  if (isRecord(evidenceEntry) && typeof evidenceEntry.reason === 'string') return evidenceEntry.reason
+  return ''
+}
+
 function outcomeFromEntry(entry: unknown, evidenceEntry: unknown): { label: OutcomeLabel; evidence: string } {
   const evidenceKind = evidenceKindOf(entry, evidenceEntry)
   const evidence = evidencePlain(evidenceKind)
+  const reason = outcomeReason(entry, evidenceEntry)
+  if (/unsupported|unavailable|execution_gate/i.test(reason)) return { label: 'Unsupported', evidence }
   if (!isRecord(entry)) {
     if (entry === true) return { label: 'Applied', evidence }
     if (entry === false) return { label: 'Not applied', evidence }
     return { label: 'Unknown', evidence }
   }
-  const reason = typeof entry.reason === 'string' ? entry.reason : ''
-  if (/unsupported|unavailable|execution_gate/i.test(reason)) return { label: 'Unsupported', evidence }
   if (entry.applied === true) return { label: 'Applied', evidence }
   if (entry.applied === false) return { label: 'Not applied', evidence }
   return { label: 'Unknown', evidence }
@@ -299,10 +328,14 @@ export function parseExecSnapshot(value: unknown): ExecSnapshotView | null {
   if (!isRecord(root) || typeof root.id !== 'string') return null
   const applied = isRecord(root.applied) ? root.applied : {}
   const evidence = isRecord(root.evidence) ? root.evidence : {}
-  const outcomes = OUTCOME_KEYS.map((setting) => {
+  const outcomes: SettingOutcomeView[] = OUTCOME_KEYS.map((setting) => {
     const view = outcomeFromEntry(applied[setting], evidence[setting])
     return { setting, label: view.label, evidence: view.evidence }
   })
+  if (applied.approvalMode !== undefined || evidence.approvalMode !== undefined) {
+    const approval = outcomeFromEntry(applied.approvalMode, evidence.approvalMode)
+    outcomes.push({ setting: 'approvalMode', label: approval.label, evidence: approval.evidence })
+  }
   const modelOutcome = outcomes.find((item) => item.setting === 'model')
   const requested = isRecord(root.requested) ? root.requested : {}
   const appliedModel = modelIdFrom(applied.model)

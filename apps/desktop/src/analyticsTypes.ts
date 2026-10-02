@@ -20,6 +20,7 @@ export interface AnalyticsTokens {
 }
 
 export interface AnalyticsSeriesPoint {
+  /** RFC3339 UTC with milliseconds and a Z suffix, for example `2026-03-28T00:00:00.000Z`. */
   bucketStart: string
   cost: AnalyticsCost
   tokens: AnalyticsTokens
@@ -53,9 +54,9 @@ export interface AnalyticsErrorRow {
   message: string
   /**
    * Coarse class when the daemon persisted one.
-   * Known values: provider, permission, cancelled, timeout, budget, config, other.
-   * Any other string is displayed as Other. Absence leaves the turn unclassified in the list
-   * and counted under Other in the mix.
+   * Wire values: provider, permission, cancelled, timeout, budget, config, context, other.
+   * `context` is shown as "Context full". Any other string is displayed as Other.
+   * Absence leaves the turn unclassified in the list and counted under Other in the mix.
    */
   failureClass?: string
 }

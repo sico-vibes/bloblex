@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AnalyticsSeriesPoint } from '../analyticsTypes'
-import { analyticsFixtures } from './analyticsFixtures'
+import { analyticsFixtures, daemonAnalyticsWire } from './analyticsFixtures'
 import {
+  analyticsErrorText,
   analyticsNotes,
   analyticsWindow,
   barAccessibleName,
@@ -22,6 +23,7 @@ import {
   ANALYTICS_STORAGE_KEY,
   DEFAULT_ANALYTICS_PREFS,
   OFFENDER_RATE_MIN_RUNS,
+  failureClassLabel,
   failureMix,
   failureMixSummary,
   foldLeaderboard,
@@ -30,6 +32,7 @@ import {
   offenderRateLabel,
   readAnalyticsPrefs,
   unpricedModelsNote,
+  turnFailureTitle,
   unreportedRunsNote,
   writeAnalyticsPrefs,
 } from './analyticsFormat'
@@ -240,8 +243,10 @@ describe('analytics formatting', () => {
       ['Timeout', 0],
       ['Budget stop', 1],
       ['Config/unsupported', 0],
+      ['Context full', 0],
       ['Other', 2],
     ])
+    expect(failureMix([{ failureClass: 'context' }]).find((segment) => segment.id === 'context')?.count).toBe(1)
     const summary = failureMixSummary(mix)
     expect(summary).toContain('Provider error 1')
     expect(summary).toContain('Other 2')
@@ -273,6 +278,64 @@ describe('analytics formatting', () => {
     })
     expect(classed?.errors[0]?.failureClass).toBe('timeout')
     expect(JSON.stringify(classed)).not.toContain('SECRET_PROMPT')
+    expect(failureClassLabel('context')).toBe('Context full')
+    expect(turnFailureTitle('context')).toBe('Context full')
+    expect(turnFailureTitle('CONTEXT')).toBe('Context full')
+    expect(turnFailureTitle('provider')).toBe('Turn failed')
+    expect(turnFailureTitle(undefined)).toBe('Turn failed')
+    expect(analyticsErrorText(new Error('invalid_argument: analytics range, bucket, or timezone is invalid'))).toBe('That date range cannot be loaded.')
+    expect(analyticsErrorText(new Error('invalid_argument: projectPath and agentId must be strings'))).toBe('That project or blob filter cannot be loaded.')
+    expect(analyticsErrorText(new Error('not_found: agent not found'))).toBe('That blob is no longer available.')
+  })
+
+  it('normalises a daemon usage.analytics body field by field', () => {
+    const parsed = normalizeAnalytics(daemonAnalyticsWire)
+    expect(parsed).not.toBeNull()
+    if (!parsed) return
+    expect(JSON.stringify(parsed)).not.toContain('SECRET_PROMPT')
+    expect(parsed.range).toEqual(daemonAnalyticsWire.range)
+    expect(parsed.totals.cost).toEqual({ amountMinor: null, currency: 'USD', actualMinor: null, estimatedMinor: null, lowerBound: true })
+    const blankCurrency = normalizeAnalytics({
+      ...daemonAnalyticsWire,
+      totals: { ...daemonAnalyticsWire.totals, cost: { ...daemonAnalyticsWire.totals.cost, currency: '' } },
+    })
+    expect(blankCurrency?.totals.cost.currency).toBe('USD')
+    expect(parsed.totals.tokens).toEqual({ input: 12, output: null, cacheRead: null, cacheWrite: null, reasoning: null, total: 12 })
+    expect(parsed.totals.runTimeMs).toBe(3600000)
+    expect(parsed.totals.runs).toBe(2)
+    expect(parsed.totals.failedRuns).toBe(1)
+    expect(parsed.totals.cancelledRuns).toBe(1)
+    expect(parsed.totals.activeRuns).toBe(0)
+    expect(parsed.totals.unreportedRuns).toBe(1)
+    expect(parsed.totals.unpricedModels).toEqual(['codex/model-x'])
+    expect(parsed.totals.excludedCurrencies).toEqual(['EUR'])
+    expect(parsed.series.map((point) => point.bucketStart)).toEqual(['2026-03-28T00:00:00.000Z', '2026-03-29T23:00:00.000Z'])
+    expect(parsed.series[0]?.bucketStart).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+    expect(parsed.series[0]?.cancelledRuns).toBe(0)
+    expect(parsed.series[0]?.tokens.total).toBeNull()
+    expect(parsed.series[0]?.cost.amountMinor).toBeNull()
+    expect(parsed.series[1]?.cost).toEqual({ amountMinor: 1234, currency: 'USD', actualMinor: 1000, estimatedMinor: 234, lowerBound: true })
+    expect(parsed.leaderboard[0]).toMatchObject({
+      agentId: null,
+      agentName: null,
+      runtimeId: 'rt',
+      cancelledRuns: 1,
+      unreportedRuns: 1,
+      unpricedModels: ['codex/model-x'],
+      runTimeMs: 3600000,
+    })
+    expect(parsed.errors[0]).toEqual({
+      turnId: 'analytics-turn',
+      sessionId: 'analytics-session',
+      agentId: null,
+      at: '2026-03-29T01:10:00.000Z',
+      message: 'Provider reported an error.',
+      failureClass: 'provider',
+    })
+    expect(parsed.errors[1]?.failureClass).toBe('context')
+    expect(failureClassLabel(parsed.errors[1]?.failureClass)).toBe('Context full')
+    expect(parsed.subscriptions).toEqual([{ provider: 'claude', monthlyMinor: 2000, currency: 'USD', quotaState: 'unknown' }])
+    expect(formatBucketLabel(parsed.series[1]?.bucketStart ?? '', 'day', 'Europe/London')).toContain('30')
   })
 
   it('reads defaults when analytics storage throws or is invalid', () => {

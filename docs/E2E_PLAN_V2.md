@@ -1,5 +1,21 @@
 # Bloblex E2E plan: configurable blobs, sessions tree, analytics, release
 
+## Status (2 October 2026)
+
+Evidence is the merge commit on this branch's history. "Implemented" means the code and its unit or fake-process tests are on main. It does not mean a live provider session or a native window pass of the current tree. The only recorded native smoke is the isolated-database run of the Phase 3 tree (`5138c8e`, revision `e770db8`); it does not cover Phases 4, 2b, 5, or 6. Phase 7 is still pending.
+
+| Phase | Status | Evidence |
+| --- | --- | --- |
+| 1 Logo and icons | Implemented | `7f10e60` |
+| 1.5 CLI capability record | Implemented (recorded probes, not a live session pass) | `2b4b92f` |
+| 2a Blob storage and RPCs | Implemented | `1b0232a` |
+| 3 Blob roster and editor | Implemented. Isolated native smoke of that tree, with open defects | `92f626a`, smoke `5138c8e` |
+| 4 Project and session tree | Implemented. Unit and mounted tests only | `395fd78` |
+| 2b Execution options | Implemented (storage, Claude, OpenCode, Codex). Fake-process tests only | `2dc0ae9`, `013e32b`, `73c4f03`, `9045022`, `7c0eb77` |
+| 5 Usage analytics | Implemented (UI and `usage.analytics`). Unit tests only | `55808fa`, `07bb620` |
+| 6 Settings (General, Agents, Runtimes, Permissions) | Implemented. Unit and mounted tests only | `0314cb2`, `aabbd0f` |
+| 7 Native verification and release | Pending | — |
+
 ## Director amendments (1 Oct 2026)
 
 - Phase 2 is split: **2a** delivers agent storage, migration/backfill, `agent.*` RPCs/events, snapshot inclusion, and `session.new` by `agentId` without execution options. **2b** adds `ExecOptions`, adapter mappings, model catalog, concurrency and usage capture. Phases 3 and 4 depend only on 2a.

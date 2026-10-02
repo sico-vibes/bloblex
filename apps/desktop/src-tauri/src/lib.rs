@@ -24,6 +24,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
+mod updates;
+
 #[cfg(test)]
 mod file_inspection_tests;
 
@@ -1580,7 +1582,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState::default())
+        .manage(updates::UpdateService::default())
         .setup(|app| {
             let mut show_companion = true;
             if let Some(state) = app.try_state::<AppState>() {
@@ -1610,6 +1615,7 @@ pub fn run() {
             if show_companion {
                 companion.show()?;
             }
+            updates::start_background_checker(app.handle());
             build_tray(app.handle())?;
             if let Some(main) = app.get_webview_window("main") {
                 let main_for_event = main.clone();
@@ -1655,12 +1661,17 @@ pub fn run() {
             current_companion_monitor,
             set_companion_monitor,
             refresh_tray_menu,
-            quit_bloblex
+            quit_bloblex,
+            updates::updates_get_state,
+            updates::updates_set_preferences,
+            updates::updates_check,
+            updates::updates_install
         ])
         .build(tauri::generate_context!())
         .expect("Bloblex desktop application failed to start")
         .run(|app, event| {
             if let RunEvent::Exit = event {
+                updates::stop_background_checker(app);
                 if let Some(state) = app.try_state::<AppState>() {
                     state.stop_child();
                 }

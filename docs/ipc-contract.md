@@ -1,5 +1,9 @@
 # Bloblex daemon IPC contract (v1)
 
+## Update commands
+
+The desktop updater commands and events are defined in [UPDATER.md](UPDATER.md). They run in the Tauri shell and persist preferences through the daemon settings store; they are separate from the daemon's v1 IPC methods below.
+
 This is the integration contract between `bloblexd.exe` and the desktop shell. The daemon is authoritative; UI state is reconstructed from `app.snapshot` and subsequent ordered events.
 
 This document includes intended contract requirements, not a statement that every guarantee is already implemented or independently tested. See [implementation status](implementation-status.md) for open acceptance work. Snapshot/event atomicity, complete permission lifecycle, financial aggregation and process-tree cleanup remain under review.

@@ -203,6 +203,7 @@ async fn parse_line(
                 input_tokens: None, output_tokens: None, cache_read_tokens: None, cache_write_tokens: None, reasoning_tokens: None,
                 usage_status: "unreported".into(), provider_update_id: None, context_used: None, context_size: None,
                 model: None, cost_minor: None, cost_currency: None, reported_cost_decimal: None,
+                cost_is_cumulative: false,
             }}).await;
             let _ = tx
                 .send(AgentEvent::Error {
@@ -226,13 +227,14 @@ async fn parse_line(
                     reasoning_tokens: u["output_tokens_details"]["thinking_tokens"].as_u64(), usage_status: if u.is_object() { "reported" } else { "unreported" }.into(),
                     provider_update_id: None, context_used: None, context_size: None,
                     model, cost_minor, cost_currency: cost_minor.map(|_| "USD".into()),
-                    reported_cost_decimal: total_cost,
+                    reported_cost_decimal: total_cost, cost_is_cumulative: false,
                 }}).await;
             } else {
                 let _ = tx.send(AgentEvent::UsageReport { turn_id: String::new(), report: UsageReport {
                     input_tokens: None, output_tokens: None, cache_read_tokens: None, cache_write_tokens: None, reasoning_tokens: None,
                     usage_status: "unreported".into(), provider_update_id: None, context_used: None, context_size: None,
                     model: None, cost_minor: None, cost_currency: None, reported_cost_decimal: None,
+                    cost_is_cumulative: false,
                 }}).await;
             }
             let _ = tx.send(AgentEvent::TurnCompleted).await;

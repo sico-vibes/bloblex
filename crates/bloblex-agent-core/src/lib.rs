@@ -118,6 +118,12 @@ pub struct UsageReport {
     pub cost_minor: Option<i64>,
     pub cost_currency: Option<String>,
     pub reported_cost_decimal: Option<String>,
+    /// True when `reported_cost_decimal` is a session-cumulative total.
+    /// OpenCode ACP's `usage_update.cost.amount` is cumulative; the daemon
+    /// derives the per-turn delta. Omitted JSON deserializes as false so
+    /// per-turn costs from other adapters stay per-turn.
+    #[serde(default)]
+    pub cost_is_cumulative: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,5 +282,22 @@ mod exec_option_tests {
         assert_eq!(new.exec_options.max_concurrency,1);assert_eq!(resume.exec_options.max_concurrency,1);assert!(prompt.exec_options.env.is_empty());
         let encoded=serde_json::to_value(ExecOptions::default()).unwrap();assert!(encoded.get("serviceTier").is_some());assert!(encoded.get("maxConcurrency").is_some());assert!(encoded.get("service_tier").is_none());
         assert_eq!(serde_json::to_value(EvidenceKind::ProviderEcho).unwrap(),"provider_echo");
+    }
+
+    #[test]
+    fn usage_report_cost_is_cumulative_defaults_false_and_serializes_camel_case() {
+        let report: UsageReport = serde_json::from_value(serde_json::json!({
+            "inputTokens": 1, "outputTokens": 2, "cacheReadTokens": null, "cacheWriteTokens": null,
+            "reasoningTokens": null, "usageStatus": "reported", "providerUpdateId": "1",
+            "contextUsed": null, "contextSize": null, "model": null, "costMinor": null,
+            "costCurrency": "USD", "reportedCostDecimal": "0.0015894"
+        })).unwrap();
+        assert!(!report.cost_is_cumulative);
+        assert_eq!(report.reported_cost_decimal.as_deref(), Some("0.0015894"));
+        let mut report = report;
+        report.cost_is_cumulative = true;
+        let encoded = serde_json::to_value(&report).unwrap();
+        assert_eq!(encoded["costIsCumulative"], true);
+        assert!(encoded.get("cost_is_cumulative").is_none());
     }
 }

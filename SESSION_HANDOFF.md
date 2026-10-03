@@ -1,65 +1,66 @@
 # Bloblex session handoff
 
-Current as of 2 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status and evidence commits are in the table at the top of that file and in [docs/implementation-status.md](docs/implementation-status.md).
+Current as of 3 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
-Acceptance of the current tree is unit tests and fake-process adapter tests. There is no live-provider session check and no native window pass of this tree. Phase 7 is the remaining native and release work.
+Acceptance of the current tree is unit, mounted and fake-process tests. There is no live-provider session check and no native window pass of this tree. Public beta releases exist (latest published: `v0.1.0-beta.3`); work merged after it is not released yet.
 
 ## What exists
 
 Bloblex is a Windows desktop app: a React/Tauri shell (`apps/desktop`) and a separate daemon (`bloblexd`) that owns sessions, permissions, budgets, and usage. The shell and the companion read the daemon's normalized state. Provider CLIs (Claude Code, Codex, OpenCode) keep their own login.
 
-On main, through the commits listed in the plan status table:
+On main:
 
-- Phases 1, 1.5, 2a, and 3: logo/icons, the capability record, persisted blobs, and the roster editor.
-- Phase 4: per-blob project and session tree.
-- Phase 2b: execution options, snapshots, model catalogs, and the Claude, OpenCode, and Codex adapters (fake-process tests).
-- Phase 5: `usage.analytics` and the analytics view (cost, tokens, run time, runs, errors).
-- Phase 6: settings modal for General, Agents, Runtimes, and Permissions, including ask / auto / bypass approval modes.
-- Companion island, chat-style main window, and character canvas are in the desktop app.
-
-An isolated-database native smoke of the Phase 3 tree is recorded in [docs/NATIVE_SMOKE_RESULTS.md](docs/NATIVE_SMOKE_RESULTS.md) (`5138c8e`, revision `e770db8`). It does not cover Phases 4, 2b, 5, or 6.
+- Plan phases 1–6 and 2b: logo, capability record, persisted blobs and the editor, the project/session tree, execution options and adapters, usage analytics, settings with ask / auto / bypass approval modes.
+- Auto-update from GitHub releases (stable and beta channels, signed NSIS updates) and the release script; see [docs/UPDATER.md](docs/UPDATER.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+- The interface redesign: chat-style main window, one-page blob editor, custom dropdowns, blob moods that settle over time, favourites and pinned conversations/projects, companion launch with the full welcome.
+- Conversation management: unread markers, Windows notifications, rename/archive/delete (migration 6), grouped tool activity, Start with Windows.
+- Honest model lists: catalog source and update time, suggestions vs validated lists, display names, default marker and family groups.
+- Settings > Usage & limits (token/turn/minute budgets, price overrides, subscription fees), Markdown export of a conversation, export/import of a blob setup.
 
 ## Lanes
 
-The Director (orchestrating Claude session) reviews diffs and commits. Implementers do not commit.
+The Director (orchestrating Claude session) reviews diffs, runs the gates and commits. Implementers do not commit.
 
 | Lane | Role |
 | --- | --- |
 | `impl` | Codex, production code including Rust |
-| `impl-b` | Cursor Grok, bake-off lane; this handoff's desktop contract work is TypeScript, CSS, and docs only |
-| `qa` | OpenCode, reports to the Director |
+| `impl-b` | Cursor Grok, used as the independent read-only reviewer of each branch |
+| `qa` | OpenCode, research and QA; reports to the Director |
 
-Do not edit the user's hooks or settings. Desktop Cursor runs go through `scripts/run-cursor-delegate.ps1`.
+The implementer sandbox cannot spawn esbuild, so the Director runs Vitest and the Vite build. Cursor runs go through `scripts/run-cursor-delegate.ps1`; in read-only mode Cursor has no shell, so give it the diff as a file. Do not edit the user's hooks or settings.
 
 ## Build and test
 
-From the repository root, with this worktree's own `node_modules` (`npm ci` here; do not link another checkout's modules):
+From the repository root, with this checkout's own `node_modules` (`npm ci`; never link another checkout's modules):
 
 ```powershell
 npm run typecheck
 npm test
 npm run build
+cargo test --workspace
+cargo check -p bloblex-desktop --lib
 ```
 
-Those three commands run the desktop workspace. They are the desktop gate: typecheck, Vitest, and the production bundle. They do not start the app, the daemon, or Tauri.
+Use a private `CARGO_TARGET_DIR`. `cargo check -p bloblex-desktop` needs the gitignored sidecar binaries in `apps/desktop/src-tauri/binaries` (copy them into a new worktree). Before committing, run the naming check: no third-party product names anywhere in the repo.
 
-Backend tests, when a lane is allowed to run them, use a fresh database path and a private Cargo target. Never point a test or a dev run at `%LOCALAPPDATA%\Bloblex`.
+Native development, only when a person is ready to launch the app, is `npm run desktop:dev` with an explicit isolated `BLOBLEX_DB_PATH`. See [docs/windows-development.md](docs/windows-development.md). Never point a test or a dev run at `%LOCALAPPDATA%\Bloblex`.
 
-Native development, only when a person is ready to launch the app, is `npm run desktop:dev` with an explicit isolated `BLOBLEX_DB_PATH`. See [docs/windows-development.md](docs/windows-development.md). Do not start it as part of a contract or docs pass.
+Releases: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). The update signing key lives outside the repo and must never be committed.
 
 ## What needs the user's native testing (Phase 7)
 
-- Companion transparency, free drag (including the face and the name), monitor clamping, DPI, and resize timing.
+- Companion transparency, free drag, monitor clamping, DPI, resize timing, and the launch welcome.
 - Real file drop, approvals in both windows, tray Pause all, keyboard focus, and reduced motion.
-- Quit and process-tree cleanup.
-- Installer, signing, updater, and a clean-machine install.
-
-The Phase 3 smoke recorded defects N1–N4 (face drag, expand clamp, companion totals labeled as daemon-wide, backup sidecar files). Later commits touch drag and clamp in source. Those fixes have not been re-checked in a native window.
+- Notifications, Start with Windows, and the export/import file dialogs.
+- Quit and process-tree cleanup; a clean-machine install; code signing.
 
 ## Known gaps
 
 - No live Claude, Codex, or OpenCode session has been accepted against the current tree.
-- The daemon does not persist or emit a `context` failure class. The UI will label that class "Context full" if it appears on an analytics error or a turn. See the implementer report for the Rust lines.
-- Session turn JSON does not include `failureClass`, so the chat card cannot show it until the daemon adds the field.
-- Settings Usage and Billing, language, and theme stay deferred.
-- WSL, signing, and the updater are not done.
+- Shared provider processes (one per runtime) are not built; each session owns its process.
+- Codex blob instructions stay thread-level: the installed app-server schema has no per-turn context field.
+- Cost budgets are not offered: turn admission cannot estimate cost yet. Existing cost policies are listed with a note.
+- The daemon does not emit a `context` failure class; session turn JSON omits `failureClass`.
+- Batches not started: quick switcher and composer model switch; first-run setup, companion start position and hotkey, light theme and text size, reorderable pins.
+- WSL.
+- Tracked `apps/desktop/tsconfig.tsbuildinfo` is rewritten by `tsc -b`; restore it before committing if it changes.

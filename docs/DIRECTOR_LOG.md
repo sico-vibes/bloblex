@@ -69,3 +69,10 @@
 
 ## 2 Oct 2026 (afternoon)
 - Tasks 16 (ACP) and 17 (Codex) merged; workspace tests green. Repo de-branded: reference material lives in the gitignored `.local/` folder. Approval modes contract added (`docs/APPROVAL_MODES.md`); backend queued as Task 19, analytics/process hardening as Task 20, UI (execution card, approval modes, settings) as Task 18.
+
+## 3 Oct 2026 - Batches A, E and Patch D merged; pipeline stopped
+- Releases 0.1.0-beta.1 to beta.3 were published earlier (auto-update, interface redesign, sidebar polish).
+- Batch A (conversation management, notifications, grouped activity), Batch E (model list provenance and presentation) and Patch D (Usage & limits, export, blob sharing) were implemented by `impl`, gated by the Director (typecheck, Vitest, build, cargo test, cargo check desktop, diff check, naming check) and reviewed by `impl-b` in read-only worktrees.
+- Review blockers fixed before merge: archived chats returning on reconnect; deleted chats resurrected by a live provider; unread/notifications missing finish and approval; OpenCode thinking rejected by a handshake without per-model efforts; cost budgets blocking every turn (cost budgets withdrawn from the form); user price overrides losing to shipped estimates; native export/import accepting any path (now single-use dialog tokens). A Director review also replaced a daemon-wide event lock (held across provider calls, with bounded channels) by short per-session locks.
+- Decisions: Codex instructions stay thread-level (no per-turn context field in the installed schema); shared provider processes deferred to their own task.
+- The user asked to stop after this set: no new batches and no release until asked.

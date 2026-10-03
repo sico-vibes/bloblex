@@ -1,6 +1,6 @@
 # Bloblex E2E plan: configurable blobs, sessions tree, analytics, release
 
-## Status (2 October 2026)
+## Status (3 October 2026)
 
 Evidence is the merge commit on this branch's history. "Implemented" means the code and its unit or fake-process tests are on main. It does not mean a live provider session or a native window pass of the current tree. The only recorded native smoke is the isolated-database run of the Phase 3 tree (`5138c8e`, revision `e770db8`); it does not cover Phases 4, 2b, 5, or 6. Phase 7 is still pending.
 
@@ -13,8 +13,10 @@ Evidence is the merge commit on this branch's history. "Implemented" means the c
 | 4 Project and session tree | Implemented. Unit and mounted tests only | `395fd78` |
 | 2b Execution options | Implemented (storage, Claude, OpenCode, Codex). Fake-process tests only | `2dc0ae9`, `013e32b`, `73c4f03`, `9045022`, `7c0eb77` |
 | 5 Usage analytics | Implemented (UI and `usage.analytics`). Unit tests only | `55808fa`, `07bb620` |
-| 6 Settings (General, Agents, Runtimes, Permissions) | Implemented. Unit and mounted tests only | `0314cb2`, `aabbd0f` |
-| 7 Native verification and release | Pending | — |
+| 6 Settings (General, Agents, Runtimes, Permissions) | Implemented, later merged into General, Agents, Usage & limits, Updates. Unit and mounted tests only | `0314cb2`, `aabbd0f`, `aea5eb1` |
+| 7 Native verification and release | Partly done: updater, release script and beta releases. Native checks, signing and clean install open | `f15f9d2`…`889bb93`, `v0.1.0-beta.1`–`beta.3` |
+
+Work after the plan phases (redesign, conversation management, model list provenance, usage limits and sharing) is listed in [implementation-status.md](implementation-status.md).
 
 ## Director amendments (1 Oct 2026)
 

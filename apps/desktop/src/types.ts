@@ -21,6 +21,8 @@ export interface Snapshot extends JsonRecord {
   latestBudgetAlert?: JsonRecord
   autoApprovals?: AutoResolvedAction[]
   bypassNotices?: BypassNotice[]
+  /** Client-side tombstones prevent delayed events from reviving deleted sessions. */
+  deletedSessionIds?: string[]
 }
 
 export interface Runtime extends JsonRecord {
@@ -77,6 +79,7 @@ export interface Session extends JsonRecord {
   provider?: string
   projectPath?: string
   title?: string
+  archived?: boolean
   state?: string
   resumable?: boolean
   messages?: ChatMessage[]
@@ -145,10 +148,19 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
   if (event.type === 'session.changed') {
     const session = (payload.session ?? payload) as Session
     if (!session.id) return { ...snapshot, sequence }
+    if (snapshot.deletedSessionIds?.includes(session.id)) return { ...snapshot, sequence }
     const sessions = snapshot.sessions ?? []
+    if (session.archived === true) return { ...snapshot, sequence, sessions: sessions.filter((item) => item.id !== session.id) }
     const existing = sessions.find((item) => item.id === session.id)
     const merged = existing ? { ...existing, ...session, messages: session.messages ?? existing.messages, turns: session.turns ?? existing.turns, tools: session.tools ?? existing.tools, files: session.files ?? existing.files } : session
     return { ...snapshot, sequence, sessions: [...sessions.filter((item) => item.id !== session.id), merged] }
+  }
+
+  if (event.type === 'session.deleted') {
+    const id = typeof payload.sessionId === 'string' ? payload.sessionId : typeof payload.id === 'string' ? payload.id : undefined
+    if (!id) return { ...snapshot, sequence }
+    const deletedSessionIds = [...new Set([...(snapshot.deletedSessionIds ?? []), id])]
+    return { ...snapshot, sequence, deletedSessionIds, sessions: (snapshot.sessions ?? []).filter((session) => session.id !== id) }
   }
 
   if (event.type === 'agent.changed') {

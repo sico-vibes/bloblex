@@ -11,6 +11,13 @@ import { SettingsSheet } from './SettingsSheet'
 
 const rpc = vi.hoisted(() => vi.fn())
 const policy = vi.hoisted(() => vi.fn())
+const autostart = vi.hoisted(() => ({ enabled: false }))
+vi.mock('../desktopIntegrations', () => ({
+  autostartEnabled: async () => autostart.enabled,
+  setAutostartEnabled: async (enabled: boolean) => { autostart.enabled = enabled },
+  sendDesktopNotification: async () => undefined,
+  flashMainWindow: async () => undefined,
+}))
 vi.mock('../tauri', () => ({
   inDesktop: true,
   rpc,
@@ -117,7 +124,8 @@ const agent = (partial: Partial<Agent>): Agent => ({
 })
 
 describe('settings modal', () => {
-  it('navigates the four pages and marks start-with-Windows unavailable', async () => {
+  it('navigates settings and changes the real start-with-Windows state', async () => {
+    autostart.enabled = false
     rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { showCompanion: true, closeToTray: true, 'companion.soundsEnabled': false } } : {})
     policy.mockResolvedValue({ defaultMode: 'ask', perAgent: [{ agentId: 'agent-2', mode: 'bypass', effectiveMode: 'bypass' }] })
     const snapshot: Snapshot = {
@@ -133,8 +141,18 @@ describe('settings modal', () => {
     expect(nav).toEqual(['General', 'Agents', 'Updates'])
     expect(view.host.textContent).not.toContain('Usage & budgets')
     const start = view.host.querySelector<HTMLButtonElement>('[aria-label="Start with Windows"]')!
-    expect(start.disabled).toBe(true)
-    expect(view.host.textContent).toContain('Not available yet')
+    expect(start.disabled).toBe(false)
+    expect(start.getAttribute('aria-checked')).toBe('false')
+    await act(async () => { start.click() })
+    await view.settle()
+    expect(start.getAttribute('aria-checked')).toBe('true')
+    expect(view.host.textContent).not.toContain('Not available yet')
+    const notifications = view.host.querySelector<HTMLButtonElement>('[aria-label="Notify when a blob finishes or needs approval"]')!
+    expect(notifications.getAttribute('aria-checked')).toBe('true')
+    await act(async () => { notifications.click() })
+    await view.settle()
+    expect(rpc).toHaveBeenCalledWith('settings.set', { key: 'notifications.enabled', value: false })
+    expect(notifications.getAttribute('aria-checked')).toBe('false')
     expect(view.host.querySelector('[aria-label="Companion sounds"]')).not.toBeNull()
 
     await page('Updates')

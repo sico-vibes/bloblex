@@ -10,6 +10,8 @@ import { parseUpdateChannel, type UpdateChannel, type UpdateInfo, type UpdatePro
 
 type Unlisten = () => void
 const noop: Unlisten = () => undefined
+const fixtureSettings: Record<string, unknown> = { 'notifications.enabled': true }
+const daemonListeners = new Set<(event: DaemonEvent) => void>()
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 const flags = () => new URLSearchParams(location.search)
 
@@ -55,6 +57,12 @@ let sessions: Session[] = [
 
 let sequence = 1
 let agentSerial = 6
+let fixtureAutostart = false
+export const fixtureNotifications: Array<{ title: string; body: string }> = []
+export async function autostartEnabled() { return fixtureAutostart }
+export async function setAutostartEnabled(enabled: boolean) { fixtureAutostart = enabled }
+export async function sendDesktopNotification(title: string, body: string) { fixtureNotifications.push({ title, body }) }
+export async function flashMainWindow() {}
 
 function rpcError(code: string, message: string) {
   return new Error(`${code}: ${message}`)
@@ -71,7 +79,7 @@ function currentSnapshot(): Snapshot {
     sequence,
     runtimes,
     agents: search.has('empty') ? [] : agents.map((agent) => ({ ...agent, customArgs: [...agent.customArgs], customEnv: { ...agent.customEnv } })),
-    sessions: sessions.map((session) => ({ ...session })),
+    sessions: sessions.filter((session) => !session.archived).map((session) => ({ ...session })),
     permissions: search.has('approval')
       ? [{ id: 'perm-1', sessionId: 'session-codex', runtimeId: 'runtime-codex', status: 'pending', title: 'Run shell command', command: 'npm test -- invoice', choices: ['allow_once', 'allow_session', 'deny'] }]
       : [],
@@ -88,7 +96,35 @@ function nameTaken(name: string, exceptId?: string) {
 export const inDesktop = true
 export async function rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   if (method === 'events.replay') return { replayAvailable: true, events: [] } as T
-  if (method === 'settings.get') return { settings: {} } as T
+  if (method === 'settings.get') return { settings: { ...fixtureSettings } } as T
+  if (method === 'settings.set') { fixtureSettings[String(params.key)] = params.value; return { saved: true } as T }
+  if (method === 'session.list') return { sessions: sessions.filter((session) => params.includeArchived === true || !session.archived).map((session) => ({ ...session })) } as T
+  if (method === 'session.rename') {
+    const session = sessions.find((item) => item.id === params.sessionId)
+    const title = typeof params.title === 'string' ? params.title.trim() : ''
+    if (!session) throw rpcError('not_found', 'Conversation not found.')
+    if (!title || title.length > 120) throw rpcError('invalid_argument', 'Title must be between 1 and 120 characters.')
+    session.title = title
+    session.updatedAt = new Date().toISOString()
+    notifyFixtureDaemon('session.changed', { session: { ...session } })
+    return { session } as T
+  }
+  if (method === 'session.archive') {
+    const session = sessions.find((item) => item.id === params.sessionId)
+    if (!session) throw rpcError('not_found', 'Conversation not found.')
+    session.archived = params.archived === true
+    session.updatedAt = new Date().toISOString()
+    notifyFixtureDaemon('session.changed', { session: { ...session } })
+    return { session } as T
+  }
+  if (method === 'session.delete') {
+    const index = sessions.findIndex((item) => item.id === params.sessionId)
+    if (index < 0) throw rpcError('not_found', 'Conversation not found.')
+    if (['starting', 'working', 'cancelling', 'waiting_permission'].includes(String(sessions[index].state))) throw rpcError('conflict', 'Cannot delete an active conversation.')
+    const [session] = sessions.splice(index, 1)
+    notifyFixtureDaemon('session.deleted', { sessionId: session.id })
+    return { deleted: true } as T
+  }
   if (method === 'agent.list') {
     const includeArchived = params.includeArchived === true
     const runtimeId = typeof params.runtimeId === 'string' ? params.runtimeId : undefined
@@ -222,7 +258,11 @@ export async function permissionsPolicyGet() {
 export async function listenForActiveSession(): Promise<Unlisten> { return noop }
 export async function listenForActiveRuntime(): Promise<Unlisten> { return noop }
 export async function listenForOpenSettings(): Promise<Unlisten> { return noop }
-export async function listenForDaemonEvents(_handler: (event: DaemonEvent) => void): Promise<Unlisten> { return noop }
+export async function listenForDaemonEvents(handler: (event: DaemonEvent) => void): Promise<Unlisten> { daemonListeners.add(handler); return () => daemonListeners.delete(handler) }
+function notifyFixtureDaemon(type: string, payload: Record<string, unknown>) {
+  const event = { sequence: ++sequence, type, payload } as DaemonEvent
+  for (const handler of daemonListeners) handler(event)
+}
 export async function listenForDaemonConnection(handler: (connected: boolean) => void): Promise<Unlisten> {
   if (flags().has('disconnected')) handler(false)
   return noop

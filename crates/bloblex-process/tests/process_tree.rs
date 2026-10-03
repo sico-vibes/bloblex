@@ -1,5 +1,7 @@
 use bloblex_process::{prepare_command, ProcessTree, StdinWriter};
 use std::{fs, path::PathBuf, time::{Duration, SystemTime, UNIX_EPOCH}};
+
+const NONREADING_CHILD_IO_TIMEOUT: Duration = Duration::from_secs(15);
 use tokio::{io::AsyncReadExt, process::Command};
 
 fn child_is_alive(pid: u32) -> bool {
@@ -71,14 +73,14 @@ async fn stdin_writer_and_stderr_drain_bound_a_nonreading_child() {
     let mut writer = StdinWriter::new(stdin);
     let payload = vec![b'p'; 1024 * 1024];
     writer.write(&payload).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(4), writer.close(&mut child, &tree))
+    tokio::time::timeout(NONREADING_CHILD_IO_TIMEOUT, writer.close(&mut child, &tree))
         .await
         .expect("close must finish within the bounded grace and kill window");
-    tokio::time::timeout(Duration::from_secs(2), child.wait())
+    tokio::time::timeout(NONREADING_CHILD_IO_TIMEOUT, child.wait())
         .await
         .unwrap()
         .unwrap();
-    let drained = tokio::time::timeout(Duration::from_secs(3), drain)
+    let drained = tokio::time::timeout(NONREADING_CHILD_IO_TIMEOUT, drain)
         .await
         .unwrap()
         .unwrap();

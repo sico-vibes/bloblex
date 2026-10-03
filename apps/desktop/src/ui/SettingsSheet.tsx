@@ -9,6 +9,7 @@ import { agentColorHex } from './agentColor'
 import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
 import { UpdatesPanel } from './UpdatesPanel'
+import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
 
 export type SettingsPageId = 'General' | 'Agents' | 'Updates'
 
@@ -33,7 +34,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   onOpenAgent: (agentId: string) => void
   focusUpdates?: boolean
 }) {
-  const dialogRef = useDialogAccessibility(onClose)
+  const { ref: dialogRef, close } = useDialogAccessibility(onClose)
   const [page, setPage] = useState<SettingsPageId>(focusUpdates ? 'Updates' : initialPage)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -45,6 +46,9 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   const [monitors, setMonitors] = useState<string[]>([])
   const [companionMonitor, setCompanionMonitorValue] = useState<string | null>(null)
   const [soundsEnabled, setSoundsEnabled] = useState(false)
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true)
+  const [startWithWindows, setStartWithWindows] = useState(false)
+  const [autostartLoaded, setAutostartLoaded] = useState(false)
   const [editorExecutable, setEditorExecutable] = useState('')
   const [editorArgs, setEditorArgs] = useState('[]')
   const [profileName, setProfileName] = useState('')
@@ -72,6 +76,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
       if (typeof settings.showCompanion === 'boolean') setCompanionVisible(settings.showCompanion)
       if (typeof settings.closeToTray === 'boolean') setCloseToTrayValue(settings.closeToTray)
       if (typeof settings['companion.soundsEnabled'] === 'boolean') setSoundsEnabled(settings['companion.soundsEnabled'])
+      setNotificationsEnabled(settings['notifications.enabled'] !== false)
       if (typeof settings.editorExecutable === 'string') setEditorExecutable(settings.editorExecutable)
       if (Array.isArray(settings.editorArgs) && settings.editorArgs.every((argument) => typeof argument === 'string')) setEditorArgs(JSON.stringify(settings.editorArgs))
       if (settings['permissions.default_mode'] === 'ask' || settings['permissions.default_mode'] === 'auto') setDefaultMode(settings['permissions.default_mode'])
@@ -95,6 +100,11 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   useEffect(() => { void load() }, [load])
 
   useEffect(() => {
+    if (!inDesktop) return
+    void autostartEnabled().then((enabled) => { setStartWithWindows(enabled); setAutostartLoaded(true) }).catch((reason) => { setAutostartLoaded(true); setFormError(messageOf(reason)) })
+  }, [])
+
+  useEffect(() => {
     if (!focusUpdates || loading || page !== 'Updates') return
     const frame = requestAnimationFrame(() => {
       dialogRef.current?.querySelector<HTMLElement>('[data-settings-section="updates"]')?.scrollIntoView?.({ block: 'nearest' })
@@ -113,6 +123,15 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
 
   const setCompanion = (visible: boolean) => guarded(async () => { await setCompanionVisibility(visible); setCompanionVisible(visible) })
   const updateCloseToTray = (enabled: boolean) => guarded(async () => { await setCloseToTray(enabled); setCloseToTrayValue(enabled) })
+  const updateAutostart = (enabled: boolean) => guarded(async () => {
+    await setAutostartEnabled(enabled)
+    setStartWithWindows(await autostartEnabled())
+  })
+  const setNotifications = (enabled: boolean) => guarded(async () => {
+    await rpc('settings.set', { key: 'notifications.enabled', value: enabled })
+    setNotificationsEnabled(enabled)
+    try { await emit('bloblex-notifications-enabled-changed', enabled) } catch { /* The main window refreshes the saved preference on reconnect. */ }
+  })
   const updateCompanionMonitor = (monitorName: string) => guarded(async () => {
     await setCompanionMonitor(monitorName)
     setCompanionMonitorValue(monitorName)
@@ -185,11 +204,11 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   const modeFor = (agent: Agent) => policy?.perAgent.find((row) => row.agentId === agent.id)?.effectiveMode ?? effectiveApprovalMode(agent) ?? defaultMode
   const switchPage = (next: SettingsPageId) => { setPage(next); setFormError(null); setNotice(null) }
 
-  return <div className="sheet-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+  return <div className="sheet-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}>
     <section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-label="Settings" tabIndex={-1}>
       <header className="settings-page-head">
         <h2 id="settings-title">{page}</h2>
-        <button type="button" className="icon-button" data-dialog-initial-focus aria-label="Close settings" onClick={onClose}><X size={17} aria-hidden="true" /></button>
+        <button type="button" className="icon-button" data-dialog-initial-focus aria-label="Close settings" onClick={close}><X size={17} aria-hidden="true" /></button>
       </header>
       <nav className="settings-nav" aria-label="Settings pages">
         {PAGES.map((item) => <button type="button" className={page === item.id ? 'selected' : ''} key={item.id} aria-current={page === item.id ? 'page' : undefined} onClick={() => switchPage(item.id)}><item.icon size={16} aria-hidden="true" />{item.label}</button>)}
@@ -201,8 +220,8 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
 
           {!loading && page === 'General' && <>
             <SettingsGroup title="System">
-              <SettingsRow label="Start with Windows" hint="Not available yet.">
-                <button type="button" className="toggle" role="switch" aria-label="Start with Windows" aria-checked={false} disabled><i /></button>
+              <SettingsRow label="Start with Windows">
+                <button type="button" className={`toggle ${startWithWindows ? 'on' : ''}`} role="switch" aria-label="Start with Windows" aria-checked={startWithWindows} onClick={() => void updateAutostart(!startWithWindows)} disabled={saving || !autostartLoaded}><i /></button>
               </SettingsRow>
               <SettingsRow label="Close to tray" hint="Closing the window keeps Bloblex running in the tray.">
                 <button type="button" className={`toggle ${closeToTray ? 'on' : ''}`} role="switch" aria-label="Close to tray" aria-checked={closeToTray} onClick={() => void updateCloseToTray(!closeToTray)} disabled={saving}><i /></button>
@@ -225,6 +244,11 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
                 <label className="settings-field"><span>Arguments <small>JSON array, {'{file}'} and {'{project}'} are replaced</small></span><input className="text-input mono" aria-label="Editor arguments" value={editorArgs} onChange={(event) => setEditorArgs(event.target.value)} spellCheck={false} /></label>
                 <div className="settings-form-actions"><button className="primary-button small" disabled={saving}>Save editor</button></div>
               </form>
+            </SettingsGroup>
+            <SettingsGroup title="Notifications">
+              <SettingsRow label="Notify when a blob finishes or needs approval">
+                <button type="button" className={`toggle ${notificationsEnabled ? 'on' : ''}`} role="switch" aria-label="Notify when a blob finishes or needs approval" aria-checked={notificationsEnabled} onClick={() => void setNotifications(!notificationsEnabled)} disabled={saving}><i /></button>
+              </SettingsRow>
             </SettingsGroup>
           </>}
 
@@ -356,4 +380,3 @@ function listFrom(value: unknown): Record<string, unknown>[] {
   const list = Object.values(record).find((item) => Array.isArray(item))
   return Array.isArray(list) ? list.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object') : []
 }
-

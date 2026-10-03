@@ -12,6 +12,7 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: /^\.\.\/tauri$/, replacement: fixture('fixtureBridge.ts') },
+      { find: /^\.\.\/desktopIntegrations$/, replacement: fixture('fixtureDesktopIntegrations.ts') },
       { find: /^@tauri-apps\/api\/(event|window)$/, replacement: fixture('fixtureTauriApi.ts') },
     ],
   },

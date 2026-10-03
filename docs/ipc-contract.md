@@ -62,14 +62,17 @@ Events:
 | `runtime.profile.save` | `{ "profile": RuntimeProfile }` | Save a direct executable + parsed args profile after path validation. |
 | `runtime.profile.delete` | `{ "profileId": string }` | Delete a saved profile. |
 | `settings.get` | `{}` | Non-secret local preferences. |
-| `settings.set` | `{ "key": string, "value": any }` | Persist a preference; credential fields are rejected. `exec_gate.*` values must be JSON booleans and actual changes persist `settings.changed`. |
+| `settings.set` | `{ "key": string, "value": any }` | Persist a preference; credential fields are rejected. `exec_gate.*` and `notifications.enabled` values must be JSON booleans. |
 | `runtime.capabilities` | `{ "runtimeId": string, "agentId"?: string }` | `{runtimeId,settings,globalConcurrency,agentConcurrency,agentConcurrencies,hostDependent}`; reports static provider support separately from the persisted `exec_gate.*` switch. Unsupported settings are disabled. |
 | `runtime.models` | `{ "runtimeId": string, "refresh"?: boolean }` | `{runtimeId,provider,models,fetchedAt,expiresAt,fallback,source}`; model rows include `id`, `displayName`, optional `providerId`, supported/default thinking, service tiers/default, optional variants, and `hostDependent`. Cached per runtime/profile for 60 seconds; `refresh:true` bypasses cache. Fallback catalogs are suggestions and do not validate execution. |
 | `exec.snapshot.get` | `{ "snapshotId": string }` | Snapshot object; `not_found` when the snapshot does not exist. |
 | `exec.snapshot.list` | `{ "sessionId": string, "after"?: string, "limit"?: integer }` | `{snapshots,next}`; `after` is an exclusive snapshot ID cursor and limit defaults to 50 (maximum 200). |
 | `exec.snapshot.latest` | `{ "sessionId": string }` | Snapshot object or `null` when the session has no turns. |
-| `session.list` | `{}` | Persisted sessions. |
+| `session.list` | `{ "includeArchived"?: boolean }` | Persisted sessions, excluding archived conversations by default. |
 | `session.get` | `{ "sessionId": string }` | Session with ordered turns, messages, tool cards and file changes. |
+| `session.rename` | `{ "sessionId": string, "title": string }` | Trim and persist a title of 1 to 120 characters; emits `session.changed`. |
+| `session.archive` | `{ "sessionId": string, "archived": boolean }` | Hide or restore a conversation; emits `session.changed`. Archived conversations appear only with `includeArchived:true`. |
+| `session.delete` | `{ "sessionId": string }` | Permanently removes Bloblex's session record and stored child data. Refuses sessions that are starting, working, cancelling, or waiting for approval. It does not modify the coding agent's own history; emits `session.deleted`. |
 | `session.new` | `{ "agentId"?: string, "runtimeId"?: string, "projectPath": string, "title"?: string }` | Exactly one of `agentId` or `runtimeId` is required. Agent selection derives its runtime; legacy runtime-only creation leaves `agentId:null`. |
 | `agent.list` | `{ "includeArchived"?: boolean, "runtimeId"?: string }` | `{ "agents": Agent[] }`; active agents by default, ordered by runtime and sort position. |
 | `agent.get` | `{ "agentId": string }` | `{ "agent": Agent }`; returns active or archived agent. |
@@ -93,6 +96,10 @@ Events:
 | `budget.set` | policy object | Persists a policy; most restrictive applicable hard cap wins. |
 | `budget.delete` | `{ "policyId": string }` | Removes that policy. |
 
+## Desktop notifications
+
+When enabled, only live transitions to completed, failed, or waiting for approval can create a Windows notification. The main window must be hidden or unfocused. Titles use the blob name; bodies use only the conversation title and transition label. Notification activation callbacks are not available on Windows through the current desktop notification integration, so the conversation remains unread until opened in the main window and can be found from its unread marker.
+
 ## Normalized core types
 
 The following examples define the v1 UI DTO fields. Nullable fields may be absent or `null`; unknown fields must be tolerated.
@@ -112,7 +119,7 @@ The following examples define the v1 UI DTO fields. Nullable fields may be absen
 }
 ```
 
-`app.snapshot` returns `{snapshotVersion,sequence,daemon,hosts,runtimes,agents,sessions,permissions,usageSummary,budgets,settings}`. `agents` includes active and archived `Agent` rows. `budgets` is a `Budget[]`; `budget.list` wraps the same array in `{policies}`. Session turn/message/tool/file arrays are ordered and omit provider raw payloads. `session.get` returns the same nested session DTO. Long transcripts may be paged in later protocol versions.
+`app.snapshot` returns `{snapshotVersion,sequence,daemon,hosts,runtimes,agents,sessions,permissions,usageSummary,budgets,settings}`. `agents` includes active and archived `Agent` rows; `sessions` excludes archived conversations. `budgets` is a `Budget[]`; `budget.list` wraps the same array in `{policies}`. Session turn/message/tool/file arrays are ordered and omit provider raw payloads. `session.get` returns the same nested session DTO. Long transcripts may be paged in later protocol versions.
 
 Session turn objects add nullable `failureClass` and `failureMessage` fields. The message is a safe daemon-authored summary for the failure class; both fields are null for turns without a classified failure. This projection does not expose provider error text.
 
@@ -153,7 +160,7 @@ Runtime auth state is one of `authenticated`, `unauthenticated`, `needs_interact
 
 Session state is `idle`, `starting`, `working`, `waiting_permission`, `waiting_user`, `cancelling`, `completed`, `cancelled`, `closed`, `error`, or `offline`. An unclean daemon restart marks volatile active sessions `offline`, fails their incomplete turns, expires pending approvals, retains partial history and provider-native IDs, and never resends prompts automatically. A session persists both Bloblex and provider-native IDs, provider, runtime, project path, resumability, and timestamps.
 
-The normalized event vocabulary is `runtime.changed`, `agent.changed`, `session.changed`, `message.delta`, `message.completed`, `tool.changed`, `file.changed`, `command.changed`, `permission.requested`, `permission.resolved`, `usage.updated`, `budget.warning`, `budget.blocked`, `turn.completed`, `turn.cancelled`, `turn.error`, and `daemon.health`. Streamed and finalized messages carry the same stable `id`/`messageId`; `session.changed` carries a full session DTO. Unsupported semantics remain unsupported; never synthesize provider success, auth, usage or permission grants.
+The normalized event vocabulary is `runtime.changed`, `agent.changed`, `session.changed`, `session.deleted`, `message.delta`, `message.completed`, `tool.changed`, `file.changed`, `command.changed`, `permission.requested`, `permission.resolved`, `usage.updated`, `budget.warning`, `budget.blocked`, `turn.completed`, `turn.cancelled`, `turn.error`, and `daemon.health`. Streamed and finalized messages carry the same stable `id`/`messageId`; `session.changed` carries compact session metadata (identity, ownership, title, archive/activity state, resumability, and timestamps), never transcript content. Existing clients retain hydrated message and activity arrays when applying it. `session.deleted` permanently removes that conversation and its persisted session-specific events. Unsupported semantics remain unsupported; never synthesize provider success, auth, usage or permission grants.
 
 Usage token buckets are mutually exclusive: `inputTokens` excludes `cacheReadTokens` and `cacheWriteTokens`; output, reasoning and provider-reported cost are separately nullable. Valuation basis is `provider_reported_actual`, `api_rate_estimate`, `subscription_fixed`, `local_free`, or `unknown`. Unknown model price serializes as `null` with an explanatory status, never zero.
 

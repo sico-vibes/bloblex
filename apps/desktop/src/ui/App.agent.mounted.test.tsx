@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   sessionError: null as string | null,
 }))
 
+vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
   rpc: h.rpc,

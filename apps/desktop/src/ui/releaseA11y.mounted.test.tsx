@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ConfirmDialog } from './BlobPage'
 import { SettingsSheet } from './SettingsSheet'
 
+vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
+
 const rpc = vi.hoisted(() => vi.fn())
 const policy = vi.hoisted(() => vi.fn())
 vi.mock('../tauri', () => ({

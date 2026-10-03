@@ -1,6 +1,8 @@
 import type { JsonRecord, Session } from '../types'
 
 export type ConversationItem = { kind: 'message' | 'activity'; id: string; value?: JsonRecord; activity?: JsonRecord; activityKind?: 'tool' | 'file' | 'turn' }
+export type ActivityGroup = { kind: 'activity-group'; id: string; items: ConversationItem[]; commands: number; files: number; failed: number; runningTitle: string | null }
+export type GroupedConversationItem = ConversationItem | ActivityGroup
 
 export function buildConversationItems(session: Session): ConversationItem[] {
   const messages = session.messages ?? session.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages as JsonRecord[] : []) ?? session.events ?? []
@@ -27,4 +29,39 @@ export function buildConversationItems(session: Session): ConversationItem[] {
     }
     return (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER) || left.tie - right.tie
   })
+}
+
+export function groupConversationActivity(items: ConversationItem[]): GroupedConversationItem[] {
+  const output: GroupedConversationItem[] = []
+  for (let index = 0; index < items.length;) {
+    if (items[index].kind !== 'activity' || index === 0 || items[index - 1].kind !== 'message') {
+      output.push(items[index++])
+      continue
+    }
+    let end = index
+    while (end < items.length && items[end].kind === 'activity') end += 1
+    const activityItems = items.slice(index, end)
+    if (activityItems.length < 2 || (end < items.length && items[end].kind !== 'message')) {
+      output.push(...activityItems)
+      index = end
+      continue
+    }
+    const failed = activityItems.filter((item) => {
+      const state = String(item.activity?.state ?? item.activity?.status ?? '').toLowerCase()
+      return ['error', 'failed', 'rejected'].includes(state) || item.activityKind === 'turn'
+    }).length
+    const running = activityItems.find((item) => ['running', 'working', 'started'].includes(String(item.activity?.state ?? item.activity?.status ?? '').toLowerCase()))
+    const title = running?.activity?.title ?? running?.activity?.command ?? running?.activity?.kind
+    output.push({
+      kind: 'activity-group',
+      id: `activity-group:${activityItems[0].id}:${activityItems.at(-1)?.id}`,
+      items: activityItems,
+      commands: activityItems.filter((item) => item.activityKind === 'tool').length,
+      files: activityItems.filter((item) => item.activityKind === 'file').length,
+      failed,
+      runningTitle: running ? String(title ?? 'Agent activity') : null,
+    })
+    index = end
+  }
+  return output
 }

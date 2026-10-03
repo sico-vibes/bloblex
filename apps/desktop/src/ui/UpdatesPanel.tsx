@@ -210,14 +210,14 @@ function UpdateOffer({ info }: { info: UpdateInfo }) {
 }
 
 function InstallConfirmDialog({ count, onConfirm, onCancel }: { count: number; onConfirm: () => void; onCancel: () => void }) {
-  const ref = useDialogAccessibility(onCancel)
+  const { ref, close } = useDialogAccessibility(onCancel)
   const sent = useRef(false)
   return <div className="sheet-backdrop update-confirm-backdrop">
     <section ref={ref} className="blob-dialog" role="dialog" aria-modal="true" aria-labelledby="update-install-title" tabIndex={-1} data-update-confirm>
       <h2 id="update-install-title">Install and restart?</h2>
       <p data-update-impact>{installImpactCopy(count)}</p>
       <div className="blob-dialog-actions">
-        <button type="button" className="secondary-button" data-dialog-initial-focus onClick={onCancel}>Cancel</button>
+        <button type="button" className="secondary-button" data-dialog-initial-focus onClick={close}>Cancel</button>
         <button type="button" className="primary-button" onClick={() => { if (sent.current) return; sent.current = true; onConfirm() }}>Install and restart</button>
       </div>
     </section>

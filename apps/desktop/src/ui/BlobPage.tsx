@@ -9,6 +9,7 @@ import { BlobOverview } from './BlobOverview'
 import { BlobSessions } from './BlobSessions'
 import { BlobSettings } from './BlobSettings'
 import { BlobUsage } from './BlobUsage'
+import { useDialogAccessibility } from './dialogFocus'
 
 export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
   mode: 'create' | 'edit'
@@ -97,7 +98,6 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
     {discardOpen && <ConfirmDialog title="Discard unsaved changes?" confirmLabel="Discard" cancelLabel="Keep editing" onConfirm={leave} onCancel={() => setDiscardOpen(false)} />}
   </div>
 }
-
 export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, onConfirm, onCancel }: {
   title: string
   body?: string
@@ -106,43 +106,15 @@ export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, onConfir
   onConfirm: () => void
   onCancel: () => void
 }) {
-  const ref = useDialogAccessibility(onCancel)
+  const { ref, close } = useDialogAccessibility(onCancel)
   return <div className="sheet-backdrop blob-dialog-backdrop">
     <section ref={ref} className="blob-dialog" role="dialog" aria-modal="true" aria-labelledby="blob-dialog-title" tabIndex={-1}>
       <h2 id="blob-dialog-title">{title}</h2>
       {body && <p>{body}</p>}
       <div className="blob-dialog-actions">
-        <button type="button" className="secondary-button" data-dialog-initial-focus onClick={onCancel}>{cancelLabel}</button>
+        <button type="button" className="secondary-button" data-dialog-initial-focus onClick={close}>{cancelLabel}</button>
         <button type="button" className="primary-button" onClick={onConfirm}>{confirmLabel}</button>
       </div>
     </section>
   </div>
-}
-
-function useDialogAccessibility(onClose: () => void) {
-  const ref = useRef<HTMLElement>(null)
-  const closeRef = useRef(onClose)
-  closeRef.current = onClose
-  useEffect(() => {
-    const root = ref.current
-    if (!root) return
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const focusables = () => Array.from(root.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'))
-    const initial = root.querySelector<HTMLElement>('[data-dialog-initial-focus]') ?? focusables()[0]
-    const frame = requestAnimationFrame(() => initial?.focus())
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); closeRef.current(); return }
-      if (event.key !== 'Tab') return
-      const items = focusables()
-      if (!items.length) { event.preventDefault(); root.focus(); return }
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (!first || !last) return
-      if (event.shiftKey && (document.activeElement === first || !root.contains(document.activeElement))) { event.preventDefault(); last.focus() }
-      else if (!event.shiftKey && (document.activeElement === last || !root.contains(document.activeElement))) { event.preventDefault(); first.focus() }
-    }
-    document.addEventListener('keydown', keydown)
-    return () => { cancelAnimationFrame(frame); document.removeEventListener('keydown', keydown); previous?.focus() }
-  }, [])
-  return ref
 }

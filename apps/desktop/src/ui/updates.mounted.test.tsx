@@ -9,6 +9,8 @@ import {
 } from '../updatesContract'
 import { DISMISSED_UPDATE_VERSION_KEY, UpdateAvailableBanner, useMainUpdateOffer } from './UpdateBanner'
 import { SettingsSheet } from './SettingsSheet'
+
+vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 import { UpdatesPanel } from './UpdatesPanel'
 
 const h = vi.hoisted(() => ({

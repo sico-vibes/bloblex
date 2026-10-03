@@ -31,7 +31,7 @@ export function AutoApprovedList({ actions }: { actions: readonly AutoResolvedAc
 }
 
 export function BypassConfirmDialog({ blobName, onConfirm, onCancel }: { blobName: string; onConfirm: () => void; onCancel: () => void }) {
-  const ref = useDialogAccessibility(onCancel)
+  const { ref, close } = useDialogAccessibility(onCancel)
   const [typed, setTyped] = useState('')
   const matches = typed === blobName && blobName.length > 0
   return <div className="sheet-backdrop blob-dialog-backdrop">
@@ -46,7 +46,7 @@ export function BypassConfirmDialog({ blobName, onConfirm, onCancel }: { blobNam
         <input aria-label="Type the blob name to confirm bypass" data-dialog-initial-focus value={typed} onChange={(event) => setTyped(event.target.value)} autoComplete="off" />
       </label>
       <div className="blob-dialog-actions">
-        <button type="button" className="secondary-button" onClick={onCancel}>Cancel</button>
+        <button type="button" className="secondary-button" onClick={close}>Cancel</button>
         <button type="button" className="primary-button" disabled={!matches} onClick={onConfirm}>Turn on bypass</button>
       </div>
     </section>

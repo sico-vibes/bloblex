@@ -46,6 +46,13 @@ describe('daemon event reconciliation', () => {
     expect(next.sessions?.[0].tools).toHaveLength(1)
   })
 
+  it('does not resurrect a session after a later session.changed event', () => {
+    const deleted = applyEvent(base(), event('session.deleted', 5, { sessionId: 's-a' }))
+    const late = applyEvent(deleted, event('session.changed', 6, { id: 's-a', runtimeId: 'rt-a', title: 'Late provider output', state: 'idle' }))
+    expect(late.sessions).toEqual([])
+    expect(late.deletedSessionIds).toContain('s-a')
+  })
+
   it('upserts tool and file activity and records usage and budget events', () => {
     let next = applyEvent(base(), event('tool.changed', 5, { sessionId: 's-a', tool: { id: 'tool-a', state: 'completed' } }))
     next = applyEvent(next, event('file.changed', 6, { sessionId: 's-a', file: { id: 'f-b', path: 'src/b.ts', addedLines: 4 } }))

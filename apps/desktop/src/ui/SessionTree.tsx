@@ -1,19 +1,22 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Folder, Plus } from 'lucide-react'
 import type { Session } from '../types'
 import { labelize } from '../types'
 import { sessionDisplayTitle, sessionDotClass, shortTime, type BlobLayout } from './rosterSelectors'
 
-export function SessionTree({ agentId, layout, canCreate, selectedSessionId, activeTreeId, bindRef, onToggleProject, onToggleOther, onSelectSession, onNewSessionInProject, onShowMoreProjects, onShowMoreSessions }: {
+export function SessionTree({ agentId, layout, canCreate, selectedSessionId, unreadSessionIds, approvalSessionIds, activeTreeId, bindRef, onToggleProject, onToggleOther, onSelectSession, onRenameSession, onNewSessionInProject, onShowMoreProjects, onShowMoreSessions }: {
   agentId: string
   layout: BlobLayout
   canCreate: boolean
   selectedSessionId: string | null
+  unreadSessionIds?: Set<string>
+  approvalSessionIds?: Set<string>
   activeTreeId: string | null
   bindRef: (id: string, node: HTMLElement | null) => void
   onToggleProject: (key: string) => void
   onToggleOther: () => void
   onSelectSession: (session: Session) => void
+  onRenameSession?: (session: Session, title: string) => void
   onNewSessionInProject: (path: string) => void
   onShowMoreProjects: () => void
   onShowMoreSessions: (key: string) => void
@@ -48,7 +51,7 @@ export function SessionTree({ agentId, layout, canCreate, selectedSessionId, act
         </div>
         {project.group.key !== null && <button type="button" className="tree-new" tabIndex={-1} data-tree-for={project.id} aria-label={`New session in ${project.group.label}`} disabled={!canCreate} onClick={(event) => { event.stopPropagation(); onNewSessionInProject(project.group.path) }}><Plus size={14} aria-hidden="true" /></button>}
         {project.open && <div id={groupId} role="group" className="tree-group">
-          {project.sessions.map((item) => <SessionRow key={item.id} id={item.id} session={item.session} pos={item.pos} setSize={project.sessionSetSize} selected={item.session.id === selectedSessionId} activeTreeId={activeTreeId} bindRef={bindRef} onSelect={() => onSelectSession(item.session)} />)}
+          {project.sessions.map((item) => <SessionRow key={item.id} id={item.id} session={item.session} pos={item.pos} setSize={project.sessionSetSize} selected={item.session.id === selectedSessionId} unread={unreadSessionIds?.has(item.id) ?? false} needsApproval={approvalSessionIds?.has(item.id) ?? false} activeTreeId={activeTreeId} bindRef={bindRef} onSelect={() => onSelectSession(item.session)} onRename={onRenameSession ? (title) => onRenameSession(item.session, title) : undefined} />)}
           {project.more && <MoreRow id={project.more.id} label={project.more.label} level={3} pos={project.more.pos} setSize={project.sessionSetSize} activeTreeId={activeTreeId} bindRef={bindRef} onActivate={() => onShowMoreSessions(project.more?.capKey ?? key)} />}
         </div>}
       </div>
@@ -76,29 +79,47 @@ export function SessionTree({ agentId, layout, canCreate, selectedSessionId, act
         <span className="tree-chevron" aria-hidden="true" onMouseDown={(event) => event.preventDefault()} onClick={(event) => { event.stopPropagation(); onToggleOther() }}>{layout.other.open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
       </div>
       {layout.other.open && <div id={`other-group-${agentId}`} role="group" className="tree-group">
-        {layout.other.sessions.map((item) => <SessionRow key={item.id} id={item.id} session={item.session} pos={item.pos} setSize={layout.other?.sessionSetSize ?? 0} selected={item.session.id === selectedSessionId} activeTreeId={activeTreeId} bindRef={bindRef} onSelect={() => onSelectSession(item.session)} />)}
+        {layout.other.sessions.map((item) => <SessionRow key={item.id} id={item.id} session={item.session} pos={item.pos} setSize={layout.other?.sessionSetSize ?? 0} selected={item.session.id === selectedSessionId} unread={unreadSessionIds?.has(item.id) ?? false} needsApproval={approvalSessionIds?.has(item.id) ?? false} activeTreeId={activeTreeId} bindRef={bindRef} onSelect={() => onSelectSession(item.session)} onRename={onRenameSession ? (title) => onRenameSession(item.session, title) : undefined} />)}
         {layout.other.more && <MoreRow id={layout.other.more.id} label={layout.other.more.label} level={3} pos={layout.other.more.pos} setSize={layout.other.sessionSetSize} activeTreeId={activeTreeId} bindRef={bindRef} onActivate={() => onShowMoreSessions(layout.other?.more?.capKey ?? '')} />}
       </div>}
     </div>}
   </>
 }
 
-function SessionRow({ id, session, pos, setSize, selected, activeTreeId, bindRef, onSelect }: {
+export function SessionRow({ id, session, pos, setSize, selected, unread, needsApproval, activeTreeId, bindRef, onSelect, onRename }: {
   id: string
   session: Session
   pos: number
   setSize: number
   selected: boolean
+  unread: boolean
+  needsApproval: boolean
   activeTreeId: string | null
   bindRef: (id: string, node: HTMLElement | null) => void
   onSelect: () => void
+  onRename?: (title: string) => void
 }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(session.title ?? '')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
+  const busy = ['starting', 'working', 'cancelling', 'waiting_permission'].includes((session.state ?? '').toLowerCase())
+  useEffect(() => { if (editing) { setDraft(session.title ?? ''); inputRef.current?.focus(); inputRef.current?.select() } }, [editing, session.title])
+  useEffect(() => {
+    const startRename = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === session.id && !busy) setEditing(true)
+    }
+    document.addEventListener('bloblex-session-rename', startRename)
+    return () => document.removeEventListener('bloblex-session-rename', startRename)
+  }, [session.id, busy])
   const title = sessionDisplayTitle(session)
   const word = labelize(session.state, 'Idle')
   const clock = session.updatedAt ? shortTime(session.updatedAt) : ''
   // Completed and idle conversations stay quiet; only live or failed ones get a dot.
   const dot = sessionDotClass(session.state)
   const activity = dot === 'good' ? 'muted' : dot
+  const finish = () => { setDraft(session.title ?? ''); setEditing(false); requestAnimationFrame(() => rowRef.current?.focus()) }
+  const save = () => { const next = draft.trim(); if (!next) { finish(); return } onRename?.(next); finish() }
   return <div
     role="treeitem"
     className="tree-session"
@@ -106,16 +127,18 @@ function SessionRow({ id, session, pos, setSize, selected, activeTreeId, bindRef
     aria-selected={selected}
     aria-setsize={setSize}
     aria-posinset={pos}
-    aria-label={`${title}, ${word}, ${clock || 'time unavailable'}`}
+    aria-label={`${title}, ${word}, ${clock || 'time unavailable'}${unread ? needsApproval ? ', needs approval' : ', unread' : ''}`}
     data-session-id={session.id}
     data-tree-kind="session"
     data-tree-id={id}
     tabIndex={activeTreeId === id ? 0 : -1}
-    ref={(node) => bindRef(id, node)}
-    onClick={onSelect}
+    ref={(node) => { rowRef.current = node; bindRef(id, node) }}
+    onClick={() => { if (!editing) onSelect() }}
+    onDoubleClick={() => { if (onRename && !busy) setEditing(true) }}
   >
-    <span className="tree-label" title={title}>{title}</span>
+    {editing ? <input ref={inputRef} className="tree-rename-input" aria-label={`Rename ${title}`} maxLength={120} value={draft} onChange={(event) => setDraft(event.target.value)} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); save() } if (event.key === 'Escape') { event.preventDefault(); finish() } }} onBlur={() => { if (!draft.trim()) finish() }} /> : <span className="tree-label" title={title}>{title}</span>}
     {activity !== 'muted' && <i className={`status-dot ${activity}`} aria-hidden="true" />}
+    {unread && <i className={`unread-dot ${needsApproval ? 'approval' : ''}`} aria-hidden="true" />}
     {clock && <time>{clock}</time>}
   </div>
 }

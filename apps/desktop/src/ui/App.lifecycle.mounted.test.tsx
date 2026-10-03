@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   setCompanionSoundsEnabled: vi.fn(), disposeCompanionAudio: vi.fn(), daemonEventHandlers: [] as Array<(event: any) => void>,
 }))
 
+vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
   rpc: h.rpc,

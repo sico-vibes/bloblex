@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildConversationItems } from './conversation'
+import { buildConversationItems, groupConversationActivity } from './conversation'
 
 describe('conversation timeline', () => {
   it('keeps daemon messages, tools, and file changes in sequence order with stable IDs', () => {
@@ -35,5 +35,40 @@ describe('conversation timeline', () => {
       tools: [{ id: 'tool', sequence: 11, state: 'completed' }],
     })
     expect(result.map((item) => item.id)).toEqual(['message:old', 'tool:tool', 'message:new'])
+  })
+})
+
+describe('grouped conversation activity', () => {
+  it('groups only multiple activity items bounded by messages', () => {
+    const items = [
+      { kind: 'message', id: 'm1' },
+      { kind: 'activity', id: 't1', activityKind: 'tool', activity: { state: 'completed' } },
+      { kind: 'activity', id: 'f1', activityKind: 'file', activity: { operation: 'edited' } },
+      { kind: 'message', id: 'm2' },
+      { kind: 'activity', id: 't2', activityKind: 'tool', activity: { state: 'completed' } },
+    ] as const
+    const grouped = groupConversationActivity([...items])
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'activity-group', 'message', 'activity'])
+    expect(grouped[1]).toMatchObject({ commands: 1, files: 1, failed: 0 })
+  })
+
+  it('counts failures and exposes the running item title', () => {
+    const grouped = groupConversationActivity([
+      { kind: 'message', id: 'm1' },
+      { kind: 'activity', id: 't1', activityKind: 'tool', activity: { state: 'failed' } },
+      { kind: 'activity', id: 't2', activityKind: 'tool', activity: { state: 'running', title: 'npm test' } },
+      { kind: 'message', id: 'm2' },
+    ])
+    expect(grouped[1]).toMatchObject({ failed: 1, runningTitle: 'npm test' })
+  })
+
+  it('groups a trailing live run after a message and exposes its running state', () => {
+    const grouped = groupConversationActivity([
+      { kind: 'message', id: 'user-message' },
+      { kind: 'activity', id: 'tool-1', activityKind: 'tool', activity: { state: 'completed', title: 'Read package' } },
+      { kind: 'activity', id: 'tool-2', activityKind: 'tool', activity: { state: 'running', title: 'npm test' } },
+    ])
+    expect(grouped).toHaveLength(2)
+    expect(grouped[1]).toMatchObject({ kind: 'activity-group', commands: 2, runningTitle: 'npm test' })
   })
 })

@@ -301,4 +301,41 @@ mod tests {
         assert!(resolve_rule_at("x", Some("m"), "2026-09-30T23:59:59Z", &[r.clone()]).is_some());
         assert!(resolve_rule_at("x", Some("m"), "2026-10-01T00:00:00Z", &[r]).is_none());
     }
+
+    #[test]
+    fn user_override_precedes_shipped_rate_for_the_estimate() {
+        let shipped = PriceRule {
+            id: "shipped".into(),
+            provider: "codex".into(),
+            canonical_model_id: "model-a".into(),
+            aliases: vec![],
+            input_per_million: Some(10),
+            output_per_million: Some(0),
+            cache_read_per_million: Some(0),
+            cache_write_per_million: Some(0),
+            currency: "USD".into(),
+            effective_from: "2026-01-01".into(),
+            effective_to: None,
+            source_url: None,
+        };
+        let override_rule = PriceRule {
+            id: "user-override".into(),
+            input_per_million: Some(25),
+            ..shipped.clone()
+        };
+        let rules = [override_rule, shipped];
+        let selected = resolve_rule_at("codex", Some("model-a"), "2026-10-03T00:00:00Z", &rules).unwrap();
+        assert_eq!(selected.id, "user-override");
+        let record = UsageRecord {
+            input_tokens: Some(1_000_000),
+            output_tokens: Some(0),
+            cache_read_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            model: Some("model-a".into()),
+            ..Default::default()
+        };
+        let value = estimate(&record, Some(selected));
+        assert_eq!(value.amount_minor, Some(25));
+        assert_eq!(value.pricing_rule_id.as_deref(), Some("user-override"));
+    }
 }

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import type { Agent, Session } from '../types'
+import type { Agent, Runtime, Session } from '../types'
 import type { AnalyticsBucket, AnalyticsErrorRow, AnalyticsMetric, AnalyticsRangeDays, UsageAnalytics } from '../analyticsTypes'
 import { labelize } from '../types'
 import { agentColorHex } from './agentColor'
-import { fetchUsageAnalytics } from '../tauri'
+import { fetchUsageAnalytics, rpc } from '../tauri'
 import {
   type AnalyticsViewPrefs,
   type LeaderboardViewRow,
@@ -48,14 +48,18 @@ const METRICS: Array<{ id: AnalyticsMetric; label: string }> = [
   { id: 'time', label: 'Time' },
   { id: 'runs', label: 'Runs' },
 ]
+const NO_BUDGETS: readonly Record<string, unknown>[] = []
 
-export function AnalyticsView({ agentId = null, sessions, agents, connected, embedded = false, onBack, now, timeZone }: {
+export function AnalyticsView({ agentId = null, sessions, agents, runtimes = [], budgets = NO_BUDGETS, connected, embedded = false, onBack, onSetPrices, now, timeZone }: {
   agentId?: string | null
   sessions: readonly Session[]
   agents: readonly Agent[]
+  runtimes?: readonly Runtime[]
+  budgets?: readonly Record<string, unknown>[]
   connected: boolean
   embedded?: boolean
   onBack?: () => void
+  onSetPrices?: () => void
   now?: Date
   timeZone?: string
 }) {
@@ -69,6 +73,9 @@ export function AnalyticsView({ agentId = null, sessions, agents, connected, emb
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
   const [data, setData] = useState<UsageAnalytics | null>(null)
+  const [budgetPolicies, setBudgetPolicies] = useState<readonly Record<string, unknown>[]>(budgets)
+  const budgetSnapshot = useRef(budgets)
+  budgetSnapshot.current = budgets
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const projects = useMemo(() => analyticsProjectChoices(sessions), [sessions])
   const projectPath = projects.find((option) => option.key === projectChoice)?.path ?? ''
@@ -82,6 +89,20 @@ export function AnalyticsView({ agentId = null, sessions, agents, connected, emb
   useEffect(() => {
     writeAnalyticsPrefs({ days, bucket, metric, panel, projectKey: projectChoice })
   }, [days, bucket, metric, panel, projectChoice])
+
+  useEffect(() => {
+    if (!connected) return
+    let active = true
+    rpc<unknown>('budget.list').then((result) => {
+      if (!active) return
+      const value = result && typeof result === 'object' && !Array.isArray(result)
+        ? (result as Record<string, unknown>).policies
+        : null
+      if (Array.isArray(value)) setBudgetPolicies(value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item)))
+      else setBudgetPolicies(budgetSnapshot.current)
+    }).catch(() => { if (active) setBudgetPolicies(budgetSnapshot.current) })
+    return () => { active = false }
+  }, [connected])
 
   useEffect(() => {
     if (!connected) return
@@ -131,7 +152,7 @@ export function AnalyticsView({ agentId = null, sessions, agents, connected, emb
           <button type="button" className="secondary-button" onClick={() => setRetry((value) => value + 1)}>Try again</button>
         </div>
       </AnalyticsTabs>}
-      {data && phase === 'ready' && <AnalyticsBody data={data} agents={agents} metric={metric} panel={panel} updatedAt={updatedAt} onMetric={setMetric} onPanel={setPanel} onRefresh={() => setRetry((value) => value + 1)} />}
+      {data && phase === 'ready' && <AnalyticsBody data={data} agents={agents} runtimes={runtimes} budgets={budgetPolicies} agentId={agentId} metric={metric} panel={panel} updatedAt={updatedAt} onMetric={setMetric} onPanel={setPanel} onRefresh={() => setRetry((value) => value + 1)} onSetPrices={onSetPrices} />}
     </>}
   </Frame>
 }
@@ -185,21 +206,26 @@ function AnalyticsTabs({ panel, onPanel, children }: { panel: AnalyticsViewPrefs
   </>
 }
 
-function AnalyticsBody({ data, agents, metric, panel, updatedAt, onMetric, onPanel, onRefresh }: {
+function AnalyticsBody({ data, agents, runtimes, budgets, agentId, metric, panel, updatedAt, onMetric, onPanel, onRefresh, onSetPrices }: {
   data: UsageAnalytics
   agents: readonly Agent[]
+  runtimes: readonly Runtime[]
+  budgets: readonly Record<string, unknown>[]
+  agentId: string | null
   metric: AnalyticsMetric
   panel: AnalyticsViewPrefs['panel']
   updatedAt: Date | null
   onMetric: (metric: AnalyticsMetric) => void
   onPanel: (panel: AnalyticsViewPrefs['panel']) => void
   onRefresh: () => void
+  onSetPrices?: () => void
 }) {
   const notes = analyticsNotes(data.totals)
   const bars = chartBars(data.series, metric, data.range.bucket, data.range.tz)
   const rects = chartRects(bars)
   const summary = chartSummary(bars, metric, data.range.bucket)
   const leaderboard = useMemo(() => foldLeaderboard(data.leaderboard, agents), [data.leaderboard, agents])
+  const activeBudget = applicableAnalyticsBudget(budgets, agents, runtimes, agentId)
   const fractions = leaderboardFractions(leaderboard.map((row) => row.cost.amountMinor))
   const empty = isEmptyAnalytics(data)
   const cost = data.totals.cost
@@ -219,7 +245,7 @@ function AnalyticsBody({ data, agents, metric, panel, updatedAt, onMetric, onPan
       {clock && <span>Updated {clock}</span>}
       <button type="button" className="secondary-button" aria-label="Refresh analytics" onClick={onRefresh}>Refresh</button>
     </p>
-    {notes.length > 0 && <div className="analytics-notes" role="note">{notes.map((note) => <p key={note}>{note}</p>)}</div>}
+    {notes.length > 0 && <div className="analytics-notes" role="note">{notes.map((note) => <p key={note}>{note}{(note.toLowerCase().includes('unpriced') || note.includes('did not report usage')) && onSetPrices && <> <button type="button" className="ghost-button small" onClick={onSetPrices}>Set prices</button></>}</p>)}</div>}
     {empty && <p className="blob-muted" role="status" data-analytics-empty="usage">No usage in this range.</p>}
     <div className="analytics-cards">
       <article className="analytics-card" data-analytics-card="cost" aria-label={`Cost ${formatBoundMoney(cost.amountMinor, cost.currency, cost.lowerBound)}`}>
@@ -245,6 +271,7 @@ function AnalyticsBody({ data, agents, metric, panel, updatedAt, onMetric, onPan
     </div>
     <AnalyticsTabs panel={panel} onPanel={onPanel}>
       {panel === 'overview' ? <div className="analytics-chart-block">
+        {activeBudget && <AnalyticsBudgetCard budget={activeBudget} />}
         <div className="analytics-switch" role="group" aria-label="Chart metric">
           {METRICS.map((item) => <button key={item.id} type="button" aria-pressed={metric === item.id} onClick={() => onMetric(item.id)}>{item.label}</button>)}
         </div>
@@ -285,7 +312,7 @@ function AnalyticsBody({ data, agents, metric, panel, updatedAt, onMetric, onPan
               <div className="analytics-leader-track" role="img" aria-label={`${row.name} bar, ${costText}`} data-fraction={fraction === null ? 'null' : String(fraction)}>
                 {fraction !== null && <div className={color ? 'analytics-leader-fill' : 'analytics-leader-fill is-unassigned'} style={{ width: `${fraction * 100}%`, background: color || undefined }} />}
               </div>
-              {rowNotes.length > 0 && <p className="analytics-leader-note" role="note">{rowNotes.join(' ')}</p>}
+              {rowNotes.length > 0 && <p className="analytics-leader-note" role="note">{rowNotes.join(' ')} {onSetPrices && <button type="button" className="ghost-button small" onClick={onSetPrices}>Set prices</button>}</p>}
             </div>
           })}
         </div>
@@ -298,6 +325,45 @@ function AnalyticsBody({ data, agents, metric, panel, updatedAt, onMetric, onPan
       </div>}
     </section>
   </>
+}
+
+function applicableAnalyticsBudget(budgets: readonly Record<string, unknown>[], agents: readonly Agent[], runtimes: readonly Runtime[], agentId: string | null) {
+  const selectedAgent = agentId ? agents.find((agent) => agent.id === agentId) : null
+  const applicable = budgets.filter((budget) => budget.enabled !== false && !isCostBudgetMetric(budget.metric)).filter((budget) => {
+    const scope = String(budget.scopeType ?? 'global')
+    if (scope === 'global') return true
+    if (!selectedAgent) return false
+    const provider = runtimes.find((runtime) => runtime.id === selectedAgent.runtimeId)?.provider
+    return scope === 'runtime' && budget.scopeId === selectedAgent.runtimeId || scope === 'agent' && budget.scopeId === provider
+  })
+  const specificity = (budget: Record<string, unknown>) => budget.scopeType === 'global' ? 0 : 1
+  const fraction = (budget: Record<string, unknown>) => typeof budget.hardLimit === 'number' && budget.hardLimit > 0 && typeof budget.remaining === 'number' ? 1 - budget.remaining / budget.hardLimit : -1
+  return applicable.sort((a, b) => specificity(b) - specificity(a) || fraction(b) - fraction(a) || String(a.id ?? '').localeCompare(String(b.id ?? '')))[0] ?? null
+}
+
+function isCostBudgetMetric(metric: unknown) {
+  return metric === 'cost_minor' || metric === 'estimated_cost_minor' || metric === 'actual_cost_minor'
+}
+
+function AnalyticsBudgetCard({ budget }: { budget: Record<string, unknown> }) {
+  const limit = typeof budget.hardLimit === 'number' ? budget.hardLimit : null
+  const used = typeof budget.consumed === 'number' ? budget.consumed + (typeof budget.reserved === 'number' ? budget.reserved : 0) : null
+  const remaining = typeof budget.remaining === 'number' ? budget.remaining : null
+  if (limit === null || used === null || remaining === null || limit <= 0) return null
+  const currency = typeof budget.currency === 'string' ? budget.currency : ''
+  const progress = Math.max(0, Math.min(1, used / limit))
+  const thresholds = Array.isArray(budget.warningThresholds) ? budget.warningThresholds.map(Number).filter((value) => Number.isFinite(value) && value > 0 && value < 100) : []
+  const warningLevel = thresholds.length ? Math.min(...thresholds) / 100 : 0.5
+  const severity = used > limit ? 'over' : progress >= warningLevel ? 'warning' : 'normal'
+  const metric = budget.metric === 'cost_minor' ? formatBoundMoney(used, currency, false) : formatExactNumber(used)
+  const cap = budget.metric === 'cost_minor' ? formatBoundMoney(limit, currency, false) : formatExactNumber(limit)
+  const left = budget.metric === 'cost_minor' ? formatBoundMoney(remaining, currency, false) : formatExactNumber(remaining)
+  return <section className={`analytics-budget-card is-${severity}`} aria-label="Budget" data-budget-progress={progress}>
+    <div><strong>Budget</strong><span>{labelize(budget.period, 'Period')}</span></div>
+    <p>Limit {cap} · Used {metric} · Remaining {left}</p>
+    {budget.period === 'turn' && <small>Used and remaining describe the latest turn; each new turn starts with a fresh limit.</small>}
+    <div className="analytics-budget-track" role="img" aria-label={`${Math.round(progress * 100)}% of budget used`}><span style={{ width: `${progress * 100}%` }} /></div>
+  </section>
 }
 
 function ErrorsPanel({ data, agents, leaderboard }: { data: UsageAnalytics; agents: readonly Agent[]; leaderboard: readonly LeaderboardViewRow[] }) {

@@ -63,6 +63,9 @@ export async function autostartEnabled() { return fixtureAutostart }
 export async function setAutostartEnabled(enabled: boolean) { fixtureAutostart = enabled }
 export async function sendDesktopNotification(title: string, body: string) { fixtureNotifications.push({ title, body }) }
 export async function flashMainWindow() {}
+let demoBudgets: Record<string, unknown>[] = [{ id: 'budget-global', scopeType: 'global', scopeId: null, period: 'month', metric: 'tokens', hardLimit: 500_000, warningThresholds: [80, 90], enabled: true, currency: 'USD', consumed: 312_000, reserved: 8_000, remaining: 180_000 }]
+let demoPrices: Record<string, unknown>[] = [{ id: 'price-codex', provider: 'codex', canonicalModelId: 'gpt-5.5', inputPerMillion: 250, outputPerMillion: 1_000, cacheReadPerMillion: null, cacheWritePerMillion: null, currency: 'USD', effectiveFrom: new Date(0).toISOString(), aliases: [] }]
+let demoSubscriptions: Record<string, unknown>[] = [{ id: 'sub-codex', provider: 'codex', planName: 'Pro', monthlyMinor: 2000, currency: 'USD', quotaState: 'unknown', renewalDay: 1 }]
 
 function rpcError(code: string, message: string) {
   return new Error(`${code}: ${message}`)
@@ -84,7 +87,7 @@ function currentSnapshot(): Snapshot {
       ? [{ id: 'perm-1', sessionId: 'session-codex', runtimeId: 'runtime-codex', status: 'pending', title: 'Run shell command', command: 'npm test -- invoice', choices: ['allow_once', 'allow_session', 'deny'] }]
       : [],
     usageSummary: { inputTokens: 182_400, outputTokens: 24_900 },
-    budgets: [],
+    budgets: demoBudgets,
   }
 }
 
@@ -125,6 +128,13 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     notifyFixtureDaemon('session.deleted', { sessionId: session.id })
     return { deleted: true } as T
   }
+  if (method === 'budget.list') return { policies: demoBudgets } as T
+  if (method === 'budget.set') { const item = params as Record<string, unknown>; demoBudgets = [...demoBudgets.filter((row) => row.id !== item.id), { ...item, consumed: 0, remaining: item.hardLimit }]; return { saved: true } as T }
+  if (method === 'budget.delete') { demoBudgets = demoBudgets.filter((row) => row.id !== params.policyId); return { deleted: true } as T }
+  if (method === 'pricing.list') return { rules: demoPrices } as T
+  if (method === 'pricing.override') { const rule = (params.rule ?? {}) as Record<string, unknown>; if (rule.remove === true) demoPrices = demoPrices.filter((item) => item.id !== rule.id); else demoPrices = [...demoPrices.filter((item) => item.id !== rule.id), rule]; return { saved: true } as T }
+  if (method === 'subscription.list') return { plans: demoSubscriptions } as T
+  if (method === 'subscription.save') { const plan = (params.plan ?? {}) as Record<string, unknown>; demoSubscriptions = [...demoSubscriptions.filter((item) => item.id !== plan.id), plan]; return { saved: true } as T }
   if (method === 'agent.list') {
     const includeArchived = params.includeArchived === true
     const runtimeId = typeof params.runtimeId === 'string' ? params.runtimeId : undefined
@@ -227,6 +237,12 @@ export async function ensureDaemon() {}
 export async function startDaemonEventStream() {}
 export async function openProjectFolder() { return null }
 export async function selectLocalFile() { return null }
+export async function selectMarkdownExportPath() { return 'preview-markdown-token' }
+export async function writeMarkdownExport(_selectionToken: string, _text: string) {}
+export async function selectBlobExportPath(_name: string) { return 'preview-blob-export-token' }
+export async function selectBlobImportPath() { return 'preview-blob-import-token' }
+export async function readBlobImport(_selectionToken: string) { return '' }
+export async function writeBlobExport(_selectionToken: string, _text: string) {}
 export async function inspectLocalFile(path: string) { return { path, fileName: path.split(/[\\/]/).pop() ?? path, sizeBytes: 2048 } }
 export async function openInEditor() {}
 export async function revealInExplorer() {}

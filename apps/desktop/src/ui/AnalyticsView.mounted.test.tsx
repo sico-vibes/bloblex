@@ -113,6 +113,20 @@ afterEach(() => {
 })
 
 describe('analytics view', () => {
+  it('opens pricing settings from the lower-bound notes and shows daemon-reported budget progress', async () => {
+    fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.partial)
+    const onSetPrices = vi.fn()
+    const view = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} budgets={[{ id: 'budget', scopeType: 'global', period: 'month', metric: 'tokens', hardLimit: 500, consumed: 440, reserved: 20, remaining: 40, warningThresholds: [80] }]} connected now={now} onSetPrices={onSetPrices} />)
+    await view.flush()
+    const budgetCard = view.host.querySelector('.analytics-budget-card')
+    expect(budgetCard?.textContent).toContain('Limit 500')
+    expect(budgetCard?.textContent).toContain('Used 460')
+    expect(budgetCard?.textContent).toContain('Remaining 40')
+    expect(budgetCard?.className).toContain('is-warning')
+    await click(buttonNamed(view.host, 'Set prices'))
+    expect(onSetPrices).toHaveBeenCalledOnce()
+  })
+
   it('renders summary cards for full, lower-bound, empty, and unknown data', async () => {
     fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.full)
     const full = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} connected now={now} />)

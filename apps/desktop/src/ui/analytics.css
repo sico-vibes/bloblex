@@ -16,6 +16,15 @@
 .analytics-notes { display: grid; gap: 4px; }
 .analytics-notes p { margin: 0; color: var(--ink-2); font-size: 13px; }
 .analytics-chart-block { display: grid; gap: 8px; }
+.analytics-budget-card { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-raised); }
+.analytics-budget-card > div:first-child { display: flex; justify-content: space-between; gap: 12px; color: var(--text-2); font-size: var(--fs-xs); }
+.analytics-budget-card > div:first-child strong { color: var(--text-1); font-size: var(--fs-sm); }
+.analytics-budget-card p { margin: 0; color: var(--text-2); font-size: var(--fs-sm); }
+.analytics-budget-card small { color: var(--text-2); font-size: var(--fs-xs); }
+.analytics-budget-track { height: 3px; overflow: hidden; border-radius: var(--radius-pill); background: var(--surface-selected-strong); }
+.analytics-budget-track span { display: block; height: 100%; background: var(--text-2); }
+.analytics-budget-card.is-warning .analytics-budget-track span { background: var(--status-working); }
+.analytics-budget-card.is-over .analytics-budget-track span { background: var(--status-danger); }
 .analytics-chart { width: 100%; height: auto; display: block; overflow: visible; }
 .analytics-chart rect { cursor: pointer; }
 .analytics-chart .analytics-bar { fill: #6b6b6b; }

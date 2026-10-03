@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { emit } from '@tauri-apps/api/event'
-import { Bot, Check, ChevronDown, ChevronRight, Download, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
+import { Bot, Check, ChevronDown, ChevronRight, Download, Gauge, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
@@ -10,12 +10,14 @@ import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
 import { UpdatesPanel } from './UpdatesPanel'
 import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
+import { UsageLimitsSettings } from './UsageLimitsSettings'
 
-export type SettingsPageId = 'General' | 'Agents' | 'Updates'
+export type SettingsPageId = 'General' | 'Agents' | 'Usage & limits' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
   { id: 'Agents', label: 'Agents', icon: Bot },
+  { id: 'Usage & limits', label: 'Usage & limits', icon: Gauge },
   { id: 'Updates', label: 'Updates', icon: Download },
 ]
 
@@ -319,6 +321,8 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
               </div>
             </SettingsGroup>
           </>}
+
+          {!loading && page === 'Usage & limits' && <UsageLimitsSettings agents={agents} runtimes={runtimes} sessions={snapshot?.sessions ?? []} />}
         </div>
     </section>
   </div>

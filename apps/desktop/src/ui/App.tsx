@@ -28,6 +28,8 @@ import { turnFailureTitle } from './analyticsFormat'
 import { createDraft, createParams, daemonCodeOf, draftFromAgent, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
 import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicateAgentName, emptyExpandedState, garbageCollectExpanded, legacySessions, nextAgentAfterArchive, parseExpandedState, projectFolderName, projectGroups, projectKey, recentProjects, runtimeUsable, sessionDisplayTitle, sessionForSelection, sessionNewParams, sessionSelectionTarget, type ExpandedState } from './rosterSelectors'
 import { AnalyticsView } from './AnalyticsView'
+import { conversationMarkdown } from './conversationMarkdown'
+import { parseSharedBlob, serializeBlob, type SharedBlob } from './blobShare'
 import { ApprovalPill } from './approvalUi'
 import { BlobPage, ConfirmDialog } from './BlobPage'
 import { UpdateAvailableBanner, useMainUpdateOffer } from './UpdateBanner'
@@ -41,7 +43,7 @@ import { initialiseSeen, isUnread, markSeen, unreadNeedsApproval, type SeenSessi
 import { notificationForTransition } from './notificationTransitions'
 import { flashMainWindow, sendDesktopNotification } from '../desktopIntegrations'
 import { stampCompanionDragRegions } from './companionDrag'
-import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectLocalFile, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream } from '../tauri'
+import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, readBlobImport, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream, writeBlobExport, writeMarkdownExport } from '../tauri'
 
 type ContextTab = 'Details' | 'Runtime' | 'Files'
 export function App() {
@@ -89,6 +91,8 @@ export function App() {
   const [appliedModel, setAppliedModel] = useState<string | null>(null)
   const [diffViewer, setDiffViewer] = useState<{ path: string; content: string } | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
+  const [createMenuOpen, setCreateMenuOpen] = useState(false)
+  const [pendingBlobImport, setPendingBlobImport] = useState<SharedBlob | null>(null)
   const [usageSummary, setUsageSummary] = useState<Record<string, unknown> | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const agentEventSeq = useRef(new Map<string, number>())
@@ -722,6 +726,7 @@ export function App() {
   }
 
   const openCreate = () => {
+    setCreateMenuOpen(false)
     setAnalyticsOpen(false)
     const next = createDraft(runtimes, activeSelectedAgent?.runtimeId ?? selectedRuntime?.id ?? null)
     setDraft(next)
@@ -734,6 +739,70 @@ export function App() {
   const closeAnalytics = () => {
     setAnalyticsOpen(false)
     window.setTimeout(() => usageLinkRef.current?.focus(), 0)
+  }
+
+  const openUsageSettings = () => {
+    setAnalyticsOpen(false)
+    setSettingsInitialPage('Usage & limits')
+    setSettingsFocus(null)
+    setSettingsSheet(true)
+  }
+
+  const restoreMoreFocus = () => window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[aria-label="More options"]')?.focus())
+  const restoreCreateFocus = () => window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[aria-label="Create blob"]')?.focus())
+
+  const exportConversation = async (copy: boolean) => {
+    if (!selectedSession) return
+    const markdown = conversationMarkdown(selectedSession, agentName)
+    try {
+      if (copy) await navigator.clipboard.writeText(markdown)
+      else {
+        const selectionToken = await selectMarkdownExportPath()
+        if (!selectionToken) return
+        await writeMarkdownExport(selectionToken, markdown)
+      }
+      setError(null)
+    } catch (reason) { setError(messageOf(reason)) }
+    finally { restoreMoreFocus() }
+  }
+
+  const exportBlob = async (agent: Agent) => {
+    const runtime = runtimes.find((item) => item.id === agent.runtimeId)
+    if (!runtime) { setError('The coding agent for this blob is not available.'); return }
+    try {
+      const selectionToken = await selectBlobExportPath(agent.name)
+      if (!selectionToken) return
+      await writeBlobExport(selectionToken, serializeBlob(agent, runtime.provider))
+      setError(null)
+    } catch (reason) { setError(messageOf(reason)) }
+  }
+
+  const importBlob = async () => {
+    setCreateMenuOpen(false)
+    try {
+      const selectionToken = await selectBlobImportPath()
+      if (!selectionToken) { restoreCreateFocus(); return }
+      setPendingBlobImport(parseSharedBlob(await readBlobImport(selectionToken)))
+      setError(null)
+    } catch (reason) { setError(messageOf(reason)); restoreCreateFocus() }
+  }
+
+  const createImportedBlob = (blob: SharedBlob, runtimeId: string) => {
+    const next = createDraft(runtimes, runtimeId)
+    next.name = blob.name
+    next.description = blob.description
+    next.color = blob.colour
+    next.instructions = blob.instructions
+    next.model = blob.model
+    next.thinking = blob.thinking
+    next.serviceTier = blob.speed
+    next.approvalMode = blob.defaultApprovalMode ?? null
+    setDraft(next)
+    setBaseline(next)
+    setAnalyticsOpen(false)
+    setBlobPage({ mode: 'create', agentId: null })
+    setPendingBlobImport(null)
+    setFormError(null)
   }
 
   const closeBlobPage = (focusId: string | null) => {
@@ -1004,10 +1073,16 @@ export function App() {
       <aside className="sidebar" aria-label="Agents">
         <div className="sidebar-top">
           <div className="brand-lockup"><img className="brand-logo" src={bloblexLogo} alt="Bloblex logo" /><strong>Bloblex</strong></div>
-          <button className="icon-button" title="Create blob" aria-label="Create blob" disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={openCreate}><Plus size={17} /></button>
+          <div className="sidebar-create-actions">
+            <button className="icon-button" title="Create blob" aria-label="Create blob" disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={openCreate}><Plus size={17} /></button>
+            <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setCreateMenuOpen(false); restoreCreateFocus() } }}>
+              <button type="button" className="icon-button small" title="Import a blob setup" aria-label="Blob actions" aria-haspopup="menu" aria-expanded={createMenuOpen} disabled={connection !== 'connected' || busy} onClick={() => setCreateMenuOpen((open) => !open)}><ChevronDown size={14} /></button>
+              {createMenuOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" onClick={() => void importBlob()}>Import blob…</button></div>}
+            </div>
+          </div>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <AgentRoster agents={agents} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} busy={busy} now={now} pins={pins} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} onToggleFavorite={(agentId) => updatePins((current) => toggleFavorite(current, agentId))} onTogglePinProject={(project) => updatePins((current) => togglePinnedProject(current, project))} onTogglePinSession={(sessionId) => updatePins((current) => togglePinnedSession(current, sessionId))} onRevealProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, open: true, projects: { ...entry.projects, [key]: true } }))} selectedAgentId={activeSelectedAgent?.id ?? null} selectedSessionId={selectedSession?.id ?? null} query={search} expanded={expanded} onQueryChange={setSearch} onSelect={selectAgent} onCreate={openCreate} onScan={() => void refreshRuntimes()} onNewSession={(agent) => newSession(agent.id)} onEdit={openEdit} onDuplicate={(agent) => void duplicateAgent(agent)} onArchive={setArchiveTarget} onToggleBlob={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, open: !entry.open }))} onToggleProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, projects: { ...entry.projects, [key]: entry.projects[key] !== true } }))} onToggleOther={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, other: !entry.other }))} onSelectSession={selectSession} onRenameSession={(session, title) => { void rpc('session.rename', { sessionId: session.id, title }).catch((reason) => setError(messageOf(reason))) }} onArchiveSession={(session) => { void rpc('session.archive', { sessionId: session.id, archived: true }).catch((reason) => setError(messageOf(reason))) }} onDeleteSession={setSessionDeleteTarget} onNewSessionInProject={(agent, path) => void createSession(agent, path, 'project')} onResumeSession={(session) => { selectSession(session); void resumeSession(session) }} onCancelSession={(session) => { selectSession(session); void cancelTurn(session) }} />
+        <AgentRoster agents={agents} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} busy={busy} now={now} pins={pins} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} onToggleFavorite={(agentId) => updatePins((current) => toggleFavorite(current, agentId))} onTogglePinProject={(project) => updatePins((current) => togglePinnedProject(current, project))} onTogglePinSession={(sessionId) => updatePins((current) => togglePinnedSession(current, sessionId))} onRevealProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, open: true, projects: { ...entry.projects, [key]: true } }))} selectedAgentId={activeSelectedAgent?.id ?? null} selectedSessionId={selectedSession?.id ?? null} query={search} expanded={expanded} onQueryChange={setSearch} onSelect={selectAgent} onCreate={openCreate} onScan={() => void refreshRuntimes()} onNewSession={(agent) => newSession(agent.id)} onEdit={openEdit} onDuplicate={(agent) => void duplicateAgent(agent)} onArchive={setArchiveTarget} onExportBlob={(agent) => void exportBlob(agent)} onToggleBlob={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, open: !entry.open }))} onToggleProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, projects: { ...entry.projects, [key]: entry.projects[key] !== true } }))} onToggleOther={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, other: !entry.other }))} onSelectSession={selectSession} onRenameSession={(session, title) => { void rpc('session.rename', { sessionId: session.id, title }).catch((reason) => setError(messageOf(reason))) }} onArchiveSession={(session) => { void rpc('session.archive', { sessionId: session.id, archived: true }).catch((reason) => setError(messageOf(reason))) }} onDeleteSession={setSessionDeleteTarget} onNewSessionInProject={(agent, path) => void createSession(agent, path, 'project')} onResumeSession={(session) => { selectSession(session); void resumeSession(session) }} onCancelSession={(session) => { selectSession(session); void cancelTurn(session) }} />
         <ProfileMenu
           connection={connection}
           usageActive={analyticsOpen}
@@ -1022,7 +1097,7 @@ export function App() {
 
       <section className="conversation-pane">
         {updateOffer.version && <UpdateAvailableBanner version={updateOffer.version} onView={() => { setSettingsInitialPage('General'); setSettingsFocus('updates'); setSettingsSheet(true) }} onLater={updateOffer.dismiss} />}
-        {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} connected={connection === 'connected'} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
+        {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} runtimes={runtimes} budgets={Array.isArray(snapshot?.budgets) ? snapshot.budgets : []} connected={connection === 'connected'} onBack={closeAnalytics} onSetPrices={openUsageSettings} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} budgets={Array.isArray(snapshot?.budgets) ? snapshot.budgets : []} onSetPrices={openUsageSettings} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         <header className="chat-header">
           <div className="chat-title">
             {activeSelectedAgent
@@ -1048,9 +1123,9 @@ export function App() {
             {selectedSession?.resumable && !sessionBusy && <button className="icon-button" title="Resume conversation" aria-label="Resume conversation" disabled={busy || connection !== 'connected' || !runtimeReady} onClick={() => void resumeSession()}><Play size={15} /></button>}
             <button className="icon-button" title="New session" aria-label="New session" disabled={!canStartSession} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
-            <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') setMoreOpen(false) }}>
+            <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setMoreOpen(false); restoreMoreFocus() } }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
-              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />Blob settings</button>}<span className="menu-separator" /><button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
+              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}>Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}>Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />Blob settings</button>}<span className="menu-separator" /><button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
             </div>
           </div>
         </header>
@@ -1101,8 +1176,21 @@ export function App() {
       {chooserView}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body="It leaves the roster. Its conversations stay saved. Restoring a blob is not available yet." confirmLabel="Archive" cancelLabel="Cancel" onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
       {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bloblex. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" onConfirm={() => { const target = sessionDeleteTarget; setSessionDeleteTarget(null); void rpc('session.delete', { sessionId: target.id }).then(() => focusSidebarBlob()).catch((reason) => { setError(messageOf(reason)); focusSidebarSession(target.id) }) }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
+      {pendingBlobImport && <ImportBlobDialog blob={pendingBlobImport} runtimes={runtimes} onCancel={() => { setPendingBlobImport(null); restoreCreateFocus() }} onCreate={(runtimeId) => createImportedBlob(pendingBlobImport, runtimeId)} />}
     </main>
   )
+}
+
+function ImportBlobDialog({ blob, runtimes, onCancel, onCreate }: { blob: SharedBlob; runtimes: Runtime[]; onCancel: () => void; onCreate: (runtimeId: string) => void }) {
+  const { ref, close } = useDialogAccessibility(onCancel)
+  const suggested = runtimes.find((runtime) => runtime.provider === blob.providerId)?.id ?? runtimes[0]?.id ?? ''
+  const [runtimeId, setRuntimeId] = useState(suggested)
+  return <div className="sheet-backdrop blob-dialog-backdrop"><section ref={ref} className="blob-dialog" role="dialog" aria-modal="true" aria-labelledby="import-blob-title" tabIndex={-1}>
+    <h2 id="import-blob-title">Import {blob.name}</h2>
+    <p>This opens a new blob draft. Nothing is created until you choose Create blob.</p>
+    {runtimes.length === 0 ? <p role="alert">No coding agents are available. Scan again before importing.</p> : <label className="settings-field"><span>Attach to coding agent</span><Select ariaLabel="Attach imported blob to coding agent" variant="field" align="left" value={runtimeId} onChange={setRuntimeId} options={runtimes.map((runtime) => ({ value: runtime.id, label: `${labelize(runtime.provider)}${runtime.provider === blob.providerId ? ' · matching provider' : ''}` }))} /></label>}
+    <div className="blob-dialog-actions"><button type="button" className="secondary-button" data-dialog-initial-focus onClick={close}>Cancel</button><button type="button" className="primary-button" disabled={!runtimeId} onClick={() => onCreate(runtimeId)}>Continue</button></div>
+  </section></div>
 }
 
 function EmptyConversation({ connected, hasRuntime, hasAgent, accent, mood, agentName, onNewSession, onCreate, onRefresh }: { connected: boolean; hasRuntime: boolean; hasAgent: boolean; accent: string; mood: BlobMood; agentName: string; onNewSession: (anchor?: HTMLElement | null) => void; onCreate: () => void; onRefresh: () => void }) {

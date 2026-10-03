@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react'
-import { Archive, Copy, Pencil, MessageSquarePlus, Star, StarOff } from 'lucide-react'
+import { Archive, Copy, Download, Pencil, MessageSquarePlus, Star, StarOff } from 'lucide-react'
 import type { Agent } from '../types'
 
-export function AgentContextMenu({ agent, enabled, position, favorite = false, onClose, onNewSession, onEdit, onDuplicate, onArchive, onToggleFavorite }: {
+export function AgentContextMenu({ agent, enabled, position, favorite = false, onClose, onNewSession, onEdit, onDuplicate, onArchive, onExport, onToggleFavorite }: {
   agent: Agent
   enabled: { newSession: boolean; duplicate: boolean; archive: boolean }
   position: { x: number; y: number }
@@ -12,6 +12,7 @@ export function AgentContextMenu({ agent, enabled, position, favorite = false, o
   onEdit: () => void
   onDuplicate: () => void
   onArchive: () => void
+  onExport?: () => void
   onToggleFavorite?: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -42,6 +43,7 @@ export function AgentContextMenu({ agent, enabled, position, favorite = false, o
     <button type="button" role="menuitem" onClick={onEdit}><Pencil size={14} />Edit blob</button>
     {onToggleFavorite && <button type="button" role="menuitem" onClick={onToggleFavorite}>{favorite ? <StarOff size={14} /> : <Star size={14} />}{favorite ? 'Remove from favourites' : 'Add to favourites'}</button>}
     <button type="button" role="menuitem" disabled={!enabled.duplicate} onClick={onDuplicate}><Copy size={14} />Duplicate</button>
+    {onExport && <button type="button" role="menuitem" onClick={onExport}><Download size={14} />Export blob…</button>}
     <button type="button" role="menuitem" disabled={!enabled.archive} onClick={onArchive}><Archive size={14} />Archive</button>
   </div>
 }

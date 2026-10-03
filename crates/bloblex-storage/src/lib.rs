@@ -16,6 +16,8 @@ pub enum StorageError {
     Poisoned,
     #[error("invalid budget policy")]
     InvalidBudget,
+    #[error("invalid pricing rule")]
+    InvalidPricing,
     #[error("invalid agent")]
     InvalidAgent,
     #[error("invalid analytics request")]
@@ -347,6 +349,26 @@ pub fn restore_verified_backup(backup_path:&Path,destination:&Path,expected_vers
     let restored=Connection::open_with_flags(destination,OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     if restored.query_row("PRAGMA integrity_check",[],|r|r.get::<_,String>(0))?!="ok"||restored.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get::<_,i64>(0))?!=expected_version||table_counts(&restored)?!=expected{return Err(StorageError::InvalidAgent)}
     Ok(failed)
+}
+
+fn shipped_pricing_rule(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let aliases: String = row.get(11)?;
+    Ok(json!({
+        "id": row.get::<_, String>(0)?,
+        "provider": row.get::<_, String>(1)?,
+        "canonicalModelId": row.get::<_, String>(2)?,
+        "model": row.get::<_, String>(2)?,
+        "currency": row.get::<_, String>(3)?,
+        "inputPerMillion": row.get::<_, Option<i64>>(4)?,
+        "outputPerMillion": row.get::<_, Option<i64>>(5)?,
+        "cacheReadPerMillion": row.get::<_, Option<i64>>(6)?,
+        "cacheWritePerMillion": row.get::<_, Option<i64>>(7)?,
+        "effectiveFrom": row.get::<_, String>(8)?,
+        "effectiveTo": row.get::<_, Option<String>>(9)?,
+        "sourceUrl": row.get::<_, Option<String>>(10)?,
+        "aliases": serde_json::from_str::<Value>(&aliases).unwrap_or(json!([])),
+        "source": "shipped_estimate"
+    }))
 }
 
 impl Storage {
@@ -1396,22 +1418,72 @@ impl Storage {
     }
     pub fn pricing_list(&self, provider: Option<&str>) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let sql = if provider.is_some() {
+        let shipped_sql = if provider.is_some() {
+            "SELECT id,provider,model,currency,input_per_million,output_per_million,cache_read_per_million,cache_write_per_million,effective_from,effective_to,source_url,aliases FROM pricing_rules WHERE provider=?1 ORDER BY model"
+        } else {
+            "SELECT id,provider,model,currency,input_per_million,output_per_million,cache_read_per_million,cache_write_per_million,effective_from,effective_to,source_url,aliases FROM pricing_rules ORDER BY provider,model"
+        };
+        let mut shipped_query = c.prepare(shipped_sql)?;
+        let mut shipped = match provider {
+            Some(provider) => shipped_query
+                .query_map([provider], shipped_pricing_rule)?
+                .collect::<Result<Vec<_>, _>>()?,
+            None => shipped_query
+                .query_map([], shipped_pricing_rule)?
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        let override_sql = if provider.is_some() {
             "SELECT data FROM user_pricing_rules WHERE provider=?1 ORDER BY model"
         } else {
             "SELECT data FROM user_pricing_rules ORDER BY provider,model"
         };
-        let mut s = c.prepare(sql)?;
-        let rows = s
-            .query_map([provider.unwrap_or("")], |r| r.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(
-            json!({"rules":rows.into_iter().filter_map(|x|serde_json::from_str::<Value>(&x).ok()).collect::<Vec<_>>()}),
-        )
+        let mut override_query = c.prepare(override_sql)?;
+        let overrides = match provider {
+            Some(provider) => override_query
+                .query_map([provider], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?,
+            None => override_query
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        let mut rules = Vec::with_capacity(overrides.len() + shipped.len());
+        for data in overrides {
+            if let Ok(mut rule) = serde_json::from_str::<Value>(&data) {
+                if let Some(object) = rule.as_object_mut() {
+                    object.insert("source".to_string(), json!("user_override"));
+                }
+                rules.push(rule);
+            }
+        }
+        rules.append(&mut shipped);
+        Ok(json!({"rules":rules}))
     }
     pub fn save_pricing(&self, p: &Value) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        c.execute("INSERT INTO user_pricing_rules(id,provider,model,aliases,input_rate,output_rate,cache_read_rate,cache_write_rate,currency,effective_from,effective_to,source_url,data) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) ON CONFLICT(id) DO UPDATE SET data=excluded.data",params![p["id"].as_str().unwrap_or(""),p["provider"].as_str().unwrap_or(""),p["canonicalModelId"].as_str().unwrap_or(""),p["aliases"].to_string(),p["inputPerMillion"].as_i64(),p["outputPerMillion"].as_i64(),p["cacheReadPerMillion"].as_i64(),p["cacheWritePerMillion"].as_i64(),p["currency"].as_str().unwrap_or("USD"),p["effectiveFrom"].as_str().unwrap_or(""),p["effectiveTo"].as_str(),p["sourceUrl"].as_str(),p.to_string()])?;
+        if p["remove"].as_bool() == Some(true) {
+            let id = p["id"].as_str().unwrap_or("");
+            if id.trim().is_empty() { return Err(StorageError::InvalidPricing); }
+            c.execute("DELETE FROM user_pricing_rules WHERE id=?1", [id])?;
+            return Ok(());
+        }
+        c.execute(
+            "INSERT INTO user_pricing_rules(id,provider,model,aliases,input_rate,output_rate,cache_read_rate,cache_write_rate,currency,effective_from,effective_to,source_url,data) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) ON CONFLICT(id) DO UPDATE SET provider=excluded.provider,model=excluded.model,aliases=excluded.aliases,input_rate=excluded.input_rate,output_rate=excluded.output_rate,cache_read_rate=excluded.cache_read_rate,cache_write_rate=excluded.cache_write_rate,currency=excluded.currency,effective_from=excluded.effective_from,effective_to=excluded.effective_to,source_url=excluded.source_url,data=excluded.data",
+            params![
+                p["id"].as_str().unwrap_or(""),
+                p["provider"].as_str().unwrap_or(""),
+                p["canonicalModelId"].as_str().unwrap_or(""),
+                p["aliases"].to_string(),
+                p["inputPerMillion"].as_i64(),
+                p["outputPerMillion"].as_i64(),
+                p["cacheReadPerMillion"].as_i64(),
+                p["cacheWritePerMillion"].as_i64(),
+                p["currency"].as_str().unwrap_or("USD"),
+                p["effectiveFrom"].as_str().unwrap_or(""),
+                p["effectiveTo"].as_str(),
+                p["sourceUrl"].as_str(),
+                p.to_string()
+            ],
+        )?;
         Ok(())
     }
     pub fn subscriptions(&self) -> Result<Value, StorageError> {
@@ -1890,7 +1962,7 @@ fn budget_totals_locked(
     let start = period_start(&Utc::now(), period);
     if period == "turn" {
         c.query_row(
-            "SELECT COALESCE(SUM(CASE WHEN status='reconciled' THEN COALESCE(reconciled_amount,amount) ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='active' THEN amount ELSE 0 END),0) FROM budget_reservations WHERE policy_id=?1",
+            "SELECT COALESCE(SUM(CASE WHEN status='reconciled' THEN COALESCE(reconciled_amount,amount) ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='active' THEN amount ELSE 0 END),0) FROM budget_reservations WHERE policy_id=?1 AND turn_id=(SELECT turn_id FROM budget_reservations WHERE policy_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 1)",
             [policy_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -1936,6 +2008,73 @@ fn single_currency_total<'a>(rows: &[&'a Value]) -> (Option<i64>, Option<&'a str
         total = total.saturating_add(amount);
     }
     (currency.map(|_| total), currency)
+}
+
+#[cfg(test)]
+mod pricing_override_removal_tests {
+    use super::{Storage, StorageError};
+    use serde_json::json;
+
+    #[test]
+    fn lists_sources_updates_indexed_columns_and_removes_only_user_overrides() {
+        let db = Storage::open_in_memory().unwrap();
+        {
+            let connection = db.conn.lock().unwrap();
+            connection.execute(
+                "INSERT INTO pricing_rules(id,provider,model,currency,input_per_million,output_per_million,effective_from,aliases) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                rusqlite::params!["shipped-1", "codex", "model-a", "USD", 50, 100, "2026-01-01T00:00:00Z", "[]"],
+            ).unwrap();
+        }
+        db.save_pricing(&json!({
+            "id": "override-1",
+            "provider": "codex",
+            "canonicalModelId": "model-a",
+            "aliases": ["alias-a"],
+            "inputPerMillion": 100,
+            "outputPerMillion": null,
+            "cacheReadPerMillion": null,
+            "cacheWritePerMillion": null,
+            "currency": "USD",
+            "effectiveFrom": "2026-10-01T00:00:00Z"
+        })).unwrap();
+        let listed = db.pricing_list(None).unwrap();
+        assert_eq!(listed["rules"].as_array().unwrap().len(), 2);
+        assert_eq!(listed["rules"][0]["source"], "user_override");
+        assert_eq!(listed["rules"][1]["source"], "shipped_estimate");
+
+        db.save_pricing(&json!({
+            "id": "override-1",
+            "provider": "claude",
+            "canonicalModelId": "model-b",
+            "aliases": ["alias-b"],
+            "inputPerMillion": 250,
+            "outputPerMillion": 500,
+            "cacheReadPerMillion": null,
+            "cacheWritePerMillion": null,
+            "currency": "EUR",
+            "effectiveFrom": "2026-10-02T00:00:00Z"
+        })).unwrap();
+        assert_eq!(db.pricing_list(Some("codex")).unwrap()["rules"].as_array().unwrap().len(), 1);
+        let edited = db.pricing_list(Some("claude")).unwrap();
+        assert_eq!(edited["rules"].as_array().unwrap().len(), 1);
+        assert_eq!(edited["rules"][0]["canonicalModelId"], "model-b");
+        assert_eq!(edited["rules"][0]["inputPerMillion"], 250);
+        assert_eq!(edited["rules"][0]["currency"], "EUR");
+        assert_eq!(edited["rules"][0]["aliases"][0], "alias-b");
+
+        assert!(matches!(
+            db.save_pricing(&json!({ "id": "", "remove": true })),
+            Err(StorageError::InvalidPricing)
+        ));
+        assert!(matches!(
+            db.save_pricing(&json!({ "id": "  ", "remove": true })),
+            Err(StorageError::InvalidPricing)
+        ));
+        db.save_pricing(&json!({ "id": "override-1", "remove": true })).unwrap();
+        let remaining = db.pricing_list(None).unwrap();
+        assert_eq!(remaining["rules"].as_array().unwrap().len(), 1);
+        assert_eq!(remaining["rules"][0]["source"], "shipped_estimate");
+    }
 }
 
 #[cfg(test)]
@@ -2244,6 +2383,19 @@ mod tests {
         db.reconcile_budget_turn_metrics("t2", &json!({"tokens":12,"estimated_cost_minor":17})).unwrap();
         assert_eq!(db.budget_usage("tokens", "day").unwrap(), (0, 12));
         assert_eq!(db.budget_usage("estimate", "day").unwrap(), (0, 17));
+    }
+    #[test]
+    fn turn_budget_totals_report_only_the_latest_turn() {
+        let db = Storage::open_in_memory().unwrap();
+        db.save_budget(&json!({"id":"turn","scopeType":"global","period":"turn","metric":"tokens","hardLimit":10,"enabled":true})).unwrap();
+        assert!(db.reserve_applicable_budgets("turn-a", "s", "rt", "codex", "C:/repo", 7).unwrap());
+        db.reconcile_budget_turn_metrics("turn-a", &json!({"tokens":7})).unwrap();
+        assert!(db.reserve_applicable_budgets("turn-b", "s", "rt", "codex", "C:/repo", 3).unwrap());
+
+        let policy = &db.budget_list().unwrap()["policies"][0];
+        assert_eq!(policy["consumed"], 0);
+        assert_eq!(policy["reserved"], 3);
+        assert_eq!(policy["remaining"], 7);
     }
     #[test]
     fn multi_policy_budget_admission_rolls_back_and_reconciles() {

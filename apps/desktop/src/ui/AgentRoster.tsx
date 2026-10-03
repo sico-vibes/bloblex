@@ -34,7 +34,7 @@ type RosterMenu =
   | { kind: 'session'; agentId: string; session: Session; x: number; y: number }
   | { kind: 'pinned'; label: string; onUnpin: () => void; x: number; y: number }
 
-export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, pins, unreadSessionIds = new Set(), approvalSessionIds = new Set(), onToggleFavorite, onTogglePinProject, onTogglePinSession, onRevealProject, selectedAgentId, selectedSessionId, query, expanded, onQueryChange, onSelect, onCreate, onScan, onNewSession, onEdit, onDuplicate, onArchive, onToggleBlob, onToggleProject, onToggleOther, onSelectSession, onRenameSession, onArchiveSession, onDeleteSession, onNewSessionInProject, onResumeSession, onCancelSession }: {
+export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, pins, unreadSessionIds = new Set(), approvalSessionIds = new Set(), onToggleFavorite, onTogglePinProject, onTogglePinSession, onRevealProject, selectedAgentId, selectedSessionId, query, expanded, onQueryChange, onSelect, onCreate, onScan, onNewSession, onEdit, onDuplicate, onArchive, onExportBlob, onToggleBlob, onToggleProject, onToggleOther, onSelectSession, onRenameSession, onArchiveSession, onDeleteSession, onNewSessionInProject, onResumeSession, onCancelSession }: {
   agents: Agent[]
   sessions: Session[]
   runtimes: Runtime[]
@@ -62,6 +62,7 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
   onEdit: (agent: Agent) => void
   onDuplicate: (agent: Agent) => void
   onArchive: (agent: Agent) => void
+  onExportBlob?: (agent: Agent) => void
   onToggleBlob: (agentId: string) => void
   onToggleProject: (agentId: string, key: string) => void
   onToggleOther: (agentId: string) => void
@@ -346,6 +347,12 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
       onEdit={() => { closeMenu(); onEdit(menuAgent) }}
       onDuplicate={() => { closeMenu(); onDuplicate(menuAgent) }}
       onArchive={() => { closeMenu(); onArchive(menuAgent) }}
+      onExport={onExportBlob ? () => {
+        const agentId = menuAgent.id
+        setMenu(null)
+        onExportBlob(menuAgent)
+        window.requestAnimationFrame(() => focusTreeItem(treeItemId('blob', agentId)))
+      } : undefined}
     />}
     {menu?.kind === 'project' && projectMenuAgent && <RowActionMenu
       label={`${menu.label} project`}

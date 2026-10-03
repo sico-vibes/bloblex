@@ -3,6 +3,7 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
@@ -44,6 +45,17 @@ struct DaemonProcess {
     connection: DaemonConnection,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelectedFilePurpose {
+    Export,
+    Import,
+}
+
+struct SelectedFilePath {
+    path: PathBuf,
+    purpose: SelectedFilePurpose,
+}
+
 struct AppState {
     daemon: Arc<Mutex<Option<DaemonProcess>>>,
     daemon_start_lock: Mutex<()>,
@@ -54,6 +66,7 @@ struct AppState {
     companion_resize_in_progress: Arc<AtomicBool>,
     companion_resize_generation: Arc<AtomicU64>,
     close_to_tray: AtomicBool,
+    selected_file_paths: Mutex<HashMap<String, SelectedFilePath>>,
 }
 
 impl Default for AppState {
@@ -68,6 +81,7 @@ impl Default for AppState {
             companion_resize_in_progress: Arc::new(AtomicBool::new(false)),
             companion_resize_generation: Arc::new(AtomicU64::new(0)),
             close_to_tray: AtomicBool::new(true),
+            selected_file_paths: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -548,6 +562,131 @@ fn select_local_file(app: AppHandle) -> Option<String> {
         .blocking_pick_file()
         .and_then(|path| path.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn remember_selected_path(
+    state: &AppState,
+    path: PathBuf,
+    purpose: SelectedFilePurpose,
+) -> Result<String, String> {
+    if path.as_os_str().is_empty() {
+        return Err("The selected file path is unavailable.".to_string());
+    }
+    let token = Uuid::new_v4().to_string();
+    state
+        .selected_file_paths
+        .lock()
+        .map_err(|_| "File selection state is unavailable.".to_string())?
+        .insert(token.clone(), SelectedFilePath { path, purpose });
+    Ok(token)
+}
+
+fn take_selected_path(
+    state: &AppState,
+    token: &str,
+    purpose: SelectedFilePurpose,
+) -> Result<PathBuf, String> {
+    if token.trim().is_empty() {
+        return Err("Choose a file through the file dialog first.".to_string());
+    }
+    let selection = state
+        .selected_file_paths
+        .lock()
+        .map_err(|_| "File selection state is unavailable.".to_string())?
+        .remove(token)
+        .ok_or_else(|| "That file selection is unavailable. Choose it again.".to_string())?;
+    if selection.purpose != purpose {
+        return Err("That file selection cannot be used for this operation.".to_string());
+    }
+    Ok(selection.path)
+}
+
+fn write_markdown_export(state: &AppState, selection_token: &str, text: &str) -> Result<(), String> {
+    let path = take_selected_path(state, selection_token, SelectedFilePurpose::Export)?;
+    fs::write(path, text.as_bytes())
+        .map_err(|_| "The Markdown file could not be saved.".to_string())
+}
+
+#[tauri::command]
+fn select_markdown_export_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(selected) = app
+        .dialog()
+        .file()
+        .set_file_name("conversation.md")
+        .add_filter("Markdown", &["md"])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let path = selected
+        .into_path()
+        .map_err(|_| "The selected file path is unavailable.".to_string())?;
+    Ok(Some(remember_selected_path(&state, path, SelectedFilePurpose::Export)?))
+}
+
+#[tauri::command]
+fn write_selected_export_text(
+    state: State<'_, AppState>,
+    selection_token: String,
+    text: String,
+) -> Result<(), String> {
+    write_markdown_export(&state, &selection_token, &text)
+}
+
+#[tauri::command]
+fn select_blob_export_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let stem = name.trim().chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-' || *character == '_').take(48).collect::<String>();
+    let suggested_name = if stem.is_empty() { "blob.json".to_string() } else { format!("{stem}.json") };
+    let Some(selected) = app
+        .dialog()
+        .file()
+        .set_file_name(suggested_name)
+        .add_filter("JSON", &["json"])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let path = selected.into_path().map_err(|_| "The selected file path is unavailable.".to_string())?;
+    Ok(Some(remember_selected_path(&state, path, SelectedFilePurpose::Export)?))
+}
+
+#[tauri::command]
+fn select_blob_import_path(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(selected) = app.dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = selected.into_path().map_err(|_| "The selected blob file path is unavailable.".to_string())?;
+    Ok(Some(remember_selected_path(&state, path, SelectedFilePurpose::Import)?))
+}
+
+#[tauri::command]
+fn read_blob_import(state: State<'_, AppState>, selection_token: String) -> Result<String, String> {
+    let path = take_selected_path(&state, &selection_token, SelectedFilePurpose::Import)?;
+    let metadata = fs::metadata(&path)
+        .map_err(|_| "The selected blob file could not be read.".to_string())?;
+    if metadata.len() > 64 * 1024 {
+        return Err("This blob file is too large.".to_string());
+    }
+    let bytes = fs::read(&path)
+        .map_err(|_| "The selected blob file could not be read.".to_string())?;
+    if bytes.len() > 64 * 1024 {
+        return Err("This blob file is too large.".to_string());
+    }
+    String::from_utf8(bytes).map_err(|_| "This blob file is not UTF-8 text.".to_string())
 }
 
 #[derive(Serialize)]
@@ -1726,6 +1865,11 @@ pub fn run() {
             ensure_daemon,
             select_project_folder,
             select_local_file,
+            select_markdown_export_path,
+            write_selected_export_text,
+            select_blob_export_path,
+            select_blob_import_path,
+            read_blob_import,
             inspect_local_file,
             open_in_editor,
             resolve_project_file,
@@ -1760,4 +1904,40 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod markdown_export_tests {
+    use super::{remember_selected_path, take_selected_path, write_markdown_export, AppState, SelectedFilePurpose};
+    use std::path::PathBuf;
+
+    #[test]
+    fn export_rejects_a_path_not_selected_by_the_native_dialog() {
+        let state = AppState::default();
+        assert!(take_selected_path(&state, "C:/arbitrary/file.md", SelectedFilePurpose::Export).is_err());
+        assert!(take_selected_path(&state, "C:/arbitrary/file.json", SelectedFilePurpose::Import).is_err());
+        assert!(write_markdown_export(&state, "C:/arbitrary/file.md", "content").is_err());
+        assert!(write_markdown_export(&state, "  ", "content").is_err());
+    }
+
+    #[test]
+    fn native_dialog_selection_is_opaque_and_single_use() {
+        let state = AppState::default();
+        let selected = PathBuf::from("C:/selected/conversation.md");
+        let token = remember_selected_path(&state, selected.clone(), SelectedFilePurpose::Export).unwrap();
+        assert_ne!(token, selected.to_string_lossy());
+        assert_eq!(take_selected_path(&state, &token, SelectedFilePurpose::Export).unwrap(), selected);
+        assert!(take_selected_path(&state, &token, SelectedFilePurpose::Export).is_err());
+    }
+
+    #[test]
+    fn import_selection_cannot_be_used_as_an_export_path() {
+        let state = AppState::default();
+        let token = remember_selected_path(
+            &state,
+            PathBuf::from("C:/selected/import.json"),
+            SelectedFilePurpose::Import,
+        ).unwrap();
+        assert!(write_markdown_export(&state, &token, "content").is_err());
+    }
 }

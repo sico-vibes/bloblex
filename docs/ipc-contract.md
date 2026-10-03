@@ -6,6 +6,8 @@ The desktop updater commands and events are defined in [UPDATER.md](UPDATER.md).
 
 This is the integration contract between `bloblexd.exe` and the desktop shell. The daemon is authoritative; UI state is reconstructed from `app.snapshot` and subsequent ordered events.
 
+The desktop shell also exposes local Tauri commands for user-selected file flows. Native save/open dialogs retain their selected paths in process-local state and return only opaque single-use selection tokens to the webview. `write_selected_export_text` consumes a save token to write UTF-8 text, and `read_blob_import` consumes an open token to read UTF-8 JSON with a 64 KiB limit. A webview-supplied path is never accepted by these commands, and they do not access the daemon database.
+
 This document includes intended contract requirements, not a statement that every guarantee is already implemented or independently tested. See [implementation status](implementation-status.md) for open acceptance work. Snapshot/event atomicity, complete permission lifecycle, financial aggregation and process-tree cleanup remain under review.
 
 ## Transport and startup
@@ -88,8 +90,8 @@ Events:
 | `permission.reply` | `{ "permissionId": string, "choice": string }` | Choice is an opaque provider-supported option ID from that request; the provider adapter must receive and acknowledge it before Bloblex marks it resolved. |
 | `usage.summary` | `{ "from": string, "to": string, "scope"?: object }` | Raw token totals and separate known/unknown valuations; subscription fees are not API estimates. |
 | `usage.analytics` | `{ "from": string, "to": string, "bucket": "day"|"week", "tz": string, "projectPath"?: string, "agentId"?: string }` | Returns `UsageAnalytics` as defined in `docs/PHASE_5_CONTRACT.md`; invalid range, bucket, or timezone is `invalid_argument`, unknown agent is `not_found`. |
-| `pricing.list` | `{ "provider"?: string }` | Effective pricing rules including source and aliases. |
-| `pricing.override` | `{ "rule": PricingRule }` | Save user-defined pricing, visibly marked as an override. |
+| `pricing.list` | `{ "provider"?: string }` | Effective pricing rules including source (`shipped_estimate` or `user_override`) and aliases. Models without a rule remain unpriced. |
+| `pricing.override` | `{ "rule": PricingRule }` | Save user-defined pricing. IDs, provider, model, known currency, RFC3339 `effectiveFrom`, and integer minor-unit rates (or `null`) are validated. `{ "rule": { "id": string, "remove": true } }` removes that override. |
 | `subscription.list` | `{}` | User-entered plan fees, separated from token estimates and quota (`unknown` unless measured). |
 | `subscription.save` | `{ "plan": SubscriptionPlan }` | Save provider, currency, fixed monthly amount and renewal day. |
 | `budget.list` | `{}` | `{ "policies": Budget[] }` with active reservations where available. |

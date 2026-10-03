@@ -202,6 +202,70 @@ fn derr(code: &str, msg: &str, status: StatusCode) -> DispatchError {
     )
 }
 
+fn validate_pricing_override(rule: &Value) -> Result<(), &'static str> {
+    let Some(object) = rule.as_object() else {
+        return Err("rule must be an object");
+    };
+    let id = rule["id"].as_str().map(str::trim).filter(|value| !value.is_empty());
+    if id.is_none() {
+        return Err("id is required");
+    }
+    if let Some(remove) = object.get("remove") {
+        let Some(remove) = remove.as_bool() else {
+            return Err("remove must be a boolean");
+        };
+        if remove {
+            return Ok(());
+        }
+    }
+    if rule["provider"].as_str().is_none_or(|value| value.trim().is_empty()) {
+        return Err("provider is required");
+    }
+    if rule["canonicalModelId"].as_str().is_none_or(|value| value.trim().is_empty()) {
+        return Err("canonicalModelId is required");
+    }
+    const CURRENCIES: &[&str] = &[
+        "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN", "BAM",
+        "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL", "BSD", "BTN",
+        "BWP", "BYN", "BZD", "CAD", "CDF", "CHF", "CLP", "CNY", "COP", "CRC", "CUP",
+        "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP", "ERN", "ETB", "EUR", "FJD",
+        "FKP", "GBP", "GEL", "GHS", "GIP", "GMD", "GNF", "GTQ", "GYD", "HKD", "HNL",
+        "HTG", "HUF", "IDR", "ILS", "INR", "IQD", "IRR", "ISK", "JMD", "JOD", "JPY",
+        "KES", "KGS", "KHR", "KMF", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR",
+        "LRD", "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU",
+        "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK", "NPR",
+        "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON",
+        "RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLE",
+        "SLL", "SOS", "SRD", "SSP", "STN", "SVC", "SYP", "SZL", "THB", "TJS", "TMT",
+        "TND", "TOP", "TRY", "TTD", "TWD", "TZS", "UAH", "UGX", "USD", "UYU", "UZS",
+        "VES", "VND", "VUV", "WST", "XAF", "XCD", "XOF", "XPF", "YER", "ZAR", "ZMW",
+        "ZWG",
+    ];
+    if !rule["currency"].as_str().is_some_and(|currency| CURRENCIES.contains(&currency)) {
+        return Err("currency must be a supported three-letter code");
+    }
+    if !rule["effectiveFrom"]
+        .as_str()
+        .is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok())
+    {
+        return Err("effectiveFrom must be an RFC3339 timestamp");
+    }
+    for field in [
+        "inputPerMillion",
+        "outputPerMillion",
+        "cacheReadPerMillion",
+        "cacheWritePerMillion",
+    ] {
+        let Some(rate) = object.get(field) else {
+            return Err("all rate fields must be an integer minor-unit amount or null");
+        };
+        if !rate.is_null() && rate.as_i64().is_none_or(|amount| amount < 0) {
+            return Err("all rate fields must be a non-negative integer minor-unit amount or null");
+        }
+    }
+    Ok(())
+}
+
 async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, DispatchError> {
     match method {
         "exec.snapshot.get" => {
@@ -557,11 +621,25 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 StatusCode::INTERNAL_SERVER_ERROR,
             )
         }),
-        "pricing.override" => st
-            .db
-            .save_pricing(&p["rule"])
-            .map_err(|e| derr("invalid_argument", &e.to_string(), StatusCode::BAD_REQUEST))
-            .map(|_| json!({"saved":true})),
+        "pricing.override" => {
+            let rule = &p["rule"];
+            validate_pricing_override(rule).map_err(|message| {
+                derr("invalid_argument", message, StatusCode::BAD_REQUEST)
+            })?;
+            st.db.save_pricing(rule).map_err(|error| match error {
+                bloblex_storage::StorageError::InvalidPricing => derr(
+                    "invalid_argument",
+                    "pricing rule is invalid",
+                    StatusCode::BAD_REQUEST,
+                ),
+                _ => derr(
+                    "internal",
+                    "pricing rule could not be saved",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                ),
+            })?;
+            Ok(json!({"saved":true}))
+        }
         "subscription.list" => st.db.subscriptions().map_err(|e| {
             derr(
                 "internal",
@@ -2033,6 +2111,52 @@ async fn main() {
 #[cfg(test)]
 mod phase2a_tests {
     use super::*;
+
+    fn pricing_rule_fixture() -> Value {
+        json!({
+            "id": "price-1",
+            "provider": "codex",
+            "canonicalModelId": "model-a",
+            "currency": "USD",
+            "effectiveFrom": "2026-10-03T10:00:00Z",
+            "inputPerMillion": 125,
+            "outputPerMillion": null,
+            "cacheReadPerMillion": 0,
+            "cacheWritePerMillion": null
+        })
+    }
+
+    #[test]
+    fn pricing_override_validation_checks_schema_rates_currency_and_dates() {
+        assert!(validate_pricing_override(&pricing_rule_fixture()).is_ok());
+        assert!(validate_pricing_override(&json!({ "id": "price-1", "remove": true })).is_ok());
+
+        let mut invalid = pricing_rule_fixture();
+        invalid["id"] = json!("");
+        assert_eq!(validate_pricing_override(&invalid), Err("id is required"));
+
+        let mut invalid = pricing_rule_fixture();
+        invalid["provider"] = json!("  ");
+        assert_eq!(validate_pricing_override(&invalid), Err("provider is required"));
+
+        let mut invalid = pricing_rule_fixture();
+        invalid["currency"] = json!("ZZZ");
+        assert_eq!(validate_pricing_override(&invalid), Err("currency must be a supported three-letter code"));
+
+        let mut invalid = pricing_rule_fixture();
+        invalid["effectiveFrom"] = json!("not a date");
+        assert_eq!(validate_pricing_override(&invalid), Err("effectiveFrom must be an RFC3339 timestamp"));
+
+        for rate in [json!(-1), json!(1.5), json!("12")] {
+            let mut invalid = pricing_rule_fixture();
+            invalid["inputPerMillion"] = rate;
+            assert!(validate_pricing_override(&invalid).is_err());
+        }
+        let mut invalid = pricing_rule_fixture();
+        invalid.as_object_mut().unwrap().remove("cacheWritePerMillion");
+        assert!(validate_pricing_override(&invalid).is_err());
+    }
+
     #[derive(Default)] struct PolicyAdapter{replies:std::sync::atomic::AtomicUsize}
     #[async_trait::async_trait] impl AgentAdapter for PolicyAdapter {
         async fn probe(&self,_:&RuntimeSpec)->Result<bloblex_agent_core::ProbeResult,bloblex_agent_core::AdapterError>{Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))}

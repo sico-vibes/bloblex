@@ -11,7 +11,7 @@ import { BlobSettings } from './BlobSettings'
 import { BlobUsage } from './BlobUsage'
 import { useDialogAccessibility } from './dialogFocus'
 
-export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
+export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], budgets = [], onSetPrices = () => undefined, onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
   mode: 'create' | 'edit'
   agent: Agent | null
   draft: AgentDraft
@@ -31,6 +31,8 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
   execution: StoredExecution
   autoApprovals?: readonly AutoResolvedAction[]
   bypassNotices?: readonly BypassNotice[]
+  budgets?: readonly Record<string, unknown>[]
+  onSetPrices?: () => void
   onDraftChange: (draft: AgentDraft) => void
   onExecutionGate?: (gate: ExecutionSendGate) => void
   onBack: () => void
@@ -83,7 +85,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
           </div>
           {mode === 'create' || !agent
             ? <div className="settings-card"><p className="settings-empty">Save this blob to see its usage.</p></div>
-            : usageOpen ? <BlobUsage agentId={agent.id} sessions={sessions} agents={[agent]} connected={connected} /> : <div className="settings-card"><p className="settings-empty">Tokens, cost and run time for this blob.</p></div>}
+            : usageOpen ? <BlobUsage agentId={agent.id} sessions={sessions} agents={[agent]} runtimes={runtimes} budgets={budgets} connected={connected} onSetPrices={onSetPrices} /> : <div className="settings-card"><p className="settings-empty">Tokens, cost and run time for this blob.</p></div>}
         </section>
         {mode === 'edit' && <section className="settings-group blob-group" aria-label="Archive">
           <div className="settings-card">
@@ -98,11 +100,13 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
     {discardOpen && <ConfirmDialog title="Discard unsaved changes?" confirmLabel="Discard" cancelLabel="Keep editing" onConfirm={leave} onCancel={() => setDiscardOpen(false)} />}
   </div>
 }
-export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, onConfirm, onCancel }: {
+
+export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, confirmDisabled = false, onConfirm, onCancel }: {
   title: string
   body?: string
   confirmLabel: string
   cancelLabel: string
+  confirmDisabled?: boolean
   onConfirm: () => void
   onCancel: () => void
 }) {
@@ -113,7 +117,7 @@ export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, onConfir
       {body && <p>{body}</p>}
       <div className="blob-dialog-actions">
         <button type="button" className="secondary-button" data-dialog-initial-focus onClick={close}>{cancelLabel}</button>
-        <button type="button" className="primary-button" onClick={onConfirm}>{confirmLabel}</button>
+        <button type="button" className="primary-button" disabled={confirmDisabled} onClick={onConfirm}>{confirmLabel}</button>
       </div>
     </section>
   </div>

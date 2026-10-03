@@ -30,6 +30,35 @@ export async function selectLocalFile(): Promise<string | null> {
   return invoke<string | null>('select_local_file')
 }
 
+export async function selectMarkdownExportPath(): Promise<string | null> {
+  if (!inDesktop) return null
+  return invoke<string | null>('select_markdown_export_path')
+}
+
+export async function writeMarkdownExport(selectionToken: string, text: string): Promise<void> {
+  if (!inDesktop) throw new Error('Markdown export is available only in the desktop app.')
+  await invoke('write_selected_export_text', { selectionToken, text })
+}
+
+export async function selectBlobExportPath(name: string): Promise<string | null> {
+  if (!inDesktop) return null
+  return invoke<string | null>('select_blob_export_path', { name })
+}
+
+export async function selectBlobImportPath(): Promise<string | null> {
+  if (!inDesktop) return null
+  return invoke<string | null>('select_blob_import_path')
+}
+
+export async function readBlobImport(selectionToken: string): Promise<string> {
+  if (!inDesktop) throw new Error('Blob import is available only in the desktop app.')
+  return invoke<string>('read_blob_import', { selectionToken })
+}
+
+export async function writeBlobExport(selectionToken: string, text: string): Promise<void> {
+  await writeMarkdownExport(selectionToken, text)
+}
+
 export async function inspectLocalFile(path: string): Promise<{ path: string; fileName: string; sizeBytes: number }> {
   if (!inDesktop) throw new Error('Local file validation is available only in the desktop app.')
   return invoke<{ path: string; fileName: string; sizeBytes: number }>('inspect_local_file', { path })

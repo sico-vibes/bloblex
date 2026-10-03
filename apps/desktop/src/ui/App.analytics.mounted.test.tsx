@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   listenForDaemonEvents: vi.fn(), listenForDaemonConnection: vi.fn(), listenForActiveSession: vi.fn(),
   listenForActiveRuntime: vi.fn(), listenForOpenSettings: vi.fn(), directListen: vi.fn(), emit: vi.fn(),
   getCurrentWindow: vi.fn(), openProjectFolder: vi.fn(), fetchUsageAnalytics: vi.fn(),
+  selectMarkdownExportPath: vi.fn(), writeMarkdownExport: vi.fn(), selectBlobExportPath: vi.fn(), writeBlobExport: vi.fn(),
+  selectBlobImportPath: vi.fn(), readBlobImport: vi.fn(),
 }))
 
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
@@ -43,6 +45,9 @@ vi.mock('../tauri', () => ({
   listenForOpenSettings: h.listenForOpenSettings,
   openProjectFolder: h.openProjectFolder,
   selectLocalFile: vi.fn(), inspectLocalFile: vi.fn(),
+  selectMarkdownExportPath: h.selectMarkdownExportPath, writeMarkdownExport: h.writeMarkdownExport,
+  selectBlobExportPath: h.selectBlobExportPath, writeBlobExport: h.writeBlobExport,
+  selectBlobImportPath: h.selectBlobImportPath, readBlobImport: h.readBlobImport,
   openInEditor: vi.fn(), revealInExplorer: vi.fn(), resolveProjectFile: vi.fn(),
   quitBloblex: vi.fn(), setCloseToTray: vi.fn(),
   fetchUsageAnalytics: h.fetchUsageAnalytics,
@@ -76,7 +81,7 @@ function agent(partial: Pick<Agent, 'id' | 'name' | 'color' | 'runtimeId' | 'sor
 }
 const claude = agent({ id: 'agent-claude', name: 'Claude', color: 'coral', runtimeId: 'runtime-claude', sortOrder: 0 })
 const sessions: Session[] = [
-  { id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', projectPath: 'C:/work/site', state: 'idle', updatedAt: stamp, messages: [] },
+  { id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', projectPath: 'C:/work/site', state: 'idle', updatedAt: stamp, messages: [{ id: 'm1', role: 'user', text: 'Make the heading concise.', createdAt: stamp }, { id: 'm2', role: 'assistant', text: 'I shortened the heading.', createdAt: stamp }] },
 ]
 
 function snapshot(): Snapshot {
@@ -147,6 +152,12 @@ beforeEach(() => {
   h.directListen.mockResolvedValue(stop)
   h.getCurrentWindow.mockReturnValue({ onDragDropEvent: vi.fn().mockResolvedValue(stop) })
   h.fetchUsageAnalytics.mockResolvedValue(analyticsFixtures.full)
+  h.selectMarkdownExportPath.mockResolvedValue('selected-markdown-token')
+  h.writeMarkdownExport.mockResolvedValue(undefined)
+  h.selectBlobExportPath.mockResolvedValue('selected-blob-export-token')
+  h.writeBlobExport.mockResolvedValue(undefined)
+  h.selectBlobImportPath.mockResolvedValue('selected-blob-import-token')
+  h.readBlobImport.mockResolvedValue(JSON.stringify({ format: 'bloblex.blob.v1', name: 'Imported helper', description: 'Shared', colour: '#aabbcc', instructions: 'Use concise answers.', model: null, thinking: null, speed: null, defaultApprovalMode: 'ask' }))
 })
 
 afterEach(() => {
@@ -177,5 +188,45 @@ describe('sidebar usage analytics', () => {
     await view.settle()
     expect(view.host.querySelector('.analytics-page')).toBeNull()
     expect(document.activeElement).toBe(profile)
+  })
+
+  it('copies and exports the selected conversation through the mocked file bridge', async () => {
+    const clipboardWrite = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: clipboardWrite } })
+    const view = startApp()
+    await view.settle()
+    await click(buttonNamed(view.host, 'More options'))
+    await click(buttonNamed(view.host, 'Copy as Markdown'))
+    expect(clipboardWrite).toHaveBeenCalledWith(expect.stringContaining('# Landing page copy'))
+    expect(clipboardWrite.mock.calls[0]?.[0]).toContain('Make the heading concise.')
+    await click(buttonNamed(view.host, 'More options'))
+    await click(buttonNamed(view.host, 'Export as Markdown…'))
+    await view.settle()
+    expect(h.selectMarkdownExportPath).toHaveBeenCalledOnce()
+    expect(h.writeMarkdownExport).toHaveBeenCalledWith('selected-markdown-token', expect.stringContaining('I shortened the heading.'))
+  })
+
+  it('exports a blob setup and imports it as a draft without creating it', async () => {
+    const view = startApp()
+    await view.settle()
+    const blobRow = view.host.querySelector<HTMLElement>('[data-tree-id="blob:agent-claude"]')
+    if (!blobRow) throw new Error('Missing blob row')
+    await act(async () => { blobRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 12, clientY: 12 })) })
+    await click(buttonNamed(view.host, 'Export blob…'))
+    await view.settle()
+    expect(h.selectBlobExportPath).toHaveBeenCalledWith('Claude')
+    expect(h.writeBlobExport).toHaveBeenCalledWith('selected-blob-export-token', expect.stringContaining('"format": "bloblex.blob.v1"'))
+
+    await click(buttonNamed(view.host, 'Blob actions'))
+    await click(buttonNamed(view.host, 'Import blob…'))
+    await view.settle()
+    expect(h.selectBlobImportPath).toHaveBeenCalledOnce()
+    expect(h.readBlobImport).toHaveBeenCalledWith('selected-blob-import-token')
+    expect(view.host.querySelector('[aria-label="Attach imported blob to coding agent"]')).not.toBeNull()
+    await click(buttonNamed(view.host, 'Continue'))
+    await view.settle()
+    expect(view.host.querySelector('.blob-page')).not.toBeNull()
+    expect(view.host.querySelector<HTMLInputElement>('input[aria-label="Blob name"]')?.value).toBe('Imported helper')
+    expect(h.rpc.mock.calls.some((call) => call[0] === 'agent.create')).toBe(false)
   })
 })

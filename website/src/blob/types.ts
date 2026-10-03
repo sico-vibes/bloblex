@@ -1,0 +1,12 @@
+export type BlobMood =
+  | 'idle'
+  | 'online'
+  | 'listening'
+  | 'working'
+  | 'thinking'
+  | 'permission'
+  | 'question'
+  | 'success'
+  | 'error'
+  | 'offline'
+  | 'sleeping'

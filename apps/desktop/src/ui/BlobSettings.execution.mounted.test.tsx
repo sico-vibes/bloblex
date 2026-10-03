@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { chooseOption, selectOptions, selectTrigger, selectValue } from './testSelect'
+import { chooseOption, openSelect, selectOptions, selectTrigger, selectValue } from './testSelect'
 import { act, useRef, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -35,10 +35,10 @@ function caps(settings: Record<string, unknown>) {
 }
 
 const catalog = {
-  runtimeId: 'rt-1', provider: 'codex', fallback: false, source: 'app_server', fetchedAt: '2026-10-02T00:00:00Z', expiresAt: '2026-10-02T00:01:00Z',
+  runtimeId: 'rt-1', provider: 'codex', fallback: false, validated: true, source: 'live_query', fetchedAt: '2026-10-02T00:00:00Z', expiresAt: '2026-10-02T00:01:00Z',
   models: [
-    { id: 'alpha', displayName: 'Alpha', supportedThinking: ['low', 'high'], defaultThinking: 'high', serviceTiers: [{ id: 'priority', name: 'Priority' }], defaultServiceTier: 'priority', hostDependent: false },
-    { id: 'beta', displayName: 'Beta', supportedThinking: ['low'], defaultThinking: 'low', serviceTiers: [{ id: 'flex', name: 'Flex' }], defaultServiceTier: 'flex', hostDependent: true },
+    { id: 'alpha', displayName: 'Alpha', supportedThinking: ['low', 'high'], defaultThinking: 'high', serviceTiers: [{ id: 'priority', name: 'Priority' }], defaultServiceTier: 'priority', hostDependent: false, isDefault: true, group: 'Alpha', availability: 'offered' },
+    { id: 'beta', displayName: 'Beta', supportedThinking: ['low'], defaultThinking: 'low', serviceTiers: [{ id: 'flex', name: 'Flex' }], defaultServiceTier: 'flex', hostDependent: true, isDefault: false, group: 'Beta', availability: 'offered' },
   ],
 }
 
@@ -137,11 +137,21 @@ describe('live execution card', () => {
     expect(view.host.textContent).toContain('Applies to new conversations.')
   })
 
+  it('hides the thinking control when the selected model has no model-specific effort evidence', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models'
+      ? { ...catalog, models: [{ ...catalog.models[0], supportedThinking: [] }] }
+      : answer(method))
+    const view = mount(<Harness provider="opencode" initial={draft({ model: 'alpha', thinking: 'high' })} sessionId={null} />)
+    await view.settle()
+    expect(selectValue(view.host, 'Model')).toBe('alpha')
+    expect(selectNamed(view.host, 'Thinking')).toBeNull()
+  })
+
   it('accepts an unvalidated custom Claude id and does not send thinking', async () => {
     rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? { ...catalog, provider: 'claude', fallback: true } : answer(method))
     const view = mount(<Harness provider="claude" initial={draft()} sessionId={null} />)
     await view.settle()
-    expect(view.host.textContent).toContain('suggestions only')
+    expect(view.host.textContent).toContain('Suggested models, not checked with Claude Code.')
     await chooseOption(view.host, 'Model', '__custom__')
     const input = view.host.querySelector<HTMLInputElement>('[aria-label="Custom model id"]')!
     expect(view.host.textContent).toContain('Not validated')
@@ -172,6 +182,42 @@ describe('live execution card', () => {
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('runtime.models', { runtimeId: 'rt-1', refresh: true })
     expect(selectNamed(view.host, 'Model')).not.toBeNull()
+  })
+
+  it('labels suggestions, refresh time, default family, and a saved model missing from discovery', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models'
+      ? {
+          ...catalog,
+          fallback: true,
+          validated: false,
+          source: 'fallback',
+          models: [
+            ...catalog.models.map((model, index) => ({ ...model, isDefault: index === 0, group: 'Alpha family' })),
+            { id: 'gamma', displayName: 'Gamma', supportedThinking: [], defaultThinking: null, serviceTiers: [], defaultServiceTier: null, variants: [], hostDependent: false, isDefault: false, group: 'Other models', availability: null },
+          ],
+        }
+      : answer(method))
+    const view = mount(<Harness provider="codex" initial={draft({ model: 'retired-model' })} sessionId={null} />)
+    await view.settle()
+    expect(view.host.textContent).toContain('Suggested models, not checked with Codex.')
+    expect(view.host.querySelector('.catalog-refresh-action')?.textContent).toContain('Updated')
+    const options = await selectOptions(view.host, 'Model')
+    expect(options).toContainEqual(expect.objectContaining({ value: 'alpha', label: 'Alpha · Default' }))
+    expect(options).toContainEqual(expect.objectContaining({ value: 'retired-model', label: 'retired-model' }))
+    expect(options).toContainEqual(expect.objectContaining({ value: 'gamma', label: 'Gamma' }))
+    await openSelect(view.host, 'Model')
+    expect([...view.host.querySelectorAll('.select-group-label')].map((node) => node.textContent)).toEqual(['Alpha family', 'Other models'])
+
+    view.unmount()
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? catalog : answer(method))
+    const liveView = mount(<Harness provider="codex" initial={draft({ model: 'retired-model' })} sessionId={null} />)
+    await liveView.settle()
+    expect(liveView.host.querySelector('.model-catalog-note')).toBeNull()
+    const liveOptions = await selectOptions(liveView.host, 'Model')
+    expect(liveOptions).toContainEqual(expect.objectContaining({
+      value: 'retired-model',
+      label: 'retired-model · Not offered by Codex right now',
+    }))
   })
 
   it('states an empty catalog without inventing models', async () => {

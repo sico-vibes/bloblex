@@ -723,6 +723,9 @@ pub struct ModelCatalog {
     pub expires_at: String,
     pub fallback: bool,
     pub source: String,
+    /// Whether the daemon may use this live source to validate turn options.
+    #[serde(default)]
+    pub validated: bool,
 }
 
 /// One profile-visible model and the settings that model accepts.
@@ -740,6 +743,15 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variants: Option<Vec<String>>,
     pub host_dependent: bool,
+    /// Provider default marker added by the local daemon presentation overlay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_default: Option<bool>,
+    /// Local display group, such as a model family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// Whether the provider currently reports this model as offered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

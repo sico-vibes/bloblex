@@ -46,6 +46,9 @@ export interface CatalogModel {
   defaultServiceTier: string | null
   variants: string[]
   hostDependent: boolean
+  isDefault: boolean
+  group: string | null
+  availability: string | null
 }
 
 export interface ModelCatalog {
@@ -56,6 +59,7 @@ export interface ModelCatalog {
   expiresAt: string | null
   fallback: boolean
   source: string | null
+  validated: boolean
 }
 
 export type OutcomeLabel = 'Applied' | 'Not applied' | 'Unsupported' | 'Unknown'
@@ -200,6 +204,9 @@ function parseModel(value: unknown): CatalogModel | null {
     defaultServiceTier: optionalString(value.defaultServiceTier),
     variants,
     hostDependent: value.hostDependent === true,
+    isDefault: value.isDefault === true,
+    group: optionalString(value.group),
+    availability: optionalString(value.availability),
   }
 }
 
@@ -214,6 +221,7 @@ export function parseModelCatalog(value: unknown): ModelCatalog | null {
     expiresAt: optionalString(root.expiresAt),
     fallback: root.fallback === true,
     source: optionalString(root.source),
+    validated: root.validated === true,
   }
 }
 

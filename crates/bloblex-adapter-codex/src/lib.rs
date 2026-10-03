@@ -595,6 +595,9 @@ fn parse_catalog_model(m: &Value) -> Result<ModelInfo, AdapterError> {
         default_service_tier: m["defaultServiceTier"].as_str().map(str::to_owned),
         variants: None,
         host_dependent: true,
+        is_default: m["isDefault"].as_bool(),
+        group: None,
+        availability: None,
     })
 }
 async fn read_reply(
@@ -727,7 +730,8 @@ impl AgentAdapter for CodexAdapter {
             fetched_at: now.to_rfc3339(),
             expires_at: (now + Duration::seconds(60)).to_rfc3339(),
             fallback: false,
-            source: "app_server".into(),
+            source: "live_query".into(),
+            validated: true,
         })
     }
     async fn preflight_exec_options(&self, options: &ExecOptions) -> Result<(), AdapterError> {

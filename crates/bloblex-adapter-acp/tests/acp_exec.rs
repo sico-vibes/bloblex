@@ -278,6 +278,52 @@ async fn mode_and_effort_are_not_selected_without_instructions_or_thinking() {
 }
 
 #[tokio::test]
+async fn clearing_instructions_restores_provider_default_mode_before_next_turn() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into()];
+    let with_instructions = options(None, None, Some(SENTINEL));
+    let (handle, _) = open_session(&adapter, args, with_instructions.clone()).await;
+
+    adapter
+        .prompt(
+            &handle,
+            PromptRequest {
+                turn_id: "turn-with-instructions".into(),
+                text: "first".into(),
+                exec_options: with_instructions,
+            },
+        )
+        .await
+        .unwrap();
+    adapter
+        .prompt(
+            &handle,
+            PromptRequest {
+                turn_id: "turn-without-instructions".into(),
+                text: "second".into(),
+                exec_options: options(None, None, None),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        rpc_trace(&read_record(&temp.record())),
+        vec![
+            "initialize".to_owned(),
+            "initialized".to_owned(),
+            "session/new".to_owned(),
+            "session/set_config_option mode=bloblex".to_owned(),
+            "session/prompt".to_owned(),
+            "session/set_config_option mode=build".to_owned(),
+            "session/prompt".to_owned(),
+        ]
+    );
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
 async fn parent_config_is_replaced_and_allowlisted_env_is_kept() {
     let _parent = EnvSet::set(
         "OPENCODE_CONFIG_CONTENT",
@@ -645,20 +691,21 @@ async fn prompt_rpc_error_is_unreported_and_hides_provider_text() {
 }
 
 #[tokio::test]
-async fn verbose_catalog_comes_from_the_child_and_isolates_its_profile() {
+async fn config_options_catalog_uses_per_model_efforts_from_verbose_rows() {
     let temp = Temp::new();
     let adapter = AcpAdapter::default();
-    let runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into(), "--catalog-with-effort".into()]);
+    let runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into()]);
     let catalog = adapter.model_catalog(&runtime).await.unwrap();
-    assert_eq!(catalog.source, "acp_config_options");
+    assert_eq!(catalog.source, "config_options");
+    assert!(catalog.validated);
     assert!(!catalog.fallback);
     assert_eq!(catalog.models.len(), 2);
     assert_eq!(catalog.models[0].id, "opencode/big-pickle");
     assert_eq!(catalog.models[0].variants.as_deref(), Some(&["build", "plan"].map(str::to_owned)[..]));
-    assert!(catalog.models[0].supported_thinking.contains(&"low".into()));
+    assert!(catalog.models[0].supported_thinking.is_empty());
     assert!(catalog.models.iter().all(|model| model.host_dependent && model.service_tiers.is_empty()));
-    assert!(catalog.models.iter().all(|model| model.supported_thinking.iter().any(|level| level == "default")));
-    assert!(catalog.models[1].supported_thinking.contains(&"max".into()));
+    assert_eq!(catalog.models[1].id, "opencode-go/deepseek-v4.1-flash");
+    assert_eq!(catalog.models[1].supported_thinking, ["high", "low", "max"]);
     let isolated: BTreeSet<_> = read_record(&temp.record())["isolated_dirs"]
         .as_array()
         .unwrap()
@@ -686,7 +733,8 @@ async fn verbose_catalog_is_used_when_session_handshake_has_no_config_options() 
     let adapter = AcpAdapter::default();
     let runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into(), "--catalog-no-config-options".into()]);
     let catalog = adapter.model_catalog(&runtime).await.unwrap();
-    assert_eq!(catalog.source, "cli_verbose");
+    assert_eq!(catalog.source, "cli_list");
+    assert!(!catalog.validated);
     assert!(!catalog.fallback);
     assert_eq!(catalog.models.len(), 3);
 }

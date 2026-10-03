@@ -208,9 +208,7 @@ pub(crate) fn config_option_catalog(options: &[Value]) -> Option<Vec<ModelInfo>>
     let model_option = config_option(options, "model")?;
     let models = model_option["options"].as_array()?;
     let modes = config_option(options, "mode").map(option_values).unwrap_or_default();
-    let effort_option = config_option(options, "effort");
-    let efforts = effort_option.map(option_values).unwrap_or_default();
-    let default_effort = effort_option.and_then(current_value);
+    let selected_model = current_value(model_option);
     let mut catalog = Vec::new();
     for model in models {
         let id = model["value"].as_str().or_else(|| model["id"].as_str())?;
@@ -218,15 +216,39 @@ pub(crate) fn config_option_catalog(options: &[Value]) -> Option<Vec<ModelInfo>>
             id: id.to_owned(),
             display_name: model["name"].as_str().unwrap_or(id).to_owned(),
             provider_id: None,
-            supported_thinking: efforts.iter().cloned().collect(),
-            default_thinking: default_effort.clone(),
+            supported_thinking: Vec::new(),
+            default_thinking: None,
             service_tiers: Vec::new(),
             default_service_tier: None,
             variants: (!modes.is_empty()).then(|| modes.iter().cloned().collect()),
             host_dependent: true,
+            is_default: Some(selected_model.as_deref() == Some(id)),
+            group: None,
+            availability: None,
         });
     }
     (!catalog.is_empty()).then_some(catalog)
+}
+
+pub(crate) fn default_provider_mode(options: &[Value]) -> Option<String> {
+    let mode = config_option(options, "mode")?;
+    if let Some(current) = current_value(mode).filter(|value| value != AGENT_NAME) {
+        return Some(current);
+    }
+    let values = option_values(mode);
+    if values.contains("build") {
+        return Some("build".into());
+    }
+    None
+}
+
+pub(crate) fn apply_model_efforts(models: &mut [ModelInfo], verbose_models: &[ModelInfo]) {
+    for model in models {
+        if let Some(verbose) = verbose_models.iter().find(|candidate| candidate.id == model.id) {
+            model.supported_thinking = verbose.supported_thinking.clone();
+            model.default_thinking = verbose.default_thinking.clone();
+        }
+    }
 }
 
 pub(crate) fn current_value(option: &Value) -> Option<String> {
@@ -484,6 +506,58 @@ mod tests {
         assert_eq!(full["agent"][AGENT_NAME]["prompt"], "SENTINEL_PROMPT");
         assert!(full["$schema"].as_str().unwrap().contains("opencode.ai"));
     }
+
+    #[test]
+    fn session_effort_option_is_not_assigned_to_every_model() {
+        let options = options_from_result(&json!({"configOptions":[
+            {"id":"model","currentValue":"opencode-go/deepseek-v4.1-flash","options":[
+                {"value":"opencode/big-pickle","name":"Big Pickle"},
+                {"value":"opencode-go/deepseek-v4.1-flash","name":"DeepSeek"}
+            ]},
+            {"id":"effort","currentValue":"low","options":[{"value":"low"},{"value":"high"}]}
+        ]}));
+        let mut models = config_option_catalog(&options).unwrap();
+        assert!(models.iter().all(|model| model.supported_thinking.is_empty()));
+
+        let verbose_models = vec![ModelInfo {
+            id: "opencode-go/deepseek-v4.1-flash".into(),
+            display_name: "DeepSeek".into(),
+            provider_id: Some("opencode-go".into()),
+            supported_thinking: vec!["low".into(), "high".into()],
+            default_thinking: None,
+            service_tiers: Vec::new(),
+            default_service_tier: None,
+            variants: Some(vec!["low".into(), "high".into()]),
+            host_dependent: true,
+            is_default: None,
+            group: None,
+            availability: None,
+        }];
+        apply_model_efforts(&mut models, &verbose_models);
+        assert!(models.iter().find(|model| model.id == "opencode/big-pickle").unwrap().supported_thinking.is_empty());
+        assert_eq!(
+            models.iter().find(|model| model.id == "opencode-go/deepseek-v4.1-flash").unwrap().supported_thinking,
+            ["low", "high"],
+        );
+    }
+
+    #[test]
+    fn default_provider_mode_preserves_current_mode_or_uses_build_after_custom_mode() {
+        let modes = vec![json!({
+            "id": "mode",
+            "currentValue": "plan",
+            "options": [{"value":"build"},{"value":"plan"},{"value":"bloblex"}]
+        })];
+        assert_eq!(default_provider_mode(&modes).as_deref(), Some("plan"));
+
+        let loaded_custom_mode = vec![json!({
+            "id": "mode",
+            "currentValue": "bloblex",
+            "options": [{"value":"build"},{"value":"plan"},{"value":"bloblex"}]
+        })];
+        assert_eq!(default_provider_mode(&loaded_custom_mode).as_deref(), Some("build"));
+    }
+
     #[test]
     fn approval_modes_never_become_acp_args_or_config_fields(){
         for mode in [bloblex_agent_core::ApprovalMode::Ask,bloblex_agent_core::ApprovalMode::Auto,bloblex_agent_core::ApprovalMode::Bypass]{let options=ExecOptions{approval_mode:mode,..ExecOptions::default()};let config=config_content(&options);assert!(!config.contains("approval"));assert!(!config.contains("bypass"));assert!(options.extra_args.is_empty());}

@@ -33,6 +33,8 @@ use tokio::{
 };
 use uuid::Uuid;
 
+mod model_presentation;
+
 static MODEL_CATALOG_CACHE: OnceLock<StdMutex<HashMap<String, (Instant, Value)>>> = OnceLock::new();
 
 #[derive(Clone)]
@@ -52,9 +54,9 @@ struct AppState {
 }
 #[derive(Clone)]
 struct Adapters {
-    acp: Arc<AcpAdapter>,
-    codex: Arc<CodexAdapter>,
-    claude: Arc<ClaudeAdapter>,
+    acp: Arc<dyn AgentAdapter>,
+    codex: Arc<dyn AgentAdapter>,
+    claude: Arc<dyn AgentAdapter>,
 }
 #[derive(Clone)]
 struct ActiveSession {
@@ -666,12 +668,13 @@ async fn fetch_model_catalog(st: &AppState, runtime: &Value, refresh: bool) -> R
     if !refresh { if let Ok(cache) = cache.lock() { if let Some((at, value)) = cache.get(&key) { if at.elapsed() < std::time::Duration::from_secs(60) { return Ok(value.clone()); } } } }
     let provider = runtime["provider"].as_str().unwrap_or("");
     let adapter = adapter_for(&st.adapters, provider).ok_or_else(|| derr("unsupported", "model catalogs are unsupported for this runtime", StatusCode::BAD_REQUEST))?;
-    let catalog = adapter.model_catalog(&spec).await.map_err(|e| match e {
+    let mut catalog = adapter.model_catalog(&spec).await.map_err(|e| match e {
         bloblex_agent_core::AdapterError::Unsupported(_) => derr("unsupported", "model catalogs are unsupported for this runtime", StatusCode::BAD_REQUEST),
         bloblex_agent_core::AdapterError::Process(_) => derr("provider_unavailable", "runtime model catalog is unavailable", StatusCode::BAD_GATEWAY),
         _ => derr("provider_error", "runtime returned an invalid model catalog", StatusCode::BAD_GATEWAY),
     })?;
-    let value = json!({"runtimeId":spec.runtime_id,"provider":provider,"models":catalog.models,"fetchedAt":catalog.fetched_at,"expiresAt":catalog.expires_at,"fallback":catalog.fallback,"source":catalog.source});
+    model_presentation::apply(&mut catalog.models, catalog.validated, catalog.fallback);
+    let value = json!({"runtimeId":spec.runtime_id,"provider":provider,"models":catalog.models,"fetchedAt":catalog.fetched_at,"expiresAt":catalog.expires_at,"fallback":catalog.fallback,"source":catalog.source,"validated":catalog.validated});
     if let Ok(mut cache) = cache.lock() { cache.insert(key, (Instant::now(), value.clone())); }
     Ok(value)
 }
@@ -700,10 +703,40 @@ async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) 
 }
 fn validate_option_values_against_catalog(model_id:Option<&str>,thinking:Option<&str>,service_tier:Option<&str>,catalog:Option<&Value>,allow_standard_turn_tier:bool)->Result<(),DispatchError>{
     if service_tier==Some("fast")||(service_tier==Some("standard")&&!allow_standard_turn_tier){return Err(derr("invalid_argument","serviceTier must be a catalog tier id; standard speed is a per-turn default request",StatusCode::BAD_REQUEST));}
-    let Some(catalog)=catalog.filter(|c|c["fallback"]!=true)else{return Ok(())};
+    let Some(catalog)=catalog.filter(|c|c["validated"]==true && c["fallback"]!=true)else{return Ok(())};
     let models=catalog["models"].as_array().ok_or_else(||derr("provider_error","runtime returned an invalid model catalog",StatusCode::BAD_GATEWAY))?;
     let selected=if let Some(id)=model_id{Some(models.iter().find(|m|m["id"]==id).ok_or_else(||derr("invalid_argument","model is not available in this runtime catalog",StatusCode::BAD_REQUEST))?)}else{None};
-    if let Some(effort)=thinking{let supported=selected.map(|m|m["supportedThinking"].as_array().is_some_and(|a|a.iter().any(|v|v.as_str()==Some(effort)))).unwrap_or_else(||models.iter().any(|m|m["supportedThinking"].as_array().is_some_and(|a|a.iter().any(|v|v.as_str()==Some(effort)))));if !supported{return Err(derr("invalid_argument",if selected.is_some(){"thinking is not supported by the selected model"}else{"thinking is not supported by the runtime catalog"},StatusCode::BAD_REQUEST));}}
+    if let Some(effort) = thinking {
+        let selected_efforts = selected
+            .and_then(|model| model["supportedThinking"].as_array())
+            .filter(|values| !values.is_empty());
+        if let Some(values) = selected_efforts {
+            if !values.iter().any(|value| value.as_str() == Some(effort)) {
+                return Err(derr(
+                    "invalid_argument",
+                    "thinking is not supported by the selected model",
+                    StatusCode::BAD_REQUEST,
+                ));
+            }
+        } else if selected.is_none() {
+            let known_efforts = models
+                .iter()
+                .filter_map(|model| model["supportedThinking"].as_array())
+                .filter(|values| !values.is_empty())
+                .collect::<Vec<_>>();
+            if !known_efforts.is_empty()
+                && !known_efforts
+                    .iter()
+                    .any(|values| values.iter().any(|value| value.as_str() == Some(effort)))
+            {
+                return Err(derr(
+                    "invalid_argument",
+                    "thinking is not supported by the runtime catalog",
+                    StatusCode::BAD_REQUEST,
+                ));
+            }
+        }
+    }
     if let Some(tier)=service_tier.filter(|tier|!(allow_standard_turn_tier&&*tier=="standard")){let supported=selected.map(|m|m["serviceTiers"].as_array().is_some_and(|a|a.iter().any(|v|v["id"]==tier))).unwrap_or_else(||models.iter().any(|m|m["serviceTiers"].as_array().is_some_and(|a|a.iter().any(|v|v["id"]==tier))));if !supported{return Err(derr("invalid_argument",if selected.is_some(){"serviceTier is not supported by the selected model"}else{"serviceTier is not supported by the runtime catalog"},StatusCode::BAD_REQUEST));}}
     Ok(())
 }
@@ -2010,6 +2043,26 @@ mod phase2a_tests {
         async fn reply_permission(&self,_:&str,_:&str)->Result<(),bloblex_agent_core::AdapterError>{self.replies.fetch_add(1,std::sync::atomic::Ordering::SeqCst);Ok(())}
         async fn close_session(&self,_:&SessionHandle)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
     }
+    struct CatalogAdapter(bloblex_agent_core::ModelCatalog);
+    #[async_trait::async_trait]
+    impl AgentAdapter for CatalogAdapter {
+        async fn model_catalog(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ModelCatalog, bloblex_agent_core::AdapterError> {
+            Ok(self.0.clone())
+        }
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> {
+            Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))
+        }
+        async fn new_session(&self, _: &RuntimeSpec, _: NewSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))
+        }
+        async fn resume_session(&self, _: &RuntimeSpec, _: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))
+        }
+        async fn prompt(&self, _: &SessionHandle, _: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+    }
     struct LifecycleAdapter {
         reject_resume: bool,
         allow_resume: bool,
@@ -2476,10 +2529,111 @@ mod phase2a_tests {
         assert!(exec_option_rejection(&st,"opencode",&requested).unwrap().is_none());
     }
     #[tokio::test]
+    async fn runtime_models_dispatch_applies_presentation_overlay_before_returning_rows() {
+        let (mut st, _) = state();
+        let model = |id: &str, display_name: &str, is_default| bloblex_agent_core::ModelInfo {
+            id: id.into(), display_name: display_name.into(), provider_id: None,
+            supported_thinking: Vec::new(), default_thinking: None, service_tiers: Vec::new(),
+            default_service_tier: None, variants: None, host_dependent: true,
+            is_default, group: None, availability: None,
+        };
+        let catalog = bloblex_agent_core::ModelCatalog {
+            models: vec![
+                model("gpt-5.5", "gpt-5.5", Some(false)),
+                model("gpt-6-sol", "gpt-6-sol", Some(false)),
+                model("gpt-6-luna", "gpt-6-luna", Some(true)),
+            ],
+            fetched_at: "2026-10-03T00:00:00Z".into(),
+            expires_at: "2026-10-03T00:01:00Z".into(),
+            fallback: false,
+            source: "config_options".into(),
+            validated: true,
+        };
+        let runtime_id = "rt-presentation-overlay-test";
+        st.adapters = Arc::new(Adapters {
+            acp: Arc::new(CatalogAdapter(catalog)),
+            codex: Arc::new(CodexAdapter::default()),
+            claude: Arc::new(ClaudeAdapter::default()),
+        });
+        *st.runtimes.write().await = vec![json!({
+            "id": runtime_id,
+            "provider": "opencode",
+            "status": "online",
+            "executablePath": "unused-test-runtime",
+            "launchArgs": []
+        })];
+
+        let response = dispatch(
+            &st,
+            "runtime.models",
+            json!({"runtimeId": runtime_id, "refresh": true}),
+        )
+        .await
+        .unwrap();
+        let models = response["models"].as_array().unwrap();
+        assert_eq!(models[0]["id"], "gpt-6-luna");
+        assert_eq!(models[0]["displayName"], "GPT-6 Luna");
+        assert_eq!(models[0]["isDefault"], true);
+        assert_eq!(models[0]["group"], "GPT-6");
+        assert_eq!(models[0]["availability"], "offered");
+        assert_eq!(models[1]["group"], "GPT-6");
+        assert_eq!(models[2]["group"], "Other models");
+    }
+
+    #[tokio::test]
+    async fn saved_thinking_is_not_rejected_without_model_specific_effort_evidence() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-effort-unreported-test";
+        let catalog = bloblex_agent_core::ModelCatalog {
+            models: vec![bloblex_agent_core::ModelInfo {
+                id: "opencode/example-model".into(),
+                display_name: "Example model".into(),
+                provider_id: None,
+                supported_thinking: Vec::new(),
+                default_thinking: None,
+                service_tiers: Vec::new(),
+                default_service_tier: None,
+                variants: None,
+                host_dependent: true,
+                is_default: None,
+                group: None,
+                availability: None,
+            }],
+            fetched_at: "2026-10-03T00:00:00Z".into(),
+            expires_at: "2026-10-03T00:01:00Z".into(),
+            fallback: false,
+            source: "config_options".into(),
+            validated: true,
+        };
+        st.adapters = Arc::new(Adapters {
+            acp: Arc::new(CatalogAdapter(catalog)),
+            codex: Arc::new(CodexAdapter::default()),
+            claude: Arc::new(ClaudeAdapter::default()),
+        });
+        *st.runtimes.write().await = vec![json!({
+            "id": runtime_id,
+            "provider": "opencode",
+            "status": "online",
+            "executablePath": "unused-test-runtime",
+            "launchArgs": []
+        })];
+
+        validate_agent_catalog(
+            &st,
+            runtime_id,
+            &json!({"model":"opencode/example-model","thinking":"high"}),
+        )
+        .await
+        .unwrap();
+    }
+    #[tokio::test]
     async fn catalog_validation_rejects_turn_values_but_accepts_custom_ids_without_authority(){
-        let authoritative=json!({"fallback":false,"models":[{"id":"claude-sonnet-test","supportedThinking":["low","high"],"serviceTiers":[{"id":"priority"}]}]});
+        let authoritative=json!({"fallback":false,"validated":true,"models":[{"id":"claude-sonnet-test","supportedThinking":["low","high"],"serviceTiers":[{"id":"priority"}]}]});
         assert!(validate_option_values_against_catalog(Some("custom-model"),Some("custom-effort"),Some("custom-tier"),None,false).is_ok());
         assert!(validate_option_values_against_catalog(Some("custom-model"),Some("custom-effort"),Some("custom-tier"),Some(&json!({"fallback":true,"models":[]})),false).is_ok());
+        assert!(validate_option_values_against_catalog(Some("suggestion-only"),None,None,Some(&json!({"fallback":false,"validated":false,"models":[]})),false).is_ok());
+        let model_only_catalog=json!({"fallback":false,"validated":true,"models":[{"id":"opencode-go/deepseek-v4.1-flash","supportedThinking":[]}]});
+        assert!(validate_option_values_against_catalog(Some("opencode-go/deepseek-v4.1-flash"),Some("high"),None,Some(&model_only_catalog),false).is_ok());
         assert_eq!(validate_option_values_against_catalog(Some("missing"),None,None,Some(&authoritative),false).unwrap_err().1.code,"invalid_argument");
         assert_eq!(validate_option_values_against_catalog(Some("claude-sonnet-test"),Some("xhigh"),None,Some(&authoritative),false).unwrap_err().1.message,"thinking is not supported by the selected model");
         assert_eq!(validate_option_values_against_catalog(Some("claude-sonnet-test"),None,Some("slow"),Some(&authoritative),false).unwrap_err().1.message,"serviceTier is not supported by the selected model");

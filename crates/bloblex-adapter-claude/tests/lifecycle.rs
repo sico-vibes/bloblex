@@ -118,7 +118,8 @@ async fn fake_provider_proves_argv_order_hash_restart_secure_file_lifecycle_and_
 
     let catalog: ModelCatalog = adapter.model_catalog(&rt).await.unwrap();
     assert!(!catalog.fallback);
-    assert_eq!(catalog.source, "control_request");
+    assert_eq!(catalog.source, "live_query");
+    assert!(catalog.validated);
     assert_eq!(catalog.models[0].id, "claude-sonnet-test");
     adapter.close_session(&handle).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -182,7 +183,8 @@ async fn fake_provider_catalog_failure_returns_static_suggestions() {
     let missing = RuntimeSpec { runtime_id: "missing".into(), provider: "claude".into(), executable: root.join("absent.exe"), args: vec![], cwd: None };
     let catalog = adapter.model_catalog(&missing).await.unwrap();
     assert!(catalog.fallback);
-    assert_eq!(catalog.source, "static");
+    assert_eq!(catalog.source, "fallback");
+    assert!(!catalog.validated);
     assert_eq!(catalog.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["sonnet", "opus", "fable", "haiku"]);
     std::fs::remove_dir_all(root).unwrap();
 }

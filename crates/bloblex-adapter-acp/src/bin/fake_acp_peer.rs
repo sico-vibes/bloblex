@@ -122,9 +122,9 @@ impl Session {
         }
     }
 
-    fn options(&self, include_effort: bool) -> Value {
+    fn options(&self) -> Value {
         let mut options = vec![select("model", &self.model, &self.models), select("mode", &self.mode, &self.modes)];
-        if include_effort || self.effort.is_some() {
+        if self.effort.is_some() {
             options.push(select("effort", self.effort.as_deref().unwrap_or("low"), &self.efforts));
         }
         Value::Array(options)
@@ -200,7 +200,7 @@ fn acp_main(_args: &[String], flags: &Flags) {
                 let session_id = message["params"]["sessionId"].as_str().unwrap_or("native-session");
                 let mut result = json!({"sessionId": session_id});
                 if !env::args().any(|arg| arg == "--catalog-no-config-options") {
-                    result["configOptions"] = session.options(env::args().any(|arg| arg == "--catalog-with-effort"));
+                    result["configOptions"] = session.options();
                 }
                 respond(&mut stdout, &id, result);
             }
@@ -210,7 +210,7 @@ fn acp_main(_args: &[String], flags: &Flags) {
                 if !apply_option(&mut session, config_id, value) {
                     error(&mut stdout, &id, -32602, "option value is not offered");
                 } else {
-                    respond(&mut stdout, &id, json!({"configOptions": session.options(false)}));
+                    respond(&mut stdout, &id, json!({"configOptions": session.options()}));
                 }
                 write_record(flags, &rpc, Some(&session));
             }

@@ -108,11 +108,6 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
   const gate = useMemo(() => sendGateFor(capabilities, custom), [capabilities, custom])
   useEffect(() => { onExecutionGate?.(gate) }, [gate, onExecutionGate])
 
-  useEffect(() => {
-    if (!catalog || !draft.model || allowsCustomModelId(provider) === false) return
-    if (!catalog.models.some((model) => model.id === draft.model)) setCustom(true)
-  }, [catalog, draft.model, provider])
-
   const refreshCatalog = async () => {
     if (!draft.runtimeId) return
     setLoading(true)
@@ -170,7 +165,7 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
       </div>
     </EditGroup>
 
-    <EditGroup title="Model" label="Execution" action={<button type="button" className="ghost-button small" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}><RefreshCw size={13} className={loading ? 'spinning' : ''} />Refresh models</button>}>
+    <EditGroup title="Model" label="Execution" action={<span className="catalog-refresh-action">{catalog?.fetchedAt && <small>Updated {formatCatalogTime(catalog.fetchedAt)}</small>}<button type="button" className="ghost-button small" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}><RefreshCw size={13} className={loading ? 'spinning' : ''} />Refresh models</button></span>}>
       <div className="settings-row">
         <span className="settings-row-copy"><strong>Coding agent</strong><small>New conversations use it. Existing ones keep theirs.</small></span>
         <span className="settings-row-control">
@@ -178,14 +173,13 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
         </span>
       </div>
       {errors.runtimeId && <p className="blob-error blob-inset">{errors.runtimeId}</p>}
-      {(loading || catalogError || (!loading && catalog && catalog.models.length === 0) || catalog?.fallback) && <div className="blob-notes">
+      {(loading || catalogError || (!loading && catalog && catalog.models.length === 0)) && <div className="blob-notes">
         {loading && <p className="blob-help" role="status">Loading models…</p>}
         {catalogError && <div className="blob-error" role="alert">
           <p>{catalogError}</p>
           {catalogUnavailable && <button type="button" className="secondary-button small" onClick={() => void refreshCatalog()}>Retry</button>}
         </div>}
         {!loading && catalog && catalog.models.length === 0 && <p className="blob-help">No models were reported for this agent.</p>}
-        {catalog?.fallback && <p className="blob-help">These models are suggestions only. Bloblex has not validated that this agent can run them.</p>}
       </div>}
       <CapabilityField label="Model" state={modelState} setting={capabilities?.settings.model ?? null}>
         <Select ariaLabel="Model" variant="muted" value={custom ? '__custom__' : (draft.model ?? '')} disabled={!modelInteractive} onChange={(value) => {
@@ -193,11 +187,19 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
           else applyModel(value || null, false)
         }} options={[
           { value: '', label: 'Default model' },
-          ...(catalog?.models ?? []).map((model) => ({ value: model.id, label: model.displayName })),
-          ...(draft.model && !custom && !(catalog?.models ?? []).some((model) => model.id === draft.model) ? [{ value: draft.model, label: draft.model }] : []),
+          ...(catalog?.models ?? []).map((model, index, models) => ({ value: model.id, label: `${model.displayName}${model.isDefault ? ' · Default' : ''}`, group: model.group && model.group !== models[index - 1]?.group ? model.group : undefined })),
+          ...(draft.model && !custom && !(catalog?.models ?? []).some((model) => model.id === draft.model)
+            ? [{
+                value: draft.model,
+                label: catalog?.validated && !catalog.fallback
+                  ? `${draft.model} · Not offered by ${providerLabel(provider)} right now`
+                  : draft.model,
+              }]
+            : []),
           ...(allowsCustomModelId(provider) ? [{ value: '__custom__', label: 'Custom model id' }] : []),
         ]} />
       </CapabilityField>
+      {catalog && (!catalog.validated || catalog.fallback) && <p className="blob-help model-catalog-note">Suggested models, not checked with {providerLabel(provider)}.</p>}
       {custom && allowsCustomModelId(provider) && <div className="blob-form blob-form-tight">
         <label className="blob-field"><span>Custom model id <small id="custom-model-note">Not validated</small></span>
           <input aria-label="Custom model id" aria-describedby="custom-model-note" value={draft.model ?? ''} disabled={!modelInteractive} onChange={(event) => onDraftChange({ ...draft, model: event.target.value || null, thinking: null, serviceTier: null })} />
@@ -255,6 +257,20 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
     </section>}
     {bypassOpen && <BypassConfirmDialog blobName={draft.name} onCancel={() => setBypassOpen(false)} onConfirm={() => { setBypassOpen(false); onDraftChange({ ...draft, approvalMode: 'bypass' satisfies ApprovalMode }) }} />}
   </>
+}
+
+function providerLabel(provider: string) {
+  switch (provider.toLowerCase()) {
+    case 'claude': return 'Claude Code'
+    case 'codex': return 'Codex'
+    case 'opencode': return 'OpenCode'
+    default: return 'this agent'
+  }
+}
+
+function formatCatalogTime(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
 function EditGroup({ title, label, action, children }: { title: string; label?: string; action?: ReactNode; children: ReactNode }) {

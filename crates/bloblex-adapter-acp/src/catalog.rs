@@ -18,16 +18,36 @@ pub(crate) async fn fetch_model_catalog(
     runtime: &RuntimeSpec,
     timeout: Duration,
 ) -> Result<ModelCatalog, AdapterError> {
-    if let Some(models) = fetch_config_options(runtime, timeout).await {
+    if let Some(mut models) = fetch_config_options(runtime, timeout).await {
+        if let Ok(verbose_models) = fetch_verbose_catalog(runtime, timeout).await {
+            crate::exec::apply_model_efforts(&mut models, &verbose_models);
+        }
         let fetched = unix_now();
         return Ok(ModelCatalog {
             models,
             fetched_at: rfc3339_from_unix(fetched),
             expires_at: rfc3339_from_unix(fetched.saturating_add(60)),
             fallback: false,
-            source: "acp_config_options".into(),
+            source: "config_options".into(),
+            validated: true,
         });
     }
+    let models = fetch_verbose_catalog(runtime, timeout).await?;
+    let fetched = unix_now();
+    Ok(ModelCatalog {
+        models,
+        fetched_at: rfc3339_from_unix(fetched),
+        expires_at: rfc3339_from_unix(fetched.saturating_add(60)),
+        fallback: false,
+        source: "cli_list".into(),
+        validated: false,
+    })
+}
+
+async fn fetch_verbose_catalog(
+    runtime: &RuntimeSpec,
+    timeout: Duration,
+) -> Result<Vec<ModelInfo>, AdapterError> {
     let temp = TempHome::new().map_err(|_| AdapterError::Process(ERR_CATALOG.into()))?;
     let mut command = Command::new(&runtime.executable);
     prepare_command(&mut command);
@@ -73,15 +93,7 @@ pub(crate) async fn fetch_model_catalog(
     if !status.success() {
         return Err(AdapterError::Process(ERR_CATALOG.into()));
     }
-    let models = parse_verbose_catalog(&text).map_err(|_| AdapterError::Process(ERR_CATALOG.into()))?;
-    let fetched = unix_now();
-    Ok(ModelCatalog {
-        models,
-        fetched_at: rfc3339_from_unix(fetched),
-        expires_at: rfc3339_from_unix(fetched.saturating_add(60)),
-        fallback: false,
-        source: "cli_verbose".into(),
-    })
+    parse_verbose_catalog(&text).map_err(|_| AdapterError::Process(ERR_CATALOG.into()))
 }
 
 async fn fetch_config_options(runtime: &RuntimeSpec, timeout: Duration) -> Option<Vec<ModelInfo>> {
@@ -320,6 +332,9 @@ fn model_from(header: &str, value: &Value) -> Result<ModelInfo, String> {
         default_service_tier: None,
         variants: if variant_keys.is_empty() { None } else { Some(variant_keys) },
         host_dependent: true,
+        is_default: None,
+        group: None,
+        availability: None,
     })
 }
 

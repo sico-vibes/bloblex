@@ -90,39 +90,15 @@ fn parse_model_catalog(value: &Value) -> Result<Vec<ModelInfo>, AdapterError> {
             provider_id: model["providerId"].as_str().map(str::to_owned), supported_thinking: levels,
             default_thinking: model["defaultEffort"].as_str().map(str::to_owned), service_tiers: vec![],
             default_service_tier: None, variants: None, host_dependent: true,
-        });
-    }
-    let resolved = value["resolvedModel"].as_str();
-    let default = value["default"].as_str();
-    if let Some(default_id) = default.filter(|id| !normalized.iter().any(|model| model.id == *id)) {
-        normalized.push(ModelInfo {
-            id: default_id.to_owned(),
-            display_name: "Default".into(),
-            provider_id: None,
-            supported_thinking: value["supportedEffortLevels"]
-                .as_array()
-                .map(|levels| levels.iter().filter_map(Value::as_str).map(str::to_owned).collect())
-                .unwrap_or_default(),
-            default_thinking: value["defaultEffort"].as_str().map(str::to_owned),
-            service_tiers: vec![],
-            default_service_tier: None,
-            variants: None,
-            host_dependent: true,
+            is_default: model["isDefault"].as_bool().or_else(|| {
+                value["default"].as_str().map(|default_id| {
+                    id == default_id || model["value"].as_str() == Some(default_id)
+                })
+            }),
+            group: None, availability: None,
         });
     }
     if normalized.is_empty() { return Err(AdapterError::Protocol("Claude catalog is empty".into())); }
-    for model in &mut normalized {
-        let mut markers = Vec::new();
-        if Some(model.id.as_str()) == resolved {
-            markers.push("resolved");
-        }
-        if Some(model.id.as_str()) == default {
-            markers.push("default");
-        }
-        if !markers.is_empty() {
-            model.display_name = format!("{} ({})", model.display_name, markers.join(", "));
-        }
-    }
     Ok(normalized)
 }
 
@@ -130,6 +106,7 @@ fn fallback_catalog() -> Vec<ModelInfo> {
     ["sonnet", "opus", "fable", "haiku"].into_iter().map(|id| ModelInfo {
         id: id.into(), display_name: id.into(), provider_id: None, supported_thinking: vec![],
         default_thinking: None, service_tiers: vec![], default_service_tier: None, variants: None, host_dependent: true,
+        is_default: None, group: None, availability: None,
     }).collect()
 }
 fn typed_args(options: &ExecOptions, instruction_file: Option<&std::path::Path>, instruction_changed: bool) -> Vec<String> {
@@ -563,8 +540,11 @@ impl AgentAdapter for ClaudeAdapter {
             let body = found.ok_or_else(|| AdapterError::Protocol("Claude catalog response was missing".into()))?;
             parse_model_catalog(&body["response"])
         }.await;
-        let (models, fallback, source) = match result { Ok(models) => (models, false, "control_request"), Err(_) => (fallback_catalog(), true, "static") };
-        Ok(ModelCatalog { models, fetched_at: now.to_rfc3339(), expires_at: (now + Duration::seconds(60)).to_rfc3339(), fallback, source: source.into() })
+        let (models, fallback, source, validated) = match result {
+            Ok(models) => (models, false, "live_query", true),
+            Err(_) => (fallback_catalog(), true, "fallback", false),
+        };
+        Ok(ModelCatalog { models, fetched_at: now.to_rfc3339(), expires_at: (now + Duration::seconds(60)).to_rfc3339(), fallback, source: source.into(), validated })
     }
     async fn probe(&self, r: &RuntimeSpec) -> Result<ProbeResult, AdapterError> {
         let mut c = Command::new(&r.executable);
@@ -782,19 +762,21 @@ mod tests {
     }
 
     #[test]
-    fn catalog_skips_disabled_models_and_marks_resolved_and_default_entries() {
+    fn catalog_skips_disabled_models_and_marks_default_without_rewriting_names() {
         let rows = parse_model_catalog(&json!({
             "resolvedModel": "model-current",
             "default": "model-default",
             "models": [
                 {"value":"model-disabled","disabled":true},
                 {"value":"model-current","displayName":"Current"},
-                {"value":"model-default","displayName":"Default"}
+                {"value":"model-default","displayName":"Sonnet"}
             ]
         })).unwrap();
         assert_eq!(rows.len(), 2);
-        assert!(rows[0].display_name.contains("resolved"));
-        assert!(rows[1].display_name.contains("default"));
+        assert_eq!(rows[0].display_name, "Current");
+        assert_eq!(rows[0].is_default, Some(false));
+        assert_eq!(rows[1].display_name, "Sonnet");
+        assert_eq!(rows[1].is_default, Some(true));
         assert!(!rows.iter().any(|model| model.id == "model-disabled"));
     }
 

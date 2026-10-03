@@ -41,6 +41,7 @@ struct Conn {
     spawned_instructions: Option<String>,
     spawned_env: BTreeMap<String, String>,
     config_options: Mutex<Vec<Value>>,
+    default_mode: Mutex<Option<String>>,
     applied: Mutex<exec::Echoes>,
     usage: Mutex<exec::UsageSnap>,
     usage_seq: AtomicU64,
@@ -135,6 +136,7 @@ impl AcpAdapter {
             spawned_instructions: secret,
             spawned_env: options.env.clone(),
             config_options: Mutex::new(Vec::new()),
+            default_mode: Mutex::new(None),
             applied: Mutex::new(exec::Echoes::default()),
             usage: Mutex::new(exec::UsageSnap::default()),
             usage_seq: AtomicU64::new(0),
@@ -355,6 +357,25 @@ impl AcpAdapter {
                 turn_id,
             )
             .await?;
+        } else if exec::normalize_instructions(&options.instructions).is_none()
+            && c.applied.lock().await.mode.as_deref() == Some(exec::AGENT_NAME)
+        {
+            let default_mode = c.default_mode.lock().await.clone();
+            let Some(default_mode) = default_mode else {
+                Self::fail_setting(c, turn_id, "instructions", json!(false), exec::ERR_MODE_MISSING).await;
+                return Err(AdapterError::Protocol(exec::ERR_MODE_MISSING.into()));
+            };
+            Self::select(
+                c,
+                provider_session_id,
+                "mode",
+                &default_mode,
+                "instructions",
+                exec::ERR_MODE_MISSING,
+                exec::ERR_MODE_REJECTED,
+                turn_id,
+            )
+            .await?;
         }
         if let Some(thinking) = exec::nonempty(&options.thinking) {
             if c.applied.lock().await.effort.as_deref() != Some(thinking) {
@@ -547,7 +568,9 @@ impl AgentAdapter for AcpAdapter {
                 .ok_or_else(|| AdapterError::Protocol("session/new returned no sessionId".into()))?
                 .to_owned();
             *c.session_id.lock().await = Some(provider_id.clone());
-            *c.config_options.lock().await = exec::options_from_result(&result);
+            let config_options = exec::options_from_result(&result);
+            *c.default_mode.lock().await = exec::default_provider_mode(&config_options);
+            *c.config_options.lock().await = config_options;
             Self::apply_options(&c, &provider_id, &req.exec_options, None).await?;
             Ok::<String, AdapterError>(provider_id)
         }
@@ -618,7 +641,9 @@ impl AgentAdapter for AcpAdapter {
                 other => other,
             })?;
             *c.session_id.lock().await = Some(req.provider_session_id.clone());
-            *c.config_options.lock().await = exec::options_from_result(&result);
+            let config_options = exec::options_from_result(&result);
+            *c.default_mode.lock().await = exec::default_provider_mode(&config_options);
+            *c.config_options.lock().await = config_options;
             Self::apply_options(&c, &req.provider_session_id, &req.exec_options, None).await?;
             Ok::<(), AdapterError>(())
         }

@@ -224,7 +224,8 @@ async fn exact_start_turn_resume_fields_and_replayed_usage_are_scoped() {
 async fn catalog_paginates_visible_models_on_one_short_lived_process() {
     let (r, record) = setup(None);
     let catalog = CodexAdapter::default().model_catalog(&r).await.unwrap();
-    assert_eq!(catalog.source, "app_server");
+    assert_eq!(catalog.source, "live_query");
+    assert!(catalog.validated);
     assert!(!catalog.fallback);
     assert!(catalog.models.iter().all(|m| m.host_dependent));
     assert_eq!(

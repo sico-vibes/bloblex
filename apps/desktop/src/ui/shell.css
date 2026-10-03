@@ -18,7 +18,28 @@
 .sidebar-search input::placeholder { color: var(--text-3); }
 .sidebar-search input:focus-visible { box-shadow: none; }
 
-.bot-list { min-height: 0; flex: 1; padding: 2px 8px 8px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #2e2e2e transparent; }
+.sidebar-scroll { min-height: 0; flex: 1; padding: 2px 8px 8px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #2e2e2e transparent; }
+.bot-list { display: flex; flex-direction: column; gap: 2px; }
+.roster-section-label { padding: 12px 10px 4px; color: var(--text-3); font-size: var(--fs-2xs); font-weight: 500; }
+.sidebar-scroll > .pinned-section:first-child .roster-section-label, .bot-list > .roster-section-label:first-child { padding-top: 4px; }
+
+/* Pinned projects and conversations */
+.pinned-section { margin-bottom: 4px; display: grid; gap: 1px; }
+.pinned-row { position: relative; border-radius: var(--radius-md); }
+.pinned-row:hover { background: var(--surface-hover); }
+.pinned-main { width: 100%; min-height: 40px; padding: 5px 10px; display: flex; align-items: center; gap: 10px; color: var(--text-2); border: 0; border-radius: var(--radius-md); background: transparent; text-align: left; }
+.pinned-row.selected .pinned-main { color: var(--text-1); }
+.pinned-row.selected .pinned-copy strong { font-weight: 600; }
+.pinned-main:focus-visible { box-shadow: var(--focus-ring); }
+.pinned-icon { width: 20px; flex: 0 0 auto; display: grid; place-items: center; }
+.pinned-copy { min-width: 0; flex: 1; display: grid; gap: 1px; }
+.pinned-copy strong { overflow: hidden; color: inherit; font-size: var(--fs-sm); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.pinned-copy small { overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.pinned-main time { flex: 0 0 auto; color: var(--text-3); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; transition: opacity 120ms ease; }
+.pinned-unpin { position: absolute; right: 6px; top: 50%; width: 24px; height: 24px; margin-top: -12px; display: grid; place-items: center; padding: 0; color: var(--text-3); border: 0; border-radius: var(--radius-sm); background: transparent; opacity: 0; }
+.pinned-unpin:hover { color: var(--text-1); background: var(--surface-hover); }
+.pinned-row:hover .pinned-unpin, .pinned-unpin:focus-visible { opacity: 1; }
+.pinned-row:hover .pinned-main time { opacity: 0; }
 .blob-block { min-width: 0; border-radius: 12px; }
 .blob-block.selected { background: var(--surface-selected); }
 .bot-row { width: 100%; min-width: 0; min-height: 56px; padding: 9px 10px; display: flex; align-items: center; gap: 10px; color: var(--text-1); text-align: left; border: 0; border-radius: 12px; background: transparent; transition: background 120ms ease; }
@@ -35,27 +56,41 @@
 .bot-row:hover .tree-chevron, .bot-row:focus-visible .tree-chevron, .bot-row[aria-expanded="true"] .tree-chevron,
 .tree-project:hover .tree-chevron, .tree-project-item:focus-visible .tree-chevron, .tree-project-item[aria-expanded="true"] .tree-chevron { opacity: 1; }
 
-/* Expanded blob: children hang off a guide line under the avatar, inside the same highlight. */
-.blob-children { position: relative; margin: -2px 0 0 28px; padding: 0 6px 8px 0; display: flex; flex-direction: column; gap: 1px; border-left: 1px solid var(--line-strong); }
-.tree-group { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.tree-project { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; position: relative; }
-.tree-project > .tree-group { flex: 1 0 100%; }
+/* Expanded blob: projects and conversations hang off branch lines that bend
+   into each row (└), inside the blob's single highlight. Selection inside the
+   tree is shown with text weight, not another box. */
+.blob-children { --tree-line: #ffffff38; position: relative; margin: -4px 0 0 27px; padding: 0 6px 8px 0; display: flex; flex-direction: column; }
+.tree-group { min-width: 0; display: flex; flex-direction: column; }
+.tree-project { position: relative; min-width: 0; }
+.blob-children > .tree-project, .blob-children > .tree-more, .blob-children > .tree-empty,
+.tree-project > .tree-group > .tree-session, .tree-project > .tree-group > .tree-more { position: relative; }
+/* Elbow into the row */
+.blob-children > .tree-project::before, .blob-children > .tree-more::before,
+.tree-project > .tree-group > .tree-session::before, .tree-project > .tree-group > .tree-more::before {
+  content: ""; position: absolute; left: 0; top: 0; width: 10px; height: 15px; pointer-events: none;
+  border-left: 1px solid var(--tree-line); border-bottom: 1px solid var(--tree-line); border-bottom-left-radius: 7px;
+}
+/* Trunk continues past every row except the last one */
+.blob-children > .tree-project:not(:last-child)::after, .blob-children > .tree-more:not(:last-child)::after,
+.tree-project > .tree-group > .tree-session:not(:last-child)::after, .tree-project > .tree-group > .tree-more:not(:last-child)::after {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; pointer-events: none; border-left: 1px solid var(--tree-line);
+}
+/* Conversations branch from under the folder icon */
+.tree-project > .tree-group { margin-left: 25px; }
 .tree-project-item, .tree-session, .tree-more { min-width: 0; height: 30px; display: flex; align-items: center; gap: 8px; overflow: hidden; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); text-align: left; font-size: var(--fs-sm); cursor: pointer; }
-.tree-project-item { flex: 1; padding: 0 6px 0 12px; }
-.tree-session { width: 100%; padding: 0 8px 0 34px; }
-.tree-more { width: 100%; color: var(--text-3); font-size: var(--fs-xs); }
-.tree-more[aria-level="2"] { padding: 0 8px 0 12px; }
-.tree-more[aria-level="3"] { padding: 0 8px 0 34px; }
-.tree-project-item:hover, .tree-session:hover, .tree-more:hover { color: var(--text-1); background: var(--surface-hover); }
-.tree-session[aria-selected="true"] { color: var(--text-1); background: var(--surface-selected-strong); }
+.tree-project-item { padding: 0 6px 0 18px; }
+.tree-session { width: 100%; padding: 0 8px 0 18px; }
+.tree-more { width: 100%; padding: 0 8px 0 18px; color: var(--text-3); font-size: var(--fs-xs); }
+.tree-project-item:hover, .tree-session:hover, .tree-more:hover { color: var(--text-1); }
+.tree-session[aria-selected="true"] { color: var(--text-1); font-weight: 600; }
 .tree-project-item:focus-visible, .tree-session:focus-visible, .tree-more:focus-visible { box-shadow: var(--focus-ring); }
 .tree-icon { flex: 0 0 auto; color: var(--text-3); }
 .tree-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-session time { flex: 0 0 auto; color: var(--text-3); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; }
-.tree-new { position: absolute; right: 30px; top: 2px; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); opacity: 0; }
+.tree-new { position: absolute; right: 28px; top: 2px; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); opacity: 0; }
 .tree-new:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }
 .tree-project:hover .tree-new, .tree-project:focus-within .tree-new { opacity: 1; }
-.tree-empty { margin: 0; padding: 6px 12px 4px; color: var(--text-3); font-size: var(--fs-xs); }
+.tree-empty { margin: 0; padding: 6px 12px 4px 18px; color: var(--text-3); font-size: var(--fs-xs); }
 @media (hover: none) { .tree-chevron, .tree-new { opacity: 1; } }
 .status-dot { display: inline-block; width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--text-3); }
 .status-dot.good { background: var(--status-success); }
@@ -180,6 +215,8 @@
 .context-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--line); background: var(--surface-panel); }
 .app-shell:not(.inspector-open) .context-pane { border-left-color: transparent; }
 .context-pane > * { min-width: 320px; }
+/* The tab strip has 20 px side margins, so its own width is 40 px narrower to stay centred under the avatar. */
+.context-pane > .context-tabs { min-width: 280px; }
 .context-head { padding: 30px 20px 14px; display: grid; justify-items: center; gap: 6px; text-align: center; }
 .context-head .blob-canvas { margin-bottom: 6px; }
 .context-head h2 { max-width: 100%; margin: 0; overflow: hidden; font-size: var(--fs-lg); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
@@ -233,5 +270,6 @@
   .app-shell { grid-template-columns: 248px minmax(0, 1fr) 0; }
   .app-shell.inspector-open { grid-template-columns: 248px minmax(0, 1fr) 296px; }
   .context-pane > * { min-width: 296px; }
+  .context-pane > .context-tabs { min-width: 256px; }
   .model-pill { display: none; }
 }

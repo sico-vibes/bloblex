@@ -284,6 +284,23 @@ function emit(event: DaemonEvent) {
 }
 
 describe('blob roster and editor', () => {
+  it('moves a favourite blob into a Favourites section and back', async () => {
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelector('.roster-section-label')).toBeNull()
+    await openMenu(rows(view.host)[2]!)
+    await click(menuItem(view.host, 'Add to favourites'))
+    await view.settle()
+    const labels = [...view.host.querySelectorAll('.bot-list .roster-section-label')].map((node) => node.textContent)
+    expect(labels).toEqual(['Favourites', 'Blobs'])
+    expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Invoice helper', 'Claude', 'Codex', 'OpenCode'])
+    await openMenu(rows(view.host)[0]!)
+    await click(menuItem(view.host, 'Remove from favourites'))
+    await view.settle()
+    expect(view.host.querySelector('.roster-section-label')).toBeNull()
+    expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Claude', 'Codex', 'Invoice helper', 'OpenCode'])
+  })
+
   it('renders active blobs in roster order and hides archived ones', async () => {
     const view = startApp()
     await view.settle()

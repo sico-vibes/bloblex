@@ -121,7 +121,7 @@ export class IslandStateMachine {
     }, this.homeToPetitDelay * 1000);
   }
 
-  private scheduleGreetCollapse(delay: number) {
+  protected scheduleGreetCollapse(delay: number) {
     this.clear("greetCollapse");
     this.greetCollapse = window.setTimeout(() => {
       this.greetCollapse = null;
@@ -129,7 +129,7 @@ export class IslandStateMachine {
     }, delay * 1000);
   }
 
-  private clear(which: "petitHide" | "homeCollapse" | "greetCollapse") {
+  protected clear(which: "petitHide" | "homeCollapse" | "greetCollapse") {
     const id = this[which];
     if (id != null) window.clearTimeout(id);
     this[which] = null;

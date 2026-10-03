@@ -10,7 +10,27 @@ export type CompanionMode = FsmState
 export class CompanionFsm extends IslandStateMachine {
   // After the greeting ends the island rests a moment before shrinking to the compact bar.
   override greetAutoCollapseDelay = 1.4
+  private greeted = false
+
+  launch() {
+    this.greeted = false
+    super.launch()
+  }
+
+  greetComplete() {
+    this.greeted = true
+    super.greetComplete()
+  }
+
   mouseLeft() {
+    // The welcome greeting always plays to the end: moving the pointer off the
+    // island must not cut it short. Leaving drops the long hover hold, so the
+    // island rests briefly after the greeting and then shrinks.
+    if (this.state === 'welcome') {
+      this.clear('greetCollapse')
+      if (this.greeted) this.scheduleGreetCollapse(this.greetAutoCollapseDelay)
+      return
+    }
     super.mouseLeft()
     // A freely positioned overlay must not vanish into an unknown desktop
     // location. Preserve upstream home/greeting transitions but cancel only

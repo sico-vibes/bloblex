@@ -14,6 +14,20 @@ afterAll(() => {
 describe('companion capsule interaction states', () => {
   afterEach(() => vi.useRealTimers())
 
+  it('finishes the welcome greeting even when the pointer passes over and leaves', () => {
+    vi.useFakeTimers()
+    const fsm = new CompanionFsm()
+    fsm.launch()
+    fsm.mouseEntered()
+    fsm.mouseLeft()
+    expect(fsm.state).toBe('welcome')
+    fsm.greetComplete()
+    vi.advanceTimersByTime(1399)
+    expect(fsm.state).toBe('welcome')
+    vi.advanceTimersByTime(1)
+    expect(fsm.state).toBe('petit')
+  })
+
   it('greets briefly, expands on hover, then collapses after leaving', () => {
     vi.useFakeTimers()
     const fsm = new CompanionFsm()

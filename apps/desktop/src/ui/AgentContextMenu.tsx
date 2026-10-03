@@ -1,16 +1,18 @@
 import { useEffect, useRef } from 'react'
-import { Archive, Copy, Pencil, MessageSquarePlus } from 'lucide-react'
+import { Archive, Copy, Pencil, MessageSquarePlus, Star, StarOff } from 'lucide-react'
 import type { Agent } from '../types'
 
-export function AgentContextMenu({ agent, enabled, position, onClose, onNewSession, onEdit, onDuplicate, onArchive }: {
+export function AgentContextMenu({ agent, enabled, position, favorite = false, onClose, onNewSession, onEdit, onDuplicate, onArchive, onToggleFavorite }: {
   agent: Agent
   enabled: { newSession: boolean; duplicate: boolean; archive: boolean }
   position: { x: number; y: number }
+  favorite?: boolean
   onClose: () => void
   onNewSession: () => void
   onEdit: () => void
   onDuplicate: () => void
   onArchive: () => void
+  onToggleFavorite?: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus() }, [])
@@ -38,6 +40,7 @@ export function AgentContextMenu({ agent, enabled, position, onClose, onNewSessi
     <strong className="runtime-context-title">{agent.name}</strong>
     <button type="button" role="menuitem" disabled={!enabled.newSession} onClick={onNewSession}><MessageSquarePlus size={14} />New session</button>
     <button type="button" role="menuitem" onClick={onEdit}><Pencil size={14} />Edit blob</button>
+    {onToggleFavorite && <button type="button" role="menuitem" onClick={onToggleFavorite}>{favorite ? <StarOff size={14} /> : <Star size={14} />}{favorite ? 'Remove from favourites' : 'Add to favourites'}</button>}
     <button type="button" role="menuitem" disabled={!enabled.duplicate} onClick={onDuplicate}><Copy size={14} />Duplicate</button>
     <button type="button" role="menuitem" disabled={!enabled.archive} onClick={onArchive}><Archive size={14} />Archive</button>
   </div>

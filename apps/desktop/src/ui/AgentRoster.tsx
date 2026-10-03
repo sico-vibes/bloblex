@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, Search } from 'lucide-react'
+import { ChevronDown, ChevronRight, Folder, MessageSquare, PinOff, Search } from 'lucide-react'
 import type { Agent, Runtime, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { effectiveApprovalMode } from '../approvalContract'
@@ -8,8 +8,9 @@ import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
 import { AgentContextMenu } from './AgentContextMenu'
 import { RowActionMenu, SessionTree } from './SessionTree'
+import { isProjectPinned, type PinnedProject, type SidebarPins } from './sidebarPins'
 import {
-  OTHER_CAP_KEY, PROJECT_CAP, SESSION_CAP, activeAgents, layoutBlobTree, runtimeUsable, sessionDisplayTitle,
+  OTHER_CAP_KEY, PROJECT_CAP, SESSION_CAP, activeAgents, layoutBlobTree, projectFolderName, runtimeUsable, sessionDisplayTitle,
   shortTime, treeItemId, treeModel, type ExpandedState, type TreeRow,
 } from './rosterSelectors'
 
@@ -31,8 +32,9 @@ type RosterMenu =
   | { kind: 'blob'; agentId: string; x: number; y: number }
   | { kind: 'project'; agentId: string; projectKey: string; path: string; label: string; x: number; y: number }
   | { kind: 'session'; agentId: string; session: Session; x: number; y: number }
+  | { kind: 'pinned'; label: string; onUnpin: () => void; x: number; y: number }
 
-export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, selectedAgentId, selectedSessionId, query, expanded, onQueryChange, onSelect, onCreate, onScan, onNewSession, onEdit, onDuplicate, onArchive, onToggleBlob, onToggleProject, onToggleOther, onSelectSession, onNewSessionInProject, onResumeSession, onCancelSession }: {
+export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, pins, onToggleFavorite, onTogglePinProject, onTogglePinSession, onRevealProject, selectedAgentId, selectedSessionId, query, expanded, onQueryChange, onSelect, onCreate, onScan, onNewSession, onEdit, onDuplicate, onArchive, onToggleBlob, onToggleProject, onToggleOther, onSelectSession, onNewSessionInProject, onResumeSession, onCancelSession }: {
   agents: Agent[]
   sessions: Session[]
   runtimes: Runtime[]
@@ -40,6 +42,12 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
   busy: boolean
   /** Current time, so row moods settle (happy, idle, asleep) without new events. */
   now?: number
+  /** Favourite blobs and pinned projects or conversations (this device). */
+  pins?: SidebarPins
+  onToggleFavorite?: (agentId: string) => void
+  onTogglePinProject?: (project: PinnedProject) => void
+  onTogglePinSession?: (sessionId: string) => void
+  onRevealProject?: (agentId: string, key: string) => void
   selectedAgentId: string | null
   selectedSessionId: string | null
   query: string
@@ -61,7 +69,11 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
   onCancelSession: (session: Session) => void
 }) {
   const model = useMemo(() => treeModel(agents, sessions, query), [agents, sessions, query])
-  const rows = model.groups.flatMap((group) => group.rows)
+  const favoriteIds = new Set(pins?.favorites ?? [])
+  const grouped = model.groups.flatMap((group) => group.rows)
+  // Favourite blobs come first; keyboard order follows what is drawn.
+  const rows = [...grouped.filter((row) => favoriteIds.has(row.agent.id)), ...grouped.filter((row) => !favoriteIds.has(row.agent.id))]
+  const hasFavorites = rows.some((row) => favoriteIds.has(row.agent.id))
   const active = activeAgents(agents)
   const treeItemRefs = useRef(new Map<string, HTMLElement>())
   const parentOf = useRef(new Map<string, string | null>())
@@ -247,8 +259,46 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
     return state === 'working' || state === 'waiting_permission'
   }
 
+  const activeById = new Map(active.map((agent) => [agent.id, agent]))
+  const pinnedItems = query.trim() ? [] : [
+    ...(pins?.projects ?? []).flatMap((pin) => {
+      const agent = activeById.get(pin.agentId)
+      if (!agent) return []
+      const group = grouped.find((row) => row.agent.id === agent.id)?.projects.find((item) => item.key === pin.key)
+      const latest = group?.sessions[0]
+      return [{ kind: 'project' as const, id: `project:${agent.id}:${pin.key}`, agent, pin, title: group?.label ?? projectFolderName(pin.path), time: latest?.updatedAt ?? null }]
+    }),
+    ...(pins?.sessions ?? []).flatMap((sessionId) => {
+      const session = sessions.find((item) => item.id === sessionId)
+      const agent = session?.agentId ? activeById.get(session.agentId) : undefined
+      if (!session || !agent) return []
+      return [{ kind: 'session' as const, id: `session:${session.id}`, agent, session, title: sessionDisplayTitle(session), time: session.updatedAt ?? null }]
+    }),
+  ]
+
   return <>
     <label className="sidebar-search"><Search size={14} /><input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Search" aria-label="Search agents and conversations" /></label>
+    <div className="sidebar-scroll">
+    {pinnedItems.length > 0 && <section className="pinned-section" aria-label="Pinned">
+      <div className="roster-section-label">Pinned</div>
+      {pinnedItems.map((item) => {
+        const selected = item.kind === 'session' && item.session.id === selectedSessionId
+        const open = () => {
+          if (item.kind === 'session') { onSelectSession(item.session); return }
+          onSelect(item.agent)
+          onRevealProject?.(item.agent.id, item.pin.key)
+        }
+        const unpin = () => item.kind === 'session' ? onTogglePinSession?.(item.session.id) : onTogglePinProject?.(item.pin)
+        return <div className={`pinned-row ${selected ? 'selected' : ''}`} key={item.id}>
+          <button type="button" className="pinned-main" aria-current={selected ? 'true' : undefined} onClick={open} onContextMenu={(event) => { event.preventDefault(); setMenu({ kind: 'pinned', label: item.title, onUnpin: unpin, x: event.clientX, y: event.clientY }) }}>
+            <span className="pinned-icon" style={{ color: agentColorHex(item.agent.color) }} aria-hidden="true">{item.kind === 'project' ? <Folder size={14} /> : <MessageSquare size={14} />}</span>
+            <span className="pinned-copy"><strong>{item.title}</strong><small>{item.agent.name}{item.kind === 'project' ? ' · project' : ''}</small></span>
+            {item.time && <time>{shortTime(item.time)}</time>}
+          </button>
+          <button type="button" className="pinned-unpin" aria-label={`Unpin ${item.title}`} title="Unpin" onClick={unpin}><PinOff size={13} /></button>
+        </div>
+      })}
+    </section>}
     <nav className="bot-list runtime-list" aria-label="Blobs" role="tree" onKeyDown={onNavKeyDown} onFocus={(event) => {
       const id = (event.target as HTMLElement).closest?.('[data-tree-id]')?.getAttribute('data-tree-id')
       if (id) setFocusId((current) => current === id ? current : id)
@@ -259,15 +309,23 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
       const found = visible.find((entry) => entry.id === item.getAttribute('data-tree-id'))
       if (found) openRowMenu(found, event.clientX, event.clientY)
     }}>
-      {rows.map((row) => renderBlob(row))}
+      {rows.map((row, index) => <Fragment key={row.agent.id}>
+        {hasFavorites && index === 0 && <div className="roster-section-label" role="presentation">Favourites</div>}
+        {hasFavorites && index > 0 && favoriteIds.has(rows[index - 1].agent.id) && !favoriteIds.has(row.agent.id) && <div className="roster-section-label" role="presentation">Blobs</div>}
+        {renderBlob(row)}
+      </Fragment>)}
       {connected && runtimes.length === 0 && <div className="rail-empty">No coding CLIs detected yet.<button type="button" onClick={onScan}>Scan again</button></div>}
       {connected && runtimes.length > 0 && active.length === 0 && <div className="rail-empty">No blobs yet.<button type="button" onClick={onCreate}>Create blob</button></div>}
       {connected && active.length > 0 && rows.length === 0 && <div className="rail-empty">Nothing matches “{query}”.</div>}
       {!connected && active.length === 0 && <div className="rail-empty">Connect to your local runtime to see installed agents.</div>}
     </nav>
+    </div>
+    {menu?.kind === 'pinned' && <RowActionMenu label={`${menu.label} pinned`} position={menu} onClose={() => setMenu(null)} items={[{ label: 'Unpin', onSelect: () => { setMenu(null); menu.onUnpin() } }]} />}
     {menu?.kind === 'blob' && menuAgent && <AgentContextMenu
       agent={menuAgent}
       position={menu}
+      favorite={favoriteIds.has(menuAgent.id)}
+      onToggleFavorite={onToggleFavorite ? () => { setMenu(null); onToggleFavorite(menuAgent.id) } : undefined}
       enabled={{ newSession: canCreateFor(menuAgent), duplicate: connected && !busy, archive: connected && !busy }}
       onClose={closeMenu}
       onNewSession={() => { setMenu(null); onNewSession(menuAgent) }}
@@ -279,7 +337,10 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
       label={`${menu.label} project`}
       position={menu}
       onClose={closeMenu}
-      items={[{ label: 'New session', disabled: !canCreateFor(projectMenuAgent), onSelect: () => { const path = menu.path; const agent = projectMenuAgent; setMenu(null); onNewSessionInProject(agent, path) } }]}
+      items={[
+        { label: 'New session', disabled: !canCreateFor(projectMenuAgent), onSelect: () => { const path = menu.path; const agent = projectMenuAgent; setMenu(null); onNewSessionInProject(agent, path) } },
+        ...(onTogglePinProject ? [{ label: isProjectPinned(pins ?? { v: 1, favorites: [], projects: [], sessions: [] }, menu.agentId, menu.projectKey) ? 'Unpin project' : 'Pin project', onSelect: () => { const project = { agentId: menu.agentId, key: menu.projectKey, path: menu.path }; setMenu(null); onTogglePinProject(project) } }] : []),
+      ]}
     />}
     {menu?.kind === 'session' && <RowActionMenu
       label="Session"
@@ -288,6 +349,7 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
       items={[
         { label: 'Resume conversation', disabled: !resumeEnabled(menu.session), onSelect: () => { const session = menu.session; setMenu(null); onResumeSession(session) } },
         { label: 'Cancel turn', disabled: !cancelEnabled(menu.session), onSelect: () => { const session = menu.session; setMenu(null); onCancelSession(session) } },
+        ...(onTogglePinSession ? [{ label: (pins?.sessions ?? []).includes(menu.session.id) ? 'Unpin conversation' : 'Pin conversation', onSelect: () => { const id = menu.session.id; setMenu(null); onTogglePinSession(id) } }] : []),
       ]}
     />}
   </>

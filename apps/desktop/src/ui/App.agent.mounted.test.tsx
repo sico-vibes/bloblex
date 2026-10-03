@@ -249,9 +249,6 @@ function menuItem(root: ParentNode, name: string) {
   return [...root.querySelectorAll('[role="menuitem"]')].find((item) => (item.textContent ?? '').replace(/\s+/g, ' ').trim() === name)
 }
 
-function tabNamed(root: ParentNode, name: string) {
-  return [...root.querySelectorAll('[role="tab"]')].find((button) => (button.textContent ?? '').trim() === name)
-}
 
 function field(root: ParentNode, label: string) {
   const match = [...root.querySelectorAll('label')].find((node) => (node.textContent ?? '').includes(label))
@@ -307,7 +304,7 @@ describe('blob roster and editor', () => {
     await view.settle()
     expect(view.host.querySelector('.companion-welcome [data-color]')?.getAttribute('data-color')).toBe('#F38C6F')
     await click(buttonNamed(view.host, 'Complete greeting fixture'))
-    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
     await click(buttonNamed(view.host, 'Open companion home'))
     await view.settle()
     const pill = [...view.host.querySelectorAll('.pill.on')].find((node) => node.textContent?.includes('Claude'))
@@ -350,7 +347,6 @@ describe('blob roster and editor', () => {
     expect(view.host.textContent).toContain('Enter a name.')
     const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create blob'))
     expect(save?.hasAttribute('disabled')).toBe(true)
-    await click(tabNamed(view.host, 'Settings'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'A'.repeat(61))
     expect(view.host.textContent).toContain('Use 60 characters or fewer for the name.')
     await typeInto(field(view.host, 'Description') as HTMLTextAreaElement, 'B'.repeat(256))
@@ -379,7 +375,6 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await click(buttonNamed(view.host, 'Create blob'))
-    await click(tabNamed(view.host, 'Settings'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Fresh blob')
     const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create blob'))
     const cases: Array<[string, string]> = [
@@ -403,7 +398,6 @@ describe('blob roster and editor', () => {
     await view.settle()
     await openMenu(rows(view.host)[0]!)
     await click(buttonNamed(view.host, 'Edit blob'))
-    await click(tabNamed(view.host, 'Settings'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Claude Prime')
     expect(buttonNamed(view.host, 'Cancel')).toBeTruthy()
     await click(buttonNamed(view.host, 'Cancel'))
@@ -427,7 +421,6 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await click(view.host.querySelector('[aria-label="Edit Claude"]'))
-    await click(tabNamed(view.host, 'Settings'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Claude Prime')
     h.updateError = 'conflict: name'
     await click(buttonNamed(view.host, 'Save'))
@@ -475,7 +468,6 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await click(view.host.querySelector('[aria-label="Edit Claude"]'))
-    await click(tabNamed(view.host, 'Settings'))
     expect(buttonNamed(view.host, 'Coral, selected')?.getAttribute('aria-pressed')).toBe('true')
     await click(buttonNamed(view.host, 'Pink'))
     expect(buttonNamed(view.host, 'Pink, selected')?.getAttribute('aria-pressed')).toBe('true')
@@ -564,7 +556,6 @@ describe('blob roster and editor', () => {
     await view.settle()
     await openMenu(rows(view.host)[0]!)
     await click(buttonNamed(view.host, 'Edit blob'))
-    await click(tabNamed(view.host, 'Settings'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Claude Prime')
     await click(buttonNamed(view.host, 'Back'))
     expect(view.host.querySelector('#blob-dialog-title')?.textContent).toBe('Discard unsaved changes?')
@@ -653,7 +644,6 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await click(buttonNamed(view.host, 'Create blob'))
-    await click(tabNamed(view.host, 'Settings'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Fresh blob')
     const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create blob'))
     await click(save)
@@ -1029,7 +1019,7 @@ describe('blob roster and editor', () => {
     const companion = startApp('?companion=1')
     await companion.settle()
     await click(buttonNamed(companion.host, 'Complete greeting fixture'))
-    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
     await click(buttonNamed(companion.host, 'Open companion home'))
     await companion.settle()
     expect(companion.host.querySelector('.tool')?.textContent).toBe('Hero follow-up')

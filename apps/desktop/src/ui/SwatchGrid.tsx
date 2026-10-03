@@ -69,6 +69,7 @@ export function SwatchGrid({ value, onChange, disabled = false }: { value: strin
           type="button"
           ref={(node) => { buttons.current[index] = node }}
           className="swatch"
+          title={label}
           aria-pressed={pressed}
           aria-label={pressed ? `${label}, selected` : label}
           disabled={disabled}
@@ -76,12 +77,11 @@ export function SwatchGrid({ value, onChange, disabled = false }: { value: strin
           onKeyDown={(event) => move(event, index)}
         >
           <span className="swatch-chip" style={{ background: swatch.hex }} />
-          <span>{label}</span>
         </button>
       })}
     </div>
-    <label className="blob-field">
-      Custom colour
+    <label className="blob-field swatch-custom">
+      <span>Custom colour</span>
       <input ref={inputRef} value={text} disabled={disabled} aria-invalid={invalid} aria-describedby={invalid ? 'custom-colour-error' : undefined} onChange={(event) => edit(event.target.value)} onBlur={() => { const hex = parseCustomHex(text); if (hex) setText(hex) }} spellCheck={false} autoCapitalize="off" />
     </label>
     {invalid && <p id="custom-colour-error" className="blob-error" role="alert">{CLIENT_MESSAGES.color}</p>}

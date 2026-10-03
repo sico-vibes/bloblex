@@ -1,20 +1,22 @@
 import { useRef } from 'react'
+import type { ApprovalMode } from '../approvalContract'
 import type { Runtime, Session } from '../types'
 import { labelize } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentColorHex, previewHex, resolvedAgentColor } from './agentColor'
+import { ApprovalPill } from './approvalUi'
 import { deriveCompanionStatus } from './companionStatus'
 import type { AgentDraft } from './agentForm'
-import { SwatchGrid } from './SwatchGrid'
 
-export function BlobOverview({ draft, runtime, session, connected, model, mode, onColorChange }: {
+/** Top of the blob editor: the character, its name and one line of facts. */
+export function BlobOverview({ draft, runtime, session, connected, model, mode, approvalMode }: {
   draft: AgentDraft
   runtime: Runtime | null
   session: Session | null
   connected: boolean
   model: string | null
   mode: 'create' | 'edit'
-  onColorChange: (color: string) => void
+  approvalMode?: ApprovalMode | null
 }) {
   const derived = deriveCompanionStatus({ connected, runtime, session: mode === 'create' ? null : session, now: Date.now() })
   const mood = mode === 'create' ? (connected ? 'idle' : 'offline') : derived.mood
@@ -23,20 +25,18 @@ export function BlobOverview({ draft, runtime, session, connected, model, mode, 
   if (resolved) lastValid.current = resolved
   // previewHex is the last-valid form of agentColorHex (spec section 4): an invalid draft keeps the previous paint.
   const paint = previewHex(draft.color, lastValid.current)
-  const modelValue = model?.trim() ? model : 'Default model'
-  return <div className="blob-card">
-    <div className="blob-profile">
-      <BlobCanvas color={paint} size={96} mood={mood} label={draft.name.trim() || 'New blob'} />
-      <div>
-        <h2>{draft.name.trim() || 'New blob'}</h2>
-        <p className="blob-muted">{draft.description.trim() ? draft.description : 'No description'}</p>
-      </div>
+  const facts = [
+    runtime ? labelize(runtime.provider) : 'No coding agent',
+    model?.trim() ? model : 'Default model',
+    mode === 'create' ? 'Not created yet' : derived.label,
+  ]
+  return <section className="blob-hero" aria-label="Blob preview">
+    <BlobCanvas color={paint} size={104} mood={mood} label={draft.name.trim() || 'New blob'} />
+    <div className="blob-hero-name">
+      <h2>{draft.name.trim() || 'New blob'}</h2>
+      <ApprovalPill mode={approvalMode} />
     </div>
-    <div className="blob-facts">
-      <div className="blob-fact"><span>Runtime</span><strong>{runtime ? [labelize(runtime.provider), runtime.version].filter(Boolean).join(' · ') : 'No runtime'}</strong></div>
-      <div className="blob-fact"><span>Model</span><strong>{modelValue}</strong></div>
-      <div className="blob-fact"><span>Status</span><strong>{mode === 'create' ? 'Not created yet' : derived.label}</strong></div>
-    </div>
-    <SwatchGrid value={draft.color} onChange={onColorChange} />
-  </div>
+    {draft.description.trim() && <p className="blob-hero-description">{draft.description}</p>}
+    <p className="blob-hero-facts">{facts.join(' · ')}</p>
+  </section>
 }

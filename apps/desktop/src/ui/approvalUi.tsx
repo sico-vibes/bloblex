@@ -18,8 +18,8 @@ export function ApprovalPill({ mode, compact = false }: { mode: ApprovalMode | n
 
 export function AutoApprovedList({ actions }: { actions: readonly AutoResolvedAction[] }) {
   const rows = newestFirst(actions)
-  return <section className="blob-card" aria-label="Auto-approved actions">
-    <h3>Auto-approved actions</h3>
+  return <section className="auto-approved" aria-label="Auto-approved actions">
+    <span className="blob-field-label">Auto-approved actions</span>
     {rows.length === 0 ? <p className="blob-muted">No actions have been auto-approved.</p> : <ol className="auto-approved-list">
       {rows.map((action) => <li key={`${action.sequence}:${action.permissionId ?? action.summary}`}>
         <strong>{action.summary}</strong>

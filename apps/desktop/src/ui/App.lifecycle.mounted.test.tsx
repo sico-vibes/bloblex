@@ -268,7 +268,7 @@ describe('App mounted lifecycle', () => {
     expect(h.playCompanionCue).not.toHaveBeenCalled()
 
     act(() => view.host.querySelector<HTMLButtonElement>('[aria-label="Complete greeting fixture"]')!.click())
-    await act(async () => { await vi.advanceTimersByTimeAsync(601); await settleMicrotasks() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1401); await settleMicrotasks() })
     expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('petit')
     expect(view.host.querySelectorAll('[data-testid="blob-canvas"][data-sound-cues="true"]')).toHaveLength(1)
 

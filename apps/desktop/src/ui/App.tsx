@@ -1263,7 +1263,8 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
     fsm.launch()
     return () => { fsm.dispose(); void setCompanionMode('petit') }
   }, [])
-  useEffect(() => { void setCompanionMode(presentation) }, [presentation])
+  // The window already opens at the welcome size, so the greeting never waits on a resize.
+  useEffect(() => { void (presentation === 'welcome' ? setCompanionMode('welcome', false) : setCompanionMode(presentation)) }, [presentation])
   useEffect(() => { fileRequest.current++; setDraft(''); setDroppedFile(null); setFileInfo(null); setPreparingFile(false); setFileError(null); setDropError(null) }, [runtime?.id, session?.id])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1446,7 +1447,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
     <div ref={capsuleRef} className={`companion-capsule island ${mode}`} data-tauri-drag-region>
       {mode === 'petit' ? <div className="companion-compact" data-tauri-drag-region>
         <button className="compact-bot" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}>{focusBlob(40)}</button>
-        <div className="compact-copy" onClick={() => fsmRef.current?.click()}><strong>{name}</strong><ApprovalPill mode={approvalMode} compact /><span role="status" aria-live="polite" className={shimmering ? 'shimmer' : ''}>{statusLine}</span></div>
+        <div className="compact-copy" onClick={() => fsmRef.current?.click()}><span className="compact-name"><strong>{name}</strong><ApprovalPill mode={approvalMode} compact /></span><span role="status" aria-live="polite" className={`compact-status ${shimmering ? 'shimmer' : ''}`}>{statusLine}</span></div>
         {permission && <ShieldAlert className="companion-alert" size={15} aria-label="Approval required" />}
         {peers.length > 0 && <div className="mini-grid" aria-hidden="true" data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} label={item.name} /> })}</div>}
         <button className="companion-collapse" aria-label="Expand companion" onClick={() => fsmRef.current?.click()}><ChevronUp size={15} /></button>
@@ -1489,7 +1490,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
               <span className="card-bot">{focusBlob(58)}</span>
               <button className="icon-btn jump" aria-label="Open in Bloblex" title="Open in Bloblex" onClick={onOpenMain}><ArrowUpRight size={9} /></button>
               <div className="card-stack">
-                <div className="who"><i className={`status-dot ${connected ? statusClass(runtime?.status) : 'muted'}`} /><span className="name">{name}</span><span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
+                <div className="who"><span className="name">{name}</span><span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
                 <div className="ticker">{tickerLines.map((line, index) => <div key={index} className={`ticker-row ${index === tickerLines.length - 1 ? 'current' : ''}`}><span className={index === tickerLines.length - 1 && shimmering ? 'shimmer' : ''}>{line}</span></div>)}</div>
                 <div className="glance" title={`Totals across all blobs. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()} · API estimate ${apiCost}`}><span>All blobs: Tokens <b>{tokenGlance}</b> · Cost <b>{actualCost}</b></span></div>
               </div>
@@ -1554,12 +1555,6 @@ function permissionChoiceLabel(choice: string) {
   return labelize(choice)
 }
 
-function statusClass(status?: string) {
-  if (status === 'online' || status === 'ready' || status === 'available' || status === 'connected') return 'good'
-  if (status === 'busy' || status === 'working') return 'busy'
-  if (status === 'error' || status === 'offline' || status === 'disconnected') return 'bad'
-  return 'muted'
-}
 
 function messageOf(reason: unknown) {
   if (reason instanceof Error) return reason.message

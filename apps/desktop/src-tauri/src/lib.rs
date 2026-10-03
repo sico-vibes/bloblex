@@ -956,6 +956,28 @@ fn clamp_companion_position(
 }
 
 #[cfg(test)]
+mod companion_launch_tests {
+    use super::companion_launch_spot;
+
+    #[test]
+    fn launch_spot_is_centred_and_above_the_bottom_edge() {
+        // 1920x1040 work area, 640x160 welcome island.
+        let (x, y) = companion_launch_spot(0, 0, 1920, 1040, 640, 160);
+        assert_eq!(x, 640);
+        assert_eq!(y, 1040 - 160 - 187);
+    }
+
+    #[test]
+    fn launch_spot_follows_a_secondary_display_and_stays_inside_it() {
+        let (x, y) = companion_launch_spot(1920, 0, 1280, 680, 800, 200);
+        assert_eq!(x, 1920 + 240);
+        assert_eq!(y, 680 - 200 - 122);
+        let (x, y) = companion_launch_spot(0, 0, 600, 300, 640, 160);
+        assert_eq!((x, y), (0, 86));
+    }
+}
+
+#[cfg(test)]
 mod companion_clamp_tests {
     use super::clamp_physical_position;
 
@@ -1281,6 +1303,63 @@ fn companion_position(app: &AppHandle, window: &WebviewWindow) -> PhysicalPositi
     )
 }
 
+/// Logical size of the companion while the welcome greeting plays.
+const COMPANION_WELCOME_SIZE: (f64, f64) = (640.0, 160.0);
+/// The welcome island sits this fraction of the work-area height above the bottom edge.
+const COMPANION_LAUNCH_BOTTOM_GAP: f64 = 0.18;
+
+/// Every launch starts at the same calm spot: horizontally centred and a little
+/// above the bottom of the display the companion last used (or the primary
+/// display). Dragging afterwards still moves it anywhere.
+fn companion_launch_position(app: &AppHandle, window: &WebviewWindow) -> PhysicalPosition<i32> {
+    let saved = companion_position(app, window);
+    let saved_size = window.inner_size().unwrap_or(tauri::PhysicalSize::new(344, 62));
+    let saved_center = (saved.x + saved_size.width as i32 / 2, saved.y + saved_size.height as i32 / 2);
+    let monitors = window.available_monitors().unwrap_or_default();
+    let monitor = monitors
+        .iter()
+        .find(|monitor| {
+            let area = monitor.work_area();
+            saved_center.0 >= area.position.x
+                && saved_center.0 < area.position.x + area.size.width as i32
+                && saved_center.1 >= area.position.y
+                && saved_center.1 < area.position.y + area.size.height as i32
+        })
+        .cloned()
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .or_else(|| monitors.first().cloned());
+    let Some(monitor) = monitor else {
+        return saved;
+    };
+    let scale = monitor.scale_factor();
+    let width = (COMPANION_WELCOME_SIZE.0 * scale).round() as i32;
+    let height = (COMPANION_WELCOME_SIZE.1 * scale).round() as i32;
+    let area = monitor.work_area();
+    let (x, y) = companion_launch_spot(
+        area.position.x,
+        area.position.y,
+        area.size.width as i32,
+        area.size.height as i32,
+        width,
+        height,
+    );
+    PhysicalPosition::new(x, y)
+}
+
+fn companion_launch_spot(
+    area_x: i32,
+    area_y: i32,
+    area_width: i32,
+    area_height: i32,
+    width: i32,
+    height: i32,
+) -> (i32, i32) {
+    let gap = (area_height as f64 * COMPANION_LAUNCH_BOTTOM_GAP).round() as i32;
+    let x = area_x + (area_width - width) / 2;
+    let y = area_y + area_height - height - gap;
+    clamp_physical_position(x, y, width, height, area_x, area_y, area_width, area_height)
+}
+
 fn persist_companion_position(app: &AppHandle, window: &WebviewWindow) {
     let Ok(position) = window.outer_position() else {
         return;
@@ -1341,7 +1420,9 @@ fn make_companion(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         WebviewUrl::App("index.html?companion=1".into()),
     )
     .title("Bloblex Companion")
-    .inner_size(344.0, 62.0)
+    // Opens at the welcome size so the greeting plays in full; the island
+    // shrinks to its compact bar once the greeting has settled.
+    .inner_size(COMPANION_WELCOME_SIZE.0, COMPANION_WELCOME_SIZE.1)
     .position(400.0, 400.0)
     .decorations(false)
     .transparent(true)
@@ -1352,7 +1433,7 @@ fn make_companion(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     .visible(false)
     .shadow(false)
     .build()?;
-    let position = companion_position(app, &window);
+    let position = companion_launch_position(app, &window);
     let _ = window.set_position(position);
     let app_handle = app.clone();
     let resize_flag = Arc::clone(&app.state::<AppState>().companion_resize_in_progress);

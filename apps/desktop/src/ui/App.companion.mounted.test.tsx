@@ -247,7 +247,7 @@ describe('companion drag and usage labels', () => {
     assertIsland(view.host, 'welcome')
 
     await press(view.host, 'Complete greeting fixture')
-    await act(async () => { await vi.advanceTimersByTimeAsync(700); await settleMicrotasks() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); await settleMicrotasks() })
     expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('petit')
     const face = view.host.querySelector('.compact-bot canvas.blob-canvas')
     const name = view.host.querySelector('.compact-copy strong')
@@ -318,7 +318,7 @@ describe('companion drag and usage labels', () => {
     const companion = startApp('?companion=1')
     await companion.settle()
     await press(companion.host, 'Complete greeting fixture')
-    await act(async () => { await vi.advanceTimersByTimeAsync(700); await settleMicrotasks() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); await settleMicrotasks() })
     await press(companion.host, 'Open companion home')
     await companion.settle()
     const glance = companion.host.querySelector('.glance')

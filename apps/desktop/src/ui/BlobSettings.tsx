@@ -3,10 +3,10 @@ import type { Runtime } from '../types'
 import { labelize } from '../types'
 import { rpc } from '../tauri'
 import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
-import { runtimeDotClass, runtimeOptionLabel, scalarLength } from './rosterSelectors'
+import { runtimeOptionLabel, scalarLength } from './rosterSelectors'
 import { SwatchGrid } from './SwatchGrid'
 import { approvalDescription } from '../approvalContract'
-import type { ApprovalMode } from '../approvalContract'
+import type { ApprovalMode, AutoResolvedAction } from '../approvalContract'
 import {
   allowsCustomModelId, capabilityState, catalogModel, evidencePlain, instructionNote, isProviderUnavailable,
   outcomeText, parseCapabilities, parseExecSnapshot, parseModelCatalog, rpcFailure, selectionAfterModelChange,
@@ -14,15 +14,18 @@ import {
   type CapabilitySetting, type ExecutionSendGate, type ExecSnapshotView, type ModelCatalog, type RuntimeCapabilities,
 } from '../executionContract'
 import { Select } from './Select'
-import { BypassConfirmDialog } from './approvalUi'
+import { AutoApprovedList, BypassConfirmDialog } from './approvalUi'
+import { RefreshCw } from 'lucide-react'
 
-export function BlobSettings({ draft, runtimes, errors, execution, agentId, sessionId, onDraftChange, onArchive, onExecutionGate }: {
+export function BlobSettings({ draft, runtimes, errors, execution, agentId, sessionId, autoApprovals, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
   runtimes: Runtime[]
   errors: FieldErrors
   execution: StoredExecution
   agentId?: string | null
   sessionId?: string | null
+  /** Shown under the approval mode for saved blobs. */
+  autoApprovals?: readonly AutoResolvedAction[]
   onDraftChange: (draft: AgentDraft) => void
   onArchive?: () => void
   onExecutionGate?: (gate: ExecutionSendGate) => void
@@ -148,96 +151,125 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
   }
 
   return <>
-    <section className="blob-card">
-      <h3>Profile</h3>
-      <SwatchGrid value={draft.color} onChange={(color) => onDraftChange({ ...draft, color })} />
-      <label className="blob-field">Name
-        <input aria-label="Blob name" aria-invalid={!!errors.name} aria-describedby={errors.name ? 'blob-name-error' : undefined} value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} />
-      </label>
-      {errors.name && <p className="blob-error" id="blob-name-error">{errors.name}</p>}
-      <label className="blob-field">Description
-        <textarea aria-label="Description" aria-invalid={!!errors.description} aria-describedby={described('blob-description-count', errors.description ? 'blob-description-error' : undefined)} value={draft.description} onChange={(event) => onDraftChange({ ...draft, description: event.target.value })} />
-      </label>
-      <p id="blob-description-count" className="blob-counter" style={{ color: descriptionCount > 255 ? 'var(--bad)' : 'var(--ink-3)' }}>{descriptionCount} / 255</p>
-      {errors.description && <p className="blob-error" id="blob-description-error">{errors.description}</p>}
-    </section>
-    <section className="blob-card" aria-label="Execution">
-      <h3>Execution</h3>
-      <label className="blob-field">Runtime
-        <span className="blob-runtime-picker">
-          <i className={`status-dot ${runtimeDotClass(runtime?.status)}`} />
-          <Select ariaLabel="Runtime" variant="field" align="left" value={draft.runtimeId} onChange={(value) => { setCustom(false); onDraftChange({ ...draft, runtimeId: value, model: null, thinking: null, serviceTier: null }) }} options={runtimes.map((item) => ({ value: item.id, label: runtimeOptionLabel(item, runtimes) }))} />
+    <EditGroup title="Appearance">
+      <div className="blob-form">
+        <SwatchGrid value={draft.color} onChange={(color) => onDraftChange({ ...draft, color })} />
+      </div>
+    </EditGroup>
+
+    <EditGroup title="Profile">
+      <div className="blob-form">
+        <label className="blob-field"><span>Name</span>
+          <input aria-label="Blob name" aria-invalid={!!errors.name} aria-describedby={errors.name ? 'blob-name-error' : undefined} value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} />
+        </label>
+        {errors.name && <p className="blob-error" id="blob-name-error">{errors.name}</p>}
+        <label className="blob-field"><span>Description <small id="blob-description-count" className={descriptionCount > 255 ? 'over' : undefined}>{descriptionCount} / 255</small></span>
+          <textarea aria-label="Description" rows={2} aria-invalid={!!errors.description} aria-describedby={described('blob-description-count', errors.description ? 'blob-description-error' : undefined)} value={draft.description} onChange={(event) => onDraftChange({ ...draft, description: event.target.value })} />
+        </label>
+        {errors.description && <p className="blob-error" id="blob-description-error">{errors.description}</p>}
+      </div>
+    </EditGroup>
+
+    <EditGroup title="Model" label="Execution" action={<button type="button" className="ghost-button small" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}><RefreshCw size={13} className={loading ? 'spinning' : ''} />Refresh models</button>}>
+      <div className="settings-row">
+        <span className="settings-row-copy"><strong>Coding agent</strong><small>New conversations use it. Existing ones keep theirs.</small></span>
+        <span className="settings-row-control">
+          <Select ariaLabel="Runtime" variant="muted" value={draft.runtimeId} onChange={(value) => { setCustom(false); onDraftChange({ ...draft, runtimeId: value, model: null, thinking: null, serviceTier: null }) }} options={runtimes.map((item) => ({ value: item.id, label: runtimeOptionLabel(item, runtimes) }))} />
         </span>
-      </label>
-      {errors.runtimeId && <p className="blob-error">{errors.runtimeId}</p>}
-      <p className="blob-help">New sessions use this runtime. Existing conversations stay on the runtime that started them.</p>
-      {loading && <p className="blob-help" role="status">Loading execution options…</p>}
-      {catalogError && <div className="blob-error" role="alert">
-        <p>{catalogError}</p>
-        {catalogUnavailable && <button type="button" className="secondary-button" onClick={() => void refreshCatalog()}>Retry</button>}
+      </div>
+      {errors.runtimeId && <p className="blob-error blob-inset">{errors.runtimeId}</p>}
+      {(loading || catalogError || (!loading && catalog && catalog.models.length === 0) || catalog?.fallback) && <div className="blob-notes">
+        {loading && <p className="blob-help" role="status">Loading models…</p>}
+        {catalogError && <div className="blob-error" role="alert">
+          <p>{catalogError}</p>
+          {catalogUnavailable && <button type="button" className="secondary-button small" onClick={() => void refreshCatalog()}>Retry</button>}
+        </div>}
+        {!loading && catalog && catalog.models.length === 0 && <p className="blob-help">No models were reported for this agent.</p>}
+        {catalog?.fallback && <p className="blob-help">These models are suggestions only. Bloblex has not validated that this agent can run them.</p>}
       </div>}
-      {!loading && catalog && catalog.models.length === 0 && <p className="blob-help">No models were reported for this runtime.</p>}
-      {catalog?.fallback && <p className="blob-help">These models are suggestions only. Bloblex has not validated that this runtime can run them.</p>}
       <CapabilityField label="Model" state={modelState} setting={capabilities?.settings.model ?? null}>
-        <Select ariaLabel="Model" variant="field" align="left" value={custom ? '__custom__' : (draft.model ?? '')} disabled={!modelInteractive} onChange={(value) => {
+        <Select ariaLabel="Model" variant="muted" value={custom ? '__custom__' : (draft.model ?? '')} disabled={!modelInteractive} onChange={(value) => {
           if (value === '__custom__') applyModel(draft.model, true)
           else applyModel(value || null, false)
         }} options={[
-          { value: '', label: 'Runtime default' },
+          { value: '', label: 'Default model' },
           ...(catalog?.models ?? []).map((model) => ({ value: model.id, label: model.displayName })),
           ...(draft.model && !custom && !(catalog?.models ?? []).some((model) => model.id === draft.model) ? [{ value: draft.model, label: draft.model }] : []),
           ...(allowsCustomModelId(provider) ? [{ value: '__custom__', label: 'Custom model id' }] : []),
         ]} />
-        {custom && allowsCustomModelId(provider) && <>
-          <input aria-label="Custom model id" aria-describedby="custom-model-note" value={draft.model ?? ''} disabled={!modelInteractive} onChange={(event) => onDraftChange({ ...draft, model: event.target.value || null, thinking: null, serviceTier: null })} />
-          <p id="custom-model-note" className="blob-help">Not validated</p>
-        </>}
       </CapabilityField>
-      {thinkingVisible && <label className="blob-field">Thinking
-        <Select ariaLabel="Thinking" variant="field" align="left" value={draft.thinking ?? ''} onChange={(value) => onDraftChange({ ...draft, thinking: value || null })} options={[{ value: '', label: 'Runtime default' }, ...(selected?.supportedThinking ?? []).map((level) => ({ value: level, label: level }))]} />
-      </label>}
+      {custom && allowsCustomModelId(provider) && <div className="blob-form blob-form-tight">
+        <label className="blob-field"><span>Custom model id <small id="custom-model-note">Not validated</small></span>
+          <input aria-label="Custom model id" aria-describedby="custom-model-note" value={draft.model ?? ''} disabled={!modelInteractive} onChange={(event) => onDraftChange({ ...draft, model: event.target.value || null, thinking: null, serviceTier: null })} />
+        </label>
+      </div>}
+      {thinkingVisible && <div className="settings-row">
+        <span className="settings-row-copy"><strong>Thinking</strong></span>
+        <span className="settings-row-control">
+          <Select ariaLabel="Thinking" variant="muted" value={draft.thinking ?? ''} onChange={(value) => onDraftChange({ ...draft, thinking: value || null })} options={[{ value: '', label: 'Default' }, ...(selected?.supportedThinking ?? []).map((level) => ({ value: level, label: labelize(level) }))]} />
+        </span>
+      </div>}
       {tierVisible && <CapabilityField label="Speed" state={tierState} setting={capabilities?.settings.serviceTier ?? null}>
-        <Select ariaLabel="Speed" variant="field" align="left" value={draft.serviceTier ?? ''} disabled={!tierInteractive} onChange={(value) => onDraftChange({ ...draft, serviceTier: value || null })} options={[{ value: '', label: 'Runtime default' }, ...(selected?.serviceTiers ?? []).map((tier) => ({ value: tier.id, label: tier.name }))]} />
+        <Select ariaLabel="Speed" variant="muted" value={draft.serviceTier ?? ''} disabled={!tierInteractive} onChange={(value) => onDraftChange({ ...draft, serviceTier: value || null })} options={[{ value: '', label: 'Default' }, ...(selected?.serviceTiers ?? []).map((tier) => ({ value: tier.id, label: tier.name }))]} />
       </CapabilityField>}
-      <div className="blob-field-actions">
-        <button type="button" className="secondary-button" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}>Refresh models</button>
+      <div className="blob-form">
+        <label className="blob-field"><span>Instructions</span>
+          <textarea aria-label="Instructions" rows={4} placeholder="How should this blob work? For example: keep answers short and run the tests before finishing." aria-invalid={!!errors.instructions} aria-describedby={described('blob-instructions-help', errors.instructions ? 'blob-instructions-error' : undefined)} value={draft.instructions} onChange={(event) => onDraftChange({ ...draft, instructions: event.target.value })} />
+        </label>
+        <p id="blob-instructions-help" className="blob-help">{instructionHelp}</p>
+        {errors.instructions && <p className="blob-error" id="blob-instructions-error">{errors.instructions}</p>}
+        <label className="blob-field"><span>Default project</span>
+          <input aria-label="Default project" aria-describedby="blob-project-help" placeholder="C:\path\to\project" value={draft.defaultProject ?? ''} onChange={(event) => onDraftChange({ ...draft, defaultProject: event.target.value })} />
+        </label>
+        <p id="blob-project-help" className="blob-help">Offered first when you start a conversation. Leave empty to pick from recent folders.</p>
       </div>
-      <label className="blob-field">Instructions
-        <textarea aria-label="Instructions" aria-invalid={!!errors.instructions} aria-describedby={described('blob-instructions-help', errors.instructions ? 'blob-instructions-error' : undefined)} value={draft.instructions} onChange={(event) => onDraftChange({ ...draft, instructions: event.target.value })} />
-      </label>
-      <p id="blob-instructions-help" className="blob-help">{instructionHelp}</p>
-      {errors.instructions && <p className="blob-error" id="blob-instructions-error">{errors.instructions}</p>}
-      <div className="blob-fact"><span>Concurrency</span><strong>{concurrencyText(capabilities, execution.maxConcurrency)}</strong></div>
-      {capabilities?.settings.customEnv && <p className="blob-help">{envNote(capabilities.settings.customEnv)}</p>}
-      <div aria-label="Last applied snapshot">
-        <h4 className="blob-subhead">Last applied snapshot</h4>
+    </EditGroup>
+
+    <EditGroup title="Permissions">
+      <div className="settings-row">
+        <span className="settings-row-copy"><strong>Approval mode</strong><small>{approvalDescription(draft.approvalMode)}</small></span>
+        <span className="settings-row-control">
+          <Select ariaLabel="Approval mode" variant="muted" value={draft.approvalMode ?? ''} onChange={onApproval} options={[{ value: '', label: 'Use default' }, { value: 'ask', label: 'Ask' }, { value: 'auto', label: 'Auto-approve' }, { value: 'bypass', label: 'Bypass' }]} />
+        </span>
+      </div>
+      {autoApprovals && <div className="blob-form"><AutoApprovedList actions={autoApprovals} /></div>}
+    </EditGroup>
+
+    <EditGroup title="Details">
+      <div className="settings-row"><span className="settings-row-copy"><strong>Concurrency</strong></span><span className="settings-value">{concurrencyText(capabilities, execution.maxConcurrency)}</span></div>
+      <div className="blob-form" aria-label="Last applied snapshot">
+        <span className="blob-field-label">Last applied settings</span>
         {snapshot ? <ul className="snapshot-outcomes">{snapshot.outcomes.map((outcome) => <li key={outcome.setting} data-outcome={outcome.label}><span>{outcome.setting === 'approvalMode' ? 'Approval mode' : outcome.setting === 'serviceTier' ? 'Speed' : labelize(outcome.setting)}</span><strong>{outcomeText(outcome)}</strong></li>)}</ul> : <p className="blob-help">{snapshotNote}</p>}
+        {capabilities?.settings.customEnv && <p className="blob-help">{envNote(capabilities.settings.customEnv)}</p>}
+        <p className="blob-help">Custom arguments are not accepted.</p>
       </div>
-      <label className="blob-field">Default project
-        <input aria-label="Default project" aria-describedby="blob-project-help" value={draft.defaultProject ?? ''} onChange={(event) => onDraftChange({ ...draft, defaultProject: event.target.value })} />
-      </label>
-      <p id="blob-project-help" className="blob-help">Shown first when you start a session. Leave blank to pick from recent folders.</p>
-      <p className="blob-help">Custom arguments are not accepted. Environment values are limited to the keys this runtime reports.</p>
-      {onArchive && <button type="button" className="secondary-button" onClick={onArchive}>Archive blob</button>}
-    </section>
-    <section className="blob-card" aria-label="Permissions">
-      <h3>Permissions</h3>
-      <label className="blob-field">Approval mode
-        <Select ariaLabel="Approval mode" variant="field" align="left" value={draft.approvalMode ?? ''} onChange={onApproval} options={[{ value: '', label: 'Inherit default' }, { value: 'ask', label: 'Ask' }, { value: 'auto', label: 'Auto-approve' }, { value: 'bypass', label: 'Bypass' }]} />
-      </label>
-      <p className="blob-help">{approvalDescription(draft.approvalMode)}</p>
-    </section>
+    </EditGroup>
+
+    {onArchive && <section className="settings-group">
+      <div className="settings-card">
+        <div className="settings-row">
+          <span className="settings-row-copy"><strong>Archive blob</strong><small>It leaves the sidebar. Its conversations stay saved.</small></span>
+          <span className="settings-row-control"><button type="button" className="secondary-button small danger-button" onClick={onArchive}>Archive blob</button></span>
+        </div>
+      </div>
+    </section>}
     {bypassOpen && <BypassConfirmDialog blobName={draft.name} onCancel={() => setBypassOpen(false)} onConfirm={() => { setBypassOpen(false); onDraftChange({ ...draft, approvalMode: 'bypass' satisfies ApprovalMode }) }} />}
   </>
 }
 
+function EditGroup({ title, label, action, children }: { title: string; label?: string; action?: ReactNode; children: ReactNode }) {
+  return <section className="settings-group blob-group" aria-label={label ?? title}>
+    <div className="settings-group-head"><h3>{title}</h3>{action}</div>
+    <div className="settings-card">{children}</div>
+  </section>
+}
+
 function CapabilityField({ label, state, setting, children }: { label: string; state: ReturnType<typeof capabilityState>; setting: CapabilitySetting | null; children: ReactNode }) {
   const reason = state === 'supported' ? '' : settingReason(setting, state)
-  return <label className="blob-field" data-capability={state}>
-    {label}
-    {children}
-    {reason && <span className="blob-help">{reason}</span>}
-  </label>
+  return <div className="settings-row" data-capability={state}>
+    <span className="settings-row-copy"><strong>{label}</strong>{reason && <small>{reason}</small>}</span>
+    <span className="settings-row-control">{children}</span>
+  </div>
 }
 
 function concurrencyText(capabilities: RuntimeCapabilities | null, stored: number) {

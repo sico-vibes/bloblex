@@ -8,6 +8,8 @@ export type CompanionMode = FsmState
  * the companion window adapter.
  */
 export class CompanionFsm extends IslandStateMachine {
+  // After the greeting ends the island rests a moment before shrinking to the compact bar.
+  override greetAutoCollapseDelay = 1.4
   mouseLeft() {
     super.mouseLeft()
     // A freely positioned overlay must not vanish into an unknown desktop

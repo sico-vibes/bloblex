@@ -15,6 +15,7 @@ const fetchUsageAnalytics = vi.hoisted(() => vi.fn())
 vi.mock('../tauri', () => ({
   inDesktop: true,
   fetchUsageAnalytics,
+  rpc: async () => null,
 }))
 
 vi.mock('../blob/BlobCanvas', () => ({
@@ -305,8 +306,9 @@ describe('analytics view', () => {
       onOpenSession={() => undefined}
     />)
     expect(view.host.textContent).not.toContain('not available yet')
-    const usageTab = [...view.host.querySelectorAll('.blob-page-column > .blob-tabs [role="tab"]')].find((tab) => tab.textContent === 'Usage')
-    await click(usageTab)
+    expect(view.host.querySelector('.blob-page-column [role="tab"]')).toBeNull()
+    expect(view.host.querySelector('[data-analytics-root="embedded"]')).toBeNull()
+    await click(buttonNamed(view.host, 'Show usage'))
     await view.flush()
     expect(view.host.querySelector('[data-analytics-root="embedded"]')).not.toBeNull()
     expect(view.host.querySelector('.analytics-page')).toBeNull()
@@ -341,9 +343,8 @@ describe('analytics view', () => {
       onNewSession={() => undefined}
       onOpenSession={() => undefined}
     />)
-    const createUsage = [...created.host.querySelectorAll('.blob-page-column > .blob-tabs [role="tab"]')].find((tab) => tab.textContent === 'Usage')
-    await click(createUsage)
     await created.flush()
+    expect(buttonNamed(created.host, 'Show usage')).toBeUndefined()
     expect(created.host.textContent).toContain('Save this blob to see its usage.')
     expect(fetchUsageAnalytics).not.toHaveBeenCalled()
   })
@@ -533,7 +534,7 @@ describe('analytics view', () => {
     expect(requests().at(-1)?.projectPath).toBeUndefined()
   })
 
-  it('moves analytics and blob tabs with the arrow keys', async () => {
+  it('moves analytics tabs with the arrow keys', async () => {
     const view = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
     await view.flush()
     const overview = view.host.querySelector<HTMLButtonElement>('#analytics-tab-overview')
@@ -542,37 +543,5 @@ describe('analytics view', () => {
     expect(view.host.querySelector('#analytics-tab-errors')?.getAttribute('aria-selected')).toBe('true')
     expect(view.host.querySelector('#analytics-tab-errors')?.getAttribute('aria-label') ?? view.host.querySelector('#analytics-tab-errors')?.textContent).toBe('Errors')
     view.unmount()
-
-    const blob = mount(<BlobPage
-      mode="edit"
-      agent={claude}
-      draft={draftFromAgent(claude)}
-      runtime={runtime}
-      session={sessions[1] ?? null}
-      runtimes={[runtime]}
-      sessions={sessions.filter((item) => item.agentId === claude.id)}
-      legacyCount={0}
-      connected
-      saving={false}
-      dirty={false}
-      ready
-      canStartSession={false}
-      error={null}
-      remoteNotice={null}
-      errors={{}}
-      execution={executionFromAgent(claude)}
-      onDraftChange={() => undefined}
-      onBack={() => undefined}
-      onSave={() => undefined}
-      onCancel={() => undefined}
-      onArchive={() => undefined}
-      onNewSession={() => undefined}
-      onOpenSession={() => undefined}
-    />)
-    const blobOverview = blob.host.querySelector<HTMLButtonElement>('#blob-tab-Overview')
-    blobOverview?.focus()
-    await act(async () => { blobOverview?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })) })
-    expect(blob.host.querySelector('#blob-tab-Sessions')?.getAttribute('aria-selected')).toBe('true')
-    expect(document.activeElement).toBe(blob.host.querySelector('#blob-tab-Sessions'))
   })
 })

@@ -20,7 +20,10 @@ describe('companion capsule interaction states', () => {
     fsm.launch()
     expect(fsm.state).toBe('welcome')
     fsm.greetComplete()
-    vi.advanceTimersByTime(600)
+    // The island rests briefly after the greeting before shrinking.
+    vi.advanceTimersByTime(1399)
+    expect(fsm.state).toBe('welcome')
+    vi.advanceTimersByTime(1)
     expect(fsm.state).toBe('petit')
     fsm.click()
     expect(fsm.state).toBe('home')

@@ -4,14 +4,11 @@ import { visibleApprovalMode } from '../approvalContract'
 import type { Agent, Runtime, Session } from '../types'
 import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
 import type { ExecutionSendGate } from '../executionContract'
-import { ApprovalBadge, AutoApprovedList } from './approvalUi'
+import { ChevronLeft } from 'lucide-react'
 import { BlobOverview } from './BlobOverview'
 import { BlobSessions } from './BlobSessions'
 import { BlobSettings } from './BlobSettings'
 import { BlobUsage } from './BlobUsage'
-
-const TABS = ['Overview', 'Sessions', 'Usage', 'Settings'] as const
-type BlobTab = (typeof TABS)[number]
 
 export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
   mode: 'create' | 'edit'
@@ -42,7 +39,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
   onNewSession: () => void
   onOpenSession: (session: Session) => void
 }) {
-  const [tab, setTab] = useState<BlobTab>('Overview')
+  const [usageOpen, setUsageOpen] = useState(false)
   const [discardOpen, setDiscardOpen] = useState(false)
   const backRef = useRef<HTMLButtonElement>(null)
   useEffect(() => { backRef.current?.focus() }, [])
@@ -62,41 +59,39 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
   const fieldErrors = Object.values(errors).filter((message): message is string => !!message)
   return <div className="blob-page">
     <header className="blob-page-header">
-      <button ref={backRef} type="button" className="secondary-button" onClick={requestBack}>Back</button>
+      <button ref={backRef} type="button" className="icon-button" aria-label="Back" title="Back" onClick={requestBack}><ChevronLeft size={18} aria-hidden="true" /></button>
       <strong className="blob-page-heading">{title}</strong>
-      <ApprovalBadge mode={badgeMode} />
       <div className="blob-page-actions">
-        {dirty && <button type="button" className="secondary-button" onClick={requestCancel}>Cancel</button>}
-        <button type="button" className="primary-button" disabled={!ready || saving || (mode === 'edit' && !dirty)} onClick={onSave}>{saving ? 'Saving…' : mode === 'create' ? 'Create blob' : 'Save'}</button>
+        {dirty && <button type="button" className="ghost-button small" onClick={requestCancel}>Cancel</button>}
+        <button type="button" className="primary-button small" disabled={!ready || saving || (mode === 'edit' && !dirty)} onClick={onSave}>{saving ? 'Saving…' : mode === 'create' ? 'Create blob' : 'Save'}</button>
       </div>
     </header>
     <div className="blob-page-scroll">
       <div className="blob-page-column">
-        {error && <p className="blob-page-notice" role="alert">{error}</p>}
+        <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} approvalMode={badgeMode} />
+        {error && <p className="blob-page-notice error" role="alert">{error}</p>}
         {remoteNotice && <p className="blob-page-notice" role="status">{remoteNotice}</p>}
-        {fieldErrors.map((message) => <p className="blob-error" role="alert" key={message}>{message}</p>)}
-        <div className="blob-tabs" role="tablist" aria-label="Blob">
-          {TABS.map((name, index) => <button key={name} type="button" id={`blob-tab-${name}`} role="tab" aria-selected={tab === name} aria-controls={`blob-panel-${name}`} tabIndex={tab === name ? 0 : -1} onClick={() => setTab(name)} onKeyDown={(event) => {
-            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
-            event.preventDefault()
-            const next = event.key === 'Home' ? 0 : event.key === 'End' ? TABS.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length
-            const target = TABS[next] ?? 'Overview'
-            setTab(target)
-            document.getElementById(`blob-tab-${target}`)?.focus()
-          }}>{name}</button>)}
-        </div>
-        <div id={`blob-panel-${tab}`} role="tabpanel" aria-labelledby={`blob-tab-${tab}`}>
-          {tab === 'Overview' && <>
-            {bypassLine && <p className="blob-page-notice" role="status">Bypass is active for this blob. New requests are approved without asking.</p>}
-            <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} onColorChange={(color) => onDraftChange({ ...draft, color })} />
-            <AutoApprovedList actions={blobActions} />
-          </>}
-          {tab === 'Sessions' && (mode === 'create'
-            ? <section className="blob-card"><h3>Sessions</h3><p className="blob-muted">Save this blob to start conversations.</p></section>
-            : <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />)}
-          {tab === 'Usage' && <BlobUsage agentId={mode === 'edit' ? agent?.id ?? null : null} sessions={sessions} agents={agent ? [agent] : []} connected={connected} />}
-          {tab === 'Settings' && <BlobSettings draft={draft} runtimes={runtimes} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} onArchive={mode === 'edit' ? onArchive : undefined} />}
-        </div>
+        {fieldErrors.map((message) => <p className="blob-page-notice error" role="alert" key={message}>{message}</p>)}
+        {bypassLine && <p className="blob-page-notice warning" role="status">Bypass is active for this blob. New requests are approved without asking.</p>}
+        <BlobSettings draft={draft} runtimes={runtimes} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} />
+        {mode === 'edit' && <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />}
+        <section className="settings-group blob-group" aria-label="Usage">
+          <div className="settings-group-head">
+            <h3>Usage</h3>
+            {mode === 'edit' && agent && <button type="button" className="ghost-button small" aria-expanded={usageOpen} onClick={() => setUsageOpen((open) => !open)}>{usageOpen ? 'Hide usage' : 'Show usage'}</button>}
+          </div>
+          {mode === 'create' || !agent
+            ? <div className="settings-card"><p className="settings-empty">Save this blob to see its usage.</p></div>
+            : usageOpen ? <BlobUsage agentId={agent.id} sessions={sessions} agents={[agent]} connected={connected} /> : <div className="settings-card"><p className="settings-empty">Tokens, cost and run time for this blob.</p></div>}
+        </section>
+        {mode === 'edit' && <section className="settings-group blob-group" aria-label="Archive">
+          <div className="settings-card">
+            <div className="settings-row">
+              <span className="settings-row-copy"><strong>Archive blob</strong><small>It leaves the sidebar. Its conversations stay saved.</small></span>
+              <span className="settings-row-control"><button type="button" className="secondary-button small danger-button" onClick={onArchive}>Archive blob</button></span>
+            </div>
+          </div>
+        </section>}
       </div>
     </div>
     {discardOpen && <ConfirmDialog title="Discard unsaved changes?" confirmLabel="Discard" cancelLabel="Keep editing" onConfirm={leave} onCancel={() => setDiscardOpen(false)} />}

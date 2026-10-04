@@ -1,6 +1,6 @@
 # Implementation status
 
-Current as of 3 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
+Current as of 4 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
 
 **Evidence class:** desktop unit and mounted tests, plus daemon and adapter tests that use in-memory storage or fake processes. Public beta installers (0.1.0-beta.1 to beta.3) were built, signed for the updater and verified by download, manifest and signature. There is still no accepted live-provider session and no native window pass of the current tree. The Phase 3 isolated-database smoke (`5138c8e`, revision `e770db8`, [NATIVE_SMOKE_RESULTS.md](NATIVE_SMOKE_RESULTS.md)) is the only recorded native pass.
 
@@ -24,10 +24,13 @@ Current as of 3 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [
 | --- | --- | --- |
 | Interface redesign: chat-style shell, one-page blob editor, custom dropdowns, settling blob moods, favourites and pins, companion launch and welcome | `aea5eb1`, `bb76b7e`, `70222f2` (released as beta.2 and beta.3) | Unit and mounted tests, browser preview with fixtures. |
 | Batch A: unread markers, Windows notifications, rename/archive/delete conversations (migration 6), grouped tool activity, Start with Windows | Batch A commit on main (3 Oct) | Unit, mounted, storage and daemon tests (fake adapters). Toast click activation is not supported on Windows. Not yet in a release. |
-| Batch E: model list provenance (source, update time, suggestions vs validated), presentation overlay (names, default marker, family groups), OpenCode instruction/mode fixes | Batch E commit on main (3 Oct) | Fake-peer and daemon tests. Codex per-turn context is not possible with the installed app-server schema. Shared provider processes (one process per runtime) are not built. Not yet in a release. |
+| Batch E: model list provenance (source, update time, suggestions vs validated), presentation overlay (names, default marker, family groups), OpenCode instruction/mode fixes | Batch E commit on main (3 Oct) | Fake-peer and daemon tests. Codex per-turn context is not possible with the installed app-server schema. Not yet in a release. |
 | Patch D: Settings > Usage & limits (budgets, price overrides, subscription fees), Analytics links and budget card, export a conversation as Markdown, export/import a blob setup | Patch D commit on main (3 Oct) | Unit, mounted, storage and native-command tests. Cost budgets are not offered (turn admission cannot estimate cost yet). Not yet in a release. |
+| Batch B: Ctrl+K quick switcher, composer model and thinking switch, safe Markdown, unified diff view and approval shortcuts shared with the companion | `863a779` | Unit and mounted tests only. No native window or live-provider check. Not yet in a release. |
+| B1: shared Codex app-server and OpenCode ACP processes per runtime key, per-session queues, idle shutdown, crash restart and resume, bounded cancel | `1f802b0` | Unit and fake-process tests only. No native window or live-provider check. Not yet in a release. |
+| Batch C: first-run setup for empty installs, companion start position and hotkey, system/dark/light themes, text size, and reorderable favourites and pins | `e6b1076` | Unit and mounted tests only. No native window or live-provider check. Not yet in a release. |
 
-Each of Batch A, Batch E and Patch D was implemented by the `impl` lane, gated by the Director, and reviewed by an independent read-only lane before merging; every review finding was fixed or answered with evidence.
+These changes were implemented by the `impl` lane, gated by the Director, and reviewed by an independent lane before merging; review findings were fixed or answered with evidence.
 
 ## How to check the desktop app
 
@@ -45,8 +48,6 @@ Backend: `cargo test --workspace` and `cargo check -p bloblex-desktop --lib` wit
 
 - Phase 7 native items: companion drag/DPI, file drop, approvals in both windows, tray Pause all, keyboard, reduced motion, Quit, code signing, clean-machine install.
 - Live provider sessions (Claude Code, Codex, OpenCode) against the current daemon.
-- Shared provider processes: one Codex app-server / OpenCode ACP process per runtime with notification routing, idle unload and crash restart.
 - Cost budgets enforced before a turn (needs a same-currency cost estimate at admission).
 - A `context` failure class on the daemon (the UI already labels it "Context full").
-- Not started: quick switcher and composer model switch (Batch B); first-run setup, companion start position and hotkey, light theme and text size, reorderable pins (Batch C).
 - WSL.

@@ -98,6 +98,8 @@ Events:
 | `budget.set` | policy object | Persists a policy; most restrictive applicable hard cap wins. |
 | `budget.delete` | `{ "policyId": string }` | Removes that policy. |
 
+Appearance and companion preferences use `appearance.theme` (`system`, `dark`, or `light`), `appearance.textSize` (`small`, `default`, `large`, or `larger`), `companion.startPosition` (`launch` or `last`), and `companion.hotkey` (boolean).
+
 ## Desktop notifications
 
 When enabled, only live transitions to completed, failed, or waiting for approval can create a Windows notification. The main window must be hidden or unfocused. Titles use the blob name; bodies use only the conversation title and transition label. Notification activation callbacks are not available on Windows through the current desktop notification integration, so the conversation remains unread until opened in the main window and can be found from its unread marker.

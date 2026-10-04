@@ -1,6 +1,6 @@
 # Bloblex session handoff
 
-Current as of 3 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+Current as of 4 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
 Acceptance of the current tree is unit, mounted and fake-process tests. There is no live-provider session check and no native window pass of this tree. Public beta releases exist (latest published: `v0.1.0-beta.3`); work merged after it is not released yet.
 
@@ -16,6 +16,9 @@ On main:
 - Conversation management: unread markers, Windows notifications, rename/archive/delete (migration 6), grouped tool activity, Start with Windows.
 - Honest model lists: catalog source and update time, suggestions vs validated lists, display names, default marker and family groups.
 - Settings > Usage & limits (token/turn/minute budgets, price overrides, subscription fees), Markdown export of a conversation, export/import of a blob setup.
+- Batch B: Ctrl+K quick switcher, composer model and thinking switch, safe Markdown, unified diff view and approval shortcuts. The companion uses the same approval card.
+- Batch B1: one shared Codex app-server or OpenCode ACP process per runtime key, per-session queues that coalesce streaming deltas only, idle shutdown, crash restart and resume, and bounded per-session cancel. Claude Code remains one process per session.
+- Batch C: first-run setup on an empty install, companion start position and Ctrl+Alt+B hotkey, system/dark/light themes and text size, and reorderable favourites and pins. A contrast test checks the light theme against AA.
 
 ## Lanes
 
@@ -41,7 +44,7 @@ cargo test --workspace
 cargo check -p bloblex-desktop --lib
 ```
 
-Use a private `CARGO_TARGET_DIR`. `cargo check -p bloblex-desktop` needs the gitignored sidecar binaries in `apps/desktop/src-tauri/binaries` (copy them into a new worktree). Before committing, run the naming check: no third-party product names anywhere in the repo.
+The Director's gate output is outside OneDrive at `C:\dev\bloblex-target` (`CARGO_TARGET_DIR`). Review lanes must also use a short `CARGO_TARGET_DIR`; long paths break the Windows linker. `cargo check -p bloblex-desktop` needs the gitignored sidecar binaries in `apps/desktop/src-tauri/binaries` (copy them into a new worktree). Before committing, run the naming check: no third-party product names anywhere in the repo.
 
 Native development, only when a person is ready to launch the app, is `npm run desktop:dev` with an explicit isolated `BLOBLEX_DB_PATH`. See [docs/windows-development.md](docs/windows-development.md). Never point a test or a dev run at `%LOCALAPPDATA%\Bloblex`.
 
@@ -57,10 +60,8 @@ Releases: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). The update sig
 ## Known gaps
 
 - No live Claude, Codex, or OpenCode session has been accepted against the current tree.
-- Shared provider processes (one per runtime) are not built; each session owns its process.
 - Codex blob instructions stay thread-level: the installed app-server schema has no per-turn context field.
 - Cost budgets are not offered: turn admission cannot estimate cost yet. Existing cost policies are listed with a note.
 - The daemon does not emit a `context` failure class; session turn JSON omits `failureClass`.
-- Batches not started: quick switcher and composer model switch; first-run setup, companion start position and hotkey, light theme and text size, reorderable pins.
 - WSL.
 - Tracked `apps/desktop/tsconfig.tsbuildinfo` is rewritten by `tsc -b`; restore it before committing if it changes.

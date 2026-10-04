@@ -76,3 +76,9 @@
 - Review blockers fixed before merge: archived chats returning on reconnect; deleted chats resurrected by a live provider; unread/notifications missing finish and approval; OpenCode thinking rejected by a handshake without per-model efforts; cost budgets blocking every turn (cost budgets withdrawn from the form); user price overrides losing to shipped estimates; native export/import accepting any path (now single-use dialog tokens). A Director review also replaced a daemon-wide event lock (held across provider calls, with bounded channels) by short per-session locks.
 - Decisions: Codex instructions stay thread-level (no per-turn context field in the installed schema); shared provider processes deferred to their own task.
 - The user asked to stop after this set: no new batches and no release until asked.
+
+## 4 Oct 2026 - Batches B, B1 and C merged
+- Merged `863a779` (Batch B), `1f802b0` (B1) and `e6b1076` (Batch C). The `impl` lane implemented each change; `impl-b` reviewed each over two or three rounds; the Director merged after gates. No release followed. Main gates: workspace tests 209 passed, desktop check passed, typecheck passed, Vitest 294/294 and build passed.
+- B1 review caught cancellation that could kill a child shared by sessions, an idle-shutdown/attach race, and flaky process tests. The Director rejected the event-drop policy twice; only streaming deltas may coalesce. Other events stay ordered and retained.
+- Batch B review caught a composer model switch rejected by the daemon, a missing opener permission, and approval-card focus issues.
+- Batch C review caught setup hiding conversations and approvals, light-theme contrast problems and hard-coded colours, and a contrast test that never ran. These were fixed before merge.

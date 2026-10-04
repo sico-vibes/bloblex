@@ -127,7 +127,7 @@ export function SessionRow({ id, session, pos, setSize, selected, unread, needsA
     aria-selected={selected}
     aria-setsize={setSize}
     aria-posinset={pos}
-    aria-label={`${title}, ${word}, ${clock || 'time unavailable'}${unread ? needsApproval ? ', needs approval' : ', unread' : ''}`}
+    aria-label={`${title}, ${word}, ${clock || 'time unavailable'}${unread || needsApproval ? needsApproval ? ', needs approval' : ', unread' : ''}`}
     data-session-id={session.id}
     data-tree-kind="session"
     data-tree-id={id}
@@ -138,7 +138,7 @@ export function SessionRow({ id, session, pos, setSize, selected, unread, needsA
   >
     {editing ? <input ref={inputRef} className="tree-rename-input" aria-label={`Rename ${title}`} maxLength={120} value={draft} onChange={(event) => setDraft(event.target.value)} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); save() } if (event.key === 'Escape') { event.preventDefault(); finish() } }} onBlur={() => { if (!draft.trim()) finish() }} /> : <span className="tree-label" title={title}>{title}</span>}
     {activity !== 'muted' && <i className={`status-dot ${activity}`} aria-hidden="true" />}
-    {unread && <i className={`unread-dot ${needsApproval ? 'approval' : ''}`} aria-hidden="true" />}
+    {(unread || needsApproval) && <i className={`unread-dot ${needsApproval ? 'approval' : ''}`} aria-hidden="true" />}
     {clock && <time>{clock}</time>}
   </div>
 }

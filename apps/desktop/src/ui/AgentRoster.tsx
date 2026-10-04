@@ -304,10 +304,10 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
         }
         const unpin = () => item.kind === 'session' ? onTogglePinSession?.(item.session.id) : onTogglePinProject?.(item.pin)
         return <div className={`pinned-row ${selected ? 'selected' : ''}`} key={item.id}>
-          <button type="button" className="pinned-main" aria-current={selected ? 'true' : undefined} aria-label={`${item.title}, ${item.agent.name}${item.kind === 'project' ? ', project' : ''}${item.kind === 'session' && unreadSessionIds.has(item.session.id) ? approvalSessionIds.has(item.session.id) ? ', needs approval' : ', unread' : ''}`} onClick={open} onContextMenu={(event) => { event.preventDefault(); menuTriggerRef.current = event.currentTarget; setMenu({ kind: 'pinned', label: item.title, onUnpin: unpin, x: event.clientX, y: event.clientY }) }}>
+          <button type="button" className="pinned-main" aria-current={selected ? 'true' : undefined} aria-label={`${item.title}, ${item.agent.name}${item.kind === 'project' ? ', project' : ''}${item.kind === 'session' && (unreadSessionIds.has(item.session.id) || approvalSessionIds.has(item.session.id)) ? approvalSessionIds.has(item.session.id) ? ', needs approval' : ', unread' : ''}`} onClick={open} onContextMenu={(event) => { event.preventDefault(); menuTriggerRef.current = event.currentTarget; setMenu({ kind: 'pinned', label: item.title, onUnpin: unpin, x: event.clientX, y: event.clientY }) }}>
             <span className="pinned-icon" style={{ color: agentColorHex(item.agent.color) }} aria-hidden="true">{item.kind === 'project' ? <Folder size={14} /> : <MessageSquare size={14} />}</span>
             <span className="pinned-copy"><strong>{item.title}</strong><small>{item.agent.name}{item.kind === 'project' ? ' · project' : ''}</small></span>
-            {item.kind === 'session' && unreadSessionIds.has(item.session.id) && <i className={`unread-dot ${approvalSessionIds.has(item.session.id) ? 'approval' : ''}`} aria-hidden="true" />}
+            {item.kind === 'session' && (unreadSessionIds.has(item.session.id) || approvalSessionIds.has(item.session.id)) && <i className={`unread-dot ${approvalSessionIds.has(item.session.id) ? 'approval' : ''}`} aria-hidden="true" />}
             {item.time && <time>{shortTime(item.time)}</time>}
           </button>
           <button type="button" className="pinned-unpin" aria-label={`Unpin ${item.title}`} title="Unpin" onClick={unpin}><PinOff size={13} /></button>
@@ -396,7 +396,7 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
           data-agent-id={agent.id}
           data-tree-id={blobId}
           className={`bot-row ${selected ? 'selected' : ''}`}
-          aria-label={`${agent.name}${sessions.some((session) => session.agentId === agent.id && unreadSessionIds.has(session.id)) ? sessions.some((session) => session.agentId === agent.id && approvalSessionIds.has(session.id)) ? ', needs approval' : ', unread' : ''}`}
+          aria-label={`${agent.name}${sessions.some((session) => session.agentId === agent.id && (unreadSessionIds.has(session.id) || approvalSessionIds.has(session.id))) ? sessions.some((session) => session.agentId === agent.id && approvalSessionIds.has(session.id)) ? ', needs approval' : ', unread' : ''}`}
           aria-current={selected ? 'true' : undefined}
           aria-level={1}
           aria-expanded={item.blobOpen}
@@ -418,7 +418,7 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
             <span className="bot-row-line">
               <strong>{agent.name}</strong>
               {mode === 'bypass' && <ApprovalBadge mode={mode} />}
-              {sessions.some((session) => session.agentId === agent.id && unreadSessionIds.has(session.id)) && <i className={`unread-dot ${sessions.some((session) => session.agentId === agent.id && approvalSessionIds.has(session.id)) ? 'approval' : ''}`} aria-hidden="true" />}
+              {sessions.some((session) => session.agentId === agent.id && (unreadSessionIds.has(session.id) || approvalSessionIds.has(session.id))) && <i className={`unread-dot ${sessions.some((session) => session.agentId === agent.id && approvalSessionIds.has(session.id)) ? 'approval' : ''}`} aria-hidden="true" />}
               {row.latest?.updatedAt && <time>{shortTime(row.latest.updatedAt)}</time>}
             </span>
             <span className="bot-row-line">

@@ -310,9 +310,45 @@ describe('companion drag and usage labels', () => {
     const choices = [...approval.host.querySelectorAll('.companion-permission-choice')]
     expect(choices.length).toBeGreaterThan(0)
     for (const choice of choices) expect(choice.hasAttribute(DRAG), 'permission choice').toBe(false)
-    expect(resolvesToDrag(approval.host.querySelector('.island-card .title')), 'permission title').toBe(true)
+    expect(choices.find((choice) => choice.textContent?.includes('Allow once'))?.classList.contains('permission-choice-primary')).toBe(true)
+    expect(choices.find((choice) => choice.textContent?.includes('Deny'))?.classList.contains('permission-choice-secondary')).toBe(true)
+    expect(choices.map((choice) => choice.textContent)).toEqual(expect.arrayContaining([expect.stringContaining('Enter'), expect.stringContaining('Esc')]))
+    expect(resolvesToDrag(approval.host.querySelector('.companion-approval-card strong')), 'permission title').toBe(true)
     expect(resolvesToDrag(approval.host.querySelector('.card-bot canvas.blob-canvas')), 'permission face').toBe(true)
+    const approvalCard = approval.host.querySelector<HTMLElement>('.companion-approval-card')!
+    act(() => approvalCard.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
+    await approval.settle()
+    expect(h.rpc.mock.calls.some(([method, params]) => method === 'permission.reply' && params.permissionId === 'perm-1' && params.choice === 'allow_once')).toBe(true)
     assertIsland(approval.host, 'approval')
+  })
+
+  it('denies an approval on Escape without collapsing the companion', async () => {
+    configure(snapshot({
+      sessions: [{ ...claudeSession, state: 'waiting_permission' }],
+      permissions: [{ id: 'perm-escape', sessionId: 'session-claude', runtimeId: 'runtime-claude', status: 'pending', title: 'Confirm action', choices: ['allow_once', 'deny'] }],
+    }))
+    const view = startApp('?companion=1')
+    await view.settle()
+    const normalRpc = h.rpc.getMockImplementation()!
+    let rejectFirstReply = true
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'permission.reply' && rejectFirstReply) { rejectFirstReply = false; throw new Error('Temporary reply failure') }
+      return normalRpc(method, params)
+    })
+    const firstCard = view.host.querySelector<HTMLElement>('.companion-approval-card')!
+    const firstEvent = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    act(() => firstCard.dispatchEvent(firstEvent))
+    await view.settle()
+
+    expect(firstEvent.defaultPrevented).toBe(true)
+    expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('home')
+    expect(view.host.querySelector('.companion-approval-card')).not.toBeNull()
+    act(() => view.host.querySelector<HTMLElement>('.companion-approval-card')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+    await view.settle()
+    const replies = h.rpc.mock.calls.filter(([method]) => method === 'permission.reply')
+    expect(replies).toHaveLength(2)
+    expect(replies[1]?.[1]).toMatchObject({ permissionId: 'perm-escape', choice: 'deny' })
+    expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('home')
   })
 
   it('labels daemon-wide tokens and cost as totals beside a blob and keeps unknown cost unknown', async () => {

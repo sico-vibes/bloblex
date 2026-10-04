@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
 import {
   Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronUp, CircleHelp, Code2, Copy, FileText, FolderOpen,
   Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelRight, Paperclip, Play, Plus,
-  RefreshCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X,
+  RefreshCw, Search, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X,
 } from 'lucide-react'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, unlockCompanionAudioFromGesture } from '../blob/soundCues'
@@ -13,7 +14,7 @@ import { buildConversationItems, groupConversationActivity, type ConversationIte
 import { deriveCompanionStatus } from './companionStatus'
 import { moneyMinor, records, tokenValue, usageTokenBuckets, valuationLabel } from './usagePresentation'
 import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermission } from './permissionSelection'
-import { PermissionChoiceButton } from './PermissionChoiceButton'
+import { ApprovalCard } from './ApprovalCard'
 import bloblexLogo from '../assets/bloblex-128.png'
 import { sessionsForPauseRequest } from './trayActions'
 import { budgetValue, findApplicableBudget } from './budgetPresentation'
@@ -43,9 +44,23 @@ import { initialiseSeen, isUnread, markSeen, unreadNeedsApproval, type SeenSessi
 import { notificationForTransition } from './notificationTransitions'
 import { flashMainWindow, sendDesktopNotification } from '../desktopIntegrations'
 import { stampCompanionDragRegions } from './companionDrag'
+import { QuickSwitcher } from './QuickSwitcher'
+import { useQuickSwitcherShortcut } from './useQuickSwitcherShortcut'
+import { ComposerExecutionSwitch } from './ComposerExecutionSwitch'
+import { SafeMarkdown } from './SafeMarkdown'
+import { parseUnifiedDiff } from './diffParser'
+import type { QuickSwitcherItem } from './quickSwitcherModel'
 import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, quitBloblex, readBlobImport, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionVisibility, showMainSettings, showMainWindow, startDaemonEventStream, writeBlobExport, writeMarkdownExport } from '../tauri'
 
 type ContextTab = 'Details' | 'Runtime' | 'Files'
+type AppliedModelState = { sessionId: string; model: string | null; hasSnapshot: boolean; loading: boolean }
+async function openSafeLink(url: string) {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return
+    await invoke('plugin:opener|open_url', { url: parsed.href })
+  } catch { /* An unavailable opener leaves the link inert. */ }
+}
 export function App() {
   const companion = new URLSearchParams(location.search).has('companion')
   useEffect(() => {
@@ -78,6 +93,9 @@ export function App() {
   const [archiveNotice, setArchiveNotice] = useState<string | null>(null)
   const [tab, setTab] = useState<ContextTab>('Details')
   const [composer, setComposer] = useState('')
+  const composerTypingRef = useRef(false)
+  const [appliedModelState, setAppliedModelState] = useState<AppliedModelState | null>(null)
+  const appliedModelRequest = useRef(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [usageSheet, setUsageSheet] = useState(false)
@@ -88,7 +106,6 @@ export function App() {
   const updateOffer = useMainUpdateOffer(companion)
   const now = useClock(10_000)
   const executionGate = useRef<ExecutionSendGate>({ model: false, thinking: false, serviceTier: false })
-  const [appliedModel, setAppliedModel] = useState<string | null>(null)
   const [diffViewer, setDiffViewer] = useState<{ path: string; content: string } | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
@@ -133,6 +150,8 @@ export function App() {
   const [permissionClock, setPermissionClock] = useState(() => Date.now())
   const [inspectorOpen, setInspectorOpen] = useState(() => storageFlag('bloblex.inspector.open'))
   const [search, setSearch] = useState('')
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false)
+  const openQuickSwitcher = useCallback(() => setQuickSwitcherOpen(true), [])
   const [expanded, setExpanded] = useState<ExpandedState>(() => companion ? emptyExpandedState() : readRosterExpanded())
   const [chooser, setChooser] = useState<{ agentId: string; x: number; y: number } | null>(null)
   const [pins, setPins] = useState<SidebarPins>(() => companion ? emptyPins() : readPins())
@@ -147,6 +166,7 @@ export function App() {
   const snapshotRef = useRef<Snapshot | null>(null)
   const pendingSessionHydrations = useRef(new Set<string>())
   const selectedAgentIdRef = useRef<string | null>(null)
+  const detailsSessionIdRef = useRef<string | null>(null)
   const selectedRuntimeIdRef = useRef<string | null>(null)
   const activeSessionIdRef = useRef<string | null>(null)
   const blobPageRef = useRef(blobPage)
@@ -164,6 +184,34 @@ export function App() {
   blobPageRef.current = blobPage
   draftDirtyRef.current = !!(draft && baseline && isAgentDirty(draft, baseline))
 
+  const refreshAppliedModel = useCallback((sessionId: string) => {
+    const requestId = ++appliedModelRequest.current
+    setAppliedModelState((current) => current?.sessionId === sessionId
+      ? { ...current, loading: true }
+      : { sessionId, model: null, hasSnapshot: false, loading: true })
+    void rpc('exec.snapshot.latest', { sessionId }).then((result) => {
+      if (requestId !== appliedModelRequest.current) return
+      const parsed = parseExecSnapshot(result)
+      setAppliedModelState((current) => {
+        if (requestId !== appliedModelRequest.current) return current
+        const previous = current?.sessionId === sessionId ? current : null
+        return parsed
+          ? { sessionId, model: parsed.appliedModelId, hasSnapshot: true, loading: false }
+          : { sessionId, model: previous?.model ?? null, hasSnapshot: previous?.hasSnapshot ?? false, loading: false }
+      })
+    }).catch(() => {
+      if (requestId !== appliedModelRequest.current) return
+      setAppliedModelState((current) => current?.sessionId === sessionId
+        ? { ...current, loading: false }
+        : { sessionId, model: null, hasSnapshot: false, loading: false })
+    })
+  }, [])
+  const refreshAppliedModelFromEvent = useCallback((event: DaemonEvent) => {
+    if (event.type !== 'exec.options.changed') return
+    const sessionId = typeof event.payload?.sessionId === 'string' ? event.payload.sessionId : null
+    if (sessionId && sessionId === detailsSessionIdRef.current) refreshAppliedModel(sessionId)
+  }, [refreshAppliedModel])
+
   useEffect(() => {
     const syncAttention = () => setMainAttention(!companion && document.visibilityState === 'visible' && document.hasFocus())
     window.addEventListener('focus', syncAttention)
@@ -176,6 +224,8 @@ export function App() {
       document.removeEventListener('visibilitychange', syncAttention)
     }
   }, [companion])
+
+  useQuickSwitcherShortcut(!companion && !blobPage && !analyticsOpen, openQuickSwitcher)
 
   useEffect(() => {
     if (companion || !inDesktop) return
@@ -215,6 +265,12 @@ export function App() {
       ?? sessions.find((session) => session.id === activeSessionId && (!selectedRuntime || session.runtimeId === selectedRuntime.id))
       ?? sessions.filter((session) => session.runtimeId === selectedRuntime?.id).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
       ?? null
+  detailsSessionIdRef.current = selectedSession?.id ?? null
+  const appliedModelForDetails = selectedSession
+    ? appliedModelState?.sessionId === selectedSession.id
+      ? appliedModelState.model?.trim() || (appliedModelState.hasSnapshot ? 'Unknown' : appliedModelState.loading ? 'Loading…' : 'Unavailable')
+      : 'Loading…'
+    : null
   const sessionMessages = selectedSession?.messages ?? selectedSession?.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages : []) ?? selectedSession?.events ?? []
   const conversationItems = selectedSession ? buildConversationItems(selectedSession) : []
   useEffect(() => {
@@ -268,16 +324,19 @@ export function App() {
       notificationStates.current.set(session.id, next)
       if (!previous || previous === next) continue
       const notification = notificationForTransition(previous, next)
-      if (!notification || mainAttention || !notificationsEnabled) continue
+      if (!notification || mainAttention) continue
       const agent = agents.find((item) => item.id === session.agentId)
       const name = agent?.name ?? labelize(session.provider, 'Blob')
       const title = formatUnknownSafe(session.title, 'Conversation')
-      void sendDesktopNotification(name, notification.body(title)).catch(() => undefined)
+      if (notificationsEnabled) void sendDesktopNotification(name, notification.body(title)).catch(() => undefined)
       if (notification.state === 'approval') void flashMainWindow().catch(() => undefined)
     }
   }, [snapshot, sessions, agents, companion, notificationSettingLoaded, notificationsEnabled, mainAttention])
   const unreadSessionIds = new Set(sessions.filter((session) => isUnread(session, seenSessions) && !(mainAttention && session.id === selectedSession?.id)).map((session) => session.id))
-  const approvalSessionIds = new Set(sessions.filter((session) => unreadNeedsApproval(session, seenSessions) && !(mainAttention && session.id === selectedSession?.id)).map((session) => session.id))
+  const approvalSessionIds = new Set([
+    ...sessions.filter((session) => unreadNeedsApproval(session, seenSessions)).map((session) => session.id),
+    ...(snapshot?.permissions ?? []).filter((permission) => typeof permission.sessionId === 'string' && isPendingPermissionLive(permission, permissionClock)).map((permission) => permission.sessionId!),
+  ].filter((id) => !(mainAttention && id === selectedSession?.id)))
   const groupedConversationItems = groupConversationActivity(conversationItems)
   const activePermission = selectPendingPermission(snapshot?.permissions ?? [], selectedSession?.id, activeSessionId, permissionClock)
   const agentName = activeSelectedAgent?.name ?? (selectedRuntime ? labelize(selectedRuntime.provider) : 'No runtime selected')
@@ -303,13 +362,13 @@ export function App() {
 
   useEffect(() => {
     const sessionId = selectedSession?.id
-    if (!sessionId) { setAppliedModel(null); return }
-    let cancelled = false
-    rpc('exec.snapshot.latest', { sessionId }).then((result) => {
-      if (!cancelled) setAppliedModel(parseExecSnapshot(result)?.appliedModelId ?? null)
-    }).catch(() => { if (!cancelled) setAppliedModel(null) })
-    return () => { cancelled = true }
-  }, [selectedSession?.id])
+    if (!sessionId) {
+      appliedModelRequest.current += 1
+      setAppliedModelState(null)
+      return
+    }
+    refreshAppliedModel(sessionId)
+  }, [selectedSession?.id, refreshAppliedModel])
 
   useEffect(() => {
     if (!companion) return
@@ -360,6 +419,7 @@ export function App() {
       hydrating.current = false
       setSnapshot(queued.reduce((state, event) => applyEvent(state, event), next))
       queued.forEach(hydrateSessionChange)
+      queued.forEach(refreshAppliedModelFromEvent)
       hydrateAgentChanges(queued)
       setConnection(new URLSearchParams(location.search).has('disconnected') ? 'disconnected' : 'connected')
       setError(null)
@@ -375,7 +435,7 @@ export function App() {
         window.setTimeout(() => void refresh(), 0)
       }
     }
-  }, [hydrateAgentChanges, hydrateSessionChange])
+  }, [hydrateAgentChanges, hydrateSessionChange, refreshAppliedModelFromEvent])
 
   useEffect(() => {
     if (!activePermission?.sessionId) return
@@ -428,6 +488,7 @@ export function App() {
       } else if (hydrating.current) queuedEvents.current.push(event)
       else {
         setSnapshot((current) => current ? applyEvent(current, event) : current)
+        refreshAppliedModelFromEvent(event)
         hydrateSessionChange(event)
         hydrateAgentChanges([event])
       }
@@ -438,7 +499,7 @@ export function App() {
       if (connected) setError(null)
     }).then((stop) => { if (cancelled) stop(); else unlistenConnection = stop })
     return () => { cancelled = true; unlistenEvents?.(); unlistenConnection?.() }
-  }, [hydrateAgentChanges])
+  }, [hydrateAgentChanges, refreshAppliedModelFromEvent])
 
   useEffect(() => {
     if (!inDesktop || companion) return
@@ -506,6 +567,7 @@ export function App() {
         hydrating.current = false
         setSnapshot((current) => missedWhileSubscribing.reduce((state, event) => applyEvent(state ?? initial, event), current ?? initial))
         missedWhileSubscribing.forEach(hydrateSessionChange)
+        missedWhileSubscribing.forEach(refreshAppliedModelFromEvent)
         hydrateAgentChanges(missedWhileSubscribing)
       } catch (reason) {
         hydrating.current = false
@@ -956,17 +1018,18 @@ export function App() {
     try { await doRpc('session.resume', { sessionId: session.id }); void refreshTrayMenu().catch(() => undefined); await refresh() } catch { /* inline */ }
   }
 
-  const answerPermission = async (permission: PermissionRequest, choice: string) => {
+  const answerPermission = async (permission: PermissionRequest, choice: string): Promise<boolean> => {
     const now = Date.now()
     if (!isPendingPermissionLive(permission, now) || !isPermissionReplyAllowed(permission, choice)) {
       setPermissionClock(now)
       await refresh()
       setError('This approval expired or is no longer pending. No reply was sent. Check the refreshed request state before continuing.')
-      return
+      return false
     }
-    try { await doRpc('permission.reply', { permissionId: permission.id, choice }); await refresh() } catch (reason) {
+    try { await doRpc('permission.reply', { permissionId: permission.id, choice }); await refresh(); return true } catch (reason) {
       await refresh()
       setError(messageOf(reason))
+      return false
     }
   }
 
@@ -1052,6 +1115,7 @@ export function App() {
   const sessionBusy = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
   const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
   const runtimeReady = runtimeUsable(selectedRuntime)
+  const approvalFocusOnMount = !composerTypingRef.current || connection !== 'connected' || busy || selectedSession?.state === 'waiting_permission' || !runtimeReady
   const canStartSession = connection === 'connected' && !busy && !!activeSelectedAgent && runtimeReady
   const lastAgentIndex = conversationItems.reduce((last, item, index) => item.kind === 'message' && !isUserMessage(item.value) ? index : last, -1)
   // The details panel describes the open conversation, so it steps aside for the blob editor and Analytics.
@@ -1067,13 +1131,56 @@ export function App() {
   const pageLegacy = legacySessions(sessions, (editingAgent ?? activeSelectedAgent)?.runtimeId ?? draft?.runtimeId ?? '')
   const headerOwned = activeSelectedAgent ? agentSessions(sessions, activeSelectedAgent.id) : sessions.filter((session) => !selectedRuntime || session.runtimeId === selectedRuntime.id)
   const headerLegacy = activeSelectedAgent ? legacySessions(sessions, activeSelectedAgent.runtimeId) : []
-
+  const visibleSessions = sessions.filter((session) => session.archived !== true)
+  const quickSwitcherItems: QuickSwitcherItem[] = [
+    ...activeAgents(agents).map((agent) => ({ id: agent.id, kind: 'blob' as const, title: agent.name, subtitle: agent.description, searchText: `${agent.name} ${agent.description}` })),
+    ...visibleSessions.map((session) => {
+      const owner = agents.find((agent) => agent.id === session.agentId)
+      const title = sessionDisplayTitle(session)
+      const subtitle = owner?.name ?? labelize(session.provider, 'Blob')
+      return { id: session.id, kind: 'conversation' as const, title, subtitle, searchText: `${title} ${subtitle} ${session.projectPath ?? ''}`, recentAt: session.updatedAt ?? session.createdAt ?? null }
+    }),
+    ...activeAgents(agents).flatMap((agent) => projectGroups(visibleSessions, agent.id).filter((project) => project.key !== null).map((project) => ({ id: `${agent.id}:${project.key}`, kind: 'project' as const, title: project.label, subtitle: agent.name, searchText: `${project.label} ${agent.name} ${project.path}` }))),
+    ...(activeSelectedAgent ? [{ id: 'new-session', kind: 'action' as const, title: 'New session', subtitle: `For ${activeSelectedAgent.name}`, searchText: `New session ${activeSelectedAgent.name}` }] : []),
+    { id: 'new-blob', kind: 'action', title: 'New blob', subtitle: '', searchText: 'New blob' },
+    { id: 'usage', kind: 'action', title: 'Usage', subtitle: '', searchText: 'Usage limits' },
+    { id: 'settings', kind: 'action', title: 'Settings', subtitle: '', searchText: 'Settings' },
+    { id: 'find-agents', kind: 'action', title: 'Find coding agents', subtitle: '', searchText: 'Find coding agents runtime' },
+    { id: 'toggle-details', kind: 'action', title: 'Toggle details panel', subtitle: '', searchText: 'Toggle details panel inspector' },
+  ]
+  const chooseQuickSwitcherItem = (item: QuickSwitcherItem) => {
+    if (item.kind === 'blob') {
+      const agent = agents.find((candidate) => candidate.id === item.id && !candidate.archived)
+      if (agent) selectAgent(agent)
+    } else if (item.kind === 'conversation') {
+      const session = sessions.find((candidate) => candidate.id === item.id && !candidate.archived)
+      if (session) selectSession(session)
+    } else if (item.kind === 'project') {
+      const [agentId, ...keyParts] = item.id.split(':')
+      const key = keyParts.join(':')
+      const agent = agents.find((candidate) => candidate.id === agentId && !candidate.archived)
+      if (agent) {
+        const project = projectGroups(visibleSessions, agent.id).find((candidate) => candidate.key === key)
+        if (project?.sessions[0]) selectSession(project.sessions[0])
+        else selectAgent(agent)
+        patchExpanded(agent.id, (entry) => ({ ...entry, open: true, projects: { ...entry.projects, [key]: true } }))
+      }
+    } else {
+      if (item.id === 'new-session' && activeSelectedAgent) newSession(activeSelectedAgent.id)
+      else if (item.id === 'new-blob') openCreate()
+      else if (item.id === 'usage') void showUsage()
+      else if (item.id === 'settings') { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }
+      else if (item.id === 'find-agents') void refreshRuntimes()
+      else if (item.id === 'toggle-details') toggleInspector()
+    }
+  }
   return (
     <main className={`app-shell ${detailsVisible ? 'inspector-open' : ''}`} style={accent ? { '--agent-accent': accent } as React.CSSProperties : undefined}>
       <aside className="sidebar" aria-label="Agents">
         <div className="sidebar-top">
           <div className="brand-lockup"><img className="brand-logo" src={bloblexLogo} alt="Bloblex logo" /><strong>Bloblex</strong></div>
           <div className="sidebar-create-actions">
+            <button type="button" className="icon-button" title="Quick switcher" aria-label="Open quick switcher" onClick={() => setQuickSwitcherOpen(true)}><Search size={16} /></button>
             <button className="icon-button" title="Create blob" aria-label="Create blob" disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={openCreate}><Plus size={17} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setCreateMenuOpen(false); restoreCreateFocus() } }}>
               <button type="button" className="icon-button small" title="Import a blob setup" aria-label="Blob actions" aria-haspopup="menu" aria-expanded={createMenuOpen} disabled={connection !== 'connected' || busy} onClick={() => setCreateMenuOpen((open) => !open)}><ChevronDown size={14} /></button>
@@ -1118,7 +1225,6 @@ export function App() {
             />}
           </div>
           <div className="header-actions">
-            {selectedRuntime && <span className="model-pill" title={appliedModel ? 'Model applied on the latest turn' : 'Model reported by the session'}>{appliedModel ?? (selectedSession?.model?.trim() ? selectedSession.model : 'Default model')}</span>}
             <ApprovalPill mode={headerMode} />
             {selectedSession?.resumable && !sessionBusy && <button className="icon-button" title="Resume conversation" aria-label="Resume conversation" disabled={busy || connection !== 'connected' || !runtimeReady} onClick={() => void resumeSession()}><Play size={15} /></button>}
             <button className="icon-button" title="New session" aria-label="New session" disabled={!canStartSession} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>
@@ -1133,21 +1239,22 @@ export function App() {
         {error && <div className="inline-error" role="alert"><ShieldAlert size={16} /><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError(null)}><X size={15} /></button></div>}
         {archiveNotice && <div className="inline-error" role="status"><span>{archiveNotice}</span><button aria-label="Dismiss notice" onClick={() => setArchiveNotice(null)}><X size={15} /></button></div>}
 
-        {!selectedSession ? <>{activePermission && <PermissionCard permission={activePermission} onReply={(choice) => void answerPermission(activePermission, choice)} />}<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} accent={accent} mood={selectedMood} agentName={agentName} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={openCreate} onRefresh={() => void refreshRuntimes()} /></> : <>
+        {!selectedSession ? <>{activePermission && <ApprovalCard permission={activePermission} onReply={(choice) => answerPermission(activePermission, choice)} /> }<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} accent={accent} mood={selectedMood} agentName={agentName} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={openCreate} onRefresh={() => void refreshRuntimes()} /></> : <>
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
             <div className="chat-column">
               {groupedConversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent} size={112} mood={selectedMood} label={agentName} /><h2>Ready when you are.</h2><p>Ask {agentName} to explore <code>{currentProjectName ?? 'the project'}</code> or make a change.</p></div> : groupedConversationItems.map((item, index) => item.kind === 'activity-group'
-                ? <ActivityGroupRow key={item.id} group={item} />
+                ? <ActivityGroupRow key={item.id} group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
                 : item.kind === 'message'
                   ? <MessageItem key={item.id} message={item.value!} accent={accent} agentName={agentName} showAvatar={!isUserMessage(item.value) && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))} mood={index === lastAgentIndex ? selectedMood : 'idle'} />
-                  : <ActivityItem key={item.id} item={item} />)}
-              {activePermission && <PermissionCard permission={activePermission} onReply={(choice) => void answerPermission(activePermission, choice)} />}
+                  : <ActivityItem key={item.id} item={item} onDiff={(path, content) => setDiffViewer({ path, content })} />)}
+              {activePermission && <ApprovalCard permission={activePermission} focusOnMount={approvalFocusOnMount} onReply={(choice) => answerPermission(activePermission, choice)} />}
               {selectedSession.state === 'working' && <div className="working-indicator" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>{agentName} is working</div>}
             </div>
           </section>
           <div className="composer-wrap">
             <div className="composer-box">
-              <textarea ref={composerRef} value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() } }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
+              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() } }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
+              {activeSelectedAgent && <ComposerExecutionSwitch agent={activeSelectedAgent} onAgentUpdated={mergeAgent} onError={(reason) => setError(messageOf(reason))} />}
               <button className={`send-button ${turnLive ? 'cancel' : ''}`} onClick={turnLive ? () => void cancelTurn() : () => void sendPrompt()} disabled={busy || (!turnLive && (!composer.trim() || !runtimeReady))} aria-label={turnLive ? 'Cancel turn' : 'Send message'}>{busy ? <LoaderCircle size={16} className="spinning" /> : turnLive ? <Square size={12} fill="currentColor" /> : <ArrowUp size={17} />}</button>
             </div>
             <div className="composer-note">{currentProjectName ? <><FolderOpen size={11} />{currentProjectName}<span>·</span></> : null}Agent actions run on your device. You approve what matters.</div>
@@ -1164,13 +1271,14 @@ export function App() {
         </section>
         <div className="context-tabs" role="tablist" aria-label="Conversation context">{(['Details', 'Runtime', 'Files'] as ContextTab[]).map((name, index, tabs) => <button key={name} type="button" id={`context-tab-${name.toLowerCase()}`} role="tab" aria-controls="context-panel" aria-selected={tab === name} tabIndex={tab === name ? 0 : -1} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} onKeyDown={(event) => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); const targetIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length; const target = tabs[targetIndex]; setTab(target); document.getElementById(`context-tab-${target.toLowerCase()}`)?.focus() }}>{name}</button>)}</div>
         <div id="context-panel" role="tabpanel" aria-labelledby={`context-tab-${tab.toLowerCase()}`} tabIndex={0} className="context-tab-panel">
-          {tab === 'Details' && <DetailsPane session={selectedSession} model={appliedModel ?? selectedSession?.model ?? null} budgetWarning={budgetWarningFor(selectedSession)} budget={selectedBudget} usage={snapshot?.usageSummary ?? null} onUsage={() => void showUsage()} />}
+          {tab === 'Details' && <DetailsPane session={selectedSession} model={appliedModelForDetails} budgetWarning={budgetWarningFor(selectedSession)} budget={selectedBudget} usage={snapshot?.usageSummary ?? null} onUsage={() => void showUsage()} />}
           {tab === 'Runtime' && <RuntimePane runtime={selectedRuntime} connected={connection === 'connected'} onRefresh={() => void refreshRuntimes()} refreshing={refreshing} />}
           {tab === 'Files' && <FilesPane session={selectedSession} onOpen={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onReveal={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopy={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} />}
         </div>
       </aside>
 
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} loading={busy && usageSummary === null} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onClose={() => setUsageSheet(false)} />}
+      {quickSwitcherOpen && <QuickSwitcher items={quickSwitcherItems} onChoose={chooseQuickSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />}
       {settingsSheet && <SettingsSheet snapshot={snapshot} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
       {chooserView}
@@ -1260,7 +1368,7 @@ function plainText(text: string) {
   return text.replace(/```[\s\S]*?```/g, ' [code] ').replace(/\*\*|__|`/g, '').replace(/\s+/g, ' ').trim()
 }
 
-export function ActivityGroupRow({ group }: { group: Extract<GroupedConversationItem, { kind: 'activity-group' }> }) {
+export function ActivityGroupRow({ group, onDiff }: { group: Extract<GroupedConversationItem, { kind: 'activity-group' }>; onDiff?: (path: string, content: string) => void }) {
   const startsExpanded = group.failed > 0 || group.runningTitle !== null
   const [expanded, setExpanded] = useState(startsExpanded)
   useEffect(() => { if (startsExpanded) setExpanded(true) }, [startsExpanded])
@@ -1276,7 +1384,7 @@ export function ActivityGroupRow({ group }: { group: Extract<GroupedConversation
       <span>{summary || `${group.items.length} activities`}{group.failed > 0 ? ` · ${group.failed} failed` : ''}</span>
       {expanded ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
     </button>
-    {expanded && <div className="activity-group-items">{group.items.map((item) => <ActivityItem key={item.id} item={item} />)}</div>}
+    {expanded && <div className="activity-group-items">{group.items.map((item) => <ActivityItem key={item.id} item={item} onDiff={onDiff} />)}</div>}
   </section>
 }
 
@@ -1320,7 +1428,7 @@ function mergeHydratedSession(snapshot: Snapshot, id: string, fullSession: Sessi
   return { ...snapshot, sessions: [...sessions.filter((session) => session.id !== id), merged] }
 }
 
-function ActivityItem({ item }: { item: ConversationItem }) {
+function ActivityItem({ item, onDiff }: { item: ConversationItem; onDiff?: (path: string, content: string) => void }) {
   const activity = item.activity ?? {}
   const file = item.activityKind === 'file'
   const failed = ['error', 'failed', 'rejected'].includes(String(activity.state ?? activity.status ?? '').toLowerCase()) || item.activityKind === 'turn'
@@ -1332,38 +1440,13 @@ function ActivityItem({ item }: { item: ConversationItem }) {
     <div className="activity-heading">{file ? <FileText size={15} /> : <Terminal size={15} />}<strong>{title}</strong><span>{labelize(activity.state ?? activity.status, file ? 'Reported' : 'Activity')}</span>{time && !Number.isNaN(time.valueOf()) && <time>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>}</div>
     {detail && <p>{detail}</p>}
     {typeof activity.exitCode === 'number' && <small>Exit code {activity.exitCode}</small>}
-    {typeof activity.diff === 'string' && <details className="activity-detail"><summary>View reported diff</summary><pre>{activity.diff}</pre></details>}
+    {typeof activity.diff === 'string' && <button type="button" className="ghost-button small activity-diff-button" onClick={() => onDiff?.(String(activity.path ?? activity.filePath ?? activity.title ?? 'Reported change'), activity.diff as string)}>View reported diff</button>}
     {typeof activity.output === 'string' && activity.output !== detail && <details className="activity-detail"><summary>Output</summary><pre>{activity.output}</pre></details>}
   </article>
 }
 
 function SafeMessageText({ text }: { text: string }) {
-  const blocks = text.split(/```([^\n`]*)\n([\s\S]*?)```/g)
-  return <div className="safe-markdown">{blocks.map((part, index) => {
-    if (index % 3 === 1) return null
-    if (index % 3 === 2) return <CodeBlock key={`code-${index}`} language={blocks[index - 1]?.trim()} code={part.replace(/\n$/, '')} />
-    return part.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((inline, inlineIndex) => inline.startsWith('`') && inline.endsWith('`')
-      ? <code key={`${index}-${inlineIndex}`}>{inline.slice(1, -1)}</code>
-      : inline.startsWith('**') && inline.endsWith('**')
-        ? <strong key={`${index}-${inlineIndex}`}>{inline.slice(2, -2)}</strong>
-        : <span key={`${index}-${inlineIndex}`}>{inline}</span>)
-  })}</div>
-}
-
-function CodeBlock({ language, code }: { language: string; code: string }) {
-  const [copied, setCopied] = useState(false)
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(code); setCopied(true); window.setTimeout(() => setCopied(false), 1200) } catch { setCopied(false) }
-  }
-  return <div className="message-code"><div className="message-code-header"><span>{language || 'Code'}</span><button onClick={() => void copy()} aria-label="Copy code"><Copy size={13} />{copied ? 'Copied' : 'Copy'}</button></div><pre><code>{code}</code></pre></div>
-}
-
-function PermissionCard({ permission, onReply }: { permission: PermissionRequest; onReply: (choice: string) => void }) {
-  const choices = permission.choices ?? []
-  const detail = typeof permission.detail === 'string' ? permission.detail : typeof permission.description === 'string' ? permission.description : typeof permission.command === 'string' ? permission.command : null
-  const tool = typeof permission.tool === 'string' ? permission.tool : null
-  const deadline = typeof permission.expiresAt === 'string' ? Date.parse(permission.expiresAt) : Number.NaN
-  return <section className="permission-card"><div className="permission-icon"><ShieldAlert size={17} /></div><div className="permission-copy"><strong>{formatUnknownSafe(permission.title, 'Approval requested')}</strong><p>{detail ?? `The agent requested permission${tool ? ` to use ${tool}` : ''}.`}</p>{Number.isFinite(deadline) && <small className="permission-deadline">Expires {new Date(deadline).toLocaleTimeString()}</small>}<div className="permission-actions">{choices.map((choice) => <PermissionChoiceButton key={choice} permission={permission} choice={choice} className="permission-choice" onReply={onReply}>{permissionChoiceLabel(choice)}</PermissionChoiceButton>)}</div></div></section>
+  return <SafeMarkdown text={text} onOpenLink={(url) => void openSafeLink(url)} />
 }
 
 function DetailRow({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
@@ -1378,7 +1461,7 @@ function DetailsPane({ session, model, budgetWarning, budget, usage, onUsage }: 
         <DetailRow label="Title" value={formatUnknownSafe(session.title, fileNameForPath(session.projectPath ?? '') ?? 'Untitled')} />
         <DetailRow label="Project" value={session.projectPath ?? 'Unavailable'} mono />
         <DetailRow label="Status" value={labelize(session.state, 'Unknown')} />
-        <DetailRow label="Model" value={model?.trim() ? model : 'Default model'} />
+        <DetailRow label="Model" value={model?.trim() ?? 'Unknown'} />
       </div> : <p className="context-empty">No conversation selected.</p>}
     </section>
     <section className="context-section usage-section">
@@ -1425,11 +1508,32 @@ function RuntimePane({ runtime, connected, refreshing, onRefresh }: { runtime: R
 function FilesPane({ session, onOpen, onReveal, onCopy, onDiff }: { session: Session | null; onOpen: (path: string) => void; onReveal: (path: string) => void; onCopy: (path: string) => void; onDiff: (path: string, content: string) => void }) {
   const files = session?.files ?? []
   if (files.length === 0) return <div className="context-scroll"><div className="files-empty"><FileText size={20} /><strong>No files yet</strong><span>Files the agent edits in this conversation appear here.</span></div></div>
-  return <div className="context-scroll"><div className="file-list">{files.map((file, index) => {
+  const turns = session?.turns ?? []
+  const turnInfo = new Map(turns.map((turn, index) => {
+    const at = [turn.completedAt, turn.updatedAt, turn.startedAt, turn.createdAt].find((value) => typeof value === 'string' && Number.isFinite(Date.parse(value)))
+    return [String(turn.id ?? turn.turnId ?? ''), { index, at: typeof at === 'string' ? Date.parse(at) : 0 }] as const
+  }))
+  const groups = new Map<string, { id: string; label: string; index: number; at: number; sequence: number; files: Array<Record<string, unknown>> }>()
+  for (const file of files) {
+    const id = typeof file.turnId === 'string' ? file.turnId : ''
+    const info = id ? turnInfo.get(id) : undefined
+    const order = info?.index ?? -1
+    const sequence = typeof file.sequence === 'number' ? file.sequence : 0
+    const key = id || '__ungrouped__'
+    const title = id ? `Turn ${order >= 0 ? order + 1 : 'with changes'}` : 'Other changes'
+    const changedAt = typeof file.changedAt === 'string' ? Date.parse(file.changedAt) : 0
+    const group = groups.get(key) ?? { id: key, label: title, index: order, at: info?.at || (Number.isFinite(changedAt) ? changedAt : 0), sequence, files: [] }
+    group.sequence = Math.max(group.sequence, sequence)
+    group.files.push(file)
+    groups.set(key, group)
+  }
+  const orderedGroups = [...groups.values()].sort((a, b) => b.at - a.at || b.index - a.index || b.sequence - a.sequence)
+  const renderFile = (file: Record<string, unknown>, index: number) => {
     const path = String(file.path ?? file.filePath ?? 'Unknown path')
     const diff = typeof file.diff === 'string' ? file.diff : typeof file.patch === 'string' ? file.patch : null
-    const added = typeof file.addedLines === 'number' ? file.addedLines : typeof file.additions === 'number' ? file.additions : null
-    const removed = typeof file.removedLines === 'number' ? file.removedLines : typeof file.deletions === 'number' ? file.deletions : null
+    const parsed = diff ? parseUnifiedDiff(diff) : null
+    const added = typeof file.addedLines === 'number' ? file.addedLines : typeof file.additions === 'number' ? file.additions : parsed?.additions ?? null
+    const removed = typeof file.removedLines === 'number' ? file.removedLines : typeof file.deletions === 'number' ? file.deletions : parsed?.deletions ?? null
     const unknown = path === 'Unknown path'
     return <article className="file-row" key={String(file.id ?? path) + index}>
       <FileText size={15} />
@@ -1443,12 +1547,17 @@ function FilesPane({ session, onOpen, onReveal, onCopy, onDiff }: { session: Ses
         <button title={diff ? 'View diff' : 'No diff reported'} aria-label={`View diff for ${path}`} disabled={!diff} onClick={() => diff && onDiff(path, diff)}><FileText size={13} /></button>
       </span>
     </article>
-  })}</div></div>
+  }
+  const hasTurnInformation = files.some((file) => typeof file.turnId === 'string' && file.turnId)
+  return <div className="context-scroll"><div className="file-list">{hasTurnInformation ? orderedGroups.map((group) => <section className="file-turn-group" key={group.id}><h3>{group.label}</h3>{group.files.map(renderFile)}</section>) : files.map(renderFile)}</div></div>
 }
 
 function DiffViewer({ path, content, onClose }: { path: string; content: string; onClose: () => void }) {
   const { ref: dialogRef, close } = useDialogAccessibility(onClose)
-  return <div className="sheet-backdrop diff-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}><section ref={dialogRef} className="diff-sheet" role="dialog" aria-modal="true" aria-labelledby="diff-title"><header><div><p className="eyebrow">FILE CHANGE</p><h2 id="diff-title">{fileNameForPath(path)}</h2><small>{path}</small></div><button className="icon-button" data-dialog-initial-focus aria-label="Close diff" onClick={close}><X size={17} /></button></header><pre>{content}</pre></section></div>
+  const parsed = parseUnifiedDiff(content)
+  return <div className="sheet-backdrop diff-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}><section ref={dialogRef} className="diff-sheet" role="dialog" aria-modal="true" aria-labelledby="diff-title"><header><div><p className="eyebrow">FILE CHANGE</p><h2 id="diff-title">{fileNameForPath(path)}</h2><small>{path}</small></div><span className="diff-counts"><em>+{parsed.additions}</em><i>−{parsed.deletions}</i></span><button className="icon-button" data-dialog-initial-focus aria-label="Close diff" onClick={close}><X size={17} /></button></header>
+    <div className="diff-content" role="region" aria-label={`Diff for ${path}`} tabIndex={0}>{parsed.empty ? <p className="diff-empty">No diff content was reported.</p> : parsed.binary ? <p className="diff-empty">Binary file change. Text lines are unavailable.</p> : <pre>{parsed.lines.map((line, index) => <span className={`diff-line ${line.kind}`} key={`${index}-${line.text}`}><span className="diff-number">{line.oldNumber ?? ''}</span><span className="diff-number">{line.newNumber ?? ''}</span><code>{line.text}</code></span>)}</pre>}</div>
+  </section></div>
 }
 
 function UsageSheet({ summary, period, loading, onPeriodChange, onClose }: { summary: Record<string, unknown> | null; period: 'today' | 'month'; loading: boolean; onPeriodChange: (period: 'today' | 'month') => void; onClose: () => void }) {
@@ -1481,8 +1590,7 @@ function shortDate(value: unknown) {
 
 function recordFrom(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
 
-function Companion({ agent, agents, runtime, runtimes, session, usage, connected, appError, activityLabel, budgetWarning, permission, approvalMode, onReply, onNewSession, onOpenMain, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; budgetWarning: boolean; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
-  const choices = permission?.choices ?? []
+function Companion({ agent, agents, runtime, runtimes, session, usage, connected, appError, activityLabel, budgetWarning, permission, approvalMode, onReply, onNewSession, onOpenMain, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; budgetWarning: boolean; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
   const [view, setView] = useState<'overview' | 'chat' | 'activity' | 'settings'>('overview')
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -1530,7 +1638,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
   useEffect(() => { fileRequest.current++; setDraft(''); setDroppedFile(null); setFileInfo(null); setPreparingFile(false); setFileError(null); setDropError(null) }, [runtime?.id, session?.id])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
+      if (event.key !== 'Escape' || event.defaultPrevented) return
       if (view !== 'overview') { setView('overview'); return }
       if (mode === 'home') fsmRef.current?.forcePetit()
     }
@@ -1605,7 +1713,6 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
   })
   const toggleExpanded = () => { if (mode === 'home') fsmRef.current?.forcePetit(); else fsmRef.current?.click() }
   const openView = (next: typeof view) => { setView(next); if (mode !== 'home') fsmRef.current?.forceHome() }
-  const detail = permission && (typeof permission.detail === 'string' ? permission.detail : typeof permission.description === 'string' ? permission.description : null)
   const beginConfused = () => { viewBeforeConfused.current = view; setConfused(true); if (mode !== 'home') fsmRef.current?.forceHome() }
   const recoverFromConfused = () => { setConfused(false); setView(viewBeforeConfused.current) }
   const prepareLocalReference = async (path: string) => {
@@ -1736,10 +1843,8 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
           {permission ? <div className="island-card wash amber">
             <span className="card-bot">{focusBlob(56)}</span>
             <div className="card-stack">
-              <div className="who-row"><i className="who-dot" style={{ background: color }} /><span className="n">{name}</span><span>needs permission</span></div>
-              <div className="title">{formatUnknownSafe(permission.title, 'Approval needed')}</div>
-              {(detail ?? permission.command) && <div className="code">{detail ?? permission.command}</div>}
-              <div className="actions companion-choices">{choices.map((choice) => <PermissionChoiceButton key={choice} permission={permission} choice={choice} className={`btn ${/deny|reject/.test(choice) ? 'secondary' : 'primary'} companion-permission-choice`} onReply={(value) => onReply(permission, value)}>{permissionChoiceLabel(choice)}</PermissionChoiceButton>)}{session && <button className="btn ghost" onClick={cancelCompanionTurn} disabled={sending}>Cancel turn</button>}</div>
+              <ApprovalCard permission={permission} variant="companion" onReply={(choice) => onReply(permission, choice)} />
+              {session && <button className="btn ghost" onClick={cancelCompanionTurn} disabled={sending}>Cancel turn</button>}
             </div>
           </div> : confused ? <div className="island-card wash pink">
             <span className="card-bot">{focusBlob(62)}</span>
@@ -1807,16 +1912,6 @@ function formatMinor(value: number, currency: unknown) {
   const digits = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2
   return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: digits }).format(value / (10 ** digits))
 }
-
-function permissionChoiceLabel(choice: string) {
-  if (choice === 'allow_once') return 'Allow once'
-  if (choice === 'allow_session') return 'Allow this session'
-  if (choice === 'deny') return 'Deny'
-  if (choice === 'reject_once') return 'Reject once'
-  if (choice === 'reject_always') return 'Reject always'
-  return labelize(choice)
-}
-
 
 function messageOf(reason: unknown) {
   if (reason instanceof Error) return reason.message

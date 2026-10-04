@@ -260,6 +260,58 @@ describe('App mounted lifecycle', () => {
     expect(view.host.querySelector('.inline-error')?.textContent).toContain('No reply was sent')
   })
 
+  it('focuses the approval when the active composer becomes disabled', async () => {
+    configure(snapshot())
+    const view = startApp()
+    await view.settle()
+    const composer = view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')!
+    composer.focus()
+    expect(document.activeElement).toBe(composer)
+
+    const permission = { id: 'permission-focus', sessionId: 'session-a', runtimeId: 'runtime-a', status: 'pending', title: 'Confirm operation', choices: ['allow_once', 'deny'] }
+    act(() => h.daemonEventHandlers.at(-1)!({ sequence: 21, type: 'permission.requested', payload: { sessionId: 'session-a', permission } }))
+    await view.settle()
+
+    const approval = view.host.querySelector<HTMLElement>('[data-permission-card]')
+    expect(composer.disabled).toBe(true)
+    expect(approval).not.toBeNull()
+    expect(document.activeElement).toBe(approval)
+  })
+
+  it('refreshes the applied model on exec.options.changed while the session remains working', async () => {
+    const workingSession = { ...sessionA, state: 'working' }
+    configure(snapshot({ sessions: [workingSession, sessionB] }))
+    let latestModel = 'model-before'
+    let useDeferredSnapshot = false
+    const nextSnapshot = deferred<unknown>()
+    const execSnapshot = (model: string) => ({
+      id: 'snapshot-a', sessionId: 'session-a', status: 'partial',
+      requested: { model }, applied: { model: { applied: true, value: model } },
+    })
+    h.rpc.mockImplementation(async (method: string) => {
+      if (method === 'events.replay') return { replayAvailable: true, events: [] }
+      if (method === 'settings.get') return { settings: {} }
+      if (method === 'exec.snapshot.latest') return useDeferredSnapshot ? nextSnapshot.promise : execSnapshot(latestModel)
+      return {}
+    })
+    const view = startApp()
+    await view.settle()
+    const modelRow = () => [...view.host.querySelectorAll<HTMLElement>('.detail-row')].find((row) => row.firstElementChild?.textContent === 'Model')
+    expect(modelRow()?.textContent).toContain('model-before')
+
+    latestModel = 'model-after'
+    useDeferredSnapshot = true
+    act(() => h.daemonEventHandlers.at(-1)!({ sequence: 21, type: 'exec.options.changed', payload: { sessionId: 'session-a', turnId: 'turn-a' } }))
+    await view.settle()
+    expect(modelRow()?.textContent).toContain('model-before')
+    expect(view.host.querySelectorAll('.detail-row')[2]?.textContent).toContain('Working')
+
+    await act(async () => { nextSnapshot.resolve(execSnapshot(latestModel)); await settleMicrotasks() })
+    await view.settle()
+    expect(modelRow()?.textContent).toContain('model-after')
+    expect(view.host.querySelectorAll('.detail-row')[2]?.textContent).toContain('Working')
+  })
+
   it('keeps one opt-in companion sound owner through greeting, compact, and home, and unlocks only on gesture', async () => {
     configure(snapshot(), { activeSession: 'session-a', activeRuntime: 'runtime-a', soundsEnabled: true })
     const view = startApp('?companion')

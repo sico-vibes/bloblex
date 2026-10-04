@@ -15,7 +15,7 @@ const runtime = (provider: string): Runtime => ({ id: 'rt-1', provider, status: 
 
 function draft(partial: Partial<AgentDraft> = {}): AgentDraft {
   return {
-    name: 'Claude', description: '', instructions: 'Be brief', color: 'mint', runtimeId: 'rt-1', defaultProject: null,
+    name: 'Claude', description: '', instructions: 'Be brief', color: 'mint', outfit: 'auto', runtimeId: 'rt-1', defaultProject: null,
     model: null, thinking: null, serviceTier: null, approvalMode: null, ...partial,
   }
 }

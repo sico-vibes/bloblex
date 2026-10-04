@@ -467,12 +467,27 @@ describe('blob roster and editor', () => {
     await click(buttonNamed(view.host, 'Duplicate'))
     await view.settle()
     const create = h.rpc.mock.calls.find((call) => call[0] === 'agent.create')
-    expect(create?.[1]).toEqual({
+    expect(create?.[1]).toStrictEqual({
       name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default agent for Claude.', instructions: '', color: '#f38c6f',
-      model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
+      outfit: 'auto', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
     })
     expect(create?.[1]).not.toHaveProperty('archived')
     expect(rows(view.host).some((row) => row.textContent?.includes('Copy of Claude'))).toBe(true)
+  })
+
+  it('copies a selected outfit on duplicate', async () => {
+    const source = agent({ ...claude, outfit: 'witch-hat' })
+    h.fetchSnapshot.mockResolvedValue(snapshot({ agents: [source, codex, invoice, opencode, retired] }))
+    const view = startApp()
+    await view.settle()
+    await openMenu(rows(view.host)[0]!)
+    await click(buttonNamed(view.host, 'Duplicate'))
+    await view.settle()
+    const create = h.rpc.mock.calls.find((call) => call[0] === 'agent.create')
+    expect(create?.[1]).toStrictEqual({
+      name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default agent for Claude.', instructions: '', color: '#f38c6f',
+      outfit: 'witch-hat', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
+    })
   })
 
   it('archives after confirmation and removes the row', async () => {

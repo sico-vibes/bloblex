@@ -1,5 +1,6 @@
 import type { Agent } from '../types'
 import { agentColorHex } from './agentColor'
+import { isOutfit, normalizeOutfit, type Outfit } from '../blob/outfit'
 
 export const BLOB_SHARE_FORMAT = 'bloblex.blob.v1'
 export const BLOB_SHARE_MAX_BYTES = 64 * 1024
@@ -13,6 +14,7 @@ export interface SharedBlob {
   model: string | null
   thinking: string | null
   speed: string | null
+  outfit: Outfit
   defaultApprovalMode?: 'ask' | 'auto'
   providerId?: string
 }
@@ -28,6 +30,7 @@ export function serializeBlob(agent: Agent, providerId: string): string {
     model: boundedOptional(agent.model, 160),
     thinking: boundedOptional(agent.thinking, 80),
     speed: boundedOptional(agent.serviceTier, 80),
+    outfit: normalizeOutfit(agent.outfit),
     ...(defaultApprovalMode ? { defaultApprovalMode } : {}),
     providerId,
   }
@@ -48,13 +51,15 @@ export function parseSharedBlob(text: string): SharedBlob {
   const model = nullableText(parsed.model, 160, 'model')
   const thinking = nullableText(parsed.thinking, 80, 'thinking')
   const speed = nullableText(parsed.speed, 80, 'speed')
+  if (parsed.outfit !== undefined && !isOutfit(parsed.outfit)) throw new Error('Choose a valid outfit.')
+  const outfit = normalizeOutfit(parsed.outfit)
   let providerId: string | undefined
   if (parsed.providerId !== undefined && parsed.providerId !== null) {
     providerId = optionalText(parsed.providerId, 100, 'provider').trim() || undefined
   }
   if (parsed.defaultApprovalMode !== undefined && parsed.defaultApprovalMode !== 'ask' && parsed.defaultApprovalMode !== 'auto') throw new Error('Only Ask or Auto approval can be imported.')
   return {
-    format: BLOB_SHARE_FORMAT, name, description, colour, instructions, model, thinking, speed,
+    format: BLOB_SHARE_FORMAT, name, description, colour, instructions, model, thinking, speed, outfit,
     ...(parsed.defaultApprovalMode === 'ask' || parsed.defaultApprovalMode === 'auto' ? { defaultApprovalMode: parsed.defaultApprovalMode } : {}),
     ...(providerId ? { providerId } : {}),
   }

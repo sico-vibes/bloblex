@@ -2529,11 +2529,13 @@ mod phase2a_tests {
     #[tokio::test]
     async fn agent_rpc_crud_reorder_archive_errors_and_persisted_event_sequence(){
         let(st,mut events)=state();
-        let created=dispatch(&st,"agent.create",json!({"name":"Alpha","runtimeId":"rt-test","instructions":"keep private","customEnv":{"TERM":"xterm-256color"}})).await.unwrap()["agent"].clone();let id=created["id"].as_str().unwrap().to_owned();
+        let created=dispatch(&st,"agent.create",json!({"name":"Alpha","runtimeId":"rt-test","instructions":"keep private","customEnv":{"TERM":"xterm-256color"}})).await.unwrap()["agent"].clone();let id=created["id"].as_str().unwrap().to_owned();assert_eq!(created["outfit"],"auto");
         let ev=events.recv().await.unwrap();assert_eq!(ev.event_type,"agent.changed");assert_eq!(ev.payload["action"],"created");assert!(ev.payload.get("instructions").is_none());assert!(ev.payload.get("customEnv").is_none());assert!(ev.payload.get("customArgs").is_none());
         assert_eq!(dispatch(&st,"agent.get",json!({"agentId":id})).await.unwrap()["agent"]["name"],"Alpha");assert_eq!(dispatch(&st,"agent.list",json!({})).await.unwrap()["agents"].as_array().unwrap().len(),1);
         let second=dispatch(&st,"agent.create",json!({"name":"Beta","runtimeId":"rt-test"})).await.unwrap()["agent"]["id"].as_str().unwrap().to_owned();let _=events.recv().await.unwrap();
         let updated=dispatch(&st,"agent.update",json!({"agentId":id,"name":"Alpha Prime"})).await.unwrap();assert_eq!(updated["agent"]["name"],"Alpha Prime");let update_event=events.recv().await.unwrap();assert!(update_event.sequence>ev.sequence);
+        let dressed=dispatch(&st,"agent.update",json!({"agentId":id,"outfit":"crown"})).await.unwrap();assert_eq!(dressed["agent"]["outfit"],"crown");let _=events.recv().await.unwrap();
+        assert_eq!(dispatch(&st,"agent.update",json!({"agentId":id,"outfit":"bunny-ears"})).await.unwrap_err().1.code,"invalid_argument");
         let reorder=dispatch(&st,"agent.reorder",json!({"runtimeId":"rt-test","agentIds":[second,id]})).await.unwrap();assert_eq!(reorder["agents"][0]["id"],second);let _=events.recv().await.unwrap();let _=events.recv().await.unwrap();
         assert_eq!(dispatch(&st,"agent.reorder",json!({"runtimeId":"rt-test","agentIds":[id]})).await.unwrap_err().1.code,"invalid_argument");
         let archived=dispatch(&st,"agent.delete",json!({"agentId":second})).await.unwrap();assert_eq!(archived["agent"]["archived"],true);let archive_event=events.recv().await.unwrap();assert_eq!(archive_event.payload["action"],"archived");

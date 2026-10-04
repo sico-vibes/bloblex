@@ -9,7 +9,7 @@ import { deriveCompanionStatus } from './companionStatus'
 import type { AgentDraft } from './agentForm'
 
 /** Top of the blob editor: the character, its name and one line of facts. */
-export function BlobOverview({ draft, runtime, session, connected, model, mode, approvalMode }: {
+export function BlobOverview({ draft, runtime, session, connected, model, mode, approvalMode, createdAt }: {
   draft: AgentDraft
   runtime: Runtime | null
   session: Session | null
@@ -17,6 +17,7 @@ export function BlobOverview({ draft, runtime, session, connected, model, mode, 
   model: string | null
   mode: 'create' | 'edit'
   approvalMode?: ApprovalMode | null
+  createdAt?: string | null
 }) {
   const derived = deriveCompanionStatus({ connected, runtime, session: mode === 'create' ? null : session, now: Date.now() })
   const mood = mode === 'create' ? (connected ? 'idle' : 'offline') : derived.mood
@@ -31,7 +32,7 @@ export function BlobOverview({ draft, runtime, session, connected, model, mode, 
     mode === 'create' ? 'Not created yet' : derived.label,
   ]
   return <section className="blob-hero" aria-label="Blob preview">
-    <BlobCanvas color={paint} size={104} mood={mood} label={draft.name.trim() || 'New blob'} />
+    <BlobCanvas color={paint} size={104} mood={mood} outfit={draft.outfit} createdAt={createdAt} label={draft.name.trim() || 'New blob'} />
     <div className="blob-hero-name">
       <h2>{draft.name.trim() || 'New blob'}</h2>
       <ApprovalPill mode={approvalMode} />

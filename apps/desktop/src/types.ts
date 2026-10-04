@@ -1,4 +1,5 @@
 import type { AutoResolvedAction, BypassNotice } from './approvalContract'
+import type { Outfit } from './blob/outfit'
 import { parseAutoResolved, parseBypassActive } from './approvalContract'
 
 export type { AutoResolvedAction, BypassNotice } from './approvalContract'
@@ -44,6 +45,7 @@ export interface Agent extends JsonRecord {
   description: string
   instructions: string
   color: string
+  outfit?: Outfit | null
   runtimeId: string
   model: string | null
   thinking: string | null

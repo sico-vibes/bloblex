@@ -6,6 +6,8 @@ import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { hexToRGB } from '../blob/blobEngine'
 import { drawGreetingScene } from '../blob/greetingScene'
 import { AGENT_SWATCHES, agentColorHex, swatchLabel } from '../ui/agentColor'
+import { OUTFITS, OUTFIT_LABELS, resolveOutfit } from '../blob/outfit'
+import '../ui/theme.css'
 
 const moods: BlobMood[] = ['idle', 'online', 'listening', 'thinking', 'working', 'tool_activity', 'permission', 'success', 'error', 'rate_limited', 'budget_warning', 'sleeping', 'offline', 'file_drop', 'file_preparing', 'file_ready', 'file_sending', 'file_error']
 const palette = [
@@ -31,6 +33,7 @@ function Preview() {
   const [color, setColor] = useState(palette[0].color)
   const [mood, setMood] = useState<BlobMood>('idle')
   const [greetKey, setGreetKey] = useState(0)
+  const [wardrobeSize, setWardrobeSize] = useState(72)
   return <main style={{ minHeight: '100vh', margin: 0, padding: 24, background: '#070707', color: '#fcfcfc', font: '13px system-ui, Segoe UI, sans-serif' }}>
     <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
       {palette.map((item) => <button key={item.name} onClick={() => setColor(item.color)} style={{ padding: '6px 12px', borderRadius: 999, border: '1px solid #333', background: item.color === color ? '#2f2f2f' : 'transparent', color: 'inherit' }}>{item.name}</button>)}
@@ -43,6 +46,18 @@ function Preview() {
       <BlobCanvas color={color} size={160} mood={mood} label="Focus" />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxWidth: 640 }}>
         {moods.map((item) => <button key={item} onClick={() => setMood(item)} style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid #333', background: item === mood ? '#1084fe' : '#111', color: 'inherit' }}>{item}</button>)}
+      </div>
+    </section>
+    <section style={{ marginBottom: 24 }} aria-label="Outfit previews">
+      <h2 style={{ fontSize: 'var(--fs-lg)', fontWeight: 600 }}>Outfits</h2>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }} aria-label="Preview size">
+        {[36, 72, 120].map((value) => <button key={value} aria-pressed={wardrobeSize === value} onClick={() => setWardrobeSize(value)} style={{ padding: '5px 9px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line-strong)', background: wardrobeSize === value ? 'var(--surface-selected)' : 'var(--surface-raised)', color: 'var(--text-1)', fontSize: 'var(--fs-xs)' }}>{value}px</button>)}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(92px, 1fr))', gap: 10 }}>
+        {OUTFITS.map((outfit) => <figure key={outfit} style={{ minHeight: 118, margin: 0, padding: 8, display: 'grid', justifyItems: 'center', alignContent: 'center', gap: 4, borderRadius: 'var(--radius-md)', background: 'var(--surface-panel)' }}>
+          <BlobCanvas color={color} size={wardrobeSize} outfit={outfit === 'auto' ? resolveOutfit('auto') : outfit} label={`${OUTFIT_LABELS[outfit]} preview`} />
+          <figcaption style={{ color: 'var(--text-3)', fontSize: 'var(--fs-2xs)' }}>{outfit === 'auto' ? `Auto · ${OUTFIT_LABELS[resolveOutfit('auto')]}` : OUTFIT_LABELS[outfit]}</figcaption>
+        </figure>)}
       </div>
     </section>
     <section style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 110px)', gap: 14 }}>

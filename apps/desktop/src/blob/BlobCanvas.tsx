@@ -4,6 +4,7 @@ import { BlobEngine, hexToRGB, type EngineState } from './blobEngine'
 import { drawGreetingScene, GREETING_END_MS, GREETING_REFERENCE } from './greetingScene'
 import { DizzyRecoveryDeadline, GreetingLifecycle } from './motion'
 import { playCompanionCue, unlockCompanionAudioFromGesture } from './soundCues'
+import { normalizeOutfit, type Outfit } from './outfit'
 
 export type { BlobMood } from './characterState'
 import type { BlobMood } from './characterState'
@@ -19,6 +20,9 @@ interface Props {
   greeting?: boolean
   /** Small peer avatars: flatter shading, larger eyes and a wandering gaze. */
   mini?: boolean
+  decorative?: boolean
+  outfit?: Outfit | null
+  createdAt?: string | null
   /** Opt in only on the companion surface; main-window avatars stay silent. */
   soundCues?: boolean
   onGreetingComplete?: () => void
@@ -67,7 +71,7 @@ const LOVE_COOLDOWN_MS = 6000
  * avatar, so a blob keeps one face language everywhere. With `greeting`, the
  * canvas plays the companion welcome scene instead.
  */
-export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, soundCues = false, onGreetingComplete, onDizzy, onDizzyRecovery }: Props) {
+export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, decorative = false, outfit = 'auto', createdAt = null, soundCues = false, onGreetingComplete, onDizzy, onDizzyRecovery }: Props) {
   const effectiveMood = moodWithFileReference(mood, fileStage)
   const canvas = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<BlobEngine | null>(null)
@@ -75,6 +79,8 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
     const engine = new BlobEngine()
     engine.isMini = mini
     engine.bodyColor = hexToRGB(color)
+    engine.outfit = normalizeOutfit(outfit)
+    engine.createdAt = createdAt
     engine.setState(engineStateFor(effectiveMood), { force: true, silent: true })
     engineRef.current = engine
   }
@@ -99,6 +105,12 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
     engineRef.current!.isMini = mini
     scheduleRef.current?.()
   }, [color, mini])
+
+  useEffect(() => {
+    engineRef.current!.outfit = normalizeOutfit(outfit)
+    engineRef.current!.createdAt = createdAt ?? null
+    scheduleRef.current?.()
+  }, [outfit, createdAt])
 
   useEffect(() => {
     const life = greetingLife.current!
@@ -153,7 +165,7 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
 
       ctx.clearRect(0, 0, width, height)
       if (greeting) {
-        drawGreetingScene(ctx, width, height, life.active && motionAllowed ? life.age(now) : GREETING_END_MS, engine.bodyColor)
+        drawGreetingScene(ctx, width, height, life.active && motionAllowed ? life.age(now) : GREETING_END_MS, engine.bodyColor, engine.outfit, engine.createdAt)
         if (life.active && motionAllowed) frame = requestAnimationFrame(draw)
         return
       }
@@ -290,5 +302,5 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
   }, [size, greeting, soundCues])
 
   const { width, height } = blobCanvasSize(size, greeting)
-  return <canvas ref={canvas} className={`blob-canvas ${className}`} width={width} height={height} style={{ width, height }} role="img" aria-label={`${label} ${effectiveMood}`} data-tauri-drag-region={dragRegion ? '' : undefined} />
+  return <canvas ref={canvas} className={`blob-canvas ${className}`} width={width} height={height} style={{ width, height }} role={decorative ? undefined : 'img'} aria-hidden={decorative || undefined} aria-label={decorative ? undefined : `${label} ${effectiveMood}`} data-tauri-drag-region={dragRegion ? '' : undefined} />
 }

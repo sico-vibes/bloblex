@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseSharedBlob, serializeBlob } from './blobShare'
 
-const base = { format: 'bloblex.blob.v1', name: 'Helper', description: '', colour: '#AABBCC', instructions: '', model: null, thinking: null, speed: null, providerId: 'codex' }
+const base = { format: 'bloblex.blob.v1', name: 'Helper', description: '', colour: '#AABBCC', instructions: '', model: null, thinking: null, speed: null, outfit: 'santa-hat', providerId: 'codex' }
 
 describe('blob share format', () => {
   it('ignores unknown fields and accepts only safe approval modes', () => {
@@ -13,6 +13,16 @@ describe('blob share format', () => {
   it('accepts a missing provider so the import flow can ask for an agent', () => {
     const { providerId: _providerId, ...withoutProvider } = base
     expect(parseSharedBlob(JSON.stringify(withoutProvider)).providerId).toBeUndefined()
+  })
+
+  it('round trips outfits and defaults older files to auto', () => {
+    const agent = { name: 'Helper', description: '', instructions: '', color: '#aabbcc', outfit: 'witch-hat', model: null, thinking: null, serviceTier: null } as never
+    const value = JSON.parse(serializeBlob(agent, 'codex'))
+    expect(value.outfit).toBe('witch-hat')
+    expect(parseSharedBlob(JSON.stringify(value)).outfit).toBe('witch-hat')
+    const { outfit: _oldField, ...older } = base
+    expect(parseSharedBlob(JSON.stringify(older)).outfit).toBe('auto')
+    expect(() => parseSharedBlob(JSON.stringify({ ...base, outfit: 'bunny-ears' }))).toThrow(/valid outfit/)
   })
 
   it('rejects wrong versions, malformed colours, and oversized content', () => {

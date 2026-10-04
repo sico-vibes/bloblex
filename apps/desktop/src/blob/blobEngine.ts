@@ -6,6 +6,10 @@
 // instead of setTimeout, and a reduced-motion mode is supported.
 
 import { Ease, lerp, type EaseFn } from './engine/core/anim'
+import { drawWardrobe, type WardrobeEyeFrame } from './wardrobeDrawing'
+import { resolveOutfit, type Outfit } from './outfit'
+import { BADGE_OFFSET, BADGE_RADIUS } from './blobGeometry'
+export { BADGE_OFFSET } from './blobGeometry'
 
 export type RGB = readonly [number, number, number]
 
@@ -187,12 +191,12 @@ const secondsNow = () => performance.now() / 1000
 export const BODY_RADIUS = 0.4
 
 /** Badge centre relative to the body centre, in units of the body radius. */
-export const BADGE_OFFSET = { x: -0.82, y: -0.66 } as const
-
 export class BlobEngine {
   isMini = false
   reducedMotion = false
   bodyColor: RGB = C.idle
+  outfit: Outfit = 'auto'
+  createdAt: string | null = null
 
   yaw = 0; pitch = 0; roll = 0; tilt = 0; open = 1
   sx = 1; sy = 1; oy = 0; ox = 0
@@ -214,6 +218,10 @@ export class BlobEngine {
 
   lookX = 0
   lookY = 0
+  hatLagX = 0
+  hatLagY = 0
+  private hatLagVx = 0
+  private hatLagVy = 0
 
   private tweens = new Map<PropKey, Tween>()
   private locks = new Set<PropKey>()
@@ -389,6 +397,7 @@ export class BlobEngine {
       Math.abs(this.tgYaw - this.yaw) > 0.002 || Math.abs(this.tgPitch - this.pitch) > 0.002 ||
       Math.abs(this.tgTilt - this.tilt) > 0.002 || Math.abs(this.tgSy - this.sy) > 0.002 ||
       Math.abs(this.tgSx - this.sx) > 0.002 || Math.abs(this.tgEs - this.es) > 0.002 ||
+      Math.abs(this.hatLagX) > 0.002 || Math.abs(this.hatLagY) > 0.002 || Math.abs(this.hatLagVx) > 0.004 || Math.abs(this.hatLagVy) > 0.004 ||
       this.slotH > 0.001 || Math.abs(this.slotHVel) > 0.001 ||
       Math.abs(this.col[0] - this.colT[0]) > 0.003 || Math.abs(this.col[1] - this.colT[1]) > 0.003 ||
       Math.abs(this.col[2] - this.colT[2]) > 0.003
@@ -499,6 +508,20 @@ export class BlobEngine {
     if (!this.locks.has('sy')) this.sy += (this.tgSy - this.sy) * kGen
     if (!this.locks.has('sx')) this.sx += (this.tgSx - this.sx) * kGen
     if (!this.locks.has('es')) this.es += (this.tgEs - this.es) * kGen
+    if (!motion) {
+      this.hatLagX = 0; this.hatLagY = 0; this.hatLagVx = 0; this.hatLagVy = 0
+    } else {
+      const targetX = -this.yaw * 0.045
+      const targetY = Math.max(0, -this.oy) * 0.04 - this.pitch * 0.035
+      const spring = (position: number, velocity: number, target: number) => {
+        const acceleration = (target - position) * 115 - velocity * 17
+        velocity += acceleration * dt
+        position += velocity * dt
+        return [position, velocity] as const
+      }
+      ;[this.hatLagX, this.hatLagVx] = spring(this.hatLagX, this.hatLagVx, targetX)
+      ;[this.hatLagY, this.hatLagVy] = spring(this.hatLagY, this.hatLagVy, targetY)
+    }
     this.col = motion ? mix3(this.col, this.colT, 1 - Math.pow(0.002, dt)) : this.colT
 
     if (n > this.nextBlink) {
@@ -557,6 +580,7 @@ export class BlobEngine {
     }
 
     this.drawEyes(x, body, R)
+    drawWardrobe(x, resolveOutfit(this.outfit, new Date(), this.createdAt), R, this.wardrobeEyeFrames(R), this.open, this.hatLagX, this.hatLagY, this.yaw, this.pitch)
     if (this.morph > 0.05) this.drawMouth(x, body, R)
     if (this.cfg.dim > 0) {
       x.fillStyle = `rgba(16,18,22,${this.cfg.dim})`
@@ -658,6 +682,29 @@ export class BlobEngine {
       x.restore()
     }
     x.restore()
+  }
+
+  wardrobeEyeFrames(R: number): WardrobeEyeFrame[] {
+    const frames: WardrobeEyeFrame[] = []
+    for (const sd of [-1, 1] as const) {
+      const eyeYaw = sd * EYE_SP + this.yaw
+      let eyePitch = EYE_P + this.pitch + this.roll
+      eyePitch = (((eyePitch + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - Math.PI
+      const cp = Math.cos(eyePitch)
+      const visible = Math.cos(eyeYaw) * cp > 0.04
+      const fx = lerp(Math.max(0.18, Math.cos(eyeYaw)), 1, this.morph * 0.7)
+      const fy = lerp(Math.max(0.18, cp), 1, this.morph * 0.7)
+      const mult = this.isMini ? 1.15 : 1
+      frames.push({
+        x: Math.sin(eyeYaw) * cp * R,
+        y: -Math.sin(eyePitch) * R + (this.morph > 0 ? R * 0.14 * this.morph : 0),
+        width: R * EYE_W * this.es * mult * fx,
+        height: R * EYE_H * this.es * mult * fy,
+        rotation: Math.sin(eyeYaw) * Math.sin(eyePitch) * 0.6,
+        visible,
+      })
+    }
+    return frames
   }
 
   private drawEyeShape(x: CanvasRenderingContext2D, shape: EyeShape, w: number, h: number, arcH: number, sd: number) {
@@ -796,8 +843,8 @@ export class BlobEngine {
       return
     }
 
-    const outer = R * 0.34
-    const inner = R * 0.27
+    const outer = R * BADGE_RADIUS
+    const inner = R * (BADGE_RADIUS * (0.27 / 0.34))
     x.fillStyle = ring
     x.beginPath(); x.arc(0, 0, outer, 0, Math.PI * 2); x.fill()
     x.fillStyle = col

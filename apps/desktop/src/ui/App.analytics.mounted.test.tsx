@@ -65,7 +65,7 @@ vi.mock('../blob/soundCues', () => ({
   playCompanionCue: vi.fn(), unlockCompanionAudioFromGesture: vi.fn(),
   setCompanionSoundsEnabled: vi.fn(), disposeCompanionAudio: vi.fn(),
 }))
-vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => null }))
+vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: Record<string, unknown>) => <span data-outfit={props.outfit} /> }))
 
 import { App } from './App'
 
@@ -157,7 +157,7 @@ beforeEach(() => {
   h.selectBlobExportPath.mockResolvedValue('selected-blob-export-token')
   h.writeBlobExport.mockResolvedValue(undefined)
   h.selectBlobImportPath.mockResolvedValue('selected-blob-import-token')
-  h.readBlobImport.mockResolvedValue(JSON.stringify({ format: 'bloblex.blob.v1', name: 'Imported helper', description: 'Shared', colour: '#aabbcc', instructions: 'Use concise answers.', model: null, thinking: null, speed: null, defaultApprovalMode: 'ask' }))
+  h.readBlobImport.mockResolvedValue(JSON.stringify({ format: 'bloblex.blob.v1', name: 'Imported helper', description: 'Shared', colour: '#aabbcc', instructions: 'Use concise answers.', model: null, thinking: null, speed: null, outfit: 'witch-hat', defaultApprovalMode: 'ask' }))
 })
 
 afterEach(() => {
@@ -227,6 +227,7 @@ describe('sidebar usage analytics', () => {
     await view.settle()
     expect(view.host.querySelector('.blob-page')).not.toBeNull()
     expect(view.host.querySelector<HTMLInputElement>('input[aria-label="Blob name"]')?.value).toBe('Imported helper')
+    expect(view.host.querySelector('.blob-hero [data-outfit="witch-hat"]')).not.toBeNull()
     expect(h.rpc.mock.calls.some((call) => call[0] === 'agent.create')).toBe(false)
   })
 })

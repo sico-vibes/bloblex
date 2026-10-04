@@ -3,7 +3,10 @@
 // a sphere with capsule eyes in the agent colour; the notch collapse strip is
 // omitted because the companion window shell owns that transition.
 
-import { BADGE_OFFSET, type RGB } from './blobEngine'
+import type { RGB } from './blobEngine'
+import { BADGE_OFFSET } from './blobGeometry'
+import { drawWardrobe } from './wardrobeDrawing'
+import { resolveOutfit, type Outfit } from './outfit'
 
 export const GREETING_REFERENCE = { width: 640, height: 150 } as const
 
@@ -206,7 +209,7 @@ function drawHandR(x: CanvasRenderingContext2D, hw: number, hh: number, p: Scene
   x.restore()
 }
 
-function drawCharacter(x: CanvasRenderingContext2D, p: ScenePose, color: RGB) {
+function drawCharacter(x: CanvasRenderingContext2D, p: ScenePose, color: RGB, outfit: Outfit, createdAt?: string | null) {
   const r = p.hb * SPHERE
   if (r <= 0.4) return
 
@@ -289,6 +292,10 @@ function drawCharacter(x: CanvasRenderingContext2D, p: ScenePose, color: RGB) {
   }
   x.restore()
 
+  drawWardrobe(x, resolveOutfit(outfit, new Date(), createdAt), r, [-1, 1].map((sd) => ({
+    x: sd * sp + lx, y: ly, width: w, height: h, rotation: 0, visible: true,
+  })), p.open)
+
   if (p.badge > 0.01) {
     x.save()
     x.translate(r * BADGE_OFFSET.x, r * BADGE_OFFSET.y)
@@ -335,7 +342,7 @@ function drawParticles(x: CanvasRenderingContext2D, t: number, p: ScenePose) {
 }
 
 /** Draws the welcome scene for `ageMs` into a `W`×`H` CSS-pixel canvas. */
-export function drawGreetingScene(x: CanvasRenderingContext2D, W: number, H: number, ageMs: number, color: RGB) {
+export function drawGreetingScene(x: CanvasRenderingContext2D, W: number, H: number, ageMs: number, color: RGB, outfit: Outfit = 'auto', createdAt?: string | null) {
   const t = Math.max(0, Math.min(ageMs, GREETING_END_MS)) / 1000
   const scale = Math.min(W / GREETING_REFERENCE.width, H / GREETING_REFERENCE.height)
   const p = greetPose(t)
@@ -356,6 +363,6 @@ export function drawGreetingScene(x: CanvasRenderingContext2D, W: number, H: num
     drawParticles(x, t, p)
     x.restore()
   }
-  drawCharacter(x, p, color)
+  drawCharacter(x, p, color, outfit, createdAt)
   x.restore()
 }

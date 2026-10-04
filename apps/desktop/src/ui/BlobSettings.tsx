@@ -16,13 +16,16 @@ import {
 import { Select } from './Select'
 import { AutoApprovedList, BypassConfirmDialog } from './approvalUi'
 import { RefreshCw } from 'lucide-react'
+import { WardrobeGrid } from './WardrobeGrid'
+import { agentColorHex, previewHex } from './agentColor'
 
-export function BlobSettings({ draft, runtimes, errors, execution, agentId, sessionId, autoApprovals, onDraftChange, onArchive, onExecutionGate }: {
+export function BlobSettings({ draft, runtimes, errors, execution, agentId, createdAt, sessionId, autoApprovals, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
   runtimes: Runtime[]
   errors: FieldErrors
   execution: StoredExecution
   agentId?: string | null
+  createdAt?: string | null
   sessionId?: string | null
   /** Shown under the approval mode for saved blobs. */
   autoApprovals?: readonly AutoResolvedAction[]
@@ -149,6 +152,9 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, sess
     <EditGroup title="Appearance">
       <div className="blob-form">
         <SwatchGrid value={draft.color} onChange={(color) => onDraftChange({ ...draft, color })} />
+      </div>
+      <div className="wardrobe-form">
+        <WardrobeGrid color={previewHex(draft.color, agentColorHex('mint'))} value={draft.outfit} createdAt={createdAt} onChange={(outfit) => onDraftChange({ ...draft, outfit })} />
       </div>
     </EditGroup>
 

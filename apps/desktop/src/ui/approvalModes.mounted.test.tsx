@@ -37,7 +37,7 @@ vi.mock('../tauri', () => ({
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn() }))
 
 function draft(partial: Partial<AgentDraft> = {}): AgentDraft {
-  return { name: 'Claude', description: '', instructions: '', color: 'mint', runtimeId: 'rt-1', defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null, ...partial }
+  return { name: 'Claude', description: '', instructions: '', color: 'mint', outfit: 'auto', runtimeId: 'rt-1', defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null, ...partial }
 }
 
 function mount(node: ReactNode) {

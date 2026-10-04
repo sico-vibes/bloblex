@@ -71,12 +71,12 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
     </header>
     <div className="blob-page-scroll">
       <div className="blob-page-column">
-        <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} approvalMode={badgeMode} />
+        <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} approvalMode={badgeMode} createdAt={agent?.createdAt ?? null} />
         {error && <p className="blob-page-notice error" role="alert">{error}</p>}
         {remoteNotice && <p className="blob-page-notice" role="status">{remoteNotice}</p>}
         {fieldErrors.map((message) => <p className="blob-page-notice error" role="alert" key={message}>{message}</p>)}
         {bypassLine && <p className="blob-page-notice warning" role="status">Bypass is active for this blob. New requests are approved without asking.</p>}
-        <BlobSettings draft={draft} runtimes={runtimes} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} />
+        <BlobSettings draft={draft} runtimes={runtimes} errors={errors} execution={execution} agentId={agent?.id ?? null} createdAt={agent?.createdAt ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} />
         {mode === 'edit' && <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />}
         <section className="settings-group blob-group" aria-label="Usage">
           <div className="settings-group-head">

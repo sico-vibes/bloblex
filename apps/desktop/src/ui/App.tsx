@@ -901,6 +901,7 @@ export function App() {
     next.name = blob.name
     next.description = blob.description
     next.color = blob.colour
+    next.outfit = blob.outfit
     next.instructions = blob.instructions
     next.model = blob.model
     next.thinking = blob.thinking

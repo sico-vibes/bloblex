@@ -547,7 +547,7 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
             if (blob) openRowMenu(blob, event.clientX, event.clientY)
           }}
         >
-          <BlobCanvas color={agentColorHex(agent.color)} size={36} mood={status.mood} label={agent.name} />
+          <BlobCanvas color={agentColorHex(agent.color)} size={36} mood={status.mood} outfit={agent.outfit} createdAt={agent.createdAt} label={agent.name} />
           <span className="bot-row-copy">
             <span className="bot-row-line">
               <strong>{agent.name}</strong>

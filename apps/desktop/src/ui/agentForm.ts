@@ -3,12 +3,14 @@ import type { ExecutionSendGate } from '../executionContract'
 import type { Agent, Runtime } from '../types'
 import { colorForRpc, colorsEquivalent, parseCustomHex, swatchForColor } from './agentColor'
 import { runtimeUsable, scalarLength } from './rosterSelectors'
+import { isOutfit, normalizeOutfit, type Outfit } from '../blob/outfit'
 
 export interface AgentDraft {
   name: string
   description: string
   instructions: string
   color: string
+  outfit: Outfit
   runtimeId: string
   defaultProject: string | null
   model: string | null
@@ -32,9 +34,10 @@ export const CLIENT_MESSAGES = {
   color: 'Enter a colour as #RRGGBB, or choose a swatch.',
   runtime: 'Choose a runtime.',
   nameTaken: 'Another blob already uses this name.',
+  outfit: 'Choose a valid outfit.',
 } as const
 
-export type AgentField = 'name' | 'description' | 'instructions' | 'color' | 'runtimeId'
+export type AgentField = 'name' | 'description' | 'instructions' | 'color' | 'outfit' | 'runtimeId'
 export type FieldErrors = Partial<Record<AgentField, string>>
 
 export type DaemonFailureKind = 'agent.create' | 'agent.update' | 'agent.get' | 'agent.delete' | 'session.new' | 'agent.reorder'
@@ -50,6 +53,7 @@ export function draftFromAgent(agent: Agent): AgentDraft {
     description: agent.description,
     instructions: agent.instructions,
     color: agent.color,
+    outfit: normalizeOutfit(agent.outfit),
     runtimeId: agent.runtimeId,
     defaultProject: agent.defaultProject,
     model: agent.model,
@@ -65,7 +69,7 @@ export function createDraft(runtimes: readonly Runtime[], selectedRuntimeId: str
     ?? runtimes.find((runtime) => runtimeUsable(runtime))?.id
     ?? runtimes[0]?.id
     ?? ''
-  return { name: '', description: '', instructions: '', color: 'mint', runtimeId, defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null }
+  return { name: '', description: '', instructions: '', color: 'mint', outfit: 'auto', runtimeId, defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null }
 }
 
 export function starterDraft(runtime: Runtime): AgentDraft {
@@ -87,6 +91,7 @@ export function isAgentDirty(draft: AgentDraft, baseline: AgentDraft) {
     || draft.description !== baseline.description
     || draft.instructions !== baseline.instructions
     || !colorsEquivalent(draft.color, baseline.color)
+    || draft.outfit !== baseline.outfit
     || draft.runtimeId !== baseline.runtimeId
     || normalizeProject(draft.defaultProject) !== normalizeProject(baseline.defaultProject)
     || nullableText(draft.model) !== nullableText(baseline.model)
@@ -104,6 +109,7 @@ export function validateAgentDraft(draft: AgentDraft, otherActiveNames: readonly
   if (scalarLength(draft.description) > 255) errors.description = CLIENT_MESSAGES.descriptionLong
   if (draft.instructions.includes('\0')) errors.instructions = CLIENT_MESSAGES.instructionsNul
   if (!swatchForColor(draft.color) && !parseCustomHex(draft.color)) errors.color = CLIENT_MESSAGES.color
+  if (!isOutfit(draft.outfit)) errors.outfit = CLIENT_MESSAGES.outfit
   if (!draft.runtimeId.trim()) errors.runtimeId = CLIENT_MESSAGES.runtime
   return errors
 }
@@ -119,6 +125,7 @@ export function createParams(draft: AgentDraft, gate: ExecutionSendGate = CLOSED
     description: draft.description,
     instructions: draft.instructions,
     color: colorForRpc(draft.color),
+    outfit: draft.outfit,
     defaultProject: normalizeProject(draft.defaultProject),
   }
   if (gate.model && nullableText(draft.model)) params.model = nullableText(draft.model)
@@ -135,6 +142,7 @@ export function duplicateParams(source: Agent, name: string): Record<string, unk
     description: source.description,
     instructions: source.instructions,
     color: source.color,
+    outfit: normalizeOutfit(source.outfit),
     model: source.model,
     thinking: source.thinking,
     serviceTier: source.serviceTier,
@@ -152,6 +160,7 @@ export function updateParams(agentId: string, draft: AgentDraft, baseline: Agent
   if (draft.description !== baseline.description) params.description = draft.description
   if (draft.instructions !== baseline.instructions) params.instructions = draft.instructions
   if (!colorsEquivalent(draft.color, baseline.color)) params.color = colorForRpc(draft.color)
+  if (draft.outfit !== baseline.outfit && isOutfit(draft.outfit)) params.outfit = draft.outfit
   if (draft.runtimeId !== baseline.runtimeId) params.runtimeId = draft.runtimeId
   if (normalizeProject(draft.defaultProject) !== normalizeProject(baseline.defaultProject)) params.defaultProject = normalizeProject(draft.defaultProject)
   if (gate.model && nullableText(draft.model) !== nullableText(baseline.model)) params.model = nullableText(draft.model)

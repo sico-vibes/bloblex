@@ -285,6 +285,17 @@ function emit(event: DaemonEvent) {
 }
 
 describe('blob roster and editor', () => {
+  it('creates a provider starter from first-run setup with the detected runtime id and Ask approval', async () => {
+    configure(snapshot({ runtimes: [codexRuntime], agents: [], sessions: [] }))
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelectorAll('.setup-agent-row')).toHaveLength(1)
+    await click(view.host.querySelector('.setup-agent-row button'))
+    await view.settle()
+    const create = h.rpc.mock.calls.find(([method]) => method === 'agent.create')
+    expect(create?.[1]).toMatchObject({ name: 'Codex', runtimeId: 'runtime-codex', color: 'blue', approvalMode: 'ask' })
+  })
+
   it('moves a favourite blob into a Favourites section and back', async () => {
     const view = startApp()
     await view.settle()

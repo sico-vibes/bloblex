@@ -8,7 +8,7 @@ import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
 import { AgentContextMenu } from './AgentContextMenu'
 import { RowActionMenu, SessionTree } from './SessionTree'
-import { isProjectPinned, type PinnedProject, type SidebarPins } from './sidebarPins'
+import { isProjectPinned, pointerDropPlacement, type PinnedProject, type SidebarPins } from './sidebarPins'
 import {
   OTHER_CAP_KEY, PROJECT_CAP, SESSION_CAP, activeAgents, layoutBlobTree, projectFolderName, runtimeUsable, sessionDisplayTitle,
   shortTime, treeItemId, treeModel, type ExpandedState, type TreeRow,
@@ -34,7 +34,7 @@ type RosterMenu =
   | { kind: 'session'; agentId: string; session: Session; x: number; y: number }
   | { kind: 'pinned'; label: string; onUnpin: () => void; x: number; y: number }
 
-export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, pins, unreadSessionIds = new Set(), approvalSessionIds = new Set(), onToggleFavorite, onTogglePinProject, onTogglePinSession, onRevealProject, selectedAgentId, selectedSessionId, query, expanded, onQueryChange, onSelect, onCreate, onScan, onNewSession, onEdit, onDuplicate, onArchive, onExportBlob, onToggleBlob, onToggleProject, onToggleOther, onSelectSession, onRenameSession, onArchiveSession, onDeleteSession, onNewSessionInProject, onResumeSession, onCancelSession }: {
+export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, pins, showSetupEmptyState = false, unreadSessionIds = new Set(), approvalSessionIds = new Set(), onToggleFavorite, onMoveFavorite, onMovePinned, onTogglePinProject, onTogglePinSession, onRevealProject, selectedAgentId, selectedSessionId, query, expanded, onQueryChange, onSelect, onCreate, onScan, onNewSession, onEdit, onDuplicate, onArchive, onExportBlob, onToggleBlob, onToggleProject, onToggleOther, onSelectSession, onRenameSession, onArchiveSession, onDeleteSession, onNewSessionInProject, onResumeSession, onCancelSession }: {
   agents: Agent[]
   sessions: Session[]
   runtimes: Runtime[]
@@ -44,6 +44,9 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
   now?: number
   /** Favourite blobs and pinned projects or conversations (this device). */
   pins?: SidebarPins
+  showSetupEmptyState?: boolean
+  onMoveFavorite?: (agentId: string, targetId: string, placement: 'before' | 'after', visibleIds: string[]) => void
+  onMovePinned?: (itemId: string, targetId: string, placement: 'before' | 'after', visibleIds: string[]) => void
   unreadSessionIds?: Set<string>
   approvalSessionIds?: Set<string>
   onToggleFavorite?: (agentId: string) => void
@@ -78,7 +81,8 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
   const favoriteIds = new Set(pins?.favorites ?? [])
   const grouped = model.groups.flatMap((group) => group.rows)
   // Favourite blobs come first; keyboard order follows what is drawn.
-  const rows = [...grouped.filter((row) => favoriteIds.has(row.agent.id)), ...grouped.filter((row) => !favoriteIds.has(row.agent.id))]
+  const favoriteOrder = new Map((pins?.favorites ?? []).map((id, index) => [id, index]))
+  const rows = [...grouped.filter((row) => favoriteIds.has(row.agent.id)).sort((a, b) => (favoriteOrder.get(a.agent.id) ?? 0) - (favoriteOrder.get(b.agent.id) ?? 0)), ...grouped.filter((row) => !favoriteIds.has(row.agent.id))]
   const hasFavorites = rows.some((row) => favoriteIds.has(row.agent.id))
   const active = activeAgents(agents)
   const treeItemRefs = useRef(new Map<string, HTMLElement>())
@@ -87,6 +91,9 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
   const typeaheadRef = useRef({ prefix: '', timer: 0 })
   const [focusId, setFocusId] = useState<string | null>(null)
   const [menu, setMenu] = useState<RosterMenu | null>(null)
+  const [dropIndicator, setDropIndicator] = useState<{ id: string; placement: 'before' | 'after' } | null>(null)
+  const [reorderAnnouncement, setReorderAnnouncement] = useState('')
+  const drag = useRef<{ kind: 'favorite' | 'pinned'; id: string; pointerId: number } | null>(null)
   const [caps, setCaps] = useState<{ projects: Record<string, boolean>; sessions: Record<string, boolean> }>({ projects: {}, sessions: {} })
   const menuAgent = menu?.kind === 'blob' ? agents.find((agent) => agent.id === menu.agentId) ?? null : null
   const runtimeFor = (runtimeId: string) => runtimes.find((runtime) => runtime.id === runtimeId)
@@ -210,6 +217,18 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
     const current = index >= 0 ? visible[index] : undefined
     if (!current) return
     const key = event.key
+    if (event.altKey && (key === 'ArrowUp' || key === 'ArrowDown') && current.kind === 'blob' && favoriteIds.has(current.agentId) && onMoveFavorite) {
+      event.preventDefault()
+      const position = visibleFavoriteIds.indexOf(current.agentId)
+      const target = visibleFavoriteIds[position + (key === 'ArrowUp' ? -1 : 1)]
+      if (position >= 0 && target) {
+        const placement = key === 'ArrowUp' ? 'before' : 'after'
+        const nextIndex = position + (key === 'ArrowUp' ? -1 : 1)
+        onMoveFavorite(current.agentId, target, placement, visibleFavoriteIds)
+        announceKeyboardMove(current.label, nextIndex, visibleFavoriteIds.length, 'Favourites')
+      }
+      return
+    }
     if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Home' || key === 'End') {
       event.preventDefault()
       const next = key === 'ArrowDown' ? visible[(index + 1) % visible.length]
@@ -288,23 +307,129 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
       if (!session || !agent) return []
       return [{ kind: 'session' as const, id: `session:${session.id}`, agent, session, title: sessionDisplayTitle(session), time: session.updatedAt ?? null }]
     }),
-  ]
+  ].sort((a, b) => (pins?.order.indexOf(a.id) ?? -1) - (pins?.order.indexOf(b.id) ?? -1))
+  const visibleFavoriteIds = rows.filter((row) => favoriteIds.has(row.agent.id)).map((row) => row.agent.id)
+  const visiblePinnedIds = pinnedItems.map((item) => item.id)
+
+  useEffect(() => {
+    const track = (event: PointerEvent) => {
+      const current = drag.current
+      if (!current || current.pointerId !== event.pointerId) return
+      const target = document.elementFromPoint(event.clientX, event.clientY)
+      const row = current.kind === 'favorite'
+        ? target?.closest<HTMLElement>('[data-favorite-id]')
+        : target?.closest<HTMLElement>('[data-pinned-id]')
+      const targetId = row?.dataset[current.kind === 'favorite' ? 'favoriteId' : 'pinnedId']
+      const visibleIds = current.kind === 'favorite' ? visibleFavoriteIds : visiblePinnedIds
+      if (!row || !targetId || targetId === current.id || !visibleIds.includes(targetId)) {
+        setDropIndicator(null)
+        return
+      }
+      const rect = row.getBoundingClientRect()
+      const placement = pointerDropPlacement(event.clientY, rect.top, rect.height)
+      setDropIndicator({ id: targetId, placement })
+    }
+    const finish = (event: PointerEvent) => {
+      const current = drag.current
+      if (!current || current.pointerId !== event.pointerId) return
+      drag.current = null
+      setDropIndicator(null)
+      const target = document.elementFromPoint(event.clientX, event.clientY) ?? (event.target instanceof Element ? event.target : null)
+      if (!target) return
+      if (current.kind === 'favorite') {
+        const targetId = target.closest<HTMLElement>('[data-favorite-id]')?.dataset.favoriteId
+        const sourceIndex = visibleFavoriteIds.indexOf(current.id)
+        const targetIndex = targetId ? visibleFavoriteIds.indexOf(targetId) : -1
+        if (targetId && targetIndex >= 0 && targetId !== current.id) {
+          const targetRow = target.closest<HTMLElement>('[data-favorite-id]')!
+          const rect = targetRow.getBoundingClientRect()
+          const placement = pointerDropPlacement(event.clientY, rect.top, rect.height)
+          const finalIndex = targetIndex - (sourceIndex < targetIndex ? 1 : 0) + (placement === 'after' ? 1 : 0)
+          if (finalIndex !== sourceIndex) {
+            onMoveFavorite?.(current.id, targetId, placement, visibleFavoriteIds)
+            const name = rows.find((row) => row.agent.id === current.id)?.agent.name ?? current.id
+            setReorderAnnouncement(`${name} moved to position ${finalIndex + 1} of ${visibleFavoriteIds.length} in Favourites.`)
+          }
+        }
+      } else {
+        const targetId = target.closest<HTMLElement>('[data-pinned-id]')?.dataset.pinnedId
+        const sourceIndex = visiblePinnedIds.indexOf(current.id)
+        const targetIndex = targetId ? visiblePinnedIds.indexOf(targetId) : -1
+        if (targetId && targetIndex >= 0 && targetId !== current.id) {
+          const targetRow = target.closest<HTMLElement>('[data-pinned-id]')!
+          const rect = targetRow.getBoundingClientRect()
+          const placement = pointerDropPlacement(event.clientY, rect.top, rect.height)
+          const finalIndex = targetIndex - (sourceIndex < targetIndex ? 1 : 0) + (placement === 'after' ? 1 : 0)
+          if (finalIndex !== sourceIndex) {
+            onMovePinned?.(current.id, targetId, placement, visiblePinnedIds)
+            const title = pinnedItems.find((item) => item.id === current.id)?.title ?? current.id
+            setReorderAnnouncement(`${title} moved to position ${finalIndex + 1} of ${visiblePinnedIds.length} in Pinned.`)
+          }
+        }
+      }
+    }
+    const cancel = (event: PointerEvent) => {
+      if (!drag.current || drag.current.pointerId !== event.pointerId) return
+      drag.current = null
+      setDropIndicator(null)
+    }
+    document.addEventListener('pointermove', track)
+    document.addEventListener('pointerup', finish)
+    document.addEventListener('pointercancel', cancel)
+    return () => {
+      document.removeEventListener('pointermove', track)
+      document.removeEventListener('pointerup', finish)
+      document.removeEventListener('pointercancel', cancel)
+    }
+  }, [visibleFavoriteIds, visiblePinnedIds, pinnedItems, rows, onMoveFavorite, onMovePinned])
+
+  const announceKeyboardMove = (label: string, index: number, count: number, group: string) => {
+    setReorderAnnouncement(`${label} moved to position ${index + 1} of ${count} in ${group}.`)
+  }
 
   return <>
     <label className="sidebar-search"><Search size={14} /><input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Search" aria-label="Search agents and conversations" /></label>
+    <div className="sr-only" data-reorder-announcement aria-live="polite" aria-atomic="true">{reorderAnnouncement}</div>
     <div className="sidebar-scroll">
     {pinnedItems.length > 0 && <section className="pinned-section" aria-label="Pinned">
       <div className="roster-section-label">Pinned</div>
       {pinnedItems.map((item) => {
         const selected = item.kind === 'session' && item.session.id === selectedSessionId
         const open = () => {
-          if (item.kind === 'session') { onSelectSession(item.session); return }
+    if (item.kind === 'session') { onSelectSession(item.session); return }
           onSelect(item.agent)
           onRevealProject?.(item.agent.id, item.pin.key)
         }
         const unpin = () => item.kind === 'session' ? onTogglePinSession?.(item.session.id) : onTogglePinProject?.(item.pin)
-        return <div className={`pinned-row ${selected ? 'selected' : ''}`} key={item.id}>
-          <button type="button" className="pinned-main" aria-current={selected ? 'true' : undefined} aria-label={`${item.title}, ${item.agent.name}${item.kind === 'project' ? ', project' : ''}${item.kind === 'session' && (unreadSessionIds.has(item.session.id) || approvalSessionIds.has(item.session.id)) ? approvalSessionIds.has(item.session.id) ? ', needs approval' : ', unread' : ''}`} onClick={open} onContextMenu={(event) => { event.preventDefault(); menuTriggerRef.current = event.currentTarget; setMenu({ kind: 'pinned', label: item.title, onUnpin: unpin, x: event.clientX, y: event.clientY }) }}>
+        return <div className={`pinned-row ${selected ? 'selected' : ''} ${dropIndicator?.id === item.id ? `drop-${dropIndicator.placement}` : ''}`} key={item.id}>
+          <button
+            type="button"
+            className="pinned-main"
+            data-pinned-id={item.id}
+            aria-current={selected ? 'true' : undefined}
+            aria-label={`${item.title}, ${item.agent.name}${item.kind === 'project' ? ', project' : ''}${item.kind === 'session' && (unreadSessionIds.has(item.session.id) || approvalSessionIds.has(item.session.id)) ? approvalSessionIds.has(item.session.id) ? ', needs approval' : ', unread' : ''}`}
+            onClick={open}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return
+              drag.current = { kind: 'pinned', id: item.id, pointerId: event.pointerId }
+              try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* Pointer capture is not available in every test surface. */ }
+            }}
+            onPointerEnter={(event) => { if (drag.current?.kind === 'pinned' && drag.current.id !== item.id) { const rect = event.currentTarget.getBoundingClientRect(); setDropIndicator({ id: item.id, placement: pointerDropPlacement(event.clientY, rect.top, rect.height) }) } }}
+            onPointerCancel={() => { drag.current = null; setDropIndicator(null) }}
+            onLostPointerCapture={() => { drag.current = null; setDropIndicator(null) }}
+            onKeyDown={(event) => {
+              if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+              event.preventDefault()
+              const position = visiblePinnedIds.indexOf(item.id)
+              const target = visiblePinnedIds[position + (event.key === 'ArrowUp' ? -1 : 1)]
+              if (position < 0 || !target) return
+              const placement = event.key === 'ArrowUp' ? 'before' : 'after'
+              const nextIndex = position + (event.key === 'ArrowUp' ? -1 : 1)
+              onMovePinned?.(item.id, target, placement, visiblePinnedIds)
+              announceKeyboardMove(item.title, nextIndex, visiblePinnedIds.length, 'Pinned')
+            }}
+            onContextMenu={(event) => { event.preventDefault(); menuTriggerRef.current = event.currentTarget; setMenu({ kind: 'pinned', label: item.title, onUnpin: unpin, x: event.clientX, y: event.clientY }) }}
+          >
             <span className="pinned-icon" style={{ color: agentColorHex(item.agent.color) }} aria-hidden="true">{item.kind === 'project' ? <Folder size={14} /> : <MessageSquare size={14} />}</span>
             <span className="pinned-copy"><strong>{item.title}</strong><small>{item.agent.name}{item.kind === 'project' ? ' · project' : ''}</small></span>
             {item.kind === 'session' && (unreadSessionIds.has(item.session.id) || approvalSessionIds.has(item.session.id)) && <i className={`unread-dot ${approvalSessionIds.has(item.session.id) ? 'approval' : ''}`} aria-hidden="true" />}
@@ -330,7 +455,7 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
         {renderBlob(row)}
       </Fragment>)}
       {connected && runtimes.length === 0 && <div className="rail-empty">No coding CLIs detected yet.<button type="button" onClick={onScan}>Scan again</button></div>}
-      {connected && runtimes.length > 0 && active.length === 0 && <div className="rail-empty">No blobs yet.<button type="button" onClick={onCreate}>Create blob</button></div>}
+      {connected && runtimes.length > 0 && active.length === 0 && !showSetupEmptyState && <div className="rail-empty">No blobs yet.<button type="button" onClick={onCreate}>Create blob</button></div>}
       {connected && active.length > 0 && rows.length === 0 && <div className="rail-empty">Nothing matches “{query}”.</div>}
       {!connected && active.length === 0 && <div className="rail-empty">Connect to your local runtime to see installed agents.</div>}
     </nav>
@@ -360,7 +485,7 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
       onClose={closeMenu}
       items={[
         { label: 'New session', disabled: !canCreateFor(projectMenuAgent), onSelect: () => { const path = menu.path; const agent = projectMenuAgent; closeMenu(); onNewSessionInProject(agent, path) } },
-        ...(onTogglePinProject ? [{ label: isProjectPinned(pins ?? { v: 1, favorites: [], projects: [], sessions: [] }, menu.agentId, menu.projectKey) ? 'Unpin project' : 'Pin project', onSelect: () => { const project = { agentId: menu.agentId, key: menu.projectKey, path: menu.path }; closeMenu(); onTogglePinProject(project) } }] : []),
+        ...(onTogglePinProject ? [{ label: isProjectPinned(pins ?? { v: 1, favorites: [], projects: [], sessions: [], order: [] }, menu.agentId, menu.projectKey) ? 'Unpin project' : 'Pin project', onSelect: () => { const project = { agentId: menu.agentId, key: menu.projectKey, path: menu.path }; closeMenu(); onTogglePinProject(project) } }] : []),
       ]}
     />}
     {menu?.kind === 'session' && <RowActionMenu
@@ -394,8 +519,9 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
           type="button"
           role="treeitem"
           data-agent-id={agent.id}
+          data-favorite-id={favoriteIds.has(agent.id) ? agent.id : undefined}
           data-tree-id={blobId}
-          className={`bot-row ${selected ? 'selected' : ''}`}
+          className={`bot-row ${selected ? 'selected' : ''} ${dropIndicator?.id === agent.id ? `drop-${dropIndicator.placement}` : ''}`}
           aria-label={`${agent.name}${sessions.some((session) => session.agentId === agent.id && (unreadSessionIds.has(session.id) || approvalSessionIds.has(session.id))) ? sessions.some((session) => session.agentId === agent.id && approvalSessionIds.has(session.id)) ? ', needs approval' : ', unread' : ''}`}
           aria-current={selected ? 'true' : undefined}
           aria-level={1}
@@ -406,6 +532,14 @@ export function AgentRoster({ agents, sessions, runtimes, connected, busy, now, 
           aria-owns={item.blobOpen ? `blob-group-${agent.id}` : undefined}
           tabIndex={blobId === tabId ? 0 : -1}
           ref={(node) => bindRef(blobId, node)}
+          onPointerDown={(event) => {
+            if (!favoriteIds.has(agent.id) || event.button !== 0) return
+            drag.current = { kind: 'favorite', id: agent.id, pointerId: event.pointerId }
+            try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* Pointer capture is not available in every test surface. */ }
+          }}
+          onPointerEnter={(event) => { if (drag.current?.kind === 'favorite' && drag.current.id !== agent.id && favoriteIds.has(agent.id)) { const rect = event.currentTarget.getBoundingClientRect(); setDropIndicator({ id: agent.id, placement: pointerDropPlacement(event.clientY, rect.top, rect.height) }) } }}
+          onPointerCancel={() => { drag.current = null; setDropIndicator(null) }}
+          onLostPointerCapture={() => { drag.current = null; setDropIndicator(null) }}
           onClick={() => { setFocusId(blobId); onSelect(agent) }}
           onContextMenu={(event) => {
             event.preventDefault()

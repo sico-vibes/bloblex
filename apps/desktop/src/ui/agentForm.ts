@@ -68,6 +68,20 @@ export function createDraft(runtimes: readonly Runtime[], selectedRuntimeId: str
   return { name: '', description: '', instructions: '', color: 'mint', runtimeId, defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null }
 }
 
+export function starterDraft(runtime: Runtime): AgentDraft {
+  return { ...createDraft([runtime], runtime.id), name: providerDisplayNameForStarter(runtime.provider), color: starterColorFor(runtime.provider), approvalMode: 'ask' }
+}
+
+function providerDisplayNameForStarter(provider: string) {
+  const names: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
+  return names[provider.toLowerCase()] ?? provider.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function starterColorFor(provider: string) {
+  const colors: Record<string, string> = { claude: 'coral', codex: 'blue', opencode: 'violet' }
+  return colors[provider.toLowerCase()] ?? 'mint'
+}
+
 export function isAgentDirty(draft: AgentDraft, baseline: AgentDraft) {
   return draft.name !== baseline.name
     || draft.description !== baseline.description

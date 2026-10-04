@@ -26,7 +26,7 @@ import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
 import { turnFailureTitle } from './analyticsFormat'
-import { createDraft, createParams, daemonCodeOf, draftFromAgent, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
+import { createDraft, createParams, daemonCodeOf, draftFromAgent, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, starterDraft, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
 import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicateAgentName, emptyExpandedState, garbageCollectExpanded, legacySessions, nextAgentAfterArchive, parseExpandedState, projectFolderName, projectGroups, projectKey, recentProjects, runtimeUsable, sessionDisplayTitle, sessionForSelection, sessionNewParams, sessionSelectionTarget, type ExpandedState } from './rosterSelectors'
 import { AnalyticsView } from './AnalyticsView'
 import { conversationMarkdown } from './conversationMarkdown'
@@ -36,7 +36,7 @@ import { BlobPage, ConfirmDialog } from './BlobPage'
 import { UpdateAvailableBanner, useMainUpdateOffer } from './UpdateBanner'
 import { SettingsSheet, type SettingsPageId } from './SettingsSheet'
 import { ProfileMenu } from './ProfileMenu'
-import { emptyPins, readPins, toggleFavorite, togglePinnedProject, togglePinnedSession, writePins, type SidebarPins } from './sidebarPins'
+import { emptyPins, moveFavoriteRelative, movePinnedItemRelative, readPins, toggleFavorite, togglePinnedProject, togglePinnedSession, writePins, type SidebarPins } from './sidebarPins'
 import { Select } from './Select'
 import { useClock } from './useClock'
 import { useDialogAccessibility } from './dialogFocus'
@@ -46,6 +46,8 @@ import { flashMainWindow, sendDesktopNotification } from '../desktopIntegrations
 import { stampCompanionDragRegions } from './companionDrag'
 import { QuickSwitcher } from './QuickSwitcher'
 import { useQuickSwitcherShortcut } from './useQuickSwitcherShortcut'
+import { SetupScreen } from './SetupScreen'
+import { applyAppearance, applySurfaceAppearance, type TextSizeChoice, type ThemeChoice } from './appearance'
 import { ComposerExecutionSwitch } from './ComposerExecutionSwitch'
 import { SafeMarkdown } from './SafeMarkdown'
 import { parseUnifiedDiff } from './diffParser'
@@ -73,6 +75,8 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [selectedRuntimeId, setSelectedRuntimeId] = useState<string | null>(null)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const starterCreates = useRef(new Set<string>())
+  const [creatingStarterIds, setCreatingStarterIds] = useState<string[]>([])
   const [mainAttention, setMainAttention] = useState(() => !companion && document.visibilityState === 'visible' && document.hasFocus())
   const [seenSessions, setSeenSessions] = useState<SeenSessions>({})
   const seenLoaded = useRef(false)
@@ -161,6 +165,7 @@ export function App() {
   const stickToBottom = useRef(true)
   const queuedEvents = useRef<DaemonEvent[]>([])
   const hydrating = useRef(true)
+  const appearanceHydrated = useRef(false)
   const refreshingRef = useRef(false)
   const refreshAgain = useRef(false)
   const snapshotRef = useRef<Snapshot | null>(null)
@@ -537,6 +542,29 @@ export function App() {
   }, [connection, refresh, refreshing])
 
   useEffect(() => {
+    if (!inDesktop || connection !== 'connected' || appearanceHydrated.current) return
+    appearanceHydrated.current = true
+    void rpc<Record<string, unknown>>('settings.get').then((result) => {
+      const root = document.documentElement
+      const settings = (result.settings && typeof result.settings === 'object' ? result.settings : result) as Record<string, unknown>
+      const theme: ThemeChoice = settings['appearance.theme'] === 'dark' || settings['appearance.theme'] === 'light' ? settings['appearance.theme'] : 'system'
+      const size: TextSizeChoice = ['small', 'default', 'large', 'larger'].includes(String(settings['appearance.textSize'])) ? settings['appearance.textSize'] as TextSizeChoice : 'default'
+      applySurfaceAppearance(root, theme, size, companion)
+      try { localStorage.setItem('bloblex.appearance', JSON.stringify({ theme, textSize: size })) } catch { /* Daemon settings remain saved. */ }
+    }).catch(() => { appearanceHydrated.current = false })
+  }, [connection])
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: light)')
+    const change = () => {
+      const root = document.documentElement
+      if (!companion && root.dataset.themeChoice === 'system') applyAppearance(root, 'system', (root.dataset.textSize as TextSizeChoice) || 'default')
+    }
+    media.addEventListener('change', change)
+    return () => media.removeEventListener('change', change)
+  }, [])
+
+  useEffect(() => {
     if (!inDesktop) return
     let mounted = true
     const connect = async () => {
@@ -796,6 +824,25 @@ export function App() {
     setFormError(null)
     setRemoteNotice(null)
     setBlobPage({ mode: 'create', agentId: null })
+  }
+
+  const createStarterBlob = async (runtime: Runtime) => {
+    if (starterCreates.current.has(runtime.id)) return
+    starterCreates.current.add(runtime.id)
+    setCreatingStarterIds((ids) => [...ids, runtime.id])
+    const draft = starterDraft(runtime)
+    try {
+      const result = await doRpc<{ agent?: Agent }>('agent.create', createParams(draft), (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.create'))
+      if (!result.agent?.id) return
+      mergeAgent(result.agent)
+      setSelectedAgentId(result.agent.id)
+      setSelectedRuntimeId(result.agent.runtimeId)
+      setSelectedSessionId(null)
+    } catch (reason) { setError(messageForDaemonCode(daemonCodeOf(reason), 'agent.create')) }
+    finally {
+      starterCreates.current.delete(runtime.id)
+      setCreatingStarterIds((ids) => ids.filter((id) => id !== runtime.id))
+    }
   }
 
   const closeAnalytics = () => {
@@ -1174,6 +1221,10 @@ export function App() {
       else if (item.id === 'toggle-details') toggleInspector()
     }
   }
+  const noBlobs = activeAgents(agents).length === 0
+  const hasPendingApprovals = (snapshot?.permissions ?? []).some((permission) => isPendingPermissionLive(permission, permissionClock))
+  const firstRunSetup = connection === 'connected' && noBlobs && sessions.length === 0 && !hasPendingApprovals && !analyticsOpen && !blobPage
+  const showCreateBlobPrompt = connection === 'connected' && noBlobs && sessions.length > 0 && !analyticsOpen && !blobPage
   return (
     <main className={`app-shell ${detailsVisible ? 'inspector-open' : ''}`} style={accent ? { '--agent-accent': accent } as React.CSSProperties : undefined}>
       <aside className="sidebar" aria-label="Agents">
@@ -1189,7 +1240,7 @@ export function App() {
           </div>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <AgentRoster agents={agents} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} busy={busy} now={now} pins={pins} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} onToggleFavorite={(agentId) => updatePins((current) => toggleFavorite(current, agentId))} onTogglePinProject={(project) => updatePins((current) => togglePinnedProject(current, project))} onTogglePinSession={(sessionId) => updatePins((current) => togglePinnedSession(current, sessionId))} onRevealProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, open: true, projects: { ...entry.projects, [key]: true } }))} selectedAgentId={activeSelectedAgent?.id ?? null} selectedSessionId={selectedSession?.id ?? null} query={search} expanded={expanded} onQueryChange={setSearch} onSelect={selectAgent} onCreate={openCreate} onScan={() => void refreshRuntimes()} onNewSession={(agent) => newSession(agent.id)} onEdit={openEdit} onDuplicate={(agent) => void duplicateAgent(agent)} onArchive={setArchiveTarget} onExportBlob={(agent) => void exportBlob(agent)} onToggleBlob={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, open: !entry.open }))} onToggleProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, projects: { ...entry.projects, [key]: entry.projects[key] !== true } }))} onToggleOther={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, other: !entry.other }))} onSelectSession={selectSession} onRenameSession={(session, title) => { void rpc('session.rename', { sessionId: session.id, title }).catch((reason) => setError(messageOf(reason))) }} onArchiveSession={(session) => { void rpc('session.archive', { sessionId: session.id, archived: true }).catch((reason) => setError(messageOf(reason))) }} onDeleteSession={setSessionDeleteTarget} onNewSessionInProject={(agent, path) => void createSession(agent, path, 'project')} onResumeSession={(session) => { selectSession(session); void resumeSession(session) }} onCancelSession={(session) => { selectSession(session); void cancelTurn(session) }} />
+        <AgentRoster agents={agents} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} busy={busy} now={now} pins={pins} showSetupEmptyState={firstRunSetup} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} onToggleFavorite={(agentId) => updatePins((current) => toggleFavorite(current, agentId))} onMoveFavorite={(agentId, targetId, placement, visibleIds) => updatePins((current) => moveFavoriteRelative(current, agentId, targetId, placement, visibleIds))} onMovePinned={(itemId, targetId, placement, visibleIds) => updatePins((current) => movePinnedItemRelative(current, itemId, targetId, placement, visibleIds))} onTogglePinProject={(project) => updatePins((current) => togglePinnedProject(current, project))} onTogglePinSession={(sessionId) => updatePins((current) => togglePinnedSession(current, sessionId))} onRevealProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, open: true, projects: { ...entry.projects, [key]: true } }))} selectedAgentId={activeSelectedAgent?.id ?? null} selectedSessionId={selectedSession?.id ?? null} query={search} expanded={expanded} onQueryChange={setSearch} onSelect={selectAgent} onCreate={openCreate} onScan={() => void refreshRuntimes()} onNewSession={(agent) => newSession(agent.id)} onEdit={openEdit} onDuplicate={(agent) => void duplicateAgent(agent)} onArchive={setArchiveTarget} onExportBlob={(agent) => void exportBlob(agent)} onToggleBlob={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, open: !entry.open }))} onToggleProject={(agentId, key) => patchExpanded(agentId, (entry) => ({ ...entry, projects: { ...entry.projects, [key]: entry.projects[key] !== true } }))} onToggleOther={(agentId) => patchExpanded(agentId, (entry) => ({ ...entry, other: !entry.other }))} onSelectSession={selectSession} onRenameSession={(session, title) => { void rpc('session.rename', { sessionId: session.id, title }).catch((reason) => setError(messageOf(reason))) }} onArchiveSession={(session) => { void rpc('session.archive', { sessionId: session.id, archived: true }).catch((reason) => setError(messageOf(reason))) }} onDeleteSession={setSessionDeleteTarget} onNewSessionInProject={(agent, path) => void createSession(agent, path, 'project')} onResumeSession={(session) => { selectSession(session); void resumeSession(session) }} onCancelSession={(session) => { selectSession(session); void cancelTurn(session) }} />
         <ProfileMenu
           connection={connection}
           usageActive={analyticsOpen}
@@ -1204,7 +1255,8 @@ export function App() {
 
       <section className="conversation-pane">
         {updateOffer.version && <UpdateAvailableBanner version={updateOffer.version} onView={() => { setSettingsInitialPage('General'); setSettingsFocus('updates'); setSettingsSheet(true) }} onLater={updateOffer.dismiss} />}
-        {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} runtimes={runtimes} budgets={Array.isArray(snapshot?.budgets) ? snapshot.budgets : []} connected={connection === 'connected'} onBack={closeAnalytics} onSetPrices={openUsageSettings} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} budgets={Array.isArray(snapshot?.budgets) ? snapshot.budgets : []} onSetPrices={openUsageSettings} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
+        {firstRunSetup ? <SetupScreen runtimes={runtimes} error={error} creatingRuntimeIds={creatingStarterIds} onCreate={(runtime) => void createStarterBlob(runtime)} onScan={() => void refreshRuntimes()} onCustom={openCreate} scanning={refreshing} /> : analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} runtimes={runtimes} budgets={Array.isArray(snapshot?.budgets) ? snapshot.budgets : []} connected={connection === 'connected'} onBack={closeAnalytics} onSetPrices={openUsageSettings} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} budgets={Array.isArray(snapshot?.budgets) ? snapshot.budgets : []} onSetPrices={openUsageSettings} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
+        {showCreateBlobPrompt && <div className="first-run-prompt" role="status"><span>No blobs yet. Create one to organize these conversations.</span><button type="button" className="secondary-button small" onClick={openCreate}>Create blob</button></div>}
         <header className="chat-header">
           <div className="chat-title">
             {activeSelectedAgent

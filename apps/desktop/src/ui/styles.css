@@ -2,7 +2,7 @@
    Tokens live in theme.css. */
 
 /* ── Approval request ────────────────────────────────────────────────── */
-.permission-card { width: auto; max-width: min(620px, 100%); margin: 14px 0 6px; padding: 14px; display: flex; align-items: flex-start; gap: 12px; border: 1px solid #e8b04b40; border-radius: var(--radius-lg); background: #e8b04b0d; }
+.permission-card { width: auto; max-width: min(620px, 100%); margin: 14px 0 6px; padding: 14px; display: flex; align-items: flex-start; gap: 12px; border: 1px solid var(--permission-line); border-radius: var(--radius-lg); background: var(--surface-permission); }
 .permission-card:focus { outline: none; box-shadow: var(--focus-ring); }
 .permission-choice kbd { margin-left: 8px; padding: 2px 5px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font: var(--fs-2xs) var(--font-mono); }
 .file-turn-group { padding: 8px 0 4px; }
@@ -32,7 +32,7 @@
 .companion-approval-card .permission-actions .permission-choice-primary { color: var(--text-inverse); border-color: transparent; background: var(--text-1); }
 .companion-approval-card .permission-actions .permission-choice-primary:hover:not(:disabled) { color: var(--text-inverse); background: var(--text-1); }
 .empty-conversation ~ .permission-card, .conversation-pane > .permission-card { margin: 14px auto 0; }
-.permission-icon { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; color: var(--status-working); border-radius: var(--radius-sm); background: #e8b04b1f; }
+.permission-icon { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; color: var(--status-working); border-radius: var(--radius-sm); background: var(--surface-permission-icon); }
 .permission-copy { flex: 1; min-width: 0; }
 .permission-copy > strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 600; }
 .permission-copy p { margin: 4px 0 12px; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -69,7 +69,7 @@
 .usage-block-heading h3 { margin: 0; color: var(--text-1); font-size: var(--fs-sm); font-weight: 600; }
 .usage-block-heading > span { color: var(--text-3); font-size: var(--fs-2xs); text-align: right; }
 .usage-token-grid, .usage-cost-grid, .usage-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.usage-token, .usage-cost-grid > div, .usage-valuation-list > div, .usage-subscriptions > div, .usage-metric { min-width: 0; padding: 9px 10px; display: grid; align-content: center; gap: 4px; border-radius: var(--radius-sm); background: #ffffff06; }
+.usage-token, .usage-cost-grid > div, .usage-valuation-list > div, .usage-subscriptions > div, .usage-metric { min-width: 0; padding: 9px 10px; display: grid; align-content: center; gap: 4px; border-radius: var(--radius-sm); background: var(--surface-subtle); }
 .usage-token span, .usage-cost-grid span, .usage-valuation-list small, .usage-subscriptions small, .usage-metric span { color: var(--text-3); font-size: var(--fs-2xs); }
 .usage-token strong, .usage-cost-grid strong, .usage-metric strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; overflow-wrap: anywhere; }
 .usage-cost-grid small { color: var(--text-3); font-size: var(--fs-2xs); }
@@ -103,7 +103,7 @@
 .diff-empty { margin: auto; padding: 28px; color: var(--text-3); font-size: var(--fs-sm); text-align: center; }
 
 /* ── Update progress ─────────────────────────────────────────────────── */
-.update-progress { height: 4px; border-radius: var(--radius-pill); background: #ffffff14; overflow: hidden; }
+.update-progress { height: 4px; border-radius: var(--radius-pill); background: var(--surface-disabled); overflow: hidden; }
 .update-progress > span { display: block; height: 100%; width: 0; background: var(--text-1); }
 .update-progress.is-indeterminate > span { width: 35%; animation: update-progress-slide 1.1s ease-in-out infinite; }
 @keyframes update-progress-slide { from { transform: translateX(-120%); } to { transform: translateX(320%); } }

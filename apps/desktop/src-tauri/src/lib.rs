@@ -1096,7 +1096,7 @@ fn clamp_companion_position(
 
 #[cfg(test)]
 mod companion_launch_tests {
-    use super::companion_launch_spot;
+    use super::{companion_last_launch_spot, companion_launch_spot, companion_saved_compact_spot, Point};
 
     #[test]
     fn launch_spot_is_centred_and_above_the_bottom_edge() {
@@ -1113,6 +1113,28 @@ mod companion_launch_tests {
         assert_eq!(y, 680 - 200 - 122);
         let (x, y) = companion_launch_spot(0, 0, 600, 300, 640, 160);
         assert_eq!((x, y), (0, 86));
+    }
+
+    #[test]
+    fn last_position_keeps_the_welcome_island_bottom_center_on_the_saved_compact_spot() {
+        let (x, y) = companion_last_launch_spot(900, 500, 344, 62, 640, 160, 0, 0, 1920, 1040);
+        assert_eq!(x + 320, 900 + 172);
+        assert_eq!(y + 160, 500 + 62);
+    }
+
+    #[test]
+    fn last_position_is_clamped_inside_the_saved_displays_work_area() {
+        let result = companion_last_launch_spot(3500, 900, 344, 62, 640, 160, 1920, 0, 1280, 680);
+        assert_eq!(result, (2560, 520));
+    }
+
+    #[test]
+    fn persisted_bottom_edge_is_converted_to_the_compact_rect_before_welcome_placement() {
+        let point = Point { x: 900, y: 562, anchor_x: None, bottom_gap: None, monitor_name: None };
+        let (saved_x, saved_y) = companion_saved_compact_spot(&point, 344, 62, 1.0, 0, 0, 1920, 1040);
+        assert_eq!((saved_x, saved_y), (900, 500));
+        let welcome = companion_last_launch_spot(saved_x, saved_y, 344, 62, 640, 160, 0, 0, 1920, 1040);
+        assert_eq!(welcome, (752, 402));
     }
 }
 
@@ -1225,6 +1247,26 @@ async fn set_companion_visible(
         window.hide().map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn set_companion_hotkey(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+    let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
+    if enabled {
+        app.global_shortcut().register(shortcut).map_err(|_| "Ctrl+Alt+B is already in use.".to_string())
+    } else if app.global_shortcut().is_registered(shortcut) {
+        app.global_shortcut().unregister(shortcut).map_err(|_| "The companion shortcut could not be removed.".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn companion_hotkey_registered(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+    let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
+    Ok(app.global_shortcut().is_registered(shortcut))
 }
 
 #[tauri::command]
@@ -1485,6 +1527,44 @@ fn companion_launch_position(app: &AppHandle, window: &WebviewWindow) -> Physica
     PhysicalPosition::new(x, y)
 }
 
+fn companion_last_launch_spot(
+    saved_x: i32,
+    saved_y: i32,
+    saved_width: i32,
+    saved_height: i32,
+    welcome_width: i32,
+    welcome_height: i32,
+    area_x: i32,
+    area_y: i32,
+    area_width: i32,
+    area_height: i32,
+) -> (i32, i32) {
+    let x = saved_x + saved_width / 2 - welcome_width / 2;
+    let y = saved_y + saved_height - welcome_height;
+    clamp_physical_position(x, y, welcome_width, welcome_height, area_x, area_y, area_width, area_height)
+}
+
+fn companion_saved_compact_spot(
+    point: &Point,
+    compact_width: i32,
+    compact_height: i32,
+    scale: f64,
+    area_x: i32,
+    area_y: i32,
+    area_width: i32,
+    area_height: i32,
+) -> (i32, i32) {
+    let (x, y) = match (point.anchor_x, point.bottom_gap) {
+        (Some(anchor_x), Some(bottom_gap)) => {
+            let center_x = area_x + (area_width as f64 * anchor_x.clamp(0.0, 1.0)).round() as i32;
+            let bottom = area_y + area_height - (bottom_gap * scale).round() as i32;
+            (center_x - compact_width / 2, bottom - compact_height)
+        }
+        _ => (point.x, point.y - compact_height),
+    };
+    clamp_physical_position(x, y, compact_width, compact_height, area_x, area_y, area_width, area_height)
+}
+
 fn companion_launch_spot(
     area_x: i32,
     area_y: i32,
@@ -1552,7 +1632,7 @@ fn persist_companion_position(app: &AppHandle, window: &WebviewWindow) {
     }
 }
 
-fn make_companion(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+fn make_companion(app: &AppHandle, start_at_last_position: bool) -> tauri::Result<WebviewWindow> {
     let window = WebviewWindowBuilder::new(
         app,
         "companion",
@@ -1572,7 +1652,43 @@ fn make_companion(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     .visible(false)
     .shadow(false)
     .build()?;
-    let position = companion_launch_position(app, &window);
+    let position = if start_at_last_position {
+        let monitors = window.available_monitors().unwrap_or_default();
+        let saved = app_data_file(app, "companion-position.json")
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|content| serde_json::from_str::<Point>(&content).ok());
+        let default_monitor = window.primary_monitor().ok().flatten().or_else(|| monitors.first().cloned());
+        let monitor = saved.as_ref().and_then(|point| {
+            point.monitor_name.as_ref().and_then(|name| monitors.iter()
+                .find(|monitor| monitor.name().map(String::as_str) == Some(name.as_str())).cloned())
+                .or_else(|| {
+                    let monitor = default_monitor.as_ref()?;
+                    if point.anchor_x.is_some() { return default_monitor.clone(); }
+                    let scale = monitor.scale_factor();
+                    let compact_width = (344.0 * scale).round() as i32;
+                    let compact_height = (62.0 * scale).round() as i32;
+                    let center = (point.x + compact_width / 2, point.y - compact_height / 2);
+                    monitors.iter().find(|monitor| {
+                        let area = monitor.work_area();
+                        center.0 >= area.position.x && center.0 < area.position.x + area.size.width as i32
+                            && center.1 >= area.position.y && center.1 < area.position.y + area.size.height as i32
+                    }).cloned().or_else(|| default_monitor.clone())
+                })
+        }).or(default_monitor);
+        if let (Some(point), Some(monitor)) = (saved.as_ref(), monitor) {
+            let scale = monitor.scale_factor();
+            let area = monitor.work_area();
+            let compact_width = (344.0 * scale).round() as i32;
+            let compact_height = (62.0 * scale).round() as i32;
+            let (saved_x, saved_y) = companion_saved_compact_spot(point, compact_width, compact_height, scale,
+                area.position.x, area.position.y, area.size.width as i32, area.size.height as i32);
+            let welcome_width = (COMPANION_WELCOME_SIZE.0 * scale).round() as i32;
+            let welcome_height = (COMPANION_WELCOME_SIZE.1 * scale).round() as i32;
+            let (x, y) = companion_last_launch_spot(saved_x, saved_y, compact_width, compact_height,
+                welcome_width, welcome_height, area.position.x, area.position.y, area.size.width as i32, area.size.height as i32);
+            PhysicalPosition::new(x, y)
+        } else { companion_launch_position(app, &window) }
+    } else { companion_launch_position(app, &window) };
     let _ = window.set_position(position);
     let app_handle = app.clone();
     let resize_flag = Arc::clone(&app.state::<AppState>().companion_resize_in_progress);
@@ -1799,6 +1915,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, _shortcut, event| {
+            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                let _ = toggle_companion(app.clone());
+            }
+        }).build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1810,6 +1931,8 @@ pub fn run() {
         .manage(updates::UpdateService::default())
         .setup(|app| {
             let mut show_companion = true;
+            let mut start_at_last_position = false;
+            let mut hotkey_enabled = true;
             if let Some(state) = app.try_state::<AppState>() {
                 if let Err(error) = start_daemon(app.handle(), &state) {
                     eprintln!("Bloblex daemon startup: {error}");
@@ -1823,6 +1946,10 @@ pub fn run() {
                             .get("showCompanion")
                             .and_then(Value::as_bool)
                             .unwrap_or(true);
+                        start_at_last_position = preferences.get("companion.startPosition")
+                            .and_then(Value::as_str) == Some("last");
+                        hotkey_enabled = preferences.get("companion.hotkey")
+                            .and_then(Value::as_bool).unwrap_or(true);
                         state.close_to_tray.store(
                             preferences
                                 .get("closeToTray")
@@ -1833,7 +1960,14 @@ pub fn run() {
                     }
                 }
             }
-            let companion = make_companion(app.handle())?;
+            if hotkey_enabled {
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+                let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
+                if let Err(error) = app.global_shortcut().register(shortcut) {
+                    eprintln!("Bloblex companion shortcut unavailable: {error}");
+                }
+            }
+            let companion = make_companion(app.handle(), start_at_last_position)?;
             if show_companion {
                 companion.show()?;
             }
@@ -1883,6 +2017,8 @@ pub fn run() {
             toggle_companion,
             set_companion_mode,
             set_companion_visible,
+            set_companion_hotkey,
+            companion_hotkey_registered,
             set_close_to_tray,
             companion_monitor_options,
             current_companion_monitor,

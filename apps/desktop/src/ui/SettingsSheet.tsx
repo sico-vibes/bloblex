@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { emit } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 import { Bot, Check, ChevronDown, ChevronRight, Download, Gauge, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
@@ -11,6 +12,7 @@ import { Select } from './Select'
 import { UpdatesPanel } from './UpdatesPanel'
 import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
 import { UsageLimitsSettings } from './UsageLimitsSettings'
+import { applyAppearance } from './appearance'
 
 export type SettingsPageId = 'General' | 'Agents' | 'Usage & limits' | 'Updates'
 
@@ -48,6 +50,10 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   const [monitors, setMonitors] = useState<string[]>([])
   const [companionMonitor, setCompanionMonitorValue] = useState<string | null>(null)
   const [soundsEnabled, setSoundsEnabled] = useState(false)
+  const [startPosition, setStartPosition] = useState<'launch' | 'last'>('launch')
+  const [companionHotkey, setCompanionHotkey] = useState(true)
+  const [appearanceTheme, setAppearanceTheme] = useState<'system' | 'dark' | 'light'>('system')
+  const [textSize, setTextSize] = useState<'small' | 'default' | 'large' | 'larger'>('default')
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
   const [startWithWindows, setStartWithWindows] = useState(false)
   const [autostartLoaded, setAutostartLoaded] = useState(false)
@@ -78,6 +84,20 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
       if (typeof settings.showCompanion === 'boolean') setCompanionVisible(settings.showCompanion)
       if (typeof settings.closeToTray === 'boolean') setCloseToTrayValue(settings.closeToTray)
       if (typeof settings['companion.soundsEnabled'] === 'boolean') setSoundsEnabled(settings['companion.soundsEnabled'])
+      if (settings['companion.startPosition'] === 'last') setStartPosition('last')
+      if (typeof settings['companion.hotkey'] === 'boolean') setCompanionHotkey(settings['companion.hotkey'])
+      if (settings['companion.hotkey'] !== false) {
+        try {
+          const registered = await invoke<boolean>('companion_hotkey_registered')
+          setCompanionHotkey(registered)
+          if (!registered) {
+            await rpc('settings.set', { key: 'companion.hotkey', value: false }).catch(() => undefined)
+            setFormError('Ctrl+Alt+B is used by another app. The companion shortcut is off.')
+          }
+        } catch { /* Shortcut support may be unavailable on this platform. */ }
+      }
+      if (settings['appearance.theme'] === 'dark' || settings['appearance.theme'] === 'light' || settings['appearance.theme'] === 'system') setAppearanceTheme(settings['appearance.theme'])
+      if (['small', 'default', 'large', 'larger'].includes(String(settings['appearance.textSize']))) setTextSize(settings['appearance.textSize'] as typeof textSize)
       setNotificationsEnabled(settings['notifications.enabled'] !== false)
       if (typeof settings.editorExecutable === 'string') setEditorExecutable(settings.editorExecutable)
       if (Array.isArray(settings.editorArgs) && settings.editorArgs.every((argument) => typeof argument === 'string')) setEditorArgs(JSON.stringify(settings.editorArgs))
@@ -124,6 +144,35 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   }
 
   const setCompanion = (visible: boolean) => guarded(async () => { await setCompanionVisibility(visible); setCompanionVisible(visible) })
+  const saveSetting = (key: string, value: unknown) => guarded(async () => { await rpc('settings.set', { key, value }) })
+  const setStartPositionChoice = (value: string) => {
+    if (value !== 'launch' && value !== 'last') return
+    void saveSetting('companion.startPosition', value).then((failure) => { if (!failure) setStartPosition(value) })
+  }
+  const setHotkey = async (enabled: boolean) => {
+    setNotice(null)
+    const failure = await guarded(async () => {
+      await invoke('set_companion_hotkey', { enabled })
+      await rpc('settings.set', { key: 'companion.hotkey', value: enabled })
+      setCompanionHotkey(enabled)
+    })
+    if (failure) {
+      try { setCompanionHotkey(await invoke<boolean>('companion_hotkey_registered')) } catch { setCompanionHotkey(false) }
+      setFormError(enabled && failure.includes('already in use')
+        ? 'Ctrl+Alt+B is used by another app. The companion shortcut is off.'
+        : failure)
+    }
+  }
+  const updateAppearance = (theme: typeof appearanceTheme, size: typeof textSize) => guarded(async () => {
+    await rpc('settings.set', { key: 'appearance.theme', value: theme })
+    await rpc('settings.set', { key: 'appearance.textSize', value: size })
+    try { localStorage.setItem('bloblex.appearance', JSON.stringify({ theme, textSize: size })) } catch { /* The daemon remains the persisted source. */ }
+    document.documentElement.dataset.themeChoice = theme
+    applyAppearance(document.documentElement, theme, size)
+    setAppearanceTheme(theme)
+    setTextSize(size)
+    setNotice('Appearance updated.')
+  })
   const updateCloseToTray = (enabled: boolean) => guarded(async () => { await setCloseToTray(enabled); setCloseToTrayValue(enabled) })
   const updateAutostart = (enabled: boolean) => guarded(async () => {
     await setAutostartEnabled(enabled)
@@ -233,11 +282,25 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Companion">
+              <SettingsRow label="Start position">
+                <Select ariaLabel="Companion start position" variant="muted" value={startPosition} disabled={saving} onChange={setStartPositionChoice} options={[{ value: 'launch', label: 'Centre, near the bottom' }, { value: 'last', label: 'Where I left it' }]} />
+              </SettingsRow>
+              <SettingsRow label="Show/hide with Ctrl+Alt+B">
+                <button type="button" className={`toggle ${companionHotkey ? 'on' : ''}`} role="switch" aria-label="Show/hide with Ctrl+Alt+B" aria-checked={companionHotkey} onClick={() => void setHotkey(!companionHotkey)} disabled={saving}><i /></button>
+              </SettingsRow>
               <SettingsRow label="Show companion">
                 <button type="button" className={`toggle ${companionVisible ? 'on' : ''}`} role="switch" aria-label="Show companion" aria-checked={companionVisible} onClick={() => void setCompanion(!companionVisible)} disabled={saving}><i /></button>
               </SettingsRow>
               <SettingsRow label="Sounds" hint="Short cues when a blob finishes, fails or needs approval.">
                 <button type="button" className={`toggle ${soundsEnabled ? 'on' : ''}`} role="switch" aria-label="Companion sounds" aria-checked={soundsEnabled} onClick={() => void setSounds(!soundsEnabled)} disabled={saving}><i /></button>
+              </SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup title="Appearance">
+              <SettingsRow label="Theme">
+                <Select ariaLabel="Theme" variant="muted" value={appearanceTheme} disabled={saving} onChange={(value) => { if (value === 'system' || value === 'dark' || value === 'light') void updateAppearance(value, textSize) }} options={[{ value: 'system', label: 'Follow system' }, { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} />
+              </SettingsRow>
+              <SettingsRow label="Text size">
+                <Select ariaLabel="Text size" variant="muted" value={textSize} disabled={saving} onChange={(value) => { if (['small', 'default', 'large', 'larger'].includes(value)) void updateAppearance(appearanceTheme, value as typeof textSize) }} options={[{ value: 'small', label: 'Small 13' }, { value: 'default', label: 'Default 14' }, { value: 'large', label: 'Large 15' }, { value: 'larger', label: 'Larger 16' }]} />
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Editor">
@@ -358,9 +421,9 @@ function approvalLabel(mode: string) {
 
 function signInLabel(state?: string) {
   const value = (state ?? '').toLowerCase()
+  if (value === 'authenticated') return 'Signed in'
+  if (value === 'unauthenticated') return 'Signed out'
   if (!value) return ''
-  if (['signed_in', 'authenticated', 'logged_in'].includes(value)) return 'Signed in'
-  if (['signed_out', 'unauthenticated', 'logged_out'].includes(value)) return 'Signed out'
   return labelize(state)
 }
 

@@ -5,6 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#101216" />
     <meta name="description" content="A local control plane for coding agents." />
+    <script>
+      (() => {
+        const companion = new URLSearchParams(window.location.search).has('companion')
+        if (companion) document.documentElement.classList.add('companion-surface')
+        try {
+          const settings = JSON.parse(localStorage.getItem('bloblex.appearance') || '{}')
+          const theme = ['system', 'dark', 'light'].includes(settings.theme) ? settings.theme : 'system'
+          const textSize = ['small', 'default', 'large', 'larger'].includes(settings.textSize) ? settings.textSize : 'default'
+          const resolved = companion ? 'dark' : theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme
+          document.documentElement.dataset.theme = resolved
+          document.documentElement.dataset.textSize = textSize
+          document.documentElement.dataset.themeChoice = companion ? 'dark' : theme
+        } catch { document.documentElement.dataset.theme = 'dark' }
+      })()
+    </script>
     <title>Bloblex</title>
   </head>
   <body>

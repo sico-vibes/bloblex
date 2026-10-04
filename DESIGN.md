@@ -42,3 +42,7 @@ Moods come from `ui/companionStatus.ts` and settle over time: a finished turn sh
 ## Companion
 
 Rounded rectangular bill with 14 px compact and 22 px expanded corners, an opaque surface and a clear drag affordance, inside a transparent native window. The outer shell must not use a pill radius.
+
+Appearance may use system, dark or light surfaces. Light surfaces use the same semantic tokens with dark text. Type scale tokens may scale proportionally from a 13 px through 16 px body size.
+
+The companion keeps its dark token palette over transparency when the main window uses the light theme.

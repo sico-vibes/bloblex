@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent } from '../types'
-import { CLIENT_MESSAGES, createParams, draftFromAgent, duplicateParams, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type DaemonFailureKind } from './agentForm'
+import { CLIENT_MESSAGES, createParams, draftFromAgent, duplicateParams, isAgentDirty, messageForDaemonCode, starterDraft, updateParams, validateAgentDraft, type DaemonFailureKind } from './agentForm'
 
 function agent(partial: Partial<Agent> = {}): Agent {
   return {
@@ -11,6 +11,9 @@ function agent(partial: Partial<Agent> = {}): Agent {
 }
 
 describe('agent draft validation', () => {
+  it('creates a provider starter with Ask, its default swatch, and the matching runtime', () => {
+    expect(starterDraft({ id: 'rt-codex', provider: 'codex' })).toMatchObject({ name: 'Codex', runtimeId: 'rt-codex', color: 'blue', approvalMode: 'ask' })
+  })
   const baseline = draftFromAgent(agent())
 
   it('states every client validation message', () => {

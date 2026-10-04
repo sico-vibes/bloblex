@@ -1,6 +1,30 @@
 export type LaunchCheckState = 'running' | 'ok' | 'warning' | 'failed'
 export type LaunchCheck = { id: string; label: string; state: LaunchCheckState; detail: string }
 export type LaunchStep = { id: string; label: string; timeoutMs: number; run: (signal: AbortSignal) => Promise<string> }
+export type RuntimeAuthSummary = { state: 'authenticated' | 'unauthenticated' | 'unknown'; label: string }
+
+export function runtimeAuthSummary(runtime: { provider: string; authState?: string; gatewayAuthStates?: Record<string, string> }): RuntimeAuthSummary {
+  const state = (value?: string): RuntimeAuthSummary['state'] => {
+    const normalized = value?.toLowerCase()
+    if (normalized === 'authenticated' || normalized === 'signed_in') return 'authenticated'
+    if (normalized === 'unauthenticated' || normalized === 'signed_out') return 'unauthenticated'
+    return 'unknown'
+  }
+  const gateways = runtime.provider.toLowerCase() === 'opencode' ? Object.entries(runtime.gatewayAuthStates ?? {}) : []
+  if (gateways.length) {
+    const parts = gateways.sort(([left], [right]) => left.localeCompare(right)).map(([gateway, value]) => {
+      const name = gateway === 'opencode' ? 'Zen' : gateway === 'opencode-go' ? 'Go' : 'Gateway'
+      const gatewayState = state(value)
+      return { name, gatewayState, label: `${name}: ${gatewayState === 'authenticated' ? 'signed in' : gatewayState === 'unauthenticated' ? 'not signed in' : 'status unknown'}` }
+    })
+    const summaryState = parts.every((part) => part.gatewayState === 'authenticated') ? 'authenticated'
+      : parts.some((part) => part.gatewayState === 'authenticated') ? 'authenticated'
+        : parts.every((part) => part.gatewayState === 'unauthenticated') ? 'unauthenticated' : 'unknown'
+    return { state: summaryState, label: parts.map((part) => part.label).join(' · ') }
+  }
+  const fallback = state(runtime.authState)
+  return { state: fallback, label: fallback === 'authenticated' ? 'Signed in' : fallback === 'unauthenticated' ? 'Not signed in' : 'Sign-in status unknown' }
+}
 
 export const LAUNCH_TIMEOUTS = { service: 12_000, discovery: 12_000, agent: 1_000, models: 10_000, usage: 8_000, overall: 90_000 } as const
 export const LAUNCH_OVERALL_TIMEOUT_REASON = 'launch-overall-timeout'
@@ -81,8 +105,25 @@ export async function runLaunchChecks(steps: LaunchStep[], onChange: (checks: La
   return checks
 }
 
-export function launchWarningsFor(checks: readonly LaunchCheck[]) {
-  return checks
+export function launchWarningsFor(checks: readonly LaunchCheck[], runtimes: readonly { id: string; provider: string; authState?: string; gatewayAuthStates?: Record<string, string> }[] = []) {
+  const details = checks
     .filter((check) => check.state === 'warning' || check.state === 'failed')
+    .filter((check) => {
+      if (!check.id.startsWith('auth:')) return true
+      const runtimeId = check.id.slice(5)
+      const runtime = runtimes.find((item) => item.id === runtimeId)
+      if (runtime?.provider.toLowerCase() === 'opencode' && runtimeAuthSummary(runtime).state === 'authenticated') return false
+      return !checks.some((item) => item.id === `models:${runtimeId}` && item.state === 'ok')
+    })
     .map((check) => check.detail.replace(/^Warning:\s*/, ''))
+  const providers = new Map<string, string[]>()
+  const other: string[] = []
+  for (const detail of details) {
+    const match = /^(Claude Code|Codex|OpenCode):\s*(.+)$/i.exec(detail)
+    if (!match) { other.push(detail); continue }
+    const name = match[1][0].toUpperCase() + match[1].slice(1)
+    const message = match[2].replace(/[.\s]+$/, '')
+    providers.set(name, [...(providers.get(name) ?? []), message])
+  }
+  return [...providers].map(([provider, messages]) => `${provider}: ${[...new Set(messages)].join('; ')}` ).concat(other)
 }

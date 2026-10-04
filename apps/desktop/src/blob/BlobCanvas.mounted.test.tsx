@@ -7,6 +7,11 @@ import * as soundCues from './soundCues'
 
 type FrameCallback = (timestamp: number) => void
 
+class TestPath2D {
+  moveTo() {} lineTo() {} quadraticCurveTo() {} bezierCurveTo() {} closePath() {}
+  ellipse() {} arc() {} rect() {} addPath() {}
+}
+
 let clock = 10_000
 let nextFrame = 1
 let frames = new Map<number, FrameCallback>()
@@ -19,7 +24,7 @@ function makeCanvasContext() {
   return {
     setTransform: vi.fn(), clearRect: vi.fn(), save: vi.fn(), restore: vi.fn(), translate: vi.fn(), rotate: vi.fn(), scale: vi.fn(),
     createLinearGradient: vi.fn(() => gradient), createRadialGradient: vi.fn(() => gradient),
-    beginPath: vi.fn(), arc: vi.fn(), ellipse: vi.fn(), fill: vi.fn(), stroke: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(),
+    beginPath: vi.fn(), arc: vi.fn(), arcTo: vi.fn(), ellipse: vi.fn(), fill: vi.fn(), stroke: vi.fn(), clip: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(),
     roundRect: vi.fn(), quadraticCurveTo: vi.fn(), bezierCurveTo: vi.fn(), closePath: vi.fn(), fillText: vi.fn(),
     setLineDash: vi.fn(), fillRect: vi.fn(),
   }
@@ -83,6 +88,7 @@ beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   vi.useFakeTimers()
   vi.stubGlobal('performance', { now: () => clock })
+  vi.stubGlobal('Path2D', TestPath2D)
   vi.stubGlobal('requestAnimationFrame', (callback: FrameCallback) => { const id = nextFrame++; frames.set(id, callback); return id })
   vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id) })
   vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
@@ -218,6 +224,15 @@ describe('BlobCanvas mounted lifecycle', () => {
     act(() => document.dispatchEvent(new Event('visibilitychange')))
     expect(frameQueueSize()).toBe(0)
     expect(canvas.isConnected).toBe(false)
+  })
+
+  it('fits tall hat outfits with a uniform body transform so the body stays circular', () => {
+    const view = mount(<BlobCanvas color="#e67f72" size={100} mood="idle" outfit="witch-hat" />)
+    flushFrame(clock)
+    const [scaleX, scaleY] = context.scale.mock.calls[0]
+    expect(scaleX).toBeLessThan(1)
+    expect(scaleY).toBeCloseTo(scaleX)
+    view.unmount()
   })
 
   it('renders each local reference stage and preserves approval/offline/error barriers', () => {

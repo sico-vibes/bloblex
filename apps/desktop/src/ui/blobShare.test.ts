@@ -22,7 +22,8 @@ describe('blob share format', () => {
     expect(parseSharedBlob(JSON.stringify(value)).outfit).toBe('witch-hat')
     const { outfit: _oldField, ...older } = base
     expect(parseSharedBlob(JSON.stringify(older)).outfit).toBe('auto')
-    expect(() => parseSharedBlob(JSON.stringify({ ...base, outfit: 'bunny-ears' }))).toThrow(/valid outfit/)
+    expect(parseSharedBlob(JSON.stringify({ ...base, outfit: 'bunny-ears' })).outfit).toBe('bunny-ears')
+    expect(() => parseSharedBlob(JSON.stringify({ ...base, outfit: 'unrecognized-outfit' }))).toThrow(/valid outfit/)
   })
 
   it('rejects wrong versions, malformed colours, and oversized content', () => {

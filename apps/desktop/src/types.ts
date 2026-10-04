@@ -29,6 +29,7 @@ export interface Snapshot extends JsonRecord {
 export interface Runtime extends JsonRecord {
   id: string
   provider: string
+  displayName?: string
   hostId?: string
   host?: JsonRecord
   protocolFamily?: string
@@ -36,6 +37,7 @@ export interface Runtime extends JsonRecord {
   version?: string
   status?: string
   authState?: string
+  gatewayAuthStates?: Record<string, string>
   capabilities?: JsonRecord | string[]
 }
 

@@ -156,7 +156,7 @@ fn schema_v8_valid(c: &Connection) -> Result<bool, StorageError> {
     let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
     let pragma: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     let outfit: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='outfit' AND dflt_value=quote('auto'))", [], |r| r.get(0))?;
-    let values_ok: bool = c.query_row("SELECT NOT EXISTS(SELECT 1 FROM agents WHERE outfit NOT IN ('auto','none','party-hat','beanie','crown','sunglasses','round-glasses','bow','scarf','witch-hat','santa-hat'))", [], |r| r.get(0))?;
+    let values_ok: bool = c.query_row("SELECT NOT EXISTS(SELECT 1 FROM agents WHERE outfit NOT IN ('auto','none','party-hat','beanie','crown','sunglasses','round-glasses','bow','scarf','witch-hat','santa-hat','pumpkin','bunny-ears'))", [], |r| r.get(0))?;
     let columns = ["input_rate", "output_rate", "cache_read_rate", "cache_write_rate"];
     for column in columns {
         let kind: String = c.query_row("SELECT type FROM pragma_table_info('user_pricing_rules') WHERE name=?1", [column], |r| r.get(0))?;
@@ -174,7 +174,7 @@ fn schema_v8_valid(c: &Connection) -> Result<bool, StorageError> {
         }
     }
     let integrity: String = c.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
-    Ok(ledger == 8 && pragma == 8 && outfit && values_ok && integrity == "ok"
+    Ok((ledger == 8 || ledger == 9) && pragma == ledger && outfit && values_ok && integrity == "ok"
         && c.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get::<_, i64>(0))? == 0)
 }
 
@@ -215,6 +215,68 @@ fn migrate_exact_price_overrides(c: &mut Connection, path: Option<&Path>, backup
     if !schema_v8_valid(&tx)? { return Err(StorageError::InvalidAgent); }
     tx.commit()?;
     if !schema_v8_valid(c)? { return Err(StorageError::InvalidAgent); }
+    Ok(())
+}
+
+fn schema_v9_valid(c: &Connection) -> Result<bool, StorageError> {
+    let sql: Option<String> = c.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'", [], |r| r.get(0)).optional()?;
+    let v8_valid = schema_v8_valid(c)?;
+    let ids_in_constraint = sql.is_some_and(|ddl| ddl.contains("'pumpkin'") && ddl.contains("'bunny-ears'"));
+    Ok(v8_valid && ids_in_constraint)
+}
+
+fn migrate_agent_outfit_ids(c: &mut Connection, path: Option<&Path>, backup_done: bool) -> Result<(), StorageError> {
+    let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+    let pragma: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if ledger == 9 { return if schema_v9_valid(c)? { Ok(()) } else { Err(StorageError::InvalidAgent) }; }
+    let source_valid = schema_v8_valid(c)?;
+    if ledger != 8 || pragma != 8 || !source_valid { return Err(StorageError::InvalidAgent); }
+    if let Some(database_path) = path { if !backup_done { verified_backup(c, database_path, 8)?; } }
+
+    c.pragma_update(None, "foreign_keys", "OFF")?;
+    let result = (|| -> Result<(), StorageError> {
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let indexes: Vec<String> = {
+            let mut q = tx.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='agents' AND sql IS NOT NULL ORDER BY name")?;
+            let rows = q.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        tx.execute_batch("CREATE TABLE agents_v9 (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 60),
+            name_key TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '' CHECK(length(description) <= 255),
+            instructions TEXT NOT NULL DEFAULT '',
+            color TEXT NOT NULL DEFAULT 'mint' CHECK(color IN ('coral','orange','amber','lemon','lime','mint','teal','cyan','sky','blue','violet','pink') OR color GLOB '#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]'),
+            runtime_id TEXT NOT NULL REFERENCES runtimes(id) ON DELETE RESTRICT,
+            model TEXT,
+            thinking TEXT,
+            service_tier TEXT,
+            custom_args TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(custom_args) AND json_type(custom_args)='array'),
+            custom_env TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(custom_env) AND json_type(custom_env)='object'),
+            max_concurrency INTEGER NOT NULL DEFAULT 1 CHECK(max_concurrency BETWEEN 1 AND 50),
+            default_project TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0 CHECK(sort_order>=0),
+            archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            approval_mode TEXT CHECK(approval_mode IS NULL OR approval_mode IN ('ask','auto','bypass')),
+            outfit TEXT NOT NULL DEFAULT 'auto' CHECK(outfit IN ('auto','none','party-hat','beanie','crown','sunglasses','round-glasses','bow','scarf','witch-hat','santa-hat','pumpkin','bunny-ears'))
+        );
+        INSERT INTO agents_v9 SELECT id,name,name_key,description,instructions,color,runtime_id,model,thinking,service_tier,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at,approval_mode,outfit FROM agents;
+        DROP TABLE agents;
+        ALTER TABLE agents_v9 RENAME TO agents;")?;
+        for index_sql in indexes { tx.execute_batch(&index_sql)?; }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        tx.execute("INSERT INTO schema_migrations(version,applied_at) VALUES(9,?1)", [now])?;
+        tx.pragma_update(None, "user_version", 9)?;
+        if !schema_v9_valid(&tx)? { return Err(StorageError::InvalidAgent); }
+        tx.commit()?;
+        Ok(())
+    })();
+    c.pragma_update(None, "foreign_keys", "ON")?;
+    result?;
+    if !schema_v9_valid(c)? { return Err(StorageError::InvalidAgent); }
     Ok(())
 }
 
@@ -463,11 +525,12 @@ impl Storage {
         if has_ledger {
             let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
             let user:i64=conn.query_row("PRAGMA user_version",[],|r|r.get(0))?;
-            if ledger>8||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
-            if ledger==8 {
-                if !schema_v8_valid(&conn)? { return Err(StorageError::InvalidAgent); }
+            if ledger>9||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
+            if ledger==9 {
+                if !schema_v9_valid(&conn)? { return Err(StorageError::InvalidAgent); }
                 return Ok(Self { conn: Mutex::new(conn) });
             }
+            if ledger==8 && !schema_v8_valid(&conn)? { return Err(StorageError::InvalidAgent); }
             if ledger==7 && !schema_v7_valid(&conn)? { return Err(StorageError::InvalidAgent); }
             if ledger==6 && !schema_v6_valid(&conn)? { return Err(StorageError::InvalidAgent); }
             if ledger==5 && !schema_v5_valid(&conn)? { return Err(StorageError::InvalidAgent); }
@@ -477,7 +540,7 @@ impl Storage {
         if has_ledger {
             let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
             let user:i64=conn.query_row("PRAGMA user_version",[],|r|r.get(0))?;
-            if ledger>8||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
+            if ledger>9||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
             if ledger==1 {if let Some(p)=path{verified_backup(&conn,p,1)?;backup_done=true;}}
             if ledger==2 {if let Some(p)=path{verified_backup(&conn,p,2)?;backup_v2_done=true;}}
             if ledger==5 {if let Some(p)=path{verified_backup(&conn,p,5)?;backup_v5_done=true;}}
@@ -553,6 +616,11 @@ impl Storage {
             if ledger == 7 { verified_backup(&conn, path.unwrap(), 7)?; true } else { false }
         } else { false };
         migrate_exact_price_overrides(&mut conn, path, backup_v7_done)?;
+        let backup_v8_done = if path.is_some() {
+            let ledger: i64 = conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+            if ledger == 8 { verified_backup(&conn, path.unwrap(), 8)?; true } else { false }
+        } else { false };
+        migrate_agent_outfit_ids(&mut conn, path, backup_v8_done)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -580,14 +648,6 @@ impl Storage {
         }
     }
     pub fn agent_get(&self, id:&str)->Result<Value,StorageError>{ validate_agent_id(id)?;let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?; agent_read(&c,id) }
-    pub fn ensure_default_agents(&self)->Result<Vec<Value>,StorageError>{
-        let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
-        let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
-        let events=ensure_default_agents_tx(&tx,&now,true)?;
-        tx.commit()?;
-        Ok(events)
-    }
     pub fn agent_create(&self, input:&Value)->Result<(Value,Vec<Value>),StorageError>{
         validate_agent_fields(input,true)?;
         let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?; let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -626,7 +686,10 @@ impl Storage {
     pub fn agent_archive(&self,id:&str)->Result<(Value,Vec<Value>),StorageError>{
         validate_agent_id(id)?;let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;let old=agent_read(&tx,id)?;
         if old["archived"]==true{tx.commit()?;return Ok((old,vec![]));} let rt=old["runtimeId"].as_str().unwrap_or("").to_owned(); let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
-        let before=active_order(&tx,&rt)?;shift_active_except(&tx,&rt,id)?; tx.execute("UPDATE agents SET archived=1,updated_at=?2 WHERE id=?1",params![id,now])?;let remaining=active_ids(&tx,&rt)?;assign_active_order(&tx,&remaining,&before,&now)?;
+        let before=active_order(&tx,&rt)?;shift_active_except(&tx,&rt,id)?; tx.execute("UPDATE agents SET archived=1,updated_at=?2 WHERE id=?1",params![id,now])?;
+        tx.execute("DELETE FROM budget_reservations WHERE policy_id IN (SELECT id FROM budget_policies WHERE scope_type='blob' AND scope_id=?1)",[id])?;
+        tx.execute("DELETE FROM budget_policies WHERE scope_type='blob' AND scope_id=?1",[id])?;
+        let remaining=active_ids(&tx,&rt)?;assign_active_order(&tx,&remaining,&before,&now)?;
         let mut events=Vec::new();let archived=agent_read(&tx,id)?;events.push(push_agent_event(&tx,"archived",&archived)?);
         for a in changed_agents(&tx,&rt)?{if before.iter().find(|previous|previous["id"]==a["id"]).is_some_and(|previous|previous["sortOrder"]!=a["sortOrder"]){events.push(push_agent_event(&tx,"reordered",&a)?);}}
         tx.commit()?;Ok((archived,events))
@@ -957,6 +1020,7 @@ impl Storage {
     ) -> Result<bool, StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let session_agent: Option<String> = tx.query_row("SELECT agent_id FROM sessions WHERE id=?1", [session_id], |r| r.get(0)).optional()?.flatten();
         let policies = {
             let mut q = tx.prepare("SELECT id,scope_type,scope_id,period,metric,hard_limit,enabled,currency FROM budget_policies")?;
             let rows = q.query_map([], |r| {
@@ -987,6 +1051,7 @@ impl Storage {
                     .is_none_or(|s| s == "host_windows_local"),
                 "runtime" => scope_id.as_deref().is_none_or(|s| s == runtime_id),
                 "agent" => scope_id.as_deref().is_none_or(|s| s == provider),
+                "blob" => session_agent.as_deref().is_some_and(|agent| scope_id.as_deref() == Some(agent)),
                 "session" => scope_id.as_deref().is_none_or(|s| s == session_id),
                 "project" => scope_id.as_deref().is_none_or(|s| s == project_path),
                 _ => false,
@@ -1009,10 +1074,11 @@ impl Storage {
                 return Ok(false);
             }
             let start = period_start(&now, &period);
+            let blob_scope_id = if scope == "blob" { scope_id.as_deref() } else { None };
             let used: i64 = if period == "turn" {
-                tx.query_row("SELECT COALESCE(SUM(CASE WHEN status='active' THEN amount WHEN status='reconciled' THEN COALESCE(reconciled_amount,amount) ELSE 0 END),0) FROM budget_reservations WHERE policy_id=?1 AND turn_id=?2", params![id, turn_id], |r| r.get(0))?
+                tx.query_row("SELECT COALESCE(SUM(CASE WHEN br.status='active' THEN br.amount WHEN br.status='reconciled' THEN COALESCE(br.reconciled_amount,br.amount) ELSE 0 END),0) FROM budget_reservations br WHERE br.policy_id=?1 AND br.turn_id=?2 AND (?3 IS NULL OR EXISTS (SELECT 1 FROM turns t JOIN sessions s ON s.id=t.session_id WHERE t.id=br.turn_id AND s.agent_id=?3))", params![id, turn_id, blob_scope_id], |r| r.get(0))?
             } else {
-                tx.query_row("SELECT COALESCE(SUM(CASE WHEN status='active' THEN amount WHEN status='reconciled' THEN COALESCE(reconciled_amount,amount) ELSE 0 END),0) FROM budget_reservations WHERE policy_id=?1 AND created_at>=?2", params![id, start], |r| r.get(0))?
+                tx.query_row("SELECT COALESCE(SUM(CASE WHEN br.status='active' THEN br.amount WHEN br.status='reconciled' THEN COALESCE(br.reconciled_amount,br.amount) ELSE 0 END),0) FROM budget_reservations br WHERE br.policy_id=?1 AND br.created_at>=?2 AND (?3 IS NULL OR EXISTS (SELECT 1 FROM turns t JOIN sessions s ON s.id=t.session_id WHERE t.id=br.turn_id AND s.agent_id=?3))", params![id, start, blob_scope_id], |r| r.get(0))?
             };
             let Some(requested) = demands[&metric].as_i64() else {
                 tx.rollback()?;
@@ -1436,8 +1502,18 @@ impl Storage {
         Ok(json!({"policies":self.budget_list_locked(&c)?}))
     }
     pub fn save_budget(&self, p: &Value) -> Result<(), StorageError> {
-        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let scope = p["scopeType"].as_str().unwrap_or("global");
+        let scope_id = p["scopeId"].as_str();
+        if scope == "blob" {
+            let Some(agent_id) = scope_id else { return Err(StorageError::InvalidBudget); };
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND archived=0)", [agent_id], |r| r.get(0))?;
+            if !exists { return Err(StorageError::InvalidBudget); }
+        }
         let metric = p["metric"].as_str().unwrap_or("tokens");
+        let id = p["id"].as_str().unwrap_or_else(||p["policyId"].as_str().unwrap_or("")).trim();
+        if id.is_empty() { return Err(StorageError::InvalidBudget); }
         if !matches!(
             metric,
             "tokens"
@@ -1452,12 +1528,21 @@ impl Storage {
         {
             return Err(StorageError::InvalidBudget);
         }
-        c.execute("INSERT INTO budget_policies(id,scope_type,scope_id,period,metric,hard_limit,warning_json,created_at,enabled,currency) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET scope_type=excluded.scope_type,scope_id=excluded.scope_id,period=excluded.period,metric=excluded.metric,hard_limit=excluded.hard_limit,warning_json=excluded.warning_json,enabled=excluded.enabled,currency=excluded.currency",params![p["id"].as_str().unwrap_or_else(||p["policyId"].as_str().unwrap_or("")),p["scopeType"].as_str().unwrap_or("global"),p["scopeId"].as_str(),p["period"].as_str().unwrap_or("day"),metric,p["hardLimit"].as_i64().unwrap_or(0),p["warningThresholds"].to_string(),Utc::now().to_rfc3339(),p["enabled"].as_bool().unwrap_or(true),p["currency"].as_str().unwrap_or("USD")])?;
+        let period = p["period"].as_str().unwrap_or("day");
+        let prior: Option<(String,Option<String>,String,String)> = tx.query_row("SELECT scope_type,scope_id,period,metric FROM budget_policies WHERE id=?1", [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+        if prior.is_some_and(|(old_scope,old_id,old_period,old_metric)| old_scope != scope || old_id.as_deref() != scope_id || old_period != period || old_metric != metric) {
+            tx.execute("DELETE FROM budget_reservations WHERE policy_id=?1", [id])?;
+        }
+        tx.execute("INSERT INTO budget_policies(id,scope_type,scope_id,period,metric,hard_limit,warning_json,created_at,enabled,currency) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET scope_type=excluded.scope_type,scope_id=excluded.scope_id,period=excluded.period,metric=excluded.metric,hard_limit=excluded.hard_limit,warning_json=excluded.warning_json,enabled=excluded.enabled,currency=excluded.currency",params![id,scope,scope_id,period,metric,p["hardLimit"].as_i64().unwrap_or(0),p["warningThresholds"].to_string(),Utc::now().to_rfc3339(),p["enabled"].as_bool().unwrap_or(true),p["currency"].as_str().unwrap_or("USD")])?;
+        tx.commit()?;
         Ok(())
     }
     pub fn delete_budget(&self, id: &str) -> Result<(), StorageError> {
-        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        c.execute("DELETE FROM budget_policies WHERE id=?1", [id])?;
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM budget_reservations WHERE policy_id=?1", [id])?;
+        tx.execute("DELETE FROM budget_policies WHERE id=?1", [id])?;
+        tx.commit()?;
         Ok(())
     }
     pub fn settings(&self) -> Result<Value, StorageError> {
@@ -1665,7 +1750,9 @@ impl Storage {
             let id: String = r.get(0)?;
             let period: String = r.get(3)?;
             let limit: i64 = r.get(5)?;
-            let (consumed,reserved) = budget_totals_locked(c, &id, &period)?;
+            let scope_type: String = r.get(1)?;
+            let scope_id: Option<String> = r.get(2)?;
+            let (consumed,reserved) = budget_totals_locked(c, &id, &period, &scope_type, scope_id.as_deref())?;
             Ok(json!({"id":id,"scopeType":r.get::<_,String>(1)?,"scopeId":r.get::<_,Option<String>>(2)?,"period":period,"metric":r.get::<_,String>(4)?,"hardLimit":limit,"warningThresholds":serde_json::from_str::<Value>(&r.get::<_,String>(6)?).unwrap_or(json!([])),"enabled":r.get::<_,bool>(7)?,"currency":r.get::<_,String>(8)?,"consumed":consumed,"reserved":reserved,"remaining":limit.saturating_sub(consumed).saturating_sub(reserved).max(0)}))
         })?.collect::<Result<Vec<_>,_>>()?;
         Ok(Value::Array(rows))
@@ -1984,7 +2071,7 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
     if v.get("customArgs").is_some_and(|x|!x.is_array()||!x.as_array().unwrap().is_empty())||v.get("customEnv").is_some_and(|x|!x.is_object()||!x.as_object().unwrap().values().all(Value::is_string))||v.get("maxConcurrency").is_some_and(|x|!x.as_i64().is_some_and(|n|(1..=50).contains(&n))){return Err(StorageError::InvalidAgent)}
     for key in ["model","thinking","serviceTier","defaultProject","approvalMode"] { if v.get(key).is_some_and(|x|!x.is_null()&&!x.is_string()){return Err(StorageError::InvalidAgent)} }
     if v.get("approvalMode").and_then(Value::as_str).is_some_and(|s| !["ask","auto","bypass"].contains(&s)){return Err(StorageError::InvalidAgent)}
-    if v.get("outfit").is_some_and(|value| !value.as_str().is_some_and(|s| ["auto","none","party-hat","beanie","crown","sunglasses","round-glasses","bow","scarf","witch-hat","santa-hat"].contains(&s))) { return Err(StorageError::InvalidAgent); }
+    if v.get("outfit").is_some_and(|value| !value.as_str().is_some_and(|s| ["auto","none","party-hat","beanie","crown","sunglasses","round-glasses","bow","scarf","witch-hat","santa-hat","pumpkin","bunny-ears"].contains(&s))) { return Err(StorageError::InvalidAgent); }
     if create && (!v["name"].is_string()||!v["runtimeId"].is_string()){return Err(StorageError::InvalidAgent)}
     if let Some(name)=v["name"].as_str(){let n=name.trim();if n.chars().count()==0||n.chars().count()>60{return Err(StorageError::InvalidAgent)}}
     if v["description"].as_str().is_some_and(|x|x.chars().count()>255)||v["instructions"].as_str().is_some_and(|x|x.contains('\0')){return Err(StorageError::InvalidAgent)}
@@ -2036,8 +2123,23 @@ fn budget_totals_locked(
     c: &Connection,
     policy_id: &str,
     period: &str,
+    scope_type: &str,
+    scope_id: Option<&str>,
 ) -> Result<(i64, i64), rusqlite::Error> {
     let start = period_start(&Utc::now(), period);
+    if scope_type == "blob" {
+        let agent = scope_id.unwrap_or("");
+        if period == "turn" {
+            return c.query_row(
+                "SELECT COALESCE(SUM(CASE WHEN br.status='reconciled' THEN COALESCE(br.reconciled_amount,br.amount) ELSE 0 END),0),COALESCE(SUM(CASE WHEN br.status='active' THEN br.amount ELSE 0 END),0) FROM budget_reservations br JOIN turns t ON t.id=br.turn_id JOIN sessions s ON s.id=t.session_id WHERE br.policy_id=?1 AND s.agent_id=?2 AND br.turn_id=(SELECT br2.turn_id FROM budget_reservations br2 JOIN turns t2 ON t2.id=br2.turn_id JOIN sessions s2 ON s2.id=t2.session_id WHERE br2.policy_id=?1 AND s2.agent_id=?2 ORDER BY br2.created_at DESC,br2.rowid DESC LIMIT 1)",
+                params![policy_id, agent], |r| Ok((r.get(0)?, r.get(1)?)),
+            );
+        }
+        return c.query_row(
+            "SELECT COALESCE(SUM(CASE WHEN br.status='reconciled' THEN COALESCE(br.reconciled_amount,br.amount) ELSE 0 END),0),COALESCE(SUM(CASE WHEN br.status='active' THEN br.amount ELSE 0 END),0) FROM budget_reservations br JOIN turns t ON t.id=br.turn_id JOIN sessions s ON s.id=t.session_id WHERE br.policy_id=?1 AND s.agent_id=?2 AND br.created_at>=?3",
+            params![policy_id, agent, start], |r| Ok((r.get(0)?, r.get(1)?)),
+        );
+    }
     if period == "turn" {
         c.query_row(
             "SELECT COALESCE(SUM(CASE WHEN status='reconciled' THEN COALESCE(reconciled_amount,amount) ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='active' THEN amount ELSE 0 END),0) FROM budget_reservations WHERE policy_id=?1 AND turn_id=(SELECT turn_id FROM budget_reservations WHERE policy_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 1)",
@@ -2169,7 +2271,7 @@ mod pricing_override_removal_tests {
         drop(Storage::open(&path).unwrap());
         {
             let c = Connection::open(&path).unwrap();
-            c.execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL); DELETE FROM schema_migrations WHERE version=8; PRAGMA user_version=7;").unwrap();
+            c.execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL); DELETE FROM schema_migrations WHERE version IN (8,9); PRAGMA user_version=7;").unwrap();
             c.execute("INSERT INTO user_pricing_rules(id,provider,model,aliases,input_rate,output_rate,cache_read_rate,cache_write_rate,currency,effective_from,data) VALUES('old-usd','codex','gpt-old','[]',3,125,0,NULL,'USD','2026-10-01T00:00:00Z',?1)", [r#"{"id":"old-usd","provider":"codex","canonicalModelId":"gpt-old","aliases":[],"inputPerMillion":3,"outputPerMillion":125,"cacheReadPerMillion":0,"cacheWritePerMillion":null,"currency":"USD","effectiveFrom":"2026-10-01T00:00:00Z"}"#]).unwrap();
             c.execute("INSERT INTO user_pricing_rules(id,provider,model,aliases,input_rate,output_rate,cache_read_rate,cache_write_rate,currency,effective_from,data) VALUES('old-kwd','opencode','model-kwd','[]',3,NULL,NULL,NULL,'KWD','2026-10-01T00:00:00Z',?1)", [r#"{"id":"old-kwd","provider":"opencode","canonicalModelId":"model-kwd","aliases":[],"inputPerMillion":3,"outputPerMillion":null,"cacheReadPerMillion":null,"cacheWritePerMillion":null,"currency":"KWD","effectiveFrom":"2026-10-01T00:00:00Z"}"#]).unwrap();
         }
@@ -2187,7 +2289,7 @@ mod pricing_override_removal_tests {
         assert!(!c.query_row("SELECT applied_at FROM schema_migrations WHERE version=7", [], |r| r.get::<_, String>(0)).unwrap().is_empty());
         assert!(c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='outfit')", [], |r| r.get::<_, bool>(0)).unwrap());
         assert_eq!(c.query_row("SELECT COUNT(*) FROM schema_migrations WHERE version=8", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 8);
+        assert_eq!(c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
         drop(c);
         drop(db);
         let _ = fs::remove_dir_all(dir);
@@ -2198,7 +2300,7 @@ mod pricing_override_removal_tests {
 mod tests {
     use super::*;
     fn remove_session_controls_migration(c: &Connection) {
-        c.execute_batch("DELETE FROM schema_migrations WHERE version IN (6,7,8); PRAGMA user_version=5; ALTER TABLE sessions DROP COLUMN archived; ALTER TABLE sessions DROP COLUMN title_override; ALTER TABLE agents DROP COLUMN outfit; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
+        c.execute_batch("DELETE FROM schema_migrations WHERE version IN (6,7,8,9); PRAGMA user_version=5; ALTER TABLE sessions DROP COLUMN archived; ALTER TABLE sessions DROP COLUMN title_override; ALTER TABLE agents DROP COLUMN outfit; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
     }
     #[test]
     fn session_metadata_migration_rename_archive_and_delete_are_durable_and_scoped() {
@@ -2206,7 +2308,7 @@ mod tests {
         {
             let db = Storage::open(&path).unwrap();
             let version: i64 = db.conn.lock().unwrap().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(version, 8);
+            assert_eq!(version, 9);
             db.upsert_runtime(&json!({"id":"rt-controls","provider":"codex"})).unwrap();
             db.create_session("s-controls", "rt-controls", "codex", ".", "Original").unwrap();
             assert!(matches!(db.session_delete("s-controls"), Err(StorageError::SessionActive)));
@@ -2407,7 +2509,7 @@ mod tests {
         let agent_id;
         {let db=Storage::open(&path).unwrap();db.upsert_runtime(&json!({"id":"rt-v4","provider":"codex"})).unwrap();let (agent,_)=db.agent_create(&json!({"name":"Existing","runtimeId":"rt-v4"})).unwrap();agent_id=agent["id"].as_str().unwrap().to_owned();db.create_session_for_agent("session-v4","rt-v4","codex","C:/project","Existing",Some(&agent_id)).unwrap();db.insert_permission("perm-v4","session-v4","request-v4","Read file",None,&["allow".into(),"deny".into()],&json!({"toolCall":{"kind":"read"},"path":"README.md"})).unwrap();}
         {let c=Connection::open(&path).unwrap();remove_session_controls_migration(&c);c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode';").unwrap();}
-        {let db=Storage::open(&path).unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");let agent=db.agent_get(&agent_id).unwrap();assert!(agent["approvalMode"].is_null());assert_eq!(agent["effectiveApprovalMode"],"ask");let c=Connection::open(&path).unwrap();assert_eq!(c.query_row("SELECT status FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,String>(0)).unwrap(),"pending");assert!(c.query_row("SELECT resolved_by FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),8);}
+        {let db=Storage::open(&path).unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");let agent=db.agent_get(&agent_id).unwrap();assert!(agent["approvalMode"].is_null());assert_eq!(agent["effectiveApprovalMode"],"ask");let c=Connection::open(&path).unwrap();assert_eq!(c.query_row("SELECT status FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,String>(0)).unwrap(),"pending");assert!(c.query_row("SELECT resolved_by FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),9);}
         let backups=fs::read_dir(dir.join("backups")).unwrap().count();drop(Storage::open(&path).unwrap());assert_eq!(fs::read_dir(dir.join("backups")).unwrap().count(),backups);
         {let c=Connection::open(&path).unwrap();c.pragma_update(None,"user_version",3).unwrap();}assert!(matches!(Storage::open(&path),Err(StorageError::InvalidAgent)));let _=fs::remove_dir_all(dir);
     }
@@ -2424,7 +2526,7 @@ mod tests {
     fn v1_fixture() -> (PathBuf,PathBuf) {
         let dir=std::env::temp_dir().join(format!("bloblex-phase2a-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("bloblex.db");drop(Storage::open(&path).unwrap());
         let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();remove_session_controls_migration(&c);c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode'; DROP INDEX idx_usage_provider_update; DROP INDEX idx_usage_exec_snapshot; DROP INDEX idx_active_reservations_session; DROP INDEX idx_active_reservations_agent; DROP INDEX idx_exec_snapshots_session_time; DROP INDEX idx_exec_snapshots_agent_time; DROP INDEX idx_exec_snapshots_runtime_time; DROP TABLE active_turn_reservations; DROP TABLE exec_snapshots; ALTER TABLE sessions DROP COLUMN first_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN latest_exec_snapshot_id; ALTER TABLE sessions DROP COLUMN claude_instruction_sha256; ALTER TABLE sessions DROP COLUMN codex_thread_instruction_sha256; ALTER TABLE sessions DROP COLUMN opencode_cost_total; ALTER TABLE usage_events DROP COLUMN exec_snapshot_id; ALTER TABLE usage_events DROP COLUMN provider_update_id; ALTER TABLE usage_events DROP COLUMN usage_status; ALTER TABLE usage_events DROP COLUMN context_used; ALTER TABLE usage_events DROP COLUMN context_size; ALTER TABLE usage_events DROP COLUMN reported_cost_decimal; DELETE FROM app_events WHERE event_type='settings.changed'; DELETE FROM settings WHERE key LIKE 'exec_gate.%'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2; DROP INDEX idx_sessions_agent_updated; DROP INDEX idx_usage_agent_time; DROP INDEX idx_agents_active_name; DROP INDEX idx_agents_active_runtime_order; DROP INDEX idx_agents_runtime_archived_order; ALTER TABLE sessions DROP COLUMN agent_id; ALTER TABLE usage_events DROP COLUMN agent_id; DROP TABLE agents; DELETE FROM schema_migrations WHERE version=2; PRAGMA user_version=0;").unwrap();
-        c.execute_batch("DELETE FROM schema_migrations WHERE version IN (7,8); INSERT INTO runtimes(id,host_id,provider,protocol,executable,status,data) VALUES('rt-a','h','codex','codex_app_server','codex','online','{}'),('rt-b','h','claude','claude_stream','claude','offline','{}'); INSERT INTO sessions(id,runtime_id,provider,project_path,title,state,created_at,updated_at) VALUES('s-a','rt-a','codex','C:/a','A','idle','2026-01-02T00:00:00.000Z','2026-01-03T00:00:00.000Z'),('s-missing','rt-missing','other','C:/b','B','idle','2026-01-02T00:00:00.000Z','2026-01-03T00:00:00.000Z'); INSERT INTO usage_events(id,runtime_id,session_id,provider,timestamp,source,raw) VALUES('u-a','rt-a','s-a','codex','2026-01-03T00:00:00.000Z','stream','{}'),('u-missing','rt-missing','absent','other','2026-01-03T00:00:00.000Z','stream','{}');").unwrap();drop(c);let _=fs::remove_dir_all(dir.join("backups"));(dir,path)
+        c.execute_batch("DELETE FROM schema_migrations WHERE version IN (7,8,9); INSERT INTO runtimes(id,host_id,provider,protocol,executable,status,data) VALUES('rt-a','h','codex','codex_app_server','codex','online','{}'),('rt-b','h','claude','claude_stream','claude','offline','{}'); INSERT INTO sessions(id,runtime_id,provider,project_path,title,state,created_at,updated_at) VALUES('s-a','rt-a','codex','C:/a','A','idle','2026-01-02T00:00:00.000Z','2026-01-03T00:00:00.000Z'),('s-missing','rt-missing','other','C:/b','B','idle','2026-01-02T00:00:00.000Z','2026-01-03T00:00:00.000Z'); INSERT INTO usage_events(id,runtime_id,session_id,provider,timestamp,source,raw) VALUES('u-a','rt-a','s-a','codex','2026-01-03T00:00:00.000Z','stream','{}'),('u-missing','rt-missing','absent','other','2026-01-03T00:00:00.000Z','stream','{}');").unwrap();drop(c);let _=fs::remove_dir_all(dir.join("backups"));(dir,path)
     }
     fn v2_fixture()->(PathBuf,PathBuf){
         let(dir,path)=v1_fixture();drop(Storage::open(&path).unwrap());
@@ -2500,6 +2602,55 @@ mod tests {
         db.reconcile_budget_turn_metrics("t2", &json!({"tokens":12,"estimated_cost_minor":17})).unwrap();
         assert_eq!(db.budget_usage("tokens", "day").unwrap(), (0, 12));
         assert_eq!(db.budget_usage("estimate", "day").unwrap(), (0, 17));
+    }
+    #[test]
+    fn blob_budgets_match_session_agent_report_scoped_totals_and_delete_on_archive() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-blob","provider":"codex"})).unwrap();
+        let gojo = db.agent_create(&json!({"name":"Gojo","runtimeId":"rt-blob"})).unwrap().0;
+        let other = db.agent_create(&json!({"name":"Other","runtimeId":"rt-blob"})).unwrap().0;
+        let gojo_id = gojo["id"].as_str().unwrap();
+        db.create_session_for_agent("s-gojo","rt-blob","codex",".","Gojo",Some(gojo_id)).unwrap();
+        db.create_session_for_agent("s-other","rt-blob","codex",".","Other",other["id"].as_str()).unwrap();
+        db.create_turn("t-gojo","s-gojo").unwrap();
+        db.create_turn("t-other","s-other").unwrap();
+        db.save_budget(&json!({"id":"blob-cap","scopeType":"blob","scopeId":gojo_id,"period":"day","metric":"tokens","hardLimit":10,"enabled":true})).unwrap();
+        assert!(db.reserve_applicable_budgets("t-gojo","s-gojo","rt-blob","codex",".",6).unwrap());
+        assert!(!db.reserve_applicable_budgets("t-gojo-extra","s-gojo","rt-blob","codex",".",5).unwrap());
+        assert!(db.reserve_applicable_budgets("t-other","s-other","rt-blob","codex",".",9).unwrap());
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute("INSERT INTO budget_reservations(id,policy_id,turn_id,amount,status,created_at,metric) VALUES('other-agent','blob-cap','t-other',9,'active',?1,'tokens')", [Utc::now().to_rfc3339()]).unwrap();
+        }
+        db.create_turn("t-gojo-next", "s-gojo").unwrap();
+        assert!(db.reserve_applicable_budgets("t-gojo-next","s-gojo","rt-blob","codex",".",4).unwrap());
+        let listed = &db.budget_list().unwrap()["policies"][0];
+        assert_eq!(listed["scopeType"], "blob");
+        assert_eq!(listed["scopeId"], gojo_id);
+        assert_eq!(listed["reserved"], 10);
+        db.agent_archive(gojo_id).unwrap();
+        assert!(db.budget_list().unwrap()["policies"].as_array().unwrap().is_empty());
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT count(*) FROM budget_reservations WHERE policy_id='blob-cap'", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+        assert!(db.save_budget(&json!({"id":"bad","scopeType":"blob","scopeId":gojo_id,"period":"day","metric":"tokens","hardLimit":10})).is_err());
+    }
+    #[test]
+    fn retargeted_budget_policy_drops_old_active_reservations_before_reconcile() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-budget","provider":"codex"})).unwrap();
+        let agent = db.agent_create(&json!({"name":"Budget owner","runtimeId":"rt-budget"})).unwrap().0;
+        let agent_id = agent["id"].as_str().unwrap();
+        db.create_session_for_agent("budget-session","rt-budget","codex",".","Budget owner",Some(agent_id)).unwrap();
+        db.create_turn("old-turn","budget-session").unwrap();
+        db.save_budget(&json!({"id":"reused-policy","scopeType":"global","period":"day","metric":"tokens","hardLimit":100,"enabled":true})).unwrap();
+        assert!(db.reserve_applicable_budgets("old-turn","budget-session","rt-budget","codex",".",60).unwrap());
+        db.save_budget(&json!({"id":"reused-policy","scopeType":"blob","scopeId":agent_id,"period":"day","metric":"tokens","hardLimit":10,"enabled":true})).unwrap();
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT count(*) FROM budget_reservations WHERE policy_id='reused-policy'", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+        db.create_turn("new-turn","budget-session").unwrap();
+        assert!(db.reserve_applicable_budgets("new-turn","budget-session","rt-budget","codex",".",10).unwrap());
+        db.reconcile_budget_turn_metrics("old-turn", &json!({"tokens":99})).unwrap();
+        let listed = &db.budget_list().unwrap()["policies"][0];
+        assert_eq!(listed["reserved"], 10);
+        assert_eq!(listed["consumed"], 0);
     }
     #[test]
     fn turn_budget_totals_report_only_the_latest_turn() {
@@ -2607,14 +2758,16 @@ mod tests {
         let legacy = db.agent_create(&json!({"name":"Legacy","runtimeId":"rt-outfit"})).unwrap().0;
         assert_eq!(legacy["outfit"], "auto");
         let id = legacy["id"].as_str().unwrap();
-        let (updated, events) = db.agent_update(id, &json!({"outfit":"round-glasses"})).unwrap();
-        assert_eq!(updated["outfit"], "round-glasses");
-        assert_eq!(events.len(), 1);
-        assert!(matches!(db.agent_update(id, &json!({"outfit":"bunny-ears"})), Err(StorageError::InvalidAgent)));
+        for outfit in ["round-glasses", "pumpkin", "bunny-ears"] {
+            let (updated, events) = db.agent_update(id, &json!({"outfit":outfit})).unwrap();
+            assert_eq!(updated["outfit"], outfit);
+            assert_eq!(events.len(), 1);
+        }
+        assert!(matches!(db.agent_update(id, &json!({"outfit":"unknown-outfit"})), Err(StorageError::InvalidAgent)));
         assert!(matches!(db.agent_create(&json!({"name":"Invalid","runtimeId":"rt-outfit","outfit":5})), Err(StorageError::InvalidAgent)));
-        assert_eq!(db.snapshot().unwrap()["agents"][0]["outfit"], "round-glasses");
+        assert_eq!(db.snapshot().unwrap()["agents"][0]["outfit"], "bunny-ears");
         let c = db.conn.lock().unwrap();
-        assert_eq!(c.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 8);
+        assert_eq!(c.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 9);
     }
 
     #[test]
@@ -2627,7 +2780,7 @@ mod tests {
         old.agent_create(&json!({"name":"Old","runtimeId":"rt-old"})).unwrap();
         {
             let source = old.conn.lock().unwrap();
-            source.execute_batch("PRAGMA foreign_keys=OFF; ALTER TABLE agents DROP COLUMN outfit; DELETE FROM schema_migrations WHERE version IN (7,8); PRAGMA user_version=6; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
+            source.execute_batch("PRAGMA foreign_keys=OFF; ALTER TABLE agents DROP COLUMN outfit; DELETE FROM schema_migrations WHERE version IN (7,8,9); PRAGMA user_version=6; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
             let mut destination = Connection::open(&path).unwrap();
             Backup::new(&source, &mut destination).unwrap().run_to_completion(128, std::time::Duration::from_millis(10), None).unwrap();
         }
@@ -2667,9 +2820,9 @@ mod tests {
         let before_reopen = after_migration.iter().map(|item| item.file_name().unwrap().to_string_lossy().into_owned()).collect::<std::collections::BTreeSet<_>>();
         {
             let read = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-            assert_eq!(read.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 8);
-            assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 8);
-            assert_eq!(read.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 8);
+            assert_eq!(read.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 9);
+            assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 9);
+            assert_eq!(read.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 9);
         }
         drop(Storage::open(&path).unwrap());
         let after_reopen = fs::read_dir(&backup_dir).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<std::collections::BTreeSet<_>>();
@@ -2694,25 +2847,22 @@ mod tests {
         assert!(matches!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt","maxConcurrency":51})),Err(StorageError::InvalidAgent)));
     }
     #[test]
-    fn first_runtime_discovery_creates_one_default_and_respects_archived_agents(){
+    fn runtime_discovery_never_creates_blobs_and_preserves_existing_blobs(){
         let db=Storage::open_in_memory().unwrap();
         db.upsert_runtime(&json!({"id":"rt-claude","provider":"claude"})).unwrap();
         db.upsert_runtime(&json!({"id":"rt-codex","provider":"codex"})).unwrap();
-        let events=db.ensure_default_agents().unwrap();assert_eq!(events.len(),2);assert!(events.iter().all(|event|event["type"]=="agent.changed"&&event["payload"]["action"]=="created"));
-        let agents=db.agent_list(false,None).unwrap();assert_eq!(agents.len(),2);
-        let claude=agents.iter().find(|agent|agent["runtimeId"]=="rt-claude").unwrap();assert_eq!(claude["name"],"Claude");assert_eq!(claude["color"],"#F38C6F");assert_eq!(claude["description"],"Default agent for Claude.");assert_eq!(claude["sortOrder"],0);
-        assert!(db.ensure_default_agents().unwrap().is_empty());
-        db.agent_archive(claude["id"].as_str().unwrap()).unwrap();assert!(db.ensure_default_agents().unwrap().is_empty());assert_eq!(db.agent_list(true,Some("rt-claude")).unwrap().len(),1);
-        db.upsert_runtime(&json!({"id":"rt-codex-2","provider":"codex"})).unwrap();let later=db.ensure_default_agents().unwrap();assert_eq!(later.len(),1);let added=db.agent_list(false,Some("rt-codex-2")).unwrap().remove(0);assert_eq!(added["name"],"Codex (2)");assert_eq!(added["color"],"#82AAFF");assert_eq!(added["description"],"Default agent for Codex.");
-        let replay=db.replay_events(0,100).unwrap();assert_eq!(replay.iter().filter(|event|event["type"]=="agent.changed"&&event["payload"]["action"]=="created").count(),3);
+        assert!(db.agent_list(true,None).unwrap().is_empty());
+        let gojo=db.agent_create(&json!({"name":"Gojo","runtimeId":"rt-codex"})).unwrap().0;
+        db.upsert_runtime(&json!({"id":"rt-codex-2","provider":"codex"})).unwrap();
+        assert_eq!(db.agent_list(true,None).unwrap(), vec![gojo]);
     }
     #[test]
     fn v1_migration_backfills_once_creates_verified_backup_and_rolls_back_in_temp_paths(){
         let(dir,path)=v1_fixture();
         let baseline={let db=Storage::open(&path).unwrap();let s= db.sessions().unwrap();assert_eq!(s.len(),2);assert!(s.iter().find(|x|x["id"]=="s-missing").unwrap()["agentId"].is_null());assert_eq!(db.agent_list(true,None).unwrap().len(),2);(db.agent_list(true,None).unwrap(),s)};
-        let backup_dir=dir.join("backups");let paths=fs::read_dir(&backup_dir).unwrap().map(|x|x.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),14);assert_eq!(paths.iter().filter(|x|x.extension().is_some_and(|e|e=="db")).count(),7);assert!(paths.iter().all(|x|!x.file_name().unwrap().to_string_lossy().ends_with("-wal")&&!x.file_name().unwrap().to_string_lossy().ends_with("-shm")));let backup=paths.iter().find(|x|x.extension().is_some_and(|e|e=="db")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap().clone();let manifest_path=paths.iter().find(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap();let manifest:Value=serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();assert_eq!(manifest["integrity"],"ok");assert_eq!(manifest["schemaVersion"],1);assert_eq!(manifest["tableRowCounts"]["sessions"],2);
+        let backup_dir=dir.join("backups");let paths=fs::read_dir(&backup_dir).unwrap().map(|x|x.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),16);assert_eq!(paths.iter().filter(|x|x.extension().is_some_and(|e|e=="db")).count(),8);assert!(paths.iter().all(|x|!x.file_name().unwrap().to_string_lossy().ends_with("-wal")&&!x.file_name().unwrap().to_string_lossy().ends_with("-shm")));let backup=paths.iter().find(|x|x.extension().is_some_and(|e|e=="db")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap().clone();let manifest_path=paths.iter().find(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap();let manifest:Value=serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();assert_eq!(manifest["integrity"],"ok");assert_eq!(manifest["schemaVersion"],1);assert_eq!(manifest["tableRowCounts"]["sessions"],2);
         {let db=Storage::open(&path).unwrap();assert_eq!(db.agent_list(true,None).unwrap(),baseline.0);assert_eq!(db.sessions().unwrap(),baseline.1);}
-        let read=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(read.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),8);assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),8);assert_eq!(read.query_row("SELECT count(*) FROM usage_events WHERE agent_id IS NOT NULL",[],|r|r.get::<_,i64>(0)).unwrap(),1);assert_eq!(read.query_row("SELECT agent_id FROM usage_events WHERE id='u-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap(),Some(read.query_row("SELECT agent_id FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap()));assert_eq!(read.query_row("SELECT created_at FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap(),"2026-01-02T00:00:00.000Z");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='codex'",[],|r|r.get::<_,String>(0)).unwrap(),"#82AAFF");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='claude'",[],|r|r.get::<_,String>(0)).unwrap(),"#F38C6F");for (table,column) in [("sessions","agent_id"),("usage_events","agent_id"),("sessions","first_exec_snapshot_id"),("usage_events","usage_status"),("agents","approval_mode"),("permission_requests","resolved_by"),("sessions","title_override"),("sessions","archived")] {assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get::<_,bool>(0)).unwrap());}for index in ["idx_agents_active_name","idx_agents_active_runtime_order","idx_agents_runtime_archived_order","idx_sessions_agent_updated","idx_usage_agent_time","idx_usage_provider_update"]{assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",[index],|r|r.get::<_,bool>(0)).unwrap());}drop(read);
+        let read=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(read.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),9);assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),9);assert_eq!(read.query_row("SELECT count(*) FROM usage_events WHERE agent_id IS NOT NULL",[],|r|r.get::<_,i64>(0)).unwrap(),1);assert_eq!(read.query_row("SELECT agent_id FROM usage_events WHERE id='u-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap(),Some(read.query_row("SELECT agent_id FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap()));assert_eq!(read.query_row("SELECT created_at FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap(),"2026-01-02T00:00:00.000Z");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='codex'",[],|r|r.get::<_,String>(0)).unwrap(),"#82AAFF");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='claude'",[],|r|r.get::<_,String>(0)).unwrap(),"#F38C6F");for (table,column) in [("sessions","agent_id"),("usage_events","agent_id"),("sessions","first_exec_snapshot_id"),("usage_events","usage_status"),("agents","approval_mode"),("permission_requests","resolved_by"),("sessions","title_override"),("sessions","archived")] {assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get::<_,bool>(0)).unwrap());}for index in ["idx_agents_active_name","idx_agents_active_runtime_order","idx_agents_runtime_archived_order","idx_sessions_agent_updated","idx_usage_agent_time","idx_usage_provider_update"]{assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",[index],|r|r.get::<_,bool>(0)).unwrap());}drop(read);
         let failed=restore_verified_backup(&backup,&path,1).unwrap();assert!(failed.exists());let restored=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(restored.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),0);assert_eq!(restored.query_row("SELECT count(*) FROM sessions",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert!(!restored.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='agent_id')",[],|r|r.get::<_,bool>(0)).unwrap());drop(restored);let _=fs::remove_dir_all(dir);
     }
     #[test]
@@ -2727,8 +2877,8 @@ mod tests {
     fn migration_2_to_3_seeds_gates_preserves_operator_values_and_reopens_without_backup_or_sidecars(){
         let(dir,path)=v2_fixture();
         {let db=Storage::open(&path).unwrap();let settings=db.settings().unwrap();assert_eq!(settings["exec_gate.codex.model"],false);for key in ["exec_gate.claude.model","exec_gate.claude.thinking","exec_gate.claude.instructions","exec_gate.codex.thinking","exec_gate.codex.serviceTier","exec_gate.codex.instructions","exec_gate.opencode.model","exec_gate.opencode.instructions"]{assert_eq!(settings[key],true);}assert_eq!(settings["exec_gate.opencode.thinking"],false);}
-        let backup_dir=dir.join("backups");let before=fs::read_dir(&backup_dir).unwrap().count();assert_eq!(before,12);
-        {let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),8);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),8);assert_eq!(c.query_row("SELECT COUNT(*) FROM usage_events WHERE usage_status='unreported' AND exec_snapshot_id IS NULL AND provider_update_id IS NULL AND context_used IS NULL AND context_size IS NULL AND reported_cost_decimal IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='settings.changed'",[],|r|r.get::<_,i64>(0)).unwrap(),9);for (table,column) in [("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","reported_cost_decimal")] {assert_eq!(c.query_row("SELECT type FROM pragma_table_info(?1) WHERE name=?2",params![table,column],|r|r.get::<_,String>(0)).unwrap(),"TEXT");}assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cumulative_cost_micros')",[],|r|r.get::<_,bool>(0)).unwrap());}
+        let backup_dir=dir.join("backups");let before=fs::read_dir(&backup_dir).unwrap().count();assert_eq!(before,14);
+        {let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),9);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),9);assert_eq!(c.query_row("SELECT COUNT(*) FROM usage_events WHERE usage_status='unreported' AND exec_snapshot_id IS NULL AND provider_update_id IS NULL AND context_used IS NULL AND context_size IS NULL AND reported_cost_decimal IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='settings.changed'",[],|r|r.get::<_,i64>(0)).unwrap(),9);for (table,column) in [("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","reported_cost_decimal")] {assert_eq!(c.query_row("SELECT type FROM pragma_table_info(?1) WHERE name=?2",params![table,column],|r|r.get::<_,String>(0)).unwrap(),"TEXT");}assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cumulative_cost_micros')",[],|r|r.get::<_,bool>(0)).unwrap());}
         drop(Storage::open(&path).unwrap());assert_eq!(fs::read_dir(&backup_dir).unwrap().count(),before);
         let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();remove_session_controls_migration(&c);c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2;").unwrap();drop(c);drop(Storage::open(&path).unwrap());
         let entries=fs::read_dir(&dir).unwrap().map(|e|e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>();assert!(entries.iter().all(|n|!n.ends_with("-wal")&&!n.ends_with("-shm")));let backup_entries=fs::read_dir(&backup_dir).unwrap().map(|e|e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>();assert!(backup_entries.iter().all(|n|!n.ends_with("-wal")&&!n.ends_with("-shm")));let _=fs::remove_dir_all(dir);

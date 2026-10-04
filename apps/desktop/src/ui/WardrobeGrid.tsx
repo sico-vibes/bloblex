@@ -38,8 +38,8 @@ export function WardrobeGrid({ color, value, createdAt, onChange }: {
           if (event.key === 'End') { event.preventDefault(); move(OUTFITS.length - 1) }
         }}
       >
-        <BlobCanvas decorative color={color} size={42} outfit={resolved} createdAt={createdAt} label={`${label} preview`} />
-        <span>{outfit === 'auto' ? 'Auto' : OUTFIT_LABELS[outfit]}</span>
+        <BlobCanvas decorative color={color} size={30} outfit={resolved} createdAt={createdAt} label={`${label} preview`} />
+        <span>{outfit === 'auto' ? `Auto · ${OUTFIT_LABELS[autoPreview]}` : OUTFIT_LABELS[outfit]}</span>
       </button>
     })}
   </div>

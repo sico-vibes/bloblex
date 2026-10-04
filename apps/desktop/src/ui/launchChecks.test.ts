@@ -1,8 +1,21 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest'
-import { LAUNCH_TIMEOUTS, launchWarningsFor, runLaunchChecks } from './launchChecks'
+import { LAUNCH_TIMEOUTS, launchWarningsFor, runLaunchChecks, runtimeAuthSummary } from './launchChecks'
 
 describe('runLaunchChecks', () => {
+  it('hides OpenCode auth notices after a successful model load or confirmed sign-in', () => {
+    const checks = [
+      { id: 'auth:opencode-a', label: 'Checking OpenCode sign-in', state: 'warning', detail: 'Warning: OpenCode: sign-in could not be confirmed..' },
+      { id: 'models:opencode-a', label: 'Loading OpenCode models', state: 'ok', detail: 'Loaded 3 models' },
+      { id: 'auth:opencode-b', label: 'Checking OpenCode sign-in', state: 'warning', detail: 'Warning: OpenCode: sign-in could not be confirmed' },
+    ] as const
+    expect(launchWarningsFor(checks.slice(0, 2), [{ id: 'opencode-a', provider: 'opencode' }])).toEqual([])
+    expect(launchWarningsFor(checks.slice(2), [{ id: 'opencode-b', provider: 'opencode', authState: 'signed_in' }])).toEqual([])
+    expect(launchWarningsFor(checks.slice(2))).toEqual(['OpenCode: sign-in could not be confirmed'])
+    expect(launchWarningsFor(checks.slice(2), [{ id: 'opencode-b', provider: 'opencode', gatewayAuthStates: { opencode: 'authenticated', 'opencode-go': 'authenticated' } }])).toEqual([])
+    expect(runtimeAuthSummary({ provider: 'opencode', gatewayAuthStates: { opencode: 'authenticated', 'opencode-go': 'unauthenticated' } }).label).toBe('Zen: signed in · Go: not signed in')
+  })
+
   it('runs checks in order and reports each completed state', async () => {
     const order: string[] = []
     const updates: Array<Array<{ id: string; state: string }>> = []

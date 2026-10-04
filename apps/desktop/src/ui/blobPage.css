@@ -51,12 +51,13 @@
 
 /* Wardrobe */
 .wardrobe-form { padding: 2px 12px 14px; }
-.wardrobe-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(68px, 1fr)); gap: 4px; }
-.wardrobe-option { min-width: 0; min-height: 72px; padding: 5px 2px 6px; display: grid; justify-items: center; align-content: center; gap: 1px; color: var(--text-2); border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; font: inherit; font-size: var(--fs-2xs); cursor: pointer; }
+.wardrobe-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); gap: 5px; }
+.wardrobe-option { min-width: 0; min-height: 56px; padding: 4px 5px; display: flex; align-items: center; justify-content: center; gap: 5px; color: var(--text-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-panel); font: inherit; font-size: var(--fs-2xs); cursor: pointer; }
 .wardrobe-option:hover { background: var(--surface-hover); }
 .wardrobe-option.selected { color: var(--text-1); border-color: var(--line-focus); background: var(--surface-selected); }
 .wardrobe-option:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .wardrobe-option .blob-canvas { pointer-events: none; }
+.wardrobe-option span { max-width: 8ch; text-align: left; line-height: 1.2; }
 
 /* Lists inside groups */
 .blob-session-row { cursor: pointer; }

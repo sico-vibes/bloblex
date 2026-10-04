@@ -60,6 +60,26 @@ describe('Bloblex character engine', () => {
     expect(engine.eyeOverride).toBeNull()
   })
 
+  it('fades outfit entry and exit with reduced-motion snapping', () => {
+    const engine = new BlobEngine()
+    engine.setOutfit('beanie')
+    expect(engine.outfit).toBe('beanie')
+    expect(engine.outfitPresence).toBe(0)
+    step(engine, 175)
+    expect(engine.outfitPresence).toBeGreaterThan(0.4)
+    expect(engine.outfitPresence).toBeLessThan(0.7)
+    step(engine, 200)
+    expect(engine.outfitPresence).toBe(1)
+    expect(engine.busy).toBe(false)
+    engine.setOutfit('none')
+    step(engine, 200)
+    expect(engine.outfit).toBe('none')
+    expect(engine.outfitPresence).toBe(0)
+    engine.reducedMotion = true
+    engine.setOutfit('pumpkin')
+    expect(engine.outfitPresence).toBe(1)
+  })
+
   it('rolls once and sparks on completion, but not when mounted already finished', () => {
     const fresh = new BlobEngine()
     fresh.setState('finished', { force: true, silent: true })

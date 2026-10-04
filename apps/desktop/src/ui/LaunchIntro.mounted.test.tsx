@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LaunchIntro } from './LaunchIntro'
 import type { LaunchCheck } from './launchChecks'
 
-vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: { onGreetingComplete?: () => void }) => <button type="button" onClick={props.onGreetingComplete}>Finish greeting fixture</button> }))
+vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: { size: number }) => <canvas className="blob-canvas" width={props.size} height={props.size} /> }))
 let root: Root | null = null
 let host: HTMLDivElement | null = null
 function mount(checks: LaunchCheck[], serviceDown = false) {
@@ -35,10 +35,11 @@ describe('LaunchIntro', () => {
     expect(offline).toHaveBeenCalledOnce()
   })
 
-  it('does not run a pending auto-complete after the user continues offline', async () => {
+  it('keeps the startup character canvas square and cancels auto-complete when going offline', async () => {
     vi.useFakeTimers()
     const { host: mounted, complete, offline, update } = mount([{ id: 'service', label: 'Connecting', state: 'ok', detail: 'Connected' }])
-    act(() => [...mounted.querySelectorAll('button')].find((item) => item.textContent === 'Finish greeting fixture')?.click())
+    const canvas = mounted.querySelector<HTMLCanvasElement>('.launch-blob-stage canvas')
+    expect(canvas?.width).toBe(canvas?.height)
     update([{ id: 'service', label: 'Connecting', state: 'failed', detail: 'Unavailable' }], true)
     act(() => [...mounted.querySelectorAll('button')].find((item) => item.textContent === 'Continue offline')?.click())
     await act(async () => { await vi.advanceTimersByTimeAsync(300) })

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
+import { ProviderLogo } from './providerBrand'
 
 export interface SelectOption {
   value: string
@@ -7,6 +8,9 @@ export interface SelectOption {
   disabled?: boolean
   /** Starts a labelled group above this option. */
   group?: string
+  groupProvider?: string
+  groupBefore?: readonly { label: string; provider?: string }[]
+  provider?: string
 }
 
 /**
@@ -117,7 +121,7 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
       onClick={() => open ? close() : openMenu()}
       onKeyDown={onTriggerKeyDown}
     >
-      <span>{selected?.label ?? placeholder ?? ''}</span>
+      <span className={selected?.provider ? 'select-provider-label' : undefined}>{selected?.provider && <ProviderLogo provider={selected.provider} size={16} />}{selected?.label ?? placeholder ?? ''}</span>
       <ChevronDown size={14} aria-hidden="true" />
     </button>
     {open && <div
@@ -131,7 +135,8 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
       onKeyDown={onListKeyDown}
     >
       {options.map((option, index) => [
-        option.group ? <div key={`group-${index}`} className="select-group-label" role="presentation">{option.group}</div> : null,
+        ...(option.groupBefore ?? []).map((group, groupIndex) => <div key={`group-before-${index}-${groupIndex}`} className={`select-group-label ${group.provider ? 'provider-group-label' : ''}`} role="presentation">{group.provider && <ProviderLogo provider={group.provider} size={16} />}{group.label}</div>),
+        option.group ? <div key={`group-${index}`} className={`select-group-label ${option.groupProvider ? 'provider-group-label' : ''}`} role="presentation">{option.groupProvider && <ProviderLogo provider={option.groupProvider} size={16} />}{option.group}</div> : null,
         <div
           key={`${option.value}-${index}`}
           id={`${listId}-${index}`}
@@ -144,7 +149,7 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
           onPointerEnter={() => { if (!option.disabled) setActive(index) }}
           onClick={() => choose(index)}
         >
-          <span>{option.label}</span>
+          <span className={option.provider ? 'select-provider-label' : undefined}>{option.provider && <ProviderLogo provider={option.provider} size={16} />}{option.label}</span>
           {option.value === value && <Check size={14} aria-hidden="true" />}
         </div>,
       ])}

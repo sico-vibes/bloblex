@@ -202,6 +202,19 @@ fn derr(code: &str, msg: &str, status: StatusCode) -> DispatchError {
     )
 }
 
+fn persist_runtime_discovery(
+    db: &Storage,
+    discovered: Vec<bloblex_runtime::DiscoveredRuntime>,
+) -> Result<Vec<Value>, bloblex_storage::StorageError> {
+    let mut values = Vec::with_capacity(discovered.len());
+    for runtime in discovered {
+        let value = serde_json::to_value(runtime).unwrap_or(Value::Null);
+        db.upsert_runtime(&value)?;
+        values.push(value);
+    }
+    Ok(values)
+}
+
 fn validate_pricing_override(rule: &Value) -> Result<(), &'static str> {
     let Some(object) = rule.as_object() else {
         return Err("rule must be an object");
@@ -341,14 +354,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "runtime.list" => Ok(json!({"runtimes":*st.runtimes.read().await})),
         "runtime.refresh" => {
             let found = bloblex_runtime::discover().await;
-            let mut values = Vec::new();
-            for r in found {
-                let value = serde_json::to_value(r).unwrap_or(Value::Null);
-                let _ = st.db.upsert_runtime(&value);
-                values.push(value)
-            }
-            let default_events=st.db.ensure_default_agents().map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
-            st.broadcast_persisted(default_events);
+            let values = persist_runtime_discovery(&st.db, found).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
             *st.runtimes.write().await = values.clone();
             st.emit("runtime.changed", json!({"runtimes":values})).await;
             Ok(json!({"runtimes":values}))
@@ -756,6 +762,7 @@ async fn active_for_agent(st:&AppState,agent_id:&str)->u32{
 fn catalog_key(runtime: &Value) -> String {
     format!("{}|{}|{}|{}|{}", runtime["id"].as_str().unwrap_or(""), runtime["executablePath"].as_str().unwrap_or(""), runtime["version"].as_str().unwrap_or(""), serde_json::to_string(&runtime["launchArgs"]).unwrap_or_default(), runtime["profileId"].as_str().unwrap_or(""))
 }
+fn provider_display_name(provider: &str) -> &'static str { match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" } }
 async fn fetch_model_catalog(st: &AppState, runtime: &Value, refresh: bool) -> Result<Value, DispatchError> {
     let spec = runtime_from(runtime);
     let key = catalog_key(runtime);
@@ -769,7 +776,7 @@ async fn fetch_model_catalog(st: &AppState, runtime: &Value, refresh: bool) -> R
         _ => derr("provider_error", "runtime returned an invalid model catalog", StatusCode::BAD_GATEWAY),
     })?;
     model_presentation::apply(&mut catalog.models, catalog.validated, catalog.fallback);
-    let value = json!({"runtimeId":spec.runtime_id,"provider":provider,"models":catalog.models,"fetchedAt":catalog.fetched_at,"expiresAt":catalog.expires_at,"fallback":catalog.fallback,"source":catalog.source,"validated":catalog.validated});
+    let value = json!({"runtimeId":spec.runtime_id,"provider":provider,"displayName":provider_display_name(provider),"models":catalog.models,"fetchedAt":catalog.fetched_at,"expiresAt":catalog.expires_at,"fallback":catalog.fallback,"source":catalog.source,"validated":catalog.validated});
     if let Ok(mut cache) = cache.lock() { cache.insert(key, (Instant::now(), value.clone())); }
     Ok(value)
 }
@@ -2135,13 +2142,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         claude: Arc::new(ClaudeAdapter::default()),
     });
     let found = bloblex_runtime::discover().await;
-    let mut runtimes = Vec::new();
-    for r in found {
-        let v = serde_json::to_value(r)?;
-        db.upsert_runtime(&v)?;
-        runtimes.push(v)
-    }
-    let default_agent_events=db.ensure_default_agents()?;
+    let runtimes = persist_runtime_discovery(&db, found)?;
     let st = AppState {
         token: Arc::new(token.clone()),
         started: Instant::now(),
@@ -2156,7 +2157,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         deleted_sessions: Arc::new(Mutex::new(HashSet::new())),
         stopping: Arc::new(tokio::sync::Notify::new()),
     };
-    st.broadcast_persisted(default_agent_events);
     for id in recovered_sessions {
         if let Ok(session) = st.db.session_event_summary(&id) {
             st.emit("session.changed", session).await;
@@ -2703,7 +2703,12 @@ mod phase2a_tests {
         let second=dispatch(&st,"agent.create",json!({"name":"Beta","runtimeId":"rt-test"})).await.unwrap()["agent"]["id"].as_str().unwrap().to_owned();let _=events.recv().await.unwrap();
         let updated=dispatch(&st,"agent.update",json!({"agentId":id,"name":"Alpha Prime"})).await.unwrap();assert_eq!(updated["agent"]["name"],"Alpha Prime");let update_event=events.recv().await.unwrap();assert!(update_event.sequence>ev.sequence);
         let dressed=dispatch(&st,"agent.update",json!({"agentId":id,"outfit":"crown"})).await.unwrap();assert_eq!(dressed["agent"]["outfit"],"crown");let _=events.recv().await.unwrap();
-        assert_eq!(dispatch(&st,"agent.update",json!({"agentId":id,"outfit":"bunny-ears"})).await.unwrap_err().1.code,"invalid_argument");
+        for outfit in ["pumpkin", "bunny-ears"] {
+            let update=dispatch(&st,"agent.update",json!({"agentId":id,"outfit":outfit})).await.unwrap();
+            assert_eq!(update["agent"]["outfit"],outfit);
+            let _=events.recv().await.unwrap();
+        }
+        assert_eq!(dispatch(&st,"agent.update",json!({"agentId":id,"outfit":"unknown-outfit"})).await.unwrap_err().1.code,"invalid_argument");
         let reorder=dispatch(&st,"agent.reorder",json!({"runtimeId":"rt-test","agentIds":[second,id]})).await.unwrap();assert_eq!(reorder["agents"][0]["id"],second);let _=events.recv().await.unwrap();let _=events.recv().await.unwrap();
         assert_eq!(dispatch(&st,"agent.reorder",json!({"runtimeId":"rt-test","agentIds":[id]})).await.unwrap_err().1.code,"invalid_argument");
         let archived=dispatch(&st,"agent.delete",json!({"agentId":second})).await.unwrap();assert_eq!(archived["agent"]["archived"],true);let archive_event=events.recv().await.unwrap();assert_eq!(archive_event.payload["action"],"archived");
@@ -2809,6 +2814,34 @@ mod phase2a_tests {
         let claude=json!({"id":"rt-claude","provider":"claude"});*st.runtimes.write().await=vec![claude];let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-claude"})).await.unwrap();assert_eq!(caps["settings"]["serviceTier"]["supported"],false);assert_eq!(caps["settings"]["serviceTier"]["enabled"],false);assert_eq!(caps["settings"]["thinking"]["evidence"],"usage_effect");
         *st.runtimes.write().await=vec![json!({"id":"rt-opencode","provider":"opencode"})];st.db.upsert_runtime(&json!({"id":"rt-opencode","provider":"opencode"})).unwrap();let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(caps["settings"]["thinking"]["supported"],true);assert_eq!(caps["settings"]["thinking"]["enabled"],false);assert_eq!(caps["settings"]["serviceTier"]["supported"],false);st.db.set_setting("exec_gate.opencode.thinking",&json!(true)).unwrap();let enabled=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(enabled["settings"]["thinking"]["supported"],true);assert_eq!(enabled["settings"]["thinking"]["enabled"],true);
         let agent=st.db.agent_create(&json!({"name":"Capped","runtimeId":"rt-opencode","maxConcurrency":8})).unwrap().0;let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode","agentId":agent["id"]})).await.unwrap();assert_eq!(caps["agentConcurrency"]["configuredMaxConcurrency"],8);assert_eq!(caps["agentConcurrency"]["effectiveMaxConcurrency"],4);
+    }
+    #[test]
+    fn runtime_refresh_persists_fake_discovery_without_creating_or_changing_blobs() {
+        let (st, _) = state();
+        st.db.upsert_runtime(&json!({"id":"rt-existing","provider":"codex","status":"offline"})).unwrap();
+        let existing = st.db.agent_create(&json!({"name":"Keep me","runtimeId":"rt-existing"})).unwrap().0;
+        let discovered = ["rt-empty", "rt-existing"].into_iter().map(|id| {
+            serde_json::from_value::<bloblex_runtime::DiscoveredRuntime>(json!({
+                "id": id,
+                "hostId": "host_windows_local",
+                "provider": "codex",
+                "displayName": "Codex",
+                "protocolFamily": "codex_app_server",
+                "executablePath": "C:/fake/codex.exe",
+                "launchArgs": [],
+                "version": null,
+                "authState": "unknown",
+                "gatewayAuthStates": {},
+                "status": "online",
+                "capabilities": {"newSession": true}
+            })).unwrap()
+        }).collect::<Vec<_>>();
+        let refreshed = persist_runtime_discovery(&st.db, discovered).unwrap();
+        assert_eq!(refreshed.len(), 2);
+        let agents = st.db.agent_list(false, None).unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0]["id"], existing["id"]);
+        assert_eq!(agents[0]["name"], "Keep me");
     }
     #[test]
     fn requested_options_fail_closed_when_the_setting_gate_is_off(){

@@ -4,6 +4,7 @@ import type { Agent, Runtime } from '../types'
 import { colorForRpc, colorsEquivalent, parseCustomHex, swatchForColor } from './agentColor'
 import { runtimeUsable, scalarLength } from './rosterSelectors'
 import { isOutfit, normalizeOutfit, type Outfit } from '../blob/outfit'
+import { providerBrand } from './providerBrand'
 
 export interface AgentDraft {
   name: string
@@ -77,8 +78,7 @@ export function starterDraft(runtime: Runtime): AgentDraft {
 }
 
 function providerDisplayNameForStarter(provider: string) {
-  const names: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
-  return names[provider.toLowerCase()] ?? provider.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+  return providerBrand(provider).name
 }
 
 function starterColorFor(provider: string) {

@@ -39,6 +39,27 @@ describe('FirstRunOnboarding', () => {
     expect(complete).toHaveBeenCalledOnce()
   })
 
+  it('renders onboarding step two with found and missing agent rows', () => {
+    const found = mount({ initialStep: 1, runtimes: [runtime] })
+    const codex = found.host.querySelector<HTMLElement>('[data-provider="codex"]')
+    expect(codex?.textContent).toContain('Signed in')
+    expect(codex?.querySelector('.provider-logo')).not.toBeNull()
+    act(() => root?.unmount())
+    found.host.remove()
+    root = null
+    host = null
+
+    const missing = mount({ initialStep: 1, runtimes: [] })
+    expect(missing.host.querySelectorAll('.onboarding-runtime')).toHaveLength(3)
+    expect(missing.host.querySelector('[data-provider="claude"]')?.textContent).toContain('Not found on this Windows device')
+  })
+
+  it('shows each OpenCode gateway state from the normalized runtime record', () => {
+    const openCode: Runtime = { id: 'runtime-opencode', provider: 'opencode', gatewayAuthStates: { opencode: 'authenticated', 'opencode-go': 'authenticated' } }
+    const { host: mounted } = mount({ initialStep: 1, runtimes: [openCode] })
+    expect(mounted.querySelector('[data-provider="opencode"]')?.textContent).toContain('Zen: signed in · Go: signed in')
+  })
+
   it('shows found agent details and sends the selected runtime, name and colour to create', async () => {
     const create = vi.fn(async () => ({ id: 'agent-1' } as Agent))
     const saveName = vi.fn()

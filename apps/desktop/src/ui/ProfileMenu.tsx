@@ -29,7 +29,7 @@ export function profileInitials(name: string) {
  * (usage, agent scan, settings, quit) lives in its menu, like a chat app's
  * profile menu. The name is local to this device.
  */
-export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, onUsage, onFindAgents, onSettings, onQuit, onRunSetup }: {
+export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, onUsage, onFindAgents, onSettings, onQuit }: {
   connection: ConnectionState
   usageActive: boolean
   refreshing: boolean
@@ -38,7 +38,6 @@ export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, o
   onFindAgents: () => void
   onSettings: () => void
   onQuit: () => void
-  onRunSetup: () => void
 }) {
   const [name, setName] = useState(readProfileName)
   const [open, setOpen] = useState(false)
@@ -120,7 +119,6 @@ export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, o
       <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onUsage)}><Gauge size={15} />Usage</button>
       <button type="button" role="menuitem" className="menu-item" disabled={!connected || refreshing} onClick={() => run(onFindAgents)}><RefreshCw size={15} className={refreshing ? 'spinning' : ''} />Find coding agents</button>
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(onSettings)}><Settings2 size={15} />Settings</button>
-      <button type="button" role="menuitem" className="menu-item" onClick={() => run(onRunSetup)}>Run setup again</button>
       <span className="menu-separator" role="separator" />
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(() => { setDraft(name); setEditing(true) })}><Pencil size={15} />{name ? 'Edit name' : 'Add your name'}</button>
       <button type="button" role="menuitem" className="menu-item danger" onClick={() => run(onQuit)}><LogOut size={15} />Quit Bloblex</button>

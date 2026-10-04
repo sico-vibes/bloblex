@@ -3,7 +3,6 @@ import { ChevronsUpDown, Gauge, LogOut, Pencil, RefreshCw, Settings2 } from 'luc
 import type { ConnectionState } from '../types'
 
 const NAME_KEY = 'bloblex.profile.name'
-const SKIPPED_KEY = 'bloblex.profile.skipped'
 
 export function readProfileName() {
   try { return localStorage.getItem(NAME_KEY)?.trim() ?? '' } catch { return '' }
@@ -15,14 +14,8 @@ function writeProfileName(name: string) {
     else localStorage.removeItem(NAME_KEY)
   } catch { /* A blocked Storage API keeps the name for this run only. */ }
 }
+export { writeProfileName as saveProfileName }
 
-function onboardingSkipped() {
-  try { return localStorage.getItem(SKIPPED_KEY) === '1' } catch { return false }
-}
-
-function skipOnboarding() {
-  try { localStorage.setItem(SKIPPED_KEY, '1') } catch { /* in-memory only */ }
-}
 
 export function profileInitials(name: string) {
   const words = name.trim().split(/\s+/).filter(Boolean)
@@ -36,7 +29,7 @@ export function profileInitials(name: string) {
  * (usage, agent scan, settings, quit) lives in its menu, like a chat app's
  * profile menu. The name is local to this device.
  */
-export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, onUsage, onFindAgents, onSettings, onQuit }: {
+export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, onUsage, onFindAgents, onSettings, onQuit, onRunSetup }: {
   connection: ConnectionState
   usageActive: boolean
   refreshing: boolean
@@ -45,10 +38,11 @@ export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, o
   onFindAgents: () => void
   onSettings: () => void
   onQuit: () => void
+  onRunSetup: () => void
 }) {
   const [name, setName] = useState(readProfileName)
   const [open, setOpen] = useState(false)
-  const [editing, setEditing] = useState(() => !readProfileName() && !onboardingSkipped())
+  const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(name)
   const wrapRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -90,7 +84,6 @@ export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, o
     setEditing(false)
   }
   const dismissEditor = () => {
-    if (!name) skipOnboarding()
     setDraft(name)
     setEditing(false)
   }
@@ -127,6 +120,7 @@ export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, o
       <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onUsage)}><Gauge size={15} />Usage</button>
       <button type="button" role="menuitem" className="menu-item" disabled={!connected || refreshing} onClick={() => run(onFindAgents)}><RefreshCw size={15} className={refreshing ? 'spinning' : ''} />Find coding agents</button>
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(onSettings)}><Settings2 size={15} />Settings</button>
+      <button type="button" role="menuitem" className="menu-item" onClick={() => run(onRunSetup)}>Run setup again</button>
       <span className="menu-separator" role="separator" />
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(() => { setDraft(name); setEditing(true) })}><Pencil size={15} />{name ? 'Edit name' : 'Add your name'}</button>
       <button type="button" role="menuitem" className="menu-item danger" onClick={() => run(onQuit)}><LogOut size={15} />Quit Bloblex</button>

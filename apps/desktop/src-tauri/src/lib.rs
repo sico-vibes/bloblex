@@ -895,11 +895,18 @@ fn toggle_companion(app: AppHandle) -> Result<bool, String> {
         .ok_or_else(|| "The companion window is unavailable.".to_string())?;
     if window.is_visible().unwrap_or(false) {
         window.hide().map_err(|error| error.to_string())?;
+        let _ = app.emit("bloblex-companion-visible-changed", false);
         Ok(false)
     } else {
         window.show().map_err(|error| error.to_string())?;
+        let _ = app.emit("bloblex-companion-visible-changed", true);
         Ok(true)
     }
+}
+
+#[tauri::command]
+fn companion_visible(app: AppHandle) -> bool {
+    app.get_webview_window("companion").and_then(|window| window.is_visible().ok()).unwrap_or(false)
 }
 
 #[tauri::command]
@@ -913,7 +920,7 @@ fn set_companion_mode(
         .get_webview_window("companion")
         .ok_or_else(|| "The companion window is unavailable.".to_string())?;
     let (desired_width, desired_height) = match mode.as_str() {
-        "welcome" | "home" => (640.0, 160.0),
+        "home" => (640.0, 160.0),
         "home-chat" => (640.0, 264.0),
         "petit" | "hidden" => (344.0, 62.0),
         _ => return Err("Unknown companion presentation state.".to_string()),
@@ -958,8 +965,8 @@ fn set_companion_mode(
         });
         return Ok(());
     }
-    let expand = mode == "home" || mode == "home-chat" || mode == "welcome";
-    let grow_duration = if mode == "welcome" { 0.5 } else { 1.2 };
+    let expand = mode == "home" || mode == "home-chat";
+    let grow_duration = 1.2;
     thread::spawn(move || {
         let began = std::time::Instant::now();
         let mut last_width = initial.width as i32;
@@ -1228,16 +1235,8 @@ fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, input: f64) -> f64 {
 #[tauri::command]
 async fn set_companion_visible(
     app: AppHandle,
-    state: State<'_, AppState>,
     visible: bool,
 ) -> Result<(), String> {
-    let conn = connection(&state)?;
-    let _ = rpc_call(
-        &conn,
-        "settings.set",
-        json!({"key":"showCompanion","value":visible}),
-    )
-    .await?;
     let window = app
         .get_webview_window("companion")
         .ok_or_else(|| "The companion window is unavailable.".to_string())?;
@@ -1246,6 +1245,7 @@ async fn set_companion_visible(
     } else {
         window.hide().map_err(|error| error.to_string())?;
     }
+    let _ = app.emit("bloblex-companion-visible-changed", visible);
     Ok(())
 }
 
@@ -1484,9 +1484,7 @@ fn companion_position(app: &AppHandle, window: &WebviewWindow) -> PhysicalPositi
     )
 }
 
-/// Logical size of the companion while the welcome greeting plays.
-const COMPANION_WELCOME_SIZE: (f64, f64) = (640.0, 160.0);
-/// The welcome island sits this fraction of the work-area height above the bottom edge.
+/// The companion sits this fraction of the work-area height above the bottom edge.
 const COMPANION_LAUNCH_BOTTOM_GAP: f64 = 0.18;
 
 /// Every launch starts at the same calm spot: horizontally centred and a little
@@ -1513,8 +1511,8 @@ fn companion_launch_position(app: &AppHandle, window: &WebviewWindow) -> Physica
         return saved;
     };
     let scale = monitor.scale_factor();
-    let width = (COMPANION_WELCOME_SIZE.0 * scale).round() as i32;
-    let height = (COMPANION_WELCOME_SIZE.1 * scale).round() as i32;
+    let width = (344.0 * scale).round() as i32;
+    let height = (62.0 * scale).round() as i32;
     let area = monitor.work_area();
     let (x, y) = companion_launch_spot(
         area.position.x,
@@ -1639,9 +1637,7 @@ fn make_companion(app: &AppHandle, start_at_last_position: bool) -> tauri::Resul
         WebviewUrl::App("index.html?companion=1".into()),
     )
     .title("Bloblex Companion")
-    // Opens at the welcome size so the greeting plays in full; the island
-    // shrinks to its compact bar once the greeting has settled.
-    .inner_size(COMPANION_WELCOME_SIZE.0, COMPANION_WELCOME_SIZE.1)
+    .inner_size(344.0, 62.0)
     .position(400.0, 400.0)
     .decorations(false)
     .transparent(true)
@@ -1682,10 +1678,8 @@ fn make_companion(app: &AppHandle, start_at_last_position: bool) -> tauri::Resul
             let compact_height = (62.0 * scale).round() as i32;
             let (saved_x, saved_y) = companion_saved_compact_spot(point, compact_width, compact_height, scale,
                 area.position.x, area.position.y, area.size.width as i32, area.size.height as i32);
-            let welcome_width = (COMPANION_WELCOME_SIZE.0 * scale).round() as i32;
-            let welcome_height = (COMPANION_WELCOME_SIZE.1 * scale).round() as i32;
             let (x, y) = companion_last_launch_spot(saved_x, saved_y, compact_width, compact_height,
-                welcome_width, welcome_height, area.position.x, area.position.y, area.size.width as i32, area.size.height as i32);
+                compact_width, compact_height, area.position.x, area.position.y, area.size.width as i32, area.size.height as i32);
             PhysicalPosition::new(x, y)
         } else { companion_launch_position(app, &window) }
     } else { companion_launch_position(app, &window) };
@@ -1702,6 +1696,7 @@ fn make_companion(app: &AppHandle, start_at_last_position: bool) -> tauri::Resul
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             let _ = window_for_event.hide();
+            let _ = app_handle.emit("bloblex-companion-visible-changed", false);
         }
     });
     Ok(window)
@@ -1924,13 +1919,12 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["companion"]).build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState::default())
         .manage(updates::UpdateService::default())
         .setup(|app| {
-            let mut show_companion = true;
             let mut start_at_last_position = false;
             let mut hotkey_enabled = true;
             if let Some(state) = app.try_state::<AppState>() {
@@ -1942,10 +1936,6 @@ pub fn run() {
                         tauri::async_runtime::block_on(rpc_call(&conn, "settings.get", json!({})))
                     {
                         let preferences = settings.get("settings").unwrap_or(&settings);
-                        show_companion = preferences
-                            .get("showCompanion")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(true);
                         start_at_last_position = preferences.get("companion.startPosition")
                             .and_then(Value::as_str) == Some("last");
                         hotkey_enabled = preferences.get("companion.hotkey")
@@ -1968,9 +1958,8 @@ pub fn run() {
                 }
             }
             let companion = make_companion(app.handle(), start_at_last_position)?;
-            if show_companion {
-                companion.show()?;
-            }
+            let _ = companion.hide();
+            let _ = app.emit("bloblex-companion-visible-changed", false);
             updates::start_background_checker(app.handle());
             build_tray(app.handle())?;
             if let Some(main) = app.get_webview_window("main") {
@@ -2015,6 +2004,7 @@ pub fn run() {
             set_active_runtime,
             get_active_runtime,
             toggle_companion,
+            companion_visible,
             set_companion_mode,
             set_companion_visible,
             set_companion_hotkey,

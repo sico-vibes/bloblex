@@ -178,6 +178,14 @@ afterEach(() => {
 })
 
 describe('App mounted lifecycle', () => {
+  it('keeps the short app fade class and duration under reduced motion', async () => {
+    const view = startApp()
+    await view.settle()
+    const shell = view.host.querySelector<HTMLElement>('.app-shell')
+    expect(shell?.classList.contains('reduced-launch-fade')).toBe(true)
+    expect(shell?.style.getPropertyValue('--launch-fade-duration')).toBe('180ms')
+  })
+
   it('links the sidebar brand to the imported PNG logo asset', async () => {
     const view = startApp()
     await view.settle()
@@ -312,18 +320,14 @@ describe('App mounted lifecycle', () => {
     expect(view.host.querySelectorAll('.detail-row')[2]?.textContent).toContain('Working')
   })
 
-  it('keeps one opt-in companion sound owner through greeting, compact, and home, and unlocks only on gesture', async () => {
+  it('keeps one opt-in companion sound owner in compact and home, and unlocks only on gesture', async () => {
     configure(snapshot(), { activeSession: 'session-a', activeRuntime: 'runtime-a', soundsEnabled: true })
     const view = startApp('?companion')
     await view.settle()
     expect(view.host.querySelectorAll('[data-testid="blob-canvas"][data-sound-cues="true"]')).toHaveLength(1)
+    expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('petit')
     expect(h.unlockCompanionAudioFromGesture).not.toHaveBeenCalled()
     expect(h.playCompanionCue).not.toHaveBeenCalled()
-
-    act(() => view.host.querySelector<HTMLButtonElement>('[aria-label="Complete greeting fixture"]')!.click())
-    await act(async () => { await vi.advanceTimersByTimeAsync(1401); await settleMicrotasks() })
-    expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('petit')
-    expect(view.host.querySelectorAll('[data-testid="blob-canvas"][data-sound-cues="true"]')).toHaveLength(1)
 
     act(() => view.host.querySelector<HTMLButtonElement>('[aria-label="Open companion home"]')!.click())
     await view.settle()

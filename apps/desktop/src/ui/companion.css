@@ -19,8 +19,7 @@
 
 .companion-root { width: 100vw; height: 100vh; overflow: hidden; background: transparent; color: var(--c-ink); font-family: var(--c-font); -webkit-font-smoothing: antialiased; }
 .companion-capsule { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden; border-radius: 14px; background: var(--text-inverse); box-shadow: inset 0 0 0 1px var(--companion-alpha-09); }
-.companion-capsule.home, .companion-capsule.welcome { padding: 8px 10px 10px; border-radius: 22px; }
-.companion-capsule.welcome { padding: 5px 0; }
+.companion-capsule.home { padding: 8px 10px 10px; border-radius: 22px; }
 .companion-capsule[data-entering] > * { opacity: 0; }
 .companion-capsule > * { transition: opacity 0.2s ease-in-out; }
 .companion-root button { font-family: inherit; cursor: default; }
@@ -166,4 +165,3 @@
 .switch.on::after { transform: translateX(14px); }
 
 /* Welcome stage: 640×150 greeting canvas. */
-.companion-welcome { min-height: 0; flex: 1; display: grid; place-items: center; }

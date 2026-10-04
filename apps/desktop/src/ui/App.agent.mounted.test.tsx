@@ -285,15 +285,29 @@ function emit(event: DaemonEvent) {
 }
 
 describe('blob roster and editor', () => {
-  it('creates a provider starter from first-run setup with the detected runtime id and Ask approval', async () => {
+  it('creates a first blob from onboarding with the detected runtime id and Ask approval', async () => {
     configure(snapshot({ runtimes: [codexRuntime], agents: [], sessions: [] }))
     const view = startApp()
     await view.settle()
-    expect(view.host.querySelectorAll('.setup-agent-row')).toHaveLength(1)
-    await click(view.host.querySelector('.setup-agent-row button'))
+    await click(view.host.querySelector('.onboarding-step button.ghost-button'))
+    expect(view.host.querySelector('[data-provider="codex"]')).not.toBeNull()
+    await click(buttonNamed(view.host, 'Continue'))
+    await view.settle()
+    const nameField = view.host.querySelector<HTMLInputElement>('.onboarding-field input')
+    await typeInto(nameField, 'Codex')
+    await click(buttonNamed(view.host, 'Create blob'))
     await view.settle()
     const create = h.rpc.mock.calls.find(([method]) => method === 'agent.create')
-    expect(create?.[1]).toMatchObject({ name: 'Codex', runtimeId: 'runtime-codex', color: 'blue', approvalMode: 'ask' })
+    expect(create?.[1]).toMatchObject({ name: 'Codex', runtimeId: 'runtime-codex', color: '#B7A7F4', approvalMode: 'ask' })
+  })
+
+  it('keeps an existing session-only workspace in the shell instead of auto-opening onboarding', async () => {
+    const oldSession = session({ id: 'legacy-session', runtimeId: codexRuntime.id, title: 'Earlier conversation' })
+    configure(snapshot({ runtimes: [codexRuntime], agents: [], sessions: [oldSession] }))
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelector('.onboarding-screen')).toBeNull()
+    expect(view.host.querySelector('.app-shell')).not.toBeNull()
   })
 
   it('moves a favourite blob into a Favourites section and back', async () => {
@@ -331,9 +345,7 @@ describe('blob roster and editor', () => {
   it('paints the companion pill for the selected blob with that blob colour', async () => {
     const view = startApp('?companion=1')
     await view.settle()
-    expect(view.host.querySelector('.companion-welcome [data-color]')?.getAttribute('data-color')).toBe('#F38C6F')
-    await click(buttonNamed(view.host, 'Complete greeting fixture'))
-    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(view.host.querySelector('.compact-bot [data-color]')?.getAttribute('data-color')).toBe('#F38C6F')
     await click(buttonNamed(view.host, 'Open companion home'))
     await view.settle()
     const pill = [...view.host.querySelectorAll('.pill.on')].find((node) => node.textContent?.includes('Claude'))
@@ -1062,8 +1074,6 @@ describe('blob roster and editor', () => {
     h.getActiveSession.mockResolvedValue('session-claude-2')
     const companion = startApp('?companion=1')
     await companion.settle()
-    await click(buttonNamed(companion.host, 'Complete greeting fixture'))
-    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
     await click(buttonNamed(companion.host, 'Open companion home'))
     await companion.settle()
     expect(companion.host.querySelector('.tool')?.textContent).toBe('Hero follow-up')

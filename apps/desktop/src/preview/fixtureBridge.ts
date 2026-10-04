@@ -59,6 +59,14 @@ let sequence = 1
 let agentSerial = 6
 let fixtureAutostart = false
 export const fixtureNotifications: Array<{ title: string; body: string }> = []
+export const launchFixtureModes = ['normal', 'slow', 'warning', 'service-down', 'onboarding-none', 'onboarding-some'] as const
+export function launchFixtureData(mode: typeof launchFixtureModes[number]) {
+  const checks = mode === 'warning'
+    ? [{ id: 'service', label: 'Connecting to the Bloblex service', state: 'ok', detail: 'Connected' }, { id: 'discovery', label: 'Finding coding agents', state: 'ok', detail: '3 coding agents found' }, { id: 'auth:runtime-codex', label: 'Checking Codex sign-in', state: 'warning', detail: 'Warning: Codex is not signed in' }, { id: 'models:runtime-codex', label: 'Loading models for Codex', state: 'warning', detail: 'Warning: no models were returned for Codex' }, { id: 'usage', label: 'Loading usage and limits', state: 'ok', detail: 'Usage and limits are ready' }]
+    : [{ id: 'service', label: 'Connecting to the Bloblex service', state: mode === 'service-down' ? 'failed' : 'ok', detail: mode === 'service-down' ? 'Service did not respond' : 'Connected and loaded the latest state' }, { id: 'discovery', label: 'Finding coding agents', state: 'ok', detail: '3 coding agents found' }, { id: 'auth:runtime-codex', label: 'Checking Codex sign-in', state: 'ok', detail: 'Version 0.159.3, signed in' }, { id: 'models:runtime-codex', label: 'Loading models for Codex', state: 'ok', detail: 'Loaded 12 models' }, { id: 'usage', label: 'Loading usage and limits', state: 'ok', detail: 'Usage and limits are ready' }]
+  const runtimes = (mode === 'onboarding-some' ? baseRuntimes.slice(0, 2) : mode === 'onboarding-none' ? [] : baseRuntimes).map((runtime) => ({ ...runtime, authState: runtime.provider === 'codex' ? 'authenticated' : runtime.authState }))
+  return { checks, slow: mode === 'slow', serviceDown: mode === 'service-down', runtimes }
+}
 export async function autostartEnabled() { return fixtureAutostart }
 export async function setAutostartEnabled(enabled: boolean) { fixtureAutostart = enabled }
 export async function sendDesktopNotification(title: string, body: string) { fixtureNotifications.push({ title, body }) }

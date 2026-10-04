@@ -64,6 +64,8 @@ vi.mock('../blob/BlobCanvas', async () => {
         className: 'blob-canvas',
         role: 'img',
         'aria-label': `${String(props.label ?? 'Agent')} ${String(props.mood ?? 'idle')}`,
+        'data-outfit': String(props.outfit ?? 'auto'),
+        'data-created-at': String(props.createdAt ?? ''),
         width: typeof props.size === 'number' ? props.size : 52,
         height: typeof props.size === 'number' ? props.size : 52,
       },
@@ -239,16 +241,50 @@ async function press(host: ParentNode, label: string) {
 }
 
 describe('companion drag and usage labels', () => {
-  it('marks every non-interactive companion target in welcome, compact, home, chat, activity, settings, and approval', async () => {
+  it('passes the selected blob outfit and creation date to the chat state and companion', async () => {
+    const createdAt = '2026-10-04T12:00:00.000Z'
+    const dressedClaude = { ...claude, outfit: 'santa-hat' as const, createdAt }
+    const emptySession = { ...claudeSession, messages: [], turns: [], tools: [], files: [] }
+    const fixture = snapshot({ agents: [dressedClaude, codex], sessions: [emptySession] })
+    configure(fixture)
+    const main = startApp()
+    await main.settle()
+    const chatFace = main.host.querySelector<HTMLCanvasElement>('.session-first-state canvas.blob-canvas')
+    expect(chatFace?.getAttribute('data-outfit')).toBe('santa-hat')
+    expect(chatFace?.getAttribute('data-created-at')).toBe(createdAt)
+    const detailsFace = main.host.querySelector<HTMLCanvasElement>('.context-head canvas.blob-canvas')
+    expect(detailsFace?.getAttribute('data-outfit')).toBe('santa-hat')
+    expect(detailsFace?.getAttribute('data-created-at')).toBe(createdAt)
+    main.unmount()
+
+    configure(fixture)
+    const companion = startApp('?companion=1')
+    await companion.settle()
+    const companionFace = companion.host.querySelector<HTMLCanvasElement>('.compact-bot canvas.blob-canvas')
+    expect(companionFace?.getAttribute('data-outfit')).toBe('santa-hat')
+    expect(companionFace?.getAttribute('data-created-at')).toBe(createdAt)
+  })
+
+  it('mounts the main-window companion switch from the hidden native default', async () => {
+    let visibilityHandler: ((event: { payload: boolean }) => void) | undefined
+    h.directListen.mockImplementation(async (eventName: string, handler: (event: { payload: boolean }) => void) => {
+      if (eventName === 'bloblex-companion-visible-changed') visibilityHandler = handler
+      return vi.fn()
+    })
+    const view = startApp()
+    await view.settle()
+    const toggle = view.host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Companion, keep your blob on screen while you work"]')
+    expect(toggle?.getAttribute('aria-checked')).toBe('false')
+    await act(async () => { toggle?.click(); await settleMicrotasks() })
+    expect(h.setCompanionVisibility).toHaveBeenCalledWith(true)
+    expect(toggle?.getAttribute('aria-checked')).toBe('false')
+    await act(async () => { visibilityHandler?.({ payload: true }); await settleMicrotasks() })
+    expect(toggle?.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('starts compact and marks every non-interactive companion target in compact, home, chat, activity, settings, and approval', async () => {
     const view = startApp('?companion=1')
     await view.settle()
-    expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('welcome')
-    const welcomeFace = view.host.querySelector('.companion-welcome canvas.blob-canvas')
-    expect(resolvesToDrag(welcomeFace), 'welcome face').toBe(true)
-    assertIsland(view.host, 'welcome')
-
-    await press(view.host, 'Complete greeting fixture')
-    await act(async () => { await vi.advanceTimersByTimeAsync(1500); await settleMicrotasks() })
     expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('petit')
     const face = view.host.querySelector('.compact-bot canvas.blob-canvas')
     const name = view.host.querySelector('.compact-copy strong')
@@ -354,8 +390,6 @@ describe('companion drag and usage labels', () => {
   it('labels daemon-wide tokens and cost as totals beside a blob and keeps unknown cost unknown', async () => {
     const companion = startApp('?companion=1')
     await companion.settle()
-    await press(companion.host, 'Complete greeting fixture')
-    await act(async () => { await vi.advanceTimersByTimeAsync(1500); await settleMicrotasks() })
     await press(companion.host, 'Open companion home')
     await companion.settle()
     const glance = companion.host.querySelector('.glance')

@@ -3,6 +3,8 @@
 
 :root {
   color-scheme: dark;
+  --z-preview-switcher: 110;
+  --space-preview-switcher: 6px;
   /* Surfaces */
   --surface-app: #0e0e0e;
   --surface-sidebar: #151515;

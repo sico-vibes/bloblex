@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { emit } from '@tauri-apps/api/event'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { emit, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { Bot, Check, ChevronDown, ChevronRight, Download, Gauge, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
 import type { Agent, Snapshot } from '../types'
@@ -45,7 +45,9 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   const [profiles, setProfiles] = useState<Record<string, unknown>[]>([])
   const [policy, setPolicy] = useState<PermissionsPolicy | null>(null)
   const [policyError, setPolicyError] = useState<string | null>(null)
-  const [companionVisible, setCompanionVisible] = useState(true)
+  const [companionVisible, setCompanionVisible] = useState(false)
+  const companionVisibilityRevision = useRef(0)
+  const [companionOpenAtStartup, setCompanionOpenAtStartup] = useState(false)
   const [closeToTray, setCloseToTrayValue] = useState(true)
   const [monitors, setMonitors] = useState<string[]>([])
   const [companionMonitor, setCompanionMonitorValue] = useState<string | null>(null)
@@ -81,7 +83,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
       ])
       const preferences = recordFrom(settingsResult)
       const settings = recordFrom(preferences.settings ?? preferences)
-      if (typeof settings.showCompanion === 'boolean') setCompanionVisible(settings.showCompanion)
+      if (typeof settings['companion.openAtStartup'] === 'boolean') setCompanionOpenAtStartup(settings['companion.openAtStartup'])
       if (typeof settings.closeToTray === 'boolean') setCloseToTrayValue(settings.closeToTray)
       if (typeof settings['companion.soundsEnabled'] === 'boolean') setSoundsEnabled(settings['companion.soundsEnabled'])
       if (settings['companion.startPosition'] === 'last') setStartPosition('last')
@@ -122,6 +124,25 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   useEffect(() => { void load() }, [load])
 
   useEffect(() => {
+    let active = true
+    let unlisten: (() => void) | undefined
+    if (inDesktop) {
+      void listen<boolean>('bloblex-companion-visible-changed', ({ payload }) => {
+        companionVisibilityRevision.current += 1
+        setCompanionVisible(payload)
+      }).then((stop) => {
+        if (!active) { stop(); return }
+        unlisten = stop
+        const revisionAtRead = companionVisibilityRevision.current
+        void invoke<boolean>('companion_visible').then((visible) => {
+          if (active && companionVisibilityRevision.current === revisionAtRead) setCompanionVisible(visible)
+        }).catch(() => undefined)
+      })
+    }
+    return () => { active = false; unlisten?.() }
+  }, [])
+
+  useEffect(() => {
     if (!inDesktop) return
     void autostartEnabled().then((enabled) => { setStartWithWindows(enabled); setAutostartLoaded(true) }).catch((reason) => { setAutostartLoaded(true); setFormError(messageOf(reason)) })
   }, [])
@@ -143,7 +164,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
     return null
   }
 
-  const setCompanion = (visible: boolean) => guarded(async () => { await setCompanionVisibility(visible); setCompanionVisible(visible) })
+  const setCompanion = (visible: boolean) => guarded(async () => { await setCompanionVisibility(visible) })
   const saveSetting = (key: string, value: unknown) => guarded(async () => { await rpc('settings.set', { key, value }) })
   const setStartPositionChoice = (value: string) => {
     if (value !== 'launch' && value !== 'last') return
@@ -282,6 +303,9 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Companion">
+              <SettingsRow label="Open the companion when Bloblex starts">
+                <button type="button" className={`toggle ${companionOpenAtStartup ? 'on' : ''}`} role="switch" aria-label="Open the companion when Bloblex starts" aria-checked={companionOpenAtStartup} onClick={() => void saveSetting('companion.openAtStartup', !companionOpenAtStartup).then((failure) => { if (!failure) setCompanionOpenAtStartup(!companionOpenAtStartup) })} disabled={saving}><i /></button>
+              </SettingsRow>
               <SettingsRow label="Start position">
                 <Select ariaLabel="Companion start position" variant="muted" value={startPosition} disabled={saving} onChange={setStartPositionChoice} options={[{ value: 'launch', label: 'Centre, near the bottom' }, { value: 'last', label: 'Where I left it' }]} />
               </SettingsRow>

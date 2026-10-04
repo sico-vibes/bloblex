@@ -34,7 +34,7 @@ vi.mock('../tauri', () => ({
   listenForUpdateAvailable: async () => () => undefined,
   listenForUpdateProgress: async () => () => undefined,
 }))
-vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn() }))
+vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(), listen: vi.fn(async () => () => undefined) }))
 
 function draft(partial: Partial<AgentDraft> = {}): AgentDraft {
   return { name: 'Claude', description: '', instructions: '', color: 'mint', outfit: 'auto', runtimeId: 'rt-1', defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null, ...partial }

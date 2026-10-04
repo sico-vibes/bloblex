@@ -25,7 +25,7 @@ vi.mock('../tauri', () => ({
   listenForUpdateAvailable: async () => () => undefined,
   listenForUpdateProgress: async () => () => undefined,
 }))
-vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn() }))
+vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(), listen: vi.fn(async () => () => undefined) }))
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => null }))
 
 function mount(node: ReactNode) {

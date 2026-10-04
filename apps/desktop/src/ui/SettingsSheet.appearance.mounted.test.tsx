@@ -18,7 +18,7 @@ vi.mock('../tauri', () => ({
 }))
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: vi.fn(async () => false), setAutostartEnabled: vi.fn(async () => undefined) }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }))
-vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => undefined) }))
+vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => undefined), listen: vi.fn(async () => () => undefined) }))
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 let host: HTMLDivElement
@@ -67,5 +67,20 @@ describe('General settings mounted controls', () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toBe('Ctrl+Alt+B is used by another app. The companion shortcut is off.')
     expect(host.querySelector('[aria-label="Show/hide with Ctrl+Alt+B"]')?.getAttribute('aria-checked')).toBe('false')
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'companion.hotkey', value: false })
+  })
+
+  it('persists the companion launch preference and starts from the window visibility', async () => {
+    mocks.invoke.mockResolvedValue(false)
+    mocks.setCompanionVisibility.mockResolvedValue(undefined)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { 'companion.openAtStartup': false } } : {})
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const launchSwitch = host.querySelector<HTMLButtonElement>('[aria-label="Open the companion when Bloblex starts"]')
+    expect(launchSwitch?.getAttribute('aria-checked')).toBe('false')
+    await act(async () => launchSwitch?.click())
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'companion.openAtStartup', value: true })
+    expect(launchSwitch?.getAttribute('aria-checked')).toBe('true')
+    expect(host.querySelector('[aria-label="Show companion"]')?.getAttribute('aria-checked')).toBe('false')
   })
 })

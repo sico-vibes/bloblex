@@ -40,7 +40,7 @@ vi.mock('../tauri', () => ({
   listenForUpdateAvailable: h.listenForUpdateAvailable,
   listenForUpdateProgress: h.listenForUpdateProgress,
 }))
-vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(), listen: vi.fn() }))
+vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(), listen: vi.fn(async () => () => undefined) }))
 
 function state(partial: Partial<UpdatesState> = {}): UpdatesState {
   return { currentVersion: '0.1.0', channel: 'beta', autoCheck: true, lastCheckedAt: null, available: null, devBuild: false, ...partial }

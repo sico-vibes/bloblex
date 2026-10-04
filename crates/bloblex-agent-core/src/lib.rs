@@ -765,6 +765,9 @@ pub struct ModelInfo {
     /// Whether the provider currently reports this model as offered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub availability: Option<String>,
+    /// Per-model rates reported by a provider catalog, retained as exact decimal strings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_price: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

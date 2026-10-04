@@ -4,12 +4,13 @@ import type { Agent, Runtime, Session } from '../types'
 import { rpc } from '../tauri'
 import { ConfirmDialog } from './BlobPage'
 import { Select } from './Select'
-import { currencyDigits, formatCount, formatMinor, majorToMinor, minorToMajor, priceRuleParams } from './usageLimits'
+import { currencyDigits, formatCount, formatMinor, majorToMinor, minorToMajor, priceRuleParams, validPriceRate } from './usageLimits'
 
 type Row = Record<string, unknown>
 type Props = { agents: readonly Agent[]; runtimes: readonly Runtime[]; sessions: readonly Session[] }
 const currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD']
 const options = (items: readonly string[]) => items.map((value) => ({ value, label: value.replaceAll('_', ' ') }))
+const rateFieldLabels = { input: 'Input', output: 'Output', cacheRead: 'Cache read', cacheWrite: 'Cache write' } as const
 
 export function UsageLimitsSettings({ agents, runtimes, sessions }: Props) {
   const [budgets, setBudgets] = useState<Row[]>([])
@@ -41,13 +42,23 @@ export function UsageLimitsSettings({ agents, runtimes, sessions }: Props) {
       const [budgetResult, priceResult, subscriptionResult] = await Promise.all([
         rpc<unknown>('budget.list'), rpc<unknown>('pricing.list'), rpc<unknown>('subscription.list'),
       ])
+      const reportedPrices = (await Promise.all(runtimes.filter((runtime) => runtime.provider === 'opencode').map(async (runtime) => {
+        try {
+          const catalog = await rpc<Row>('runtime.models', { runtimeId: runtime.id })
+          return listField(catalog, 'models').flatMap((model) => {
+            const price = model.reportedPrice
+            if (!price || typeof price !== 'object') return []
+            return [{ provider: runtime.provider, canonicalModelId: model.id, ...price as Row, source: 'opencode_catalog_estimate' }]
+          })
+        } catch { return [] }
+      }))).flat()
       setBudgets(listField(budgetResult, 'policies'))
-      setPrices(listField(priceResult, 'rules'))
+      setPrices([...listField(priceResult, 'rules'), ...reportedPrices])
       setSubscriptions(listField(subscriptionResult, 'plans'))
     } catch (reason) { setError(messageOf(reason)) }
     finally { setLoading(false) }
   }
-  useEffect(() => { void load() }, [])
+  useEffect(() => { void load() }, [runtimes])
 
   useEffect(() => {
     if (!returnBudgetFocus.current || deleteTarget || loading) return
@@ -116,23 +127,18 @@ export function UsageLimitsSettings({ agents, runtimes, sessions }: Props) {
       return
     }
     const currency = String(draft.currency ?? 'USD')
-    const rates: Record<string, number | null> = {}
+    const rates: Record<string, string | null> = {}
     for (const [field, key] of [['input', 'inputPerMillion'], ['output', 'outputPerMillion'], ['cacheRead', 'cacheReadPerMillion'], ['cacheWrite', 'cacheWritePerMillion']] as const) {
       const raw = String(draft[field] ?? '').trim()
       if (raw === '') {
         rates[key] = null
         continue
       }
-      if (!matchesCurrencyPrecision(raw, currency)) {
-        setError(currency === 'JPY' ? 'JPY rates must be whole numbers.' : `Use no more than ${currencyDigits(currency)} decimal places for ${currency}.`)
+      if (!validPriceRate(raw)) {
+        setError('Enter a non-negative decimal rate with up to twelve fractional digits.')
         return
       }
-      const minor = majorToMinor(raw, currency, true)
-      if (minor === null) {
-        setError('Enter a valid non-negative rate.')
-        return
-      }
-      rates[key] = minor
+      rates[key] = raw
     }
     if (Object.values(rates).every((rate) => rate === null)) { setError('Enter at least one reported rate. Leave unknown rates blank.'); return }
     const rule = { ...priceRuleParams(draft), ...rates, id: typeof draft.id === 'string' ? draft.id : crypto.randomUUID(), provider, canonicalModelId: model, currency }
@@ -188,15 +194,15 @@ export function UsageLimitsSettings({ agents, runtimes, sessions }: Props) {
       <SettingsGroup title="Prices">
         {modelRows.length === 0 && <p className="settings-empty">Models appear here after a session reports them. No price, costs stay unknown.</p>}
         {modelRows.map(({ provider, model, price, override }) => <div className="settings-row" key={`${provider}:${model}`}>
-          <span className="settings-row-copy"><strong>{model}</strong><small>{providerLabel(provider)} · {priceSourceLabel(price, override)}</small></span>
-          {override && <button type="button" className="ghost-button small" onClick={() => openPriceForm({ ...override, provider, canonicalModelId: model, input: minorToMajor(override.inputPerMillion, String(override.currency ?? 'USD')), output: minorToMajor(override.outputPerMillion, String(override.currency ?? 'USD')), cacheRead: minorToMajor(override.cacheReadPerMillion, String(override.currency ?? 'USD')), cacheWrite: minorToMajor(override.cacheWritePerMillion, String(override.currency ?? 'USD')) })}>Edit price</button>}
+          <span className="settings-row-copy"><strong>{model}</strong><small>{providerLabel(provider)} · {priceSourceLabel(price, override)}</small>{price && <small>{priceRatesLabel(price, override)}</small>}{price && tierNotesLabel(price)}</span>
+          {override && <button type="button" className="ghost-button small" onClick={() => openPriceForm({ ...override, provider, canonicalModelId: model, input: String(override.inputPerMillion ?? ''), output: String(override.outputPerMillion ?? ''), cacheRead: String(override.cacheReadPerMillion ?? ''), cacheWrite: String(override.cacheWritePerMillion ?? '') })}>Edit price</button>}
           {override && <button type="button" className="ghost-button small danger-button" onClick={() => void mutate(() => rpc('pricing.override', { rule: { ...override, remove: true } }), 'Price override removed.')}>Remove override</button>}
           {!override && <button type="button" className="secondary-button small" onClick={() => openPriceForm({ provider, canonicalModelId: model, currency: 'USD', input: '', output: '', cacheRead: '', cacheWrite: '' })}>Set price</button>}
         </div>)}
         {priceDraft && <form key={priceFormModelKey} className="settings-form" onSubmit={savePrice}>
           <div className="settings-field-pair"><label className="settings-field"><span>Provider</span><input className="text-input" aria-label="Price provider" value={String(priceDraft.provider ?? '')} onChange={(event) => setPriceDraft({ ...priceDraft, provider: event.target.value })} /></label><label className="settings-field"><span>Model</span><input className="text-input" aria-label="Price model" value={String(priceDraft.canonicalModelId ?? '')} onChange={(event) => setPriceDraft({ ...priceDraft, canonicalModelId: event.target.value })} /></label></div>
           <div className="settings-field"><span>Currency</span><Select ariaLabel="Price currency" variant="field" align="left" value={String(priceDraft.currency ?? 'USD')} onChange={(value) => setPriceDraft({ ...priceDraft, currency: value })} options={currencyOptions()} /></div>
-          <div className="settings-field-pair">{(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((field) => <label className="settings-field" key={field}><span>{label(field)} per million tokens</span><input className="text-input" aria-label={`${label(field)} rate per million tokens`} type="number" min="0" step={10 ** -currencyDigits(String(priceDraft.currency ?? 'USD'))} value={String(priceDraft[field] ?? '')} onChange={(event) => setPriceDraft({ ...priceDraft, [field]: event.target.value })} /></label>)}</div>
+          <div className="settings-field-pair">{(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((field) => <label className="settings-field" key={field}><span>{rateFieldLabels[field]} per million tokens</span><input className="text-input" aria-label={`${rateFieldLabels[field]} rate per million tokens`} type="number" min="0" step="any" value={String(priceDraft[field] ?? '')} placeholder={priceFieldHint(priceDraft, field)} onChange={(event) => setPriceDraft({ ...priceDraft, [field]: event.target.value })} /></label>)}</div>
           <div className="settings-form-actions"><button type="button" className="ghost-button small" onClick={() => setPriceDraft(null)}>Cancel</button><button type="submit" className="primary-button small" disabled={saving} onClick={(event) => { event.preventDefault(); savePrice() }}>Save price</button></div>
         </form>}
       </SettingsGroup>
@@ -282,13 +288,18 @@ function scopeLabel(row: Row, _agents: readonly Agent[], runtimes: readonly Runt
 function knownModels(agents: readonly Agent[], prices: readonly Row[], runtimes: readonly Runtime[], sessions: readonly Session[]) {
   const models = new Map<string, { provider: string; model: string; price?: Row; override?: Row }>()
   for (const price of prices) {
-    const provider = String(price.provider ?? '')
-    const model = String(price.canonicalModelId ?? price.model ?? '')
+    const sourceProvider = String(price.provider ?? '')
+    const provider = displayProviderId(sourceProvider)
+    const model = displayModelId(sourceProvider, String(price.canonicalModelId ?? price.model ?? ''))
     if (!model) continue
     const key = `${provider}:${model}`
     const source = String(price.source ?? price.priceSource ?? '').toLowerCase()
     const entry = models.get(key) ?? { provider, model }
-    entry.price = price
+    const rank = (row?: Row) => {
+      const value = String(row?.source ?? row?.priceSource ?? '').toLowerCase()
+      return value.includes('user') || value.includes('override') ? 4 : value.includes('official') ? 3 : value.includes('catalog') ? 2 : 0
+    }
+    if (!entry.price || rank(price) > rank(entry.price)) entry.price = price
     if (!source || source.includes('override') || source.includes('user')) entry.override = price
     models.set(key, entry)
   }
@@ -309,8 +320,71 @@ function knownModels(agents: readonly Agent[], prices: readonly Row[], runtimes:
   return [...models.values()]
 }
 function priceSourceLabel(price?: Row, override?: Row) {
-  if (override) return 'Your override'
+  if (override) return 'Your price'
   const source = String(price?.source ?? price?.priceSource ?? '').toLowerCase()
-  if (source.includes('ship') || source.includes('estimate')) return 'Shipped estimate'
-  return 'No price, costs stay unknown'
+  if (source.includes('opencode_catalog_estimate')) return 'OpenCode catalog estimate'
+  if (source.includes('official')) return `Official price list, checked ${String(price?.checkedAt ?? 'date unavailable')}`
+  return 'Unknown'
+}
+function priceRatesLabel(price: Row, override?: Row) {
+  const fields = [['input', 'Input'], ['output', 'Output'], ['cacheRead', 'Cache read'], ['cacheWrite', 'Cache write']] as const
+  const effective = override?.effectiveFields && typeof override.effectiveFields === 'object' ? override.effectiveFields as Row : undefined
+  const values = fields.map(([key, title]) => {
+    const field = effective?.[`${key}PerMillion`] as Row | undefined
+    const raw = field ? field.rate : override?.[`${key}PerMillion`] ?? price[`${key}PerMillion`]
+    if (raw === null || raw === undefined) return null
+    const currency = String(field?.currency ?? override?.currency ?? price.currency ?? 'USD')
+    const major = typeof raw === 'string' ? raw : minorToMajor(raw, currency)
+    const source = field?.source ?? override?.source ?? price.source ?? price.priceSource
+    return `${title} ${major} ${currency} (${priceFieldSourceLabel(source, field ?? price)})`
+  }).filter(Boolean)
+  const numericRates = fields.map(([key]) => {
+    const field = effective?.[`${key}PerMillion`] as Row | undefined
+    const raw = field ? field.rate : override?.[`${key}PerMillion`] ?? price[`${key}PerMillion`]
+    return raw === null || raw === undefined ? null : Number(raw)
+  })
+  const isFree = numericRates.slice(0, 3).every((rate) => rate === 0) && (numericRates[3] === null || numericRates[3] === 0)
+  return `${isFree ? 'Free · ' : ''}${values.join(' · ')} per 1M tokens`
+}
+function priceFieldHint(rule: Row, field: 'input' | 'output' | 'cacheRead' | 'cacheWrite') {
+  const effective = rule.effectiveFields && typeof rule.effectiveFields === 'object' ? rule.effectiveFields as Row : undefined
+  const value = effective?.[`${field}PerMillion`]
+  if (!value || typeof value !== 'object') return undefined
+  const row = value as Row
+  if (row.source === 'user_override' || typeof row.rate !== 'string') return undefined
+  const currency = typeof row.currency === 'string' ? row.currency : String(rule.currency ?? 'USD')
+  return `${row.rate} ${currency} · ${priceFieldSourceLabel(row.source, rule)}`
+}
+function priceFieldSourceLabel(source: unknown, price: Row) {
+  const value = String(source ?? '').toLowerCase()
+  if (value.includes('user') || value.includes('override')) return 'Your price'
+  if (value.includes('official')) return `Official price list, checked ${String(price.checkedAt ?? 'date unavailable')}`
+  if (value.includes('catalog')) return 'OpenCode catalog estimate'
+  return 'Unknown'
+}
+function tierNotesLabel(price: Row) {
+  const tiers = Array.isArray(price.effectiveTiers) ? price.effectiveTiers as Row[] : Array.isArray(price.tiers) ? price.tiers as Row[] : []
+  const notes = tiers.map((tier) => {
+    if (tier.kind === 'long_context' && typeof tier.thresholdInputTokens === 'number') return `>${formatCount(tier.thresholdInputTokens)} input tokens: long-context rates`
+    if (tier.kind === 'time_window') {
+      const windows = Array.isArray(tier.windowsUtc) ? tier.windowsUtc as Row[] : []
+      const days = Array.isArray(tier.daysOfWeekUtc) && (tier.daysOfWeekUtc as number[]).length === 5 ? 'weekdays' : 'listed days'
+      const span = windows.map((window) => `${String(window.start)}–${String(window.end)}`).join(', ')
+      return `Peak ${days} ${span} UTC`
+    }
+    if (tier.kind === 'cache_write_duration' && typeof tier.durationMinutes === 'number') return `${tier.durationMinutes === 60 ? '1h' : `${tier.durationMinutes}m`} cache-write rate used when duration is unknown`
+    return null
+  }).filter(Boolean)
+  return notes.length ? <small>{[...new Set(notes)].join(' · ')}</small> : null
+}
+function displayProviderId(provider: string) {
+  if (provider === 'anthropic') return 'claude'
+  if (provider === 'openai') return 'codex'
+  if (provider === 'opencode-zen' || provider === 'opencode-go') return 'opencode'
+  return provider
+}
+function displayModelId(provider: string, model: string) {
+  if (provider === 'opencode-go' && !model.startsWith('opencode-go/')) return `opencode-go/${model}`
+  if (provider === 'opencode-zen' && !model.startsWith('opencode/')) return `opencode/${model}`
+  return model
 }

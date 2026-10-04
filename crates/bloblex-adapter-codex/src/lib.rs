@@ -914,6 +914,7 @@ fn parse_catalog_model(m: &Value) -> Result<ModelInfo, AdapterError> {
         is_default: m["isDefault"].as_bool(),
         group: None,
         availability: None,
+        reported_price: None,
     })
 }
 async fn read_reply(

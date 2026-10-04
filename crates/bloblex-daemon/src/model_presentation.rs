@@ -18,6 +18,21 @@ struct Family {
 }
 
 pub(crate) fn apply(models: &mut [ModelInfo], validated: bool, fallback: bool) {
+    if models.iter().any(|model| matches!(model.provider_id.as_deref(), Some("opencode" | "opencode-go")) || model.id.starts_with("opencode/") || model.id.starts_with("opencode-go/")) {
+        for model in models.iter_mut() {
+            let provider = model.provider_id.as_deref().or_else(|| model.id.split_once('/').map(|(provider, _)| provider)).unwrap_or("opencode");
+            let reported_name = model.reported_price.as_ref().and_then(|price| price["providerName"].as_str());
+            model.group = Some(match provider {
+                "opencode" => "OpenCode Zen".into(),
+                "opencode-go" => "OpenCode Go".into(),
+                _ => reported_name.map(str::to_owned).unwrap_or_else(|| title_case(provider.replace('-', " ").as_str())),
+            });
+            model.availability = (validated && !fallback).then(|| "offered".into());
+            if model.is_default.is_none() { model.is_default = Some(false); }
+        }
+        models.sort_by(|a, b| a.group.cmp(&b.group).then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase())).then_with(|| a.id.cmp(&b.id)));
+        return;
+    }
     let families = models.iter().map(|model| family(&model.id)).collect::<Vec<_>>();
     let mut family_counts = HashMap::new();
     for family in families.iter().flatten() {
@@ -129,7 +144,7 @@ mod tests {
             id: id.into(), display_name: name.into(), provider_id: None,
             supported_thinking: vec![], default_thinking: None, service_tiers: vec![],
             default_service_tier: None, variants: None, host_dependent: true,
-            is_default, group: None, availability: None,
+            is_default, group: None, availability: None, reported_price: None,
         }
     }
 
@@ -188,5 +203,20 @@ mod tests {
         assert_eq!(models[0].display_name, "Provider title");
         assert_eq!(models[0].is_default, Some(false));
         assert_eq!(models[0].group, None);
+    }
+
+    #[test]
+    fn opencode_models_group_by_catalog_gateway() {
+        let mut zen = model("opencode/big-pickle", "Big Pickle", None);
+        zen.provider_id = Some("opencode".into());
+        let mut go = model("opencode-go/deepseek-v4.1-flash", "DeepSeek", None);
+        go.provider_id = Some("opencode-go".into());
+        go.reported_price = Some(serde_json::json!({"providerName":"OpenCode Go"}));
+        let mut other = model("custom/model", "Model", None);
+        other.provider_id = Some("custom-provider".into());
+        other.reported_price = Some(serde_json::json!({"providerName":"My Gateway"}));
+        let mut models = vec![other, go, zen];
+        apply(&mut models, true, false);
+        assert_eq!(models.iter().map(|model| model.group.as_deref().unwrap()).collect::<Vec<_>>(), ["My Gateway", "OpenCode Go", "OpenCode Zen"]);
     }
 }

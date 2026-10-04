@@ -227,6 +227,7 @@ pub(crate) fn config_option_catalog(options: &[Value]) -> Option<Vec<ModelInfo>>
             is_default: Some(selected_model.as_deref() == Some(id)),
             group: None,
             availability: None,
+            reported_price: None,
         });
     }
     (!catalog.is_empty()).then_some(catalog)
@@ -244,6 +245,7 @@ pub(crate) fn default_provider_mode(options: &[Value]) -> Option<String> {
     None
 }
 
+#[cfg(test)]
 pub(crate) fn apply_model_efforts(models: &mut [ModelInfo], verbose_models: &[ModelInfo]) {
     for model in models {
         if let Some(verbose) = verbose_models.iter().find(|candidate| candidate.id == model.id) {
@@ -510,6 +512,17 @@ mod tests {
     }
 
     #[test]
+    fn session_environment_injects_bloblex_config_without_redirecting_user_login_dirs() {
+        let options = ExecOptions { model: Some("opencode-go/deepseek-v4.1-flash".into()), instructions: Some("per blob instructions".into()), ..ExecOptions::default() };
+        let mut command = Command::new("fake-opencode");
+        apply_child_env(&mut command, &options);
+        let env = command.as_std().get_envs().collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(env.get(std::ffi::OsStr::new("OPENCODE_CONFIG_CONTENT")).and_then(|value| value.as_ref()).unwrap().to_str().unwrap(), config_content(&options));
+        assert!(env.get(std::ffi::OsStr::new("OPENCODE_CONFIG_CONTENT")).unwrap().is_some());
+        assert!(env.keys().all(|key| !matches!(key.to_str(), Some("HOME" | "XDG_CONFIG_HOME" | "XDG_DATA_HOME" | "XDG_CACHE_HOME" | "XDG_STATE_HOME" | "OPENCODE_CONFIG_DIR" | "OPENCODE_DATA_DIR" | "OPENCODE_CACHE_DIR" | "OPENCODE_STATE_DIR"))));
+    }
+
+    #[test]
     fn session_effort_option_is_not_assigned_to_every_model() {
         let options = options_from_result(&json!({"configOptions":[
             {"id":"model","currentValue":"opencode-go/deepseek-v4.1-flash","options":[
@@ -534,6 +547,7 @@ mod tests {
             is_default: None,
             group: None,
             availability: None,
+            reported_price: None,
         }];
         apply_model_efforts(&mut models, &verbose_models);
         assert!(models.iter().find(|model| model.id == "opencode/big-pickle").unwrap().supported_thinking.is_empty());

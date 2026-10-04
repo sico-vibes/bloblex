@@ -21,6 +21,11 @@ export function minorToMajor(value: unknown, currency: string): string {
   return digits === 0 ? String(value) : (value / (10 ** digits)).toFixed(digits)
 }
 
+export function validPriceRate(value: string): boolean {
+  const trimmed = value.trim()
+  return /^\d{1,12}(?:\.\d{1,12})?$/.test(trimmed)
+}
+
 export function formatMinor(value: unknown, currency: unknown): string {
   if (typeof value !== 'number' || !Number.isFinite(value) || typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency)) return 'Unknown'
   try { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value / (10 ** currencyDigits(currency))) }

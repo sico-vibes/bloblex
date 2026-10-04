@@ -405,6 +405,7 @@ async fn parent_config_is_replaced_and_allowlisted_env_is_kept() {
     assert_eq!(record["allow"]["TZ"], "UTC");
     assert!(record["env_keys"].as_array().unwrap().iter().any(|key| key == "BLOBLEX_PARENT_KEPT"));
     assert!(record["env_keys"].as_array().unwrap().iter().any(|key| key == "OPENCODE_CONFIG_CONTENT"));
+    assert_eq!(record["isolated_dirs"].as_array().unwrap().len(), 0);
     let mut seen = Vec::new();
     while let Ok(event) = events.try_recv() {
         seen.push(event);
@@ -737,22 +738,24 @@ async fn prompt_rpc_error_is_unreported_and_hides_provider_text() {
 }
 
 #[tokio::test]
-async fn config_options_catalog_uses_per_model_efforts_from_verbose_rows() {
+async fn verbose_catalog_includes_zen_and_go_models_with_per_model_efforts() {
     let temp = Temp::new();
     let adapter = AcpAdapter::default();
     let runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into()]);
     let catalog = adapter.model_catalog(&runtime).await.unwrap();
-    assert_eq!(catalog.source, "config_options");
+    assert_eq!(catalog.source, "cli_list");
     assert!(catalog.validated);
     assert!(!catalog.fallback);
-    assert_eq!(catalog.models.len(), 2);
+    assert_eq!(catalog.models.len(), 3);
     assert_eq!(catalog.models[0].id, "opencode/big-pickle");
-    assert_eq!(catalog.models[0].variants.as_deref(), Some(&["build", "plan"].map(str::to_owned)[..]));
+    assert!(catalog.models[0].variants.is_none());
     assert!(catalog.models[0].supported_thinking.is_empty());
     assert!(catalog.models.iter().all(|model| model.host_dependent && model.service_tiers.is_empty()));
     assert_eq!(catalog.models[1].id, "opencode-go/deepseek-v4.1-flash");
     assert_eq!(catalog.models[1].supported_thinking, ["high", "low", "max"]);
-    let isolated: BTreeSet<_> = read_record(&temp.record())["isolated_dirs"]
+    let record = read_record(&temp.record());
+    assert_eq!(record["config"]["ok"], false);
+    let isolated: BTreeSet<_> = record["isolated_dirs"]
         .as_array()
         .unwrap()
         .iter()
@@ -760,16 +763,7 @@ async fn config_options_catalog_uses_per_model_efforts_from_verbose_rows() {
         .collect();
     assert_eq!(
         isolated,
-        BTreeSet::from([
-            "XDG_CONFIG_HOME".into(),
-            "XDG_DATA_HOME".into(),
-            "XDG_CACHE_HOME".into(),
-            "XDG_STATE_HOME".into(),
-            "OPENCODE_CONFIG_DIR".into(),
-            "OPENCODE_DATA_DIR".into(),
-            "OPENCODE_CACHE_DIR".into(),
-            "OPENCODE_STATE_DIR".into(),
-        ])
+        BTreeSet::new()
     );
 }
 
@@ -780,9 +774,27 @@ async fn verbose_catalog_is_used_when_session_handshake_has_no_config_options() 
     let runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into(), "--catalog-no-config-options".into()]);
     let catalog = adapter.model_catalog(&runtime).await.unwrap();
     assert_eq!(catalog.source, "cli_list");
-    assert!(!catalog.validated);
+    assert!(catalog.validated);
     assert!(!catalog.fallback);
     assert_eq!(catalog.models.len(), 3);
+}
+
+#[tokio::test]
+async fn config_options_fallback_uses_an_empty_bloblex_working_directory() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into(), "--verbose-invalid".into()]);
+    let catalog = adapter.model_catalog(&runtime).await.unwrap();
+    assert_eq!(catalog.source, "config_options");
+    assert!(!catalog.validated);
+    let record = read_record(&temp.record());
+    let cwd = record["cwd"].as_str().unwrap();
+    assert!(cwd.contains("bloblex-opencode-catalog-cwd-"));
+    assert_ne!(std::path::Path::new(cwd), std::env::current_dir().unwrap());
+    assert_eq!(record["cwd_entries"], 0);
+    assert_eq!(record["isolated_dirs"].as_array().unwrap().len(), 0);
+    let session = record["rpc"].as_array().unwrap().iter().find(|request| request["method"] == "session/new").unwrap();
+    assert_eq!(session["cwd"], cwd);
 }
 
 #[tokio::test]

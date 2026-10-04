@@ -257,10 +257,10 @@ fn validate_pricing_override(rule: &Value) -> Result<(), &'static str> {
         "cacheWritePerMillion",
     ] {
         let Some(rate) = object.get(field) else {
-            return Err("all rate fields must be an integer minor-unit amount or null");
+            return Err("all rate fields must be decimal strings or null");
         };
-        if !rate.is_null() && rate.as_i64().is_none_or(|amount| amount < 0) {
-            return Err("all rate fields must be a non-negative integer minor-unit amount or null");
+        if !rate.is_null() && rate.as_str().is_none_or(|amount| !bloblex_usage::valid_rate_decimal(amount)) {
+            return Err("all rate fields must be non-negative decimal strings with at most twelve fractional digits or null");
         }
     }
     Ok(())
@@ -614,13 +614,30 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.broadcast_persisted(events);
             Ok(json!({"saved":true}))
         }
-        "pricing.list" => st.db.pricing_list(p["provider"].as_str()).map_err(|e| {
-            derr(
-                "internal",
-                &e.to_string(),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        }),
+        "pricing.list" => {
+            let listed = st.db.pricing_list(p["provider"].as_str()).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            let requested_provider = p["provider"].as_str();
+            let overrides = serde_json::from_value::<Vec<bloblex_usage::PriceRule>>(listed["rules"].clone()).unwrap_or_default();
+            let official = bloblex_usage::shipped_official_price_rules().unwrap_or_default().into_iter().filter(|rule| requested_provider.is_none_or(|provider| price_provider_matches(provider, &rule.provider))).collect::<Vec<_>>();
+            let runtimes = st.runtimes.read().await.clone();
+            let catalog = if requested_provider.is_none_or(|provider| matches!(provider, "opencode" | "opencode-go" | "opencode-zen")) {
+                runtimes.iter().filter(|runtime| runtime["provider"] == "opencode").filter_map(cached_model_catalog)
+                    .flat_map(|catalog| catalog["models"].as_array().cloned().unwrap_or_default())
+                    .filter_map(|model| { let model_id = model["id"].as_str()?; let catalog = json!({"models":[model]}); reported_catalog_price(Some(&catalog), "opencode", model_id) })
+                    .filter(|rule| requested_provider.is_none_or(|provider| price_provider_matches(provider, &rule.provider)))
+                    .collect::<Vec<_>>()
+            } else { Vec::new() };
+            let lower = official.iter().chain(catalog.iter()).cloned().collect::<Vec<_>>();
+            let rules = overrides.into_iter().map(|rule| {
+                let mut value = serde_json::to_value(&rule).unwrap_or(Value::Null);
+                value["effectiveFields"] = effective_pricing_fields(&rule, &lower);
+                if let Some(effective) = bloblex_usage::resolve_rule_at(&rule.provider, Some(&rule.canonical_model_id), &Utc::now().to_rfc3339(), &lower) {
+                    value["effectiveTiers"] = json!(effective.tiers);
+                }
+                value
+            }).chain(official.into_iter().chain(catalog).filter_map(|rule| serde_json::to_value(rule).ok())).collect::<Vec<_>>();
+            Ok(json!({"rules":rules}))
+        }
         "pricing.override" => {
             let rule = &p["rule"];
             validate_pricing_override(rule).map_err(|message| {
@@ -761,6 +778,93 @@ async fn runtime_models(st: &AppState, p: &Value) -> Result<Value, DispatchError
     let refresh = p.get("refresh").map(|v| v.as_bool().ok_or_else(|| derr("invalid_argument", "refresh must be a boolean", StatusCode::BAD_REQUEST))).transpose()?.unwrap_or(false);
     let runtime = st.runtimes.read().await.iter().find(|r| r["id"] == id).cloned().ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
     fetch_model_catalog(st, &runtime, refresh).await
+}
+fn cached_model_catalog(runtime: &Value) -> Option<Value> {
+    let cache = MODEL_CATALOG_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
+    cache.lock().ok()?.get(&catalog_key(runtime)).map(|(_, value)| value.clone())
+}
+fn reported_catalog_price(catalog: Option<&Value>, runtime_provider: &str, model_id: &str) -> Option<bloblex_usage::PriceRule> {
+    if runtime_provider != "opencode" { return None; }
+    let catalog = catalog?;
+    let model = catalog["models"].as_array()?.iter().find(|model| model["id"] == model_id)?;
+    let price = model.get("reportedPrice")?;
+    let catalog_provider = model["providerId"].as_str().or_else(|| model["id"].as_str()?.split_once('/').map(|(provider, _)| provider))?;
+    let catalog_model_id = model_id.strip_prefix(&format!("{catalog_provider}/")).unwrap_or(model_id);
+    Some(bloblex_usage::PriceRule {
+        id: format!("opencode-catalog:{catalog_provider}:{catalog_model_id}"), provider: catalog_provider.to_owned(), canonical_model_id: catalog_model_id.to_owned(), aliases: vec![],
+        input_per_million: price["inputPerMillion"].as_str().map(str::to_owned),
+        output_per_million: price["outputPerMillion"].as_str().map(str::to_owned),
+        cache_read_per_million: price["cacheReadPerMillion"].as_str().map(str::to_owned),
+        cache_write_per_million: price["cacheWritePerMillion"].as_str().map(str::to_owned),
+        currency: price["currency"].as_str()?.to_owned(), effective_from: "0000-01-01".to_owned(), effective_to: None, source_url: None,
+        source: Some("opencode_catalog_estimate".into()), checked_at: None, notes: None, tiers: Vec::new(),
+    })
+}
+fn price_provider_matches(runtime_provider: &str, price_provider: &str) -> bool {
+    match runtime_provider {
+        "claude" | "anthropic" => price_provider == "anthropic",
+        "codex" | "openai" => price_provider == "openai",
+        "opencode" => matches!(price_provider, "opencode-zen" | "opencode-go" | "opencode"),
+        other => price_provider.eq_ignore_ascii_case(other),
+    }
+}
+fn effective_pricing_fields(override_rule: &bloblex_usage::PriceRule, lower_priority_rules: &[bloblex_usage::PriceRule]) -> Value {
+    let model = override_rule.canonical_model_id.as_str();
+    let date = Utc::now().format("%Y-%m-%d").to_string();
+    let fields = ["inputPerMillion", "outputPerMillion", "cacheReadPerMillion", "cacheWritePerMillion"];
+    let mut result = serde_json::Map::new();
+    for field in fields {
+        let own_rate = pricing_field_rate(override_rule, field);
+        let fallback = lower_priority_rules.iter().find(|candidate| {
+            pricing_field_rate(candidate, field).is_some() && bloblex_usage::resolve_rule_at(&override_rule.provider, Some(model), &date, std::slice::from_ref(*candidate)).is_some()
+        });
+        let (rate, source, currency, checked_at): (Option<String>, String, String, Option<String>) = if let Some(rate) = own_rate {
+            (Some(rate.clone()), "user_override".to_owned(), override_rule.currency.clone(), None)
+        } else if let Some(rule) = fallback {
+            (pricing_field_rate(rule, field).cloned(), rule.source.as_deref().unwrap_or("unknown").to_owned(), rule.currency.clone(), rule.checked_at.clone())
+        } else {
+            (None, "unknown".to_owned(), override_rule.currency.clone(), None)
+        };
+        result.insert(field.to_owned(), json!({"rate":rate,"source":source,"currency":currency,"checkedAt":checked_at}));
+    }
+    Value::Object(result)
+}
+fn pricing_field_rate<'a>(rule: &'a bloblex_usage::PriceRule, field: &str) -> Option<&'a String> {
+    match field {
+        "inputPerMillion" => rule.input_per_million.as_ref(),
+        "outputPerMillion" => rule.output_per_million.as_ref(),
+        "cacheReadPerMillion" => rule.cache_read_per_million.as_ref(),
+        "cacheWritePerMillion" => rule.cache_write_per_million.as_ref(),
+        _ => None,
+    }
+}
+fn complete_pricing_overrides(overrides: Vec<bloblex_usage::PriceRule>, lower_priority_rules: &[bloblex_usage::PriceRule]) -> Vec<bloblex_usage::PriceRule> {
+    overrides.into_iter().filter(|rule| rule.source.as_deref() == Some("user_override")).map(|rule| {
+        bloblex_usage::complete_user_override(&rule.provider, &rule, lower_priority_rules)
+    }).collect()
+}
+fn assemble_pricing_rules(provider: &str, overrides: Vec<bloblex_usage::PriceRule>, official: Vec<bloblex_usage::PriceRule>, catalog: Option<bloblex_usage::PriceRule>) -> Vec<bloblex_usage::PriceRule> {
+    let mut lower = official.into_iter().filter(|rule| price_provider_matches(provider, &rule.provider)).collect::<Vec<_>>();
+    if let Some(rule) = catalog { lower.push(rule); }
+    let mut rules = complete_pricing_overrides(overrides, &lower);
+    rules.extend(lower);
+    rules
+}
+async fn pricing_rules_for_usage(st: &AppState, runtime_id: &str, provider: &str, model: Option<&str>) -> Vec<bloblex_usage::PriceRule> {
+    let mut overrides = Vec::new();
+    if let Ok(value) = st.db.pricing_list(Some(provider)) {
+        if let Ok(rules) = serde_json::from_value::<Vec<bloblex_usage::PriceRule>>(value["rules"].clone()) {
+            for rule in rules {
+                if rule.source.as_deref() == Some("user_override") { overrides.push(rule); }
+            }
+        }
+    }
+    let official = bloblex_usage::shipped_official_price_rules().unwrap_or_default();
+    let catalog = if provider == "opencode" {
+        let runtime = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id).cloned();
+        runtime.as_ref().and_then(cached_model_catalog).as_ref().and_then(|catalog| model.and_then(|model_id| reported_catalog_price(Some(catalog), provider, model_id)))
+    } else { None };
+    assemble_pricing_rules(provider, overrides, official, catalog)
 }
 async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) -> Result<(), DispatchError> {
     for key in ["model", "thinking", "serviceTier"] {
@@ -1757,6 +1861,7 @@ async fn forward_events_with_timeouts(
                 model,
             } => {
                 let timestamp = Utc::now().to_rfc3339();
+                let valuation_timestamp = turn.as_deref().and_then(|turn_id| st.db.turn_started_at(turn_id).ok().flatten()).unwrap_or_else(|| timestamp.clone());
                 let record = bloblex_usage::UsageRecord {
                     input_tokens: input_tokens,
                     output_tokens,
@@ -1770,17 +1875,9 @@ async fn forward_events_with_timeouts(
                     raw: raw.clone(),
                 };
                 let usage_status = if [input_tokens, output_tokens, cache_read_tokens, cache_write_tokens].iter().any(Option::is_some) { "partial" } else { "unreported" };
-                let rules = st
-                    .db
-                    .pricing_list(Some(&provider))
-                    .ok()
-                    .and_then(|v| {
-                        serde_json::from_value::<Vec<bloblex_usage::PriceRule>>(v["rules"].clone())
-                            .ok()
-                    })
-                    .unwrap_or_default();
+                let rules = pricing_rules_for_usage(&st, &runtime_id, &provider, model.as_deref()).await;
                 let rule =
-                    bloblex_usage::resolve_rule_at(&provider, model.as_deref(), &timestamp, &rules);
+                    bloblex_usage::resolve_rule_at(&provider, model.as_deref(), &valuation_timestamp, &rules);
                 let valuation = if record.reported_cost_minor.is_some() {
                     bloblex_usage::Valuation {
                         basis: bloblex_usage::CostBasis::ProviderReportedActual,
@@ -1790,7 +1887,7 @@ async fn forward_events_with_timeouts(
                         status: "reported_actual".into(),
                     }
                 } else {
-                    bloblex_usage::estimate(&record, rule)
+                    bloblex_usage::estimate_at(&record, rule, Some(&valuation_timestamp))
                 };
                 let valuation = serde_json::to_value(valuation).unwrap_or(Value::Null);
                 let usage = json!({"id":Uuid::new_v4().to_string(),"runtimeId":runtime_id,"sessionId":sid,"turnId":turn,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":input_tokens,"outputTokens":output_tokens,"cacheReadTokens":cache_read_tokens,"cacheWriteTokens":cache_write_tokens,"source":"fallback","raw":raw,"providerReportedCostMinor":record.reported_cost_minor,"providerReportedCurrency":record.currency,"usageStatus":usage_status,"valuation":valuation});
@@ -1812,6 +1909,7 @@ async fn forward_events_with_timeouts(
             AgentEvent::UsageReport { turn_id, report } => {
                 let timestamp = Utc::now().to_rfc3339();
                 let model = report.model.clone();
+                let valuation_timestamp = st.db.turn_started_at(&turn_id).ok().flatten().unwrap_or_else(|| timestamp.clone());
                 let provider_update_id = report
                     .provider_update_id
                     .as_deref()
@@ -1826,15 +1924,8 @@ async fn forward_events_with_timeouts(
                     })
                     .unwrap_or(Value::Null)
                 } else if report.reported_cost_decimal.is_none() {
-                    let rules = st
-                        .db
-                        .pricing_list(Some(&provider))
-                        .ok()
-                        .and_then(|value| {
-                            serde_json::from_value::<Vec<bloblex_usage::PriceRule>>(value["rules"].clone()).ok()
-                        })
-                        .unwrap_or_default();
-                    let rule = bloblex_usage::resolve_rule_at(&provider, model.as_deref(), &timestamp, &rules);
+                    let rules = pricing_rules_for_usage(&st, &runtime_id, &provider, model.as_deref()).await;
+                    let rule = bloblex_usage::resolve_rule_at(&provider, model.as_deref(), &valuation_timestamp, &rules);
                     let record = bloblex_usage::UsageRecord {
                         input_tokens: report.input_tokens,
                         output_tokens: report.output_tokens,
@@ -1847,7 +1938,7 @@ async fn forward_events_with_timeouts(
                         source: "terminal".into(),
                         raw: Value::Null,
                     };
-                    serde_json::to_value(bloblex_usage::estimate(&record, rule)).unwrap_or(Value::Null)
+                    serde_json::to_value(bloblex_usage::estimate_at(&record, rule, Some(&valuation_timestamp))).unwrap_or(Value::Null)
                 } else {
                     Value::Null
                 };
@@ -2101,6 +2192,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 #[tokio::main]
 async fn main() {
+    if let Err(error) = bloblex_usage::shipped_official_price_rules() {
+        eprintln!("official price table validation failed: {error}");
+        std::process::exit(1);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
@@ -2122,9 +2217,9 @@ mod phase2a_tests {
             "canonicalModelId": "model-a",
             "currency": "USD",
             "effectiveFrom": "2026-10-03T10:00:00Z",
-            "inputPerMillion": 125,
+            "inputPerMillion": "1.25",
             "outputPerMillion": null,
-            "cacheReadPerMillion": 0,
+            "cacheReadPerMillion": "0",
             "cacheWritePerMillion": null
         })
     }
@@ -2150,7 +2245,7 @@ mod phase2a_tests {
         invalid["effectiveFrom"] = json!("not a date");
         assert_eq!(validate_pricing_override(&invalid), Err("effectiveFrom must be an RFC3339 timestamp"));
 
-        for rate in [json!(-1), json!(1.5), json!("12")] {
+        for rate in [json!(-1), json!(1.5), json!("1e2"), json!("1.0000000000001")] {
             let mut invalid = pricing_rule_fixture();
             invalid["inputPerMillion"] = rate;
             assert!(validate_pricing_override(&invalid).is_err());
@@ -2158,6 +2253,79 @@ mod phase2a_tests {
         let mut invalid = pricing_rule_fixture();
         invalid.as_object_mut().unwrap().remove("cacheWritePerMillion");
         assert!(validate_pricing_override(&invalid).is_err());
+    }
+
+    #[tokio::test]
+    async fn pricing_list_keeps_partial_override_raw_and_separates_effective_field_sources() {
+        let (st, _) = state();
+        let started = Utc::now().to_rfc3339();
+        let rule = json!({
+            "id":"partial-opencode-price","provider":"opencode","canonicalModelId":"opencode-go/gpt-6-luna",
+            "aliases":[],"currency":"USD","effectiveFrom":started,"effectiveTo":null,"sourceUrl":null,
+            "inputPerMillion":"0.17","outputPerMillion":null,"cacheReadPerMillion":null,"cacheWritePerMillion":null
+        });
+        dispatch(&st, "pricing.override", json!({"rule":rule})).await.unwrap();
+
+        let listed = dispatch(&st, "pricing.list", json!({"provider":"opencode"})).await.unwrap();
+        let saved = listed["rules"].as_array().unwrap().iter().find(|row| row["id"] == "partial-opencode-price").unwrap();
+        assert_eq!(saved["inputPerMillion"], "0.17");
+        assert!(saved["outputPerMillion"].is_null());
+        assert!(saved["cacheReadPerMillion"].is_null());
+        assert!(saved["cacheWritePerMillion"].is_null());
+        assert_eq!(saved["effectiveFields"]["inputPerMillion"]["source"], "user_override");
+        assert_eq!(saved["effectiveFields"]["outputPerMillion"]["rate"], "0.5");
+        assert_eq!(saved["effectiveFields"]["outputPerMillion"]["source"], "official_price_list");
+        assert_eq!(saved["effectiveFields"]["cacheReadPerMillion"]["source"], "official_price_list");
+        assert_eq!(saved["effectiveFields"]["cacheWritePerMillion"]["source"], "official_price_list");
+
+        let edited = json!({
+            "id":saved["id"],"provider":saved["provider"],"canonicalModelId":saved["canonicalModelId"],
+            "aliases":saved["aliases"],"currency":saved["currency"],"effectiveFrom":saved["effectiveFrom"],
+            "effectiveTo":saved["effectiveTo"],"sourceUrl":saved["sourceUrl"],
+            "inputPerMillion":saved["inputPerMillion"],"outputPerMillion":saved["outputPerMillion"],
+            "cacheReadPerMillion":"0.007","cacheWritePerMillion":saved["cacheWritePerMillion"]
+        });
+        dispatch(&st, "pricing.override", json!({"rule":edited})).await.unwrap();
+        let stored = st.db.pricing_list(Some("opencode")).unwrap();
+        let raw = stored["rules"].as_array().unwrap().iter().find(|row| row["id"] == "partial-opencode-price").unwrap();
+        assert_eq!(raw["inputPerMillion"], "0.17");
+        assert!(raw["outputPerMillion"].is_null());
+        assert_eq!(raw["cacheReadPerMillion"], "0.007");
+        assert!(raw["cacheWritePerMillion"].is_null());
+    }
+
+    #[tokio::test]
+    async fn real_usage_rule_builder_uses_cached_catalog_only_and_orders_override_official_catalog() {
+        let (st, _) = state();
+        let runtime_id = "rt-opencode-price-cache";
+        let timestamp = Utc::now().to_rfc3339();
+        let runtime = json!({"id":runtime_id,"provider":"opencode","executablePath":"no-real-cli-is-launched","launchArgs":[],"status":"online"});
+        *st.runtimes.write().await = vec![runtime.clone()];
+        let key = catalog_key(&runtime);
+        let cache = MODEL_CATALOG_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
+        cache.lock().unwrap().insert(key.clone(), (Instant::now() - std::time::Duration::from_secs(120), json!({"fetchedAt":"2026-10-04T00:00:00Z","models":[{"id":"opencode-go/gpt-6-luna","providerId":"opencode-go","reportedPrice":{"inputPerMillion":"0.01","outputPerMillion":"0.02","cacheReadPerMillion":"0.001","cacheWritePerMillion":"0.002","currency":"USD"}},{"id":"opencode-go/catalog-only","providerId":"opencode-go","reportedPrice":{"inputPerMillion":"0.003","outputPerMillion":"0.004","cacheReadPerMillion":"0.001","cacheWritePerMillion":null,"currency":"USD"}}]})));
+        let rules = pricing_rules_for_usage(&st, runtime_id, "opencode", Some("opencode-go/gpt-6-luna")).await;
+        let selected = bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/gpt-6-luna"), &timestamp, &rules).unwrap();
+        assert_eq!(selected.source.as_deref(), Some("official_price_list"));
+        let catalog_only_rules = pricing_rules_for_usage(&st, runtime_id, "opencode", Some("opencode-go/catalog-only")).await;
+        let fallback = bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/catalog-only"), &timestamp, &catalog_only_rules).unwrap();
+        assert_eq!(fallback.source.as_deref(), Some("opencode_catalog_estimate"));
+        let earlier = bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/catalog-only"), "2026-10-02T12:00:00Z", &catalog_only_rules).unwrap();
+        assert_eq!(earlier.source.as_deref(), Some("opencode_catalog_estimate"));
+
+        st.db.save_pricing(&json!({"id":"override-cache-test","provider":"opencode","canonicalModelId":"opencode-go/gpt-6-luna","aliases":[],"currency":"USD","effectiveFrom":"2026-10-04T00:00:00Z","inputPerMillion":"0.17","outputPerMillion":null,"cacheReadPerMillion":null,"cacheWritePerMillion":null})).unwrap();
+        assert_eq!(st.db.pricing_list(Some("opencode")).unwrap()["rules"][0]["source"], "user_override");
+        let rules = pricing_rules_for_usage(&st, runtime_id, "opencode", Some("opencode-go/gpt-6-luna")).await;
+        assert_eq!(rules.first().and_then(|rule| rule.source.as_deref()), Some("user_override"));
+        let selected = bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/gpt-6-luna"), &timestamp, &rules).unwrap();
+        assert_eq!(selected.source.as_deref(), Some("user_override"));
+        assert_eq!(selected.input_per_million.as_deref(), Some("0.17"));
+        assert_eq!(selected.output_per_million.as_deref(), Some("0.5"));
+        assert_eq!(selected.cache_read_per_million.as_deref(), Some("0.01"));
+
+        cache.lock().unwrap().remove(&key);
+        let rules = pricing_rules_for_usage(&st, runtime_id, "opencode", Some("opencode-go/not-in-either-list")).await;
+        assert!(bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/not-in-either-list"), &timestamp, &rules).is_none());
     }
 
     #[derive(Default)] struct PolicyAdapter{replies:std::sync::atomic::AtomicUsize}
@@ -2664,7 +2832,7 @@ mod phase2a_tests {
             id: id.into(), display_name: display_name.into(), provider_id: None,
             supported_thinking: Vec::new(), default_thinking: None, service_tiers: Vec::new(),
             default_service_tier: None, variants: None, host_dependent: true,
-            is_default, group: None, availability: None,
+            is_default, group: None, availability: None, reported_price: None,
         };
         let catalog = bloblex_agent_core::ModelCatalog {
             models: vec![
@@ -2727,6 +2895,7 @@ mod phase2a_tests {
                 is_default: None,
                 group: None,
                 availability: None,
+                reported_price: None,
             }],
             fetched_at: "2026-10-03T00:00:00Z".into(),
             expires_at: "2026-10-03T00:01:00Z".into(),

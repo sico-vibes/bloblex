@@ -12,34 +12,33 @@ use tokio::{
 };
 use uuid::Uuid;
 
-pub(crate) const ISOLATION_MARKER: &str = "bloblex-oc-catalog";
-
 pub(crate) async fn fetch_model_catalog(
     runtime: &RuntimeSpec,
     timeout: Duration,
 ) -> Result<ModelCatalog, AdapterError> {
-    if let Some(mut models) = fetch_config_options(runtime, timeout).await {
-        if let Ok(verbose_models) = fetch_verbose_catalog(runtime, timeout).await {
-            crate::exec::apply_model_efforts(&mut models, &verbose_models);
+    match fetch_verbose_catalog(runtime, timeout).await {
+        Ok(models) => {
+            let fetched = unix_now();
+            return Ok(ModelCatalog {
+                models,
+                fetched_at: rfc3339_from_unix(fetched),
+                expires_at: rfc3339_from_unix(fetched.saturating_add(60)),
+                fallback: false,
+                source: "cli_list".into(),
+                validated: true,
+            });
         }
-        let fetched = unix_now();
-        return Ok(ModelCatalog {
-            models,
-            fetched_at: rfc3339_from_unix(fetched),
-            expires_at: rfc3339_from_unix(fetched.saturating_add(60)),
-            fallback: false,
-            source: "config_options".into(),
-            validated: true,
-        });
+        Err(AdapterError::Process(message)) if message == ERR_CATALOG_TIMEOUT => return Err(AdapterError::Process(message)),
+        Err(_) => {}
     }
-    let models = fetch_verbose_catalog(runtime, timeout).await?;
+    let models = fetch_config_options(runtime, timeout).await.ok_or_else(|| AdapterError::Process(ERR_CATALOG.into()))?;
     let fetched = unix_now();
     Ok(ModelCatalog {
         models,
         fetched_at: rfc3339_from_unix(fetched),
         expires_at: rfc3339_from_unix(fetched.saturating_add(60)),
         fallback: false,
-        source: "cli_list".into(),
+        source: "config_options".into(),
         validated: false,
     })
 }
@@ -48,7 +47,6 @@ async fn fetch_verbose_catalog(
     runtime: &RuntimeSpec,
     timeout: Duration,
 ) -> Result<Vec<ModelInfo>, AdapterError> {
-    let temp = TempHome::new().map_err(|_| AdapterError::Process(ERR_CATALOG.into()))?;
     let mut command = Command::new(&runtime.executable);
     prepare_command(&mut command);
     command
@@ -58,10 +56,8 @@ async fn fetch_verbose_catalog(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .current_dir(temp.path())
         .kill_on_drop(true);
-    temp.apply_env(&mut command);
-    command.env_remove("OPENCODE_CONFIG_CONTENT");
+    prepare_listing_environment(&mut command);
     let mut child = command
         .spawn()
         .map_err(|_| AdapterError::Process(ERR_CATALOG.into()))?;
@@ -97,21 +93,21 @@ async fn fetch_verbose_catalog(
 }
 
 async fn fetch_config_options(runtime: &RuntimeSpec, timeout: Duration) -> Option<Vec<ModelInfo>> {
-    let temp = TempHome::new().ok()?;
+    let cwd = CatalogWorkingDirectory::new().ok()?;
+    let cwd_arg = cwd.path().to_string_lossy().into_owned();
     let mut command = Command::new(&runtime.executable);
     prepare_command(&mut command);
     command
         .args(&runtime.args)
         .arg("acp")
         .arg("--cwd")
-        .arg(temp.path())
-        .current_dir(temp.path())
+        .arg(cwd.path())
+        .current_dir(cwd.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
-    temp.apply_env(&mut command);
-    command.env_remove("OPENCODE_CONFIG_CONTENT");
+    prepare_listing_environment(&mut command);
     let mut child = command.spawn().ok()?;
     let process_tree = ProcessTree::attach(&mut child).ok()?;
     let stdin = child.stdin.take()?;
@@ -122,7 +118,7 @@ async fn fetch_config_options(runtime: &RuntimeSpec, timeout: Duration) -> Optio
         for request in [
             r#"{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Bloblex","version":"0.1.0"}}}"#,
             r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
-            r#"{"jsonrpc":"2.0","id":"2","method":"session/new","params":{"cwd":".","mcpServers":[]}}"#,
+            &serde_json::json!({"jsonrpc":"2.0","id":"2","method":"session/new","params":{"cwd":cwd_arg,"mcpServers":[]}}).to_string(),
         ] {
             stdin.write_all(request.as_bytes()).await.ok()?;
             stdin.write_all(b"\n").await.ok()?;
@@ -170,44 +166,6 @@ async fn read_limited(stdout: impl AsyncRead + Unpin, limit: usize) -> Result<St
         out.extend_from_slice(&buf[..read]);
     }
     String::from_utf8(out).map_err(|_| AdapterError::Process(ERR_CATALOG.into()))
-}
-
-struct TempHome(PathBuf);
-
-impl TempHome {
-    fn new() -> std::io::Result<Self> {
-        let path = std::env::temp_dir().join(format!("{ISOLATION_MARKER}-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(path.join("config"))?;
-        std::fs::create_dir_all(path.join("data"))?;
-        std::fs::create_dir_all(path.join("cache"))?;
-        std::fs::create_dir_all(path.join("state"))?;
-        Ok(Self(path))
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-
-    fn apply_env(&self, command: &mut Command) {
-        let config = self.0.join("config");
-        let data = self.0.join("data");
-        let cache = self.0.join("cache");
-        let state = self.0.join("state");
-        command.env("XDG_CONFIG_HOME", &config);
-        command.env("XDG_DATA_HOME", &data);
-        command.env("XDG_CACHE_HOME", &cache);
-        command.env("XDG_STATE_HOME", &state);
-        command.env("OPENCODE_CONFIG_DIR", &config);
-        command.env("OPENCODE_DATA_DIR", &data);
-        command.env("OPENCODE_CACHE_DIR", &cache);
-        command.env("OPENCODE_STATE_DIR", &state);
-    }
-}
-
-impl Drop for TempHome {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
 }
 
 pub(crate) fn parse_verbose_catalog(text: &str) -> Result<Vec<ModelInfo>, String> {
@@ -321,6 +279,22 @@ fn model_from(header: &str, value: &Value) -> Result<ModelInfo, String> {
         Some(_) => return Err("verbose model variants are invalid".into()),
     };
     let display = value["name"].as_str().unwrap_or(header).to_owned();
+    let provider_name = value["providerName"].as_str().unwrap_or(provider);
+    let cost = value.get("cost").and_then(Value::as_object);
+    let reported_price = cost.map(|cost| {
+        let rate = |key: &str| cost.get(key).and_then(decimal_text);
+        let cache = cost.get("cache").and_then(Value::as_object);
+        let currency = cost.get("currency").and_then(Value::as_str).unwrap_or("USD");
+        serde_json::json!({
+            "inputPerMillion": rate("input"),
+            "outputPerMillion": rate("output"),
+            "cacheReadPerMillion": cache.and_then(|cache| cache.get("read")).and_then(decimal_text),
+            "cacheWritePerMillion": cache.and_then(|cache| cache.get("write")).and_then(decimal_text),
+            "currency": currency,
+            "source": "opencode_catalog_estimate",
+            "providerName": provider_name,
+        })
+    });
     let supported = variant_keys.clone();
     Ok(ModelInfo {
         id: composed,
@@ -335,7 +309,34 @@ fn model_from(header: &str, value: &Value) -> Result<ModelInfo, String> {
         is_default: None,
         group: None,
         availability: None,
+        reported_price,
     })
+}
+
+struct CatalogWorkingDirectory(PathBuf);
+impl CatalogWorkingDirectory {
+    fn new() -> std::io::Result<Self> {
+        let path = std::env::temp_dir().join(format!("bloblex-opencode-catalog-cwd-{}", Uuid::new_v4()));
+        std::fs::create_dir(&path)?;
+        Ok(Self(path))
+    }
+    fn path(&self) -> &Path { &self.0 }
+}
+impl Drop for CatalogWorkingDirectory { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+
+fn prepare_listing_environment(command: &mut Command) {
+    // Listing must use the user's provider/login configuration, never a Bloblex session profile.
+    command.env_remove("OPENCODE_CONFIG_CONTENT");
+}
+
+fn decimal_text(value: &Value) -> Option<String> {
+    let text = match value {
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => text.clone(),
+        _ => return None,
+    };
+    let number = serde_json::from_str::<serde_json::Number>(&text).ok()?;
+    (!number.to_string().starts_with('-')).then_some(text)
 }
 
 fn unix_now() -> u64 {
@@ -387,6 +388,9 @@ mod tests {
         assert!(models[0].supported_thinking.is_empty());
         assert!(models[0].variants.is_none());
         assert_eq!(models[1].id, "opencode-go/deepseek-v4.1-flash");
+        assert_eq!(models[0].reported_price.as_ref().unwrap()["inputPerMillion"], "0");
+        assert_eq!(models[0].reported_price.as_ref().unwrap()["currency"], "USD");
+        assert_eq!(models[1].reported_price.as_ref().unwrap()["inputPerMillion"], "0.14");
         let thinking: std::collections::BTreeSet<_> = models[1].supported_thinking.iter().cloned().collect();
         assert_eq!(thinking, ["high", "low", "max"].into_iter().map(str::to_owned).collect());
         assert!(!models[1].supported_thinking.iter().any(|level| level == "default"));
@@ -401,5 +405,25 @@ mod tests {
         let braces = "opencode/brace-name\n{\"id\":\"brace-name\",\"providerID\":\"opencode\",\"name\":\"Big {Pickle}\",\"cost\":{\"input\":0},\"limit\":{\"context\":1},\"capabilities\":{\"reasoning\":false},\"variants\":{}}\n";
         let models = parse_verbose_catalog(braces).unwrap();
         assert_eq!(models[0].display_name, "Big {Pickle}");
+    }
+
+    #[test]
+    fn reported_catalog_rates_keep_exact_decimal_lexemes_without_float_conversion() {
+        let text = "opencode/exact\n{\"id\":\"exact\",\"providerID\":\"opencode\",\"cost\":{\"input\":0.000000000003,\"output\":\"0.000000000007\"}}\n";
+        let model = parse_verbose_catalog(text).unwrap().remove(0);
+        let price = model.reported_price.unwrap();
+        assert_eq!(price["inputPerMillion"], "0.000000000003");
+        assert_eq!(price["outputPerMillion"], "0.000000000007");
+        assert_eq!(decimal_text(&Value::String("-0.1".into())), None);
+        assert_eq!(decimal_text(&Value::String("not-a-rate".into())), None);
+    }
+
+    #[test]
+    fn listing_removes_only_inline_bloblex_config_and_keeps_user_home_dirs_inherited() {
+        let mut command = Command::new("fake-opencode");
+        prepare_listing_environment(&mut command);
+        let env = command.as_std().get_envs().collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(env.get(std::ffi::OsStr::new("OPENCODE_CONFIG_CONTENT")), Some(&None));
+        assert!(env.keys().all(|key| !matches!(key.to_str(), Some("HOME" | "XDG_CONFIG_HOME" | "XDG_DATA_HOME" | "XDG_CACHE_HOME" | "XDG_STATE_HOME" | "OPENCODE_CONFIG_DIR" | "OPENCODE_DATA_DIR" | "OPENCODE_CACHE_DIR" | "OPENCODE_STATE_DIR"))));
     }
 }

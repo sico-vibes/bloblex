@@ -83,6 +83,9 @@ fn csv(value: &str) -> Vec<String> {
 
 fn catalog_main(flags: &Flags) {
     write_record(flags, &[], None);
+    if env::args().any(|arg| arg == "--verbose-invalid") {
+        std::process::exit(2);
+    }
     if env::args().any(|arg| arg == "--hang") {
         thread::sleep(Duration::from_secs(30));
         return;
@@ -171,6 +174,7 @@ fn acp_main(_args: &[String], flags: &Flags) {
             continue;
         }
         let mut entry = json!({"method": method});
+        if method == "session/new" { entry["cwd"] = message["params"]["cwd"].clone(); }
         if method == "session/set_config_option" {
             entry["configId"] = message["params"]["configId"].clone();
             entry["value"] = message["params"]["value"].clone();
@@ -341,6 +345,8 @@ fn write_record(flags: &Flags, rpc: &[Value], _session: Option<&Session>) {
     let config = config_shape();
     let body = json!({
         "pid": std::process::id(),
+        "cwd": env::current_dir().ok().map(|path| path.to_string_lossy().into_owned()),
+        "cwd_entries": env::current_dir().ok().and_then(|path| fs::read_dir(path).ok()).map(|entries| entries.count()),
         "argv": env::args().skip(1).collect::<Vec<_>>(),
         "env_keys": keys,
         "allow": allow,

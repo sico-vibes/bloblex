@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatMinor, majorToMinor, minorToMajor } from './usageLimits'
+import { formatMinor, majorToMinor, minorToMajor, validPriceRate } from './usageLimits'
 
 describe('usage limit money conversion', () => {
   it('converts major amounts exactly for zero, two, and three digit currencies', () => {
@@ -19,5 +19,13 @@ describe('usage limit money conversion', () => {
     expect(minorToMajor(null, 'USD')).toBe('')
     expect(minorToMajor(1234, 'USD')).toBe('12.34')
     expect(formatMinor(null, 'USD')).toBe('Unknown')
+  })
+
+  it('accepts exact non-negative price decimals through twelve fractional places', () => {
+    expect(validPriceRate('0.003')).toBe(true)
+    expect(validPriceRate('12.123456789012')).toBe(true)
+    expect(validPriceRate('-0.01')).toBe(false)
+    expect(validPriceRate('0.1234567890123')).toBe(false)
+    expect(validPriceRate('1e-3')).toBe(false)
   })
 })

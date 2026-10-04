@@ -505,6 +505,7 @@ dependencies = [
 name = "bloblex-storage"
 version = "0.1.0-beta.4"
 dependencies = [
+ "bloblex-usage",
  "chrono",
  "chrono-tz",
  "rusqlite",
@@ -518,6 +519,7 @@ dependencies = [
 name = "bloblex-usage"
 version = "0.1.0-beta.4"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
 ]

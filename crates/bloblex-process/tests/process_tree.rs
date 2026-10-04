@@ -54,7 +54,13 @@ async fn cancellation_terminates_the_parent_and_long_lived_grandchild() {
 
 #[tokio::test]
 async fn stdin_writer_and_stderr_drain_bound_a_nonreading_child() {
+    let marker = std::env::temp_dir().join(format!(
+        "bloblex-process-stderr-drained-{}-{}.done",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+    ));
     let mut command = Command::new(env!("CARGO_BIN_EXE_fake_pipe_child"));
+    command.arg(&marker);
     command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
@@ -73,6 +79,11 @@ async fn stdin_writer_and_stderr_drain_bound_a_nonreading_child() {
     let mut writer = StdinWriter::new(stdin);
     let payload = vec![b'p'; 1024 * 1024];
     writer.write(&payload).await.unwrap();
+    let deadline = tokio::time::Instant::now() + NONREADING_CHILD_IO_TIMEOUT;
+    while !marker.exists() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(marker.exists(), "fake child must finish its stderr burst before bounded shutdown");
     tokio::time::timeout(NONREADING_CHILD_IO_TIMEOUT, writer.close(&mut child, &tree))
         .await
         .expect("close must finish within the bounded grace and kill window");
@@ -85,4 +96,5 @@ async fn stdin_writer_and_stderr_drain_bound_a_nonreading_child() {
         .unwrap()
         .unwrap();
     assert_eq!(drained.len(), 8 * 1024 * 1024);
+    let _ = fs::remove_file(marker);
 }

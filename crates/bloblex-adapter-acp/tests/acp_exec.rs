@@ -13,6 +13,52 @@ use tokio::sync::mpsc;
 
 const SENTINEL: &str = "BLOBLEX_SENTINEL_INSTRUCTION_9f3a";
 const PARENT_MARKER: &str = "PARENT_ONLY_MARKER_7c2e";
+const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[cfg(windows)]
+struct ProcessSignal(usize);
+
+#[cfg(windows)]
+impl ProcessSignal {
+    fn open(pid: u32) -> Option<Self> {
+        #[link(name = "kernel32")]
+        extern "system" { fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void; }
+        let handle = unsafe { OpenProcess(0x0010_0000, 0, pid) };
+        (!handle.is_null()).then_some(Self(handle as usize))
+    }
+
+    async fn wait_signaled(&self, timeout: Duration) -> bool {
+        let handle = self.0;
+        let millis = timeout.as_millis().min(u32::MAX as u128) as u32;
+        tokio::task::spawn_blocking(move || {
+            #[link(name = "kernel32")]
+            extern "system" { fn WaitForSingleObject(handle: *mut std::ffi::c_void, millis: u32) -> u32; }
+            unsafe { WaitForSingleObject(handle as *mut std::ffi::c_void, millis) == 0 }
+        }).await.unwrap()
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ProcessSignal {
+    fn drop(&mut self) {
+        #[link(name = "kernel32")]
+        extern "system" { fn CloseHandle(handle: *mut std::ffi::c_void) -> i32; }
+        unsafe { CloseHandle(self.0 as *mut std::ffi::c_void); }
+    }
+}
+
+#[cfg(not(windows))]
+struct ProcessSignal(u32);
+
+#[cfg(not(windows))]
+impl ProcessSignal {
+    fn open(pid: u32) -> Option<Self> { Some(Self(pid)) }
+    async fn wait_signaled(&self, timeout: Duration) -> bool {
+        tokio::time::timeout(timeout, async {
+            while Path::new("/proc").join(self.0.to_string()).exists() { tokio::time::sleep(Duration::from_millis(20)).await; }
+        }).await.is_ok()
+    }
+}
 
 fn peer() -> PathBuf {
     if let Some(path) = std::env::var_os("CARGO_BIN_EXE_fake_acp_peer") {
@@ -742,25 +788,23 @@ async fn verbose_catalog_is_used_when_session_handshake_has_no_config_options() 
 #[tokio::test]
 async fn catalog_timeout_kills_the_child_and_failure_is_provider_unavailable() {
     let temp = Temp::new();
-    let adapter = AcpAdapter::with_catalog_timeout(Duration::from_millis(400));
+    let adapter = std::sync::Arc::new(AcpAdapter::with_catalog_timeout(Duration::from_millis(400)));
     let started = Instant::now();
-    let error = adapter
-        .model_catalog(&runtime(vec!["--record".into(), temp.record().to_string_lossy().into(), "--hang".into()]))
-        .await
-        .unwrap_err();
+    let hang_runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into(), "--hang".into()]);
+    let catalog = tokio::spawn({
+        let adapter = adapter.clone();
+        async move { adapter.model_catalog(&hang_runtime).await }
+    });
+    tokio::time::timeout(PROCESS_EXIT_TIMEOUT, async {
+        while !temp.record().exists() { tokio::time::sleep(Duration::from_millis(20)).await; }
+    }).await.unwrap();
+    let pid = read_record(&temp.record())["pid"].as_u64().unwrap() as u32;
+    let child = ProcessSignal::open(pid).expect("catalog fake child process handle");
+    let error = catalog.await.unwrap().unwrap_err();
     assert!(started.elapsed() < Duration::from_secs(8), "catalog hang was not killed");
     assert!(matches!(error, AdapterError::Process(_)));
     assert!(error.to_string().contains("timed out"));
-    let pid = read_record(&temp.record())["pid"].as_u64().unwrap() as u32;
-    let mut dead = false;
-    for _ in 0..30 {
-        if !pid_alive(pid) {
-            dead = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(dead, "catalog child {pid} was still running");
+    assert!(child.wait_signaled(PROCESS_EXIT_TIMEOUT).await, "catalog timeout must reap its original child");
 
     let failed = AcpAdapter::default()
         .model_catalog(&runtime(vec!["--fail".into()]))
@@ -768,13 +812,4 @@ async fn catalog_timeout_kills_the_child_and_failure_is_provider_unavailable() {
         .unwrap_err();
     assert!(matches!(failed, AdapterError::Process(_)));
     assert!(failed.to_string().contains("unavailable"));
-}
-
-fn pid_alive(pid: u32) -> bool {
-    let output = std::process::Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-        .output();
-    let Ok(output) = output else { return true };
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.contains(&pid.to_string()) && !text.to_ascii_lowercase().contains("no tasks")
 }

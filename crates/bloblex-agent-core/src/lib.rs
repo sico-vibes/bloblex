@@ -506,8 +506,21 @@ fn denied(kind:&str,value:&str)->PermissionClassification { PermissionClassifica
 mod approval_tests {
     use super::*;
     use serde_json::json;
-    use std::{fs,path::PathBuf,time::{SystemTime,UNIX_EPOCH}};
-    fn project()->PathBuf{let p=std::env::temp_dir().join(format!("bloblex-policy-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));fs::create_dir_all(p.join(".git")).unwrap();fs::write(p.join("readme.md"),"x").unwrap();fs::write(p.join("edit.txt"),"x").unwrap();fs::write(p.join(".env.local"),"x").unwrap();p.canonicalize().unwrap()}
+    use std::{fs, path::PathBuf, sync::atomic::{AtomicU64, Ordering}, time::{SystemTime, UNIX_EPOCH}};
+    fn project() -> PathBuf {
+        static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
+        let p = std::env::temp_dir().join(format!(
+            "bloblex-policy-{}-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+            NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir_all(p.join(".git")).unwrap();
+        fs::write(p.join("readme.md"), "x").unwrap();
+        fs::write(p.join("edit.txt"), "x").unwrap();
+        fs::write(p.join(".env.local"), "x").unwrap();
+        p.canonicalize().unwrap()
+    }
     #[test]
     fn classifier_table_fails_closed_and_accepts_only_safe_categories() {
         let p = project();
@@ -951,6 +964,8 @@ pub trait AgentAdapter: Send + Sync {
         choice: &str,
     ) -> Result<(), AdapterError>;
     async fn close_session(&self, handle: &SessionHandle) -> Result<(), AdapterError>;
+    /// Stops adapter-owned provider processes during daemon shutdown.
+    async fn shutdown(&self) {}
 }
 
 #[cfg(test)]

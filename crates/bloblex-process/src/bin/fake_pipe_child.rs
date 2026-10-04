@@ -8,6 +8,9 @@ fn main() {
         }
     }
     let _ = std::io::stderr().flush();
+    if let Some(marker) = std::env::args_os().nth(1) {
+        let _ = std::fs::write(marker, b"complete");
+    }
     loop {
         thread::sleep(Duration::from_secs(60));
     }

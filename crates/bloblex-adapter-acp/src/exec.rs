@@ -122,6 +122,7 @@ pub(crate) fn apply_child_env(cmd: &mut Command, options: &ExecOptions) {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn scrub_stderr(line: &str, secret: Option<&str>) -> String {
     if let Some(secret) = secret {
         if !secret.is_empty() && line.contains(secret) {
@@ -131,6 +132,7 @@ pub(crate) fn scrub_stderr(line: &str, secret: Option<&str>) -> String {
     safe_stderr(line)
 }
 
+#[cfg(test)]
 pub(crate) fn safe_stderr(line: &str) -> String {
     let lower = line.to_ascii_lowercase();
     if ["password", "secret", "credential", "authorization", "bearer", "api_key", "token="]

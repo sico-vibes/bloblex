@@ -2094,6 +2094,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     for (_, s) in sessions {
         let _ = s.adapter.close_session(&s.handle).await;
     }
+    st.adapters.acp.shutdown().await;
+    st.adapters.codex.shutdown().await;
+    st.adapters.claude.shutdown().await;
     Ok(())
 }
 #[tokio::main]

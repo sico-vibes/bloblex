@@ -1,78 +1,88 @@
-// Development-only character sheet: `npm run dev`, then open /preview.html.
-// Not referenced by index.html, so it is never part of the production bundle.
-import { useEffect, useRef, useState } from 'react'
+// Development-only wardrobe comparison sheet at /preview.html.
+import { useEffect, useRef } from 'react'
 import ReactDOM from 'react-dom/client'
-import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
-import { hexToRGB } from '../blob/blobEngine'
-import { drawGreetingScene } from '../blob/greetingScene'
-import { AGENT_SWATCHES, agentColorHex, swatchLabel } from '../ui/agentColor'
-import { OUTFITS, OUTFIT_LABELS, resolveOutfit } from '../blob/outfit'
+import { BlobEngine, hexToRGB } from '../blob/blobEngine'
+import { OUTFITS, OUTFIT_LABELS, resolveOutfit, type Outfit } from '../blob/outfit'
 import '../ui/theme.css'
 
-const moods: BlobMood[] = ['idle', 'online', 'listening', 'thinking', 'working', 'tool_activity', 'permission', 'success', 'error', 'rate_limited', 'budget_warning', 'sleeping', 'offline', 'file_drop', 'file_preparing', 'file_ready', 'file_sending', 'file_error']
-const palette = [
-  { name: 'Soft white', color: '#e6e9ee' },
-  ...AGENT_SWATCHES.map((swatch) => ({ name: swatchLabel(swatch.key), color: agentColorHex(swatch.key) })),
+const colors = [
+  { name: 'Pearl', value: '#e6e9ee' },
+  { name: 'Sky', value: '#7db6ff' },
+  { name: 'Rose', value: '#ff9bd0' },
 ]
+const orientations = [
+  { label: 'Left', yaw: -0.5, pitch: 0, dx: 0.6, dy: 0, tilt: 0 },
+  { label: 'Front', yaw: 0, pitch: 0, dx: 0, dy: 0, tilt: 0 },
+  { label: 'Right', yaw: 0.5, pitch: 0, dx: -0.6, dy: 0, tilt: 0 },
+  { label: 'Up', yaw: 0.15, pitch: 0.4, dx: 0, dy: 0.4, tilt: 0 },
+  { label: 'Down', yaw: -0.2, pitch: -0.5, dx: 0, dy: -0.4, tilt: 0 },
+  { label: 'Tilt', yaw: 0.3, pitch: -0.25, dx: -0.3, dy: 0, tilt: 0.12 },
+]
+const sheetSize = 190
+const smallSize = 64
+const renderScale = 0.46
 
-function GreetingFrame({ seconds, color }: { seconds: number; color: string }) {
+function PreviewBlob({ color, outfit, orientation, size }: {
+  color: string
+  outfit: Outfit
+  orientation: typeof orientations[number]
+  size: number
+}) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const canvas = ref.current
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx) return
-    canvas.width = 320 * 2
-    canvas.height = 75 * 2
-    ctx.setTransform(2, 0, 0, 2, 0, 0)
-    drawGreetingScene(ctx, 320, 75, seconds * 1000, hexToRGB(color))
-  }, [seconds, color])
-  return <figure style={{ margin: 0 }}><canvas ref={ref} style={{ width: 320, height: 75, background: '#000', borderRadius: 12 }} /><figcaption style={{ color: '#fcfcfc99', fontSize: 11 }}>{seconds.toFixed(2)} s</figcaption></figure>
+    const ratio = Math.min(window.devicePixelRatio || 1, 2)
+    canvas.width = size * ratio
+    canvas.height = size * ratio
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
+    ctx.translate(size / 2, size / 2)
+    ctx.scale(renderScale, renderScale)
+    ctx.translate(-size / 2, -size / 2)
+    const engine = new BlobEngine()
+    engine.bodyColor = hexToRGB(color)
+    engine.outfit = outfit === 'auto' ? resolveOutfit('auto') : outfit
+    engine.yaw = orientation.yaw
+    engine.pitch = orientation.pitch
+    engine.hatLagX = orientation.dx
+    engine.hatLagY = orientation.dy
+    engine.tilt = orientation.tilt
+    engine.draw(ctx, size, size)
+  }, [color, outfit, orientation, size])
+  return <canvas ref={ref} width={size} height={size} style={{ width: size, height: size }} aria-hidden="true" />
 }
 
-function Preview() {
-  const [color, setColor] = useState(palette[0].color)
-  const [mood, setMood] = useState<BlobMood>('idle')
-  const [greetKey, setGreetKey] = useState(0)
-  const [wardrobeSize, setWardrobeSize] = useState(72)
-  return <main style={{ minHeight: '100vh', margin: 0, padding: 24, background: '#070707', color: '#fcfcfc', font: '13px system-ui, Segoe UI, sans-serif' }}>
-    <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
-      {palette.map((item) => <button key={item.name} onClick={() => setColor(item.color)} style={{ padding: '6px 12px', borderRadius: 999, border: '1px solid #333', background: item.color === color ? '#2f2f2f' : 'transparent', color: 'inherit' }}>{item.name}</button>)}
-      <button onClick={() => setGreetKey((key) => key + 1)} style={{ marginLeft: 'auto', padding: '6px 12px', borderRadius: 999, border: '1px solid #333', background: 'transparent', color: 'inherit' }}>Replay welcome</button>
-    </div>
-    <section style={{ width: 640, padding: 0, borderRadius: 22, background: '#000', marginBottom: 24 }}>
-      <BlobCanvas key={greetKey} color={color} size={100} greeting label="Welcome" onGreetingComplete={() => undefined} />
-    </section>
-    <section style={{ display: 'flex', alignItems: 'center', gap: 28, marginBottom: 24 }}>
-      <BlobCanvas color={color} size={160} mood={mood} label="Focus" />
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxWidth: 640 }}>
-        {moods.map((item) => <button key={item} onClick={() => setMood(item)} style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid #333', background: item === mood ? '#1084fe' : '#111', color: 'inherit' }}>{item}</button>)}
+function OutfitSheet() {
+  return <main style={{ minHeight: '100vh', padding: 20, color: 'var(--text-1)', background: 'var(--surface-app)', fontFamily: 'system-ui, sans-serif' }}>
+    <header style={{ marginBottom: 18 }}>
+      <p style={{ margin: '0 0 4px', color: 'var(--text-3)', fontSize: 'var(--fs-xs)' }}>Bloblex · outfit renderer</p>
+      <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 600 }}>Wardrobe sheet</h1>
+      <p style={{ margin: '6px 0 0', color: 'var(--text-2)', fontSize: 'var(--fs-sm)' }}>Left, front, right, up, down and tilt. Auto today: {OUTFIT_LABELS[resolveOutfit('auto')]}. Last column uses the small reference scale.</p>
+    </header>
+    {colors.map((color) => <section key={color.value} aria-label={`${color.name} wardrobe`} style={{ marginBottom: 30 }}>
+      <h2 style={{ margin: '0 0 8px', fontSize: 'var(--fs-md)', fontWeight: 600 }}>{color.name}</h2>
+      <div style={{ width: 'min(100%, 1360px)', overflowX: 'auto' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: `94px repeat(${orientations.length}, ${sheetSize}px) ${smallSize}px`, gap: 6, marginBottom: 4, alignItems: 'end' }}>
+          <span />
+          {orientations.map((item) => <span key={item.label} style={{ color: 'var(--text-3)', fontSize: 'var(--fs-2xs)', textAlign: 'center' }}>{item.label}</span>)}
+          <span style={{ color: 'var(--text-3)', fontSize: 'var(--fs-2xs)', textAlign: 'center' }}>Small</span>
+        </div>
+        {OUTFITS.map((choice) => {
+          const outfit = choice === 'auto' ? resolveOutfit('auto') : choice
+          return <div key={choice} style={{ display: 'grid', gridTemplateColumns: `94px repeat(${orientations.length}, ${sheetSize}px) ${smallSize}px`, gap: 6, margin: '5px 0', alignItems: 'center' }}>
+            <span style={{ color: 'var(--text-2)', fontSize: 'var(--fs-xs)', textAlign: 'right' }}>{choice === 'auto' ? `Auto · ${OUTFIT_LABELS[outfit]}` : OUTFIT_LABELS[choice]}</span>
+            {orientations.map((orientation) => <div key={orientation.label} style={{ display: 'grid', placeItems: 'center', width: sheetSize, height: sheetSize, border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', background: 'var(--surface-panel)' }}>
+              <PreviewBlob color={color.value} outfit={outfit} orientation={orientation} size={sheetSize} />
+            </div>)}
+            <div style={{ display: 'grid', placeItems: 'center', width: smallSize, height: smallSize, border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', background: 'var(--surface-panel)' }}>
+              <PreviewBlob color={color.value} outfit={outfit} orientation={orientations[1]} size={smallSize} />
+            </div>
+          </div>
+        })}
       </div>
-    </section>
-    <section style={{ marginBottom: 24 }} aria-label="Outfit previews">
-      <h2 style={{ fontSize: 'var(--fs-lg)', fontWeight: 600 }}>Outfits</h2>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }} aria-label="Preview size">
-        {[36, 72, 120].map((value) => <button key={value} aria-pressed={wardrobeSize === value} onClick={() => setWardrobeSize(value)} style={{ padding: '5px 9px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line-strong)', background: wardrobeSize === value ? 'var(--surface-selected)' : 'var(--surface-raised)', color: 'var(--text-1)', fontSize: 'var(--fs-xs)' }}>{value}px</button>)}
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(92px, 1fr))', gap: 10 }}>
-        {OUTFITS.map((outfit) => <figure key={outfit} style={{ minHeight: 118, margin: 0, padding: 8, display: 'grid', justifyItems: 'center', alignContent: 'center', gap: 4, borderRadius: 'var(--radius-md)', background: 'var(--surface-panel)' }}>
-          <BlobCanvas color={color} size={wardrobeSize} outfit={outfit === 'auto' ? resolveOutfit('auto') : outfit} label={`${OUTFIT_LABELS[outfit]} preview`} />
-          <figcaption style={{ color: 'var(--text-3)', fontSize: 'var(--fs-2xs)' }}>{outfit === 'auto' ? `Auto · ${OUTFIT_LABELS[resolveOutfit('auto')]}` : OUTFIT_LABELS[outfit]}</figcaption>
-        </figure>)}
-      </div>
-    </section>
-    <section style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 110px)', gap: 14 }}>
-      {moods.map((item) => <figure key={item} style={{ margin: 0, display: 'grid', justifyItems: 'center', gap: 6 }}>
-        <BlobCanvas color={color} size={72} mood={item} label={item} />
-        <figcaption style={{ color: '#fcfcfc99', fontSize: 11 }}>{item}</figcaption>
-      </figure>)}
-    </section>
-    <section style={{ display: 'flex', gap: 10, marginTop: 24 }}>
-      {palette.slice(1).map((item) => <BlobCanvas key={item.name} color={item.color} size={28} mini mood="idle" label={item.name} />)}
-    </section>
-    <section style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 320px)', gap: 12, marginTop: 24 }}>
-      {[0.2, 0.7, 1.1, 1.385, 1.7, 2.2, 2.5, 2.75, 4.6].map((seconds) => <GreetingFrame key={seconds} seconds={seconds} color={color} />)}
-    </section>
+    </section>)}
   </main>
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(<Preview />)
+ReactDOM.createRoot(document.getElementById('root')!).render(<OutfitSheet />)

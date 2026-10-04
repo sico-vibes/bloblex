@@ -6,7 +6,7 @@
 // instead of setTimeout, and a reduced-motion mode is supported.
 
 import { Ease, lerp, type EaseFn } from './engine/core/anim'
-import { drawWardrobe, type WardrobeEyeFrame } from './wardrobeDrawing'
+import { bodyColorsForOutfit, drawWardrobe, drawWardrobeBehind, type WardrobeEyeFrame } from './wardrobeDrawing'
 import { resolveOutfit, type Outfit } from './outfit'
 import { BADGE_OFFSET, BADGE_RADIUS } from './blobGeometry'
 export { BADGE_OFFSET } from './blobGeometry'
@@ -196,6 +196,12 @@ export class BlobEngine {
   reducedMotion = false
   bodyColor: RGB = C.idle
   outfit: Outfit = 'auto'
+  outfitPresence = 1
+  private outfitTransition: 'enter' | 'exit' | null = null
+  private outfitTransitionElapsed = 0
+  private outfitTransitionStart = 1
+  private pendingOutfit: Outfit | null = null
+  private outfitTarget: Outfit = 'auto'
   createdAt: string | null = null
 
   yaw = 0; pitch = 0; roll = 0; tilt = 0; open = 1
@@ -222,6 +228,9 @@ export class BlobEngine {
   hatLagY = 0
   private hatLagVx = 0
   private hatLagVy = 0
+  private prevOutfitYaw = 0
+  private prevOutfitOy = 0
+  private prevOutfitRoll = 0
 
   private tweens = new Map<PropKey, Tween>()
   private locks = new Set<PropKey>()
@@ -386,12 +395,43 @@ export class BlobEngine {
     this.anim('morph', [[target, durationMs ?? (target > 0.5 ? 550 : 650), Ease.inOut]])
   }
 
+  setOutfit(value: Outfit, animated = true) {
+    if (value === this.outfitTarget) return
+    this.outfitTarget = value
+    if (!animated || this.reducedMotion) {
+      this.outfit = value
+      this.pendingOutfit = null
+      this.outfitPresence = value === 'none' ? 0 : 1
+      this.outfitTransition = null
+      return
+    }
+    if (value === 'none') {
+      this.pendingOutfit = null
+      this.outfitTransitionStart = this.outfitPresence
+      this.outfitTransitionElapsed = 0
+      this.outfitTransition = 'exit'
+      return
+    }
+    if (this.outfit !== 'none' && this.outfit !== 'auto' && this.outfitPresence > 0.01) {
+      this.pendingOutfit = value
+      this.outfitTransitionStart = this.outfitPresence
+      this.outfitTransitionElapsed = 0
+      this.outfitTransition = 'exit'
+    } else {
+      this.outfit = value
+      this.pendingOutfit = null
+      this.outfitPresence = 0
+      this.outfitTransitionElapsed = 0
+      this.outfitTransition = 'enter'
+    }
+  }
+
   /** True while anything is still moving or animating on screen. */
   get busy(): boolean {
     if (this.reducedMotion) return this.tweens.size > 0
     const animatedBadge = this.badge && this.badgeS > 0.01 && this.badge.kind === 'dots'
     return (
-      this.tweens.size > 0 || this.jobs.length > 0 || this.particles.length > 0 || !!animatedBadge || this.isChewing ||
+      this.tweens.size > 0 || this.jobs.length > 0 || this.particles.length > 0 || !!animatedBadge || this.isChewing || this.outfitTransition !== null ||
       this.cfg.bounces || this.cfg.scans || this.cfg.breathes || this.cfg.zz || this.cfg.sweat ||
       this.state === 'dizzy' || this.eyeOverride === 'spiral' || this.isMini ||
       Math.abs(this.tgYaw - this.yaw) > 0.002 || Math.abs(this.tgPitch - this.pitch) > 0.002 ||
@@ -434,6 +474,34 @@ export class BlobEngine {
   update(dt: number) {
     const n = secondsNow()
     const nowMs = performance.now()
+
+    if (this.outfitTransition && this.reducedMotion) {
+      this.outfit = this.outfitTarget
+      this.outfitPresence = this.outfit === 'none' ? 0 : 1
+      this.pendingOutfit = null
+      this.outfitTransition = null
+    } else if (this.outfitTransition) {
+      this.outfitTransitionElapsed += Math.max(0, dt)
+      const duration = this.outfitTransition === 'exit' ? 0.18 : 0.35
+      const p = Math.min(1, this.outfitTransitionElapsed / duration)
+      const eased = p * p * (3 - 2 * p)
+      this.outfitPresence = this.outfitTransition === 'exit'
+        ? this.outfitTransitionStart * (1 - eased)
+        : eased
+      if (p >= 1) {
+        if (this.outfitTransition === 'exit' && this.pendingOutfit) {
+          this.outfit = this.pendingOutfit
+          this.pendingOutfit = null
+          this.outfitPresence = 0
+          this.outfitTransitionElapsed = 0
+          this.outfitTransition = 'enter'
+        } else {
+          if (this.outfitTransition === 'exit') this.outfit = 'none'
+          this.outfitPresence = this.outfit === 'none' ? 0 : 1
+          this.outfitTransition = null
+        }
+      }
+    }
 
     if (this.jobs.length) {
       const due = this.jobs.filter((job) => job.at <= n)
@@ -508,19 +576,21 @@ export class BlobEngine {
     if (!this.locks.has('sy')) this.sy += (this.tgSy - this.sy) * kGen
     if (!this.locks.has('sx')) this.sx += (this.tgSx - this.sx) * kGen
     if (!this.locks.has('es')) this.es += (this.tgEs - this.es) * kGen
-    if (!motion) {
+    if (!motion || dt <= 0) {
       this.hatLagX = 0; this.hatLagY = 0; this.hatLagVx = 0; this.hatLagVy = 0
+      this.prevOutfitYaw = this.yaw; this.prevOutfitOy = this.oy; this.prevOutfitRoll = this.roll
     } else {
-      const targetX = -this.yaw * 0.045
-      const targetY = Math.max(0, -this.oy) * 0.04 - this.pitch * 0.035
-      const spring = (position: number, velocity: number, target: number) => {
-        const acceleration = (target - position) * 115 - velocity * 17
-        velocity += acceleration * dt
-        position += velocity * dt
-        return [position, velocity] as const
-      }
-      ;[this.hatLagX, this.hatLagVx] = spring(this.hatLagX, this.hatLagVx, targetX)
-      ;[this.hatLagY, this.hatLagVy] = spring(this.hatLagY, this.hatLagVy, targetY)
+      const yawVel = (this.yaw - this.prevOutfitYaw) / dt
+      const oyVel = (this.oy - this.prevOutfitOy) / dt
+      const rollVel = (this.roll - this.prevOutfitRoll) / dt
+      this.prevOutfitYaw = this.yaw; this.prevOutfitOy = this.oy; this.prevOutfitRoll = this.roll
+      const centrifugal = this.outfit !== 'none' && this.outfitPresence > 0.05 ? rollVel * 0.18 : 0
+      const targetX = Math.max(-1, Math.min(1, -yawVel * 0.35 - this.tilt * 2 + centrifugal))
+      const targetY = Math.max(-1, Math.min(1, oyVel * 0.5))
+      this.hatLagVx += (60 * (targetX - this.hatLagX) - 9 * this.hatLagVx) * dt
+      this.hatLagVy += (60 * (targetY - this.hatLagY) - 9 * this.hatLagVy) * dt
+      this.hatLagX += this.hatLagVx * dt
+      this.hatLagY += this.hatLagVy * dt
     }
     this.col = motion ? mix3(this.col, this.colT, 1 - Math.pow(0.002, dt)) : this.colT
 
@@ -556,13 +626,23 @@ export class BlobEngine {
     const R = Math.min(W, H) * BODY_RADIUS
     const cx = W / 2 + this.ox * R
     const cy = H / 2 + this.oy * R
+    const rigidRoll = this.outfitPresence > 0.05 && resolveOutfit(this.outfit, new Date(), this.createdAt) !== 'none'
 
     x.save()
     x.translate(cx, cy)
+    if (rigidRoll && Math.abs(this.roll) > 0.001) x.rotate(this.roll)
     if (this.tilt !== 0) x.rotate(this.tilt)
     x.scale(this.sx, this.sy)
 
     const body = () => this.traceBody(x, R)
+    const activeOutfit = resolveOutfit(this.outfit, new Date(), this.createdAt)
+    const outfitAlpha = Math.min(1, this.outfitPresence * 2.5) * (1 - Math.min(1, Math.max(0, (this.morph - 0.3) / 0.2)))
+    if (!this.isMini && outfitAlpha > 0.005) {
+      x.save()
+      x.globalAlpha *= outfitAlpha
+      drawWardrobeBehind(x, activeOutfit, R, this.wardrobeEyeFrames(R), this.hatLagX, this.hatLagY, this.yaw, this.pitch, this.roll, this.outfitPresence)
+      x.restore()
+    }
     this.drawBody(x, body, R)
 
     const blushVal = Math.max(this.blush, this.tint * 0.5 * (this.state === 'error' || this.state === 'dizzy' ? 1 : 0.4)) * (1 - this.morph)
@@ -580,7 +660,12 @@ export class BlobEngine {
     }
 
     this.drawEyes(x, body, R)
-    drawWardrobe(x, resolveOutfit(this.outfit, new Date(), this.createdAt), R, this.wardrobeEyeFrames(R), this.open, this.hatLagX, this.hatLagY, this.yaw, this.pitch)
+    if (!this.isMini && outfitAlpha > 0.005) {
+      x.save()
+      x.globalAlpha *= outfitAlpha
+      drawWardrobe(x, activeOutfit, R, this.wardrobeEyeFrames(R), this.open, this.hatLagX, this.hatLagY, this.yaw, this.pitch, this.outfitPresence, this.roll)
+      x.restore()
+    }
     if (this.morph > 0.05) this.drawMouth(x, body, R)
     if (this.cfg.dim > 0) {
       x.fillStyle = `rgba(16,18,22,${this.cfg.dim})`
@@ -614,9 +699,18 @@ export class BlobEngine {
   }
 
   private drawBody(x: CanvasRenderingContext2D, body: () => void, R: number) {
-    const c = this.bodyColor
-    const g = x.createRadialGradient(-R * 0.38, -R * 0.48, R * 0.05, -R * 0.1, -R * 0.1, R * 1.45)
-    if (this.isMini) {
+    const pumpkinColors = this.isMini ? null : bodyColorsForOutfit(resolveOutfit(this.outfit, new Date(), this.createdAt))
+    const pumpkin = !!pumpkinColors && this.outfitPresence > 0
+    const pumpkinTop = mix3(this.bodyColor, pumpkinColors ? hexToRGB(pumpkinColors[0]) : this.bodyColor, this.outfitPresence)
+    const pumpkinBottom = mix3(this.bodyColor, pumpkinColors ? hexToRGB(pumpkinColors[1]) : this.bodyColor, this.outfitPresence)
+    const c = pumpkin ? pumpkinTop : this.bodyColor
+    const g = pumpkin
+      ? x.createLinearGradient(R * 0.7, -R * 0.85, -R * 0.8, R * 0.9)
+      : x.createRadialGradient(-R * 0.38, -R * 0.48, R * 0.05, -R * 0.1, -R * 0.1, R * 1.45)
+    if (pumpkin) {
+      g.addColorStop(0, rgba(pumpkinTop))
+      g.addColorStop(1, rgba(pumpkinBottom))
+    } else if (this.isMini) {
       g.addColorStop(0, rgba(mix3(c, WHITE, 0.22)))
       g.addColorStop(1, rgba(mix3(c, BLACK, 0.12)))
     } else {
@@ -664,7 +758,7 @@ export class BlobEngine {
     x.strokeStyle = INK
     for (const sd of [-1, 1] as const) {
       const eyeYaw = sd * EYE_SP + this.yaw
-      let eyePitch = EYE_P + this.pitch + this.roll
+      let eyePitch = EYE_P + this.pitch + (this.outfitPresence > 0.05 ? 0 : this.roll)
       eyePitch = (((eyePitch + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - Math.PI
       const cp = Math.cos(eyePitch)
       if (Math.cos(eyeYaw) * cp <= 0.04) continue
@@ -688,7 +782,7 @@ export class BlobEngine {
     const frames: WardrobeEyeFrame[] = []
     for (const sd of [-1, 1] as const) {
       const eyeYaw = sd * EYE_SP + this.yaw
-      let eyePitch = EYE_P + this.pitch + this.roll
+      let eyePitch = EYE_P + this.pitch + (this.outfitPresence > 0.05 ? 0 : this.roll)
       eyePitch = (((eyePitch + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - Math.PI
       const cp = Math.cos(eyePitch)
       const visible = Math.cos(eyeYaw) * cp > 0.04

@@ -2703,7 +2703,12 @@ mod phase2a_tests {
         let second=dispatch(&st,"agent.create",json!({"name":"Beta","runtimeId":"rt-test"})).await.unwrap()["agent"]["id"].as_str().unwrap().to_owned();let _=events.recv().await.unwrap();
         let updated=dispatch(&st,"agent.update",json!({"agentId":id,"name":"Alpha Prime"})).await.unwrap();assert_eq!(updated["agent"]["name"],"Alpha Prime");let update_event=events.recv().await.unwrap();assert!(update_event.sequence>ev.sequence);
         let dressed=dispatch(&st,"agent.update",json!({"agentId":id,"outfit":"crown"})).await.unwrap();assert_eq!(dressed["agent"]["outfit"],"crown");let _=events.recv().await.unwrap();
-        assert_eq!(dispatch(&st,"agent.update",json!({"agentId":id,"outfit":"bunny-ears"})).await.unwrap_err().1.code,"invalid_argument");
+        for outfit in ["pumpkin", "bunny-ears"] {
+            let update=dispatch(&st,"agent.update",json!({"agentId":id,"outfit":outfit})).await.unwrap();
+            assert_eq!(update["agent"]["outfit"],outfit);
+            let _=events.recv().await.unwrap();
+        }
+        assert_eq!(dispatch(&st,"agent.update",json!({"agentId":id,"outfit":"unknown-outfit"})).await.unwrap_err().1.code,"invalid_argument");
         let reorder=dispatch(&st,"agent.reorder",json!({"runtimeId":"rt-test","agentIds":[second,id]})).await.unwrap();assert_eq!(reorder["agents"][0]["id"],second);let _=events.recv().await.unwrap();let _=events.recv().await.unwrap();
         assert_eq!(dispatch(&st,"agent.reorder",json!({"runtimeId":"rt-test","agentIds":[id]})).await.unwrap_err().1.code,"invalid_argument");
         let archived=dispatch(&st,"agent.delete",json!({"agentId":second})).await.unwrap();assert_eq!(archived["agent"]["archived"],true);let archive_event=events.recv().await.unwrap();assert_eq!(archive_event.payload["action"],"archived");

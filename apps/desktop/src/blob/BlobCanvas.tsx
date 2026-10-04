@@ -79,7 +79,7 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
     const engine = new BlobEngine()
     engine.isMini = mini
     engine.bodyColor = hexToRGB(color)
-    engine.outfit = normalizeOutfit(outfit)
+    engine.setOutfit(normalizeOutfit(outfit), false)
     engine.createdAt = createdAt
     engine.setState(engineStateFor(effectiveMood), { force: true, silent: true })
     engineRef.current = engine
@@ -107,7 +107,7 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
   }, [color, mini])
 
   useEffect(() => {
-    engineRef.current!.outfit = normalizeOutfit(outfit)
+    engineRef.current!.setOutfit(normalizeOutfit(outfit))
     engineRef.current!.createdAt = createdAt ?? null
     scheduleRef.current?.()
   }, [outfit, createdAt])

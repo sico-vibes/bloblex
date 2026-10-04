@@ -24,8 +24,31 @@
 :root[data-theme="light"] .settings-nav { background: var(--surface-sidebar); }
 
 .settings-group { margin-top: 22px; }
-.settings-group-head { min-height: 24px; margin: 0 0 8px; padding: 0 4px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.settings-group-head { min-height: 28px; margin: 0 0 8px; padding: 0 4px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .settings-group-head h3 { margin: 0; color: var(--text-3); font-size: var(--fs-xs); font-weight: 500; }
+.model-picker-provider { display: inline-flex; align-items: center; gap: 7px; }
+.provider-group-label { display: flex; align-items: center; gap: 7px; }
+.select-provider-label { display: flex; align-items: center; gap: 7px; }
+.price-source-note { margin: 0; padding: 11px 16px 8px; color: var(--text-2); font-size: var(--fs-xs); }
+.settings-row.show-all-models { min-height: 52px; }
+.budget-row-actions { margin-left: auto; }
+.price-provider-group { padding: 7px 0 0; }
+.price-provider-heading { margin: 0; padding: 9px 16px; display: flex; align-items: center; gap: 8px; color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; }
+.price-table { width: 100%; }
+.price-table-head, .price-table-row { display: grid; grid-template-columns: minmax(150px, 1.6fr) repeat(4, minmax(70px, 0.7fr)) 34px; align-items: center; gap: 8px; padding: 9px 12px 9px 16px; }
+.price-table-head { color: var(--text-3); font-size: var(--fs-2xs); }
+.price-table-row { min-height: 42px; border-top: 1px solid var(--line); }
+.price-model { min-width: 0; display: grid; gap: 3px; overflow-wrap: anywhere; }
+.price-model strong { font-size: var(--fs-xs); font-weight: 500; }
+.price-model small { color: var(--text-3); font-size: var(--fs-2xs); }
+.price-rate { color: var(--text-2); font-size: var(--fs-xs); white-space: nowrap; }
+.price-row-menu { position: relative; justify-self: end; }
+.price-row-menu summary { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-pill); color: var(--text-2); cursor: pointer; list-style: none; }
+.price-row-menu summary::-webkit-details-marker { display: none; }
+.price-row-menu summary:hover, .price-row-menu[open] summary { background: var(--surface-selected); color: var(--text-1); }
+.price-row-menu .menu-surface { position: absolute; z-index: var(--z-menu); inset-block-start: 100%; inset-inline-end: 0; min-width: 172px; padding: 4px; }
+.price-row-menu .menu-item { width: 100%; text-align: left; }
+@media (max-width: 700px) { .price-table-head, .price-table-row { grid-template-columns: minmax(110px, 1.4fr) repeat(4, minmax(54px, 0.65fr)) 28px; gap: 4px; padding-inline: 9px; } .price-rate { font-size: var(--fs-2xs); } }
 .settings-card { overflow: visible; border-radius: 12px; background: var(--surface-raised); }
 .settings-row { width: 100%; min-height: 56px; padding: 12px 16px; display: flex; align-items: center; gap: 16px; color: var(--text-1); border: 0; background: transparent; text-align: left; }
 .settings-card > * + *, .settings-card > [data-settings-about] > * + * { border-top: 1px solid var(--line); }

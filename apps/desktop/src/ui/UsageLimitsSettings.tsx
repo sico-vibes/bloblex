@@ -4,6 +4,7 @@ import type { Agent, Runtime, Session } from '../types'
 import { rpc } from '../tauri'
 import { ConfirmDialog } from './BlobPage'
 import { Select } from './Select'
+import { ProviderLogo, providerBrand } from './providerBrand'
 import { currencyDigits, formatCount, formatMinor, majorToMinor, minorToMajor, priceRuleParams, validPriceRate } from './usageLimits'
 
 type Row = Record<string, unknown>
@@ -12,7 +13,7 @@ const currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD']
 const options = (items: readonly string[]) => items.map((value) => ({ value, label: value.replaceAll('_', ' ') }))
 const rateFieldLabels = { input: 'Input', output: 'Output', cacheRead: 'Cache read', cacheWrite: 'Cache write' } as const
 
-export function UsageLimitsSettings({ agents, runtimes, sessions }: Props) {
+export function UsageLimitsSettings({ agents, runtimes, sessions, showAllModelsByDefault = false }: Props & { showAllModelsByDefault?: boolean }) {
   const [budgets, setBudgets] = useState<Row[]>([])
   const [prices, setPrices] = useState<Row[]>([])
   const [subscriptions, setSubscriptions] = useState<Row[]>([])
@@ -31,6 +32,7 @@ export function UsageLimitsSettings({ agents, runtimes, sessions }: Props) {
   const [subscriptionAmount, setSubscriptionAmount] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<Row | null>(null)
   const [deletingBudget, setDeletingBudget] = useState(false)
+  const [showAllModels, setShowAllModels] = useState(showAllModelsByDefault)
   const budgetGroupRef = useRef<HTMLElement>(null)
   const addBudgetRef = useRef<HTMLButtonElement>(null)
   const returnBudgetFocus = useRef(false)
@@ -116,7 +118,7 @@ export function UsageLimitsSettings({ agents, runtimes, sessions }: Props) {
     setSubscriptionAmount(plan ? minorToMajor(plan.monthlyMinor, String(plan.currency ?? 'USD')) : '')
     setSubscriptionOpen(true)
   }
-  const savePrice = (event?: FormEvent) => {
+  const savePrice = async (event?: FormEvent) => {
     event?.preventDefault()
     const draft = priceDraft
     if (!draft) return
@@ -142,8 +144,7 @@ export function UsageLimitsSettings({ agents, runtimes, sessions }: Props) {
     }
     if (Object.values(rates).every((rate) => rate === null)) { setError('Enter at least one reported rate. Leave unknown rates blank.'); return }
     const rule = { ...priceRuleParams(draft), ...rates, id: typeof draft.id === 'string' ? draft.id : crypto.randomUUID(), provider, canonicalModelId: model, currency }
-    void mutate(() => rpc('pricing.override', { rule }), 'Price override saved.')
-    setPriceDraft(null)
+    if (await mutate(() => rpc('pricing.override', { rule }), 'Price override saved.')) setPriceDraft(null)
   }
   const saveSubscription = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
@@ -174,12 +175,14 @@ export function UsageLimitsSettings({ agents, runtimes, sessions }: Props) {
             ? <>Limit {formatMinor(budget.hardLimit, budget.currency)} · Usage unknown. Cost limits are not enforced before a turn yet.</>
             : <>Limit {formatCount(budget.hardLimit)} · Used {budgetUsed(budget) == null ? 'Unknown' : formatCount(budgetUsed(budget))} · Remaining {budget.remaining == null ? 'Unknown' : formatCount(budget.remaining)}</>}</small>{budget.period === 'turn' && !isCostMetric(budget.metric) && <small>Used and remaining describe the latest turn; each new turn starts with a fresh limit.</small>}</span>
           <span className="settings-value">{budgetWarning(budget)}</span>
-          {budgetEditable(budget) && <button type="button" className="ghost-button small" onClick={() => setBudgetDraft({ ...budget, amount: String(budget.hardLimit) })}>Edit</button>}
-          <button type="button" className="icon-button" aria-label={`Delete budget ${scopeLabel(budget, agents, runtimes)}`} onClick={() => setDeleteTarget(budget)}><Trash2 size={14} /></button>
+          <span className="settings-row-control budget-row-actions">
+            {budgetEditable(budget) && <button type="button" className="ghost-button small" onClick={() => setBudgetDraft({ ...budget, amount: String(budget.hardLimit) })}>Edit</button>}
+            <button type="button" className="icon-button" aria-label={`Delete budget ${scopeLabel(budget, agents, runtimes)}`} onClick={() => setDeleteTarget(budget)}><Trash2 size={14} /></button>
+          </span>
         </div>)}
         {budgetDraft && <form className="settings-form" onSubmit={saveBudget}>
           <div className="settings-field-pair">
-            <div className="settings-field"><span>Scope</span><Select ariaLabel="Budget scope" variant="field" align="left" value={String(budgetDraft.scopeType ?? 'global')} onChange={(value) => setBudgetDraft({ ...budgetDraft, scopeType: value, scopeId: '' })} options={[{ value: 'global', label: 'All agents' }, { value: 'agent', label: 'Coding agent' }, { value: 'runtime', label: 'Agent install' }]} /></div>
+            <div className="settings-field"><span>Scope</span><Select ariaLabel="Budget scope" variant="field" align="left" value={String(budgetDraft.scopeType ?? 'blob')} onChange={(value) => setBudgetDraft({ ...budgetDraft, scopeType: value, scopeId: '' })} options={[{ value: 'blob', label: 'Blob' }, { value: 'agent', label: 'Coding agent' }, { value: 'global', label: 'Everything' }, ...(budgetDraft.scopeType === 'runtime' ? [{ value: 'runtime', label: 'Legacy agent install' }] : [])]} /></div>
             {budgetDraft.scopeType !== 'global' && <div className="settings-field"><span>For</span><Select ariaLabel="Budget target" variant="field" align="left" value={String(budgetDraft.scopeId ?? '')} onChange={(value) => setBudgetDraft({ ...budgetDraft, scopeId: value })} options={budgetTargets(String(budgetDraft.scopeType), agents, runtimes)} /> </div>}
           </div>
           <div className="settings-field-pair">
@@ -191,19 +194,33 @@ export function UsageLimitsSettings({ agents, runtimes, sessions }: Props) {
         </form>}
       </SettingsGroup>
 
-      <SettingsGroup title="Prices">
-        {modelRows.length === 0 && <p className="settings-empty">Models appear here after a session reports them. No price, costs stay unknown.</p>}
-        {modelRows.map(({ provider, model, price, override }) => <div className="settings-row" key={`${provider}:${model}`}>
-          <span className="settings-row-copy"><strong>{model}</strong><small>{providerLabel(provider)} · {priceSourceLabel(price, override)}</small>{price && <small>{priceRatesLabel(price, override)}</small>}{price && tierNotesLabel(price)}</span>
-          {override && <button type="button" className="ghost-button small" onClick={() => openPriceForm({ ...override, provider, canonicalModelId: model, input: String(override.inputPerMillion ?? ''), output: String(override.outputPerMillion ?? ''), cacheRead: String(override.cacheReadPerMillion ?? ''), cacheWrite: String(override.cacheWritePerMillion ?? '') })}>Edit price</button>}
-          {override && <button type="button" className="ghost-button small danger-button" onClick={() => void mutate(() => rpc('pricing.override', { rule: { ...override, remove: true } }), 'Price override removed.')}>Remove override</button>}
-          {!override && <button type="button" className="secondary-button small" onClick={() => openPriceForm({ provider, canonicalModelId: model, currency: 'USD', input: '', output: '', cacheRead: '', cacheWrite: '' })}>Set price</button>}
-        </div>)}
+      <SettingsGroup title="Model prices">
+        <p className="price-source-note">Rates per 1M tokens. Official prices from each vendor, checked 4 Oct 2026.</p>
+        <div className="settings-row show-all-models">
+          <span className="settings-row-copy"><strong>Show all models</strong><small>Include models no blob currently uses.</small></span>
+          <button type="button" className={`toggle ${showAllModels ? 'on' : ''}`} role="switch" aria-label="Show all models" aria-checked={showAllModels} onClick={() => setShowAllModels((shown) => !shown)}><i /></button>
+        </div>
+        {modelRows.length === 0 && <p className="settings-empty">Models appear here when a blob uses them. Costs stay unknown until a price is available.</p>}
+        {groupPrices(showAllModels ? modelRows : modelRows.filter(({ provider, model }) => isUsedModel(provider, model, agents, runtimes, sessions))).map(([provider, rows]) => <section className="price-provider-group" key={provider} aria-label={`${providerBrand(provider).name} model prices`}>
+          <h4 className="price-provider-heading"><ProviderLogo provider={provider} />{providerBrand(provider).name}</h4>
+          <div className="price-table" role="table" aria-label={`${providerBrand(provider).name} prices`}>
+            <div className="price-table-head" role="row"><span role="columnheader">Model</span><span role="columnheader">Input</span><span role="columnheader">Output</span><span role="columnheader">Cache read</span><span role="columnheader">Cache write</span><span role="columnheader">Actions</span></div>
+            {rows.map(({ provider: rowProvider, model, price, override }) => <div className="price-table-row" role="row" key={`${rowProvider}:${model}`}>
+              <span className="price-model" role="cell"><strong>{model}</strong>{priceSourceLabel(price, override) !== 'Official' && <small>{priceSourceLabel(price, override)}</small>}{price && tierNotesLabel(price)}</span>
+              {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((field) => <span role="cell" className="price-rate" key={field}>{priceCell(price, override, field)}</span>)}
+              <details className="price-row-menu" role="cell"><summary aria-label={`Price actions for ${model}`}>•••</summary><div className="menu-surface">
+                {override && <button type="button" className="menu-item" onClick={() => openPriceForm({ ...override, provider: rowProvider, canonicalModelId: model, input: String(override.inputPerMillion ?? ''), output: String(override.outputPerMillion ?? ''), cacheRead: String(override.cacheReadPerMillion ?? ''), cacheWrite: String(override.cacheWritePerMillion ?? '') })}>Edit my price…</button>}
+                {override && <button type="button" className="menu-item" onClick={() => void mutate(() => rpc('pricing.override', { rule: { ...override, remove: true } }), 'Price override removed.')}>Remove my price</button>}
+                <button type="button" className="menu-item" onClick={() => openPriceForm({ provider: rowProvider, canonicalModelId: model, currency: 'USD', input: '', output: '', cacheRead: '', cacheWrite: '' })}>Use my own price…</button>
+              </div></details>
+            </div>)}
+          </div>
+        </section>)}
         {priceDraft && <form key={priceFormModelKey} className="settings-form" onSubmit={savePrice}>
           <div className="settings-field-pair"><label className="settings-field"><span>Provider</span><input className="text-input" aria-label="Price provider" value={String(priceDraft.provider ?? '')} onChange={(event) => setPriceDraft({ ...priceDraft, provider: event.target.value })} /></label><label className="settings-field"><span>Model</span><input className="text-input" aria-label="Price model" value={String(priceDraft.canonicalModelId ?? '')} onChange={(event) => setPriceDraft({ ...priceDraft, canonicalModelId: event.target.value })} /></label></div>
           <div className="settings-field"><span>Currency</span><Select ariaLabel="Price currency" variant="field" align="left" value={String(priceDraft.currency ?? 'USD')} onChange={(value) => setPriceDraft({ ...priceDraft, currency: value })} options={currencyOptions()} /></div>
           <div className="settings-field-pair">{(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((field) => <label className="settings-field" key={field}><span>{rateFieldLabels[field]} per million tokens</span><input className="text-input" aria-label={`${rateFieldLabels[field]} rate per million tokens`} type="number" min="0" step="any" value={String(priceDraft[field] ?? '')} placeholder={priceFieldHint(priceDraft, field)} onChange={(event) => setPriceDraft({ ...priceDraft, [field]: event.target.value })} /></label>)}</div>
-          <div className="settings-form-actions"><button type="button" className="ghost-button small" onClick={() => setPriceDraft(null)}>Cancel</button><button type="submit" className="primary-button small" disabled={saving} onClick={(event) => { event.preventDefault(); savePrice() }}>Save price</button></div>
+          <div className="settings-form-actions"><button type="button" className="ghost-button small" onClick={() => setPriceDraft(null)}>Cancel</button><button type="submit" className="primary-button small" disabled={saving}>Save price</button></div>
         </form>}
       </SettingsGroup>
 
@@ -245,17 +262,16 @@ function budgetMetricLabel(metric: unknown) {
   return label(String(metric ?? 'tokens'))
 }
 function budgetEditable(budget: Row) {
-  return ['global', 'agent', 'runtime'].includes(String(budget.scopeType ?? 'global'))
+  return ['global', 'blob', 'agent', 'runtime'].includes(String(budget.scopeType ?? 'global'))
     && ['tokens', 'input_tokens', 'turns', 'runtime_minutes'].includes(String(budget.metric ?? 'tokens'))
 }
-function blankBudget(): Row { return { scopeType: 'global', scopeId: '', metric: 'tokens', period: 'day', amount: '' } }
+function blankBudget(): Row { return { scopeType: 'blob', scopeId: '', metric: 'tokens', period: 'day', amount: '' } }
 function currencyOptions() { return currencies.map((currency) => ({ value: currency, label: currency })) }
-function providerLabel(provider: string) { return ({ claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' } as Record<string, string>)[provider] ?? label(provider) }
-function budgetTargets(scope: string, _agents: readonly Agent[], runtimes: readonly Runtime[]) {
+function providerLabel(provider: string) { return providerBrand(provider).name }
+function budgetTargets(scope: string, agents: readonly Agent[], runtimes: readonly Runtime[]) {
+  if (scope === 'blob') return agents.filter((agent) => !agent.archived).map((agent) => ({ value: agent.id, label: agent.name }))
   if (scope === 'agent') return [
-    { value: 'claude', label: 'Claude Code' },
-    { value: 'codex', label: 'Codex' },
-    { value: 'opencode', label: 'OpenCode' },
+    ...['claude', 'codex', 'opencode'].map((provider) => ({ value: provider, label: providerBrand(provider).name, provider })),
   ]
   return [...runtimes]
     .sort((left, right) => runtimeInstallBase(left).localeCompare(runtimeInstallBase(right)))
@@ -277,7 +293,8 @@ function runtimeInstallLabel(runtime: Runtime, allRuntimes: readonly Runtime[] =
 function scopeLabel(row: Row, _agents: readonly Agent[], runtimes: readonly Runtime[]) {
   const scope = String(row.scopeType ?? 'global')
   const id = typeof row.scopeId === 'string' ? row.scopeId : ''
-  if (scope === 'global') return 'All agents'
+  if (scope === 'global') return 'Everything'
+  if (scope === 'blob') return `Blob · ${_agents.find((agent) => agent.id === id)?.name ?? (id || 'Choose a blob')}`
   if (scope === 'agent') return `Coding agent · ${providerLabel(id)}`
   if (scope === 'runtime') return `Agent install · ${runtimeInstallLabel(runtimes.find((runtime) => runtime.id === id) ?? { id, provider: 'unknown' }, runtimes)}`
   if (scope === 'host') return `Host · ${id || 'All local hosts'}`
@@ -322,29 +339,23 @@ function knownModels(agents: readonly Agent[], prices: readonly Row[], runtimes:
 function priceSourceLabel(price?: Row, override?: Row) {
   if (override) return 'Your price'
   const source = String(price?.source ?? price?.priceSource ?? '').toLowerCase()
-  if (source.includes('opencode_catalog_estimate')) return 'OpenCode catalog estimate'
-  if (source.includes('official')) return `Official price list, checked ${String(price?.checkedAt ?? 'date unavailable')}`
+  if (source.includes('opencode_catalog_estimate')) return price && hasFreePrice(price) ? 'OpenCode catalog estimate · Free' : 'OpenCode catalog estimate'
+  if (price && hasFreePrice(price)) return 'Free'
+  if (source.includes('official')) return 'Official'
   return 'Unknown'
 }
-function priceRatesLabel(price: Row, override?: Row) {
-  const fields = [['input', 'Input'], ['output', 'Output'], ['cacheRead', 'Cache read'], ['cacheWrite', 'Cache write']] as const
+function priceCell(price: Row | undefined, override: Row | undefined, fieldName: 'input' | 'output' | 'cacheRead' | 'cacheWrite') {
+  if (!price && !override) return 'Unknown'
   const effective = override?.effectiveFields && typeof override.effectiveFields === 'object' ? override.effectiveFields as Row : undefined
-  const values = fields.map(([key, title]) => {
-    const field = effective?.[`${key}PerMillion`] as Row | undefined
-    const raw = field ? field.rate : override?.[`${key}PerMillion`] ?? price[`${key}PerMillion`]
-    if (raw === null || raw === undefined) return null
-    const currency = String(field?.currency ?? override?.currency ?? price.currency ?? 'USD')
-    const major = typeof raw === 'string' ? raw : minorToMajor(raw, currency)
-    const source = field?.source ?? override?.source ?? price.source ?? price.priceSource
-    return `${title} ${major} ${currency} (${priceFieldSourceLabel(source, field ?? price)})`
-  }).filter(Boolean)
-  const numericRates = fields.map(([key]) => {
-    const field = effective?.[`${key}PerMillion`] as Row | undefined
-    const raw = field ? field.rate : override?.[`${key}PerMillion`] ?? price[`${key}PerMillion`]
-    return raw === null || raw === undefined ? null : Number(raw)
-  })
-  const isFree = numericRates.slice(0, 3).every((rate) => rate === 0) && (numericRates[3] === null || numericRates[3] === 0)
-  return `${isFree ? 'Free · ' : ''}${values.join(' · ')} per 1M tokens`
+  const field = effective?.[`${fieldName}PerMillion`] as Row | undefined
+  const raw = field ? field.rate : override?.[`${fieldName}PerMillion`] ?? price?.[`${fieldName}PerMillion`]
+  if (raw === null || raw === undefined) return 'Unknown'
+  const currency = String(field?.currency ?? override?.currency ?? price?.currency ?? 'USD')
+  const amount = typeof raw === 'string' ? Number(raw) : Number(minorToMajor(raw, currency))
+  if (!Number.isFinite(amount)) return 'Unknown'
+  let symbol = currency
+  try { symbol = new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 2 }).formatToParts(0).find((part) => part.type === 'currency')?.value ?? currency } catch { /* Keep the ISO currency code. */ }
+  return `${symbol}${new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(amount)}`
 }
 function priceFieldHint(rule: Row, field: 'input' | 'output' | 'cacheRead' | 'cacheWrite') {
   const effective = rule.effectiveFields && typeof rule.effectiveFields === 'object' ? rule.effectiveFields as Row : undefined
@@ -387,4 +398,22 @@ function displayModelId(provider: string, model: string) {
   if (provider === 'opencode-go' && !model.startsWith('opencode-go/')) return `opencode-go/${model}`
   if (provider === 'opencode-zen' && !model.startsWith('opencode/')) return `opencode/${model}`
   return model
+}
+function hasFreePrice(price: Row) {
+  const values = ['inputPerMillion', 'outputPerMillion', 'cacheReadPerMillion', 'cacheWritePerMillion'].map((key) => price[key])
+  return values.some((value) => value !== null && value !== undefined) && values.filter((value) => value !== null && value !== undefined).every((value) => Number(value) === 0)
+}
+function groupPrices(rows: ReturnType<typeof knownModels>) {
+  const grouped = new Map<string, typeof rows>()
+  for (const row of rows) grouped.set(row.provider, [...(grouped.get(row.provider) ?? []), row])
+  return [...grouped.entries()].sort(([a], [b]) => providerBrand(a).name.localeCompare(providerBrand(b).name))
+}
+function isUsedModel(provider: string, model: string, agents: readonly Agent[], runtimes: readonly Runtime[], sessions: readonly Session[]) {
+  const used = new Set<string>()
+  for (const item of [...agents, ...sessions]) {
+    if (!item.model) continue
+    const runtime = runtimes.find((candidate) => candidate.id === item.runtimeId)
+    if (runtime) used.add(`${displayProviderId(runtime.provider)}:${displayModelId(runtime.provider, item.model)}`)
+  }
+  return used.has(`${provider}:${model}`)
 }

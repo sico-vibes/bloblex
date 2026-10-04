@@ -14,6 +14,7 @@ import {
   type CapabilitySetting, type ExecutionSendGate, type ExecSnapshotView, type ModelCatalog, type RuntimeCapabilities,
 } from '../executionContract'
 import { Select } from './Select'
+import { ProviderLogo, providerBrand } from './providerBrand'
 import { AutoApprovedList, BypassConfirmDialog } from './approvalUi'
 import { RefreshCw } from 'lucide-react'
 import { WardrobeGrid } from './WardrobeGrid'
@@ -175,7 +176,7 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, crea
       <div className="settings-row">
         <span className="settings-row-copy"><strong>Coding agent</strong><small>New conversations use it. Existing ones keep theirs.</small></span>
         <span className="settings-row-control">
-          <Select ariaLabel="Runtime" variant="muted" value={draft.runtimeId} onChange={(value) => { setCustom(false); onDraftChange({ ...draft, runtimeId: value, model: null, thinking: null, serviceTier: null }) }} options={runtimes.map((item) => ({ value: item.id, label: runtimeOptionLabel(item, runtimes) }))} />
+          <Select ariaLabel="Runtime" variant="muted" value={draft.runtimeId} onChange={(value) => { setCustom(false); onDraftChange({ ...draft, runtimeId: value, model: null, thinking: null, serviceTier: null }) }} options={runtimes.map((item) => ({ value: item.id, label: runtimeOptionLabel(item, runtimes), provider: item.provider }))} />
         </span>
       </div>
       {errors.runtimeId && <p className="blob-error blob-inset">{errors.runtimeId}</p>}
@@ -187,13 +188,13 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, crea
         </div>}
         {!loading && catalog && catalog.models.length === 0 && <p className="blob-help">No models were reported for this agent.</p>}
       </div>}
-      <CapabilityField label="Model" state={modelState} setting={capabilities?.settings.model ?? null}>
+      <CapabilityField label="Model" provider={provider} state={modelState} setting={capabilities?.settings.model ?? null}>
         <Select ariaLabel="Model" variant="muted" value={custom ? '__custom__' : (draft.model ?? '')} disabled={!modelInteractive} onChange={(value) => {
           if (value === '__custom__') applyModel(draft.model, true)
           else applyModel(value || null, false)
         }} options={[
           { value: '', label: 'Default model' },
-          ...(catalog?.models ?? []).map((model, index, models) => ({ value: model.id, label: `${model.displayName}${model.isDefault ? ' · Default' : ''}`, group: model.group && model.group !== models[index - 1]?.group ? model.group : undefined })),
+          ...(catalog?.models ?? []).map((model, index, models) => ({ value: model.id, label: `${model.displayName}${model.isDefault ? ' · Default' : ''}`, group: model.group && model.group !== models[index - 1]?.group ? model.group : undefined, ...(index === 0 ? { groupBefore: [{ label: `${providerBrand(provider).name} models`, provider }] } : {}) })),
           ...(draft.model && !custom && !(catalog?.models ?? []).some((model) => model.id === draft.model)
             ? [{
                 value: draft.model,
@@ -265,14 +266,7 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, crea
   </>
 }
 
-function providerLabel(provider: string) {
-  switch (provider.toLowerCase()) {
-    case 'claude': return 'Claude Code'
-    case 'codex': return 'Codex'
-    case 'opencode': return 'OpenCode'
-    default: return 'this agent'
-  }
-}
+function providerLabel(provider: string) { return providerBrand(provider).name || 'this agent' }
 
 function formatCatalogTime(value: string) {
   const date = new Date(value)
@@ -286,10 +280,10 @@ function EditGroup({ title, label, action, children }: { title: string; label?: 
   </section>
 }
 
-function CapabilityField({ label, state, setting, children }: { label: string; state: ReturnType<typeof capabilityState>; setting: CapabilitySetting | null; children: ReactNode }) {
+function CapabilityField({ label, provider, state, setting, children }: { label: string; provider?: string; state: ReturnType<typeof capabilityState>; setting: CapabilitySetting | null; children: ReactNode }) {
   const reason = state === 'supported' ? '' : settingReason(setting, state)
   return <div className="settings-row" data-capability={state}>
-    <span className="settings-row-copy"><strong>{label}</strong>{reason && <small>{reason}</small>}</span>
+    <span className="settings-row-copy"><strong>{provider ? <span className="model-picker-provider"><ProviderLogo provider={provider} />{label}</span> : label}</strong>{reason && <small>{reason}</small>}</span>
     <span className="settings-row-control">{children}</span>
   </div>
 }

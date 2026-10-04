@@ -327,18 +327,32 @@
 .companion-sidebar-card .toggle.on b { transform: translateX(15px); background: var(--text-inverse); }
 .companion-root.pop-in .companion-capsule { animation: companion-pop-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 .launch-preview-switcher { position: fixed; z-index: var(--z-preview-switcher); inset-block-start: var(--space-preview-switcher); inset-inline-start: 50%; max-width: 95vw; display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-preview-switcher); transform: translateX(-50%); }
+.preview-settings-page { position: fixed; inset: 0; overflow: auto; padding: 62px 32px 32px; background: var(--surface-app); color: var(--text-1); }
+.preview-page-heading { width: min(880px, 100%); margin: 0 auto 20px; }
+.preview-page-heading h1 { margin: 0; font-size: var(--fs-xl); font-weight: 600; }
+.preview-settings-page > .usage-limits-page { width: min(880px, 100%); margin: auto; }
 
 .launch-intro, .onboarding-screen { position: fixed; z-index: 100; inset: 0; min-height: 100vh; display: grid; place-items: center; padding: 28px; color: var(--text-1); background: var(--surface-app); animation: launch-fade-in 220ms ease-out both; }
-.launch-intro-content { width: min(560px, 100%); display: flex; flex-direction: column; align-items: center; }
-.launch-intro-content > canvas { max-width: 100%; height: auto; }
+.launch-intro::before, .onboarding-screen::before { content: none; }
+.launch-intro-content { width: min(560px, 100%); display: flex; flex-direction: column; align-items: center; gap: 0; }
+.launch-blob-stage { width: 180px; height: 180px; display: grid; place-items: center; margin: 0 auto 8px; }
+.launch-blob-stage .blob-canvas { width: 168px; height: 168px; aspect-ratio: 1; }
 .launch-status { min-height: 24px; margin: 10px 0 18px; color: var(--text-2); font-size: var(--fs-md); text-align: center; }
-.launch-checklist { width: min(440px, 100%); margin: 0; padding: 0; display: grid; gap: 2px; list-style: none; }
-.launch-checklist li { min-height: 44px; display: flex; align-items: center; gap: 10px; }
-.launch-check-mark { width: 20px; flex: 0 0 auto; color: var(--text-3); text-align: center; }
-.launch-checklist li[data-state="ok"] .launch-check-mark { color: var(--text-2); }
-.launch-checklist li[data-state="warning"] .launch-check-mark { color: var(--status-working); }
-.launch-checklist li[data-state="failed"] .launch-check-mark { color: var(--status-danger); }
-.launch-checklist li > span:last-child { display: grid; gap: 2px; }
+.launch-checklist { width: min(420px, 100%); margin: 0 auto; padding: 0; display: grid; gap: 2px; list-style: none; }
+.launch-checklist li { min-height: 44px; display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 10px; }
+.launch-check-icon { position: relative; width: 20px; height: 20px; display: grid; place-items: center; color: var(--text-3); }
+.launch-check-icon.has-provider { overflow: visible; }
+.launch-check-icon.has-provider > .provider-logo { width: 16px; height: 16px; }
+.launch-state-mark { display: grid; place-items: center; width: 20px; height: 20px; color: var(--text-2); font-size: var(--fs-sm); }
+.launch-checklist li[data-state="warning"] .launch-state-mark { color: var(--status-working); }
+.launch-checklist li[data-state="failed"] .launch-state-mark { color: var(--status-danger); }
+.launch-state-indicator { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; display: grid; place-items: center; border: 1px solid var(--surface-app); border-radius: 50%; background: var(--text-2); color: var(--surface-app); font-size: 8px; line-height: 1; }
+.launch-checklist li[data-state="warning"] .launch-state-indicator { background: var(--status-working); }
+.launch-checklist li[data-state="failed"] .launch-state-indicator { background: var(--status-danger); }
+.launch-checklist li[data-state="running"] .launch-state-indicator { background: var(--surface-app); }
+.launch-check-copy { min-width: 0; display: grid; gap: 2px; }
+.launch-spinner { width: 12px; height: 12px; display: block; border: 1.5px solid var(--line-strong); border-top-color: var(--text-2); border-radius: 50%; animation: launch-spin 800ms linear infinite; }
+@keyframes launch-spin { to { transform: rotate(360deg); } }
 .launch-checklist strong { font-size: var(--fs-sm); font-weight: 500; }
 .launch-checklist small { color: var(--text-2); font-size: var(--fs-xs); }
 .launch-actions, .onboarding-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
@@ -346,13 +360,14 @@
 .launch-warning-notice { padding: 10px 14px; display: flex; align-items: center; gap: 10px; color: var(--text-1); border-bottom: 1px solid var(--warning-line); background: var(--surface-warning); font-size: var(--fs-sm); }
 .launch-warning-notice > span { flex: 1; }
 .onboarding-screen { overflow-y: auto; }
-.onboarding-content { width: min(620px, 100%); margin: auto; }
-.onboarding-character { height: 152px; display: grid; place-items: center; }
-.onboarding-progress { margin: 2px 0 20px; display: flex; justify-content: center; gap: 7px; }
+.onboarding-content { width: min(600px, 100%); margin: auto; display: flex; flex-direction: column; }
+.onboarding-character { height: 136px; margin-bottom: 8px; display: grid; place-items: center; }
+.onboarding-character .blob-canvas { width: 112px; height: 112px; aspect-ratio: 1; }
+.onboarding-progress { order: 2; margin: 20px 0 0; padding: 10px 0; display: flex; justify-content: center; gap: 9px; }
 .onboarding-progress span { width: 7px; height: 7px; border-radius: 50%; background: var(--surface-disabled); }
 .onboarding-progress span.active { background: var(--text-1); }
 .onboarding-progress span.done { background: var(--text-2); }
-.onboarding-step { display: grid; gap: 13px; }
+.onboarding-step { order: 3; width: 100%; display: grid; gap: 13px; }
 .onboarding-step h1 { margin: 0; font-size: var(--fs-xl); font-weight: 600; text-align: center; }
 .onboarding-step > p { margin: 0; color: var(--text-2); font-size: var(--fs-sm); text-align: center; }
 .onboarding-field { display: grid; gap: 6px; color: var(--text-2); font-size: var(--fs-xs); }
@@ -362,6 +377,7 @@
 .onboarding-runtimes { margin-top: 4px; display: grid; }
 .onboarding-runtime { min-width: 0; padding: 10px 2px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 14px; border-bottom: 1px solid var(--line); }
 .onboarding-runtime-heading { min-width: 0; display: grid; gap: 3px; }
+.onboarding-provider { display: flex; align-items: center; gap: 8px; }
 .onboarding-runtime strong { font-size: var(--fs-sm); font-weight: 500; }
 .onboarding-runtime small, .onboarding-runtime code { color: var(--text-2); font-size: var(--fs-xs); }
 .onboarding-runtime code { overflow-wrap: anywhere; }
@@ -381,6 +397,7 @@
 @keyframes launch-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes companion-pop-in { from { opacity: 0.72; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) {
+  .launch-spinner { animation: none; border-top-color: var(--line-strong); }
   /* Keep only the opacity-only handoff visible; all other reduced-motion effects stay suppressed. */
   .app-shell.reduced-launch-fade { animation-duration: var(--launch-fade-duration, 180ms) !important; animation-iteration-count: 1 !important; }
   .launch-intro, .onboarding-screen { animation: none; }

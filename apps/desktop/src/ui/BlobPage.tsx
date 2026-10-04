@@ -88,12 +88,8 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
             : usageOpen ? <BlobUsage agentId={agent.id} sessions={sessions} agents={[agent]} runtimes={runtimes} budgets={budgets} connected={connected} onSetPrices={onSetPrices} /> : <div className="settings-card"><p className="settings-empty">Tokens, cost and run time for this blob.</p></div>}
         </section>
         {mode === 'edit' && <section className="settings-group blob-group" aria-label="Archive">
-          <div className="settings-card">
-            <div className="settings-row">
-              <span className="settings-row-copy"><strong>Archive blob</strong><small>It leaves the sidebar. Its conversations stay saved.</small></span>
-              <span className="settings-row-control"><button type="button" className="secondary-button small danger-button" onClick={onArchive}>Archive blob</button></span>
-            </div>
-          </div>
+          <div className="settings-group-head"><h3>Archive</h3><button type="button" className="ghost-button small danger-button" onClick={onArchive}>Archive blob</button></div>
+          <div className="settings-card"><p className="settings-empty">This blob leaves the sidebar. Its conversations stay saved.</p></div>
         </section>}
       </div>
     </div>

@@ -49,6 +49,7 @@ import { useQuickSwitcherShortcut } from './useQuickSwitcherShortcut'
 import { LaunchIntro, LaunchWarnings } from './LaunchIntro'
 import { FirstRunOnboarding } from './FirstRunOnboarding'
 import { LAUNCH_OVERALL_TIMEOUT_REASON, LAUNCH_TIMEOUTS, launchWarningsFor, runLaunchChecks, throwIfLaunchAborted, type LaunchCheck } from './launchChecks'
+import { providerBrand } from './providerBrand'
 import { applyAppearance, applySurfaceAppearance, type TextSizeChoice, type ThemeChoice } from './appearance'
 import { ComposerExecutionSwitch } from './ComposerExecutionSwitch'
 import { SafeMarkdown } from './SafeMarkdown'
@@ -524,20 +525,20 @@ export function App() {
       if (signal.aborted || generation !== launchGeneration.current) return
       const discoveryFailed = checks.find((check) => check.id === 'discovery')?.state === 'failed'
       const authSteps = discoveryFailed ? [] : found.map((runtime) => ({
-        id: 'auth:' + runtime.id, label: 'Checking ' + runtime.provider + ' sign-in', timeoutMs: LAUNCH_TIMEOUTS.agent,
+        id: 'auth:' + runtime.id, label: 'Checking ' + providerBrand(runtime.provider).name + ' sign-in', timeoutMs: LAUNCH_TIMEOUTS.agent,
         run: async (stageSignal: AbortSignal) => {
           throwIfLaunchAborted(stageSignal)
-          const version = runtime.version ?? 'version unavailable'
-          return runtime.authState === 'authenticated' ? 'Version ' + version + '; signed in.' : runtime.authState === 'unauthenticated' ? 'Warning: Version ' + version + '; not signed in.' : 'Warning: Version ' + version + '; sign-in state unknown.'
+          const signedIn = runtime.authState === 'authenticated' || runtime.authState === 'signed_in'
+          return signedIn ? 'Signed in' : runtime.authState === 'unauthenticated' || runtime.authState === 'signed_out' ? 'Warning: ' + providerBrand(runtime.provider).name + ': sign-in required' : 'Warning: ' + providerBrand(runtime.provider).name + ': sign-in could not be confirmed'
         },
       }))
       if (authSteps.length) await runSteps(authSteps)
       if (signal.aborted || generation !== launchGeneration.current) return
-      const modelSteps = discoveryFailed ? [] : found.map((runtime) => ({ id: 'models:' + runtime.id, label: 'Loading models for ' + runtime.provider, timeoutMs: LAUNCH_TIMEOUTS.models, run: async (stageSignal: AbortSignal) => {
+      const modelSteps = discoveryFailed ? [] : found.map((runtime) => ({ id: 'models:' + runtime.id, label: 'Loading ' + providerBrand(runtime.provider).name + ' models', timeoutMs: LAUNCH_TIMEOUTS.models, run: async (stageSignal: AbortSignal) => {
         const result = await rpc<Record<string, unknown>>('runtime.models', { runtimeId: runtime.id })
         throwIfLaunchAborted(stageSignal)
         const models = Array.isArray(result.models) ? result.models : Array.isArray(result.items) ? result.items : []
-        if (!models.length) return 'Warning: no models were returned for ' + runtime.provider
+        if (!models.length) return 'Warning: ' + providerBrand(runtime.provider).name + ': models could not be loaded'
         return 'Loaded ' + models.length + ' models'
       } }))
       if (modelSteps.length) await runSteps(modelSteps)
@@ -1348,7 +1349,7 @@ export function App() {
   }
   const noBlobs = activeAgents(agents).length === 0
   const showCreateBlobPrompt = connection === 'connected' && noBlobs && sessions.length > 0 && !analyticsOpen && !blobPage
-  const launchWarnings = launchWarningsFor(launchChecks)
+  const launchWarnings = launchWarningsFor(launchChecks, runtimes)
   const retryLaunch = () => {
     launchAbort.current?.abort()
     setLaunchRunId((id) => id + 1)
@@ -1409,7 +1410,6 @@ export function App() {
           onFindAgents={() => void refreshRuntimes()}
           onSettings={() => { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }}
           onQuit={() => void quitBloblex()}
-          onRunSetup={() => setOnboardingVisible(true)}
         />
       </aside>
 
@@ -1467,7 +1467,7 @@ export function App() {
           <div className="composer-wrap">
             <div className="composer-box">
               <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() } }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
-              {activeSelectedAgent && <ComposerExecutionSwitch agent={activeSelectedAgent} onAgentUpdated={mergeAgent} onError={(reason) => setError(messageOf(reason))} />}
+              {activeSelectedAgent && <ComposerExecutionSwitch agent={activeSelectedAgent} provider={runtimes.find((runtime) => runtime.id === activeSelectedAgent.runtimeId)?.provider} onAgentUpdated={mergeAgent} onError={(reason) => setError(messageOf(reason))} />}
               <button className={`send-button ${turnLive ? 'cancel' : ''}`} onClick={turnLive ? () => void cancelTurn() : () => void sendPrompt()} disabled={busy || (!turnLive && (!composer.trim() || !runtimeReady))} aria-label={turnLive ? 'Cancel turn' : 'Send message'}>{busy ? <LoaderCircle size={16} className="spinning" /> : turnLive ? <Square size={12} fill="currentColor" /> : <ArrowUp size={17} />}</button>
             </div>
             <div className="composer-note">{currentProjectName ? <><FolderOpen size={11} />{currentProjectName}<span>·</span></> : null}Agent actions run on your device. You approve what matters.</div>
@@ -1492,7 +1492,7 @@ export function App() {
 
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} loading={busy && usageSummary === null} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onClose={() => setUsageSheet(false)} />}
       {quickSwitcherOpen && <QuickSwitcher items={quickSwitcherItems} onChoose={chooseQuickSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />}
-      {settingsSheet && <SettingsSheet snapshot={snapshot} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
+      {settingsSheet && <SettingsSheet snapshot={snapshot} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
       {chooserView}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body="It leaves the roster. Its conversations stay saved. Restoring a blob is not available yet." confirmLabel="Archive" cancelLabel="Cancel" onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
@@ -1509,7 +1509,7 @@ function ImportBlobDialog({ blob, runtimes, onCancel, onCreate }: { blob: Shared
   return <div className="sheet-backdrop blob-dialog-backdrop"><section ref={ref} className="blob-dialog" role="dialog" aria-modal="true" aria-labelledby="import-blob-title" tabIndex={-1}>
     <h2 id="import-blob-title">Import {blob.name}</h2>
     <p>This opens a new blob draft. Nothing is created until you choose Create blob.</p>
-    {runtimes.length === 0 ? <p role="alert">No coding agents are available. Scan again before importing.</p> : <label className="settings-field"><span>Attach to coding agent</span><Select ariaLabel="Attach imported blob to coding agent" variant="field" align="left" value={runtimeId} onChange={setRuntimeId} options={runtimes.map((runtime) => ({ value: runtime.id, label: `${labelize(runtime.provider)}${runtime.provider === blob.providerId ? ' · matching provider' : ''}` }))} /></label>}
+    {runtimes.length === 0 ? <p role="alert">No coding agents are available. Scan again before importing.</p> : <label className="settings-field"><span>Attach to coding agent</span><Select ariaLabel="Attach imported blob to coding agent" variant="field" align="left" value={runtimeId} onChange={setRuntimeId} options={runtimes.map((runtime) => ({ value: runtime.id, label: `${providerBrand(runtime.provider).name}${runtime.provider === blob.providerId ? ' · matching provider' : ''}`, provider: runtime.provider }))} /></label>}
     <div className="blob-dialog-actions"><button type="button" className="secondary-button" data-dialog-initial-focus onClick={close}>Cancel</button><button type="button" className="primary-button" disabled={!runtimeId} onClick={() => onCreate(runtimeId)}>Continue</button></div>
   </section></div>
 }

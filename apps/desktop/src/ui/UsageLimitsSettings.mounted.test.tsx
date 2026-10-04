@@ -44,11 +44,12 @@ async function click(host: ParentNode, label: string) {
   await act(async () => { button.click(); await Promise.resolve() })
 }
 
-async function clickRow(host: ParentNode, rowText: string, buttonText: string) {
-  const row = [...host.querySelectorAll<HTMLElement>('.settings-row')].find((item) => item.textContent?.includes(rowText))
-  const button = [...(row?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((item) => item.textContent?.trim() === buttonText)
-  if (!button) throw new Error(`Missing ${buttonText} for ${rowText}`)
-  await act(async () => { button.click(); await Promise.resolve() })
+async function clickPriceAction(host: ParentNode, model: string, action: string) {
+  const row = [...host.querySelectorAll<HTMLElement>('.price-table-row')].find((item) => item.textContent?.includes(model))
+  const summary = row?.querySelector<HTMLElement>('summary')
+  if (!row || !summary) throw new Error(`Missing price row ${model}`)
+  await act(async () => { summary.click(); await Promise.resolve() })
+  await click(host, action)
 }
 
 beforeEach(() => {
@@ -77,41 +78,41 @@ describe('Usage & limits settings forms', () => {
     const view = mount(<UsageLimitsSettings agents={[agent]} runtimes={[runtime]} sessions={[]} />)
     await view.settle()
     await click(view.host, 'Add budget')
+    await chooseOption(view.host, 'Budget target', 'Helper')
     fill(view.host, 'Budget limit', '1000')
     await click(view.host, 'Save budget')
     await view.settle()
-    expect(rpc).toHaveBeenCalledWith('budget.set', expect.objectContaining({ metric: 'tokens', hardLimit: 1000, scopeType: 'global' }))
+    expect(rpc).toHaveBeenCalledWith('budget.set', expect.objectContaining({ metric: 'tokens', hardLimit: 1000, scopeType: 'blob', scopeId: 'agent-1' }))
     await click(view.host, 'Edit')
     fill(view.host, 'Budget limit', '2000')
     await click(view.host, 'Save budget')
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('budget.set', expect.objectContaining({ hardLimit: 2000 }))
-    await click(view.host, 'Delete budget All agents')
+    await click(view.host, 'Delete budget Everything')
     await click(view.host, 'Delete budget')
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('budget.delete', expect.objectContaining({ policyId: expect.any(String) }))
   })
 
-  it('saves provider and agent-install scope ids from their selects', async () => {
+  it('saves blob and coding-agent scope ids from their selects', async () => {
     const runtimeWithIdentity: Runtime = { ...runtime, version: '2.0', executablePath: 'C:/agents/codex.exe' }
     const view = mount(<UsageLimitsSettings agents={[agent]} runtimes={[runtimeWithIdentity]} sessions={[]} />)
     await view.settle()
 
     await click(view.host, 'Add budget')
-    await chooseOption(view.host, 'Budget scope', 'agent')
-    await chooseOption(view.host, 'Budget target', 'codex')
+    await chooseOption(view.host, 'Budget target', 'Helper')
     fill(view.host, 'Budget limit', '100')
     await click(view.host, 'Save budget')
     await view.settle()
-    expect(rpc).toHaveBeenCalledWith('budget.set', expect.objectContaining({ scopeType: 'agent', scopeId: 'codex' }))
+    expect(rpc).toHaveBeenCalledWith('budget.set', expect.objectContaining({ scopeType: 'blob', scopeId: 'agent-1' }))
 
     await click(view.host, 'Add budget')
-    await chooseOption(view.host, 'Budget scope', 'runtime')
-    await chooseOption(view.host, 'Budget target', 'runtime-1')
+    await chooseOption(view.host, 'Budget scope', 'agent')
+    await chooseOption(view.host, 'Budget target', 'codex')
     fill(view.host, 'Budget limit', '200')
     await click(view.host, 'Save budget')
     await view.settle()
-    expect(rpc).toHaveBeenCalledWith('budget.set', expect.objectContaining({ scopeType: 'runtime', scopeId: 'runtime-1' }))
+    expect(rpc).toHaveBeenCalledWith('budget.set', expect.objectContaining({ scopeType: 'agent', scopeId: 'codex' }))
   })
 
   it('lists legacy cost budgets as unenforced and still permits deletion', async () => {
@@ -122,7 +123,7 @@ describe('Usage & limits settings forms', () => {
     expect(view.host.textContent).toContain('Usage unknown.')
     expect(view.host.textContent).not.toContain('Used $0.00')
     expect([...view.host.querySelectorAll('.settings-row button')].some((button) => button.textContent?.trim() === 'Edit')).toBe(false)
-    await click(view.host, 'Delete budget All agents')
+    await click(view.host, 'Delete budget Everything')
     await click(view.host, 'Delete budget')
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('budget.delete', { policyId: 'cost-policy' })
@@ -131,13 +132,13 @@ describe('Usage & limits settings forms', () => {
   it('sets and removes a model price while preserving unknown rates', async () => {
     const view = mount(<UsageLimitsSettings agents={[agent]} runtimes={[runtime]} sessions={[{ id: 's', runtimeId: 'runtime-1', model: 'gpt-5.5' }]} />)
     await view.settle()
-    await click(view.host, 'Set price')
+    await clickPriceAction(view.host, 'gpt-5.5', 'Use my own price…')
     fill(view.host, 'Input rate per million tokens', '1.25')
     await click(view.host, 'Save price')
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('pricing.override', { rule: expect.objectContaining({ inputPerMillion: '1.25', outputPerMillion: null, cacheReadPerMillion: null, cacheWritePerMillion: null, currency: 'USD' }) })
     expect(view.host.textContent).toContain('Your price')
-    await click(view.host, 'Remove override')
+    await clickPriceAction(view.host, 'gpt-5.5', 'Remove my price')
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('pricing.override', { rule: expect.objectContaining({ remove: true }) })
     expect(view.host.textContent).toContain('Unknown')
@@ -154,9 +155,9 @@ describe('Usage & limits settings forms', () => {
         cacheWritePerMillion: { rate: '0.125', source: 'official_price_list', currency: 'USD', checkedAt: '2026-10-04' },
       },
     }]
-    const view = mount(<UsageLimitsSettings agents={[agent]} runtimes={[runtime]} sessions={[]} />)
+    const view = mount(<UsageLimitsSettings agents={[agent]} runtimes={[runtime]} sessions={[{ id: 'price-session', runtimeId: runtime.id, model: 'gpt-5.5' }]} />)
     await view.settle()
-    await clickRow(view.host, 'gpt-5.5', 'Edit price')
+    await clickPriceAction(view.host, 'gpt-5.5', 'Edit my price…')
 
     expect(view.host.querySelector<HTMLInputElement>('[aria-label="Input rate per million tokens"]')?.value).toBe('0.17')
     expect(view.host.querySelector<HTMLInputElement>('[aria-label="Output rate per million tokens"]')?.value).toBe('')
@@ -180,9 +181,9 @@ describe('Usage & limits settings forms', () => {
     const view = mount(<UsageLimitsSettings agents={[agent]} runtimes={[runtime]} sessions={sessions} />)
     await view.settle()
 
-    await clickRow(view.host, 'model-a', 'Set price')
+    await clickPriceAction(view.host, 'model-a', 'Use my own price…')
     fill(view.host, 'Input rate per million tokens', '1.25')
-    await clickRow(view.host, 'model-b', 'Set price')
+    await clickPriceAction(view.host, 'model-b', 'Use my own price…')
     expect(view.host.querySelector<HTMLInputElement>('[aria-label="Input rate per million tokens"]')?.value).toBe('')
     fill(view.host, 'Input rate per million tokens', '0.50')
     await click(view.host, 'Save price')
@@ -190,7 +191,7 @@ describe('Usage & limits settings forms', () => {
     expect(rpc).toHaveBeenCalledWith('pricing.override', { rule: expect.objectContaining({ canonicalModelId: 'model-b', inputPerMillion: '0.50' }) })
     expect(prices.find((rule) => rule.canonicalModelId === 'model-b')?.inputPerMillion).toBe('0.50')
 
-    await clickRow(view.host, 'model-a', 'Set price')
+    await clickPriceAction(view.host, 'model-a', 'Use my own price…')
     fill(view.host, 'Input rate per million tokens', '0.003')
     await chooseOption(view.host, 'Price currency', 'JPY')
     await click(view.host, 'Save price')
@@ -206,12 +207,23 @@ describe('Usage & limits settings forms', () => {
       { id: 'opencode-go/gpt-6-luna', reportedPrice: { inputPerMillion: '0', outputPerMillion: '0', cacheReadPerMillion: '0', cacheWritePerMillion: '0', currency: 'USD' } },
       { id: 'opencode-go/free-catalog-only', reportedPrice: { inputPerMillion: '0', outputPerMillion: '0', cacheReadPerMillion: '0', currency: 'USD' } },
     ]
-    const view = mount(<UsageLimitsSettings agents={[agent]} runtimes={[openCodeRuntime]} sessions={[]} />)
+    const view = mount(<UsageLimitsSettings agents={[agent]} runtimes={[openCodeRuntime]} sessions={[]} showAllModelsByDefault />)
     await view.settle()
-    expect(view.host.textContent).toContain('Official price list, checked 2026-10-04')
+    expect(view.host.textContent).toContain('Official prices from each vendor, checked 4 Oct 2026.')
     expect(view.host.textContent).toContain('OpenCode catalog estimate')
     expect(view.host.textContent).toContain('Free')
     expect(view.host.textContent).toContain('272,000 input tokens: long-context rates')
+  })
+
+  it('hides unused model prices by default and reveals them with the accessible switch', async () => {
+    prices = [{ id: 'unused-price', provider: 'codex', canonicalModelId: 'unused-model', currency: 'USD', inputPerMillion: '1', outputPerMillion: '2', source: 'official_price_list' }]
+    const view = mount(<UsageLimitsSettings agents={[agent]} runtimes={[runtime]} sessions={[]} />)
+    await view.settle()
+    expect(view.host.textContent).not.toContain('unused-model')
+    const toggle = view.host.querySelector<HTMLButtonElement>('[aria-label="Show all models"]')
+    expect(toggle?.getAttribute('role')).toBe('switch')
+    await act(async () => { toggle?.click(); await Promise.resolve() })
+    expect(view.host.textContent).toContain('unused-model')
   })
 
   it('loads OpenCode catalog prices when an OpenCode runtime appears after the sheet opens', async () => {

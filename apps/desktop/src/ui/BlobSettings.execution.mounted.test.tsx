@@ -206,7 +206,8 @@ describe('live execution card', () => {
     expect(options).toContainEqual(expect.objectContaining({ value: 'retired-model', label: 'retired-model' }))
     expect(options).toContainEqual(expect.objectContaining({ value: 'gamma', label: 'Gamma' }))
     await openSelect(view.host, 'Model')
-    expect([...view.host.querySelectorAll('.select-group-label')].map((node) => node.textContent)).toEqual(['Alpha family', 'Other models'])
+    expect([...view.host.querySelectorAll('.select-group-label')].map((node) => node.textContent)).toEqual(['Codex models', 'Alpha family', 'Other models'])
+    expect(view.host.querySelector('.provider-group-label .provider-logo')).not.toBeNull()
 
     view.unmount()
     rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? catalog : answer(method))

@@ -13,6 +13,7 @@ import { UpdatesPanel } from './UpdatesPanel'
 import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
 import { UsageLimitsSettings } from './UsageLimitsSettings'
 import { applyAppearance } from './appearance'
+import { ProviderLogo, providerBrand } from './providerBrand'
 
 export type SettingsPageId = 'General' | 'Agents' | 'Usage & limits' | 'Updates'
 
@@ -23,19 +24,18 @@ const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHori
   { id: 'Updates', label: 'Updates', icon: Download },
 ]
 
-const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
-
 export function providerDisplayName(provider: string | undefined) {
-  return PROVIDER_NAMES[(provider ?? '').toLowerCase()] ?? labelize(provider, 'Coding agent')
+  return providerBrand(provider ?? '').name || labelize(provider, 'Coding agent')
 }
 
-export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onError, onOpenAgent, focusUpdates = false }: {
+export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false }: {
   snapshot: Snapshot | null
   initialPage: SettingsPageId
   onClose: () => void
   onRefresh: () => void
   onError: (error: string | null) => void
   onOpenAgent: (agentId: string) => void
+  onRunSetup?: () => void
   focusUpdates?: boolean
 }) {
   const { ref: dialogRef, close } = useDialogAccessibility(onClose)
@@ -292,6 +292,9 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
 
           {!loading && page === 'General' && <>
             <SettingsGroup title="System">
+              <SettingsRow label="Run setup again" hint="Review the welcome steps and coding agent sign-in status.">
+                <button type="button" className="secondary-button small" onClick={onRunSetup}>Run setup</button>
+              </SettingsRow>
               <SettingsRow label="Start with Windows">
                 <button type="button" className={`toggle ${startWithWindows ? 'on' : ''}`} role="switch" aria-label="Start with Windows" aria-checked={startWithWindows} onClick={() => void updateAutostart(!startWithWindows)} disabled={saving || !autostartLoaded}><i /></button>
               </SettingsRow>
@@ -357,7 +360,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
                 const owned = agents.filter((agent) => agent.runtimeId === runtime.id)
                 return <div className={`runtime-entry ${open ? 'open' : ''}`} key={runtime.id}>
                   <button type="button" className="settings-row runtime-entry-head" aria-expanded={open} onClick={() => setOpenRuntimes((current) => ({ ...current, [runtime.id]: !open }))}>
-                    <span className="runtime-mark" aria-hidden="true">{providerDisplayName(runtime.provider).slice(0, 1)}</span>
+                    <ProviderLogo provider={runtime.provider} />
                     <span className="settings-row-copy"><strong>{providerDisplayName(runtime.provider)}</strong><small>{[runtime.version, signInLabel(runtime.authState)].filter(Boolean).join(' · ') || 'Details unavailable'}</small></span>
                     <span className="settings-value">{owned.length === 1 ? '1 blob' : `${owned.length} blobs`}</span>
                     {open ? <ChevronDown size={15} className="row-chevron" aria-hidden="true" /> : <ChevronRight size={15} className="row-chevron" aria-hidden="true" />}
@@ -390,7 +393,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
               {launcherFormOpen && <form className="settings-form" onSubmit={(event) => void saveProfile(event)}>
                 <label className="settings-field"><span>Name</span><input className="text-input" aria-label="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} required /></label>
                 <div className="settings-field-pair">
-                  <div className="settings-field"><span>Agent</span><Select ariaLabel="Profile provider" variant="field" align="left" value={profileProvider} onChange={(value) => { setProfileProvider(value); setProfileProtocol(value === 'claude' ? 'claude_stream' : value === 'opencode' ? 'acp' : 'codex_app_server') }} options={[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex' }, { value: 'opencode', label: 'OpenCode' }]} /></div>
+                  <div className="settings-field"><span>Agent</span><Select ariaLabel="Profile provider" variant="field" align="left" value={profileProvider} onChange={(value) => { setProfileProvider(value); setProfileProtocol(value === 'claude' ? 'claude_stream' : value === 'opencode' ? 'acp' : 'codex_app_server') }} options={['claude', 'codex', 'opencode'].map((provider) => ({ value: provider, label: providerBrand(provider).name, provider }))} /></div>
                   <div className="settings-field"><span>Protocol</span><Select ariaLabel="Profile protocol" variant="field" align="left" value={profileProtocol} onChange={setProfileProtocol} options={[{ value: 'claude_stream', label: 'Claude stream' }, { value: 'codex_app_server', label: 'Codex app-server' }, { value: 'acp', label: 'ACP' }]} /></div>
                 </div>
                 <label className="settings-field"><span>Executable path</span><input className="text-input mono" aria-label="Profile executable" value={profilePath} onChange={(event) => setProfilePath(event.target.value)} required /></label>
@@ -445,8 +448,8 @@ function approvalLabel(mode: string) {
 
 function signInLabel(state?: string) {
   const value = (state ?? '').toLowerCase()
-  if (value === 'authenticated') return 'Signed in'
-  if (value === 'unauthenticated') return 'Signed out'
+  if (value === 'authenticated' || value === 'signed_in') return 'Signed in'
+  if (value === 'unauthenticated' || value === 'signed_out') return 'Signed out'
   if (!value) return ''
   return labelize(state)
 }

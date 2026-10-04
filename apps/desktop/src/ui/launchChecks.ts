@@ -81,8 +81,25 @@ export async function runLaunchChecks(steps: LaunchStep[], onChange: (checks: La
   return checks
 }
 
-export function launchWarningsFor(checks: readonly LaunchCheck[]) {
-  return checks
+export function launchWarningsFor(checks: readonly LaunchCheck[], runtimes: readonly { id: string; provider: string; authState?: string }[] = []) {
+  const details = checks
     .filter((check) => check.state === 'warning' || check.state === 'failed')
+    .filter((check) => {
+      if (!check.id.startsWith('auth:')) return true
+      const runtimeId = check.id.slice(5)
+      const runtime = runtimes.find((item) => item.id === runtimeId)
+      if (runtime?.provider.toLowerCase() === 'opencode' && ['authenticated', 'signed_in'].includes(runtime.authState?.toLowerCase() ?? '')) return false
+      return !checks.some((item) => item.id === `models:${runtimeId}` && item.state === 'ok')
+    })
     .map((check) => check.detail.replace(/^Warning:\s*/, ''))
+  const providers = new Map<string, string[]>()
+  const other: string[] = []
+  for (const detail of details) {
+    const match = /^(Claude Code|Codex|OpenCode):\s*(.+)$/i.exec(detail)
+    if (!match) { other.push(detail); continue }
+    const name = match[1][0].toUpperCase() + match[1].slice(1)
+    const message = match[2].replace(/[.\s]+$/, '')
+    providers.set(name, [...(providers.get(name) ?? []), message])
+  }
+  return [...providers].map(([provider, messages]) => `${provider}: ${[...new Set(messages)].join('; ')}` ).concat(other)
 }

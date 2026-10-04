@@ -580,14 +580,6 @@ impl Storage {
         }
     }
     pub fn agent_get(&self, id:&str)->Result<Value,StorageError>{ validate_agent_id(id)?;let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?; agent_read(&c,id) }
-    pub fn ensure_default_agents(&self)->Result<Vec<Value>,StorageError>{
-        let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
-        let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
-        let events=ensure_default_agents_tx(&tx,&now,true)?;
-        tx.commit()?;
-        Ok(events)
-    }
     pub fn agent_create(&self, input:&Value)->Result<(Value,Vec<Value>),StorageError>{
         validate_agent_fields(input,true)?;
         let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?; let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -626,7 +618,7 @@ impl Storage {
     pub fn agent_archive(&self,id:&str)->Result<(Value,Vec<Value>),StorageError>{
         validate_agent_id(id)?;let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;let old=agent_read(&tx,id)?;
         if old["archived"]==true{tx.commit()?;return Ok((old,vec![]));} let rt=old["runtimeId"].as_str().unwrap_or("").to_owned(); let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
-        let before=active_order(&tx,&rt)?;shift_active_except(&tx,&rt,id)?; tx.execute("UPDATE agents SET archived=1,updated_at=?2 WHERE id=?1",params![id,now])?;let remaining=active_ids(&tx,&rt)?;assign_active_order(&tx,&remaining,&before,&now)?;
+        let before=active_order(&tx,&rt)?;shift_active_except(&tx,&rt,id)?; tx.execute("UPDATE agents SET archived=1,updated_at=?2 WHERE id=?1",params![id,now])?;tx.execute("DELETE FROM budget_policies WHERE scope_type='blob' AND scope_id=?1",[id])?;let remaining=active_ids(&tx,&rt)?;assign_active_order(&tx,&remaining,&before,&now)?;
         let mut events=Vec::new();let archived=agent_read(&tx,id)?;events.push(push_agent_event(&tx,"archived",&archived)?);
         for a in changed_agents(&tx,&rt)?{if before.iter().find(|previous|previous["id"]==a["id"]).is_some_and(|previous|previous["sortOrder"]!=a["sortOrder"]){events.push(push_agent_event(&tx,"reordered",&a)?);}}
         tx.commit()?;Ok((archived,events))
@@ -957,6 +949,7 @@ impl Storage {
     ) -> Result<bool, StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let session_agent: Option<String> = tx.query_row("SELECT agent_id FROM sessions WHERE id=?1", [session_id], |r| r.get(0)).optional()?.flatten();
         let policies = {
             let mut q = tx.prepare("SELECT id,scope_type,scope_id,period,metric,hard_limit,enabled,currency FROM budget_policies")?;
             let rows = q.query_map([], |r| {
@@ -987,6 +980,7 @@ impl Storage {
                     .is_none_or(|s| s == "host_windows_local"),
                 "runtime" => scope_id.as_deref().is_none_or(|s| s == runtime_id),
                 "agent" => scope_id.as_deref().is_none_or(|s| s == provider),
+                "blob" => session_agent.as_deref().is_some_and(|agent| scope_id.as_deref() == Some(agent)),
                 "session" => scope_id.as_deref().is_none_or(|s| s == session_id),
                 "project" => scope_id.as_deref().is_none_or(|s| s == project_path),
                 _ => false,
@@ -1436,7 +1430,15 @@ impl Storage {
         Ok(json!({"policies":self.budget_list_locked(&c)?}))
     }
     pub fn save_budget(&self, p: &Value) -> Result<(), StorageError> {
-        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let scope = p["scopeType"].as_str().unwrap_or("global");
+        let scope_id = p["scopeId"].as_str();
+        if scope == "blob" {
+            let Some(agent_id) = scope_id else { return Err(StorageError::InvalidBudget); };
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND archived=0)", [agent_id], |r| r.get(0))?;
+            if !exists { return Err(StorageError::InvalidBudget); }
+        }
         let metric = p["metric"].as_str().unwrap_or("tokens");
         if !matches!(
             metric,
@@ -1452,7 +1454,8 @@ impl Storage {
         {
             return Err(StorageError::InvalidBudget);
         }
-        c.execute("INSERT INTO budget_policies(id,scope_type,scope_id,period,metric,hard_limit,warning_json,created_at,enabled,currency) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET scope_type=excluded.scope_type,scope_id=excluded.scope_id,period=excluded.period,metric=excluded.metric,hard_limit=excluded.hard_limit,warning_json=excluded.warning_json,enabled=excluded.enabled,currency=excluded.currency",params![p["id"].as_str().unwrap_or_else(||p["policyId"].as_str().unwrap_or("")),p["scopeType"].as_str().unwrap_or("global"),p["scopeId"].as_str(),p["period"].as_str().unwrap_or("day"),metric,p["hardLimit"].as_i64().unwrap_or(0),p["warningThresholds"].to_string(),Utc::now().to_rfc3339(),p["enabled"].as_bool().unwrap_or(true),p["currency"].as_str().unwrap_or("USD")])?;
+        tx.execute("INSERT INTO budget_policies(id,scope_type,scope_id,period,metric,hard_limit,warning_json,created_at,enabled,currency) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET scope_type=excluded.scope_type,scope_id=excluded.scope_id,period=excluded.period,metric=excluded.metric,hard_limit=excluded.hard_limit,warning_json=excluded.warning_json,enabled=excluded.enabled,currency=excluded.currency",params![p["id"].as_str().unwrap_or_else(||p["policyId"].as_str().unwrap_or("")),scope,scope_id,p["period"].as_str().unwrap_or("day"),metric,p["hardLimit"].as_i64().unwrap_or(0),p["warningThresholds"].to_string(),Utc::now().to_rfc3339(),p["enabled"].as_bool().unwrap_or(true),p["currency"].as_str().unwrap_or("USD")])?;
+        tx.commit()?;
         Ok(())
     }
     pub fn delete_budget(&self, id: &str) -> Result<(), StorageError> {
@@ -1665,7 +1668,9 @@ impl Storage {
             let id: String = r.get(0)?;
             let period: String = r.get(3)?;
             let limit: i64 = r.get(5)?;
-            let (consumed,reserved) = budget_totals_locked(c, &id, &period)?;
+            let scope_type: String = r.get(1)?;
+            let scope_id: Option<String> = r.get(2)?;
+            let (consumed,reserved) = budget_totals_locked(c, &id, &period, &scope_type, scope_id.as_deref())?;
             Ok(json!({"id":id,"scopeType":r.get::<_,String>(1)?,"scopeId":r.get::<_,Option<String>>(2)?,"period":period,"metric":r.get::<_,String>(4)?,"hardLimit":limit,"warningThresholds":serde_json::from_str::<Value>(&r.get::<_,String>(6)?).unwrap_or(json!([])),"enabled":r.get::<_,bool>(7)?,"currency":r.get::<_,String>(8)?,"consumed":consumed,"reserved":reserved,"remaining":limit.saturating_sub(consumed).saturating_sub(reserved).max(0)}))
         })?.collect::<Result<Vec<_>,_>>()?;
         Ok(Value::Array(rows))
@@ -2036,8 +2041,23 @@ fn budget_totals_locked(
     c: &Connection,
     policy_id: &str,
     period: &str,
+    scope_type: &str,
+    scope_id: Option<&str>,
 ) -> Result<(i64, i64), rusqlite::Error> {
     let start = period_start(&Utc::now(), period);
+    if scope_type == "blob" {
+        let agent = scope_id.unwrap_or("");
+        if period == "turn" {
+            return c.query_row(
+                "SELECT COALESCE(SUM(CASE WHEN br.status='reconciled' THEN COALESCE(br.reconciled_amount,br.amount) ELSE 0 END),0),COALESCE(SUM(CASE WHEN br.status='active' THEN br.amount ELSE 0 END),0) FROM budget_reservations br JOIN turns t ON t.id=br.turn_id JOIN sessions s ON s.id=t.session_id WHERE br.policy_id=?1 AND s.agent_id=?2 AND br.turn_id=(SELECT br2.turn_id FROM budget_reservations br2 JOIN turns t2 ON t2.id=br2.turn_id JOIN sessions s2 ON s2.id=t2.session_id WHERE br2.policy_id=?1 AND s2.agent_id=?2 ORDER BY br2.created_at DESC,br2.rowid DESC LIMIT 1)",
+                params![policy_id, agent], |r| Ok((r.get(0)?, r.get(1)?)),
+            );
+        }
+        return c.query_row(
+            "SELECT COALESCE(SUM(CASE WHEN br.status='reconciled' THEN COALESCE(br.reconciled_amount,br.amount) ELSE 0 END),0),COALESCE(SUM(CASE WHEN br.status='active' THEN br.amount ELSE 0 END),0) FROM budget_reservations br JOIN turns t ON t.id=br.turn_id JOIN sessions s ON s.id=t.session_id WHERE br.policy_id=?1 AND s.agent_id=?2 AND br.created_at>=?3",
+            params![policy_id, agent, start], |r| Ok((r.get(0)?, r.get(1)?)),
+        );
+    }
     if period == "turn" {
         c.query_row(
             "SELECT COALESCE(SUM(CASE WHEN status='reconciled' THEN COALESCE(reconciled_amount,amount) ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='active' THEN amount ELSE 0 END),0) FROM budget_reservations WHERE policy_id=?1 AND turn_id=(SELECT turn_id FROM budget_reservations WHERE policy_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 1)",
@@ -2502,6 +2522,29 @@ mod tests {
         assert_eq!(db.budget_usage("estimate", "day").unwrap(), (0, 17));
     }
     #[test]
+    fn blob_budgets_match_session_agent_report_scoped_totals_and_delete_on_archive() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-blob","provider":"codex"})).unwrap();
+        let gojo = db.agent_create(&json!({"name":"Gojo","runtimeId":"rt-blob"})).unwrap().0;
+        let other = db.agent_create(&json!({"name":"Other","runtimeId":"rt-blob"})).unwrap().0;
+        let gojo_id = gojo["id"].as_str().unwrap();
+        db.create_session_for_agent("s-gojo","rt-blob","codex",".","Gojo",Some(gojo_id)).unwrap();
+        db.create_session_for_agent("s-other","rt-blob","codex",".","Other",other["id"].as_str()).unwrap();
+        db.create_turn("t-gojo","s-gojo").unwrap();
+        db.create_turn("t-other","s-other").unwrap();
+        db.save_budget(&json!({"id":"blob-cap","scopeType":"blob","scopeId":gojo_id,"period":"day","metric":"tokens","hardLimit":10,"enabled":true})).unwrap();
+        assert!(db.reserve_applicable_budgets("t-gojo","s-gojo","rt-blob","codex",".",6).unwrap());
+        assert!(!db.reserve_applicable_budgets("t-gojo-extra","s-gojo","rt-blob","codex",".",5).unwrap());
+        assert!(db.reserve_applicable_budgets("t-other","s-other","rt-blob","codex",".",9).unwrap());
+        let listed = &db.budget_list().unwrap()["policies"][0];
+        assert_eq!(listed["scopeType"], "blob");
+        assert_eq!(listed["scopeId"], gojo_id);
+        assert_eq!(listed["reserved"], 6);
+        db.agent_archive(gojo_id).unwrap();
+        assert!(db.budget_list().unwrap()["policies"].as_array().unwrap().is_empty());
+        assert!(db.save_budget(&json!({"id":"bad","scopeType":"blob","scopeId":gojo_id,"period":"day","metric":"tokens","hardLimit":10})).is_err());
+    }
+    #[test]
     fn turn_budget_totals_report_only_the_latest_turn() {
         let db = Storage::open_in_memory().unwrap();
         db.save_budget(&json!({"id":"turn","scopeType":"global","period":"turn","metric":"tokens","hardLimit":10,"enabled":true})).unwrap();
@@ -2694,17 +2737,14 @@ mod tests {
         assert!(matches!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt","maxConcurrency":51})),Err(StorageError::InvalidAgent)));
     }
     #[test]
-    fn first_runtime_discovery_creates_one_default_and_respects_archived_agents(){
+    fn runtime_discovery_never_creates_blobs_and_preserves_existing_blobs(){
         let db=Storage::open_in_memory().unwrap();
         db.upsert_runtime(&json!({"id":"rt-claude","provider":"claude"})).unwrap();
         db.upsert_runtime(&json!({"id":"rt-codex","provider":"codex"})).unwrap();
-        let events=db.ensure_default_agents().unwrap();assert_eq!(events.len(),2);assert!(events.iter().all(|event|event["type"]=="agent.changed"&&event["payload"]["action"]=="created"));
-        let agents=db.agent_list(false,None).unwrap();assert_eq!(agents.len(),2);
-        let claude=agents.iter().find(|agent|agent["runtimeId"]=="rt-claude").unwrap();assert_eq!(claude["name"],"Claude");assert_eq!(claude["color"],"#F38C6F");assert_eq!(claude["description"],"Default agent for Claude.");assert_eq!(claude["sortOrder"],0);
-        assert!(db.ensure_default_agents().unwrap().is_empty());
-        db.agent_archive(claude["id"].as_str().unwrap()).unwrap();assert!(db.ensure_default_agents().unwrap().is_empty());assert_eq!(db.agent_list(true,Some("rt-claude")).unwrap().len(),1);
-        db.upsert_runtime(&json!({"id":"rt-codex-2","provider":"codex"})).unwrap();let later=db.ensure_default_agents().unwrap();assert_eq!(later.len(),1);let added=db.agent_list(false,Some("rt-codex-2")).unwrap().remove(0);assert_eq!(added["name"],"Codex (2)");assert_eq!(added["color"],"#82AAFF");assert_eq!(added["description"],"Default agent for Codex.");
-        let replay=db.replay_events(0,100).unwrap();assert_eq!(replay.iter().filter(|event|event["type"]=="agent.changed"&&event["payload"]["action"]=="created").count(),3);
+        assert!(db.agent_list(true,None).unwrap().is_empty());
+        let gojo=db.agent_create(&json!({"name":"Gojo","runtimeId":"rt-codex"})).unwrap().0;
+        db.upsert_runtime(&json!({"id":"rt-codex-2","provider":"codex"})).unwrap();
+        assert_eq!(db.agent_list(true,None).unwrap(), vec![gojo]);
     }
     #[test]
     fn v1_migration_backfills_once_creates_verified_backup_and_rolls_back_in_temp_paths(){

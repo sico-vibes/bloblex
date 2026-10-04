@@ -58,7 +58,7 @@ Events:
 | `events.replay` | `{ "afterSequence": number }` | Ordered retained events after the cursor; returns `replayAvailable:false` if retention no longer covers the gap, then client refreshes snapshot. |
 | `daemon.health` | `{}` | Daemon version, uptime, state and heartbeat timestamp. |
 | `daemon.shutdown` | `{}` | Gracefully stops managed adapters and exits after replying; child-process termination is a fallback. |
-| `runtime.list` | `{}` | Discovered runtimes, host, protocol, absolute executable, version, auth state and capabilities. |
+| `runtime.list` | `{}` | Discovered runtimes, host, protocol, absolute executable, version, aggregate auth state, per-gateway `gatewayAuthStates`, `displayName`, and capabilities. Provider display names are `Claude Code`, `Codex`, and `OpenCode`. |
 | `runtime.refresh` | `{}` | Rescan native Windows and configured WSL hosts; returns current runtime list. |
 | `runtime.profile.list` | `{}` | Saved runtime profiles. |
 | `runtime.profile.save` | `{ "profile": RuntimeProfile }` | Save a direct executable + parsed args profile after path validation. |
@@ -66,7 +66,7 @@ Events:
 | `settings.get` | `{}` | Non-secret local preferences. |
 | `settings.set` | `{ "key": string, "value": any }` | Persist a preference; credential fields are rejected. `exec_gate.*` and `notifications.enabled` values must be JSON booleans. |
 | `runtime.capabilities` | `{ "runtimeId": string, "agentId"?: string }` | `{runtimeId,settings,globalConcurrency,agentConcurrency,agentConcurrencies,hostDependent}`; reports static provider support separately from the persisted `exec_gate.*` switch. Unsupported settings are disabled. |
-| `runtime.models` | `{ "runtimeId": string, "refresh"?: boolean }` | `{runtimeId,provider,models,fetchedAt,expiresAt,fallback,source,validated}`; `source` is `live_query`, `cli_list`, `config_options`, or `fallback`; `validated` is true only when the live source is authoritative for model-id validation. Other settings are checked only when their model row has supporting values, such as non-empty per-model `supportedThinking`. Model rows include `id`, `displayName`, optional `providerId`, supported/default thinking, service tiers/default, optional variants, `hostDependent`, and the additive presentation fields `isDefault`, `group`, and `availability`. Cached per runtime/profile for 60 seconds; `refresh:true` bypasses cache. Fallback and other unvalidated catalogs are suggestions and do not validate execution. |
+| `runtime.models` | `{ "runtimeId": string, "refresh"?: boolean }` | `{runtimeId,provider,displayName,models,fetchedAt,expiresAt,fallback,source,validated}`; `source` is `live_query`, `cli_list`, `config_options`, or `fallback`; `validated` is true only when the live source is authoritative for model-id validation. Other settings are checked only when their model row has supporting values, such as non-empty per-model `supportedThinking`. Model rows include `id`, `displayName`, optional `providerId`, supported/default thinking, service tiers/default, optional variants, `hostDependent`, and the additive presentation fields `isDefault`, `group`, and `availability`. Cached per runtime/profile for 60 seconds; `refresh:true` bypasses cache. Fallback and other unvalidated catalogs are suggestions and do not validate execution. |
 | `exec.snapshot.get` | `{ "snapshotId": string }` | Snapshot object; `not_found` when the snapshot does not exist. |
 | `exec.snapshot.list` | `{ "sessionId": string, "after"?: string, "limit"?: integer }` | `{snapshots,next}`; `after` is an exclusive snapshot ID cursor and limit defaults to 50 (maximum 200). |
 | `exec.snapshot.latest` | `{ "sessionId": string }` | Snapshot object or `null` when the session has no turns. |
@@ -94,9 +94,9 @@ Events:
 | `pricing.override` | `{ "rule": PricingRule }` | Save user pricing with exact non-negative decimal strings per million tokens (up to twelve fractional digits) or `null` for unknown buckets. Blank buckets inherit the official or cached catalog rate when available. IDs, provider, model, currency and RFC3339 `effectiveFrom` are validated. `{ "rule": { "id": string, "remove": true } }` removes that override. |
 | `subscription.list` | `{}` | User-entered plan fees, separated from token estimates and quota (`unknown` unless measured). |
 | `subscription.save` | `{ "plan": SubscriptionPlan }` | Save provider, currency, fixed monthly amount and renewal day. |
-| `budget.list` | `{}` | `{ "policies": Budget[] }` with active reservations where available. |
-| `budget.set` | policy object | Persists a policy; most restrictive applicable hard cap wins. |
-| `budget.delete` | `{ "policyId": string }` | Removes that policy. |
+| `budget.list` | `{}` | `{ "policies": Budget[] }` with active reservations where available. `Budget.scopeType` supports `global`, `host`, `runtime`, `agent`, `blob`, `session`, and `project`; `blob` policies use a blob ID as `scopeId`. |
+| `budget.set` | `{ "id": string, "scopeType": "global"|"host"|"runtime"|"agent"|"blob"|"session"|"project", "scopeId"?: string|null, "period": string, "metric": string, "hardLimit": number, ... }` | Persists a policy; most restrictive applicable hard cap wins. `blob` requires an active blob ID in `scopeId` and matches sessions whose `agentId` equals that ID. Existing `agent` scope retains its provider-ID behavior. |
+| `budget.delete` | `{ "policyId": string }` | Removes that policy. Blob-scoped policies are also removed atomically when their blob is archived/deleted with `agent.delete`. |
 
 Appearance and companion preferences use `appearance.theme` (`system`, `dark`, or `light`), `appearance.textSize` (`small`, `default`, `large`, or `larger`), `companion.startPosition` (`launch` or `last`), `companion.hotkey` (boolean), and `companion.openAtStartup` (boolean).
 
@@ -123,7 +123,7 @@ The following examples define the v1 UI DTO fields. Nullable fields may be absen
 }
 ```
 
-`app.snapshot` returns `{snapshotVersion,sequence,daemon,hosts,runtimes,agents,sessions,permissions,usageSummary,budgets,settings}`. `agents` includes active and archived `Agent` rows; `sessions` excludes archived conversations. `budgets` is a `Budget[]`; `budget.list` wraps the same array in `{policies}`. Session turn/message/tool/file arrays are ordered and omit provider raw payloads. `session.get` returns the same nested session DTO. Long transcripts may be paged in later protocol versions.
+`app.snapshot` returns `{snapshotVersion,sequence,daemon,hosts,runtimes,agents,sessions,permissions,usageSummary,budgets,settings}`. `agents` includes active and archived `Agent` rows; `sessions` excludes archived conversations. `budgets` is a `Budget[]`; `budget.list` wraps the same array in `{policies}`. A blob policy's `consumed` and `reserved` totals include only reservations from turns whose session has the matching `agentId`. Session turn/message/tool/file arrays are ordered and omit provider raw payloads. `session.get` returns the same nested session DTO. Long transcripts may be paged in later protocol versions.
 
 Session turn objects add nullable `failureClass` and `failureMessage` fields. The message is a safe daemon-authored summary for the failure class; both fields are null for turns without a classified failure. This projection does not expose provider error text.
 

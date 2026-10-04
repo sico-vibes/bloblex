@@ -347,8 +347,6 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 let _ = st.db.upsert_runtime(&value);
                 values.push(value)
             }
-            let default_events=st.db.ensure_default_agents().map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
-            st.broadcast_persisted(default_events);
             *st.runtimes.write().await = values.clone();
             st.emit("runtime.changed", json!({"runtimes":values})).await;
             Ok(json!({"runtimes":values}))
@@ -756,6 +754,7 @@ async fn active_for_agent(st:&AppState,agent_id:&str)->u32{
 fn catalog_key(runtime: &Value) -> String {
     format!("{}|{}|{}|{}|{}", runtime["id"].as_str().unwrap_or(""), runtime["executablePath"].as_str().unwrap_or(""), runtime["version"].as_str().unwrap_or(""), serde_json::to_string(&runtime["launchArgs"]).unwrap_or_default(), runtime["profileId"].as_str().unwrap_or(""))
 }
+fn provider_display_name(provider: &str) -> &'static str { match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" } }
 async fn fetch_model_catalog(st: &AppState, runtime: &Value, refresh: bool) -> Result<Value, DispatchError> {
     let spec = runtime_from(runtime);
     let key = catalog_key(runtime);
@@ -769,7 +768,7 @@ async fn fetch_model_catalog(st: &AppState, runtime: &Value, refresh: bool) -> R
         _ => derr("provider_error", "runtime returned an invalid model catalog", StatusCode::BAD_GATEWAY),
     })?;
     model_presentation::apply(&mut catalog.models, catalog.validated, catalog.fallback);
-    let value = json!({"runtimeId":spec.runtime_id,"provider":provider,"models":catalog.models,"fetchedAt":catalog.fetched_at,"expiresAt":catalog.expires_at,"fallback":catalog.fallback,"source":catalog.source,"validated":catalog.validated});
+    let value = json!({"runtimeId":spec.runtime_id,"provider":provider,"displayName":provider_display_name(provider),"models":catalog.models,"fetchedAt":catalog.fetched_at,"expiresAt":catalog.expires_at,"fallback":catalog.fallback,"source":catalog.source,"validated":catalog.validated});
     if let Ok(mut cache) = cache.lock() { cache.insert(key, (Instant::now(), value.clone())); }
     Ok(value)
 }
@@ -2141,7 +2140,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         db.upsert_runtime(&v)?;
         runtimes.push(v)
     }
-    let default_agent_events=db.ensure_default_agents()?;
     let st = AppState {
         token: Arc::new(token.clone()),
         started: Instant::now(),
@@ -2156,7 +2154,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         deleted_sessions: Arc::new(Mutex::new(HashSet::new())),
         stopping: Arc::new(tokio::sync::Notify::new()),
     };
-    st.broadcast_persisted(default_agent_events);
     for id in recovered_sessions {
         if let Ok(session) = st.db.session_event_summary(&id) {
             st.emit("session.changed", session).await;

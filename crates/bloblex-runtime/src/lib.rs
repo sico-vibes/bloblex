@@ -19,11 +19,13 @@ pub struct DiscoveredRuntime {
     pub id: String,
     pub host_id: String,
     pub provider: String,
+    pub display_name: String,
     pub protocol_family: ProtocolFamily,
     pub executable_path: String,
     pub launch_args: Vec<String>,
     pub version: Option<String>,
     pub auth_state: AuthState,
+    pub gateway_auth_states: BTreeMap<String, AuthState>,
     pub status: String,
     pub capabilities: BTreeMap<String, bool>,
 }
@@ -241,7 +243,7 @@ pub async fn discover() -> Vec<DiscoveredRuntime> {
             }
             continue;
         }
-        let auth_state = auth_status(id, &resolved.executable, &resolved.args).await;
+        let (auth_state, gateway_auth_states) = auth_status(id, &resolved.executable, &resolved.args).await;
         let mut caps = BTreeMap::new();
         for k in [
             "newSession",
@@ -272,44 +274,106 @@ pub async fn discover() -> Vec<DiscoveredRuntime> {
             ),
             host_id: "host_windows_local".into(),
             provider: id.into(),
+            display_name: provider_display_name(id).into(),
             protocol_family: family,
             executable_path: resolved.executable.to_string_lossy().into_owned(),
             launch_args: resolved.args,
             version,
             auth_state,
+            gateway_auth_states,
             status: "online".into(),
             capabilities: caps,
         });
     }
     out
 }
-async fn auth_status(provider: &str, exe: &Path, args: &[String]) -> AuthState {
+fn provider_display_name(provider: &str) -> &'static str { match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" } }
+async fn auth_status(provider: &str, exe: &Path, args: &[String]) -> (AuthState, BTreeMap<String, AuthState>) {
     let mut av = args.iter().map(String::as_str).collect::<Vec<_>>();
     match provider {
         "claude" => av.extend(["auth", "status"]),
         "codex" => av.extend(["login", "status"]),
-        _ => return AuthState::Unknown,
+        "opencode" => av.extend(["auth", "list"]),
+        _ => return (AuthState::Unknown, BTreeMap::new()),
     };
-    let out = safe_status_output(exe, &av).await.unwrap_or_default();
+    if provider == "opencode" {
+        if let Some((true, output)) = safe_status_output(exe, &av).await {
+            let states = parse_opencode_auth_list(&output).unwrap_or_default();
+            let aggregate = if states.values().any(|s| matches!(s, AuthState::Authenticated)) { AuthState::Authenticated } else { AuthState::Unauthenticated };
+            return (aggregate, states);
+        }
+        let mut model_args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        model_args.extend(["models", "--verbose"]);
+        if let Some((true, output)) = safe_status_output(exe, &model_args).await {
+            let states = opencode_model_gateways(&output);
+            let aggregate = if states.is_empty() { AuthState::Unauthenticated } else { AuthState::Authenticated };
+            return (aggregate, states);
+        }
+        return (AuthState::Unknown, BTreeMap::new());
+    }
+    let out = safe_status_output(exe, &av).await.map(|(_, text)| text).unwrap_or_default();
     if provider == "claude" {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) {
-            return match v["loggedIn"].as_bool() {
+            return (match v["loggedIn"].as_bool() {
                 Some(true) => AuthState::Authenticated,
                 Some(false) => AuthState::Unauthenticated,
                 None => AuthState::Unknown,
-            };
+            }, BTreeMap::new());
         }
     }
     let l = out.to_ascii_lowercase();
     if l.contains("not logged in") || l.contains("not authenticated") {
-        AuthState::Unauthenticated
+        (AuthState::Unauthenticated, BTreeMap::new())
     } else if l.contains("logged in using") || l.contains("logged in") {
-        AuthState::Authenticated
+        (AuthState::Authenticated, BTreeMap::new())
     } else {
-        AuthState::Unknown
+        (AuthState::Unknown, BTreeMap::new())
     }
 }
-async fn safe_status_output(exe: &Path, args: &[&str]) -> Option<String> {
+fn safe_gateway_name(input: &str) -> Option<String> {
+    let value = input.trim().trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.');
+    if value.is_empty() || value.len() > 64 || !value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) { return None; }
+    let normalized = value.to_ascii_lowercase();
+    Some(if normalized == "opencode" { "opencode-zen".into() } else { normalized })
+}
+fn parse_opencode_auth_list(output: &str) -> Option<BTreeMap<String, AuthState>> {
+    let mut states = BTreeMap::new();
+    let mut saw_row = false;
+    for line in output.lines() {
+        let line = line.trim();
+        let mut pieces = line.split_whitespace();
+        let Some(first) = pieces.next() else { continue; };
+        let raw_name = first.trim_matches(|c: char| matches!(c, '*' | '|' | ':' | ','));
+        let Some(name) = safe_gateway_name(raw_name) else { continue; };
+        if matches!(name.as_str(), "provider" | "providers" | "gateway" | "gateways" | "name" | "status") { continue; }
+        let lower = line.to_ascii_lowercase();
+        let raw_name = raw_name.to_ascii_lowercase();
+        if lower == raw_name || lower.starts_with(&format!("{raw_name} ")) || lower.starts_with(&format!("{raw_name}:")) {
+            saw_row = true;
+            let missing = ["not configured", "no credentials", "not authenticated", "signed out", "missing"].iter().any(|marker| lower.contains(marker));
+            let present = !missing && (pieces.next().is_some() || lower == raw_name || ["configured", "authenticated", "credential", "connected", "signed in", "logged in"].iter().any(|marker| lower.contains(marker)));
+            states.insert(name, if present { AuthState::Authenticated } else { AuthState::Unauthenticated });
+        }
+    }
+    saw_row.then_some(states)
+}
+fn collect_model_gateways(value: &serde_json::Value, states: &mut BTreeMap<String, AuthState>) {
+    match value {
+        serde_json::Value::Array(rows) => rows.iter().for_each(|row| collect_model_gateways(row, states)),
+        serde_json::Value::Object(object) => {
+            let provider = object.get("providerID").and_then(serde_json::Value::as_str).or_else(|| object.get("id").and_then(serde_json::Value::as_str).and_then(|id| id.split_once('/').map(|(provider, _)| provider)));
+            if let Some(name) = provider.and_then(safe_gateway_name) { states.insert(name, AuthState::Authenticated); }
+            for (key, child) in object { if key == "models" || key == "providers" { collect_model_gateways(child, states); } }
+        }
+        _ => {}
+    }
+}
+fn opencode_model_gateways(output: &str) -> BTreeMap<String, AuthState> {
+    let mut states = BTreeMap::new();
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(output) { collect_model_gateways(&value, &mut states); }
+    states
+}
+async fn safe_status_output(exe: &Path, args: &[&str]) -> Option<(bool, String)> {
     let mut cmd = Command::new(exe);
     prepare_command(&mut cmd);
     cmd.args(args)
@@ -325,11 +389,11 @@ async fn safe_status_output(exe: &Path, args: &[&str]) -> Option<String> {
         .ok()?;
     let _ = process_tree.terminate();
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-    if text.len() < 32 * 1024 {
+    if text.len() < 32 * 1024 && args.ends_with(&["auth", "status"]) {
         text.push_str(&String::from_utf8_lossy(&out.stderr));
     }
     text.truncate(32 * 1024);
-    Some(text)
+    Some((out.status.success(), text))
 }
 fn short_hash(s: &str) -> String {
     let mut h = 2166136261u32;
@@ -408,5 +472,22 @@ mod tests {
     #[tokio::test]
     async fn resolver_never_returns_a_powershell_script() {
         assert!(!executable_extensions().iter().any(|extension| *extension == ".ps1"));
+    }
+    #[test]
+    fn fake_opencode_auth_cli_output_only_yields_gateway_and_presence() {
+        let fake_cli_output = "opencode-go configured sk-fixture-NEVER-FORWARD-0123456789\nopencode signed in";
+        let states = parse_opencode_auth_list(fake_cli_output).unwrap();
+        assert!(matches!(states.get("opencode-go"), Some(AuthState::Authenticated)));
+        assert!(matches!(states.get("opencode-zen"), Some(AuthState::Authenticated)));
+        let forwarded = serde_json::to_string(&states).unwrap();
+        assert!(!forwarded.contains("sk-fixture"));
+        assert!(!forwarded.contains("NEVER-FORWARD"));
+    }
+    #[test]
+    fn opencode_model_listing_fallback_is_gateway_scoped_and_discards_other_values() {
+        let states = opencode_model_gateways(r#"{"models":[{"id":"opencode-go/model-a","providerID":"opencode-go","description":"sk-private"},{"id":"opencode/model-b","providerID":"opencode"}]}"#);
+        assert_eq!(states.len(), 2);
+        assert!(states.values().all(|state| matches!(state, AuthState::Authenticated)));
+        assert!(!serde_json::to_string(&states).unwrap().contains("sk-private"));
     }
 }

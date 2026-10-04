@@ -1,6 +1,6 @@
 # Release checklist
 
-Source and config review, plus the release script and updater manifest helper. No installer was built, no app or daemon was started, and no signing material was read or copied while writing this file. Status values are `done`, `needs user`, or `blocked`.
+Updated 4 October 2026 after publishing `v0.1.0-beta.6` from `beta/claude-resume-2026-10-04`. The prerelease includes the NSIS installer, its Tauri updater signature, and `latest.json`; the rolling `channel-beta` release now points at beta.6. The installer is not Authenticode code-signed, and no native app or clean-machine install was run. Status values are `done`, `needs user`, or `blocked`.
 
 Versions read from this worktree: root `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.6`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
 
@@ -8,12 +8,14 @@ Versions read from this worktree: root `package.json`, `apps/desktop/package.jso
 
 ## Release command
 
-Status: **done** (script and manifest helper). Publishing a GitHub release is **needs user**.
+Status: **done**. GitHub prerelease [`v0.1.0-beta.6`](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.6) and the rolling `channel-beta` manifest are published.
+
+The release script's dry run completed the production bundle and manifest validation on the requested beta branch. It warned that direct publishing normally requires `main`; after validating the installer/signature/manifest, the equivalent GitHub release and channel upload commands were run against this explicitly requested beta branch. For the standard scripted flow on a future release, use a clean `main` checkout.
 
 From the repository root:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -Version 0.1.0-beta.1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -Version 0.1.0-beta.7
 ```
 
 `-DryRun` runs preflight, the bundle build, and manifest generation, prints the `gh` commands it would run, and does not execute `gh`, create a tag, or push. Add `-SkipBuild` to reuse an existing NSIS output directory, and `-BundleDir` to point that directory at a folder of `*-setup.exe` and matching `.sig` files (used to exercise the script without a real bundle). `-Repo` defaults to `sico-vibes/bloblex`.
@@ -24,7 +26,7 @@ Pre-release versions (for example `0.1.0-beta.1`) are published with `gh release
 
 ## Produce an installer
 
-Status: **needs user**
+Status: **done for beta.6** (NSIS build and updater signature verified).
 
 `npm run desktop:bundle` runs `scripts/bundle-windows.ps1`, which:
 
@@ -35,7 +37,7 @@ Status: **needs user**
 
 The release artifact is the NSIS installer only. An MSI is not a Bloblex release artifact: an MSI version cannot carry a `-beta.N` pre-release. `docs/UPDATER.md` sets the Windows bundle target to `nsis` only. The release script globs `<CARGO_TARGET_DIR>\release\bundle\nsis\*-setup.exe`, keeps the file whose name matches the release version, and requires the sibling `<installer>.sig`. It does not upload an MSI.
 
-`tauri.conf.json` in this worktree still has `bundle.targets` of `nsis` and `msi`, and `bundle.createUpdaterArtifacts` is `false`. That file is owned by the Tauri lane; this checklist does not edit it. Until `createUpdaterArtifacts` is enabled and the target list is `nsis`, `tauri build` will not emit the `.sig` the release script requires, and it may still emit an MSI that the release script ignores. No installer path or file size is recorded here because the bundle command was not run.
+`tauri.conf.json` now has `bundle.targets: ["nsis"]`, `createUpdaterArtifacts: true`, the updater public key, and stable/beta endpoints. The release build produced `C:\bxluna\release\bundle\nsis\Bloblex_0.1.0-beta.6_x64-setup.exe` (6,755,692 bytes) and the matching `.sig` (456 bytes). The versioned release and rolling channel manifest were verified remotely.
 
 At review time `apps/desktop/src-tauri/binaries/` contained `bloblex-hook-x86_64-pc-windows-msvc.exe` only. The daemon sidecar is produced by the bundle script; it was not built for this note.
 
@@ -45,7 +47,7 @@ Configured bundle icons exist on disk: `assets/icon/bloblex.ico` and `assets/ico
 
 ## Update manifest and channels
 
-Status: **done** (helper and release script). No manifest has been published. That publish is **needs user**.
+Status: **done**. The signed `latest.json` is attached to `v0.1.0-beta.6` and the rolling `channel-beta` asset has been updated to version `0.1.0-beta.6`.
 
 `scripts/make-update-manifest.mjs` writes the Tauri updater static file `latest.json`:
 
@@ -62,13 +64,13 @@ Notes come from `docs/releases/<version>.md`. If that file is missing or blank, 
 
 ## Updater key
 
-Status: **needs user**
+Status: **done for beta.6**. The existing Tauri updater key files were used by the release build; no private key material was committed.
 
 The updater key is a minisign key pair used by the Tauri updater plugin. It is not a Windows code-signing certificate. The release script reads the private key and password only while `npm run desktop:bundle` runs, from `%USERPROFILE%\.bloblex-release\updater.key` and `updater.pass`, or from `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` when those are already set. It then removes them from the process environment. It does not print them.
 
-The public half belongs in `tauri.conf.json` under `plugins.updater.pubkey` (`docs/UPDATER.md`). This worktree's `tauri.conf.json` has no `plugins.updater` block. Putting that public key in the config is the Tauri lane's file, and generating the key pair is the user's.
+The public half is configured in `tauri.conf.json` under `plugins.updater.pubkey` (`docs/UPDATER.md`).
 
-Losing the private key means existing installs cannot accept future updates: the app keeps the old public key and will reject signatures from a new key. Never commit `updater.key`, `updater.pass`, or the private-key environment values. This checklist did not read or copy `%USERPROFILE%\.bloblex-release`.
+Losing the private key means existing installs cannot accept future updates: the app keeps the old public key and will reject signatures from a new key. Never commit `updater.key`, `updater.pass`, or the private-key environment values. The release script loaded the existing files into its build process and removed them from the process environment afterward.
 
 ## Publishing a stable release later
 
@@ -144,6 +146,6 @@ Status: **done** as a review; the file was not edited.
 
 ## About page
 
-Status: **done**
+Status: **done** (source reviewed for beta.6; not a native UI check).
 
-Settings → General → About is read-only: version from `apps/desktop/package.json` (same `0.1.0` as `tauri.conf.json`), channel `local build`, `Updates: not configured`, `Signing: not configured`. There is no update or sign control. That text matches `apps/desktop/src/ui/SettingsSheet.tsx` in this worktree. Wiring it to the updater is outside this checklist.
+Settings → Updates includes an About group with `Code signing: Not configured`, matching the unsigned Windows installer. The app version is `0.1.0-beta.6` across the package, Tauri and Cargo workspace manifests. This source review is not a native window or installed-app verification.

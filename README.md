@@ -2,7 +2,7 @@
 
 Local Windows desktop control plane for Claude Code, Codex, and OpenCode. A React/Tauri shell and a companion window share state from the `bloblexd` daemon. Each provider CLI keeps its own login.
 
-**Status: Phases 1–6, 2b, the redesign, auto-update and later work are on main. The latest release is `v0.1.0-beta.3`; later work is unreleased.** Installers are not code-signed. Checks are unit, mounted and fake-process tests; there is no accepted live-provider session and no native window pass of the current tree. See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and the status table in [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md).
+**Status: Phases 1–6, 2b, the redesign, auto-update and later work are on main. Release `v0.1.0-beta.4` is prepared and awaits a build and publication.** Installers are not code-signed. Checks are unit, mounted and fake-process tests; there is no accepted live-provider session and no native window pass of the current tree. See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and the status table in [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md).
 
 ## Continue this project
 

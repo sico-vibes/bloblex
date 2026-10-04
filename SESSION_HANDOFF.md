@@ -2,7 +2,7 @@
 
 Current as of 4 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
-Acceptance of the current tree is unit, mounted and fake-process tests. There is no live-provider session check and no native window pass of this tree. Public beta releases exist (latest published: `v0.1.0-beta.3`); work merged after it is not released yet.
+Acceptance of the current tree is unit, mounted and fake-process tests. There is no live-provider session check and no native window pass of this tree. Public beta releases exist. Release `v0.1.0-beta.4` is prepared but unpublished.
 
 ## What exists
 

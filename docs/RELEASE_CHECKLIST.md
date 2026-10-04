@@ -39,7 +39,7 @@ The release artifact is the NSIS installer only. An MSI is not a Bloblex release
 
 `tauri.conf.json` now has `bundle.targets: ["nsis"]`, `createUpdaterArtifacts: true`, the updater public key, and stable/beta endpoints. The release build produced `C:\bxluna\release\bundle\nsis\Bloblex_0.1.0-beta.6_x64-setup.exe` (6,755,692 bytes) and the matching `.sig` (456 bytes). The versioned release and rolling channel manifest were verified remotely.
 
-At review time `apps/desktop/src-tauri/binaries/` contained `bloblex-hook-x86_64-pc-windows-msvc.exe` only. The daemon sidecar is produced by the bundle script; it was not built for this note.
+The beta.6 bundle run staged both `bloblexd-x86_64-pc-windows-msvc.exe` and `bloblex-hook-x86_64-pc-windows-msvc.exe` in `apps/desktop/src-tauri/binaries/` for packaging. These are local bundle outputs, not source changes.
 
 Configured bundle icons exist on disk: `assets/icon/bloblex.ico` and `assets/icon/bloblex-master.png` (the paths in `bundle.icon`). `assets/icon/tray.png` is also present; the tray image is embedded from Rust, which this note does not change.
 

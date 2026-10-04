@@ -2,7 +2,7 @@
 
 Current as of 4 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
-Acceptance of the current tree is unit, mounted and fake-process tests. There is no live-provider session check and no native window pass of this tree. Public beta releases exist. Release `v0.1.0-beta.4` is prepared but unpublished.
+Acceptance evidence for the current tree is unit, mounted and fake-process tests. There is no live-provider session check and no native window pass of this tree. Release `v0.1.0-beta.4` is the latest release; later work on main is unreleased.
 
 ## What exists
 
@@ -19,6 +19,11 @@ On main:
 - Batch B: Ctrl+K quick switcher, composer model and thinking switch, safe Markdown, unified diff view and approval shortcuts. The companion uses the same approval card.
 - Batch B1: one shared Codex app-server or OpenCode ACP process per runtime key, per-session queues that coalesce streaming deltas only, idle shutdown, crash restart and resume, and bounded per-session cancel. Claude Code remains one process per session.
 - Batch C: first-run setup on an empty install, companion start position and Ctrl+Alt+B hotkey, system/dark/light themes and text size, and reorderable favourites and pins. A contrast test checks the light theme against AA.
+- Blob wardrobe: per-blob outfits with seasonal automatic selection, drawn to match the blob and stored by migration 7.
+- Launch intro with startup checks, companion off by default with a sidebar toggle and an open-at-startup setting, and three-step first-run onboarding with verified install and sign-in guides.
+- OpenCode Go models and official model prices: 150 rows with exact decimals, tiers, and per-field sources, stored with migration 8. Each row records its source URL and checked date. Re-check the official price list in `crates/bloblex-usage/data` against vendor pages when prices change; the current checked date is 2026-10-04.
+
+The main gates passed: `cargo test --workspace` (231 passed), desktop check, typecheck, Vitest (338/338), and build. This is unit, mounted, in-memory-storage and fake-process evidence; it does not establish native-window behavior or a live-provider session.
 
 ## Lanes
 
@@ -53,6 +58,7 @@ Releases: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). The update sig
 ## What needs the user's native testing (Phase 7)
 
 - Companion transparency, free drag, monitor clamping, DPI, resize timing, and the launch welcome.
+- Launch startup checks, companion toggle/open-at-startup behavior, and first-run onboarding on a native install.
 - Real file drop, approvals in both windows, tray Pause all, keyboard focus, and reduced motion.
 - Notifications, Start with Windows, and the export/import file dialogs.
 - Quit and process-tree cleanup; a clean-machine install; code signing.
@@ -60,6 +66,7 @@ Releases: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). The update sig
 ## Known gaps
 
 - No live Claude, Codex, or OpenCode session has been accepted against the current tree.
+- Official model prices can change. The checked date in `crates/bloblex-usage/data/official-prices.json` is 2026-10-04; verify its source pages again when prices change.
 - Codex blob instructions stay thread-level: the installed app-server schema has no per-turn context field.
 - Cost budgets are not offered: turn admission cannot estimate cost yet. Existing cost policies are listed with a note.
 - The daemon does not emit a `context` failure class; session turn JSON omits `failureClass`.

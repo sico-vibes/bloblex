@@ -2,9 +2,9 @@
 
 Source and config review, plus the release script and updater manifest helper. No installer was built, no app or daemon was started, and no signing material was read or copied while writing this file. Status values are `done`, `needs user`, or `blocked`.
 
-Versions read from this worktree: root `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.5`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
+Versions read from this worktree: root `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.6`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
 
-`docs/releases/0.1.0-beta.5.md` is the note for this beta. Outside `-DryRun`, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
+`docs/releases/0.1.0-beta.6.md` is the note for this beta. Outside `-DryRun`, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
 
 ## Release command
 
@@ -74,7 +74,7 @@ Losing the private key means existing installs cannot accept future updates: the
 
 Status: **needs user**
 
-1. Set root `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the Cargo workspace `version` to the same non-pre-release semver (the current tree is `0.1.0-beta.5`).
+1. Set root `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the Cargo workspace `version` to the same non-pre-release semver (the current tree is `0.1.0-beta.6`).
 2. Add `docs/releases/<version>.md`.
 3. From a clean `main` checkout, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -Version <version>`.
 4. Because the version has no pre-release part, the script does not pass `--prerelease` or `--latest=false`. GitHub can mark that release as Latest.

@@ -2,7 +2,7 @@
 
 Current as of 4 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
 
-**Evidence class:** desktop unit and mounted tests, plus daemon and adapter tests that use in-memory storage or fake processes. Release `v0.1.0-beta.5` is the latest release. There is still no accepted live-provider session and no native window pass of the current tree. The Phase 3 isolated-database smoke (`5138c8e`, revision `e770db8`, [NATIVE_SMOKE_RESULTS.md](NATIVE_SMOKE_RESULTS.md)) is the only recorded native pass.
+**Evidence class:** desktop unit and mounted tests, plus daemon and adapter tests that use in-memory storage or fake processes. Release `v0.1.0-beta.6` is the latest release. There is still no accepted live-provider session and no native window pass of the current tree. The Phase 3 isolated-database smoke (`5138c8e`, revision `e770db8`, [NATIVE_SMOKE_RESULTS.md](NATIVE_SMOKE_RESULTS.md)) is the only recorded native pass.
 
 ## Phase status
 

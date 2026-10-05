@@ -15,12 +15,34 @@ use std::{
     },
 };
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
     process::Child,
     process::Command,
     sync::Mutex,
 };
 use uuid::Uuid;
+
+const STDERR_TAIL_LIMIT: usize = 8 * 1024;
+
+async fn capture_stderr_tail(
+    mut stderr: tokio::process::ChildStderr,
+    captured: Arc<Mutex<String>>,
+) {
+    let mut tail = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        let read = match stderr.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => read,
+        };
+        tail.extend_from_slice(&chunk[..read]);
+        if tail.len() > STDERR_TAIL_LIMIT {
+            let excess = tail.len() - STDERR_TAIL_LIMIT;
+            tail.drain(..excess);
+        }
+        *captured.lock().await = String::from_utf8_lossy(&tail).into_owned();
+    }
+}
 
 #[derive(Debug,Clone)]
 struct PrivateInstructionFile { path:PathBuf, lock_path:PathBuf }
@@ -117,7 +139,7 @@ fn typed_args(options: &ExecOptions, instruction_file: Option<&std::path::Path>,
     if instruction_changed { args.extend(["--system-prompt-snapshot".into(), "off".into()]); }
     args
 }
-fn permission_args(mode: bloblex_agent_core::ApprovalMode) -> Vec<&'static str>{if mode==bloblex_agent_core::ApprovalMode::Bypass{vec!["--permission-mode","bypassPermissions","--allow-dangerously-skip-permissions"]}else{vec!["--permission-mode","default","--permission-prompt-tool","stdio"]}}
+fn permission_args(mode: bloblex_agent_core::ApprovalMode) -> Vec<&'static str>{if mode==bloblex_agent_core::ApprovalMode::Bypass{vec!["--permission-mode","bypassPermissions","--allow-dangerously-skip-permissions"]}else{vec!["--permission-mode","default"]}}
 fn exact_usd_minor(decimal: &str) -> Option<i64> {
     let value = decimal.strip_prefix('+').unwrap_or(decimal);
     if value.starts_with('-') { return None; }
@@ -135,6 +157,7 @@ struct Conn {
     events: EventSender,
     provider_id: Mutex<Option<String>>,
     active_turn: AtomicBool,
+    has_delivered_prompt: AtomicBool,
     cancellation_requested: AtomicBool,
     permission_requests: Mutex<HashMap<String, (Value, Value)>>,
     local_session_id: String,
@@ -145,6 +168,10 @@ struct Conn {
     desired_instruction_sha256: Option<String>,
     event_sender: EventSender,
     active_turn_id: Mutex<Option<String>>,
+    stderr_tail: Arc<Mutex<String>>,
+    api_retry_count: std::sync::atomic::AtomicU32,
+    api_retry_http_status_seen: AtomicBool,
+    api_retry_connection_failure: AtomicBool,
 }
 fn control_response(original_id: Value, input: Value, choice: &str) -> Result<Value, AdapterError> {
     let response = match choice {
@@ -160,6 +187,43 @@ fn control_response(original_id: Value, input: Value, choice: &str) -> Result<Va
         json!({"type":"control_response","response":{"subtype":"success","request_id":original_id,"response":response}}),
     )
 }
+
+fn retry_event_has_http_status(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => fields.iter().any(|(key, child)| {
+            let key = key.to_ascii_lowercase();
+            let status_field = matches!(key.as_str(), "status" | "http_status" | "httpstatus" | "status_code" | "statuscode");
+            (status_field && child.as_u64().is_some_and(|status| (100..=599).contains(&status)))
+                || retry_event_has_http_status(child)
+        }),
+        Value::Array(values) => values.iter().any(retry_event_has_http_status),
+        _ => false,
+    }
+}
+
+fn retry_event_has_connection_failure(value: &Value) -> bool {
+    match value {
+        Value::String(text) => {
+            let text = text.to_ascii_lowercase();
+            ["connection error", "connection failed", "connectionerror", "econn", "socket error", "network error"]
+                .iter().any(|marker| text.contains(marker))
+        }
+        Value::Object(fields) => fields.values().any(retry_event_has_connection_failure),
+        Value::Array(values) => values.iter().any(retry_event_has_connection_failure),
+        _ => false,
+    }
+}
+
+fn record_api_retry(conn: &Conn, event: &Value) {
+    let _ = conn.api_retry_count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| Some(count.saturating_add(1)));
+    if retry_event_has_http_status(event) {
+        conn.api_retry_http_status_seen.store(true, Ordering::Relaxed);
+    }
+    if retry_event_has_connection_failure(event) {
+        conn.api_retry_connection_failure.store(true, Ordering::Relaxed);
+    }
+}
+
 #[derive(Default)]
 pub struct ClaudeAdapter {
     sessions: Mutex<HashMap<String, Arc<Conn>>>,
@@ -264,6 +328,8 @@ async fn parse_line(
                 .send(AgentEvent::Error {
                     message: v["result"]
                         .as_str()
+                        .filter(|message| !message.trim().is_empty())
+                        .or_else(|| v["errors"].as_array().and_then(|errors| errors.iter().find_map(Value::as_str)))
                         .unwrap_or("Claude reported a turn error")
                         .to_owned(),
                 })
@@ -404,12 +470,15 @@ impl ClaudeAdapter {
         c.current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         let mut child = match c.spawn() { Ok(child) => child, Err(e) => { if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);} return Err(AdapterError::Process(e.to_string())); } };
         let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
         let Some(stdin)=child.stdin.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdin unavailable".into()))};
         let Some(stdout)=child.stdout.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdout unavailable".into()))};
+        let Some(stderr)=child.stderr.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stderr unavailable".into()))};
+        let stderr_tail = Arc::new(Mutex::new(String::new()));
+        let stderr_capture = tokio::spawn(capture_stderr_tail(stderr, stderr_tail.clone()));
         let conn = Arc::new(Conn {
             stdin: Mutex::new(StdinWriter::new(stdin)),
             child: Mutex::new(child),
@@ -417,6 +486,7 @@ impl ClaudeAdapter {
             events: events.clone(),
             provider_id: Mutex::new(Some(assigned_id)),
             active_turn: AtomicBool::new(false),
+            has_delivered_prompt: AtomicBool::new(provider_session_id.is_some()),
             cancellation_requested: AtomicBool::new(false),
             permission_requests: Mutex::new(HashMap::new()),
             local_session_id: local_session_id.into(),
@@ -425,6 +495,10 @@ impl ClaudeAdapter {
             desired_instruction_sha256,
             event_sender: events.clone(),
             active_turn_id: Mutex::new(None),
+            stderr_tail: stderr_tail.clone(),
+            api_retry_count: std::sync::atomic::AtomicU32::new(0),
+            api_retry_http_status_seen: AtomicBool::new(false),
+            api_retry_connection_failure: AtomicBool::new(false),
         });
         let reader = conn.clone();
         let (resume_ready_tx, resume_ready_rx) = tokio::sync::oneshot::channel();
@@ -434,6 +508,9 @@ impl ClaudeAdapter {
             let mut resume_ready_tx = Some(resume_ready_tx);
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                    if v["type"].as_str() == Some("system") && v["subtype"].as_str() == Some("api_retry") {
+                        record_api_retry(&reader, &v);
+                    }
                     if check_resume {
                         if resume_rejected_result(&v) {
                             if let Some(tx) = resume_ready_tx.take() {
@@ -481,13 +558,15 @@ impl ClaudeAdapter {
                     .await;
                 }
             }
+            let _ = stderr_capture.await;
             if let Some(pair) = reader.instruction_file.as_ref() { remove_private_pair(pair); }
             if reader.active_turn.swap(false, Ordering::SeqCst) {
+                let stderr = reader.stderr_tail.lock().await.trim().to_owned();
                 let event = if reader.cancellation_requested.swap(false, Ordering::SeqCst) {
                     AgentEvent::TurnCancelled
                 } else {
                     AgentEvent::Error {
-                        message: "Claude process exited before completing the turn".into(),
+                        message: if stderr.is_empty() { "Claude process exited before completing the turn".into() } else { stderr },
                     }
                 };
                 let _ = reader.events.send(event).await;
@@ -517,7 +596,7 @@ impl AgentAdapter for ClaudeAdapter {
         let now = Utc::now();
         let mut command = Command::new(&r.executable);
         prepare_command(&mut command);
-        command.args(&r.args).args(["-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--permission-mode", "default", "--permission-prompt-tool", "stdio", "--no-session-persistence"])
+        command.args(&r.args).args(["-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--permission-mode", "default", "--no-session-persistence"])
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
         if let Some(cwd) = r.cwd.as_ref() { command.current_dir(cwd); }
         let result = async {
@@ -655,13 +734,30 @@ impl AgentAdapter for ClaudeAdapter {
             .ok_or_else(|| AdapterError::Process("Claude session not active".into()))?;
         let (desired_hash,baseline)=self.instruction_hash_context.lock().await.remove(&h.session_id).unwrap_or((None,None));
         let instruction_changed=baseline.as_ref().is_some_and(|old|Some(old)!=desired_hash.as_ref());
-        let options_changed = c.launch_options.approval_mode != q.exec_options.approval_mode || c.launch_options.model != q.exec_options.model || c.launch_options.thinking != q.exec_options.thinking || c.launch_options.service_tier != q.exec_options.service_tier || c.launch_options.instructions != q.exec_options.instructions || c.launch_options.env != q.exec_options.env || instruction_changed;
+        let has_delivered_prompt = c.has_delivered_prompt.load(Ordering::SeqCst);
+        let mut changed_fields = Vec::new();
+        if c.launch_options.approval_mode != q.exec_options.approval_mode { changed_fields.push("approvalMode"); }
+        if c.launch_options.model != q.exec_options.model { changed_fields.push("model"); }
+        if c.launch_options.thinking != q.exec_options.thinking { changed_fields.push("thinking"); }
+        if c.launch_options.service_tier != q.exec_options.service_tier { changed_fields.push("serviceTier"); }
+        if c.launch_options.instructions != q.exec_options.instructions { changed_fields.push("instructions"); }
+        if c.launch_options.env != q.exec_options.env { changed_fields.push("customEnv"); }
+        if instruction_changed { changed_fields.push("instruction hash"); }
+        let options_changed = !changed_fields.is_empty();
         if options_changed {
             let runtime = c.runtime.clone(); let cwd = c.cwd.clone(); let events = c.event_sender.clone();
-            let provider_id = c.provider_id.lock().await.clone().ok_or_else(|| AdapterError::Unsupported("Claude resume identity is unavailable for changed execution options".into()))?;
-        let _ = c.process_tree.terminate();
-        let _ = c.child.lock().await.kill().await;
-            c = self.start(&runtime, &cwd, Some(&provider_id), events, &h.session_id, &q.exec_options, instruction_changed, desired_hash.clone()).await.map_err(|_| AdapterError::Unsupported("Claude could not resume with the requested execution options".into()))?;
+            let provider_id = if has_delivered_prompt {
+                Some(c.provider_id.lock().await.clone().ok_or_else(|| AdapterError::Unsupported("Claude resume identity is unavailable for changed execution options".into()))?)
+            } else {
+                None
+            };
+            let _ = c.process_tree.terminate();
+            let _ = c.child.lock().await.kill().await;
+            let snapshot_changed = has_delivered_prompt && instruction_changed;
+            c = self.start(&runtime, &cwd, provider_id.as_deref(), events, &h.session_id, &q.exec_options, snapshot_changed, desired_hash.clone()).await.map_err(|error| {
+                let action = if has_delivered_prompt { "resume" } else { "start a fresh session" };
+                AdapterError::Unsupported(format!("Claude could not {action} after changing {}: {error}", changed_fields.join(", ")))
+            })?;
             self.sessions.lock().await.insert(h.session_id.clone(), c.clone());
         }
         let mut bytes =
@@ -673,14 +769,42 @@ impl AgentAdapter for ClaudeAdapter {
         c.active_turn.store(true, Ordering::SeqCst);
         if let Err(error) = c.stdin.lock().await.write(&bytes).await {
             c.active_turn.store(false, Ordering::SeqCst);
-            return Err(AdapterError::Process(error.to_string()));
+            let stderr = c.stderr_tail.lock().await.trim().to_owned();
+            return Err(AdapterError::Process(if stderr.is_empty() {
+                error.to_string()
+            } else {
+                stderr
+            }));
         }
+        c.has_delivered_prompt.store(true, Ordering::SeqCst);
         Ok(())
     }
     async fn set_instruction_hash_context(&self,session_id:&str,desired:Option<String>,baseline:Option<String>){self.instruction_hash_context.lock().await.insert(session_id.into(),(desired,baseline));}
     async fn preflight_exec_options(&self,options:&ExecOptions)->Result<(),AdapterError>{
         if let Some(text)=options.instructions.as_deref().filter(|s|!s.is_empty()) { let pair=self.create_instruction_file(text).map_err(|_|AdapterError::Unsupported("The requested instructions are unavailable because secure private storage could not be established.".into()))?;remove_private_pair(&pair); }
         Ok(())
+    }
+    async fn diagnostic(&self, session_id: &str) -> Option<AgentDiagnostic> {
+        let conn = self.sessions.lock().await.get(session_id).cloned()?;
+        let process_running = {
+            let mut child = conn.child.lock().await;
+            match child.try_wait() {
+                Ok(Some(_)) => Some(false),
+                Ok(None) => Some(true),
+                Err(_) => None,
+            }
+        };
+        let stderr_tail = conn.stderr_tail.lock().await.clone();
+        Some(AgentDiagnostic {
+            process_running,
+            stderr_tail: (!stderr_tail.trim().is_empty()).then_some(stderr_tail),
+            api_retry_count: match conn.api_retry_count.load(Ordering::Relaxed) {
+                0 => None,
+                retries => Some(retries),
+            },
+            api_retry_http_status_seen: conn.api_retry_http_status_seen.load(Ordering::Relaxed),
+            api_retry_connection_failure: conn.api_retry_connection_failure.load(Ordering::Relaxed),
+        })
     }
     async fn cancel(&self, h: &SessionHandle) -> Result<(), AdapterError> {
         let c = self
@@ -731,7 +855,7 @@ impl AgentAdapter for ClaudeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn permission_modes_have_typed_launch_flags_only_for_bypass(){let bypass=permission_args(bloblex_agent_core::ApprovalMode::Bypass);assert!(bypass.contains(&"bypassPermissions"));assert!(bypass.contains(&"--allow-dangerously-skip-permissions"));for mode in [bloblex_agent_core::ApprovalMode::Ask,bloblex_agent_core::ApprovalMode::Auto]{let args=permission_args(mode);assert!(!args.contains(&"bypassPermissions"));assert!(args.contains(&"--permission-prompt-tool"));}}
+    #[test] fn permission_modes_have_typed_launch_flags_only_for_bypass(){let bypass=permission_args(bloblex_agent_core::ApprovalMode::Bypass);assert!(bypass.contains(&"bypassPermissions"));assert!(bypass.contains(&"--allow-dangerously-skip-permissions"));assert!(!bypass.contains(&"--permission-prompt-tool"));for mode in [bloblex_agent_core::ApprovalMode::Ask,bloblex_agent_core::ApprovalMode::Auto]{let args=permission_args(mode);assert!(args.contains(&"--permission-mode"));assert!(args.contains(&"default"));assert!(!args.contains(&"bypassPermissions"));assert!(!args.contains(&"--permission-prompt-tool"));}}
     #[test]
     fn control_request_parser_preserves_wire_id_and_input() {
         let v = json!({"type":"control_request","request_id":"r-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"echo test"}}});
@@ -833,6 +957,10 @@ mod tests {
             assert!(matches!(rx.recv().await,Some(AgentEvent::TurnCompleted)));
             parse_line(&tx,&json!({"type":"result","is_error":true,"usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{}}),&id,&permissions,"s",&active).await;
             match rx.recv().await.unwrap(){AgentEvent::UsageReport{report,..}=>{assert_eq!(report.usage_status,"unreported");assert_eq!(report.input_tokens,None);assert_eq!(report.output_tokens,None);assert_eq!(report.model,None);},_=>panic!("unreported usage expected")}
+            match rx.recv().await.unwrap(){AgentEvent::Error{message}=>assert_eq!(message,"Claude reported a turn error"),_=>panic!("generic provider error expected")}
+            parse_line(&tx,&json!({"type":"result","is_error":true,"errors":["429 rate limit exceeded"]}),&id,&permissions,"s",&active).await;
+            match rx.recv().await.unwrap(){AgentEvent::UsageReport{report,..}=>assert_eq!(report.usage_status,"unreported"),_=>panic!("unreported usage expected")}
+            match rx.recv().await.unwrap(){AgentEvent::Error{message}=>assert_eq!(message,"429 rate limit exceeded"),_=>panic!("provider error detail expected")}
         });
     }
 }

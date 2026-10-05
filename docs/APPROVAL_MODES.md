@@ -39,7 +39,7 @@ Everything else (network access, installs, deleting, `git push`/`reset --hard`/`
 
 | Provider | `ask` | `auto` | `bypass` |
 | --- | --- | --- | --- |
-| Claude Code | unchanged (`--permission-prompt-tool stdio`, answers from the daemon) | the daemon answers the stdio permission requests per the classifier | launch with the provider's no-prompt mode (`--permission-mode bypassPermissions`; if the installed CLI additionally requires `--allow-dangerously-skip-permissions`, add it) and record `permission.bypass_active`; verify the exact flags against `claude --help` of the installed version before relying on them and record the verification in docs/runtime-capabilities.md |
+| Claude Code | `--permission-mode default`; daemon answers host `control_request` messages over stream-json | the daemon answers permission requests per the classifier | launch with the provider's no-prompt mode (`--permission-mode bypassPermissions`; if the installed CLI additionally requires `--allow-dangerously-skip-permissions`, add it) and record `permission.bypass_active`; verify the exact flags against `claude --help` of the installed version before relying on them and record the verification in docs/runtime-capabilities.md |
 | Codex | `approvalPolicy:"on-request"` with `sandbox:"workspace-write"` (unchanged) | same launch; the daemon answers approval requests per the classifier | `thread/start` with `approvalPolicy:"never"` and `sandbox:"danger-full-access"` (the sandbox must widen or the agent is stuck inside it); record `permission.bypass_active` |
 | OpenCode (ACP) | unchanged | the daemon answers `session/request_permission` per the classifier | the daemon answers every request with the allow option and audits each one (no provider flag needed) |
 

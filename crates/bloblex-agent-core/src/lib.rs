@@ -933,6 +933,17 @@ pub enum AgentEvent {
 
 pub type EventSender = mpsc::Sender<AgentEvent>;
 
+/// Safe-to-surface process state collected for a stalled provider turn.
+/// stderr remains transient here; callers must filter it before persistence/UI.
+#[derive(Debug, Clone, Default)]
+pub struct AgentDiagnostic {
+    pub process_running: Option<bool>,
+    pub stderr_tail: Option<String>,
+    pub api_retry_count: Option<u32>,
+    pub api_retry_http_status_seen: bool,
+    pub api_retry_connection_failure: bool,
+}
+
 #[async_trait]
 pub trait AgentAdapter: Send + Sync {
     /// Return a profile-scoped model catalog. Adapters that do not support
@@ -946,6 +957,9 @@ pub trait AgentAdapter: Send + Sync {
     /// Performs option preparation that can fail before a user prompt is
     /// admitted. Implementations must not send the user prompt here.
     async fn preflight_exec_options(&self, _options:&ExecOptions) -> Result<(),AdapterError> { Ok(()) }
+    /// Returns a transient process snapshot for timeout diagnostics. Provider
+    /// stderr must be sanitized before it is emitted, logged, or persisted.
+    async fn diagnostic(&self, _session_id: &str) -> Option<AgentDiagnostic> { None }
     async fn probe(&self, runtime: &RuntimeSpec) -> Result<ProbeResult, AdapterError>;
     async fn new_session(
         &self,

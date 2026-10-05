@@ -111,6 +111,152 @@ fn adapter_failure_class(error: &bloblex_agent_core::AdapterError, permission_de
     }
 }
 
+fn safe_provider_error_detail(raw: &str) -> Option<String> {
+    let first_line = raw.lines().next()?;
+    let normalized = first_line
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+
+    // Provider diagnostics can contain API credentials. If a credential marker
+    // is present, replace the entire line rather than trying to retain fragments.
+    let lower = normalized.to_ascii_lowercase();
+    let credential_markers = [
+        "sk-ant-",
+        "ghp_",
+        "gho_",
+        "github_pat_",
+        "xoxb-",
+        "xapp-",
+        "akia",
+        "bearer ",
+        "api_key",
+        "api-key",
+        "api key",
+        "x-api-key",
+        "authorization",
+        "access_token",
+        "refresh_token",
+        "oauth token",
+        "password=",
+        "secret=",
+        "claude_code_oauth_token",
+        "anthropic_auth_token",
+    ];
+    let key_shaped_sk_token = normalized.split_whitespace().any(|part| {
+        let value = part.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-');
+        value.starts_with("sk-")
+            && value.len() >= 24
+            && value.bytes().any(|ch| ch.is_ascii_digit())
+            && value.bytes().any(|ch| ch.is_ascii_alphabetic())
+    });
+    let long_opaque_value = normalized.split_whitespace().any(|part| {
+        let value = part.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '.');
+        value.len() >= 40 && value.bytes().any(|ch| ch.is_ascii_digit()) && value.bytes().any(|ch| ch.is_ascii_alphabetic())
+    });
+    if key_shaped_sk_token || long_opaque_value || credential_markers.iter().any(|marker| lower.contains(marker)) {
+        return Some("The provider reported an authentication or credential problem. Check the CLI sign-in and credential configuration.".into());
+    }
+
+    Some(normalized.chars().take(240).collect())
+}
+
+fn safe_timeout_diagnostic(provider: &str, diagnostic: Option<bloblex_agent_core::AgentDiagnostic>) -> Option<String> {
+    if provider != "claude" { return None; }
+    let diagnostic = diagnostic?;
+    let process_state = match diagnostic.process_running {
+        Some(true) => "process still running",
+        Some(false) => "process exited",
+        None => "process state unavailable",
+    };
+    let mut details = vec![format!("Claude {process_state}")];
+    if let Some(retries) = diagnostic.api_retry_count.filter(|count| *count > 0) {
+        details.push(format!("{retries} API retries"));
+        details.push(if diagnostic.api_retry_http_status_seen { "HTTP status observed" } else { "no HTTP status observed" }.into());
+        if diagnostic.api_retry_connection_failure {
+            details.push("connection failure reported".into());
+        }
+    }
+    let stderr = diagnostic.stderr_tail.as_deref().and_then(summarize_claude_stderr);
+    if let Some(detail) = stderr {
+        details.push(detail.into());
+    } else if diagnostic.api_retry_count.is_none() {
+        details.push("no stderr detail was captured".into());
+    }
+    Some(details.join("; "))
+}
+
+fn summarize_claude_stderr(stderr_tail: &str) -> Option<&'static str> {
+    if stderr_tail.trim().is_empty() { return None; }
+    let lower = stderr_tail.to_ascii_lowercase();
+    if ["sk-ant-", "bearer ", "api_key", "api-key", "api key", "authorization", "access_token", "oauth token"]
+        .iter().any(|marker| lower.contains(marker))
+    {
+        Some("provider diagnostic indicates an authentication or credential problem")
+    } else if lower.contains("429") || lower.contains("rate limit") {
+        Some("provider reported a rate limit")
+    } else if lower.contains("mcp") && (lower.contains("connect") || lower.contains("startup") || lower.contains("timeout")) {
+        Some("provider could not connect an MCP server before the turn")
+    } else if lower.contains("model") && (lower.contains("unrecognized") || lower.contains("unknown") || lower.contains("invalid")) {
+        Some("provider rejected the requested model")
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        Some("provider reported a timeout")
+    } else if lower.contains("connect") || lower.contains("network") || lower.contains("socket") {
+        Some("provider reported a connection problem")
+    } else {
+        Some("provider emitted stderr before the timeout")
+    }
+}
+
+#[cfg(test)]
+fn provider_error_detail_tests() {
+    assert_eq!(
+        safe_provider_error_detail("429 rate limit exceeded; retry later"),
+        Some("429 rate limit exceeded; retry later".into())
+    );
+    let credential = safe_provider_error_detail("Invalid API key sk-ant-test-secret").unwrap();
+    assert!(credential.contains("authentication or credential problem"));
+    assert!(!credential.contains("sk-ant-test-secret"));
+    assert!(safe_provider_error_detail(&"x".repeat(500)).unwrap().len() <= 240);
+    let timeout = safe_timeout_diagnostic(
+        "claude",
+        Some(bloblex_agent_core::AgentDiagnostic {
+            process_running: Some(true),
+            stderr_tail: Some("HTTP 401 API key sk-ant-timeout-secret".into()),
+            api_retry_count: Some(11),
+            api_retry_http_status_seen: false,
+            api_retry_connection_failure: true,
+        }),
+    ).unwrap();
+    assert!(timeout.contains("process still running"));
+    assert!(timeout.contains("authentication or credential problem"));
+    assert!(timeout.contains("11 API retries"));
+    assert!(timeout.contains("no HTTP status observed"));
+    assert!(timeout.contains("connection failure reported"));
+    assert!(!timeout.contains("sk-ant-timeout-secret"));
+    assert!(timeout.len() <= 300);
+    let opaque = safe_timeout_diagnostic(
+        "claude",
+        Some(bloblex_agent_core::AgentDiagnostic {
+            process_running: Some(false),
+            stderr_tail: Some("prompt=PRIVATE_PROMPT model=PRIVATE_MODEL env=PRIVATE_ENV".into()),
+            api_retry_count: None,
+            api_retry_http_status_seen: false,
+            api_retry_connection_failure: false,
+        }),
+    ).unwrap();
+    assert!(opaque.contains("provider emitted stderr before the timeout"));
+    for private_value in ["PRIVATE_PROMPT", "PRIVATE_MODEL", "PRIVATE_ENV"] {
+        assert!(!opaque.contains(private_value));
+    }
+}
+
 fn auth(headers: &HeaderMap, token: &str) -> bool {
     let Some(value) = headers
         .get(header::AUTHORIZATION)
@@ -212,6 +358,16 @@ fn persist_runtime_discovery(
         db.upsert_runtime(&value)?;
         values.push(value);
     }
+    Ok(values)
+}
+
+async fn publish_runtime_discovery(
+    st: &AppState,
+    discovered: Vec<bloblex_runtime::DiscoveredRuntime>,
+) -> Result<Vec<Value>, bloblex_storage::StorageError> {
+    let values = persist_runtime_discovery(&st.db, discovered)?;
+    *st.runtimes.write().await = values.clone();
+    st.emit("runtime.changed", json!({"runtimes":values})).await;
     Ok(values)
 }
 
@@ -354,9 +510,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "runtime.list" => Ok(json!({"runtimes":*st.runtimes.read().await})),
         "runtime.refresh" => {
             let found = bloblex_runtime::discover().await;
-            let values = persist_runtime_discovery(&st.db, found).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
-            *st.runtimes.write().await = values.clone();
-            st.emit("runtime.changed", json!({"runtimes":values})).await;
+            let values = publish_runtime_discovery(st, found).await.map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
             Ok(json!({"runtimes":values}))
         }
         "session.list" => {
@@ -1545,6 +1699,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
                 "permission_denied" => "A required permission was denied.",
                 _ => "The turn could not be completed.",
             };
+            let detail = if failure_class == "permission_denied" { None } else { safe_provider_error_detail(&e.to_string()) };
             let gate = gate_for_session(&state, &sid2).await;
             let _guard = gate.lock().await;
             if !session_gate_is_current(&state, &sid2, &gate).await || session_is_deleted(&state, &sid2).await
@@ -1556,7 +1711,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             // concurrency slot is released because this execution ended.
             state.active_turns.lock().await.remove(&sid2);
             if let Ok(summary) = state.db.session_event_summary(&sid2) { state.emit("session.changed", summary).await; }
-            state.emit("turn.error", json!({"sessionId":sid2,"turnId":turn2,"message":public_message})).await;
+            state.emit("turn.error", json!({"sessionId":sid2,"turnId":turn2,"message":public_message,"failureClass":failure_class,"detail":detail})).await;
         }
     });
     Ok(json!({"turnId":turn,"accepted":true}))
@@ -1645,7 +1800,9 @@ async fn forward_events_with_timeouts(
                         st.sessions.lock().await.remove(&sid)
                     };
                     let mut resumed = None;
+                    let mut provider_diagnostic = None;
                     if let Some(active) = active {
+                        provider_diagnostic = active.adapter.diagnostic(&active.handle.session_id).await;
                         let _ = active.adapter.close_session(&active.handle).await;
                         if let Some(row) = st.db.session_detail(&sid).ok() {
                             let options = exec_options_for_session(&st, &row).unwrap_or_default();
@@ -1688,11 +1845,13 @@ async fn forward_events_with_timeouts(
                     let _ = st.db.update_turn_outcome(turn_id, "error", Some("timeout"));
                     if let Ok(summary) = st.db.session_event_summary(&sid) { st.emit("session.changed", summary).await; }
                     st.active_turns.lock().await.remove(&sid);
+                    let detail = safe_timeout_diagnostic(&provider, provider_diagnostic);
                     st.emit("turn.error", json!({
                         "sessionId": sid,
                         "turnId": turn_id,
                         "failureClass": "timeout",
-                        "message": "The provider stopped making progress before the turn completed."
+                        "message": "The provider stopped making progress before the turn completed.",
+                        "detail": detail
                     })).await;
                     watched_turn = None;
                     continue;
@@ -1734,6 +1893,9 @@ async fn forward_events_with_timeouts(
                 let _ = st
                     .db
                     .set_session_provider_id(&sid, &provider_session_id, true);
+                if let Some(active) = st.sessions.lock().await.get_mut(&sid) {
+                    active.handle.provider_session_id = provider_session_id.clone();
+                }
                 let session = st.db.session_event_summary(&sid).unwrap_or(Value::Null);
                 ("session.changed", session)
             }
@@ -2009,7 +2171,7 @@ async fn forward_events_with_timeouts(
                     }),
                 )
             }
-            AgentEvent::Error { message: _ } => {
+            AgentEvent::Error { message: provider_message } => {
                 let denied = if let Some(t) = turn.as_deref() {
                     let denied = st.denied_turns.lock().await.remove(t);
                     let class = if denied { "permission_denied" } else { "provider_error" };
@@ -2021,6 +2183,8 @@ async fn forward_events_with_timeouts(
                 } else {
                     "The provider reported a turn error."
                 };
+                let failure_class = if denied { "permission_denied" } else { "provider_error" };
+                let detail = if denied { None } else { safe_provider_error_detail(&provider_message) };
                 let _ = st.db.update_session_state(&sid, "error");
                 st.active_turns.lock().await.remove(&sid);
                 if let Ok(summary) = st.db.session_event_summary(&sid) {
@@ -2028,7 +2192,7 @@ async fn forward_events_with_timeouts(
                 }
                 (
                     "turn.error",
-                    json!({"sessionId":sid,"turnId":turn,"message":message}),
+                    json!({"sessionId":sid,"turnId":turn,"message":message,"failureClass":failure_class,"detail":detail}),
                 )
             }
             AgentEvent::ThinkingDelta { text } => {
@@ -2141,14 +2305,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         codex: Arc::new(CodexAdapter::default()),
         claude: Arc::new(ClaudeAdapter::default()),
     });
-    let found = bloblex_runtime::discover().await;
-    let runtimes = persist_runtime_discovery(&db, found)?;
     let st = AppState {
         token: Arc::new(token.clone()),
         started: Instant::now(),
         db,
         events,
-        runtimes: Arc::new(RwLock::new(runtimes)),
+        runtimes: Arc::new(RwLock::new(Vec::new())),
         adapters,
         sessions: Arc::new(Mutex::new(HashMap::new())),
         active_turns: Arc::new(Mutex::new(HashMap::new())),
@@ -2168,6 +2330,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(st.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
+    let discovery_state = st.clone();
+    tokio::spawn(async move {
+        let found = bloblex_runtime::discover().await;
+        if let Err(error) = publish_runtime_discovery(&discovery_state, found).await {
+            tracing::warn!("runtime discovery could not be persisted: {error}");
+        }
+    });
     println!(
         "{}",
         serde_json::to_string(&DaemonReady {
@@ -2209,6 +2378,11 @@ async fn main() {
 #[cfg(test)]
 mod phase2a_tests {
     use super::*;
+
+    #[test]
+    fn provider_diagnostics_are_actionable_bounded_and_credential_safe() {
+        provider_error_detail_tests();
+    }
 
     fn pricing_rule_fixture() -> Value {
         json!({
@@ -2328,7 +2502,7 @@ mod phase2a_tests {
         assert!(bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/not-in-either-list"), &timestamp, &rules).is_none());
     }
 
-    #[derive(Default)] struct PolicyAdapter{replies:std::sync::atomic::AtomicUsize}
+    #[derive(Default)] struct PolicyAdapter{replies:std::sync::atomic::AtomicUsize,diagnostic:StdMutex<Option<bloblex_agent_core::AgentDiagnostic>>}
     #[async_trait::async_trait] impl AgentAdapter for PolicyAdapter {
         async fn probe(&self,_:&RuntimeSpec)->Result<bloblex_agent_core::ProbeResult,bloblex_agent_core::AdapterError>{Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))}
         async fn new_session(&self,_:&RuntimeSpec,_:NewSessionRequest,_:tokio::sync::mpsc::Sender<AgentEvent>)->Result<SessionHandle,bloblex_agent_core::AdapterError>{Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))}
@@ -2337,6 +2511,7 @@ mod phase2a_tests {
         async fn cancel(&self,_:&SessionHandle)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
         async fn reply_permission(&self,_:&str,_:&str)->Result<(),bloblex_agent_core::AdapterError>{self.replies.fetch_add(1,std::sync::atomic::Ordering::SeqCst);Ok(())}
         async fn close_session(&self,_:&SessionHandle)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+        async fn diagnostic(&self,_:&str)->Option<bloblex_agent_core::AgentDiagnostic>{self.diagnostic.lock().ok()?.clone()}
     }
     struct CatalogAdapter(bloblex_agent_core::ModelCatalog);
     #[async_trait::async_trait]
@@ -2759,7 +2934,144 @@ mod phase2a_tests {
         if event.event_type == "session.changed" { event = events.recv().await.unwrap(); }
         assert_eq!(event.event_type, "turn.error");
         assert_eq!(event.payload["message"], "A required permission was denied.");
+        assert_eq!(event.payload["failureClass"], "permission_denied");
+        assert!(event.payload["detail"].is_null(), "permission-denial details stay hidden");
         assert_eq!(st.db.turn_failure_class("t-denied").unwrap().as_deref(), Some("permission_denied"));
+    }
+    #[tokio::test]
+    async fn provider_turn_error_exposes_safe_detail_and_failure_class() {
+        let (st, mut events) = state();
+        st.db.create_session("s-provider-error", "rt-test", "claude", ".", "Provider error").unwrap();
+        st.db.create_turn("t-provider-error", "s-provider-error").unwrap();
+        st.db.update_session_state("s-provider-error", "working").unwrap();
+        st.active_turns.lock().await.insert("s-provider-error".into(), "t-provider-error".into());
+        let adapter = Arc::new(PolicyAdapter::default());
+        let handle = SessionHandle {
+            session_id: "s-provider-error".into(),
+            provider_session_id: "native".into(),
+            capabilities: bloblex_agent_core::AgentCapabilities::default(),
+        };
+        let runtime = RuntimeSpec {
+            runtime_id: "rt-test".into(),
+            provider: "claude".into(),
+            executable: PathBuf::from("fake"),
+            args: vec![],
+            cwd: None,
+        };
+        st.sessions.lock().await.insert(
+            "s-provider-error".into(),
+            ActiveSession { handle, runtime, adapter, launch_approval_mode: ApprovalMode::Ask },
+        );
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let task = tokio::spawn(forward_events(st.clone(), "s-provider-error".into(), "claude".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::Error { message: "429 rate limit exceeded; retry later".into() }).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        let mut event = events.recv().await.unwrap();
+        while event.event_type != "turn.error" { event = events.recv().await.unwrap(); }
+        assert_eq!(event.payload["failureClass"], "provider_error");
+        assert_eq!(event.payload["detail"], "429 rate limit exceeded; retry later");
+        let saved = st.db.session_detail("s-provider-error").unwrap();
+        let turn = saved["turns"].as_array().unwrap().iter().find(|turn| turn["id"] == "t-provider-error").unwrap();
+        assert_eq!(turn["failureClass"], "provider_error");
+        assert_eq!(turn["detail"], "429 rate limit exceeded; retry later");
+    }
+    #[tokio::test]
+    async fn timeout_event_includes_only_sanitized_claude_process_diagnostics() {
+        let (st, mut events) = state();
+        st.db.create_session("s-timeout-diagnostic", "rt-test", "claude", ".", "Timeout diagnostic").unwrap();
+        st.db.set_session_provider_id("s-timeout-diagnostic", "provider-session", true).unwrap();
+        st.db.create_turn("t-timeout-diagnostic", "s-timeout-diagnostic").unwrap();
+        st.db.update_session_state("s-timeout-diagnostic", "working").unwrap();
+        st.active_turns.lock().await.insert("s-timeout-diagnostic".into(), "t-timeout-diagnostic".into());
+        let adapter = Arc::new(PolicyAdapter::default());
+        *adapter.diagnostic.lock().unwrap() = Some(bloblex_agent_core::AgentDiagnostic {
+            process_running: Some(true),
+            stderr_tail: Some("HTTP 401 API key sk-ant-timeout-secret".into()),
+            api_retry_count: Some(11),
+            api_retry_http_status_seen: false,
+            api_retry_connection_failure: true,
+        });
+        let handle = SessionHandle {
+            session_id: "s-timeout-diagnostic".into(),
+            provider_session_id: "provider-session".into(),
+            capabilities: bloblex_agent_core::AgentCapabilities::default(),
+        };
+        let runtime = RuntimeSpec {
+            runtime_id: "rt-test".into(),
+            provider: "claude".into(),
+            executable: PathBuf::from("fake"),
+            args: vec![],
+            cwd: None,
+        };
+        st.sessions.lock().await.insert(
+            "s-timeout-diagnostic".into(),
+            ActiveSession { handle, runtime, adapter, launch_approval_mode: ApprovalMode::Ask },
+        );
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let task = tokio::spawn(forward_events_with_timeouts(
+            st.clone(),
+            "s-timeout-diagnostic".into(),
+            "claude".into(),
+            "rt-test".into(),
+            rx,
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_millis(20),
+        ));
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event_type == "turn.error" { break event; }
+            }
+        }).await.unwrap();
+        assert_eq!(event.payload["failureClass"], "timeout");
+        let detail = event.payload["detail"].as_str().unwrap();
+        assert!(detail.contains("process still running"));
+        assert!(detail.contains("authentication or credential problem"));
+        assert!(detail.contains("11 API retries"));
+        assert!(detail.contains("no HTTP status observed"));
+        assert!(detail.contains("connection failure reported"));
+        assert!(!detail.contains("sk-ant-timeout-secret"));
+        drop(tx);
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn session_started_refreshes_saved_and_active_provider_session_ids() {
+        let (st, mut events) = state();
+        st.db.create_session("s-provider-id", "rt-test", "claude", ".", "Provider ID").unwrap();
+        st.db.set_session_provider_id("s-provider-id", "old-provider-id", true).unwrap();
+        let handle = SessionHandle {
+            session_id: "s-provider-id".into(),
+            provider_session_id: "old-provider-id".into(),
+            capabilities: bloblex_agent_core::AgentCapabilities::default(),
+        };
+        let runtime = RuntimeSpec {
+            runtime_id: "rt-test".into(),
+            provider: "claude".into(),
+            executable: PathBuf::from("fake"),
+            args: vec![],
+            cwd: None,
+        };
+        st.sessions.lock().await.insert(
+            "s-provider-id".into(),
+            ActiveSession {
+                handle,
+                runtime,
+                adapter: Arc::new(PolicyAdapter::default()),
+                launch_approval_mode: ApprovalMode::Ask,
+            },
+        );
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let task = tokio::spawn(forward_events(st.clone(), "s-provider-id".into(), "claude".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::SessionStarted { provider_session_id: "fresh-provider-id".into() }).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+
+        assert_eq!(st.db.session_detail("s-provider-id").unwrap()["providerSessionId"], "fresh-provider-id");
+        assert_eq!(st.sessions.lock().await["s-provider-id"].handle.provider_session_id, "fresh-provider-id");
+        let mut event = events.recv().await.unwrap();
+        while event.event_type != "session.changed" { event = events.recv().await.unwrap(); }
+        assert_eq!(event.payload["id"], "s-provider-id");
     }
     #[tokio::test]
     async fn automatic_permission_path_acknowledges_audits_and_fails_closed(){
@@ -2842,6 +3154,31 @@ mod phase2a_tests {
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0]["id"], existing["id"]);
         assert_eq!(agents[0]["name"], "Keep me");
+    }
+    #[tokio::test]
+    async fn background_discovery_publishes_the_complete_runtime_roster() {
+        let (st, mut events) = state();
+        let discovered = vec![serde_json::from_value::<bloblex_runtime::DiscoveredRuntime>(json!({
+            "id": "rt-claude",
+            "hostId": "host_windows_local",
+            "provider": "claude",
+            "displayName": "Claude Code",
+            "protocolFamily": "claude_stream",
+            "executablePath": "C:/fake/claude.exe",
+            "launchArgs": [],
+            "version": null,
+            "authState": "unknown",
+            "gatewayAuthStates": {},
+            "status": "online",
+            "capabilities": {"newSession": true}
+        })).unwrap()];
+
+        let runtimes = publish_runtime_discovery(&st, discovered).await.unwrap();
+        assert_eq!(runtimes.len(), 1);
+        assert_eq!(st.runtimes.read().await.as_slice(), runtimes.as_slice());
+        let event = events.recv().await.unwrap();
+        assert_eq!(event.event_type, "runtime.changed");
+        assert_eq!(event.payload["runtimes"], serde_json::json!(runtimes));
     }
     #[test]
     fn requested_options_fail_closed_when_the_setting_gate_is_off(){

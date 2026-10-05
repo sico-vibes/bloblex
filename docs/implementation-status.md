@@ -2,7 +2,7 @@
 
 Current as of 5 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
 
-**Evidence class:** desktop unit and mounted tests, plus daemon and adapter tests that use in-memory storage or fake processes. Release `v0.1.0-beta.6` is the latest release. There is still no accepted live-provider session and no native window pass of the current tree. The Phase 3 isolated-database smoke (`5138c8e`, revision `e770db8`, [NATIVE_SMOKE_RESULTS.md](NATIVE_SMOKE_RESULTS.md)) is the only recorded native pass.
+**Evidence class:** desktop unit and mounted tests, daemon and adapter tests that use in-memory storage or fake processes, plus one accepted live Claude daemon session on an isolated database. `v0.1.0-beta.7` is a release candidate; `v0.1.0-beta.6` remains the latest published release. The candidate has no full native chat interaction or clean-machine installer pass. The Phase 3 isolated-database native smoke (`5138c8e`, revision `e770db8`, [NATIVE_SMOKE_RESULTS.md](NATIVE_SMOKE_RESULTS.md)) remains the only recorded native acceptance pass.
 
 ## Recovered Claude scope released in beta.6
 
@@ -38,6 +38,7 @@ Verification: 339/339 desktop tests, 89 Rust runtime/storage/daemon tests, typec
 | Blob wardrobe: per-blob outfits, seasonal automatic outfit, wardrobe editor, migration 7 | `0d21c46` | Unit and mounted tests only. No native window or live-provider check. Included in v0.1.0-beta.6. |
 | Launch intro and startup checks, companion off by default with sidebar toggle and open-at-startup setting, and three-step first-run onboarding with install/sign-in guides | `a862351` | Unit, mounted and fake-process tests only. Startup timing, companion window lifecycle, install/sign-in flows and native behavior have not been checked in a live app. Included in v0.1.0-beta.6. |
 | OpenCode Go models and official model prices: 150 exact-decimal rows, price tiers, per-field sources, migration 8 | `9561e7d` | Workspace tests, desktop check, typecheck, Vitest and build passed. These use unit/mounted tests, in-memory storage and fake processes; no live provider or native-window verification. Included in v0.1.0-beta.6. |
+| Claude first-turn model changes, host permission channel and timeout diagnostics | Current beta.7 candidate | Fake-process and daemon timeout-diagnostic tests pass. A live Claude Sonnet turn on the local CLI returned the expected sentinel through the daemon after model selection changed before the first prompt. The smoke used a fresh isolated database; it is not a full native-window or installer pass. |
 
 The three changes above were implemented by the `impl` lane, reviewed by `impl-b` over two or three rounds, and merged by the Director after gates. The current main gates passed: `cargo test --workspace` (231 passed), desktop check, typecheck, Vitest (338/338), and build. These checks do not establish native-window behavior or live-provider operation.
 

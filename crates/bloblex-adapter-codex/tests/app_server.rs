@@ -111,14 +111,21 @@ fn pid_is_live(pid: u32) -> bool {
         #[link(name = "kernel32")]
         extern "system" {
             fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+            fn WaitForSingleObject(handle: *mut std::ffi::c_void, millis: u32) -> u32;
             fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
         }
-        let handle = OpenProcess(0x1000, 0, pid);
+        // SYNCHRONIZE lets us query the process object's signaled state. A
+        // handle can remain open after exit, so OpenProcess alone is not proof
+        // that the process is still running.
+        const SYNCHRONIZE: u32 = 0x0010_0000;
+        const WAIT_TIMEOUT: u32 = 258;
+        let handle = OpenProcess(SYNCHRONIZE, 0, pid);
         if handle.is_null() {
             false
         } else {
+            let state = WaitForSingleObject(handle, 0);
             let _ = CloseHandle(handle);
-            true
+            state == WAIT_TIMEOUT
         }
     }
 }

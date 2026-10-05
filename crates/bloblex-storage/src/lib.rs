@@ -1736,7 +1736,7 @@ impl Storage {
         let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
         let mut v: Value =
             serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
-        let turns=query_jsons(c,"SELECT json_object('id',id,'state',state,'createdAt',created_at,'completedAt',completed_at,'failureClass',COALESCE(failure_class_v2,failure_class),'failureMessage',CASE COALESCE(failure_class_v2,failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END) FROM turns WHERE session_id=?1 ORDER BY created_at",id)?;
+        let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
         let msgs=query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at) FROM messages WHERE session_id=?1 ORDER BY sequence",id)?;
         v["turns"] = json!(turns);
         v["messages"] = json!(msgs);
@@ -2934,12 +2934,14 @@ mod tests {
         db.create_session("session", "runtime", "codex", ".", "Turn DTO").unwrap();
         db.create_turn("failed", "session").unwrap();
         db.update_turn_outcome("failed", "error", Some("timeout")).unwrap();
+        db.push_event("turn.error", &json!({"sessionId":"session","turnId":"failed","detail":"429 rate limit exceeded"})).unwrap();
         db.create_turn("successful", "session").unwrap();
         db.update_turn_outcome("successful", "completed", None).unwrap();
         let turns = db.session_detail("session").unwrap()["turns"].as_array().unwrap().clone();
         let failed = turns.iter().find(|turn| turn["id"] == "failed").unwrap();
         assert_eq!(failed["failureClass"], "timeout");
         assert_eq!(failed["failureMessage"], "The provider stopped making progress before the turn completed.");
+        assert_eq!(failed["detail"], "429 rate limit exceeded");
         let successful = turns.iter().find(|turn| turn["id"] == "successful").unwrap();
         assert!(successful["failureClass"].is_null());
         assert!(successful["failureMessage"].is_null());

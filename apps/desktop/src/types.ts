@@ -143,6 +143,10 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
   if (typeof sequence === 'number' && typeof snapshot.sequence === 'number' && sequence <= snapshot.sequence) return snapshot
 
   if (event.type === 'runtime.changed') {
+    if (Array.isArray(payload.runtimes)) {
+      const runtimes = payload.runtimes.filter((runtime): runtime is Runtime => Boolean(runtime && typeof runtime === 'object' && typeof (runtime as Runtime).id === 'string'))
+      return { ...snapshot, sequence, runtimes }
+    }
     const runtime = (payload.runtime ?? payload) as Runtime
     if (!runtime.id) return { ...snapshot, sequence }
     const runtimes = snapshot.runtimes ?? []
@@ -247,6 +251,13 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
         if (index >= 0) files[index] = { ...files[index], ...file }
         else files.push(file)
         return { ...session, files }
+      }
+      if (event.type === 'turn.error') {
+        const turnId = typeof payload.turnId === 'string' ? payload.turnId : null
+        const turns = (session.turns ?? []).map((turn) => turn.id === turnId
+          ? { ...turn, state: 'error', failureClass: payload.failureClass, detail: payload.detail }
+          : turn)
+        return { ...session, state: stateForEvent(event.type) ?? session.state, turns }
       }
       return { ...session, state: stateForEvent(event.type) ?? session.state }
     })

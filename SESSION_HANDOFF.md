@@ -2,7 +2,7 @@
 
 Current as of 5 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
-Acceptance evidence for the current tree is unit, mounted and fake-process tests. There is no live-provider session check and no native window pass of this tree. Release `v0.1.0-beta.6` is the latest release.
+`v0.1.0-beta.7` is the current release candidate; `v0.1.0-beta.6` remains the latest published release until beta.7 is uploaded. Acceptance evidence includes unit, mounted, fake-process and one live Claude daemon session on an isolated database. The desktop development app starts, but no native chat interaction or clean-machine installer pass has been recorded for this candidate.
 
 The recovered Claude UI, daemon, and wardrobe scope is released as `v0.1.0-beta.6` from branch `beta/claude-resume-2026-10-04`. See [the release notes](docs/releases/0.1.0-beta.6.md) and [implementation status](docs/implementation-status.md). The release feed is published, but a native-window or installed upgrade check remains open.
 
@@ -25,7 +25,7 @@ On main:
 - Launch intro with startup checks, companion off by default with a sidebar toggle and an open-at-startup setting, and three-step first-run onboarding with verified install and sign-in guides.
 - OpenCode Go models and official model prices: 150 rows with exact decimals, tiers, and per-field sources, stored with migration 8. Each row records its source URL and checked date. Re-check the official price list in `crates/bloblex-usage/data` against vendor pages when prices change; the current checked date is 2026-10-04.
 
-The main gates passed: `cargo test --workspace` (231 passed), desktop check, typecheck, Vitest (338/338), and build. This is unit, mounted, in-memory-storage and fake-process evidence; it does not establish native-window behavior or a live-provider session.
+The beta.7 candidate gates passed: `cargo test --workspace`, desktop typecheck, Vitest (341/341), and production build. One live Claude session returned the expected sentinel after changing the model before the first prompt. That session used an isolated database; the native app's message flow and a clean-machine installer remain unverified.
 
 ## Lanes
 

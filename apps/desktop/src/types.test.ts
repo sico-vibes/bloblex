@@ -16,6 +16,13 @@ const base = (): Snapshot => ({
 const event = (type: string, sequence: number, payload: Record<string, unknown>): DaemonEvent => ({ v: 1, type, sequence, payload })
 
 describe('daemon event reconciliation', () => {
+  it('replaces the runtime roster when background discovery completes', () => {
+    const next = applyEvent(base(), event('runtime.changed', 5, {
+      runtimes: [{ id: 'rt-claude', provider: 'claude' }],
+    }))
+    expect(next.runtimes).toEqual([{ id: 'rt-claude', provider: 'claude' }])
+  })
+
   it('appends message deltas by stable message ID and ignores duplicate sequences', () => {
     const first = applyEvent(base(), event('message.delta', 5, { sessionId: 's-a', messageId: 'm-a', role: 'assistant', delta: ' there' }))
     expect(first.sessions?.[0].messages?.[0].content).toBe('Hello there')
@@ -28,6 +35,17 @@ describe('daemon event reconciliation', () => {
     const completed = applyEvent(delta, event('message.completed', 7, { sessionId: 's-a', turnId: 't-a', role: 'assistant', content: 'hello world' }))
     expect(completed.sessions?.[0].messages).toHaveLength(1)
     expect(completed.sessions?.[0].messages?.[0].content).toBe('hello world')
+  })
+
+  it('attaches provider failure detail to its turn without losing the failure class', () => {
+    const initial = base()
+    initial.sessions![0]!.turns = [{ id: 't-a', state: 'working' }]
+    const failed = applyEvent(initial, event('turn.error', 5, {
+      sessionId: 's-a', turnId: 't-a', failureClass: 'provider_error', detail: '429 rate limit exceeded; retry later',
+    }))
+    expect(failed.sessions?.[0].turns?.[0]).toMatchObject({
+      id: 't-a', state: 'error', failureClass: 'provider_error', detail: '429 rate limit exceeded; retry later',
+    })
   })
 
   it('normalizes the daemon policies wrapper before budget events', () => {

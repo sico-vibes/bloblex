@@ -1,8 +1,14 @@
 # Implementation status
 
-Current as of 4 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
+Current as of 5 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
 
 **Evidence class:** desktop unit and mounted tests, plus daemon and adapter tests that use in-memory storage or fake processes. Release `v0.1.0-beta.6` is the latest release. There is still no accepted live-provider session and no native window pass of the current tree. The Phase 3 isolated-database smoke (`5138c8e`, revision `e770db8`, [NATIVE_SMOKE_RESULTS.md](NATIVE_SMOKE_RESULTS.md)) is the only recorded native pass.
+
+## Recovered Claude scope released in beta.6
+
+The beta.6 branch release includes the recovered UI polish, daemon fixes, and wardrobe work. The daemon now validates and sanitizes OpenCode sign-in results, clears budget reservations transactionally, scopes active reservations correctly, and persists runtime discovery without creating unexpected blobs. The UI adds provider sign-in details and pricing controls; wardrobe previews cover all outfits, colours, sizes and directions with complete accessory silhouettes.
+
+Verification: 339/339 desktop tests, 89 Rust runtime/storage/daemon tests, typecheck, production build, 936 wardrobe-canvas edge checks and 156 unscaled production renders passed. Sol reviewed 24 exact-size dark/light screenshots at 1280×800 and 1920×1080. The release remains unverified in a live provider session, native window, or clean-machine install; the Windows installer is not Authenticode-signed.
 
 ## Phase status
 
@@ -23,15 +29,15 @@ Current as of 4 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [
 | Change | Evidence | Verification limit |
 | --- | --- | --- |
 | Interface redesign: chat-style shell, one-page blob editor, custom dropdowns, settling blob moods, favourites and pins, companion launch and welcome | `aea5eb1`, `bb76b7e`, `70222f2` (released as beta.2 and beta.3) | Unit and mounted tests, browser preview with fixtures. |
-| Batch A: unread markers, Windows notifications, rename/archive/delete conversations (migration 6), grouped tool activity, Start with Windows | Batch A commit on main (3 Oct) | Unit, mounted, storage and daemon tests (fake adapters). Toast click activation is not supported on Windows. Not yet in a release. |
-| Batch E: model list provenance (source, update time, suggestions vs validated), presentation overlay (names, default marker, family groups), OpenCode instruction/mode fixes | Batch E commit on main (3 Oct) | Fake-peer and daemon tests. Codex per-turn context is not possible with the installed app-server schema. Not yet in a release. |
-| Patch D: Settings > Usage & limits (budgets, price overrides, subscription fees), Analytics links and budget card, export a conversation as Markdown, export/import a blob setup | Patch D commit on main (3 Oct) | Unit, mounted, storage and native-command tests. Cost budgets are not offered (turn admission cannot estimate cost yet). Not yet in a release. |
-| Batch B: Ctrl+K quick switcher, composer model and thinking switch, safe Markdown, unified diff view and approval shortcuts shared with the companion | `863a779` | Unit and mounted tests only. No native window or live-provider check. Not yet in a release. |
-| B1: shared Codex app-server and OpenCode ACP processes per runtime key, per-session queues, idle shutdown, crash restart and resume, bounded cancel | `1f802b0` | Unit and fake-process tests only. No native window or live-provider check. Not yet in a release. |
-| Batch C: first-run setup for empty installs, companion start position and hotkey, system/dark/light themes, text size, and reorderable favourites and pins | `e6b1076` | Unit and mounted tests only. No native window or live-provider check. Not yet in a release. |
-| Blob wardrobe: per-blob outfits, seasonal automatic outfit, wardrobe editor, migration 7 | `0d21c46` | Unit and mounted tests only. No native window or live-provider check. Not yet in a release. |
-| Launch intro and startup checks, companion off by default with sidebar toggle and open-at-startup setting, and three-step first-run onboarding with install/sign-in guides | `a862351` | Unit, mounted and fake-process tests only. Startup timing, companion window lifecycle, install/sign-in flows and native behavior have not been checked in a live app. Not yet in a release. |
-| OpenCode Go models and official model prices: 150 exact-decimal rows, price tiers, per-field sources, migration 8 | `9561e7d` | Workspace tests, desktop check, typecheck, Vitest and build passed. These use unit/mounted tests, in-memory storage and fake processes; no live provider or native-window verification. Not yet in a release. |
+| Batch A: unread markers, Windows notifications, rename/archive/delete conversations (migration 6), grouped tool activity, Start with Windows | Batch A commit on main (3 Oct) | Unit, mounted, storage and daemon tests (fake adapters). Toast click activation is not supported on Windows. Included in v0.1.0-beta.6. |
+| Batch E: model list provenance (source, update time, suggestions vs validated), presentation overlay (names, default marker, family groups), OpenCode instruction/mode fixes | Batch E commit on main (3 Oct) | Fake-peer and daemon tests. Codex per-turn context is not possible with the installed app-server schema. Included in v0.1.0-beta.6. |
+| Patch D: Settings > Usage & limits (budgets, price overrides, subscription fees), Analytics links and budget card, export a conversation as Markdown, export/import a blob setup | Patch D commit on main (3 Oct) | Unit, mounted, storage and native-command tests. Cost budgets are not offered (turn admission cannot estimate cost yet). Included in v0.1.0-beta.6. |
+| Batch B: Ctrl+K quick switcher, composer model and thinking switch, safe Markdown, unified diff view and approval shortcuts shared with the companion | `863a779` | Unit and mounted tests only. No native window or live-provider check. Included in v0.1.0-beta.6. |
+| B1: shared Codex app-server and OpenCode ACP processes per runtime key, per-session queues, idle shutdown, crash restart and resume, bounded cancel | `1f802b0` | Unit and fake-process tests only. No native window or live-provider check. Included in v0.1.0-beta.6. |
+| Batch C: first-run setup for empty installs, companion start position and hotkey, system/dark/light themes, text size, and reorderable favourites and pins | `e6b1076` | Unit and mounted tests only. No native window or live-provider check. Included in v0.1.0-beta.6. |
+| Blob wardrobe: per-blob outfits, seasonal automatic outfit, wardrobe editor, migration 7 | `0d21c46` | Unit and mounted tests only. No native window or live-provider check. Included in v0.1.0-beta.6. |
+| Launch intro and startup checks, companion off by default with sidebar toggle and open-at-startup setting, and three-step first-run onboarding with install/sign-in guides | `a862351` | Unit, mounted and fake-process tests only. Startup timing, companion window lifecycle, install/sign-in flows and native behavior have not been checked in a live app. Included in v0.1.0-beta.6. |
+| OpenCode Go models and official model prices: 150 exact-decimal rows, price tiers, per-field sources, migration 8 | `9561e7d` | Workspace tests, desktop check, typecheck, Vitest and build passed. These use unit/mounted tests, in-memory storage and fake processes; no live provider or native-window verification. Included in v0.1.0-beta.6. |
 
 The three changes above were implemented by the `impl` lane, reviewed by `impl-b` over two or three rounds, and merged by the Director after gates. The current main gates passed: `cargo test --workspace` (231 passed), desktop check, typecheck, Vitest (338/338), and build. These checks do not establish native-window behavior or live-provider operation.
 

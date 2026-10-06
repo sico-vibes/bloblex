@@ -34,6 +34,16 @@ describe('daemon event reconciliation', () => {
     expect(JSON.stringify(next.quotas)).not.toMatch(/accountId|credits|upsell/i)
   })
 
+  it('updates session context only with provider-reported fields and keeps missing fields unknown', () => {
+    const unknown = applyEvent(base(), event('session.context.updated', 5, { sessionId: 's-a', contextUsed: 413000, contextSize: null }))
+    expect(unknown.sessions?.[0]).toMatchObject({ contextUsed: 413000 })
+    expect(unknown.sessions?.[0].contextSize).toBeUndefined()
+    const known = applyEvent(unknown, event('session.context.updated', 6, { sessionId: 's-a', contextUsed: 413000, contextSize: 828000 }))
+    expect(known.sessions?.[0]).toMatchObject({ contextUsed: 413000, contextSize: 828000 })
+    const reset = applyEvent(known, event('session.context.reset', 7, { sessionId:'s-a' }))
+    expect(reset.sessions?.[0]).toMatchObject({ contextUsed:null, contextSize:null })
+  })
+
   it('appends message deltas by stable message ID and ignores duplicate sequences', () => {
     const first = applyEvent(base(), event('message.delta', 5, { sessionId: 's-a', messageId: 'm-a', role: 'assistant', delta: ' there' }))
     expect(first.sessions?.[0].messages?.[0].content).toBe('Hello there')
@@ -60,8 +70,9 @@ describe('daemon event reconciliation', () => {
   })
 
   it('merges session changes without dropping previously hydrated activity', () => {
-    const next = applyEvent(base(), event('session.changed', 5, { session: { id: 's-a', runtimeId: 'rt-a', title: 'Updated', state: 'idle' } }))
+    const next = applyEvent(base(), event('session.changed', 5, { session: { id: 's-a', runtimeId: 'rt-a', title: 'Updated', state: 'idle', modelLock:{ model:'new-model', thinking:'high' } } }))
     expect(next.sessions?.[0]).toMatchObject({ title: 'Updated', state: 'idle' })
+    expect(next.sessions?.[0].modelLock).toEqual({ model:'new-model', thinking:'high' })
     expect(next.sessions?.[0].messages).toHaveLength(1)
     expect(next.sessions?.[0].files).toHaveLength(1)
     expect(next.sessions?.[0].tools).toHaveLength(1)

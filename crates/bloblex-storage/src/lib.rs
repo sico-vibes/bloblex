@@ -319,6 +319,33 @@ fn migrate_quota_snapshots(c: &mut Connection, path: Option<&Path>, backup_done:
     Ok(())
 }
 
+fn schema_v11_valid(c: &Connection) -> Result<bool, StorageError> {
+    let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+    let pragma: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let column: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='model_lock_json')", [], |r| r.get(0))?;
+    let integrity: String = c.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+    Ok(ledger == 11 && pragma == 11 && column && integrity == "ok"
+        && c.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get::<_, i64>(0))? == 0
+        && c.query_row("SELECT count(*) FROM sessions WHERE model_lock_json IS NOT NULL AND (NOT json_valid(model_lock_json) OR json_type(model_lock_json)!='object')", [], |r| r.get::<_, i64>(0))? == 0)
+}
+
+fn migrate_session_model_lock(c: &mut Connection, path: Option<&Path>, backup_done: bool) -> Result<(), StorageError> {
+    let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+    let pragma: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if ledger == 11 { return if schema_v11_valid(c)? { Ok(()) } else { Err(StorageError::InvalidAgent) }; }
+    if ledger != 10 || pragma != 10 || !schema_v10_valid(c)? { return Err(StorageError::InvalidAgent); }
+    if let Some(database_path) = path { if !backup_done { verified_backup(c, database_path, 10)?; } }
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute_batch("ALTER TABLE sessions ADD COLUMN model_lock_json TEXT CHECK(model_lock_json IS NULL OR (json_valid(model_lock_json) AND json_type(model_lock_json)='object'));")?;
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    tx.execute("INSERT INTO schema_migrations(version,applied_at) VALUES(11,?1)", [now])?;
+    tx.pragma_update(None, "user_version", 11)?;
+    if !schema_v11_valid(&tx)? { return Err(StorageError::InvalidAgent); }
+    tx.commit()?;
+    if !schema_v11_valid(c)? { return Err(StorageError::InvalidAgent); }
+    Ok(())
+}
+
 fn migrate_session_controls(c: &mut Connection, path: Option<&Path>, backup_done: bool) -> Result<(), StorageError> {
     let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
     let pragma: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -564,15 +591,23 @@ impl Storage {
         if has_ledger {
             let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
             let user:i64=conn.query_row("PRAGMA user_version",[],|r|r.get(0))?;
-            if ledger>10||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
+            if ledger>11||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
+            if ledger==11 {
+                if !schema_v11_valid(&conn)? { return Err(StorageError::InvalidAgent); }
+                return Ok(Self { conn: Mutex::new(conn) });
+            }
             if ledger==10 {
                 if !schema_v10_valid(&conn)? { return Err(StorageError::InvalidAgent); }
+                let backup_done = if let Some(path) = path { verified_backup(&conn, path, 10)?; true } else { false };
+                migrate_session_model_lock(&mut conn, path, backup_done)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==9 {
                 if !schema_v9_valid(&conn)? { return Err(StorageError::InvalidAgent); }
                 let backup_done = if let Some(path) = path { verified_backup(&conn, path, 9)?; true } else { false };
                 migrate_quota_snapshots(&mut conn, path, backup_done)?;
+                let model_lock_backup = if let Some(path) = path { verified_backup(&conn, path, 10)?; true } else { false };
+                migrate_session_model_lock(&mut conn, path, model_lock_backup)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==8 && !schema_v8_valid(&conn)? { return Err(StorageError::InvalidAgent); }
@@ -585,7 +620,7 @@ impl Storage {
         if has_ledger {
             let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
             let user:i64=conn.query_row("PRAGMA user_version",[],|r|r.get(0))?;
-            if ledger>10||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
+            if ledger>11||(user!=0&&user!=ledger)||(ledger>=2&&user!=ledger){return Err(StorageError::InvalidAgent)}
             if ledger==1 {if let Some(p)=path{verified_backup(&conn,p,1)?;backup_done=true;}}
             if ledger==2 {if let Some(p)=path{verified_backup(&conn,p,2)?;backup_v2_done=true;}}
             if ledger==5 {if let Some(p)=path{verified_backup(&conn,p,5)?;backup_v5_done=true;}}
@@ -671,6 +706,11 @@ impl Storage {
             if ledger == 9 { verified_backup(&conn, path.unwrap(), 9)?; true } else { false }
         } else { false };
         migrate_quota_snapshots(&mut conn, path, backup_v9_done)?;
+        let backup_v10_done = if path.is_some() {
+            let ledger: i64 = conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+            if ledger == 10 { verified_backup(&conn, path.unwrap(), 10)?; true } else { false }
+        } else { false };
+        migrate_session_model_lock(&mut conn, path, backup_v10_done)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -855,6 +895,22 @@ impl Storage {
         title: &str,
         agent_id: Option<&str>,
     ) -> Result<(), StorageError> {
+        self.create_session_for_agent_with_model_lock(id, runtime_id, provider, project, title, agent_id, None)
+    }
+    pub fn create_session_for_agent_with_model_lock(
+        &self,
+        id: &str,
+        runtime_id: &str,
+        provider: &str,
+        project: &str,
+        title: &str,
+        agent_id: Option<&str>,
+        model_lock: Option<&Value>,
+    ) -> Result<(), StorageError> {
+        if model_lock.is_some_and(|lock| {
+            !lock.is_object()
+                || !["model", "thinking"].iter().all(|key| lock.get(*key).is_some_and(|value| value.is_null() || value.as_str().is_some()))
+        }) { return Err(StorageError::InvalidAgent); }
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some(agent_id)=agent_id {
@@ -864,8 +920,20 @@ impl Storage {
             if agent_runtime!=runtime_id {return Err(StorageError::InvalidAgent)}
         }
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
-        tx.execute("INSERT INTO sessions(id,runtime_id,provider,project_path,title,state,created_at,updated_at,agent_id) VALUES(?1,?2,?3,?4,?5,'starting',?6,?6,?7)",params![id,runtime_id,provider,project,title,now,agent_id])?;tx.commit()?;
+        tx.execute("INSERT INTO sessions(id,runtime_id,provider,project_path,title,state,created_at,updated_at,agent_id,model_lock_json) VALUES(?1,?2,?3,?4,?5,'starting',?6,?6,?7,?8)",params![id,runtime_id,provider,project,title,now,agent_id,model_lock.map(Value::to_string)])?;tx.commit()?;
         Ok(())
+    }
+    pub fn set_session_model_lock(&self, id: &str, model_lock: &Value) -> Result<Value, StorageError> {
+        if !model_lock.is_object()
+            || !["model", "thinking"].iter().all(|key| model_lock.get(*key).is_some_and(|value| value.is_null() || value.as_str().is_some()))
+        { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute(
+            "UPDATE sessions SET model_lock_json=?2,updated_at=?3 WHERE id=?1",
+            params![id, model_lock.to_string(), Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)],
+        )?;
+        if changed == 0 { return Err(StorageError::AgentNotFound); }
+        session_event_summary_locked(&c, id)
     }
     pub fn set_session_exec_snapshot(&self,session_id:&str,snapshot_id:&str,first:bool)->Result<(),StorageError>{
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
@@ -953,8 +1021,8 @@ impl Storage {
     pub fn sessions(&self) -> Result<Vec<Value>, StorageError> { self.session_list(false) }
     pub fn session_list(&self, include_archived: bool) -> Result<Vec<Value>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
-        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?})))?;
+        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
+        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok())})))?;
         iter.collect::<Result<Vec<_>, _>>()
             .map_err(StorageError::from)
     }
@@ -978,6 +1046,21 @@ impl Storage {
         let changed = c.execute("UPDATE sessions SET title_override=?2,updated_at=?3 WHERE id=?1", params![id, title, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)])?;
         if changed == 0 { return Err(StorageError::AgentNotFound); }
         session_event_summary_locked(&c, id)
+    }
+    pub fn session_provider_title(&self, id: &str, title: &str) -> Result<Option<Value>, StorageError> {
+        let title = title.trim();
+        let count = title.chars().count();
+        if !(1..=120).contains(&count) { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute(
+            "UPDATE sessions SET title=?2,updated_at=?3 WHERE id=?1 AND title_override IS NULL",
+            params![id, title, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)],
+        )?;
+        if changed == 0 {
+            let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [id], |r| r.get(0))?;
+            return if exists { Ok(None) } else { Err(StorageError::AgentNotFound) };
+        }
+        Ok(Some(session_event_summary_locked(&c, id)?))
     }
     pub fn session_archive(&self, id: &str, archived: bool) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -1565,6 +1648,11 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         self.session_detail_locked(&c, id)
     }
+    pub fn session_context(&self, id: &str) -> Result<(Option<u64>, Option<u64>), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let (used, size) = session_context_locked(&c, id)?;
+        Ok((used.and_then(|value| u64::try_from(value).ok()), size.and_then(|value| u64::try_from(value).ok())))
+    }
     #[cfg(test)]
     pub fn budget_list(&self) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -1801,9 +1889,12 @@ impl Storage {
         let mut q=c.prepare(sql)?;let vals=q.query_map([include_archived],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
     }
     fn session_detail_locked(&self, c: &Connection, id: &str) -> Result<Value, StorageError> {
-        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
+        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
         let mut v: Value =
             serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
+        let (context_used, context_size) = session_context_locked(c, id)?;
+        v["contextUsed"] = json!(context_used);
+        v["contextSize"] = json!(context_size);
         let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
         let msgs=query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at) FROM messages WHERE session_id=?1 ORDER BY sequence",id)?;
         v["turns"] = json!(turns);
@@ -1844,11 +1935,34 @@ impl Storage {
 
 fn session_event_summary_locked(c: &Connection, id: &str) -> Result<Value, StorageError> {
     let json: Option<String> = c.query_row(
-        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM sessions WHERE id=?1",
+        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM sessions WHERE id=?1",
         [id],
         |r| r.get(0),
     ).optional()?;
-    Ok(serde_json::from_str(&json.ok_or(StorageError::AgentNotFound)?)?)
+    let mut summary: Value = serde_json::from_str(&json.ok_or(StorageError::AgentNotFound)?)?;
+    let (context_used, context_size) = session_context_locked(c, id)?;
+    summary["contextUsed"] = json!(context_used);
+    summary["contextSize"] = json!(context_size);
+    Ok(summary)
+}
+
+fn session_context_locked(c: &Connection, id: &str) -> Result<(Option<i64>, Option<i64>), StorageError> {
+    let event: Option<(String, String)> = c.query_row(
+        "SELECT event_type,payload FROM app_events WHERE event_type IN ('session.context.updated','session.context.reset') AND json_valid(payload) AND json_extract(payload,'$.sessionId')=?1 ORDER BY sequence DESC LIMIT 1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional()?;
+    if let Some((event_type, payload)) = event {
+        if event_type == "session.context.reset" { return Ok((None, None)); }
+        let payload: Value = serde_json::from_str(&payload)?;
+        return Ok((payload["contextUsed"].as_i64(), payload["contextSize"].as_i64()));
+    }
+    let context: Option<(Option<i64>, Option<i64>)> = c.query_row(
+        "SELECT context_used,context_size FROM usage_events WHERE session_id=?1 AND (context_used IS NOT NULL OR context_size IS NOT NULL) ORDER BY rowid DESC LIMIT 1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional()?;
+    Ok(context.unwrap_or((None, None)))
 }
 
 #[derive(Clone, Default)]
@@ -2274,7 +2388,7 @@ mod pricing_override_removal_tests {
         drop(Storage::open(&path).unwrap());
         {
             let c = Connection::open(&path).unwrap();
-            c.execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE IF EXISTS quota_snapshots; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL); DELETE FROM schema_migrations WHERE version IN (8,9,10); PRAGMA user_version=7;").unwrap();
+            c.execute_batch("PRAGMA foreign_keys=OFF; ALTER TABLE sessions DROP COLUMN model_lock_json; DROP TABLE IF EXISTS quota_snapshots; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL); DELETE FROM schema_migrations WHERE version IN (8,9,10,11); PRAGMA user_version=7;").unwrap();
             c.execute("INSERT INTO user_pricing_rules(id,provider,model,aliases,input_rate,output_rate,cache_read_rate,cache_write_rate,currency,effective_from,data) VALUES('old-usd','codex','gpt-old','[]',3,125,0,NULL,'USD','2026-10-01T00:00:00Z',?1)", [r#"{"id":"old-usd","provider":"codex","canonicalModelId":"gpt-old","aliases":[],"inputPerMillion":3,"outputPerMillion":125,"cacheReadPerMillion":0,"cacheWritePerMillion":null,"currency":"USD","effectiveFrom":"2026-10-01T00:00:00Z"}"#]).unwrap();
             c.execute("INSERT INTO user_pricing_rules(id,provider,model,aliases,input_rate,output_rate,cache_read_rate,cache_write_rate,currency,effective_from,data) VALUES('old-kwd','opencode','model-kwd','[]',3,NULL,NULL,NULL,'KWD','2026-10-01T00:00:00Z',?1)", [r#"{"id":"old-kwd","provider":"opencode","canonicalModelId":"model-kwd","aliases":[],"inputPerMillion":3,"outputPerMillion":null,"cacheReadPerMillion":null,"cacheWritePerMillion":null,"currency":"KWD","effectiveFrom":"2026-10-01T00:00:00Z"}"#]).unwrap();
         }
@@ -2292,7 +2406,7 @@ mod pricing_override_removal_tests {
         assert!(!c.query_row("SELECT applied_at FROM schema_migrations WHERE version=7", [], |r| r.get::<_, String>(0)).unwrap().is_empty());
         assert!(c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='outfit')", [], |r| r.get::<_, bool>(0)).unwrap());
         assert_eq!(c.query_row("SELECT COUNT(*) FROM schema_migrations WHERE version=8", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 10);
+            assert_eq!(c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 11);
         drop(c);
         drop(db);
         let _ = fs::remove_dir_all(dir);
@@ -2303,7 +2417,7 @@ mod pricing_override_removal_tests {
 mod tests {
     use super::*;
     fn remove_session_controls_migration(c: &Connection) {
-        c.execute_batch("DROP TABLE IF EXISTS quota_snapshots; DELETE FROM schema_migrations WHERE version IN (6,7,8,9,10); PRAGMA user_version=5; ALTER TABLE sessions DROP COLUMN archived; ALTER TABLE sessions DROP COLUMN title_override; ALTER TABLE agents DROP COLUMN outfit; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
+        c.execute_batch("ALTER TABLE sessions DROP COLUMN model_lock_json; DROP TABLE IF EXISTS quota_snapshots; DELETE FROM schema_migrations WHERE version IN (6,7,8,9,10,11); PRAGMA user_version=5; ALTER TABLE sessions DROP COLUMN archived; ALTER TABLE sessions DROP COLUMN title_override; ALTER TABLE agents DROP COLUMN outfit; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
     }
     #[test]
     fn quota_cache_migration_preserves_v9_history_and_keeps_last_good_on_failure() {
@@ -2324,14 +2438,14 @@ mod tests {
         }
         {
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch("DROP TABLE quota_snapshots; DELETE FROM schema_migrations WHERE version=10; PRAGMA user_version=9;").unwrap();
+            conn.execute_batch("ALTER TABLE sessions DROP COLUMN model_lock_json; DROP TABLE quota_snapshots; DELETE FROM schema_migrations WHERE version IN (10,11); PRAGMA user_version=9;").unwrap();
             assert!(schema_v9_valid(&conn).unwrap());
         }
         let _ = fs::remove_dir_all(root.join("backups"));
         {
             let db = Storage::open(&path).unwrap();
             let conn = db.conn.lock().unwrap();
-            assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 10);
+            assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 11);
             assert_eq!(conn.query_row("SELECT hard_limit FROM budget_policies WHERE id='old-budget'", [], |r| r.get::<_, i64>(0)).unwrap(), 100);
             assert_eq!(conn.query_row("SELECT input_per_million FROM pricing_rules WHERE id='old-price'", [], |r| r.get::<_, i64>(0)).unwrap(), 123);
             assert_eq!(conn.query_row("SELECT monthly_minor FROM subscription_plans WHERE id='old-sub'", [], |r| r.get::<_, i64>(0)).unwrap(), 2000);
@@ -2365,13 +2479,16 @@ mod tests {
         {
             let db = Storage::open(&path).unwrap();
             let version: i64 = db.conn.lock().unwrap().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(version, 10);
+            assert_eq!(version, 11);
             db.upsert_runtime(&json!({"id":"rt-controls","provider":"codex"})).unwrap();
             db.create_session("s-controls", "rt-controls", "codex", ".", "Original").unwrap();
             assert!(matches!(db.session_delete("s-controls"), Err(StorageError::SessionActive)));
             db.update_session_state("s-controls", "idle").unwrap();
+            let provider_title = db.session_provider_title("s-controls", "Generated by Codex").unwrap().unwrap();
+            assert_eq!(provider_title["title"], "Generated by Codex");
             let renamed = db.session_rename("s-controls", "  Renamed chat  ").unwrap();
             assert_eq!(renamed["title"], "Renamed chat");
+            assert!(db.session_provider_title("s-controls", "A later provider title").unwrap().is_none());
             assert!(renamed.get("messages").is_none());
             assert!(matches!(db.session_rename("s-controls", "  "), Err(StorageError::InvalidAgent)));
             let archived = db.session_archive("s-controls", true).unwrap();
@@ -2382,15 +2499,31 @@ mod tests {
             db.session_archive("s-controls", false).unwrap();
             db.create_turn("t-controls", "s-controls").unwrap();
             db.append_message("s-controls", "t-controls", "user", "private test text").unwrap();
+            db.insert_usage(&json!({"id":"u-controls","runtimeId":"rt-controls","sessionId":"s-controls","turnId":"t-controls","provider":"codex","timestamp":"2026-10-02T00:00:00Z","usageStatus":"reported","contextUsed":420,"contextSize":1000})).unwrap();
+            assert_eq!(db.session_detail("s-controls").unwrap()["contextUsed"], 420);
+            assert_eq!(db.session_event_summary("s-controls").unwrap()["contextSize"], 1000);
+            db.push_event("session.context.updated", &json!({"sessionId":"s-controls","contextUsed":520,"contextSize":1200})).unwrap();
+            assert_eq!(db.session_detail("s-controls").unwrap()["contextUsed"], 520);
+            db.push_event("session.context.reset", &json!({"sessionId":"s-controls"})).unwrap();
+            assert!(db.session_detail("s-controls").unwrap()["contextUsed"].is_null());
+            assert!(db.session_event_summary("s-controls").unwrap()["contextSize"].is_null());
             db.upsert_tool("s-controls", "tool-controls", "command", "test", "completed", &json!({})).unwrap();
             db.insert_file("s-controls", "local-file", &json!({"operation":"edited"})).unwrap();
             db.conn.lock().unwrap().execute("INSERT INTO exec_snapshots(id,session_id,turn_id,runtime_id,provider,created_at,requested_json,applied_json,evidence_json,adapter_flags_json,status) VALUES('snap-controls','s-controls','t-controls','rt-controls','codex','now','{}','{}','{}','{}','applied')", []).unwrap();
             db.push_event("message.completed", &json!({"sessionId":"s-controls","content":"private test message"})).unwrap();
+            db.create_session("s-provider-title", "rt-controls", "codex", ".", "New chat").unwrap();
+            db.update_session_state("s-provider-title", "idle").unwrap();
+            db.session_provider_title("s-provider-title", "Generated provider title").unwrap();
             drop(db);
         }
         {
             let db = Storage::open(&path).unwrap();
             assert_eq!(db.session_detail("s-controls").unwrap()["title"], "Renamed chat");
+            assert!(db.session_detail("s-controls").unwrap()["contextUsed"].is_null());
+            assert!(db.session_detail("s-controls").unwrap()["contextSize"].is_null());
+            assert_eq!(db.session_detail("s-provider-title").unwrap()["title"], "Generated provider title");
+            assert!(db.session_provider_title("s-provider-title", "Later provider title").unwrap().is_some());
+            assert_eq!(db.session_detail("s-provider-title").unwrap()["title"], "Later provider title");
             db.session_delete("s-controls").unwrap();
             let replay = db.replay_events(0, 100).unwrap();
             assert!(replay.iter().all(|event| event["payload"]["sessionId"] != "s-controls"));
@@ -2567,7 +2700,7 @@ mod tests {
         let agent_id;
         {let db=Storage::open(&path).unwrap();db.upsert_runtime(&json!({"id":"rt-v4","provider":"codex"})).unwrap();let (agent,_)=db.agent_create(&json!({"name":"Existing","runtimeId":"rt-v4"})).unwrap();agent_id=agent["id"].as_str().unwrap().to_owned();db.create_session_for_agent("session-v4","rt-v4","codex","C:/project","Existing",Some(&agent_id)).unwrap();db.insert_permission("perm-v4","session-v4","request-v4","Read file",None,&["allow".into(),"deny".into()],&json!({"toolCall":{"kind":"read"},"path":"README.md"})).unwrap();}
         {let c=Connection::open(&path).unwrap();remove_session_controls_migration(&c);c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode';").unwrap();}
-        {let db=Storage::open(&path).unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");let agent=db.agent_get(&agent_id).unwrap();assert!(agent["approvalMode"].is_null());assert_eq!(agent["effectiveApprovalMode"],"ask");let c=Connection::open(&path).unwrap();assert_eq!(c.query_row("SELECT status FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,String>(0)).unwrap(),"pending");assert!(c.query_row("SELECT resolved_by FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),10);}
+        {let db=Storage::open(&path).unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");let agent=db.agent_get(&agent_id).unwrap();assert!(agent["approvalMode"].is_null());assert_eq!(agent["effectiveApprovalMode"],"ask");let c=Connection::open(&path).unwrap();assert_eq!(c.query_row("SELECT status FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,String>(0)).unwrap(),"pending");assert!(c.query_row("SELECT resolved_by FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),11);}
         let backups=fs::read_dir(dir.join("backups")).unwrap().count();drop(Storage::open(&path).unwrap());assert_eq!(fs::read_dir(dir.join("backups")).unwrap().count(),backups);
         {let c=Connection::open(&path).unwrap();c.pragma_update(None,"user_version",3).unwrap();}assert!(matches!(Storage::open(&path),Err(StorageError::InvalidAgent)));let _=fs::remove_dir_all(dir);
     }
@@ -2835,7 +2968,7 @@ mod tests {
         assert!(matches!(db.agent_create(&json!({"name":"Invalid","runtimeId":"rt-outfit","outfit":5})), Err(StorageError::InvalidAgent)));
         assert_eq!(db.snapshot().unwrap()["agents"][0]["outfit"], "bunny-ears");
         let c = db.conn.lock().unwrap();
-        assert_eq!(c.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 10);
+        assert_eq!(c.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 11);
     }
 
     #[test]
@@ -2848,7 +2981,7 @@ mod tests {
         old.agent_create(&json!({"name":"Old","runtimeId":"rt-old"})).unwrap();
         {
             let source = old.conn.lock().unwrap();
-            source.execute_batch("PRAGMA foreign_keys=OFF; ALTER TABLE agents DROP COLUMN outfit; DROP TABLE IF EXISTS quota_snapshots; DELETE FROM schema_migrations WHERE version IN (7,8,9,10); PRAGMA user_version=6; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
+            source.execute_batch("PRAGMA foreign_keys=OFF; ALTER TABLE sessions DROP COLUMN model_lock_json; ALTER TABLE agents DROP COLUMN outfit; DROP TABLE IF EXISTS quota_snapshots; DELETE FROM schema_migrations WHERE version IN (7,8,9,10,11); PRAGMA user_version=6; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
             let mut destination = Connection::open(&path).unwrap();
             Backup::new(&source, &mut destination).unwrap().run_to_completion(128, std::time::Duration::from_millis(10), None).unwrap();
         }
@@ -2888,14 +3021,48 @@ mod tests {
         let before_reopen = after_migration.iter().map(|item| item.file_name().unwrap().to_string_lossy().into_owned()).collect::<std::collections::BTreeSet<_>>();
         {
             let read = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-            assert_eq!(read.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 10);
-            assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 10);
-            assert_eq!(read.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 10);
+            assert_eq!(read.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 11);
+            assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 11);
+            assert_eq!(read.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get::<_, i64>(0)).unwrap(), 11);
         }
         drop(Storage::open(&path).unwrap());
         let after_reopen = fs::read_dir(&backup_dir).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<std::collections::BTreeSet<_>>();
         assert_eq!(after_reopen, before_reopen);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn v10_model_lock_migration_preserves_sessions_and_accepts_session_lock_updates() {
+        let root = std::env::temp_dir().join(format!("bloblex-model-lock-migration-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("db.sqlite");
+        {
+            let db = Storage::open(&path).unwrap();
+            db.upsert_runtime(&json!({"id":"rt-lock","provider":"codex"})).unwrap();
+            db.create_session("s-lock", "rt-lock", "codex", "C:/project", "Saved title").unwrap();
+            db.update_session_state("s-lock", "idle").unwrap();
+            db.create_turn("t-lock", "s-lock").unwrap();
+            db.append_message("s-lock", "t-lock", "user", "saved message").unwrap();
+        }
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("ALTER TABLE sessions DROP COLUMN model_lock_json; DELETE FROM schema_migrations WHERE version=11; PRAGMA user_version=10;").unwrap();
+        }
+        {
+            let db = Storage::open(&path).unwrap();
+            assert_eq!(db.conn.lock().unwrap().query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 11);
+            let before = db.session_detail("s-lock").unwrap();
+            assert_eq!(before["title"], "Saved title");
+            assert_eq!(before["messages"][0]["content"], "saved message");
+            assert!(before["modelLock"].is_null());
+            let lock = json!({"model":"gpt-5.6-luna","thinking":"high"});
+            let updated = db.set_session_model_lock("s-lock", &lock).unwrap();
+            assert_eq!(updated["modelLock"], lock);
+            assert_eq!(db.session_detail("s-lock").unwrap()["modelLock"], lock);
+            assert!(db.set_session_model_lock("missing", &lock).is_err());
+            assert!(db.set_session_model_lock("s-lock", &json!({"model":12,"thinking":null})).is_err());
+        }
+        let _ = fs::remove_dir_all(root);
     }
     #[test]
     fn agent_validation_is_safe_and_duplicate_names_are_conflicts() {
@@ -2928,9 +3095,9 @@ mod tests {
     fn v1_migration_backfills_once_creates_verified_backup_and_rolls_back_in_temp_paths(){
         let(dir,path)=v1_fixture();
         let baseline={let db=Storage::open(&path).unwrap();let s= db.sessions().unwrap();assert_eq!(s.len(),2);assert!(s.iter().find(|x|x["id"]=="s-missing").unwrap()["agentId"].is_null());assert_eq!(db.agent_list(true,None).unwrap().len(),2);(db.agent_list(true,None).unwrap(),s)};
-        let backup_dir=dir.join("backups");let paths=fs::read_dir(&backup_dir).unwrap().map(|x|x.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),18);assert_eq!(paths.iter().filter(|x|x.extension().is_some_and(|e|e=="db")).count(),9);assert!(paths.iter().all(|x|!x.file_name().unwrap().to_string_lossy().ends_with("-wal")&&!x.file_name().unwrap().to_string_lossy().ends_with("-shm")));let backup=paths.iter().find(|x|x.extension().is_some_and(|e|e=="db")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap().clone();let manifest_path=paths.iter().find(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap();let manifest:Value=serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();assert_eq!(manifest["integrity"],"ok");assert_eq!(manifest["schemaVersion"],1);assert_eq!(manifest["tableRowCounts"]["sessions"],2);
+        let backup_dir=dir.join("backups");let paths=fs::read_dir(&backup_dir).unwrap().map(|x|x.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),20);assert_eq!(paths.iter().filter(|x|x.extension().is_some_and(|e|e=="db")).count(),10);assert!(paths.iter().all(|x|!x.file_name().unwrap().to_string_lossy().ends_with("-wal")&&!x.file_name().unwrap().to_string_lossy().ends_with("-shm")));let backup=paths.iter().find(|x|x.extension().is_some_and(|e|e=="db")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap().clone();let manifest_path=paths.iter().find(|x|x.file_name().unwrap().to_string_lossy().ends_with("manifest.json")&&x.file_name().unwrap().to_string_lossy().contains("v1")).unwrap();let manifest:Value=serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();assert_eq!(manifest["integrity"],"ok");assert_eq!(manifest["schemaVersion"],1);assert_eq!(manifest["tableRowCounts"]["sessions"],2);
         {let db=Storage::open(&path).unwrap();assert_eq!(db.agent_list(true,None).unwrap(),baseline.0);assert_eq!(db.sessions().unwrap(),baseline.1);}
-        let read=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(read.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),10);assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),10);assert_eq!(read.query_row("SELECT count(*) FROM usage_events WHERE agent_id IS NOT NULL",[],|r|r.get::<_,i64>(0)).unwrap(),1);assert_eq!(read.query_row("SELECT agent_id FROM usage_events WHERE id='u-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap(),Some(read.query_row("SELECT agent_id FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap()));assert_eq!(read.query_row("SELECT created_at FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap(),"2026-01-02T00:00:00.000Z");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='codex'",[],|r|r.get::<_,String>(0)).unwrap(),"#82AAFF");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='claude'",[],|r|r.get::<_,String>(0)).unwrap(),"#F38C6F");for (table,column) in [("sessions","agent_id"),("usage_events","agent_id"),("sessions","first_exec_snapshot_id"),("usage_events","usage_status"),("agents","approval_mode"),("permission_requests","resolved_by"),("sessions","title_override"),("sessions","archived")] {assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get::<_,bool>(0)).unwrap());}for index in ["idx_agents_active_name","idx_agents_active_runtime_order","idx_agents_runtime_archived_order","idx_sessions_agent_updated","idx_usage_agent_time","idx_usage_provider_update"]{assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",[index],|r|r.get::<_,bool>(0)).unwrap());}drop(read);
+        let read=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(read.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),11);assert_eq!(read.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),11);assert_eq!(read.query_row("SELECT count(*) FROM usage_events WHERE agent_id IS NOT NULL",[],|r|r.get::<_,i64>(0)).unwrap(),1);assert_eq!(read.query_row("SELECT agent_id FROM usage_events WHERE id='u-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap(),Some(read.query_row("SELECT agent_id FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap()));assert_eq!(read.query_row("SELECT created_at FROM sessions WHERE id='s-a'",[],|r|r.get::<_,String>(0)).unwrap(),"2026-01-02T00:00:00.000Z");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='codex'",[],|r|r.get::<_,String>(0)).unwrap(),"#82AAFF");assert_eq!(read.query_row("SELECT a.color FROM agents a JOIN runtimes r ON r.id=a.runtime_id WHERE r.provider='claude'",[],|r|r.get::<_,String>(0)).unwrap(),"#F38C6F");for (table,column) in [("sessions","agent_id"),("usage_events","agent_id"),("sessions","first_exec_snapshot_id"),("usage_events","usage_status"),("agents","approval_mode"),("permission_requests","resolved_by"),("sessions","title_override"),("sessions","archived"),("sessions","model_lock_json")] {assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",params![table,column],|r|r.get::<_,bool>(0)).unwrap());}for index in ["idx_agents_active_name","idx_agents_active_runtime_order","idx_agents_runtime_archived_order","idx_sessions_agent_updated","idx_usage_agent_time","idx_usage_provider_update"]{assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",[index],|r|r.get::<_,bool>(0)).unwrap());}drop(read);
         let failed=restore_verified_backup(&backup,&path,1).unwrap();assert!(failed.exists());let restored=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(restored.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),0);assert_eq!(restored.query_row("SELECT count(*) FROM sessions",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert!(!restored.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='agent_id')",[],|r|r.get::<_,bool>(0)).unwrap());drop(restored);let _=fs::remove_dir_all(dir);
     }
     #[test]
@@ -2945,8 +3112,8 @@ mod tests {
     fn migration_2_to_3_seeds_gates_preserves_operator_values_and_reopens_without_backup_or_sidecars(){
         let(dir,path)=v2_fixture();
         {let db=Storage::open(&path).unwrap();let settings=db.settings().unwrap();assert_eq!(settings["exec_gate.codex.model"],false);for key in ["exec_gate.claude.model","exec_gate.claude.thinking","exec_gate.claude.instructions","exec_gate.codex.thinking","exec_gate.codex.serviceTier","exec_gate.codex.instructions","exec_gate.opencode.model","exec_gate.opencode.instructions"]{assert_eq!(settings[key],true);}assert_eq!(settings["exec_gate.opencode.thinking"],false);}
-        let backup_dir=dir.join("backups");let before=fs::read_dir(&backup_dir).unwrap().count();assert_eq!(before,16);
-        {let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),10);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),10);assert_eq!(c.query_row("SELECT COUNT(*) FROM usage_events WHERE usage_status='unreported' AND exec_snapshot_id IS NULL AND provider_update_id IS NULL AND context_used IS NULL AND context_size IS NULL AND reported_cost_decimal IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='settings.changed'",[],|r|r.get::<_,i64>(0)).unwrap(),9);for (table,column) in [("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","reported_cost_decimal")] {assert_eq!(c.query_row("SELECT type FROM pragma_table_info(?1) WHERE name=?2",params![table,column],|r|r.get::<_,String>(0)).unwrap(),"TEXT");}assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cumulative_cost_micros')",[],|r|r.get::<_,bool>(0)).unwrap());}
+        let backup_dir=dir.join("backups");let before=fs::read_dir(&backup_dir).unwrap().count();assert_eq!(before,18);
+        {let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),11);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),11);assert_eq!(c.query_row("SELECT COUNT(*) FROM usage_events WHERE usage_status='unreported' AND exec_snapshot_id IS NULL AND provider_update_id IS NULL AND context_used IS NULL AND context_size IS NULL AND reported_cost_decimal IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='settings.changed'",[],|r|r.get::<_,i64>(0)).unwrap(),9);for (table,column) in [("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","reported_cost_decimal")] {assert_eq!(c.query_row("SELECT type FROM pragma_table_info(?1) WHERE name=?2",params![table,column],|r|r.get::<_,String>(0)).unwrap(),"TEXT");}assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cumulative_cost_micros')",[],|r|r.get::<_,bool>(0)).unwrap());}
         drop(Storage::open(&path).unwrap());assert_eq!(fs::read_dir(&backup_dir).unwrap().count(),before);
         let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();remove_session_controls_migration(&c);c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2;").unwrap();drop(c);drop(Storage::open(&path).unwrap());
         let entries=fs::read_dir(&dir).unwrap().map(|e|e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>();assert!(entries.iter().all(|n|!n.ends_with("-wal")&&!n.ends_with("-shm")));let backup_entries=fs::read_dir(&backup_dir).unwrap().map(|e|e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>();assert!(backup_entries.iter().all(|n|!n.ends_with("-wal")&&!n.ends_with("-shm")));let _=fs::remove_dir_all(dir);

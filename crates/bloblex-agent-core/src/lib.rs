@@ -872,6 +872,16 @@ pub enum AgentEvent {
     SessionStarted {
         provider_session_id: String,
     },
+    /// A provider-reported human-readable conversation title.
+    SessionTitle {
+        title: String,
+    },
+    /// Structured context-window measurements; each field remains unknown
+    /// unless the provider reports it directly.
+    ContextUpdated {
+        used: Option<u64>,
+        size: Option<u64>,
+    },
     AssistantDelta {
         text: String,
     },

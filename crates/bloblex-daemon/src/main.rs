@@ -686,6 +686,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             .map_err(|e| derr("not_found", &e.to_string(), StatusCode::NOT_FOUND)),
         "session.new" => new_session(st, p).await,
         "session.resume" => resume_session(st, p).await,
+        "session.model.update" => update_session_model(st, p).await,
         "session.prompt" => session_prompt(st, p).await,
         "session.cancel" => {
             let id = p["sessionId"].as_str().unwrap_or("");
@@ -916,11 +917,48 @@ fn adapter_for(a: &Adapters, provider: &str) -> Option<Arc<dyn AgentAdapter>> {
 }
 fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,DispatchError>{
     let default=st.db.default_approval_mode().map_err(agent_error)?;
-    let Some(agent_id)=session["agentId"].as_str() else { return Ok(ExecOptions{approval_mode:parse_mode(&default),max_concurrency:4,..ExecOptions::default()}); };
-    let a=st.db.agent_get(agent_id).map_err(agent_error)?;
-    let env=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
-    let mode=a["approvalMode"].as_str().unwrap_or(&default);
-    Ok(ExecOptions{approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32})
+    let mut options = if let Some(agent_id)=session["agentId"].as_str() {
+        let a=st.db.agent_get(agent_id).map_err(agent_error)?;
+        let env=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
+        let mode=a["approvalMode"].as_str().unwrap_or(&default);
+        ExecOptions{approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32}
+    } else { ExecOptions{approval_mode:parse_mode(&default),max_concurrency:4,..ExecOptions::default()} };
+    if let Some(lock) = session["modelLock"].as_object() {
+        // Presence of the lock object is significant: explicit null means the
+        // session intentionally uses its provider default and must not follow
+        // later changes to the mutable blob model/effort fields.
+        options.model = lock.get("model").and_then(Value::as_str).map(str::to_owned);
+        options.thinking = lock.get("thinking").and_then(Value::as_str).map(str::to_owned);
+    }
+    Ok(options)
+}
+
+async fn resolve_session_model_lock(
+    st: &AppState,
+    runtime: &Value,
+    mut options: ExecOptions,
+) -> (ExecOptions, Value) {
+    let catalog = if options.model.is_none() || options.thinking.is_none() {
+        fetch_model_catalog(st, runtime, false).await.ok().filter(|catalog| catalog["validated"] == true && catalog["fallback"] != true)
+    } else { None };
+    if let Some(catalog) = catalog {
+        let models = catalog["models"].as_array().cloned().unwrap_or_default();
+        if options.model.is_none() {
+            options.model = models.iter().find(|model| model["isDefault"] == true).and_then(|model| model["id"].as_str()).map(str::to_owned);
+        }
+        if options.thinking.is_none() {
+            options.thinking = models.iter()
+                .find(|model| model["id"].as_str() == options.model.as_deref())
+                .and_then(|model| model["defaultThinking"].as_str())
+                .map(str::to_owned);
+        }
+    }
+    let lock = json!({"model":options.model.clone(),"thinking":options.thinking.clone()});
+    // Clone the normalized lock into the saved execution options so launch,
+    // resume and later turns all use precisely the same session choice.
+    options.model = lock["model"].as_str().map(str::to_owned);
+    options.thinking = lock["thinking"].as_str().map(str::to_owned);
+    (options, lock)
 }
 fn parse_mode(s:&str)->ApprovalMode{match s{"auto"=>ApprovalMode::Auto,"bypass"=>ApprovalMode::Bypass,_=>ApprovalMode::Ask}}
 fn provider_mode(provider:&str)->&'static str{match provider{"claude"=>"bypassPermissions","codex"=>"never",_=>"daemon_allow_all"}}
@@ -1145,7 +1183,8 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         )
     })?;
     let options_session=if let Some(agent_id)=agent_id.as_deref(){st.db.agent_get(agent_id).map_err(agent_error)?}else{json!({"agentId":null})};
-    let exec_options=exec_options_for_session(st,&options_session)?;
+    let base_options=exec_options_for_session(st,&options_session)?;
+    let (exec_options,model_lock)=resolve_session_model_lock(st,&runtime,base_options).await;
     let id = Uuid::new_v4().to_string();
     if let Some((setting, error)) = preflight_exec_options(st,&runtime,&provider,&exec_options).await {
         st.emit("exec.options.rejected", json!({"sessionId":id,"agentId":agent_id,"runtimeId":runtime_id,"setting":setting,"code":error.1.code,"reason":error.1.message})).await;
@@ -1157,13 +1196,14 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         .unwrap_or("New chat")
         .to_owned();
     st.db
-        .create_session_for_agent(
+        .create_session_for_agent_with_model_lock(
             &id,
             &runtime_id,
             &provider,
             &project.to_string_lossy(),
             &title,
             agent_id.as_deref(),
+            Some(&model_lock),
         )
         .map_err(agent_error)?;
     let startup_options=exec_options.clone();
@@ -1292,13 +1332,8 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         let row = st.db.session_detail(&sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
         (row, previous_state)
     };
-    if !row["resumable"].as_bool().unwrap_or(false) {
-        return Err(derr(
-            "unsupported",
-            "provider did not advertise resume support",
-            StatusCode::BAD_REQUEST,
-        ));
-    }
+    let can_resume_saved_provider = row["resumable"].as_bool().unwrap_or(false)
+        && row["providerSessionId"].as_str().is_some_and(|id| !id.is_empty());
     let rt = st
         .runtimes
         .read()
@@ -1326,7 +1361,16 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
             StatusCode::BAD_REQUEST,
         )
     })?;
-    let exec_options=exec_options_for_session(st,&row)?;
+    let base_options = exec_options_for_session(st, &row)?;
+    let (exec_options, model_lock) = if row["modelLock"].is_object() {
+        (base_options, row["modelLock"].clone())
+    } else {
+        resolve_session_model_lock(st, &rt, base_options).await
+    };
+    if !row["modelLock"].is_object() {
+        let session = st.db.set_session_model_lock(&sid, &model_lock).map_err(agent_error)?;
+        st.emit("session.changed", session).await;
+    }
     if let Some((setting, error)) = preflight_exec_options(st,&rt,&provider,&exec_options).await {
         let _guard = gate.lock().await;
         if !session_gate_is_current(st, &sid, &gate).await || session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false) {
@@ -1341,16 +1385,14 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
     let desired_instruction_hash=bloblex_agent_core::instruction_sha256(exec_options.instructions.as_deref().unwrap_or(""));
     if provider=="codex" {let baseline=st.db.codex_thread_instruction_sha256(&sid).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;adapter.set_instruction_hash_context(&sid,desired_instruction_hash,baseline).await;}
     let startup_options=exec_options.clone();
-    let resume_result = resume_or_start_fresh(
-        st,
-        adapter.clone(),
-        &spec,
-        &sid,
-        native_id,
-        project.clone(),
-        exec_options,
-    )
-    .await;
+    let resume_result = if can_resume_saved_provider {
+        resume_or_start_fresh(st,adapter.clone(),&spec,&sid,native_id,project.clone(),exec_options)
+            .await
+    } else {
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        adapter.new_session(&spec,NewSessionRequest{session_id:sid.clone(),project_path:project.clone(),exec_options},tx)
+            .await.map(|handle| (handle,rx,true))
+    };
     let (handle, rx, resume_fallback) = match resume_result {
         Ok(result) => result,
         Err(bloblex_agent_core::AdapterError::ContextExhausted) => {
@@ -1371,6 +1413,7 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
             && st.db.session_detail(&sid).is_ok_and(|session| session["archived"] != true)
             && !st.sessions.lock().await.contains_key(&sid);
         if installed {
+            st.db.set_session_provider_id(&sid, &handle.provider_session_id, handle.capabilities.resume).map_err(agent_error)?;
             st.sessions.lock().await.insert(sid.clone(), ActiveSession {
                 handle: handle.clone(),
                 runtime: spec.clone(),
@@ -1412,9 +1455,95 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         "sessionId": p["sessionId"],
         "resumed": !resume_fallback,
         "state": "idle",
-        "outcomeNote": resume_fallback.then_some("The saved provider session expired. A new provider session was started.")
+        "outcomeNote": resume_fallback.then_some(if can_resume_saved_provider { "The saved provider session expired. A new provider session was started; saved Bloblex messages remain available." } else { "A new provider context was started; saved Bloblex messages remain available." })
     }))
 }
+
+fn normalize_provider_title(raw: &str) -> Option<String> {
+    let capped = raw.chars().filter(|character| !character.is_control()).take(240).collect::<String>();
+    let normalized = capped.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = normalized.chars().take(120).collect::<String>();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+async fn ensure_session_active(st: &AppState, session_id: &str) -> Result<(), DispatchError> {
+    if st.sessions.lock().await.contains_key(session_id) {
+        return Ok(());
+    }
+    match resume_session(st, json!({"sessionId": session_id})).await {
+        Ok(_) => Ok(()),
+        Err(_error) if st.sessions.lock().await.contains_key(session_id) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+async fn update_session_model(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    let sid = p["sessionId"].as_str().filter(|value| !value.is_empty())
+        .ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
+    let gate = gate_for_session(st, sid).await;
+    let row = {
+        let _guard = gate.lock().await;
+        if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
+        if st.active_turns.lock().await.contains_key(sid) {
+            return Err(derr("conflict", "model cannot change while a turn is active", StatusCode::CONFLICT));
+        }
+        st.db.session_detail(sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?
+    };
+    if !matches!(row["state"].as_str(), Some("idle" | "closed" | "error")) {
+        return Err(derr("conflict", "model can only change between turns", StatusCode::CONFLICT));
+    }
+    let model = match p.get("model") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if !value.trim().is_empty() => Some(value.clone()),
+        _ => return Err(derr("invalid_argument", "model must be a non-empty identifier or null", StatusCode::BAD_REQUEST)),
+    };
+    let thinking = match p.get("thinking") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if !value.trim().is_empty() => Some(value.clone()),
+        _ => return Err(derr("invalid_argument", "thinking must be a non-empty identifier or null", StatusCode::BAD_REQUEST)),
+    };
+    let previous = row["modelLock"].clone();
+    let previous_model = if previous.is_object() {
+        previous["model"].as_str().map(str::to_owned)
+    } else {
+        exec_options_for_session(st, &row)?.model
+    };
+    let next_model = model.as_deref();
+    let model_changed = previous_model.as_deref() != next_model;
+    if model_changed && p["confirmModelChange"] != true {
+        return Err(derr("confirmation_required", "Changing models may reset provider context and alter response quality or speed. Confirm to continue.", StatusCode::CONFLICT));
+    }
+    let runtime = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == row["runtimeId"]).cloned()
+        .ok_or_else(|| derr("provider_unavailable", "runtime is not installed", StatusCode::BAD_GATEWAY))?;
+    let mut options = exec_options_for_session(st, &row)?;
+    options.model = model.clone();
+    options.thinking = thinking.clone();
+    if let Some((_, error)) = preflight_exec_options(st, &runtime, row["provider"].as_str().unwrap_or(""), &options).await {
+        return Err(error);
+    }
+    let lock = json!({"model":options.model,"thinking":options.thinking});
+    let (updated, active_to_close) = {
+        let _guard = gate.lock().await;
+        if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
+        if st.active_turns.lock().await.contains_key(sid) {
+            return Err(derr("conflict", "model cannot change while a turn is active", StatusCode::CONFLICT));
+        }
+        let current = st.db.session_detail(sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
+        if current["modelLock"] != row["modelLock"] || current["state"] != row["state"] {
+            return Err(derr("conflict", "conversation changed while the model selection was being checked", StatusCode::CONFLICT));
+        }
+        let active = if model_changed { st.sessions.lock().await.remove(sid) } else { None };
+        if model_changed { st.db.clear_session_provider_id(sid).map_err(agent_error)?; }
+        let _ = st.db.set_session_model_lock(sid, &lock).map_err(agent_error)?;
+        let updated = st.db.session_event_summary(sid).map_err(agent_error)?;
+        (updated, active)
+    };
+    if let Some(active) = active_to_close { let _ = active.adapter.close_session(&active.handle).await; }
+    st.emit("session.changed", updated.clone()).await;
+    if model_changed { st.emit("session.context.reset", json!({"sessionId":sid})).await; }
+    Ok(json!({"session":updated,"modelChanged":model_changed}))
+}
+
 async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
     let text = p["text"].as_str().unwrap_or("").to_owned();
@@ -1425,6 +1554,11 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             StatusCode::BAD_REQUEST,
         ));
     }
+    // Provider processes are intentionally ephemeral across daemon restarts.
+    // Lazily restore the saved provider session before creating the turn or
+    // appending its user message. A resume failure therefore leaves the
+    // composer text untouched and creates no partial conversation message.
+    ensure_session_active(st, &sid).await?;
     let mut gate = gate_for_session(st, &sid).await;
     let (mut active, session_options, previous_state) = {
         let _guard = gate.lock().await;
@@ -1813,6 +1947,20 @@ async fn forward_events_with_timeouts(
                 let session = st.db.session_event_summary(&sid).unwrap_or(Value::Null);
                 ("session.changed", session)
             }
+            AgentEvent::SessionTitle { title } => {
+                let Some(title) = normalize_provider_title(&title) else { continue; };
+                match st.db.session_provider_title(&sid, &title) {
+                    Ok(Some(session)) => ("session.changed", session),
+                    Ok(None) | Err(_) => continue,
+                }
+            }
+            AgentEvent::ContextUpdated { used, size } => {
+                let (previous_used, previous_size) = st.db.session_context(&sid).unwrap_or((None, None));
+                let context_used = used.or(previous_used);
+                let context_size = size.or(previous_size);
+                if context_used.is_none() && context_size.is_none() { continue; }
+                ("session.context.updated", json!({"sessionId":sid,"contextUsed":context_used,"contextSize":context_size}))
+            }
             AgentEvent::AssistantDelta { text } => {
                 let m = st
                     .db
@@ -1964,6 +2112,14 @@ async fn forward_events_with_timeouts(
             AgentEvent::UsageReport { turn_id, report } => {
                 let timestamp = Utc::now().to_rfc3339();
                 let model = report.model.clone();
+                if report.context_used.is_some() || report.context_size.is_some() {
+                    let (previous_used, previous_size) = st.db.session_context(&sid).unwrap_or((None, None));
+                    st.emit("session.context.updated", json!({
+                        "sessionId": sid,
+                        "contextUsed": report.context_used.or(previous_used),
+                        "contextSize": report.context_size.or(previous_size),
+                    })).await;
+                }
                 let provider_update_id = report
                     .provider_update_id
                     .as_deref()
@@ -2238,6 +2394,13 @@ mod phase2a_tests {
         provider_error_detail_tests();
     }
 
+    #[test]
+    fn provider_titles_are_trimmed_bounded_and_control_safe() {
+        assert_eq!(normalize_provider_title("  Generated\n chat\u{0000} title  ").as_deref(), Some("Generated chat title"));
+        assert!(normalize_provider_title(" \n\u{0000} ").is_none());
+        assert_eq!(normalize_provider_title(&"x".repeat(300)).unwrap().chars().count(), 120);
+    }
+
     #[tokio::test]
     async fn retired_budget_pricing_and_subscription_rpcs_do_not_expose_or_write_legacy_records() {
         let (st, _) = state();
@@ -2352,6 +2515,63 @@ mod phase2a_tests {
         async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
         async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
         async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { self.close_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst); Ok(()) }
+    }
+
+    struct PromptResumeAdapter {
+        reject_resume: bool,
+        fail_resume: bool,
+        resume_calls: std::sync::atomic::AtomicUsize,
+        new_calls: std::sync::atomic::AtomicUsize,
+        prompts: StdMutex<Vec<String>>,
+        events: StdMutex<Option<tokio::sync::mpsc::Sender<AgentEvent>>>,
+    }
+    #[async_trait::async_trait]
+    impl AgentAdapter for PromptResumeAdapter {
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, request: NewSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.new_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.events.lock().unwrap() = Some(events.clone());
+            let _ = events.send(AgentEvent::SessionStarted { provider_session_id: "fresh-after-rejection".into() }).await;
+            Ok(SessionHandle { session_id: request.session_id, provider_session_id: "fresh-after-rejection".into(), capabilities: bloblex_agent_core::AgentCapabilities { resume: true, ..Default::default() } })
+        }
+        async fn resume_session(&self, _: &RuntimeSpec, request: ResumeSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.resume_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.reject_resume { return Err(bloblex_agent_core::AdapterError::ResumeRejected); }
+            if self.fail_resume { return Err(bloblex_agent_core::AdapterError::Protocol("fixture resume failure".into())); }
+            *self.events.lock().unwrap() = Some(events.clone());
+            let _ = events.send(AgentEvent::SessionStarted { provider_session_id: request.provider_session_id.clone() }).await;
+            Ok(SessionHandle { session_id: request.session_id, provider_session_id: request.provider_session_id, capabilities: bloblex_agent_core::AgentCapabilities { resume: true, ..Default::default() } })
+        }
+        async fn prompt(&self, _: &SessionHandle, request: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> {
+            self.prompts.lock().unwrap().push(request.text);
+            let events = self.events.lock().unwrap().clone();
+            if let Some(events) = events {
+                let _ = events.send(AgentEvent::TurnCompleted).await;
+            }
+            Ok(())
+        }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+    }
+    struct ModelLockAdapter { catalog: bloblex_agent_core::ModelCatalog, new_calls: std::sync::atomic::AtomicUsize, resume_calls: std::sync::atomic::AtomicUsize }
+    #[async_trait::async_trait]
+    impl AgentAdapter for ModelLockAdapter {
+        async fn model_catalog(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ModelCatalog, bloblex_agent_core::AdapterError> { Ok(self.catalog.clone()) }
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, request: NewSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.new_calls.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+            let _ = events.send(AgentEvent::SessionStarted { provider_session_id:"fresh-locked-model-session".into() }).await;
+            Ok(SessionHandle { session_id:request.session_id, provider_session_id:"fresh-locked-model-session".into(), capabilities:bloblex_agent_core::AgentCapabilities { resume:true, ..Default::default() } })
+        }
+        async fn resume_session(&self, _: &RuntimeSpec, _: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.resume_calls.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+            Err(bloblex_agent_core::AdapterError::Protocol("should start fresh after model switch".into()))
+        }
+        async fn prompt(&self, _: &SessionHandle, _: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
     }
     #[test] fn normalized_permission_requests_map_provider_tool_names_and_fail_closed(){
         let(kind,body)=normalized_permission("claude",&json!({"request":{"tool_name":"Bash","input":{"command":"git status"}}}));assert_eq!(kind,"shell");assert_eq!(body["command"],"git status");
@@ -2568,6 +2788,98 @@ mod phase2a_tests {
         let event=events.recv().await.unwrap();
         assert_eq!(event.event_type,"session.resume_rejected");
         assert!(event.payload["outcomeNote"].as_str().unwrap().contains("new provider session was started"));
+    }
+
+    #[tokio::test]
+    async fn first_prompt_after_daemon_restart_lazily_resumes_before_recording_user_message() {
+        async fn prepare(adapter: Arc<PromptResumeAdapter>, sid: &str) -> (AppState, PathBuf) {
+            let (mut st, _) = state();
+            let project = std::env::temp_dir().join(format!("bloblex-lazy-resume-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&project).unwrap();
+            let executable = std::env::current_exe().unwrap();
+            let runtime = json!({
+                "id": "rt-test",
+                "provider": "codex",
+                "status": "online",
+                "executablePath": executable,
+                "launchArgs": [],
+            });
+            st.db.upsert_runtime(&runtime).unwrap();
+            *st.runtimes.write().await = vec![runtime];
+            st.db.create_session(sid, "rt-test", "codex", &project.to_string_lossy(), "Saved chat").unwrap();
+            st.db.set_session_provider_id(sid, "saved-provider-id", true).unwrap();
+            st.db.update_session_state(sid, "idle").unwrap();
+            st.adapters = Arc::new(Adapters {
+                acp: Arc::new(AcpAdapter::default()),
+                codex: adapter,
+                claude: Arc::new(ClaudeAdapter::default()),
+            });
+            (st, project)
+        }
+
+        let adapter = Arc::new(PromptResumeAdapter {
+            reject_resume: false,
+            fail_resume: false,
+            resume_calls: Default::default(),
+            new_calls: Default::default(),
+            prompts: StdMutex::new(Vec::new()),
+            events: StdMutex::new(None),
+        });
+        let (st, project) = prepare(adapter.clone(), "restart-resume").await;
+        let result = dispatch(&st, "session.prompt", json!({"sessionId":"restart-resume","text":"continue the saved task"})).await.unwrap();
+        assert_eq!(result["accepted"], true);
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if adapter.prompts.lock().unwrap().contains(&"continue the saved task".to_owned()) { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }).await.unwrap();
+        assert_eq!(*adapter.prompts.lock().unwrap(), ["continue the saved task"]);
+        let detail = st.db.session_detail("restart-resume").unwrap();
+        assert_eq!(detail["messages"].as_array().unwrap().iter().filter(|message| message["role"] == "user").count(), 1);
+        std::fs::remove_dir_all(project).unwrap();
+
+        let adapter = Arc::new(PromptResumeAdapter {
+            reject_resume: true,
+            fail_resume: false,
+            resume_calls: Default::default(),
+            new_calls: Default::default(),
+            prompts: StdMutex::new(Vec::new()),
+            events: StdMutex::new(None),
+        });
+        let (st, project) = prepare(adapter.clone(), "expired-resume").await;
+        let result = dispatch(&st, "session.prompt", json!({"sessionId":"expired-resume","text":"continue after expiry"})).await.unwrap();
+        assert_eq!(result["accepted"], true);
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if adapter.prompts.lock().unwrap().contains(&"continue after expiry".to_owned()) { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }).await.unwrap();
+        assert_eq!(*adapter.prompts.lock().unwrap(), ["continue after expiry"]);
+        let detail = st.db.session_detail("expired-resume").unwrap();
+        assert_eq!(detail["messages"].as_array().unwrap().iter().filter(|message| message["role"] == "user").count(), 1);
+        assert_eq!(detail["providerSessionId"], "fresh-after-rejection");
+        std::fs::remove_dir_all(project).unwrap();
+
+        let adapter = Arc::new(PromptResumeAdapter {
+            reject_resume: false,
+            fail_resume: true,
+            resume_calls: Default::default(),
+            new_calls: Default::default(),
+            prompts: StdMutex::new(Vec::new()),
+            events: StdMutex::new(None),
+        });
+        let (st, project) = prepare(adapter.clone(), "failed-resume").await;
+        let error = dispatch(&st, "session.prompt", json!({"sessionId":"failed-resume","text":"must remain in composer"})).await.unwrap_err();
+        assert_eq!(error.1.code, "provider_error");
+        assert!(st.db.session_detail("failed-resume").unwrap()["messages"].as_array().unwrap().is_empty());
+        assert!(adapter.prompts.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(project).unwrap();
     }
     #[tokio::test]
     async fn daemon_generic_resume_error_preserves_saved_provider_pointer(){
@@ -2989,6 +3301,46 @@ mod phase2a_tests {
         assert_eq!(models[0]["availability"], "offered");
         assert_eq!(models[1]["group"], "GPT-6");
         assert_eq!(models[2]["group"], "Other models");
+    }
+
+    #[tokio::test]
+    async fn session_model_lock_requires_confirmation_and_survives_agent_default_changes() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-session-model-lock";
+        st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
+        *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
+        let catalog = bloblex_agent_core::ModelCatalog {
+            models: vec![
+                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None },
+                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["low".into(),"high".into()], default_thinking:Some("high".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None },
+            ],
+            fetched_at:"2026-10-06T00:00:00Z".into(), expires_at:"2026-10-06T00:01:00Z".into(), fallback:false, source:"fake_test_catalog".into(), validated:true,
+        };
+        let adapter = Arc::new(ModelLockAdapter { catalog, new_calls:std::sync::atomic::AtomicUsize::new(0), resume_calls:std::sync::atomic::AtomicUsize::new(0) });
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter.clone(), claude:Arc::new(ClaudeAdapter::default()) });
+        let agent = st.db.agent_create(&json!({"name":"Locked","runtimeId":runtime_id,"model":"alpha","thinking":"low"})).unwrap().0;
+        let sid = "session-model-lock";
+        st.db.create_session_for_agent_with_model_lock(sid,runtime_id,"codex",".","Locked",agent["id"].as_str(),Some(&json!({"model":"alpha","thinking":"low"}))).unwrap();
+        st.db.set_session_provider_id(sid,"old-provider-context",true).unwrap();
+        st.db.update_session_state(sid,"idle").unwrap();
+
+        let unconfirmed = dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"beta","thinking":"high"})).await.unwrap_err();
+        assert_eq!(unconfirmed.1.code,"confirmation_required");
+        assert_eq!(st.db.session_detail(sid).unwrap()["modelLock"],json!({"model":"alpha","thinking":"low"}));
+        let updated = dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"beta","thinking":"high","confirmModelChange":true})).await.unwrap();
+        assert_eq!(updated["session"]["modelLock"],json!({"model":"beta","thinking":"high"}));
+        assert!(st.db.session_detail(sid).unwrap()["providerSessionId"].is_null());
+        let resumed = resume_session(&st,json!({"sessionId":sid})).await.unwrap();
+        assert_eq!(resumed["outcomeNote"],"A new provider context was started; saved Bloblex messages remain available.");
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst),1);
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst),0);
+        assert_eq!(st.db.session_detail(sid).unwrap()["providerSessionId"],"fresh-locked-model-session");
+
+        st.db.agent_update(agent["id"].as_str().unwrap(),&json!({"model":"alpha","thinking":"low"})).unwrap();
+        let session = st.db.session_detail(sid).unwrap();
+        let options = exec_options_for_session(&st,&session).unwrap();
+        assert_eq!(options.model.as_deref(),Some("beta"));
+        assert_eq!(options.thinking.as_deref(),Some("high"));
     }
 
     #[tokio::test]

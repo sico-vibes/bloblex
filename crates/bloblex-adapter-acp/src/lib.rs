@@ -837,7 +837,15 @@ async fn emit_update(tx: &SessionEventSink, p: &Value) {
                 Some(AgentEvent::ToolUpdated { tool_call_id, raw: u.clone() })
             }
         }
-        "agent_turn_complete" | "current_mode_update" | "session_info_update" | "usage_update" => None,
+        "session_info_update" => u["title"]
+            .as_str()
+            .map(|title| AgentEvent::SessionTitle { title: title.to_owned() }),
+        "usage_update" => {
+            let used = u["used"].as_u64();
+            let size = u["size"].as_u64();
+            (used.is_some() || size.is_some()).then_some(AgentEvent::ContextUpdated { used, size })
+        }
+        "agent_turn_complete" | "current_mode_update" => None,
         _ => None,
     };
     if let Some(event) = event {
@@ -1379,6 +1387,9 @@ mod tests {
             emit_update(&tx, &params).await;
             assert!(matches!(rx.recv().await, Some(AgentEvent::AssistantDelta { text }) if text == "hello"));
             emit_update(&tx, &usage).await;
+            assert!(matches!(rx.recv().await, Some(AgentEvent::ContextUpdated { used: Some(1), size: Some(2) })));
+            emit_update(&tx, &json!({"sessionId":"s","update":{"sessionUpdate":"session_info_update","title":"ACP generated title"}})).await;
+            assert!(matches!(rx.recv().await, Some(AgentEvent::SessionTitle { title }) if title == "ACP generated title"));
             assert!(rx.try_recv().is_err());
         });
         assert_eq!(id_key(&json!("1")), "1");

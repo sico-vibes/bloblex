@@ -134,7 +134,7 @@ const SHARED_PROCESS_IDLE_SHUTDOWN: std::time::Duration = std::time::Duration::f
 const SESSION_FORWARD_QUEUE_COALESCE_CAP: usize = 128;
 
 fn is_stream_event(event: &AgentEvent) -> bool {
-    matches!(event, AgentEvent::AssistantDelta { .. } | AgentEvent::ThinkingDelta { .. } | AgentEvent::ToolUpdated { .. })
+    matches!(event, AgentEvent::AssistantDelta { .. } | AgentEvent::ThinkingDelta { .. } | AgentEvent::ToolUpdated { .. } | AgentEvent::ContextUpdated { .. })
 }
 
 fn merge_stream_event(previous: &mut AgentEvent, incoming: AgentEvent) -> Result<(), AgentEvent> {
@@ -149,6 +149,14 @@ fn merge_stream_event(previous: &mut AgentEvent, incoming: AgentEvent) -> Result
             AgentEvent::ToolUpdated { tool_call_id: right_id, raw: right },
         ) if *left_id == right_id => {
             *left = right;
+            Ok(())
+        }
+        (
+            AgentEvent::ContextUpdated { used: left_used, size: left_size },
+            AgentEvent::ContextUpdated { used: right_used, size: right_size },
+        ) => {
+            if right_used.is_some() { *left_used = right_used; }
+            if right_size.is_some() { *left_size = right_size; }
             Ok(())
         }
         (_, incoming) => Err(incoming),
@@ -373,7 +381,12 @@ impl CodexAdapter {
                         "thread/tokenUsage/updated"
                             if expected.as_deref() == p["turnId"].as_str() =>
                         {
-                            r.turn.lock().await.usage = Some(p["tokenUsage"]["last"].clone());
+                            let token_usage = p["tokenUsage"].clone();
+                            let (used, size) = context_window_from_token_usage(&token_usage);
+                            r.turn.lock().await.usage = Some(token_usage);
+                            if used.is_some() || size.is_some() {
+                                let _ = r.events.enqueue(AgentEvent::ContextUpdated { used, size });
+                            }
                         }
                         "turn/completed" if expected.as_deref() == p["turn"]["id"].as_str() => {
                             let status = p["turn"]["status"].as_str().unwrap_or("");
@@ -692,6 +705,9 @@ fn context_exhausted_evidence(message: &str) -> bool {
 
 fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
     match method {
+        "thread/name/updated" => p["threadName"]
+            .as_str()
+            .map(|title| AgentEvent::SessionTitle { title: title.to_owned() }),
         "item/agentMessage/delta" | "item/agentMessageDelta" => p["delta"]
             .as_str()
             .map(|text| AgentEvent::AssistantDelta { text: text.into() }),
@@ -841,7 +857,9 @@ fn usage_report(last: Option<&Value>, model: Option<String>, success: bool) -> U
             cost_is_cumulative: false,
         };
     }
-    let u = last.cloned().unwrap_or(Value::Null);
+    let usage = last.cloned().unwrap_or(Value::Null);
+    let wrapped = usage.get("last").is_some();
+    let u = if wrapped { &usage["last"] } else { &usage };
     let input = u["inputTokens"].as_u64();
     let cached = u["cachedInputTokens"].as_u64();
     let write = u["cacheWriteInputTokens"].as_u64();
@@ -868,14 +886,21 @@ fn usage_report(last: Option<&Value>, model: Option<String>, success: bool) -> U
         .into(),
         evidence_note: note,
         provider_update_id: None,
-        context_used: None,
-        context_size: None,
+        context_used: if wrapped { u["totalTokens"].as_u64() } else { None },
+        context_size: if wrapped { usage["modelContextWindow"].as_u64() } else { None },
         model,
         cost_minor: None,
         cost_currency: None,
         reported_cost_decimal: None,
         cost_is_cumulative: false,
     }
+}
+
+fn context_window_from_token_usage(usage: &Value) -> (Option<u64>, Option<u64>) {
+    (
+        usage["last"]["totalTokens"].as_u64(),
+        usage["modelContextWindow"].as_u64(),
+    )
 }
 fn parse_catalog_model(m: &Value) -> Result<ModelInfo, AdapterError> {
     let id = m["id"]
@@ -1604,6 +1629,20 @@ mod tests {
         let c = usage_report(None, None, false);
         assert_eq!(c.usage_status, "unreported");
         assert_eq!(c.input_tokens, None);
+        let current = json!({
+            "last": {"inputTokens":8,"cachedInputTokens":5,"cacheWriteInputTokens":2,"totalTokens":413000},
+            "total": {"totalTokens":900000},
+            "modelContextWindow": 828000
+        });
+        assert_eq!(context_window_from_token_usage(&current), (Some(413000), Some(828000)));
+        let report = usage_report(Some(&current), None, true);
+        assert_eq!(report.context_used, Some(413000), "context uses last/current-turn total, never lifetime total");
+        assert_eq!(report.context_size, Some(828000));
+        assert!(matches!(
+            map_notification("thread/name/updated", &json!({"threadId":"thread","threadName":"Generated chat"})),
+            Some(AgentEvent::SessionTitle { title }) if title == "Generated chat"
+        ));
+        assert!(matches!(map_notification("thread/name/updated", &json!({"threadId":"thread","threadName":"Generated chat"})), Some(AgentEvent::SessionTitle { title }) if title == "Generated chat"));
     }
     #[test]
     fn catalog_models_normalize_tiers_and_efforts() {

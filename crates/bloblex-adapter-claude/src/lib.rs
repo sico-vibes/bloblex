@@ -168,10 +168,33 @@ struct Conn {
     desired_instruction_sha256: Option<String>,
     event_sender: EventSender,
     active_turn_id: Mutex<Option<String>>,
+    context_window: Mutex<ClaudeContextWindow>,
     stderr_tail: Arc<Mutex<String>>,
     api_retry_count: std::sync::atomic::AtomicU32,
     api_retry_http_status_seen: AtomicBool,
     api_retry_connection_failure: AtomicBool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ClaudeContextWindow {
+    used: Option<u64>,
+    size: Option<u64>,
+    model: Option<String>,
+}
+
+fn claude_context_used(per_call_usage: &Value) -> Option<u64> {
+    let input = per_call_usage["input_tokens"].as_u64()?;
+    // Anthropic's Messages usage fields count cache reads/writes as input
+    // tokens; omitted cache buckets mean that no tokens used that bucket.
+    input
+        .checked_add(per_call_usage["cache_read_input_tokens"].as_u64().unwrap_or(0))?
+        .checked_add(per_call_usage["cache_creation_input_tokens"].as_u64().unwrap_or(0))
+}
+
+fn claude_context_size(model_usage: &Value, model: Option<&str>) -> Option<u64> {
+    let models = model_usage.as_object()?;
+    let model = model.or_else(|| (models.len() == 1).then(|| models.keys().next().map(String::as_str)).flatten())?;
+    models.get(model)?["contextWindow"].as_u64()
 }
 fn control_response(original_id: Value, input: Value, choice: &str) -> Result<Value, AdapterError> {
     let response = match choice {
@@ -238,6 +261,7 @@ async fn parse_line(
     permission_requests: &Mutex<HashMap<String, (Value, Value)>>,
     local_session_id: &str,
     active_turn_id: &Mutex<Option<String>>,
+    context_window: &Mutex<ClaudeContextWindow>,
 ) {
     let typ = v["type"].as_str().unwrap_or("");
     match typ {
@@ -262,6 +286,21 @@ async fn parse_line(
             }
         }
         "assistant" => {
+            let model = v["message"]["model"].as_str().map(str::to_owned);
+            let used = claude_context_used(&v["message"]["usage"]);
+            if model.is_some() || used.is_some() {
+                let size = {
+                    let mut context = context_window.lock().await;
+                    if model.is_some() && context.model != model {
+                        context.size = None;
+                    }
+                    if model.is_some() { context.model = model; }
+                    if let Some(used) = used { context.used = Some(used); }
+                    context.size
+                };
+                let used = context_window.lock().await.used;
+                let _ = tx.send(AgentEvent::ContextUpdated { used, size }).await;
+            }
             if let Some(content) = v["message"]["content"].as_array() {
                 for c in content {
                     match c["type"].as_str().unwrap_or("") {
@@ -339,6 +378,16 @@ async fn parse_line(
             let u = &v["usage"];
             if !v["is_error"].as_bool().unwrap_or(false) {
                 let model = v["modelUsage"].as_object().and_then(|o| o.keys().next().cloned());
+                let context = {
+                    let mut context = context_window.lock().await;
+                    let model_key = context.model.as_deref().or(model.as_deref());
+                    if context.size.is_none() { context.size = claude_context_size(&v["modelUsage"], model_key); }
+                    if context.model.is_none() { context.model = model.clone(); }
+                    (context.used, context.size)
+                };
+                if context.0.is_some() || context.1.is_some() {
+                    let _ = tx.send(AgentEvent::ContextUpdated { used: context.0, size: context.1 }).await;
+                }
                 let total_cost = v["total_cost_usd"].as_number().map(ToString::to_string);
                 let cost_minor = total_cost.as_deref().and_then(exact_usd_minor);
             let turn_id = active_turn_id.lock().await.clone().unwrap_or_default();
@@ -346,7 +395,7 @@ async fn parse_line(
                     input_tokens: u["input_tokens"].as_u64(), output_tokens: u["output_tokens"].as_u64(),
                     cache_read_tokens: u["cache_read_input_tokens"].as_u64(), cache_write_tokens: u["cache_creation_input_tokens"].as_u64(),
                     reasoning_tokens: u["output_tokens_details"]["thinking_tokens"].as_u64(), usage_status: if u.is_object() { "reported" } else { "unreported" }.into(), evidence_note: None,
-                    provider_update_id: None, context_used: None, context_size: None,
+                    provider_update_id: None, context_used: context.0, context_size: context.1,
                     model, cost_minor, cost_currency: cost_minor.map(|_| "USD".into()),
                     reported_cost_decimal: total_cost, cost_is_cumulative: false,
                 }}).await;
@@ -495,6 +544,7 @@ impl ClaudeAdapter {
             desired_instruction_sha256,
             event_sender: events.clone(),
             active_turn_id: Mutex::new(None),
+            context_window: Mutex::new(ClaudeContextWindow::default()),
             stderr_tail: stderr_tail.clone(),
             api_retry_count: std::sync::atomic::AtomicU32::new(0),
             api_retry_http_status_seen: AtomicBool::new(false),
@@ -554,6 +604,7 @@ impl ClaudeAdapter {
                         &reader.permission_requests,
                         &reader.local_session_id,
                         &reader.active_turn_id,
+                        &reader.context_window,
                     )
                     .await;
                 }
@@ -765,6 +816,7 @@ impl AgentAdapter for ClaudeAdapter {
                 .map_err(|e| AdapterError::Protocol(e.to_string()))?;
         bytes.push(b'\n');
         c.cancellation_requested.store(false, Ordering::SeqCst);
+        c.context_window.lock().await.used = None;
         *c.active_turn_id.lock().await = Some(q.turn_id.clone());
         c.active_turn.store(true, Ordering::SeqCst);
         if let Err(error) = c.stdin.lock().await.write(&bytes).await {
@@ -863,8 +915,9 @@ mod tests {
         let requests = Mutex::new(HashMap::new());
         let provider_id = Mutex::new(None);
         let active_turn = Mutex::new(None);
+        let context_window = Mutex::new(ClaudeContextWindow::default());
         tokio::runtime::Runtime::new().unwrap().block_on(async {
-            parse_line(&tx, &v, &provider_id, &requests, "local-session", &active_turn).await;
+            parse_line(&tx, &v, &provider_id, &requests, "local-session", &active_turn, &context_window).await;
             assert!(matches!(rx.recv().await, Some(AgentEvent::PermissionRequested { provider_request_id, choices, .. }) if provider_request_id == "local-session:r-1" && choices == vec!["allow", "deny"]));
             let stored = requests.lock().await.get("local-session:r-1").cloned().unwrap();
             assert_eq!(stored.0, json!("r-1"));
@@ -910,6 +963,7 @@ mod tests {
         let provider_id = Mutex::new(None);
         let requests = Mutex::new(HashMap::new());
         let active_turn = Mutex::new(Some("turn-context".to_owned()));
+        let context_window = Mutex::new(ClaudeContextWindow::default());
         let message = json!({
             "type": "result",
             "is_error": true,
@@ -917,7 +971,7 @@ mod tests {
             "result": "Prompt rejected"
         });
         tokio::runtime::Runtime::new().unwrap().block_on(async {
-            parse_line(&tx, &message, &provider_id, &requests, "session", &active_turn).await;
+            parse_line(&tx, &message, &provider_id, &requests, "session", &active_turn, &context_window).await;
             assert!(matches!(rx.recv().await, Some(AgentEvent::ContextExhausted)));
             assert!(rx.try_recv().is_err());
         });
@@ -951,14 +1005,18 @@ mod tests {
     #[test]
     fn successful_claude_usage_is_normalized_and_error_zeros_stay_null() {
         let (tx,mut rx)=tokio::sync::mpsc::channel(8);let id=Mutex::new(None);let permissions=Mutex::new(HashMap::new());let active=Mutex::new(Some("turn-1".to_owned()));
+        let context_window=Mutex::new(ClaudeContextWindow::default());
         let rt=tokio::runtime::Runtime::new().unwrap();rt.block_on(async {
-            parse_line(&tx,&json!({"type":"result","is_error":false,"session_id":"provider-update","usage":{"input_tokens":8,"output_tokens":3,"cache_read_input_tokens":2,"cache_creation_input_tokens":1,"output_tokens_details":{"thinking_tokens":0}},"modelUsage":{"claude-sonnet-5-5":{"inputTokens":8}},"total_cost_usd":0.01}),&id,&permissions,"s",&active).await;
-            match rx.recv().await.unwrap(){AgentEvent::UsageReport{turn_id,report}=>{assert_eq!(turn_id,"turn-1");assert_eq!(report.input_tokens,Some(8));assert_eq!(report.reasoning_tokens,Some(0));assert_eq!(report.model.as_deref(),Some("claude-sonnet-5-5"));assert_eq!(report.cost_minor,Some(1));assert_eq!(report.reported_cost_decimal.as_deref(),Some("0.01"));},_=>panic!("normalized usage expected")}
+            parse_line(&tx,&json!({"type":"assistant","session_id":"provider-update","message":{"model":"claude-sonnet-5-5","usage":{"input_tokens":8,"cache_read_input_tokens":2,"cache_creation_input_tokens":1},"content":[]}}),&id,&permissions,"s",&active,&context_window).await;
+            assert!(matches!(rx.recv().await,Some(AgentEvent::ContextUpdated{used:Some(11),size:None})));
+            parse_line(&tx,&json!({"type":"result","is_error":false,"session_id":"provider-update","usage":{"input_tokens":8,"output_tokens":3,"cache_read_input_tokens":2,"cache_creation_input_tokens":1,"output_tokens_details":{"thinking_tokens":0}},"modelUsage":{"claude-sonnet-5-5":{"inputTokens":8,"contextWindow":200000}},"total_cost_usd":0.01}),&id,&permissions,"s",&active,&context_window).await;
+            assert!(matches!(rx.recv().await,Some(AgentEvent::ContextUpdated{used:Some(11),size:Some(200000)})));
+            match rx.recv().await.unwrap(){AgentEvent::UsageReport{turn_id,report}=>{assert_eq!(turn_id,"turn-1");assert_eq!(report.input_tokens,Some(8));assert_eq!(report.reasoning_tokens,Some(0));assert_eq!(report.model.as_deref(),Some("claude-sonnet-5-5"));assert_eq!(report.context_used,Some(11));assert_eq!(report.context_size,Some(200000));assert_eq!(report.cost_minor,Some(1));assert_eq!(report.reported_cost_decimal.as_deref(),Some("0.01"));},_=>panic!("normalized usage expected")}
             assert!(matches!(rx.recv().await,Some(AgentEvent::TurnCompleted)));
-            parse_line(&tx,&json!({"type":"result","is_error":true,"usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{}}),&id,&permissions,"s",&active).await;
+            parse_line(&tx,&json!({"type":"result","is_error":true,"usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{}}),&id,&permissions,"s",&active,&context_window).await;
             match rx.recv().await.unwrap(){AgentEvent::UsageReport{report,..}=>{assert_eq!(report.usage_status,"unreported");assert_eq!(report.input_tokens,None);assert_eq!(report.output_tokens,None);assert_eq!(report.model,None);},_=>panic!("unreported usage expected")}
             match rx.recv().await.unwrap(){AgentEvent::Error{message}=>assert_eq!(message,"Claude reported a turn error"),_=>panic!("generic provider error expected")}
-            parse_line(&tx,&json!({"type":"result","is_error":true,"errors":["429 rate limit exceeded"]}),&id,&permissions,"s",&active).await;
+            parse_line(&tx,&json!({"type":"result","is_error":true,"errors":["429 rate limit exceeded"]}),&id,&permissions,"s",&active,&context_window).await;
             match rx.recv().await.unwrap(){AgentEvent::UsageReport{report,..}=>assert_eq!(report.usage_status,"unreported"),_=>panic!("unreported usage expected")}
             match rx.recv().await.unwrap(){AgentEvent::Error{message}=>assert_eq!(message,"429 rate limit exceeded"),_=>panic!("provider error detail expected")}
         });

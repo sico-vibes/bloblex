@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { AutoResolvedAction, BypassNotice } from '../approvalContract'
 import { visibleApprovalMode } from '../approvalContract'
 import type { Agent, Runtime, Session } from '../types'
@@ -84,15 +84,33 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
   </div>
 }
 
-export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, confirmDisabled = false, onConfirm, onCancel }: {
+export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, confirmDisabled = false, holdToConfirm = false, onConfirm, onCancel }: {
   title: string
   body?: string
   confirmLabel: string
   cancelLabel: string
   confirmDisabled?: boolean
+  holdToConfirm?: boolean
   onConfirm: () => void
   onCancel: () => void
 }) {
+  const [holding, setHolding] = useState(false)
+  const [holdProgress, setHoldProgress] = useState(0)
+  const holdStarted = useRef<number | null>(null)
+  const completed = useRef(false)
+  useEffect(() => {
+    if (!holding || !holdToConfirm || confirmDisabled) return
+    const timer = window.setInterval(() => {
+      const started = holdStarted.current
+      if (started === null) return
+      const progress = Math.min(1, (performance.now() - started) / 800)
+      setHoldProgress(progress)
+      if (progress >= 1 && !completed.current) { completed.current = true; setHolding(false); onConfirm() }
+    }, 24)
+    return () => window.clearInterval(timer)
+  }, [holding, holdToConfirm, confirmDisabled, onConfirm])
+  const beginHold = () => { if (confirmDisabled || completed.current) return; holdStarted.current = performance.now(); setHoldProgress(0); setHolding(true) }
+  const cancelHold = () => { holdStarted.current = null; setHolding(false); setHoldProgress(0) }
   const { ref, close } = useDialogAccessibility(onCancel)
   return <div className="sheet-backdrop blob-dialog-backdrop">
     <section ref={ref} className="blob-dialog" role="dialog" aria-modal="true" aria-labelledby="blob-dialog-title" tabIndex={-1}>
@@ -100,8 +118,9 @@ export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, confirmD
       {body && <p>{body}</p>}
       <div className="blob-dialog-actions">
         <button type="button" className="secondary-button" data-dialog-initial-focus onClick={close}>{cancelLabel}</button>
-        <button type="button" className="primary-button" disabled={confirmDisabled} onClick={onConfirm}>{confirmLabel}</button>
+        <button type="button" className={`primary-button ${holdToConfirm ? 'hold-confirm-button' : ''}`} disabled={confirmDisabled} aria-label={holdToConfirm ? `Press and hold to ${confirmLabel.toLowerCase()}` : undefined} aria-describedby={holdToConfirm ? 'hold-confirm-hint' : undefined} style={holdToConfirm ? { '--hold-progress': `${holdProgress * 100}%` } as CSSProperties : undefined} onClick={holdToConfirm ? (event) => event.preventDefault() : onConfirm} onPointerDown={holdToConfirm ? (event) => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); beginHold() } : undefined} onPointerUp={holdToConfirm ? cancelHold : undefined} onPointerCancel={holdToConfirm ? cancelHold : undefined} onPointerLeave={holdToConfirm ? cancelHold : undefined} onKeyDown={holdToConfirm ? (event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); if (!event.repeat) beginHold() } } : undefined} onKeyUp={holdToConfirm ? (event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); cancelHold() } } : undefined}><span className={holdToConfirm ? 'hold-confirm-label' : undefined}>{confirmLabel}</span></button>
       </div>
+      {holdToConfirm && <p id="hold-confirm-hint" className="hold-confirm-hint">Press and hold for a moment to confirm. Release or press Escape to cancel.</p>}
     </section>
   </div>
 }

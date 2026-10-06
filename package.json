@@ -1,8 +1,10 @@
 {
   "name": "bloblex",
   "private": true,
-  "version": "0.1.0-beta.8",
-  "workspaces": ["apps/desktop"],
+  "version": "0.1.0-beta.9",
+  "workspaces": [
+    "apps/desktop"
+  ],
   "scripts": {
     "dev": "npm run dev --workspace @bloblex/desktop",
     "build": "npm run build --workspace @bloblex/desktop",

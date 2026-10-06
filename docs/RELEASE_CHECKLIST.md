@@ -1,10 +1,10 @@
 # Release checklist
 
-Updated 6 October 2026. Manual-only `v0.1.0-beta.8` is published. It is the latest manual GitHub release; the signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`. The beta.8 NSIS installer is unsigned and has no updater `.sig` or `latest.json`; the beta.8 workflow did not update `channel-beta`. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
+Updated 6 October 2026. Manual-only `v0.1.0-beta.8` is published. The current source is `v0.1.0-beta.9`, being prepared as the next manual-only beta. The signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`; manual-only betas do not change that feed. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
 
-Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.8`. Cargo.lock entries for crates that inherit the workspace version are beta.8; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
+Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.9`. Cargo.lock entries for crates that inherit the workspace version are beta.9; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
 
-`docs/releases/0.1.0-beta.8.md` is the published note for this beta. The signed release script was not used for beta.8. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
+`docs/releases/0.1.0-beta.9.md` is the note for the current manual-only beta. The signed release script is not used for unsigned manual releases. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
 
 ## Release command
 

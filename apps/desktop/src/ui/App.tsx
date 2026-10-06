@@ -51,7 +51,7 @@ import { FirstRunOnboarding } from './FirstRunOnboarding'
 import { LAUNCH_OVERALL_TIMEOUT_REASON, LAUNCH_TIMEOUTS, launchWarningsFor, runLaunchChecks, runtimeAuthSummary, throwIfLaunchAborted, type LaunchCheck } from './launchChecks'
 import { providerBrand } from './providerBrand'
 import { applyAppearance, applySurfaceAppearance, type TextSizeChoice, type ThemeChoice } from './appearance'
-import { ComposerExecutionSwitch } from './ComposerExecutionSwitch'
+import { SessionExecutionControls } from './SessionExecutionControls'
 import { SafeMarkdown } from './SafeMarkdown'
 import { parseUnifiedDiff } from './diffParser'
 import type { QuickSwitcherItem } from './quickSwitcherModel'
@@ -1453,20 +1453,24 @@ export function App() {
 
         {!selectedSession ? <>{activePermission && <ApprovalCard permission={activePermission} onReply={(choice) => answerPermission(activePermission, choice)} /> }<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} accent={accent} mood={selectedMood} agentName={agentName} outfit={activeSelectedAgent?.outfit ?? 'auto'} createdAt={activeSelectedAgent?.createdAt ?? null} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={openCreate} onRefresh={() => void refreshRuntimes()} /></> : <>
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
-            <div className="chat-column">
+            <div className="conversation-layout">
+              <ConversationOutline items={groupedConversationItems.filter((item): item is ConversationItem & { kind:'message' } => item.kind === 'message').map((item, index) => ({ anchor: `conversation-message-${encodeURIComponent(item.id)}`, label: `${isUserMessage(item.value) ? 'You' : agentName}: ${plainText(typeof item.value?.text === 'string' ? item.value.text : typeof item.value?.content === 'string' ? item.value.content : '').slice(0, 160) || 'Message'}`, index }))} />
+              <div className="chat-column">
               {groupedConversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} outfit={activeSelectedAgent?.outfit ?? 'auto'} createdAt={activeSelectedAgent?.createdAt ?? null} label={activeSelectedAgent?.name ?? agentName} /><h2>Ready when you are.</h2><p>Ask {agentName} to explore <code>{currentProjectName ?? 'the project'}</code> or make a change.</p></div> : groupedConversationItems.map((item, index) => item.kind === 'activity-group'
                 ? <ActivityGroupRow key={item.id} group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
                 : item.kind === 'message'
-                  ? <MessageItem key={item.id} message={item.value!} accent={accent} agentName={agentName} showAvatar={!isUserMessage(item.value) && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))} mood={index === lastAgentIndex ? selectedMood : 'idle'} />
+                  ? <MessageItem key={item.id} id={`conversation-message-${encodeURIComponent(item.id)}`} message={item.value!} accent={accent} agentName={agentName} showAvatar={!isUserMessage(item.value) && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))} mood={index === lastAgentIndex ? selectedMood : 'idle'} />
                   : <ActivityItem key={item.id} item={item} onDiff={(path, content) => setDiffViewer({ path, content })} />)}
               {activePermission && <ApprovalCard permission={activePermission} focusOnMount={approvalFocusOnMount} onReply={(choice) => answerPermission(activePermission, choice)} />}
               {selectedSession.state === 'working' && <div className="working-indicator" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>{agentName} is working</div>}
+              </div>
             </div>
           </section>
           <div className="composer-wrap">
             <div className="composer-box">
               <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() } }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
-              {activeSelectedAgent && <ComposerExecutionSwitch agent={activeSelectedAgent} provider={runtimes.find((runtime) => runtime.id === activeSelectedAgent.runtimeId)?.provider} onAgentUpdated={mergeAgent} onError={(reason) => setError(messageOf(reason))} />}
+              <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} />
+              {selectedSession && activeSelectedAgent && <SessionExecutionControls session={selectedSession} agent={activeSelectedAgent} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} />}
               <button className={`send-button ${turnLive ? 'cancel' : ''}`} onClick={turnLive ? () => void cancelTurn() : () => void sendPrompt()} disabled={busy || (!turnLive && (!composer.trim() || !runtimeReady))} aria-label={turnLive ? 'Cancel turn' : 'Send message'}>{busy ? <LoaderCircle size={16} className="spinning" /> : turnLive ? <Square size={12} fill="currentColor" /> : <ArrowUp size={17} />}</button>
             </div>
             <div className="composer-note">{currentProjectName ? <><FolderOpen size={11} />{currentProjectName}<span>·</span></> : null}Agent actions run on your device. You approve what matters.</div>
@@ -1496,7 +1500,7 @@ export function App() {
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
       {chooserView}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body="It leaves the roster. Its conversations stay saved. Restoring a blob is not available yet." confirmLabel="Archive" cancelLabel="Cancel" onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
-      {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bloblex. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" onConfirm={() => { const target = sessionDeleteTarget; setSessionDeleteTarget(null); void rpc('session.delete', { sessionId: target.id }).then(() => focusSidebarBlob()).catch((reason) => { setError(messageOf(reason)); focusSidebarSession(target.id) }) }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
+      {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bloblex. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm onConfirm={() => { const target = sessionDeleteTarget; setSessionDeleteTarget(null); void rpc('session.delete', { sessionId: target.id }).then(() => focusSidebarBlob()).catch((reason) => { setError(messageOf(reason)); focusSidebarSession(target.id) }) }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
       {pendingBlobImport && <ImportBlobDialog blob={pendingBlobImport} runtimes={runtimes} onCancel={() => { setPendingBlobImport(null); restoreCreateFocus() }} onCreate={(runtimeId) => createImportedBlob(pendingBlobImport, runtimeId)} />}
     </main>
   )
@@ -1522,7 +1526,7 @@ function EmptyConversation({ connected, hasRuntime, hasAgent, accent, mood, agen
   return <div className="empty-conversation"><div className="empty-art">{canvas}</div><h1>{heading}</h1><p className="empty-description">{description}</p><button className="primary-button" onClick={(event) => { if (!connected || !hasAgent && !hasRuntime) onRefresh(); else if (hasAgent) onNewSession(event.currentTarget); else onCreate() }} disabled={!connected && !hasRuntime}><FolderOpen size={15} />{label}</button></div>
 }
 
-function MessageItem({ message, accent, agentName, showAvatar, mood }: { message: Record<string, unknown>; accent: string; agentName: string; showAvatar: boolean; mood: BlobMood }) {
+function MessageItem({ id, message, accent, agentName, showAvatar, mood }: { id: string; message: Record<string, unknown>; accent: string; agentName: string; showAvatar: boolean; mood: BlobMood }) {
   const isUser = isUserMessage(message)
   const role = String(message.role ?? message.kind ?? 'assistant').toLowerCase()
   const text = typeof message.text === 'string' ? message.text : typeof message.content === 'string' ? message.content : typeof message.delta === 'string' ? message.delta : ''
@@ -1532,12 +1536,36 @@ function MessageItem({ message, accent, agentName, showAvatar, mood }: { message
   const isError = message.status === 'error' || role === 'error' || eventType === 'turn.error'
   const time = typeof message.createdAt === 'string' ? new Date(message.createdAt) : null
   const stamp = time && !Number.isNaN(time.valueOf()) ? <time>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time> : null
-  return <article className={`message-row ${isUser ? 'user' : 'agent'} ${showAvatar ? 'group-start' : ''}`} aria-label={isUser ? 'You' : agentName} data-mood={isError ? 'error' : mood} data-accent={accent || undefined}>
+  return <article id={id} tabIndex={-1} className={`message-row ${isUser ? 'user' : 'agent'} ${showAvatar ? 'group-start' : ''}`} aria-label={isUser ? 'You' : agentName} data-mood={isError ? 'error' : mood} data-accent={accent || undefined}>
     <div className="message-content">
       {isTool ? <div className={`activity-card ${isError ? 'error' : ''}`}><div className="activity-heading"><Terminal size={14} /><strong>{labelize(toolName ?? eventType.replace('.', ' '))}</strong><span>{isError ? 'Failed' : formatUnknownSafe(String(message.status ?? ''), 'Activity')}</span></div><p>{text || (typeof message.command === 'string' ? message.command : typeof message.summary === 'string' ? message.summary : 'Details are unavailable for this event.')}</p>{typeof message.path === 'string' && <code>{message.path}</code>}</div> : <div className={`message-bubble ${isError ? 'message-error' : ''}`}><SafeMessageText text={text || 'Message content unavailable.'} /></div>}
       {stamp && <div className="message-time">{stamp}</div>}
     </div>
   </article>
+}
+
+function ConversationOutline({ items }: { items: Array<{ anchor: string; label: string; index: number }> }) {
+  const [active, setActive] = useState(0)
+  if (items.length < 3) return null
+  const jump = (index: number) => {
+    const item = items[index]
+    if (!item) return
+    setActive(index)
+    const target = document.getElementById(item.anchor)
+    target?.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+    target?.focus({ preventScroll: true })
+  }
+  return <nav className="conversation-outline" aria-label="Conversation message outline">
+    {items.map((item, index) => <button key={item.anchor} type="button" className={active === index ? 'active' : ''} aria-label={`Jump to message ${index + 1}: ${item.label}`} aria-controls={item.anchor} aria-current={active === index ? 'location' : undefined} tabIndex={active === index ? 0 : -1} onClick={() => jump(index)} onFocus={() => setActive(index)} onKeyDown={(event) => {
+      let next: number | null = null
+      if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % items.length
+      else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index + items.length - 1) % items.length
+      else if (event.key === 'Home') next = 0
+      else if (event.key === 'End') next = items.length - 1
+      else if (event.key === 'Escape') { event.currentTarget.blur(); return }
+      if (next !== null) { event.preventDefault(); jump(next); document.querySelector<HTMLButtonElement>(`.conversation-outline button:nth-child(${next + 1})`)?.focus() }
+    }}><span aria-hidden="true" /> <span className="conversation-outline-preview">{item.label}</span></button>)}
+  </nav>
 }
 
 function storageFlag(key: string) {
@@ -1637,6 +1665,9 @@ function mergeHydratedSession(snapshot: Snapshot, id: string, fullSession: Sessi
     turns: fullSession.turns ?? existing.turns,
     tools: fullSession.tools ?? existing.tools,
     files: fullSession.files ?? existing.files,
+    modelLock: fullSession.modelLock === undefined ? existing.modelLock : fullSession.modelLock,
+    contextUsed: fullSession.contextUsed === undefined ? existing.contextUsed : fullSession.contextUsed,
+    contextSize: fullSession.contextSize === undefined ? existing.contextSize : fullSession.contextSize,
   }
   return { ...snapshot, sessions: [...sessions.filter((session) => session.id !== id), merged] }
 }
@@ -1776,6 +1807,36 @@ function QuotaMeter({ quotas, onOpen }: { quotas: Record<string, unknown>[]; onO
     {available.length ? available.map((item) => <QuotaSummary key={String(item.provider)} item={item} compact />) : <span className="quota-meter-empty">No supported account quota source available</span>}
     <span className="quota-meter-open">Usage details <ArrowUpRight size={13} /></span>
   </button>
+}
+
+function ContextWindowIndicator({ used, size }: { used?: number | null; size?: number | null }) {
+  const hasUsed = typeof used === 'number' && Number.isFinite(used) && used >= 0
+  const hasSize = typeof size === 'number' && Number.isFinite(size) && size > 0
+  const percentage = hasUsed && hasSize ? Math.max(0, Math.min(100, Math.round((used / size) * 100))) : null
+  const valueText = hasUsed && hasSize
+    ? `${contextTokenCount(used)} / ${contextTokenCount(size)} tokens`
+    : hasUsed
+      ? `${contextTokenCount(used)} tokens used · window size unknown`
+      : hasSize
+        ? `Window ${contextTokenCount(size)} tokens · usage unknown`
+        : 'Context usage unavailable'
+  const accessibleName = percentage === null ? `Context window: ${valueText}` : `Context window: ${used} of ${size} tokens used, ${percentage}% full`
+  return <span className={`context-window-indicator ${percentage === null ? 'unknown' : ''}`} aria-label={accessibleName} title={accessibleName}>
+    {percentage === null
+      ? <span>{valueText}</span>
+      : <>
+          <span>{valueText}</span>
+          <span className="context-window-progress" role="progressbar" aria-label="Context window used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage}>
+            <i><b style={{ width: `${percentage}%` }} /></i><strong>{percentage}%</strong>
+          </span>
+        </>}
+  </span>
+}
+
+function contextTokenCount(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`
+  if (value >= 1_000) return `${Math.round(value / 1_000)}k`
+  return String(value)
 }
 
 function QuotaDetails({ quotas, refreshing, onRefresh }: { quotas: Record<string, unknown>[]; refreshing: boolean; onRefresh: () => void }) {

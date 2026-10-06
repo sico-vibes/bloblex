@@ -81,7 +81,7 @@ function agent(partial: Pick<Agent, 'id' | 'name' | 'color' | 'runtimeId' | 'sor
 }
 const claude = agent({ id: 'agent-claude', name: 'Claude', color: 'coral', runtimeId: 'runtime-claude', sortOrder: 0 })
 const sessions: Session[] = [
-  { id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', projectPath: 'C:/work/site', state: 'idle', updatedAt: stamp, messages: [{ id: 'm1', role: 'user', text: 'Make the heading concise.', createdAt: stamp }, { id: 'm2', role: 'assistant', text: 'I shortened the heading.', createdAt: stamp }] },
+  { id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', projectPath: 'C:/work/site', state: 'idle', updatedAt: stamp, contextUsed: 413000, contextSize: 828000, messages: [{ id: 'm1', role: 'user', text: 'Make the heading concise.', createdAt: stamp }, { id: 'm2', role: 'assistant', text: 'I shortened the heading.', createdAt: stamp }] },
 ]
 
 function snapshot(): Snapshot {
@@ -184,6 +184,8 @@ describe('sidebar usage analytics', () => {
     })
     const view = startApp()
     await view.settle()
+    expect(view.host.querySelector('.context-window-indicator')?.textContent).toContain('413k / 828k tokens')
+    expect(view.host.querySelector('[role="progressbar"][aria-label="Context window used"]')?.getAttribute('aria-valuenow')).toBe('50')
     const row = view.host.querySelector<HTMLButtonElement>('.quota-meter-row')
     expect(row?.textContent).toContain('Codex')
     expect(row?.textContent).toContain('62%')
@@ -238,6 +240,35 @@ describe('sidebar usage analytics', () => {
     await view.settle()
     expect(view.host.querySelector('.analytics-page')).toBeNull()
     expect(document.activeElement).toBe(profile)
+  })
+
+  it('keeps context percent unknown when the provider has not reported both window values', async () => {
+    h.fetchSnapshot.mockResolvedValue({ ...snapshot(), sessions: [{ ...sessions[0], contextUsed: undefined, contextSize: undefined }] })
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelector('.context-window-indicator')?.textContent).toContain('Context usage unavailable')
+    expect(view.host.querySelector('[role="progressbar"][aria-label="Context window used"]')).toBeNull()
+  })
+
+  it('shows a keyboard-operable message outline with previews for actual messages', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable:true, value:scrollIntoView })
+    h.fetchSnapshot.mockResolvedValue({ ...snapshot(), sessions:[{ ...sessions[0], messages:[
+      { id:'outline-1', role:'user', text:'First question about a menu.' },
+      { id:'outline-2', role:'assistant', text:'I will inspect the menu behavior.' },
+      { id:'outline-3', role:'user', text:'Please change the menu label.' },
+    ] }] })
+    const view = startApp()
+    await view.settle()
+    const outline = view.host.querySelector<HTMLElement>('[aria-label="Conversation message outline"]')
+    const buttons = [...(outline?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+    expect(buttons).toHaveLength(3)
+    expect(buttons[0]?.getAttribute('aria-label')).toContain('First question about a menu.')
+    await click(buttons[0])
+    expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block:'center' }))
+    await act(async () => buttons[0]?.dispatchEvent(new KeyboardEvent('keydown', { key:'End', bubbles:true })))
+    expect(document.activeElement).toBe(buttons[2])
+    expect(document.getElementById('conversation-message-message%3Aoutline-3')).not.toBeNull()
   })
 
   it('copies and exports the selected conversation through the mocked file bridge', async () => {

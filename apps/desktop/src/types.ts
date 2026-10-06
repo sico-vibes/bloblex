@@ -93,6 +93,9 @@ export interface Session extends JsonRecord {
   updatedAt?: string
   turnId?: string
   model?: string
+  modelLock?: { model?: string | null; thinking?: string | null } | null
+  contextUsed?: number | null
+  contextSize?: number | null
   files?: JsonRecord[]
   usage?: JsonRecord[]
 }
@@ -172,6 +175,25 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
     const existing = sessions.find((item) => item.id === session.id)
     const merged = existing ? { ...existing, ...session, messages: session.messages ?? existing.messages, turns: session.turns ?? existing.turns, tools: session.tools ?? existing.tools, files: session.files ?? existing.files } : session
     return { ...snapshot, sequence, sessions: [...sessions.filter((item) => item.id !== session.id), merged] }
+  }
+
+  if (event.type === 'session.context.updated') {
+    if (!sessionId) return { ...snapshot, sequence }
+    const sessions = snapshot.sessions ?? []
+    const existing = sessions.find((session) => session.id === sessionId)
+    if (!existing) return { ...snapshot, sequence }
+    const contextUsed = typeof payload.contextUsed === 'number' ? payload.contextUsed : existing.contextUsed
+    const contextSize = typeof payload.contextSize === 'number' ? payload.contextSize : existing.contextSize
+    return {
+      ...snapshot,
+      sequence,
+      sessions: sessions.map((session) => session.id === sessionId ? { ...session, contextUsed, contextSize } : session),
+    }
+  }
+
+  if (event.type === 'session.context.reset') {
+    if (!sessionId) return { ...snapshot, sequence }
+    return { ...snapshot, sequence, sessions: (snapshot.sessions ?? []).map((session) => session.id === sessionId ? { ...session, contextUsed:null, contextSize:null } : session) }
   }
 
   if (event.type === 'session.deleted') {

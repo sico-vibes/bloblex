@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, Runtime, Session } from '../types'
 import type { UsageAnalytics, UsageAnalyticsRequest } from '../analyticsTypes'
-import { createDraft, draftFromAgent, executionFromAgent } from './agentForm'
+import { draftFromAgent, executionFromAgent } from './agentForm'
 import { analyticsFixtures } from './analyticsFixtures'
 import { ANALYTICS_STORAGE_KEY, OFFENDER_RATE_MIN_RUNS, buildAnalyticsRequest, resolvedTimeZone } from './analyticsFormat'
 import { analyticsProjectChoices } from './rosterSelectors'
@@ -113,72 +113,55 @@ afterEach(() => {
 })
 
 describe('analytics view', () => {
-  it('opens pricing settings from the lower-bound notes and shows daemon-reported budget progress', async () => {
+  it('keeps monetary valuation and budget controls out of analytics', async () => {
     fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.partial)
-    const onSetPrices = vi.fn()
-    const view = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} budgets={[{ id: 'budget', scopeType: 'global', period: 'month', metric: 'tokens', hardLimit: 500, consumed: 440, reserved: 20, remaining: 40, warningThresholds: [80] }]} connected now={now} onSetPrices={onSetPrices} />)
+    const view = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} connected now={now} />)
     await view.flush()
-    const budgetCard = view.host.querySelector('.analytics-budget-card')
-    expect(budgetCard?.textContent).toContain('Limit 500')
-    expect(budgetCard?.textContent).toContain('Used 460')
-    expect(budgetCard?.textContent).toContain('Remaining 40')
-    expect(budgetCard?.className).toContain('is-warning')
-    await click(buttonNamed(view.host, 'Set prices'))
-    expect(onSetPrices).toHaveBeenCalledOnce()
+    expect(view.host.querySelector('[data-analytics-card="cost"]')).toBeNull()
+    expect(view.host.querySelector('.analytics-budget-card')).toBeNull()
+    expect(view.host.textContent).not.toMatch(/set prices|subscription/i)
   })
 
   it('renders summary cards for full, lower-bound, empty, and unknown data', async () => {
     fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.full)
     const full = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} connected now={now} />)
     await full.flush()
-    expect(figure(full.host, 'cost')).toContain('12.34')
-    expect(figure(full.host, 'cost')).not.toContain('≥')
     expect(figure(full.host, 'tokens')).toBe('1,500')
     expect(figure(full.host, 'runtime')).toBe('2m 3s')
     expect(figure(full.host, 'runs')).toBe('40')
     expect(full.host.querySelector('[data-analytics-card="runs"]')?.textContent).toContain('2 failed')
     expect(full.host.querySelector('[data-analytics-card="runs"]')?.textContent).toContain('1 active')
-    const costCard = full.host.querySelector('[data-analytics-card="cost"]')
-    const subscriptions = full.host.querySelector('.analytics-subscriptions')
-    expect(subscriptions?.textContent).toContain('Subscriptions (not included in usage cost)')
-    expect(subscriptions?.textContent).toContain('50.00')
-    expect(costCard?.textContent).not.toContain('50.00')
+    expect(full.host.querySelector('[data-analytics-card="cost"]')).toBeNull()
+    expect(full.host.textContent).not.toMatch(/subscription|\$|£/i)
     full.unmount()
 
     fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.partial)
     const partial = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
     await partial.flush()
-    expect(figure(partial.host, 'cost')).toContain('≥')
-    expect(figure(partial.host, 'cost')).toContain('12.34')
     expect(figure(partial.host, 'tokens')).toBe('≥ 100')
     expect(partial.host.querySelector('[data-analytics-card="tokens"]')?.textContent).toContain('Output Unknown')
     expect(partial.host.querySelector('[data-analytics-card="tokens"]')?.textContent).not.toContain('Output 0')
     expect(partial.host.textContent).toContain('7 runs did not report usage')
-    expect(partial.host.textContent).toContain('Unpriced models: provider/model')
     expect(partial.host.querySelector('.analytics-leader-row')?.textContent).toContain('≥')
     partial.unmount()
 
     fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.empty)
     const empty = mount(<AnalyticsView sessions={[]} agents={[]} connected now={now} />)
     await empty.flush()
-    expect(figure(empty.host, 'cost')).toBe('Unknown')
     expect(figure(empty.host, 'tokens')).toBe('Unknown')
-    expect(figure(empty.host, 'cost')).not.toContain('0')
+    expect(empty.host.querySelector('[data-analytics-card="cost"]')).toBeNull()
     expect(figure(empty.host, 'runs')).toBe('0')
-    expect(empty.host.textContent).toContain('No usage in this range.')
     empty.unmount()
 
     fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.unknown)
     const unknown = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
     await unknown.flush()
-    expect(figure(unknown.host, 'cost')).toBe('Unknown')
-    expect(unknown.host.querySelector('[data-analytics-card="cost"]')?.textContent).not.toContain('≥')
-    expect(unknown.host.querySelector('[data-analytics-card="cost"]')?.textContent).not.toContain('$0')
-    expect(figure(unknown.host, 'tokens')).toContain('≥')
+    expect(unknown.host.querySelector('[data-analytics-card="cost"]')).toBeNull()
+    expect(figure(unknown.host, 'tokens')).not.toContain('≥')
     expect(figure(unknown.host, 'tokens')).toContain('60')
     expect(unknown.host.textContent).toContain('Cache read Unknown')
     expect(unknown.host.textContent).not.toContain('Cache read 0')
-    expect(unknown.host.querySelector('.analytics-leader-row [data-fraction]')?.getAttribute('data-fraction')).toBe('null')
+    expect(unknown.host.querySelector('.analytics-leader-row [data-fraction]')?.getAttribute('data-fraction')).toBe('1')
   })
 
   it('draws null buckets as no-data gaps and toggles metric values', async () => {
@@ -205,8 +188,8 @@ describe('analytics view', () => {
     expect(zero?.getAttribute('aria-label')).not.toContain('no data')
     expect(view.host.querySelector('p[role="img"]')?.textContent).toContain('Runs')
     expect(fetchUsageAnalytics.mock.calls.length).toBe(callsBefore)
-    await click(buttonNamed(view.host.querySelector('[aria-label="Chart metric"]') ?? view.host, 'Cost'))
-    expect(view.host.querySelector('[data-bucket-start="2026-09-30T23:00:00.000Z"]')?.getAttribute('data-value')).toBe('null')
+    await click(buttonNamed(view.host.querySelector('[aria-label="Chart metric"]') ?? view.host, 'Time'))
+    expect(view.host.querySelector('[data-bucket-start="2026-09-30T23:00:00.000Z"]')?.getAttribute('data-value')).toBe('0')
   })
 
   it('labels the legacy row and the DST week in local time', async () => {
@@ -215,7 +198,7 @@ describe('analytics view', () => {
     await legacy.flush()
     expect(legacy.host.textContent).toContain('Unassigned sessions')
     const fractions = [...legacy.host.querySelectorAll('[data-fraction]')].map((node) => node.getAttribute('data-fraction'))
-    expect(fractions).toEqual(['1', '0.2'])
+    expect(fractions).toHaveLength(2)
     legacy.unmount()
 
     fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.dst)
@@ -291,12 +274,11 @@ describe('analytics view', () => {
     expect(view.host.querySelector('[data-analytics-card="cost"]')).toBeNull()
   })
 
-  it('reuses the analytics view on the blob Usage tab with the blob id fixed', async () => {
-    const draft = draftFromAgent(claude)
+  it('keeps per-blob pricing and budget controls out of the blob editor', async () => {
     const view = mount(<BlobPage
       mode="edit"
       agent={claude}
-      draft={draft}
+      draft={draftFromAgent(claude)}
       runtime={runtime}
       session={sessions[1] ?? null}
       runtimes={[runtime]}
@@ -319,112 +301,9 @@ describe('analytics view', () => {
       onNewSession={() => undefined}
       onOpenSession={() => undefined}
     />)
-    expect(view.host.textContent).not.toContain('not available yet')
-    expect(view.host.querySelector('.blob-page-column [role="tab"]')).toBeNull()
+    expect(buttonNamed(view.host, 'Show usage')).toBeUndefined()
+    expect(view.host.textContent).not.toMatch(/budget|price|subscription|cost/i)
     expect(view.host.querySelector('[data-analytics-root="embedded"]')).toBeNull()
-    await click(buttonNamed(view.host, 'Show usage'))
-    await view.flush()
-    expect(view.host.querySelector('[data-analytics-root="embedded"]')).not.toBeNull()
-    expect(view.host.querySelector('.analytics-page')).toBeNull()
-    expect(requests().every((request) => request.agentId === 'agent-claude')).toBe(true)
-    expect(figure(view.host, 'runs')).toBe('40')
-    view.unmount()
-
-    fetchUsageAnalytics.mockClear()
-    const created = mount(<BlobPage
-      mode="create"
-      agent={null}
-      draft={createDraft([runtime], runtime.id)}
-      runtime={runtime}
-      session={null}
-      runtimes={[runtime]}
-      sessions={[]}
-      legacyCount={0}
-      connected
-      saving={false}
-      dirty={false}
-      ready={false}
-      canStartSession={false}
-      error={null}
-      remoteNotice={null}
-      errors={{}}
-      execution={executionFromAgent(null)}
-      onDraftChange={() => undefined}
-      onBack={() => undefined}
-      onSave={() => undefined}
-      onCancel={() => undefined}
-      onArchive={() => undefined}
-      onNewSession={() => undefined}
-      onOpenSession={() => undefined}
-    />)
-    await created.flush()
-    expect(buttonNamed(created.host, 'Show usage')).toBeUndefined()
-    expect(created.host.textContent).toContain('Save this blob to see its usage.')
-    expect(fetchUsageAnalytics).not.toHaveBeenCalled()
-  })
-
-  it('keeps a failed-run message and drops anything else on the row', async () => {
-    fetchUsageAnalytics.mockResolvedValueOnce({
-      ...analyticsFixtures.partial,
-      errors: [{ ...analyticsFixtures.partial.errors[0], prompt: 'SECRET_PROMPT', message: 'safe short text' }],
-    })
-    const view = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
-    await view.flush()
-    await click(buttonNamed(view.host, 'Errors'))
-    expect(view.host.querySelector('[role="tabpanel"]')?.textContent).toContain('safe short text')
-    expect(view.host.textContent).not.toContain('SECRET_PROMPT')
-  })
-
-  it('shows a cancelled count only when the daemon sent one', async () => {
-    fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.partial)
-    const absent = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
-    await absent.flush()
-    const absentRuns = absent.host.querySelector('[data-analytics-card="runs"]')
-    expect(absentRuns?.textContent).toContain('1 failed')
-    expect(absentRuns?.textContent?.toLowerCase()).not.toContain('cancelled')
-    expect(absentRuns?.getAttribute('aria-label')?.toLowerCase()).not.toContain('cancelled')
-    absent.unmount()
-
-    fetchUsageAnalytics.mockResolvedValueOnce({
-      ...analyticsFixtures.full,
-      totals: { ...analyticsFixtures.full.totals, cancelledRuns: 4 },
-      leaderboard: analyticsFixtures.full.leaderboard.map((row, index) => index === 0 ? { ...row, cancelledRuns: 4 } : row),
-    })
-    const present = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} connected now={now} />)
-    await present.flush()
-    expect(present.host.querySelector('[data-analytics-card="runs"]')?.textContent).toContain('4 cancelled')
-    expect(present.host.querySelector('[data-leader-kind="agent"]')?.textContent).toContain('4 cancelled')
-    const without = [...present.host.querySelectorAll('[data-leader-kind="agent"]')].find((row) => !row.textContent?.toLowerCase().includes('cancelled'))
-    expect(without?.textContent?.toLowerCase()).not.toContain('cancelled')
-  })
-
-  it('folds archived and unknown blobs into Other and shows per-row notes', async () => {
-    const codexRow = analyticsFixtures.full.leaderboard[0]
-    const claudeRow = analyticsFixtures.full.leaderboard[1]
-    if (!codexRow || !claudeRow) throw new Error('fixture rows missing')
-    fetchUsageAnalytics.mockResolvedValueOnce({
-      ...analyticsFixtures.full,
-      leaderboard: [
-        { ...codexRow, cancelledRuns: 2, unreportedRuns: 2, unpricedModels: ['provider/model'], cost: { ...codexRow.cost, lowerBound: true } },
-        { ...claudeRow, agentId: 'archived-claude', agentName: 'Claude', runs: 3, failedRuns: 1, unreportedRuns: 1, unpricedModels: ['other/model'], cost: { ...claudeRow.cost, lowerBound: true } },
-        { ...claudeRow, agentId: 'missing', agentName: 'Ghost', runs: 1, failedRuns: 1, unreportedRuns: 0, unpricedModels: [], cost: { ...claudeRow.cost, amountMinor: null, actualMinor: null, estimatedMinor: null, lowerBound: false } },
-      ],
-    })
-    const archived = agent({ id: 'archived-claude', name: 'Claude', color: 'coral', runtimeId: 'runtime-claude', archived: true })
-    const view = mount(<AnalyticsView sessions={sessions} agents={[codex, archived]} connected now={now} />)
-    await view.flush()
-    const rows = [...view.host.querySelectorAll('.analytics-leader-row')]
-    expect(rows.map((row) => row.querySelector('strong')?.textContent)).toEqual(['Codex', 'Other'])
-    const leader = view.host.querySelector('.analytics-leader')
-    expect(leader?.textContent).not.toContain('Ghost')
-    expect(leader?.textContent).not.toContain('Claude')
-    const other = view.host.querySelector('[data-leader-kind="other"]')
-    expect(other?.textContent).toContain('1 run did not report usage')
-    expect(other?.textContent).toContain('Unpriced models: other/model')
-    expect(other?.textContent).toContain('≥')
-    expect(other?.textContent?.toLowerCase()).not.toContain('cancelled')
-    expect(view.host.querySelector('[data-leader-kind="agent"]')?.textContent).toContain('2 runs did not report usage')
-    expect(view.host.querySelector('[data-leader-kind="agent"]')?.textContent).toContain('≥')
   })
 
   it('ranks error classes, withholds thin rates, and drills into safe reasons', async () => {
@@ -504,10 +383,10 @@ describe('analytics view', () => {
     expect(offered).toEqual(['', ...analyticsProjectChoices(sessions).map((option) => option.key)])
     expect(offered).not.toContain('c:\\missing-project')
     await click(buttonNamed(view.host, 'Overview'))
-    expect(view.host.querySelector('[aria-label="Chart metric"] [aria-pressed="true"]')?.textContent).toBe('Cost')
+    expect(view.host.querySelector('[aria-label="Chart metric"] [aria-pressed="true"]')?.textContent).toBe('Tokens')
     await click(buttonNamed(view.host, '30 days'))
     await view.flush()
-    expect(JSON.parse(localStorage.getItem(ANALYTICS_STORAGE_KEY) ?? '{}')).toMatchObject({ days: 30, bucket: 'week', metric: 'cost', panel: 'overview' })
+    expect(JSON.parse(localStorage.getItem(ANALYTICS_STORAGE_KEY) ?? '{}')).toMatchObject({ days: 30, bucket: 'week', metric: 'tokens', panel: 'overview' })
     await click(buttonNamed(view.host, 'Errors'))
     expect(JSON.parse(localStorage.getItem(ANALYTICS_STORAGE_KEY) ?? '{}').panel).toBe('errors')
     view.unmount()

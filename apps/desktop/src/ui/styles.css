@@ -68,17 +68,10 @@
 .usage-block-heading { margin-bottom: 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .usage-block-heading h3 { margin: 0; color: var(--text-1); font-size: var(--fs-sm); font-weight: 600; }
 .usage-block-heading > span { color: var(--text-3); font-size: var(--fs-2xs); text-align: right; }
-.usage-token-grid, .usage-cost-grid, .usage-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.usage-token, .usage-cost-grid > div, .usage-valuation-list > div, .usage-subscriptions > div, .usage-metric { min-width: 0; padding: 9px 10px; display: grid; align-content: center; gap: 4px; border-radius: var(--radius-sm); background: var(--surface-subtle); }
-.usage-token span, .usage-cost-grid span, .usage-valuation-list small, .usage-subscriptions small, .usage-metric span { color: var(--text-3); font-size: var(--fs-2xs); }
-.usage-token strong, .usage-cost-grid strong, .usage-metric strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; overflow-wrap: anywhere; }
-.usage-cost-grid small { color: var(--text-3); font-size: var(--fs-2xs); }
-.usage-honesty { margin: 10px 0 0; color: var(--text-3); font-size: var(--fs-2xs); line-height: 1.5; }
-.usage-valuation-list, .usage-subscriptions { margin-top: 8px; display: grid; gap: 5px; }
-.usage-valuation-list > div, .usage-subscriptions > div { grid-template-columns: minmax(0, 1fr) auto; }
-.usage-valuation-list > div > strong, .usage-subscriptions > div > strong, .usage-valuation-list > div > span, .usage-subscriptions > div > span { color: var(--text-1); font-size: var(--fs-xs); }
-.usage-valuation-list small, .usage-subscriptions small { grid-column: 1 / -1; }
-.usage-empty-line { margin: 0; color: var(--text-2); font-size: var(--fs-xs); }
+.usage-token-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.usage-token { min-width: 0; padding: 9px 10px; display: grid; align-content: center; gap: 4px; border-radius: var(--radius-sm); background: var(--surface-subtle); }
+.usage-token span { color: var(--text-3); font-size: var(--fs-2xs); }
+.usage-token strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; overflow-wrap: anywhere; }
 .usage-raw { margin-top: 12px; color: var(--text-2); font-size: var(--fs-xs); }
 .usage-raw pre { max-height: 200px; overflow: auto; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; font: 11px var(--font-mono); }
 

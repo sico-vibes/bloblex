@@ -79,19 +79,6 @@ export async function autostartEnabled() { return fixtureAutostart }
 export async function setAutostartEnabled(enabled: boolean) { fixtureAutostart = enabled }
 export async function sendDesktopNotification(title: string, body: string) { fixtureNotifications.push({ title, body }) }
 export async function flashMainWindow() {}
-let demoBudgets: Record<string, unknown>[] = [
-  { id: 'budget-blob', scopeType: 'blob', scopeId: 'agent-codex', period: 'month', metric: 'tokens', hardLimit: 250_000, warningThresholds: [80, 90], enabled: true, currency: 'USD', consumed: 112_000, reserved: 4_000, remaining: 134_000 },
-  { id: 'budget-global', scopeType: 'global', scopeId: null, period: 'week', metric: 'turns', hardLimit: 400, warningThresholds: [80, 90], enabled: true, consumed: 221, reserved: 0, remaining: 179 },
-]
-let demoPrices: Record<string, unknown>[] = [
-  { id: 'price-codex', provider: 'codex', canonicalModelId: 'gpt-5.5', inputPerMillion: '10', outputPerMillion: '50', cacheReadPerMillion: '1', cacheWritePerMillion: '2', currency: 'USD', source: 'official_price_list', checkedAt: '2026-10-04' },
-  { id: 'price-codex-override', provider: 'codex', canonicalModelId: 'gpt-5.5', inputPerMillion: '9.5', outputPerMillion: null, cacheReadPerMillion: null, cacheWritePerMillion: null, currency: 'USD', source: 'user_override' },
-  { id: 'price-claude', provider: 'claude', canonicalModelId: 'claude-sonnet', inputPerMillion: '3', outputPerMillion: '15', cacheReadPerMillion: '0.3', cacheWritePerMillion: '3.75', currency: 'USD', source: 'official_price_list', checkedAt: '2026-10-04' },
-  { id: 'price-opencode-free', provider: 'opencode-go', canonicalModelId: 'free-preview', inputPerMillion: '0', outputPerMillion: '0', cacheReadPerMillion: '0', cacheWritePerMillion: '0', currency: 'USD', source: 'official_price_list', checkedAt: '2026-10-04' },
-  { id: 'price-unknown', provider: 'opencode-zen', canonicalModelId: 'unpriced-preview', inputPerMillion: null, outputPerMillion: null, cacheReadPerMillion: null, cacheWritePerMillion: null, currency: 'USD', source: 'unknown' },
-]
-let demoSubscriptions: Record<string, unknown>[] = [{ id: 'sub-codex', provider: 'codex', planName: 'Pro', monthlyMinor: 2000, currency: 'USD', quotaState: 'unknown', renewalDay: 1 }]
-
 function rpcError(code: string, message: string) {
   return new Error(`${code}: ${message}`)
 }
@@ -112,7 +99,6 @@ function currentSnapshot(): Snapshot {
       ? [{ id: 'perm-1', sessionId: 'session-codex', runtimeId: 'runtime-codex', status: 'pending', title: 'Run shell command', command: 'npm test -- invoice', choices: ['allow_once', 'allow_session', 'deny'] }]
       : [],
     usageSummary: { inputTokens: 182_400, outputTokens: 24_900 },
-    budgets: demoBudgets,
   }
 }
 
@@ -153,12 +139,6 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     notifyFixtureDaemon('session.deleted', { sessionId: session.id })
     return { deleted: true } as T
   }
-  if (method === 'budget.list') return { policies: demoBudgets } as T
-  if (method === 'budget.set') { const item = params as Record<string, unknown>; demoBudgets = [...demoBudgets.filter((row) => row.id !== item.id), { ...item, consumed: 0, remaining: item.hardLimit }]; return { saved: true } as T }
-  if (method === 'budget.delete') { demoBudgets = demoBudgets.filter((row) => row.id !== params.policyId); return { deleted: true } as T }
-  if (method === 'pricing.list') return { rules: demoPrices } as T
-  if (method === 'pricing.override') { const rule = (params.rule ?? {}) as Record<string, unknown>; if (rule.remove === true) demoPrices = demoPrices.filter((item) => item.id !== rule.id); else demoPrices = [...demoPrices.filter((item) => item.id !== rule.id), rule]; return { saved: true } as T }
-  if (method === 'subscription.list') return { plans: demoSubscriptions } as T
   if (method === 'runtime.capabilities') {
     const supported = { supported: true, enabled: true, scope: 'agent', evidence: 'preview' }
     return { runtimeId: params.runtimeId, settings: { model: supported, thinking: supported, serviceTier: supported, instructions: supported, customEnv: supported } } as T
@@ -167,12 +147,11 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const runtimeId = String(params.runtimeId ?? '')
     const runtime = baseRuntimes.find((item) => item.id === runtimeId)
     const models = runtimeId === 'runtime-opencode' ? [
-      { id: 'opencode-go/preview-estimate', displayName: 'Preview estimate', reportedPrice: { inputPerMillion: '0.4', outputPerMillion: '1.2', cacheReadPerMillion: '0.04', currency: 'USD' }, supportedThinking: [], serviceTiers: [] },
-      { id: 'opencode-go/free-preview', displayName: 'Free preview', reportedPrice: { inputPerMillion: '0', outputPerMillion: '0', cacheReadPerMillion: '0', currency: 'USD' }, supportedThinking: [], serviceTiers: [] },
+      { id: 'opencode-go/preview', displayName: 'Preview model', supportedThinking: [], serviceTiers: [] },
+      { id: 'opencode-go/alternate-preview', displayName: 'Alternate preview', supportedThinking: [], serviceTiers: [] },
     ] : runtime?.provider === 'claude' ? [{ id: 'claude-sonnet', displayName: 'Claude Sonnet', supportedThinking: [], serviceTiers: [] }] : [{ id: 'gpt-5.5', displayName: 'GPT-5.5', supportedThinking: [], serviceTiers: [] }]
     return { runtimeId, provider: runtime?.provider ?? '', models, validated: true, source: 'fixture', fetchedAt: '2026-10-04T00:00:00Z' } as T
   }
-  if (method === 'subscription.save') { const plan = (params.plan ?? {}) as Record<string, unknown>; demoSubscriptions = [...demoSubscriptions.filter((item) => item.id !== plan.id), plan]; return { saved: true } as T }
   if (method === 'agent.list') {
     const includeArchived = params.includeArchived === true
     const runtimeId = typeof params.runtimeId === 'string' ? params.runtimeId : undefined

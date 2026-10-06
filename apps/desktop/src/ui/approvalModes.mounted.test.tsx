@@ -138,7 +138,8 @@ describe('settings modal', () => {
     await view.settle()
     const page = async (name: string) => { await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === name)?.click() }) }
     const nav = [...view.host.querySelectorAll('.settings-nav button')].map((button) => button.textContent)
-    expect(nav).toEqual(['General', 'Agents', 'Usage & limits', 'Updates'])
+    expect(nav).toEqual(['General', 'Agents', 'Updates'])
+    expect(view.host.textContent).not.toMatch(/Add budget|pricing|subscription/i)
     const start = view.host.querySelector<HTMLButtonElement>('[aria-label="Start with Windows"]')!
     expect(start.disabled).toBe(false)
     expect(start.getAttribute('aria-checked')).toBe('false')
@@ -154,9 +155,6 @@ describe('settings modal', () => {
     expect(notifications.getAttribute('aria-checked')).toBe('false')
     expect(view.host.querySelector('[aria-label="Companion sounds"]')).not.toBeNull()
 
-    await page('Usage & limits')
-    await view.settle()
-    expect(view.host.textContent).toContain('Add budget')
     await page('Updates')
     expect(view.host.querySelector('[data-settings-section="updates"]')).not.toBeNull()
     const about = view.host.querySelector('[data-settings-about]')

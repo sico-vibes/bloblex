@@ -117,7 +117,7 @@ fn parse_model_catalog(value: &Value) -> Result<Vec<ModelInfo>, AdapterError> {
                     id == default_id || model["value"].as_str() == Some(default_id)
                 })
             }),
-            group: None, availability: None, reported_price: None,
+            group: None, availability: None,
         });
     }
     if normalized.is_empty() { return Err(AdapterError::Protocol("Claude catalog is empty".into())); }
@@ -128,7 +128,7 @@ fn fallback_catalog() -> Vec<ModelInfo> {
     ["sonnet", "opus", "fable", "haiku"].into_iter().map(|id| ModelInfo {
         id: id.into(), display_name: id.into(), provider_id: None, supported_thinking: vec![],
         default_thinking: None, service_tiers: vec![], default_service_tier: None, variants: None, host_dependent: true,
-        is_default: None, group: None, availability: None, reported_price: None,
+        is_default: None, group: None, availability: None,
     }).collect()
 }
 fn typed_args(options: &ExecOptions, instruction_file: Option<&std::path::Path>, instruction_changed: bool) -> Vec<String> {

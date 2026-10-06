@@ -18,13 +18,12 @@ function restingStatus(idleMs: number, label: string): { mood: BlobMood; label: 
   return idleMs >= SLEEP_AFTER_MS ? { mood: 'sleeping', label: 'Sleeping' } : { mood: 'idle', label }
 }
 
-export function deriveCompanionStatus(input: { connected: boolean; runtime?: Runtime | null; session?: Session | null; permissionPending?: boolean; budgetWarning?: boolean; composing?: boolean; now?: number }): { mood: BlobMood; label: string } {
+export function deriveCompanionStatus(input: { connected: boolean; runtime?: Runtime | null; session?: Session | null; permissionPending?: boolean; composing?: boolean; now?: number }): { mood: BlobMood; label: string } {
   const { connected, runtime, session } = input
   const idleMs = sessionIdleMs(session, input.now ?? Date.now())
   if (!connected) return { mood: 'offline', label: 'Daemon disconnected' }
   if (!runtime || ['offline', 'error', 'disconnected'].includes((runtime.status ?? '').toLowerCase())) return { mood: 'offline', label: runtime ? 'Runtime offline' : 'No runtime selected' }
   if (input.permissionPending || session?.state === 'waiting_permission') return { mood: 'permission', label: 'Approval needed' }
-  if (input.budgetWarning) return { mood: 'budget_warning', label: 'Budget warning' }
   if (session?.state === 'rate_limited') return { mood: 'rate_limited', label: 'Rate limited' }
   if (session?.state === 'sleeping') return { mood: 'sleeping', label: 'Sleeping' }
   if (session?.state === 'error' || session?.state === 'failed') return { mood: 'error', label: 'Needs attention' }

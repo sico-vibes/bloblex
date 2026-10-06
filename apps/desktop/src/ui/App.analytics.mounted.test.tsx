@@ -85,7 +85,7 @@ const sessions: Session[] = [
 ]
 
 function snapshot(): Snapshot {
-  return { sequence: 4, runtimes: [runtime({ id: 'runtime-claude', provider: 'claude' })], agents: [claude], sessions, permissions: [], usage: [], budgets: [] }
+  return { sequence: 4, runtimes: [runtime({ id: 'runtime-claude', provider: 'claude' })], agents: [claude], sessions, permissions: [], usage: [] }
 }
 
 const mounted: Array<{ unmount: () => void }> = []
@@ -168,6 +168,36 @@ afterEach(() => {
 })
 
 describe('sidebar usage analytics', () => {
+  it('shows only structured Codex quota in the shell and opens it in the existing Usage sheet', async () => {
+    h.rpc.mockImplementation(async (method: string) => {
+      if (method === 'events.replay') return { replayAvailable: true, events: [] }
+      if (method === 'settings.get') return { settings: {} }
+      if (method === 'quota.list') return { quotas: [
+        { provider: 'codex', runtimeId: 'runtime-codex', fetchedAt: '2026-10-02T11:55:00Z', snapshot: { limits: [{ label: 'Codex', primary: { usedPercent: 62, remainingPercent: 38, windowDurationMins: 300, resetsAt: '2026-10-02T17:00:00Z' }, secondary: null }] } },
+        { provider: 'claude', runtimeId: 'runtime-claude', snapshot: { limits: [{ label: 'Claude', primary: { usedPercent: 10 } }] } },
+      ] }
+      if (method === 'usage.summary') return { from: '2026-10-02T00:00:00Z', to: '2026-10-02T12:00:00Z', inputTokens: 120, outputTokens: 80 }
+      if (method === 'agent.get') return { agent: claude }
+      return {}
+    })
+    const view = startApp()
+    await view.settle()
+    const row = view.host.querySelector<HTMLButtonElement>('.quota-meter-row')
+    expect(row?.textContent).toContain('Codex')
+    expect(row?.textContent).toContain('62%')
+    expect(row?.textContent).not.toContain('Claude')
+    await click(row)
+    await view.settle()
+    expect(view.host.querySelector('.usage-sheet')).not.toBeNull()
+    expect(view.host.querySelector('.quota-details')?.textContent).toContain('62%')
+    expect(view.host.querySelector('.quota-details')?.textContent).toContain('Resets ')
+    expect(view.host.querySelector('.quota-details')?.textContent).not.toContain('Claude')
+    expect(view.host.textContent).toContain('Token usage')
+    await click(buttonNamed(view.host, 'Refresh quota'))
+    expect(h.rpc).toHaveBeenCalledWith('quota.refresh')
+    expect(buttonNamed(view.host, 'Checking…')?.hasAttribute('disabled')).toBe(true)
+  })
+
   it('opens analytics from Usage, requests the local timezone, and returns focus on Back', async () => {
     const view = startApp()
     await view.settle()

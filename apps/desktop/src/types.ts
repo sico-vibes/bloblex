@@ -18,8 +18,7 @@ export interface Snapshot extends JsonRecord {
   permissions?: PermissionRequest[]
   usage?: JsonRecord[]
   usageSummary?: JsonRecord
-  budgets?: JsonRecord[] | JsonRecord
-  latestBudgetAlert?: JsonRecord
+  quotas?: JsonRecord[]
   autoApprovals?: AutoResolvedAction[]
   bypassNotices?: BypassNotice[]
   /** Client-side tombstones prevent delayed events from reviving deleted sessions. */
@@ -153,6 +152,17 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
     return { ...snapshot, sequence, runtimes: [...runtimes.filter((item) => item.id !== runtime.id), runtime] }
   }
 
+  if (event.type === 'quota.updated') {
+    const provider = typeof payload.provider === 'string' ? payload.provider : undefined
+    const quota = payload.quota && typeof payload.quota === 'object' ? payload.quota as JsonRecord : undefined
+    if (!provider || !quota) return { ...snapshot, sequence }
+    const row = quota.snapshot && typeof quota.snapshot === 'object'
+      ? { ...quota, provider }
+      : { provider, runtimeId: quota.runtimeId, snapshot: quota, fetchedAt: quota.fetchedAt, lastAttemptAt: quota.fetchedAt, failureCount: 0, retryAfter: null, lastError: null }
+    const quotas = [...(snapshot.quotas ?? []).filter((item) => item.provider !== provider), row]
+    return { ...snapshot, sequence, quotas }
+  }
+
   if (event.type === 'session.changed') {
     const session = (payload.session ?? payload) as Session
     if (!session.id) return { ...snapshot, sequence }
@@ -206,7 +216,7 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
   }
   if (event.type === 'daemon.health') return { ...snapshot, sequence, daemon: { ...(snapshot.daemon ?? {}), ...payload } }
 
-  if (!['message.delta', 'message.completed', 'tool.changed', 'command.changed', 'file.changed', 'permission.requested', 'usage.updated', 'budget.warning', 'budget.blocked', 'turn.completed', 'turn.error'].includes(event.type)) {
+  if (!['message.delta', 'message.completed', 'tool.changed', 'command.changed', 'file.changed', 'permission.requested', 'usage.updated', 'turn.completed', 'turn.error'].includes(event.type)) {
     return { ...snapshot, sequence }
   }
 
@@ -263,28 +273,15 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
     })
     const permissions = event.type === 'permission.requested' ? [...(snapshot.permissions ?? []), (payload.permission ?? payload) as PermissionRequest] : snapshot.permissions
     const usage = event.type === 'usage.updated' ? [...(snapshot.usage ?? []), (payload.usage ?? payload) as JsonRecord] : snapshot.usage
-    const budgets = event.type === 'budget.warning' || event.type === 'budget.blocked'
-      ? [...budgetRows(snapshot.budgets).filter((budget) => budget.id !== payload.id), (payload.budget ?? payload) as JsonRecord]
-      : snapshot.budgets
-    const latestBudgetAlert = event.type === 'budget.warning' || event.type === 'budget.blocked'
-      ? { ...payload, eventType: event.type, timestamp: event.timestamp }
-      : snapshot.latestBudgetAlert
-    return { ...snapshot, sequence, sessions, permissions, usage, budgets, latestBudgetAlert }
+    return { ...snapshot, sequence, sessions, permissions, usage }
   }
 
   if (event.type === 'usage.updated') {
     const usage = (payload.usage ?? payload) as JsonRecord
     return { ...snapshot, sequence, usage: [...(snapshot.usage ?? []), usage], usageSummary: { ...(snapshot.usageSummary ?? {}), ...usage } }
   }
-  if (event.type === 'budget.warning' || event.type === 'budget.blocked') return { ...snapshot, sequence, budgets: [...budgetRows(snapshot.budgets).filter((budget) => budget.id !== payload.id), (payload.budget ?? payload) as JsonRecord], latestBudgetAlert: { ...payload, eventType: event.type, timestamp: event.timestamp } }
   if (event.type === 'permission.requested') return { ...snapshot, sequence, permissions: [...(snapshot.permissions ?? []), (payload.permission ?? payload) as PermissionRequest] }
   return { ...snapshot, sequence }
-}
-
-function budgetRows(value: Snapshot['budgets']): JsonRecord[] {
-  if (Array.isArray(value)) return value
-  if (value && Array.isArray(value.policies)) return value.policies as JsonRecord[]
-  return []
 }
 
 export function stateForEvent(eventType: string): string | undefined {

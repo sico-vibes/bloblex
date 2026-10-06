@@ -1,10 +1,10 @@
 # Release checklist
 
-Updated 4 October 2026 after publishing `v0.1.0-beta.6` from `beta/claude-resume-2026-10-04`. The prerelease includes the NSIS installer, its Tauri updater signature, and `latest.json`; the rolling `channel-beta` release now points at beta.6. The installer is not Authenticode code-signed, and no native app or clean-machine install was run. Status values are `done`, `needs user`, or `blocked`.
+Updated 6 October 2026. `v0.1.0-beta.7` is the current release candidate; `v0.1.0-beta.6` remains the latest published release until beta.7 is uploaded. The installer remains unsigned with no recorded clean-machine install. Status values are `done`, `needs user`, or `blocked`.
 
-Versions read from this worktree: root `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.6`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
+Versions read from this worktree: root `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.7`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
 
-`docs/releases/0.1.0-beta.6.md` is the note for this beta. Outside `-DryRun`, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
+`docs/releases/0.1.0-beta.7.md` is the note for this beta. Outside `-DryRun`, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
 
 ## Release command
 

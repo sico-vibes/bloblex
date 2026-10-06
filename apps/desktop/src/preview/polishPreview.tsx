@@ -9,7 +9,6 @@ import '../ui/settings.css'
 import { FirstRunOnboarding } from '../ui/FirstRunOnboarding'
 import { BlobPage } from '../ui/BlobPage'
 import { SettingsSheet } from '../ui/SettingsSheet'
-import { UsageLimitsSettings } from '../ui/UsageLimitsSettings'
 import { draftFromAgent, executionFromAgent } from '../ui/agentForm'
 import type { Agent, Runtime, Session, Snapshot } from '../types'
 
@@ -29,7 +28,7 @@ const sessions: Session[] = [
   { id: 'session-3', agentId: 'agent-claude', runtimeId: 'runtime-claude', title: 'Release summary', projectPath: 'C:\\work\\product', model: 'claude-sonnet', state: 'idle', updatedAt: '2026-10-02T13:20:00Z', messages: [] },
   { id: 'session-4', agentId: 'agent-opencode', runtimeId: 'runtime-opencode', title: 'Review the API changes', projectPath: 'C:\\work\\api', model: 'opencode-go/preview-estimate', state: 'completed', updatedAt: '2026-10-01T12:20:00Z', messages: [] },
 ]
-const snapshot = { agents, runtimes, sessions, budgets: [], permissions: [], usageSummary: null } as unknown as Snapshot
+const snapshot = { agents, runtimes, sessions, permissions: [], usageSummary: null } as unknown as Snapshot
 
 function Preview() {
   const query = new URLSearchParams(location.search)
@@ -42,11 +41,10 @@ function Preview() {
   const draft = draftFromAgent(currentAgent)
   return <>
     <nav className="launch-preview-switcher" aria-label="Preview screens">{[
-      ['blob-page', 'Blob page'], ['settings-general', 'Settings · General'], ['settings-agents', 'Settings · Agents'], ['usage-limits', 'Usage & limits'], ['onboarding-1', 'Onboarding 1'], ['onboarding-2', 'Onboarding 2'], ['onboarding-3', 'Onboarding 3'],
+      ['blob-page', 'Blob page'], ['settings-general', 'Settings · General'], ['settings-agents', 'Settings · Agents'], ['onboarding-1', 'Onboarding 1'], ['onboarding-2', 'Onboarding 2'], ['onboarding-3', 'Onboarding 3'],
     ].map(([value, label]) => <button key={value} type="button" className="secondary-button small" aria-pressed={screen === value} onClick={() => { setScreen(value); setSettingsOpen(true); history.replaceState(null, '', `?screen=${value}`); if (value.startsWith('onboarding-')) setOnboardingStep((Number(value.slice(-1)) - 1) as 0 | 1 | 2) }}>{label}</button>)}</nav>
-    {screen === 'blob-page' && <BlobPage mode="edit" agent={currentAgent} draft={draft} runtime={runtimes[1]} session={sessions[0]} runtimes={runtimes} sessions={sessions.slice(0, 2)} legacyCount={0} connected saving={false} dirty={false} ready canStartSession error={null} remoteNotice={null} errors={{}} execution={executionFromAgent(currentAgent)} budgets={[]} onDraftChange={() => undefined} onBack={() => undefined} onSave={() => undefined} onCancel={() => undefined} onArchive={() => undefined} onNewSession={() => undefined} onOpenSession={() => undefined} />}
+    {screen === 'blob-page' && <BlobPage mode="edit" agent={currentAgent} draft={draft} runtime={runtimes[1]} session={sessions[0]} runtimes={runtimes} sessions={sessions.slice(0, 2)} legacyCount={0} connected saving={false} dirty={false} ready canStartSession error={null} remoteNotice={null} errors={{}} execution={executionFromAgent(currentAgent)} onDraftChange={() => undefined} onBack={() => undefined} onSave={() => undefined} onCancel={() => undefined} onArchive={() => undefined} onNewSession={() => undefined} onOpenSession={() => undefined} />}
     {screen.startsWith('onboarding-') && <FirstRunOnboarding key={screen} initialStep={onboardingStep} runtimes={runtimes} scanning={false} error={null} onScan={() => undefined} onCreate={async () => null} onFinish={() => undefined} onSaveName={() => undefined} />}
-    {screen === 'usage-limits' && <main className="preview-settings-page"><header className="preview-page-heading"><h1>Usage &amp; limits</h1></header><UsageLimitsSettings agents={agents} runtimes={runtimes} sessions={sessions} showAllModelsByDefault /></main>}
     {(screen === 'settings-general' || screen === 'settings-agents') && settingsOpen && <SettingsSheet snapshot={snapshot} initialPage={screen === 'settings-general' ? 'General' : 'Agents'} onClose={() => setSettingsOpen(false)} onRefresh={() => undefined} onError={() => undefined} onRunSetup={() => { setSettingsOpen(false); setScreen('onboarding-1') }} onOpenAgent={() => setScreen('blob-page')} />}
   </>
 }

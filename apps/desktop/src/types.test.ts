@@ -10,7 +10,7 @@ const base = (): Snapshot => ({
     files: [{ id: 'f-a', path: 'src/a.ts' }],
     tools: [{ id: 'tool-a', state: 'running' }],
   }],
-  permissions: [], usage: [], budgets: [],
+  permissions: [], usage: [],
 })
 
 const event = (type: string, sequence: number, payload: Record<string, unknown>): DaemonEvent => ({ v: 1, type, sequence, payload })
@@ -21,6 +21,17 @@ describe('daemon event reconciliation', () => {
       runtimes: [{ id: 'rt-claude', provider: 'claude' }],
     }))
     expect(next.runtimes).toEqual([{ id: 'rt-claude', provider: 'claude' }])
+  })
+
+  it('stores only the normalized provider quota snapshot from an update event', () => {
+    const next = applyEvent(base(), event('quota.updated', 5, {
+      provider: 'codex',
+      quota: { runtimeId: 'rt-a', fetchedAt: '2026-10-05T10:00:00Z', limits: [{ label: 'Codex', primary: { usedPercent: 72, remainingPercent: 28, resetsAt: null, windowDurationMins: 300 }, secondary: null }] },
+    }))
+    expect(next.quotas).toHaveLength(1)
+    expect(next.quotas?.[0].provider).toBe('codex')
+    expect(next.quotas?.[0].snapshot).toMatchObject({ limits: [{ label: 'Codex', primary: { usedPercent: 72, remainingPercent: 28 } }] })
+    expect(JSON.stringify(next.quotas)).not.toMatch(/accountId|credits|upsell/i)
   })
 
   it('appends message deltas by stable message ID and ignores duplicate sequences', () => {
@@ -48,14 +59,6 @@ describe('daemon event reconciliation', () => {
     })
   })
 
-  it('normalizes the daemon policies wrapper before budget events', () => {
-    const withPolicies = { ...base(), budgets: { policies: [] } }
-    const next = applyEvent(withPolicies, event('budget.warning', 8, { budget: { id: 'b-a', remaining: 12 } }))
-    expect(Array.isArray(next.budgets)).toBe(true)
-    const rows = next.budgets as { remaining: number }[]
-    expect(rows[0].remaining).toBe(12)
-  })
-
   it('merges session changes without dropping previously hydrated activity', () => {
     const next = applyEvent(base(), event('session.changed', 5, { session: { id: 's-a', runtimeId: 'rt-a', title: 'Updated', state: 'idle' } }))
     expect(next.sessions?.[0]).toMatchObject({ title: 'Updated', state: 'idle' })
@@ -71,15 +74,14 @@ describe('daemon event reconciliation', () => {
     expect(late.deletedSessionIds).toContain('s-a')
   })
 
-  it('upserts tool and file activity and records usage and budget events', () => {
+  it('upserts tool and file activity and records token usage only', () => {
     let next = applyEvent(base(), event('tool.changed', 5, { sessionId: 's-a', tool: { id: 'tool-a', state: 'completed' } }))
     next = applyEvent(next, event('file.changed', 6, { sessionId: 's-a', file: { id: 'f-b', path: 'src/b.ts', addedLines: 4 } }))
-    next = applyEvent(next, event('usage.updated', 7, { sessionId: 's-a', usage: { id: 'u-a', inputTokens: 30, valuation: { basis: 'unknown', amountMinor: null } } }))
-    next = applyEvent(next, event('budget.warning', 8, { id: 'budget-a', remaining: 12 }))
+    next = applyEvent(next, event('usage.updated', 7, { sessionId: 's-a', usage: { id: 'u-a', inputTokens: 30 } }))
     expect(next.sessions?.[0].tools?.[0].state).toBe('completed')
     expect(next.sessions?.[0].files).toHaveLength(2)
-    expect(next.usage?.[0].valuation).toEqual({ basis: 'unknown', amountMinor: null })
-    expect((next.budgets as { remaining: number }[] | undefined)?.[0]?.remaining).toBe(12)
+    expect(next.usage?.[0]).toEqual({ id: 'u-a', inputTokens: 30 })
+    expect('budgets' in next).toBe(false)
   })
 
   it('adds and resolves permissions that have no session reference', () => {

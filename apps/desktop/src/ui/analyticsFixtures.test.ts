@@ -13,15 +13,15 @@ describe('analytics fixtures', () => {
     expect(() => answerUsageAnalytics({ ...request, from: request.to, to: request.from }, null)).toThrow(/analytics range, bucket, or timezone is invalid/)
   })
 
-  it('covers full, lower-bound, empty, unknown, legacy, and DST-week responses', () => {
+  it('covers reported tokens, unknown buckets, legacy sessions, and DST-week responses', () => {
     const full = answerUsageAnalytics({ ...request, projectPath: 'C:/work/site', agentId: 'agent-claude' }, 'full')
     expect(full.range).toEqual({ from: request.from, to: request.to, bucket: 'day', tz: 'Europe/London' })
-    expect(full.totals.cost.lowerBound).toBe(false)
-    expect(full.totals.cost.amountMinor).toBe(1234)
-    expect(full.subscriptions[0]?.monthlyMinor).not.toBe(full.totals.cost.amountMinor)
+    expect(full.totals.tokens.total).toBe(1500)
+    expect('cost' in full.totals).toBe(false)
+    expect('subscriptions' in full).toBe(false)
 
     const partial = answerUsageAnalytics(request, 'partial')
-    expect(partial.totals.cost.lowerBound).toBe(true)
+    expect(partial.totals.tokensLowerBound).toBe(true)
     expect(partial.totals.unreportedRuns).toBe(7)
     expect(partial.totals.tokens.output).toBeNull()
     expect(partial.totals.tokens.total).not.toBe(0)
@@ -29,13 +29,10 @@ describe('analytics fixtures', () => {
     const empty = answerUsageAnalytics(request, 'nodata')
     expect(empty.totals.runs).toBe(0)
     expect(empty.totals.tokens.total).toBeNull()
-    expect(empty.totals.cost.amountMinor).toBeNull()
+    expect('cost' in empty.totals).toBe(false)
     expect(empty.leaderboard).toEqual([])
 
     const unknown = answerUsageAnalytics(request, 'unknown')
-    expect(unknown.totals.cost.amountMinor).toBeNull()
-    expect(unknown.totals.cost.lowerBound).toBe(true)
-    expect(unknown.totals.unpricedModels).toEqual(['openai/mystery'])
     expect(unknown.totals.tokens.total).toBe(60)
 
     const legacy = answerUsageAnalytics(request, 'legacy')

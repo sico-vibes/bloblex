@@ -1,6 +1,6 @@
-# Bloblex E2E plan: configurable blobs, sessions tree, analytics, release
+# Bloblex E2E plan: configurable blobs, sessions tree, token analytics, provider quota, release
 
-## Status (3 October 2026)
+## Status (5 October 2026)
 
 Evidence is the merge commit on this branch's history. "Implemented" means the code and its unit or fake-process tests are on main. It does not mean a live provider session or a native window pass of the current tree. The only recorded native smoke is the isolated-database run of the Phase 3 tree (`5138c8e`, revision `e770db8`); it does not cover Phases 4, 2b, 5, or 6. Phase 7 is still pending.
 
@@ -12,8 +12,8 @@ Evidence is the merge commit on this branch's history. "Implemented" means the c
 | 3 Blob roster and editor | Implemented. Isolated native smoke of that tree, with open defects | `92f626a`, smoke `5138c8e` |
 | 4 Project and session tree | Implemented. Unit and mounted tests only | `395fd78` |
 | 2b Execution options | Implemented (storage, Claude, OpenCode, Codex). Fake-process tests only | `2dc0ae9`, `013e32b`, `73c4f03`, `9045022`, `7c0eb77` |
-| 5 Usage analytics | Implemented (UI and `usage.analytics`). Unit tests only | `55808fa`, `07bb620` |
-| 6 Settings (General, Agents, Runtimes, Permissions) | Implemented, later merged into General, Agents, Usage & limits, Updates. Unit and mounted tests only | `0314cb2`, `aabbd0f`, `aea5eb1` |
+| 5 Token analytics and provider quota | Token analytics remain; cost valuation and budget/pricing/subscription features are retired in the current worktree. Codex quota source has schema-backed fake coverage only. | `55808fa`, `07bb620`, current uncommitted changes |
+| 6 Settings | General, Agents and Updates remain. Usage & limits is removed from active settings navigation. | `0314cb2`, `aabbd0f`, `aea5eb1` |
 | 7 Native verification and release | Partly done: updater, release script and beta releases. Native checks, signing and clean install open | `f15f9d2`…`889bb93`, `v0.1.0-beta.1`–`beta.3` |
 
 Work after the plan phases (redesign, conversation management, model list provenance, usage limits and sharing) is listed in [implementation-status.md](implementation-status.md).
@@ -179,7 +179,7 @@ This phase depends only on Phase 2a. Execution settings may be displayed as unav
   - The live blob preview at 96 px, plus name, description, runtime, model, status and quick usage.
   - The chat-style swatch grid: the same 12 colours, no shapes.
 - **Sessions:** the full project/session list for this blob.
-- **Usage:** the blob-scoped analytics described in Phase 5.
+- Usage opens from the existing shell and remains separate from this editor page.
 - **Settings:** the Profile card and the Execution card.
   - **Profile card:** colour, Name, Description with a "92 / 255" counter, and Instructions.
   - **Execution card:**
@@ -215,32 +215,22 @@ This phase depends on Phase 2a and the intervening native smoke gate; it does no
 - The companion's chat tab follows the blob's selected session. Its pills switch between blobs.
 - **Gate:** the same blob can hold several sessions in one project and in multiple projects. Selection, resume and cancel work from the tree, and the keyboard flow is arrow keys, Enter and context menu.
 
-## Phase 5: Cost and usage analytics
+## Phase 5: Token analytics and provider quota
 
-**Daemon:**
+**Token analytics:**
 
-- New `usage.analytics { from, to, bucket: day|week, tz, projectPath?, agentId? }`. It returns:
-  - Totals: cost, tokens (input, output, cache read, cache write), run time, runs and failed runs.
-  - A series per bucket for each of those metrics.
-  - A leaderboard per blob: tokens, cost, time, runs, `unreportedRuns` and `unpricedModels`.
-- Runs are turns. Run time is `completed_at - created_at`, and a failed run is a turn in the `error` state. OpenCode ACP `usage_update` provides context-window `used`/`size` and a USD `cost.amount`, but no input/output/cache buckets. The only captured event was a failed request, so analytics must keep token buckets unknown, must not treat that zero as a successful free turn, and must not sum repeated cost snapshots until a successful run shows whether `amount` is cumulative.
+- `usage.analytics { from, to, bucket: day|week, tz, projectPath?, agentId? }` continues to support token buckets, runtime, runs and failures. Monetary values, price estimates, subscriptions and budgets are not current product features. Historical pricing, subscription, valuation and budget rows remain untouched in storage.
+- Unknown token fields remain unknown. Input, output, cache read/write and reasoning stay as distinct reported-usage buckets. Context-window figures are never presented as token consumption.
+- The existing Analytics view retains Tokens / Time / Runs charts, project/date filters and failed-turn details. An always-visible compact bottom row shows supported quota; the existing Usage sheet shows token totals and quota separately, with an explicit non-blocking refresh action and reset time/countdown when reported. No additional page or settings navigation is introduced.
 
-**Cost rule:**
+**Quota service:**
 
-- Cost = provider-reported actual cost + an API-rate estimate from `pricing_rules` / user overrides for the uncosted tokens.
-- Unknown prices stay unknown, never $0.
-- Prefix "≥" whenever any run is unreported or any model is unpriced, and show "N runs did not report usage".
-- Subscription fees are shown separately and never mixed into usage cost.
+- Expose normalized quota snapshots through `quota.list`, `quota.refresh` and `quota.updated`; never send raw provider responses to React.
+- Poll in the background every five minutes, use a ten-second request timeout, single-flight each provider, back off after errors and retain the last successful snapshot. Polling does not delay daemon readiness or block prompts.
+- Codex is supported only through the structured `account/rateLimits/read` method matched to the checked-in Codex 0.159.3 app-server schema. Test the method and normalized fields with fake processes. Claude and OpenCode remain absent from the quota meter until a compliant reliable source is verified.
+- Reuse CLI-owned authentication; never copy credentials, scrape a terminal, or expose provider payloads. Unknown fields remain unavailable rather than zero.
 
-**UI:** an Analytics view opened from the sidebar "Usage" link, with the same component reused on the blob Usage tab.
-
-- Range picker (7d / 30d / 90d) and project filter.
-- Four summary cards: Cost, Tokens, Run time, Runs.
-- A bar chart with a Tokens / Cost / Time / Runs toggle and a Daily / Weekly toggle. Draw it with plain SVG; no chart dependency.
-- The leaderboard with bars and the "≥" notation.
-- An Errors tab listing failed turns.
-
-**Gate:** the totals reconcile with the raw `usage_events` in fixture tests, partial data is labelled correctly, and timezone bucketing is tested.
+**Gate:** token analytics and quota normalization/cache/backoff are deterministic in fixture tests, v9 history survives the additive quota migration, and shell/Usage UI presents quota separately from token use. Live Codex/OpenCode turns, live quota polling and native UI behavior remain separate unverified gates.
 
 ## Phase 6: Settings redesign (reference chat app style)
 
@@ -252,7 +242,7 @@ This phase depends on Phase 2a and the intervening native smoke gate; it does no
   - **Agents:** the blob list, with links to each blob page.
   - **Runtimes:** detected CLIs, launcher profiles, auth state.
   - **Permissions:** default approval policy.
-- Ship only General, Agents, Runtimes and Permissions. Usage and Billing, Updates, language and theme stay deferred until they have a working consumer. Keep only controls that have a working consumer. Anything else shows an "Unavailable" state. Follow the AGENTS.md invariant: "No copied provider authentication, primary terminal scraping, raw provider JSON in React, fabricated success/usage, or unknown prices presented as zero."
+- General, Agents and Updates remain. Monetary usage/billing, budget, pricing and subscription controls are retired; quota settings are not added. Keep only controls that have a working consumer. Anything else shows an "Unavailable" state. Follow the AGENTS.md invariant: "No copied provider authentication, primary terminal scraping, raw provider JSON in React, fabricated success/usage, or unknown prices presented as zero."
 - **Gate:** every visible control persists and has an effect, and the existing settings tests stay green.
 
 ## Phase 7: Native verification and release hardening

@@ -258,11 +258,6 @@ fn model_from(header: &str, value: &Value) -> Result<ModelInfo, String> {
     if header != composed {
         return Err("verbose model header does not match providerID/id".into());
     }
-    if let Some(cost) = value.get("cost") {
-        if !cost.is_object() {
-            return Err("verbose model cost is invalid".into());
-        }
-    }
     if let Some(limit) = value.get("limit") {
         if !limit.is_object() {
             return Err("verbose model limit is invalid".into());
@@ -279,22 +274,6 @@ fn model_from(header: &str, value: &Value) -> Result<ModelInfo, String> {
         Some(_) => return Err("verbose model variants are invalid".into()),
     };
     let display = value["name"].as_str().unwrap_or(header).to_owned();
-    let provider_name = value["providerName"].as_str().unwrap_or(provider);
-    let cost = value.get("cost").and_then(Value::as_object);
-    let reported_price = cost.map(|cost| {
-        let rate = |key: &str| cost.get(key).and_then(decimal_text);
-        let cache = cost.get("cache").and_then(Value::as_object);
-        let currency = cost.get("currency").and_then(Value::as_str).unwrap_or("USD");
-        serde_json::json!({
-            "inputPerMillion": rate("input"),
-            "outputPerMillion": rate("output"),
-            "cacheReadPerMillion": cache.and_then(|cache| cache.get("read")).and_then(decimal_text),
-            "cacheWritePerMillion": cache.and_then(|cache| cache.get("write")).and_then(decimal_text),
-            "currency": currency,
-            "source": "opencode_catalog_estimate",
-            "providerName": provider_name,
-        })
-    });
     let supported = variant_keys.clone();
     Ok(ModelInfo {
         id: composed,
@@ -309,7 +288,6 @@ fn model_from(header: &str, value: &Value) -> Result<ModelInfo, String> {
         is_default: None,
         group: None,
         availability: None,
-        reported_price,
     })
 }
 
@@ -327,16 +305,6 @@ impl Drop for CatalogWorkingDirectory { fn drop(&mut self) { let _ = std::fs::re
 fn prepare_listing_environment(command: &mut Command) {
     // Listing must use the user's provider/login configuration, never a Bloblex session profile.
     command.env_remove("OPENCODE_CONFIG_CONTENT");
-}
-
-fn decimal_text(value: &Value) -> Option<String> {
-    let text = match value {
-        Value::Number(number) => number.to_string(),
-        Value::String(text) => text.clone(),
-        _ => return None,
-    };
-    let number = serde_json::from_str::<serde_json::Number>(&text).ok()?;
-    (!number.to_string().starts_with('-')).then_some(text)
 }
 
 fn unix_now() -> u64 {
@@ -388,9 +356,8 @@ mod tests {
         assert!(models[0].supported_thinking.is_empty());
         assert!(models[0].variants.is_none());
         assert_eq!(models[1].id, "opencode-go/deepseek-v4.1-flash");
-        assert_eq!(models[0].reported_price.as_ref().unwrap()["inputPerMillion"], "0");
-        assert_eq!(models[0].reported_price.as_ref().unwrap()["currency"], "USD");
-        assert_eq!(models[1].reported_price.as_ref().unwrap()["inputPerMillion"], "0.14");
+        let serialized = serde_json::to_value(&models[0]).unwrap();
+        assert!(serialized.get("reportedPrice").is_none());
         let thinking: std::collections::BTreeSet<_> = models[1].supported_thinking.iter().cloned().collect();
         assert_eq!(thinking, ["high", "low", "max"].into_iter().map(str::to_owned).collect());
         assert!(!models[1].supported_thinking.iter().any(|level| level == "default"));
@@ -399,23 +366,13 @@ mod tests {
     }
 
     #[test]
-    fn invalid_cost_or_brace_in_a_string_is_handled() {
-        let bad = "opencode/big-pickle\n{\"id\":\"big-pickle\",\"providerID\":\"opencode\",\"name\":\"Big Pickle\",\"cost\":\"free\"}\n";
-        assert!(parse_verbose_catalog(bad).is_err());
+    fn model_price_metadata_is_ignored_and_braces_in_a_string_are_handled() {
+        let with_ignored_cost = "opencode/big-pickle\n{\"id\":\"big-pickle\",\"providerID\":\"opencode\",\"name\":\"Big Pickle\",\"cost\":\"free\"}\n";
+        let ignored = parse_verbose_catalog(with_ignored_cost).unwrap();
+        assert!(serde_json::to_value(&ignored[0]).unwrap().get("reportedPrice").is_none());
         let braces = "opencode/brace-name\n{\"id\":\"brace-name\",\"providerID\":\"opencode\",\"name\":\"Big {Pickle}\",\"cost\":{\"input\":0},\"limit\":{\"context\":1},\"capabilities\":{\"reasoning\":false},\"variants\":{}}\n";
         let models = parse_verbose_catalog(braces).unwrap();
         assert_eq!(models[0].display_name, "Big {Pickle}");
-    }
-
-    #[test]
-    fn reported_catalog_rates_keep_exact_decimal_lexemes_without_float_conversion() {
-        let text = "opencode/exact\n{\"id\":\"exact\",\"providerID\":\"opencode\",\"cost\":{\"input\":0.000000000003,\"output\":\"0.000000000007\"}}\n";
-        let model = parse_verbose_catalog(text).unwrap().remove(0);
-        let price = model.reported_price.unwrap();
-        assert_eq!(price["inputPerMillion"], "0.000000000003");
-        assert_eq!(price["outputPerMillion"], "0.000000000007");
-        assert_eq!(decimal_text(&Value::String("-0.1".into())), None);
-        assert_eq!(decimal_text(&Value::String("not-a-rate".into())), None);
     }
 
     #[test]

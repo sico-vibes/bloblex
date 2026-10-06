@@ -765,9 +765,6 @@ pub struct ModelInfo {
     /// Whether the provider currently reports this model as offered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub availability: Option<String>,
-    /// Per-model rates reported by a provider catalog, retained as exact decimal strings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reported_price: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -950,6 +947,11 @@ pub trait AgentAdapter: Send + Sync {
     /// discovery keep source compatibility and report `Unsupported` by default.
     async fn model_catalog(&self, _runtime: &RuntimeSpec) -> Result<ModelCatalog, AdapterError> {
         Err(AdapterError::Unsupported("model catalog is unavailable".into()))
+    }
+    /// Returns a provider's structured account quota response when the native
+    /// protocol exposes one. Callers must normalize it before persistence/UI.
+    async fn read_account_quota(&self, _runtime: &RuntimeSpec) -> Result<Value, AdapterError> {
+        Err(AdapterError::Unsupported("account quota is unavailable".into()))
     }
     /// Supplies per-turn instruction hash context. Defaults preserve source
     /// compatibility for providers whose instruction lifecycle is adapter-local.

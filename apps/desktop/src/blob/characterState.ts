@@ -1,15 +1,15 @@
-export type BlobMood = 'idle' | 'online' | 'thinking' | 'working' | 'tool_activity' | 'file_activity' | 'file_drop' | 'file_preparing' | 'file_ready' | 'file_sending' | 'file_error' | 'permission' | 'success' | 'error' | 'offline' | 'listening' | 'rate_limited' | 'budget_warning' | 'sleeping'
+export type BlobMood = 'idle' | 'online' | 'thinking' | 'working' | 'tool_activity' | 'file_activity' | 'file_drop' | 'file_preparing' | 'file_ready' | 'file_sending' | 'file_error' | 'permission' | 'success' | 'error' | 'offline' | 'listening' | 'rate_limited' | 'sleeping'
 
 export type FileReferenceStage = 'drop' | 'preparing' | 'ready' | 'sending' | 'error'
 
 const protectedMoods = new Set<BlobMood>([
-  'offline', 'permission', 'budget_warning', 'rate_limited', 'error',
+  'offline', 'permission', 'rate_limited', 'error',
 ])
 
 /**
  * Local file-reference activity may replace a stale completed success while
- * the user is interacting, but cannot hide a safety, connection, budget,
- * rate-limit, or provider failure state.
+ * the user is interacting, but cannot hide a safety, connection, rate-limit,
+ * or provider failure state.
  */
 export function moodWithFileReference(baseMood: BlobMood, stage?: FileReferenceStage): BlobMood {
   if (!stage || protectedMoods.has(baseMood)) return baseMood

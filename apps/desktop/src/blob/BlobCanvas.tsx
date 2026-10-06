@@ -48,7 +48,6 @@ const STATE_FOR_MOOD: Record<BlobMood, EngineState> = {
   offline: 'offline',
   listening: 'listening',
   rate_limited: 'ratelimit',
-  budget_warning: 'budget',
   sleeping: 'sleeping',
 }
 

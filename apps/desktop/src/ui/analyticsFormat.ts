@@ -1,5 +1,4 @@
-import type { AnalyticsBucket, AnalyticsCost, AnalyticsLeaderboardRow, AnalyticsMetric, AnalyticsRangeDays, AnalyticsSeriesPoint, AnalyticsTokens, UsageAnalytics, UsageAnalyticsRequest } from '../analyticsTypes'
-import { moneyMinor } from './usagePresentation'
+import type { AnalyticsBucket, AnalyticsLeaderboardRow, AnalyticsMetric, AnalyticsRangeDays, AnalyticsSeriesPoint, AnalyticsTokens, UsageAnalytics, UsageAnalyticsRequest } from '../analyticsTypes'
 
 export function resolvedTimeZone(): string {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -101,12 +100,6 @@ export function formatBoundNumber(value: number | null, lowerBound: boolean): st
   return lowerBound ? `≥ ${text}` : text
 }
 
-export function formatBoundMoney(amountMinor: number | null, currency: string, lowerBound: boolean): string {
-  const text = moneyMinor(amountMinor, currency)
-  if (text === 'Unknown') return 'Unknown'
-  return lowerBound ? `≥ ${text}` : text
-}
-
 export function formatRunTime(value: number | null): string {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 'Unknown'
   const total = Math.round(value / 1000)
@@ -153,40 +146,19 @@ export function unreportedRunsNote(count: number): string | null {
   return count === 1 ? `${formatted} run did not report usage` : `${formatted} runs did not report usage`
 }
 
-export function unpricedModelsNote(models: readonly string[]): string | null {
-  const list = models.filter((model) => model.trim())
-  if (!list.length) return null
-  return `Unpriced models: ${list.join(', ')}`
-}
-
-export function excludedCurrenciesNote(currencies: readonly string[]): string | null {
-  const list = currencies.filter((currency) => currency.trim())
-  if (!list.length) return null
-  return `Excluded currencies: ${list.join(', ')}`
-}
-
 export function analyticsNotes(totals: UsageAnalytics['totals']): string[] {
-  const notes: string[] = []
-  if (totals.cost.lowerBound) notes.push('Totals are a lower bound.')
   const unreported = unreportedRunsNote(totals.unreportedRuns)
-  if (unreported) notes.push(unreported)
-  const unpriced = unpricedModelsNote(totals.unpricedModels)
-  if (unpriced) notes.push(unpriced)
-  const excluded = excludedCurrenciesNote(totals.excludedCurrencies)
-  if (excluded) notes.push(excluded)
-  return notes
+  return unreported ? [unreported] : []
 }
 
 export function seriesMetricValue(point: AnalyticsSeriesPoint, metric: AnalyticsMetric): number | null {
   if (metric === 'tokens') return finiteOrNull(point.tokens.total)
-  if (metric === 'cost') return finiteOrNull(point.cost.amountMinor)
   if (metric === 'time') return finiteOrNull(point.runTimeMs)
   return finiteOrNull(point.runs)
 }
 
 export function seriesMetricExact(point: AnalyticsSeriesPoint, metric: AnalyticsMetric): string {
-  if (metric === 'tokens') return formatBoundNumber(finiteOrNull(point.tokens.total), point.cost.lowerBound)
-  if (metric === 'cost') return formatBoundMoney(finiteOrNull(point.cost.amountMinor), point.cost.currency, point.cost.lowerBound)
+  if (metric === 'tokens') return formatBoundNumber(finiteOrNull(point.tokens.total), point.tokensLowerBound === true)
   if (metric === 'time') return formatRunTime(finiteOrNull(point.runTimeMs))
   return formatExactNumber(finiteOrNull(point.runs))
 }
@@ -227,7 +199,7 @@ export function chartBars(series: readonly AnalyticsSeriesPoint[], metric: Analy
 }
 
 export function chartSummary(bars: readonly ChartBarModel[], metric: AnalyticsMetric, bucket: AnalyticsBucket): string {
-  const metricLabel = metric === 'tokens' ? 'Tokens' : metric === 'cost' ? 'Cost' : metric === 'time' ? 'Time' : 'Runs'
+  const metricLabel = metric === 'tokens' ? 'Tokens' : metric === 'time' ? 'Time' : 'Runs'
   const cadence = bucket === 'week' ? 'Weekly' : 'Daily'
   const gaps = bars.filter((bar) => bar.gap).length
   const known = bars.filter((bar) => bar.value !== null)
@@ -326,7 +298,7 @@ export function readAnalyticsPrefs(): AnalyticsViewPrefs {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ...DEFAULT_ANALYTICS_PREFS }
     const row = parsed as Record<string, unknown>
     const days: AnalyticsRangeDays = row.days === 30 || row.days === 90 || row.days === 7 ? row.days : 7
-    const metric: AnalyticsMetric = row.metric === 'cost' || row.metric === 'time' || row.metric === 'runs' || row.metric === 'tokens' ? row.metric : 'tokens'
+    const metric: AnalyticsMetric = row.metric === 'time' || row.metric === 'runs' || row.metric === 'tokens' ? row.metric : 'tokens'
     return {
       days,
       bucket: row.bucket === 'week' ? 'week' : 'day',
@@ -424,13 +396,11 @@ export interface LeaderboardViewRow {
   agentId: string | null
   tokens: AnalyticsTokens
   tokensLowerBound: boolean
-  cost: AnalyticsCost
   runTimeMs: number
   runs: number
   failedRuns: number
   cancelledRuns?: number
   unreportedRuns: number
-  unpricedModels: string[]
 }
 
 function sumNullable(values: readonly (number | null)[]): { value: number | null; partial: boolean } {
@@ -449,23 +419,6 @@ function mergeTokens(rows: readonly AnalyticsTokens[]): { tokens: AnalyticsToken
     partial = partial || summed.partial
   }
   return { tokens, partial }
-}
-
-function mergeCost(rows: readonly AnalyticsCost[]): AnalyticsCost {
-  const currencies = [...new Set(rows.map((row) => row.currency).filter((currency) => currency.trim()))]
-  const mixed = currencies.length > 1
-  const currency = currencies.length === 1 ? currencies[0] ?? '' : ''
-  const amount = sumNullable(rows.map((row) => row.amountMinor))
-  const actual = sumNullable(rows.map((row) => row.actualMinor))
-  const estimated = sumNullable(rows.map((row) => row.estimatedMinor))
-  const partial = !mixed && (amount.partial || actual.partial || estimated.partial)
-  return {
-    amountMinor: mixed ? null : amount.value,
-    currency,
-    actualMinor: mixed ? null : actual.value,
-    estimatedMinor: mixed ? null : estimated.value,
-    lowerBound: mixed || partial || rows.some((row) => row.lowerBound),
-  }
 }
 
 function mergeCancelled(rows: readonly AnalyticsLeaderboardRow[]): number | undefined {
@@ -491,43 +444,37 @@ function mergeLeaderboardGroup(key: string, group: readonly AnalyticsLeaderboard
       kind: identity.kind,
       agentId: identity.agentId,
       tokens: row.tokens,
-      tokensLowerBound: row.cost.lowerBound,
-      cost: row.cost,
+      tokensLowerBound: row.tokensLowerBound === true || row.unreportedRuns > 0,
       runTimeMs: row.runTimeMs,
       runs: row.runs,
       failedRuns: row.failedRuns,
       ...(typeof row.cancelledRuns === 'number' ? { cancelledRuns: row.cancelledRuns } : {}),
       unreportedRuns: row.unreportedRuns,
-      unpricedModels: [...row.unpricedModels],
     }
   }
   const tokens = mergeTokens(group.map((row) => row.tokens))
-  const cost = mergeCost(group.map((row) => row.cost))
   const cancelledRuns = mergeCancelled(group)
-  const unpricedModels = [...new Set(group.flatMap((row) => row.unpricedModels))]
   return {
     key,
     name: identity.name,
     kind: identity.kind,
     agentId: identity.agentId,
     tokens: tokens.tokens,
-    tokensLowerBound: cost.lowerBound || tokens.partial,
-    cost,
+    tokensLowerBound: tokens.partial || group.some((row) => row.tokensLowerBound === true || row.unreportedRuns > 0),
     runTimeMs: group.reduce((sum, row) => sum + row.runTimeMs, 0),
     runs: group.reduce((sum, row) => sum + row.runs, 0),
     failedRuns: group.reduce((sum, row) => sum + row.failedRuns, 0),
     ...(cancelledRuns === undefined ? {} : { cancelledRuns }),
     unreportedRuns: group.reduce((sum, row) => sum + row.unreportedRuns, 0),
-    unpricedModels,
   }
 }
 
 function compareLeaderboard(left: LeaderboardViewRow, right: LeaderboardViewRow): number {
-  const leftMissing = left.cost.amountMinor === null
-  const rightMissing = right.cost.amountMinor === null
+  const leftMissing = left.tokens.total === null
+  const rightMissing = right.tokens.total === null
   if (leftMissing !== rightMissing) return leftMissing ? 1 : -1
-  if (!leftMissing && !rightMissing && left.cost.amountMinor !== right.cost.amountMinor) {
-    return (right.cost.amountMinor ?? 0) - (left.cost.amountMinor ?? 0)
+  if (!leftMissing && !rightMissing && left.tokens.total !== right.tokens.total) {
+    return (right.tokens.total ?? 0) - (left.tokens.total ?? 0)
   }
   return right.runs - left.runs || left.name.localeCompare(right.name)
 }
@@ -628,25 +575,6 @@ function readFailureClass(value: unknown): string | undefined {
   return text.slice(0, 64)
 }
 
-function stringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-}
-
-function readCost(value: unknown): AnalyticsCost | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const row = value as Record<string, unknown>
-  const rawCurrency = typeof row.currency === 'string' ? row.currency.trim() : ''
-  const currency = rawCurrency || 'USD'
-  return {
-    amountMinor: numberOrNull(row.amountMinor),
-    currency,
-    actualMinor: numberOrNull(row.actualMinor),
-    estimatedMinor: numberOrNull(row.estimatedMinor),
-    lowerBound: row.lowerBound === true,
-  }
-}
-
 function readTokens(value: unknown): AnalyticsTokens | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const row = value as Record<string, unknown>
@@ -674,19 +602,17 @@ export function normalizeAnalytics(value: unknown): UsageAnalytics | null {
   const totalsRow = totals as Record<string, unknown>
   const bucket = rangeRow.bucket === 'week' ? 'week' : rangeRow.bucket === 'day' ? 'day' : null
   if (!bucket || typeof rangeRow.from !== 'string' || typeof rangeRow.to !== 'string' || typeof rangeRow.tz !== 'string') return null
-  const cost = readCost(totalsRow.cost)
   const tokens = readTokens(totalsRow.tokens)
-  if (!cost || !tokens) return null
+  if (!tokens) return null
   const series = Array.isArray(row.series) ? row.series.flatMap((point) => {
     if (!point || typeof point !== 'object' || Array.isArray(point)) return []
     const item = point as Record<string, unknown>
-    const pointCost = readCost(item.cost)
     const pointTokens = readTokens(item.tokens)
-    if (typeof item.bucketStart !== 'string' || !pointCost || !pointTokens) return []
+    if (typeof item.bucketStart !== 'string' || !pointTokens) return []
     return [{
       bucketStart: item.bucketStart,
-      cost: pointCost,
       tokens: pointTokens,
+      tokensLowerBound: item.tokensLowerBound === true,
       runTimeMs: numberOrNull(item.runTimeMs) ?? 0,
       runs: numberOrNull(item.runs) ?? 0,
       failedRuns: numberOrNull(item.failedRuns) ?? 0,
@@ -696,9 +622,8 @@ export function normalizeAnalytics(value: unknown): UsageAnalytics | null {
   const leaderboard = Array.isArray(row.leaderboard) ? row.leaderboard.flatMap((entry) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
     const item = entry as Record<string, unknown>
-    const rowCost = readCost(item.cost)
     const rowTokens = readTokens(item.tokens) ?? EMPTY_TOKENS
-    if (!rowCost || typeof item.runtimeId !== 'string') return []
+    if (typeof item.runtimeId !== 'string') return []
     const agentId = typeof item.agentId === 'string' ? item.agentId : null
     const agentName = typeof item.agentName === 'string' ? item.agentName : null
     return [{
@@ -706,13 +631,12 @@ export function normalizeAnalytics(value: unknown): UsageAnalytics | null {
       agentName,
       runtimeId: item.runtimeId,
       tokens: rowTokens,
-      cost: rowCost,
+      tokensLowerBound: item.tokensLowerBound === true || (numberOrNull(item.unreportedRuns) ?? 0) > 0,
       runTimeMs: numberOrNull(item.runTimeMs) ?? 0,
       runs: numberOrNull(item.runs) ?? 0,
       failedRuns: numberOrNull(item.failedRuns) ?? 0,
       ...cancelledField(item.cancelledRuns),
       unreportedRuns: numberOrNull(item.unreportedRuns) ?? 0,
-      unpricedModels: stringList(item.unpricedModels),
     }]
   }) : []
   const errors = Array.isArray(row.errors) ? row.errors.flatMap((entry) => {
@@ -730,36 +654,20 @@ export function normalizeAnalytics(value: unknown): UsageAnalytics | null {
       ...(failureClass ? { failureClass } : {}),
     }]
   }).slice(0, 50) : []
-  const subscriptions = Array.isArray(row.subscriptions) ? row.subscriptions.flatMap((entry) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
-    const item = entry as Record<string, unknown>
-    if (typeof item.provider !== 'string' || typeof item.currency !== 'string') return []
-    const monthlyMinor = numberOrNull(item.monthlyMinor)
-    if (monthlyMinor === null) return []
-    return [{
-      provider: item.provider,
-      monthlyMinor,
-      currency: item.currency,
-      quotaState: typeof item.quotaState === 'string' ? item.quotaState : 'unknown',
-    }]
-  }) : []
   return {
     range: { from: rangeRow.from, to: rangeRow.to, bucket, tz: rangeRow.tz },
     totals: {
-      cost,
       tokens,
+      tokensLowerBound: totalsRow.tokensLowerBound === true || (numberOrNull(totalsRow.unreportedRuns) ?? 0) > 0,
       runTimeMs: numberOrNull(totalsRow.runTimeMs) ?? 0,
       runs: numberOrNull(totalsRow.runs) ?? 0,
       failedRuns: numberOrNull(totalsRow.failedRuns) ?? 0,
       ...cancelledField(totalsRow.cancelledRuns),
       activeRuns: numberOrNull(totalsRow.activeRuns) ?? 0,
       unreportedRuns: numberOrNull(totalsRow.unreportedRuns) ?? 0,
-      unpricedModels: stringList(totalsRow.unpricedModels),
-      excludedCurrencies: stringList(totalsRow.excludedCurrencies),
     },
     series,
     leaderboard,
     errors,
-    subscriptions,
   }
 }

@@ -169,6 +169,20 @@ fn main() {
                 };
                 (page, vec![])
             }
+            "account/rateLimits/read" => {
+                if mode == "stall" { continue; }
+                (json!({
+                    "ordinaryUsageAllowed": true,
+                    "rateLimitsByLimitId": {
+                        "codex": {
+                            "limitName": "Codex",
+                            "primary": {"usedPercent": 42, "resetsAt": 1790000000, "windowDurationMins": 300},
+                            "secondary": {"usedPercent": 12, "resetsAt": 1790300000, "windowDurationMins": 10080}
+                        }
+                    },
+                    "rateLimits": {"primary":{"usedPercent":42},"secondary":{"usedPercent":12}}
+                }), vec![])
+            }
             _ => (json!({}), vec![]),
         };
         if !id.is_null() {

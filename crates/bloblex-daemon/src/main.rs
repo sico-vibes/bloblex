@@ -34,6 +34,9 @@ use tokio::{
 use uuid::Uuid;
 
 mod model_presentation;
+mod quota;
+
+use quota::{normalize_codex_quota, PollFailure, PollOutcome, QuotaPollGate, QUOTA_POLL_INTERVAL, QUOTA_REQUEST_TIMEOUT};
 
 static MODEL_CATALOG_CACHE: OnceLock<StdMutex<HashMap<String, (Instant, Value)>>> = OnceLock::new();
 
@@ -50,6 +53,7 @@ struct AppState {
     denied_turns: Arc<Mutex<HashSet<String>>>,
     session_gates: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     deleted_sessions: Arc<Mutex<HashSet<String>>>,
+    quota_poll_gate: Arc<Mutex<QuotaPollGate>>,
     stopping: Arc<tokio::sync::Notify>,
 }
 #[derive(Clone)]
@@ -371,68 +375,89 @@ async fn publish_runtime_discovery(
     Ok(values)
 }
 
-fn validate_pricing_override(rule: &Value) -> Result<(), &'static str> {
-    let Some(object) = rule.as_object() else {
-        return Err("rule must be an object");
-    };
-    let id = rule["id"].as_str().map(str::trim).filter(|value| !value.is_empty());
-    if id.is_none() {
-        return Err("id is required");
+fn quota_failure_code(failure: PollFailure) -> &'static str {
+    match failure {
+        PollFailure::Timeout => "timeout",
+        PollFailure::Unavailable => "unavailable",
+        PollFailure::Protocol => "protocol",
     }
-    if let Some(remove) = object.get("remove") {
-        let Some(remove) = remove.as_bool() else {
-            return Err("remove must be a boolean");
-        };
-        if remove {
-            return Ok(());
+}
+
+async fn poll_codex_quota(st: &AppState, runtime_value: Value) {
+    let Some(runtime_id) = runtime_value["id"].as_str().map(str::to_owned) else { return; };
+    let runtime = runtime_from(&runtime_value);
+    let normalize_runtime_id = runtime_id.clone();
+    let adapter = st.adapters.codex.clone();
+    let outcome = quota::poll_with_timeout(
+        &st.quota_poll_gate,
+        "codex",
+        QUOTA_REQUEST_TIMEOUT,
+        || async move {
+            let raw = adapter.read_account_quota(&runtime).await.map_err(|error| match error {
+                bloblex_agent_core::AdapterError::Timeout => PollFailure::Timeout,
+                bloblex_agent_core::AdapterError::Process(message) if message.contains("timed out") => PollFailure::Timeout,
+                bloblex_agent_core::AdapterError::Protocol(_) => PollFailure::Protocol,
+                _ => PollFailure::Unavailable,
+            })?;
+            let fetched_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let normalized = normalize_codex_quota(&normalize_runtime_id, &raw, &fetched_at).ok_or(PollFailure::Protocol)?;
+            Ok((normalized, fetched_at))
+        },
+    ).await;
+
+    match outcome {
+        PollOutcome::Skipped => {}
+        PollOutcome::Updated((snapshot, fetched_at)) => {
+            let normalized = serde_json::to_value(snapshot).unwrap_or(Value::Null);
+            if let Err(error) = st.db.save_quota_snapshot("codex", &runtime_id, &normalized, &fetched_at) {
+                tracing::warn!("Codex quota snapshot could not be saved: {error}");
+                return;
+            }
+            emit_quota_snapshot(st).await;
+        }
+        PollOutcome::Failed { failure, failure_count, backoff } => {
+            let attempted = Utc::now();
+            let retry_after = attempted + chrono::Duration::from_std(backoff).unwrap_or_default();
+            let attempted = attempted.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let retry_after = retry_after.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            if let Err(error) = st.db.record_quota_failure("codex", &runtime_id, &attempted, failure_count, &retry_after, quota_failure_code(failure)) {
+                tracing::warn!("Codex quota failure state could not be saved: {error}");
+                return;
+            }
+            emit_quota_snapshot(st).await;
         }
     }
-    if rule["provider"].as_str().is_none_or(|value| value.trim().is_empty()) {
-        return Err("provider is required");
-    }
-    if rule["canonicalModelId"].as_str().is_none_or(|value| value.trim().is_empty()) {
-        return Err("canonicalModelId is required");
-    }
-    const CURRENCIES: &[&str] = &[
-        "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN", "BAM",
-        "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL", "BSD", "BTN",
-        "BWP", "BYN", "BZD", "CAD", "CDF", "CHF", "CLP", "CNY", "COP", "CRC", "CUP",
-        "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP", "ERN", "ETB", "EUR", "FJD",
-        "FKP", "GBP", "GEL", "GHS", "GIP", "GMD", "GNF", "GTQ", "GYD", "HKD", "HNL",
-        "HTG", "HUF", "IDR", "ILS", "INR", "IQD", "IRR", "ISK", "JMD", "JOD", "JPY",
-        "KES", "KGS", "KHR", "KMF", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR",
-        "LRD", "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU",
-        "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK", "NPR",
-        "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON",
-        "RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLE",
-        "SLL", "SOS", "SRD", "SSP", "STN", "SVC", "SYP", "SZL", "THB", "TJS", "TMT",
-        "TND", "TOP", "TRY", "TTD", "TWD", "TZS", "UAH", "UGX", "USD", "UYU", "UZS",
-        "VES", "VND", "VUV", "WST", "XAF", "XCD", "XOF", "XPF", "YER", "ZAR", "ZMW",
-        "ZWG",
-    ];
-    if !rule["currency"].as_str().is_some_and(|currency| CURRENCIES.contains(&currency)) {
-        return Err("currency must be a supported three-letter code");
-    }
-    if !rule["effectiveFrom"]
-        .as_str()
-        .is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok())
-    {
-        return Err("effectiveFrom must be an RFC3339 timestamp");
-    }
-    for field in [
-        "inputPerMillion",
-        "outputPerMillion",
-        "cacheReadPerMillion",
-        "cacheWritePerMillion",
-    ] {
-        let Some(rate) = object.get(field) else {
-            return Err("all rate fields must be decimal strings or null");
-        };
-        if !rate.is_null() && rate.as_str().is_none_or(|amount| !bloblex_usage::valid_rate_decimal(amount)) {
-            return Err("all rate fields must be non-negative decimal strings with at most twelve fractional digits or null");
+}
+
+async fn emit_quota_snapshot(st: &AppState) {
+    if let Ok(quotas) = st.db.quota_snapshots() {
+        if let Some(quota) = quotas.into_iter().find(|quota| quota["provider"] == "codex") {
+            st.emit("quota.updated", json!({"provider":"codex","quota":quota})).await;
         }
     }
-    Ok(())
+}
+
+async fn poll_provider_quotas(st: &AppState) {
+    let runtimes = st.runtimes.read().await.clone();
+    if let Some(runtime) = runtimes.into_iter().find(|runtime| runtime["provider"] == "codex" && runtime["status"] == "online") {
+        poll_codex_quota(st, runtime).await;
+    }
+}
+
+async fn quota_poll_loop(st: AppState, mut events: broadcast::Receiver<EventEnvelope>) {
+    let mut interval = tokio::time::interval(QUOTA_POLL_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => poll_provider_quotas(&st).await,
+            event = events.recv() => match event {
+                Ok(event) if event.event_type == "runtime.changed" => poll_provider_quotas(&st).await,
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {},
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            _ = st.stopping.notified() => break,
+        }
+    }
 }
 
 async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, DispatchError> {
@@ -512,6 +537,12 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let found = bloblex_runtime::discover().await;
             let values = publish_runtime_discovery(st, found).await.map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
             Ok(json!({"runtimes":values}))
+        }
+        "quota.list" => st.db.quota_snapshots().map(|quotas| json!({"quotas":quotas})).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)),
+        "quota.refresh" => {
+            let state = st.clone();
+            tokio::spawn(async move { poll_provider_quotas(&state).await; });
+            Ok(json!({"accepted":true}))
         }
         "session.list" => {
             let include = match p.get("includeArchived") { None => false, Some(value) => value.as_bool().ok_or_else(|| derr("invalid_argument", "includeArchived must be a boolean", StatusCode::BAD_REQUEST))? };
@@ -676,29 +707,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.emit("permission.resolved", json!({"permissionId":id,"choice":choice})).await;
             Ok(json!({"resolved":true}))
         }
-        "budget.list" => st.db.budget_list().map_err(|e| {
-            derr(
-                "internal",
-                &e.to_string(),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        }),
-        "budget.set" => st
-            .db
-            .save_budget(&p)
-            .map_err(|e| derr("invalid_argument", &e.to_string(), StatusCode::BAD_REQUEST))
-            .map(|_| json!({"saved":true})),
-        "budget.delete" => st
-            .db
-            .delete_budget(p["policyId"].as_str().unwrap_or(""))
-            .map_err(|e| {
-                derr(
-                    "internal",
-                    &e.to_string(),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })
-            .map(|_| json!({"deleted":true})),
+        "budget.list" | "budget.set" | "budget.delete" => Err(derr("unsupported", "budget controls have been retired; historical records are preserved", StatusCode::NOT_FOUND)),
         "usage.summary" => st.db.usage_summary(&p).map_err(|e| {
             derr(
                 "internal",
@@ -774,61 +783,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.broadcast_persisted(events);
             Ok(json!({"saved":true}))
         }
-        "pricing.list" => {
-            let listed = st.db.pricing_list(p["provider"].as_str()).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
-            let requested_provider = p["provider"].as_str();
-            let overrides = serde_json::from_value::<Vec<bloblex_usage::PriceRule>>(listed["rules"].clone()).unwrap_or_default();
-            let official = bloblex_usage::shipped_official_price_rules().unwrap_or_default().into_iter().filter(|rule| requested_provider.is_none_or(|provider| price_provider_matches(provider, &rule.provider))).collect::<Vec<_>>();
-            let runtimes = st.runtimes.read().await.clone();
-            let catalog = if requested_provider.is_none_or(|provider| matches!(provider, "opencode" | "opencode-go" | "opencode-zen")) {
-                runtimes.iter().filter(|runtime| runtime["provider"] == "opencode").filter_map(cached_model_catalog)
-                    .flat_map(|catalog| catalog["models"].as_array().cloned().unwrap_or_default())
-                    .filter_map(|model| { let model_id = model["id"].as_str()?; let catalog = json!({"models":[model]}); reported_catalog_price(Some(&catalog), "opencode", model_id) })
-                    .filter(|rule| requested_provider.is_none_or(|provider| price_provider_matches(provider, &rule.provider)))
-                    .collect::<Vec<_>>()
-            } else { Vec::new() };
-            let lower = official.iter().chain(catalog.iter()).cloned().collect::<Vec<_>>();
-            let rules = overrides.into_iter().map(|rule| {
-                let mut value = serde_json::to_value(&rule).unwrap_or(Value::Null);
-                value["effectiveFields"] = effective_pricing_fields(&rule, &lower);
-                if let Some(effective) = bloblex_usage::resolve_rule_at(&rule.provider, Some(&rule.canonical_model_id), &Utc::now().to_rfc3339(), &lower) {
-                    value["effectiveTiers"] = json!(effective.tiers);
-                }
-                value
-            }).chain(official.into_iter().chain(catalog).filter_map(|rule| serde_json::to_value(rule).ok())).collect::<Vec<_>>();
-            Ok(json!({"rules":rules}))
-        }
-        "pricing.override" => {
-            let rule = &p["rule"];
-            validate_pricing_override(rule).map_err(|message| {
-                derr("invalid_argument", message, StatusCode::BAD_REQUEST)
-            })?;
-            st.db.save_pricing(rule).map_err(|error| match error {
-                bloblex_storage::StorageError::InvalidPricing => derr(
-                    "invalid_argument",
-                    "pricing rule is invalid",
-                    StatusCode::BAD_REQUEST,
-                ),
-                _ => derr(
-                    "internal",
-                    "pricing rule could not be saved",
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ),
-            })?;
-            Ok(json!({"saved":true}))
-        }
-        "subscription.list" => st.db.subscriptions().map_err(|e| {
-            derr(
-                "internal",
-                &e.to_string(),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        }),
-        "subscription.save" => st
-            .db
-            .save_subscription(&p["plan"])
-            .map_err(|e| derr("invalid_argument", &e.to_string(), StatusCode::BAD_REQUEST))
-            .map(|_| json!({"saved":true})),
+        "pricing.list" | "pricing.override" | "subscription.list" | "subscription.save" => Err(derr("unsupported", "monetary valuation and subscription controls have been retired; historical records are preserved", StatusCode::NOT_FOUND)),
         _ => Err(derr(
             "unsupported",
             "method is not supported",
@@ -939,93 +894,6 @@ async fn runtime_models(st: &AppState, p: &Value) -> Result<Value, DispatchError
     let refresh = p.get("refresh").map(|v| v.as_bool().ok_or_else(|| derr("invalid_argument", "refresh must be a boolean", StatusCode::BAD_REQUEST))).transpose()?.unwrap_or(false);
     let runtime = st.runtimes.read().await.iter().find(|r| r["id"] == id).cloned().ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
     fetch_model_catalog(st, &runtime, refresh).await
-}
-fn cached_model_catalog(runtime: &Value) -> Option<Value> {
-    let cache = MODEL_CATALOG_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
-    cache.lock().ok()?.get(&catalog_key(runtime)).map(|(_, value)| value.clone())
-}
-fn reported_catalog_price(catalog: Option<&Value>, runtime_provider: &str, model_id: &str) -> Option<bloblex_usage::PriceRule> {
-    if runtime_provider != "opencode" { return None; }
-    let catalog = catalog?;
-    let model = catalog["models"].as_array()?.iter().find(|model| model["id"] == model_id)?;
-    let price = model.get("reportedPrice")?;
-    let catalog_provider = model["providerId"].as_str().or_else(|| model["id"].as_str()?.split_once('/').map(|(provider, _)| provider))?;
-    let catalog_model_id = model_id.strip_prefix(&format!("{catalog_provider}/")).unwrap_or(model_id);
-    Some(bloblex_usage::PriceRule {
-        id: format!("opencode-catalog:{catalog_provider}:{catalog_model_id}"), provider: catalog_provider.to_owned(), canonical_model_id: catalog_model_id.to_owned(), aliases: vec![],
-        input_per_million: price["inputPerMillion"].as_str().map(str::to_owned),
-        output_per_million: price["outputPerMillion"].as_str().map(str::to_owned),
-        cache_read_per_million: price["cacheReadPerMillion"].as_str().map(str::to_owned),
-        cache_write_per_million: price["cacheWritePerMillion"].as_str().map(str::to_owned),
-        currency: price["currency"].as_str()?.to_owned(), effective_from: "0000-01-01".to_owned(), effective_to: None, source_url: None,
-        source: Some("opencode_catalog_estimate".into()), checked_at: None, notes: None, tiers: Vec::new(),
-    })
-}
-fn price_provider_matches(runtime_provider: &str, price_provider: &str) -> bool {
-    match runtime_provider {
-        "claude" | "anthropic" => price_provider == "anthropic",
-        "codex" | "openai" => price_provider == "openai",
-        "opencode" => matches!(price_provider, "opencode-zen" | "opencode-go" | "opencode"),
-        other => price_provider.eq_ignore_ascii_case(other),
-    }
-}
-fn effective_pricing_fields(override_rule: &bloblex_usage::PriceRule, lower_priority_rules: &[bloblex_usage::PriceRule]) -> Value {
-    let model = override_rule.canonical_model_id.as_str();
-    let date = Utc::now().format("%Y-%m-%d").to_string();
-    let fields = ["inputPerMillion", "outputPerMillion", "cacheReadPerMillion", "cacheWritePerMillion"];
-    let mut result = serde_json::Map::new();
-    for field in fields {
-        let own_rate = pricing_field_rate(override_rule, field);
-        let fallback = lower_priority_rules.iter().find(|candidate| {
-            pricing_field_rate(candidate, field).is_some() && bloblex_usage::resolve_rule_at(&override_rule.provider, Some(model), &date, std::slice::from_ref(*candidate)).is_some()
-        });
-        let (rate, source, currency, checked_at): (Option<String>, String, String, Option<String>) = if let Some(rate) = own_rate {
-            (Some(rate.clone()), "user_override".to_owned(), override_rule.currency.clone(), None)
-        } else if let Some(rule) = fallback {
-            (pricing_field_rate(rule, field).cloned(), rule.source.as_deref().unwrap_or("unknown").to_owned(), rule.currency.clone(), rule.checked_at.clone())
-        } else {
-            (None, "unknown".to_owned(), override_rule.currency.clone(), None)
-        };
-        result.insert(field.to_owned(), json!({"rate":rate,"source":source,"currency":currency,"checkedAt":checked_at}));
-    }
-    Value::Object(result)
-}
-fn pricing_field_rate<'a>(rule: &'a bloblex_usage::PriceRule, field: &str) -> Option<&'a String> {
-    match field {
-        "inputPerMillion" => rule.input_per_million.as_ref(),
-        "outputPerMillion" => rule.output_per_million.as_ref(),
-        "cacheReadPerMillion" => rule.cache_read_per_million.as_ref(),
-        "cacheWritePerMillion" => rule.cache_write_per_million.as_ref(),
-        _ => None,
-    }
-}
-fn complete_pricing_overrides(overrides: Vec<bloblex_usage::PriceRule>, lower_priority_rules: &[bloblex_usage::PriceRule]) -> Vec<bloblex_usage::PriceRule> {
-    overrides.into_iter().filter(|rule| rule.source.as_deref() == Some("user_override")).map(|rule| {
-        bloblex_usage::complete_user_override(&rule.provider, &rule, lower_priority_rules)
-    }).collect()
-}
-fn assemble_pricing_rules(provider: &str, overrides: Vec<bloblex_usage::PriceRule>, official: Vec<bloblex_usage::PriceRule>, catalog: Option<bloblex_usage::PriceRule>) -> Vec<bloblex_usage::PriceRule> {
-    let mut lower = official.into_iter().filter(|rule| price_provider_matches(provider, &rule.provider)).collect::<Vec<_>>();
-    if let Some(rule) = catalog { lower.push(rule); }
-    let mut rules = complete_pricing_overrides(overrides, &lower);
-    rules.extend(lower);
-    rules
-}
-async fn pricing_rules_for_usage(st: &AppState, runtime_id: &str, provider: &str, model: Option<&str>) -> Vec<bloblex_usage::PriceRule> {
-    let mut overrides = Vec::new();
-    if let Ok(value) = st.db.pricing_list(Some(provider)) {
-        if let Ok(rules) = serde_json::from_value::<Vec<bloblex_usage::PriceRule>>(value["rules"].clone()) {
-            for rule in rules {
-                if rule.source.as_deref() == Some("user_override") { overrides.push(rule); }
-            }
-        }
-    }
-    let official = bloblex_usage::shipped_official_price_rules().unwrap_or_default();
-    let catalog = if provider == "opencode" {
-        let runtime = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id).cloned();
-        runtime.as_ref().and_then(cached_model_catalog).as_ref().and_then(|catalog| model.and_then(|model_id| reported_catalog_price(Some(catalog), provider, model_id)))
-    } else { None };
-    assemble_pricing_rules(provider, overrides, official, catalog)
 }
 async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) -> Result<(), DispatchError> {
     for key in ["model", "thinking", "serviceTier"] {
@@ -1597,34 +1465,9 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
                 StatusCode::INTERNAL_SERVER_ERROR,
             )
         })?;
-        // Conservative bounded prompt-size estimate for admission. Providers do
-        // not expose a common max-output token setting here; completion usage
-        // reconciles this reservation when available, otherwise it remains
-        // charged. Unknown cost/concurrency demands fail closed in storage.
-        let estimated_input_tokens = ((text.as_bytes().len() as i64 + 2) / 3).max(1);
-        let reserved = st
-            .db
-            .reserve_applicable_budgets_with_demands(
-                &turn,
-                &sid,
-                &active.runtime.runtime_id,
-                &active.runtime.provider,
-                session["projectPath"].as_str().unwrap_or(""),
-                &json!({"tokens":estimated_input_tokens,"input_tokens":estimated_input_tokens,"turns":1,"runtime_minutes":1}),
-            )
-            .map_err(|e| {
-                derr(
-                    "internal",
-                    &e.to_string(),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
-        if !reserved {
-            let _ = st.db.record_budget_stopped_turn(&turn, &sid);
-            return Err(derr("budget_blocked", "an applicable budget has insufficient remaining capacity or cannot be safely estimated", StatusCode::TOO_MANY_REQUESTS));
-        }
+        // Prompt admission is governed by daemon/session concurrency and
+        // provider permissions. Historical budget records are not enforced.
         let admitted = st.db.create_reserved_turn(&turn, &sid).map_err(|e| {
-            let _ = st.db.release_budget_turn(&turn);
             derr(
                 "internal",
                 &e.to_string(),
@@ -1632,14 +1475,12 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             )
         })?;
         if !admitted {
-            let _ = st.db.release_budget_turn(&turn);
             return Err(derr("conflict", "daemon or agent concurrency limit reached", StatusCode::CONFLICT));
         }
         st.db
             .append_message(&sid, &turn, "user", &text)
             .map_err(|e| {
-                let _ = st.db.release_budget_turn(&turn);
-                let _ = st.db.update_turn_outcome(&turn, "error", Some("other"));
+                    let _ = st.db.update_turn_outcome(&turn, "error", Some("other"));
                 derr(
                     "internal",
                     &e.to_string(),
@@ -1653,11 +1494,10 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
         let gates = json!({"model":settings[format!("exec_gate.{}.model",active.runtime.provider)],"thinking":settings[format!("exec_gate.{}.thinking",active.runtime.provider)],"serviceTier":settings[format!("exec_gate.{}.serviceTier",active.runtime.provider)],"instructions":settings[format!("exec_gate.{}.instructions",active.runtime.provider)]});
         let launch_applied=active.runtime.provider=="claude"||active.runtime.provider=="codex";
         let mode_outcome=json!({"value":exec_options.approval_mode.as_str(),"applied":true,"kind":"request_shape","reason":if launch_applied{"provider launch mode requested for this turn"}else{"daemon policy mode"}});
-        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({"approvalMode":mode_outcome}),&json!({"approvalMode":{"kind":"request_shape","value":exec_options.approval_mode.as_str()}}),desired_instruction_hash.as_deref(),&json!({"adapter":active.runtime.provider,"gates":gates,"approvalMode":exec_options.approval_mode.as_str()}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|{let _=st.db.update_turn_outcome(&turn,"error",Some("other"));let _=st.db.release_budget_turn(&turn);derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR)})?;
+        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({"approvalMode":mode_outcome}),&json!({"approvalMode":{"kind":"request_shape","value":exec_options.approval_mode.as_str()}}),desired_instruction_hash.as_deref(),&json!({"adapter":active.runtime.provider,"gates":gates,"approvalMode":exec_options.approval_mode.as_str()}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|{let _=st.db.update_turn_outcome(&turn,"error",Some("other"));derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR)})?;
         st.emit("exec.options.changed", json!({"sessionId":sid,"turnId":turn,"agentId":session["agentId"],"runtimeId":active.runtime.runtime_id,"requested":snapshot["requested"],"applied":snapshot["applied"],"snapshotId":snapshot_id})).await;
         st.db.update_session_state(&sid, "working").map_err(|e| {
             let _ = st.db.update_turn_outcome(&turn, "error", Some("other"));
-            let _ = st.db.release_budget_turn(&turn);
             derr(
                 "internal",
                 &e.to_string(),
@@ -2022,7 +1862,7 @@ async fn forward_events_with_timeouts(
                 ("permission.requested",json!({"id":id,"sessionId":sid,"runtimeId":runtime_id,"category":"other","title":title,"detail":detail,"risk":"unknown","choices":choices,"expiresAt":null,"status":"pending"}))
             }
             AgentEvent::UsageUpdated {
-                raw,
+                raw: _,
                 input_tokens,
                 output_tokens,
                 cache_read_tokens,
@@ -2030,40 +1870,12 @@ async fn forward_events_with_timeouts(
                 model,
             } => {
                 let timestamp = Utc::now().to_rfc3339();
-                let valuation_timestamp = turn.as_deref().and_then(|turn_id| st.db.turn_started_at(turn_id).ok().flatten()).unwrap_or_else(|| timestamp.clone());
-                let record = bloblex_usage::UsageRecord {
-                    input_tokens: input_tokens,
-                    output_tokens,
-                    cache_read_tokens,
-                    cache_write_tokens,
-                    reasoning_tokens: None,
-                    model: model.clone(),
-                    reported_cost_minor: raw["costMinor"].as_i64(),
-                    currency: raw["currency"].as_str().map(str::to_owned),
-                    source: "stream".into(),
-                    raw: raw.clone(),
-                };
                 let usage_status = if [input_tokens, output_tokens, cache_read_tokens, cache_write_tokens].iter().any(Option::is_some) { "partial" } else { "unreported" };
-                let rules = pricing_rules_for_usage(&st, &runtime_id, &provider, model.as_deref()).await;
-                let rule =
-                    bloblex_usage::resolve_rule_at(&provider, model.as_deref(), &valuation_timestamp, &rules);
-                let valuation = if record.reported_cost_minor.is_some() {
-                    bloblex_usage::Valuation {
-                        basis: bloblex_usage::CostBasis::ProviderReportedActual,
-                        amount_minor: record.reported_cost_minor,
-                        currency: record.currency.clone(),
-                        pricing_rule_id: None,
-                        status: "reported_actual".into(),
-                    }
-                } else {
-                    bloblex_usage::estimate_at(&record, rule, Some(&valuation_timestamp))
-                };
-                let valuation = serde_json::to_value(valuation).unwrap_or(Value::Null);
-                let usage = json!({"id":Uuid::new_v4().to_string(),"runtimeId":runtime_id,"sessionId":sid,"turnId":turn,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":input_tokens,"outputTokens":output_tokens,"cacheReadTokens":cache_read_tokens,"cacheWriteTokens":cache_write_tokens,"source":"fallback","raw":raw,"providerReportedCostMinor":record.reported_cost_minor,"providerReportedCurrency":record.currency,"usageStatus":usage_status,"valuation":valuation});
+                let usage = json!({"id":Uuid::new_v4().to_string(),"runtimeId":runtime_id,"sessionId":sid,"turnId":turn,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":input_tokens,"outputTokens":output_tokens,"cacheReadTokens":cache_read_tokens,"cacheWriteTokens":cache_write_tokens,"reasoningTokens":null,"source":"fallback","raw":{},"usageStatus":usage_status});
                 let _ = st.db.insert_usage(&usage);
                 (
                     "usage.updated",
-                    json!({"id":usage["id"],"runtimeId":runtime_id,"sessionId":sid,"turnId":turn,"provider":provider,"model":model,"timestamp":usage["timestamp"],"inputTokens":input_tokens,"outputTokens":output_tokens,"cacheReadTokens":cache_read_tokens,"cacheWriteTokens":cache_write_tokens,"reasoningTokens":null,"providerReportedCostMinor":record.reported_cost_minor,"providerReportedCurrency":record.currency,"source":"fallback","usageStatus":usage_status,"valuation":valuation}),
+                    json!({"id":usage["id"],"runtimeId":runtime_id,"sessionId":sid,"turnId":turn,"provider":provider,"model":model,"timestamp":usage["timestamp"],"inputTokens":input_tokens,"outputTokens":output_tokens,"cacheReadTokens":cache_read_tokens,"cacheWriteTokens":cache_write_tokens,"reasoningTokens":null,"source":"fallback","usageStatus":usage_status}),
                 )
             }
             AgentEvent::ExecApplied { turn_id, outcomes } => {
@@ -2078,50 +1890,18 @@ async fn forward_events_with_timeouts(
             AgentEvent::UsageReport { turn_id, report } => {
                 let timestamp = Utc::now().to_rfc3339();
                 let model = report.model.clone();
-                let valuation_timestamp = st.db.turn_started_at(&turn_id).ok().flatten().unwrap_or_else(|| timestamp.clone());
                 let provider_update_id = report
                     .provider_update_id
                     .as_deref()
                     .map(|id| format!("{}:{}", turn_id, id));
-                let valuation = if report.cost_minor.is_some() {
-                    serde_json::to_value(bloblex_usage::Valuation {
-                        basis: bloblex_usage::CostBasis::ProviderReportedActual,
-                        amount_minor: report.cost_minor,
-                        currency: report.cost_currency.clone(),
-                        pricing_rule_id: None,
-                        status: "reported_actual".into(),
-                    })
-                    .unwrap_or(Value::Null)
-                } else if report.reported_cost_decimal.is_none() {
-                    let rules = pricing_rules_for_usage(&st, &runtime_id, &provider, model.as_deref()).await;
-                    let rule = bloblex_usage::resolve_rule_at(&provider, model.as_deref(), &valuation_timestamp, &rules);
-                    let record = bloblex_usage::UsageRecord {
-                        input_tokens: report.input_tokens,
-                        output_tokens: report.output_tokens,
-                        cache_read_tokens: report.cache_read_tokens,
-                        cache_write_tokens: report.cache_write_tokens,
-                        reasoning_tokens: report.reasoning_tokens,
-                        model: model.clone(),
-                        reported_cost_minor: None,
-                        currency: None,
-                        source: "terminal".into(),
-                        raw: Value::Null,
-                    };
-                    serde_json::to_value(bloblex_usage::estimate_at(&record, rule, Some(&valuation_timestamp))).unwrap_or(Value::Null)
-                } else {
-                    Value::Null
-                };
-                let usage = json!({"id":Uuid::new_v4().to_string(),"runtimeId":runtime_id,"sessionId":sid,"turnId":turn_id,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":report.input_tokens,"outputTokens":report.output_tokens,"cacheReadTokens":report.cache_read_tokens,"cacheWriteTokens":report.cache_write_tokens,"reasoningTokens":report.reasoning_tokens,"source":"terminal","raw":{},"providerReportedCostMinor":report.cost_minor,"providerReportedCurrency":report.cost_currency,"providerUpdateId":provider_update_id,"usageStatus":report.usage_status,"contextUsed":report.context_used,"contextSize":report.context_size,"reportedCostDecimal":report.reported_cost_decimal,"costIsCumulative":report.cost_is_cumulative,"valuation":valuation});
+                let usage = json!({"id":Uuid::new_v4().to_string(),"runtimeId":runtime_id,"sessionId":sid,"turnId":turn_id,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":report.input_tokens,"outputTokens":report.output_tokens,"cacheReadTokens":report.cache_read_tokens,"cacheWriteTokens":report.cache_write_tokens,"reasoningTokens":report.reasoning_tokens,"source":"terminal","raw":{},"providerUpdateId":provider_update_id,"usageStatus":report.usage_status,"contextUsed":report.context_used,"contextSize":report.context_size});
                 let _ = st.db.insert_usage(&usage);
-                ("usage.updated", json!({"id":usage["id"],"runtimeId":runtime_id,"sessionId":sid,"turnId":turn_id,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":report.input_tokens,"outputTokens":report.output_tokens,"cacheReadTokens":report.cache_read_tokens,"cacheWriteTokens":report.cache_write_tokens,"reasoningTokens":report.reasoning_tokens,"providerReportedCostMinor":report.cost_minor,"providerReportedCurrency":report.cost_currency,"source":"stream","usageStatus":report.usage_status,"evidenceNote":report.evidence_note,"contextUsed":report.context_used,"contextSize":report.context_size}))
+                ("usage.updated", json!({"id":usage["id"],"runtimeId":runtime_id,"sessionId":sid,"turnId":turn_id,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":report.input_tokens,"outputTokens":report.output_tokens,"cacheReadTokens":report.cache_read_tokens,"cacheWriteTokens":report.cache_write_tokens,"reasoningTokens":report.reasoning_tokens,"source":"stream","usageStatus":report.usage_status,"contextUsed":report.context_used,"contextSize":report.context_size}))
             }
             AgentEvent::TurnCompleted => {
                 if let Some(t) = turn.as_deref() { st.denied_turns.lock().await.remove(t); }
                 if let Some(t) = turn.as_deref() {
                     let _ = st.db.update_turn_state(t, "completed");
-                    if let Ok(metrics) = st.db.latest_turn_budget_metrics(t) {
-                        let _ = st.db.reconcile_budget_turn_metrics(t, &metrics);
-                    }
                 }
                 let _ = st.db.update_session_state(&sid, "completed");
                 st.active_turns.lock().await.remove(&sid);
@@ -2137,9 +1917,6 @@ async fn forward_events_with_timeouts(
                 if let Some(t) = turn.as_deref() { st.denied_turns.lock().await.remove(t); }
                 if let Some(t) = turn.as_deref() {
                     let _ = st.db.update_turn_outcome(t, "cancelled", Some("cancelled"));
-                    if let Ok(metrics) = st.db.latest_turn_budget_metrics(t) {
-                        let _ = st.db.reconcile_budget_turn_metrics(t, &metrics);
-                    }
                 }
                 let _ = st.db.update_session_state(&sid, "cancelled");
                 st.active_turns.lock().await.remove(&sid);
@@ -2317,6 +2094,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         denied_turns: Arc::new(Mutex::new(HashSet::new())),
         session_gates: Arc::new(Mutex::new(HashMap::new())),
         deleted_sessions: Arc::new(Mutex::new(HashSet::new())),
+        quota_poll_gate: Arc::new(Mutex::new(QuotaPollGate::default())),
         stopping: Arc::new(tokio::sync::Notify::new()),
     };
     for id in recovered_sessions {
@@ -2330,6 +2108,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(st.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
+    let quota_state = st.clone();
+    tokio::spawn(quota_poll_loop(quota_state, st.events.subscribe()));
     let discovery_state = st.clone();
     tokio::spawn(async move {
         let found = bloblex_runtime::discover().await;
@@ -2384,122 +2164,12 @@ mod phase2a_tests {
         provider_error_detail_tests();
     }
 
-    fn pricing_rule_fixture() -> Value {
-        json!({
-            "id": "price-1",
-            "provider": "codex",
-            "canonicalModelId": "model-a",
-            "currency": "USD",
-            "effectiveFrom": "2026-10-03T10:00:00Z",
-            "inputPerMillion": "1.25",
-            "outputPerMillion": null,
-            "cacheReadPerMillion": "0",
-            "cacheWritePerMillion": null
-        })
-    }
-
-    #[test]
-    fn pricing_override_validation_checks_schema_rates_currency_and_dates() {
-        assert!(validate_pricing_override(&pricing_rule_fixture()).is_ok());
-        assert!(validate_pricing_override(&json!({ "id": "price-1", "remove": true })).is_ok());
-
-        let mut invalid = pricing_rule_fixture();
-        invalid["id"] = json!("");
-        assert_eq!(validate_pricing_override(&invalid), Err("id is required"));
-
-        let mut invalid = pricing_rule_fixture();
-        invalid["provider"] = json!("  ");
-        assert_eq!(validate_pricing_override(&invalid), Err("provider is required"));
-
-        let mut invalid = pricing_rule_fixture();
-        invalid["currency"] = json!("ZZZ");
-        assert_eq!(validate_pricing_override(&invalid), Err("currency must be a supported three-letter code"));
-
-        let mut invalid = pricing_rule_fixture();
-        invalid["effectiveFrom"] = json!("not a date");
-        assert_eq!(validate_pricing_override(&invalid), Err("effectiveFrom must be an RFC3339 timestamp"));
-
-        for rate in [json!(-1), json!(1.5), json!("1e2"), json!("1.0000000000001")] {
-            let mut invalid = pricing_rule_fixture();
-            invalid["inputPerMillion"] = rate;
-            assert!(validate_pricing_override(&invalid).is_err());
+    #[tokio::test]
+    async fn retired_budget_pricing_and_subscription_rpcs_do_not_expose_or_write_legacy_records() {
+        let (st, _) = state();
+        for method in ["budget.list", "budget.set", "budget.delete", "pricing.list", "pricing.override", "subscription.list", "subscription.save"] {
+            assert!(dispatch(&st, method, json!({"plan":{},"rule":{},"policyId":"old"})).await.is_err(), "{method} remains retired");
         }
-        let mut invalid = pricing_rule_fixture();
-        invalid.as_object_mut().unwrap().remove("cacheWritePerMillion");
-        assert!(validate_pricing_override(&invalid).is_err());
-    }
-
-    #[tokio::test]
-    async fn pricing_list_keeps_partial_override_raw_and_separates_effective_field_sources() {
-        let (st, _) = state();
-        let started = Utc::now().to_rfc3339();
-        let rule = json!({
-            "id":"partial-opencode-price","provider":"opencode","canonicalModelId":"opencode-go/gpt-6-luna",
-            "aliases":[],"currency":"USD","effectiveFrom":started,"effectiveTo":null,"sourceUrl":null,
-            "inputPerMillion":"0.17","outputPerMillion":null,"cacheReadPerMillion":null,"cacheWritePerMillion":null
-        });
-        dispatch(&st, "pricing.override", json!({"rule":rule})).await.unwrap();
-
-        let listed = dispatch(&st, "pricing.list", json!({"provider":"opencode"})).await.unwrap();
-        let saved = listed["rules"].as_array().unwrap().iter().find(|row| row["id"] == "partial-opencode-price").unwrap();
-        assert_eq!(saved["inputPerMillion"], "0.17");
-        assert!(saved["outputPerMillion"].is_null());
-        assert!(saved["cacheReadPerMillion"].is_null());
-        assert!(saved["cacheWritePerMillion"].is_null());
-        assert_eq!(saved["effectiveFields"]["inputPerMillion"]["source"], "user_override");
-        assert_eq!(saved["effectiveFields"]["outputPerMillion"]["rate"], "0.5");
-        assert_eq!(saved["effectiveFields"]["outputPerMillion"]["source"], "official_price_list");
-        assert_eq!(saved["effectiveFields"]["cacheReadPerMillion"]["source"], "official_price_list");
-        assert_eq!(saved["effectiveFields"]["cacheWritePerMillion"]["source"], "official_price_list");
-
-        let edited = json!({
-            "id":saved["id"],"provider":saved["provider"],"canonicalModelId":saved["canonicalModelId"],
-            "aliases":saved["aliases"],"currency":saved["currency"],"effectiveFrom":saved["effectiveFrom"],
-            "effectiveTo":saved["effectiveTo"],"sourceUrl":saved["sourceUrl"],
-            "inputPerMillion":saved["inputPerMillion"],"outputPerMillion":saved["outputPerMillion"],
-            "cacheReadPerMillion":"0.007","cacheWritePerMillion":saved["cacheWritePerMillion"]
-        });
-        dispatch(&st, "pricing.override", json!({"rule":edited})).await.unwrap();
-        let stored = st.db.pricing_list(Some("opencode")).unwrap();
-        let raw = stored["rules"].as_array().unwrap().iter().find(|row| row["id"] == "partial-opencode-price").unwrap();
-        assert_eq!(raw["inputPerMillion"], "0.17");
-        assert!(raw["outputPerMillion"].is_null());
-        assert_eq!(raw["cacheReadPerMillion"], "0.007");
-        assert!(raw["cacheWritePerMillion"].is_null());
-    }
-
-    #[tokio::test]
-    async fn real_usage_rule_builder_uses_cached_catalog_only_and_orders_override_official_catalog() {
-        let (st, _) = state();
-        let runtime_id = "rt-opencode-price-cache";
-        let timestamp = Utc::now().to_rfc3339();
-        let runtime = json!({"id":runtime_id,"provider":"opencode","executablePath":"no-real-cli-is-launched","launchArgs":[],"status":"online"});
-        *st.runtimes.write().await = vec![runtime.clone()];
-        let key = catalog_key(&runtime);
-        let cache = MODEL_CATALOG_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
-        cache.lock().unwrap().insert(key.clone(), (Instant::now() - std::time::Duration::from_secs(120), json!({"fetchedAt":"2026-10-04T00:00:00Z","models":[{"id":"opencode-go/gpt-6-luna","providerId":"opencode-go","reportedPrice":{"inputPerMillion":"0.01","outputPerMillion":"0.02","cacheReadPerMillion":"0.001","cacheWritePerMillion":"0.002","currency":"USD"}},{"id":"opencode-go/catalog-only","providerId":"opencode-go","reportedPrice":{"inputPerMillion":"0.003","outputPerMillion":"0.004","cacheReadPerMillion":"0.001","cacheWritePerMillion":null,"currency":"USD"}}]})));
-        let rules = pricing_rules_for_usage(&st, runtime_id, "opencode", Some("opencode-go/gpt-6-luna")).await;
-        let selected = bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/gpt-6-luna"), &timestamp, &rules).unwrap();
-        assert_eq!(selected.source.as_deref(), Some("official_price_list"));
-        let catalog_only_rules = pricing_rules_for_usage(&st, runtime_id, "opencode", Some("opencode-go/catalog-only")).await;
-        let fallback = bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/catalog-only"), &timestamp, &catalog_only_rules).unwrap();
-        assert_eq!(fallback.source.as_deref(), Some("opencode_catalog_estimate"));
-        let earlier = bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/catalog-only"), "2026-10-02T12:00:00Z", &catalog_only_rules).unwrap();
-        assert_eq!(earlier.source.as_deref(), Some("opencode_catalog_estimate"));
-
-        st.db.save_pricing(&json!({"id":"override-cache-test","provider":"opencode","canonicalModelId":"opencode-go/gpt-6-luna","aliases":[],"currency":"USD","effectiveFrom":"2026-10-04T00:00:00Z","inputPerMillion":"0.17","outputPerMillion":null,"cacheReadPerMillion":null,"cacheWritePerMillion":null})).unwrap();
-        assert_eq!(st.db.pricing_list(Some("opencode")).unwrap()["rules"][0]["source"], "user_override");
-        let rules = pricing_rules_for_usage(&st, runtime_id, "opencode", Some("opencode-go/gpt-6-luna")).await;
-        assert_eq!(rules.first().and_then(|rule| rule.source.as_deref()), Some("user_override"));
-        let selected = bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/gpt-6-luna"), &timestamp, &rules).unwrap();
-        assert_eq!(selected.source.as_deref(), Some("user_override"));
-        assert_eq!(selected.input_per_million.as_deref(), Some("0.17"));
-        assert_eq!(selected.output_per_million.as_deref(), Some("0.5"));
-        assert_eq!(selected.cache_read_per_million.as_deref(), Some("0.01"));
-
-        cache.lock().unwrap().remove(&key);
-        let rules = pricing_rules_for_usage(&st, runtime_id, "opencode", Some("opencode-go/not-in-either-list")).await;
-        assert!(bloblex_usage::resolve_rule_at("opencode", Some("opencode-go/not-in-either-list"), &timestamp, &rules).is_none());
     }
 
     #[derive(Default)] struct PolicyAdapter{replies:std::sync::atomic::AtomicUsize,diagnostic:StdMutex<Option<bloblex_agent_core::AgentDiagnostic>>}
@@ -2656,7 +2326,7 @@ mod phase2a_tests {
     }
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),stopping:Arc::new(tokio::sync::Notify::new())};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new())};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -3202,7 +2872,7 @@ mod phase2a_tests {
             id: id.into(), display_name: display_name.into(), provider_id: None,
             supported_thinking: Vec::new(), default_thinking: None, service_tiers: Vec::new(),
             default_service_tier: None, variants: None, host_dependent: true,
-            is_default, group: None, availability: None, reported_price: None,
+            is_default, group: None, availability: None,
         };
         let catalog = bloblex_agent_core::ModelCatalog {
             models: vec![
@@ -3265,7 +2935,7 @@ mod phase2a_tests {
                 is_default: None,
                 group: None,
                 availability: None,
-                reported_price: None,
+
             }],
             fetched_at: "2026-10-03T00:00:00Z".into(),
             expires_at: "2026-10-03T00:01:00Z".into(),

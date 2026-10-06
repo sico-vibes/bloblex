@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import type { Agent, Runtime, Session } from '../types'
+import type { Agent, Session } from '../types'
 import type { AnalyticsBucket, AnalyticsErrorRow, AnalyticsMetric, AnalyticsRangeDays, UsageAnalytics } from '../analyticsTypes'
-import { labelize } from '../types'
 import { agentColorHex } from './agentColor'
-import { fetchUsageAnalytics, rpc } from '../tauri'
+import { fetchUsageAnalytics } from '../tauri'
 import {
   type AnalyticsViewPrefs,
   type LeaderboardViewRow,
   analyticsAgentKey,
   analyticsErrorText,
-  analyticsNotes,
   buildAnalyticsRequest,
   chartBars,
   chartRects,
@@ -19,19 +17,16 @@ import {
   failureMix,
   failureMixSummary,
   foldLeaderboard,
-  formatBoundMoney,
   formatBoundNumber,
   formatCancelledCount,
   formatExactNumber,
   formatInstant,
   formatRunTime,
   formatUpdatedClock,
-  isEmptyAnalytics,
   leaderboardFractions,
   offenderRateLabel,
   rankOffenders,
   readAnalyticsPrefs,
-  unpricedModelsNote,
   unreportedRunsNote,
   writeAnalyticsPrefs,
   normalizeAnalytics,
@@ -44,22 +39,17 @@ const RANGES: AnalyticsRangeDays[] = [7, 30, 90]
 const PANELS = ['overview', 'errors'] as const
 const METRICS: Array<{ id: AnalyticsMetric; label: string }> = [
   { id: 'tokens', label: 'Tokens' },
-  { id: 'cost', label: 'Cost' },
   { id: 'time', label: 'Time' },
   { id: 'runs', label: 'Runs' },
 ]
-const NO_BUDGETS: readonly Record<string, unknown>[] = []
 
-export function AnalyticsView({ agentId = null, sessions, agents, runtimes = [], budgets = NO_BUDGETS, connected, embedded = false, onBack, onSetPrices, now, timeZone }: {
+export function AnalyticsView({ agentId = null, sessions, agents, connected, embedded = false, onBack, now, timeZone }: {
   agentId?: string | null
   sessions: readonly Session[]
   agents: readonly Agent[]
-  runtimes?: readonly Runtime[]
-  budgets?: readonly Record<string, unknown>[]
   connected: boolean
   embedded?: boolean
   onBack?: () => void
-  onSetPrices?: () => void
   now?: Date
   timeZone?: string
 }) {
@@ -73,9 +63,6 @@ export function AnalyticsView({ agentId = null, sessions, agents, runtimes = [],
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
   const [data, setData] = useState<UsageAnalytics | null>(null)
-  const [budgetPolicies, setBudgetPolicies] = useState<readonly Record<string, unknown>[]>(budgets)
-  const budgetSnapshot = useRef(budgets)
-  budgetSnapshot.current = budgets
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const projects = useMemo(() => analyticsProjectChoices(sessions), [sessions])
   const projectPath = projects.find((option) => option.key === projectChoice)?.path ?? ''
@@ -89,20 +76,6 @@ export function AnalyticsView({ agentId = null, sessions, agents, runtimes = [],
   useEffect(() => {
     writeAnalyticsPrefs({ days, bucket, metric, panel, projectKey: projectChoice })
   }, [days, bucket, metric, panel, projectChoice])
-
-  useEffect(() => {
-    if (!connected) return
-    let active = true
-    rpc<unknown>('budget.list').then((result) => {
-      if (!active) return
-      const value = result && typeof result === 'object' && !Array.isArray(result)
-        ? (result as Record<string, unknown>).policies
-        : null
-      if (Array.isArray(value)) setBudgetPolicies(value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item)))
-      else setBudgetPolicies(budgetSnapshot.current)
-    }).catch(() => { if (active) setBudgetPolicies(budgetSnapshot.current) })
-    return () => { active = false }
-  }, [connected])
 
   useEffect(() => {
     if (!connected) return
@@ -152,7 +125,7 @@ export function AnalyticsView({ agentId = null, sessions, agents, runtimes = [],
           <button type="button" className="secondary-button" onClick={() => setRetry((value) => value + 1)}>Try again</button>
         </div>
       </AnalyticsTabs>}
-      {data && phase === 'ready' && <AnalyticsBody data={data} agents={agents} runtimes={runtimes} budgets={budgetPolicies} agentId={agentId} metric={metric} panel={panel} updatedAt={updatedAt} onMetric={setMetric} onPanel={setPanel} onRefresh={() => setRetry((value) => value + 1)} onSetPrices={onSetPrices} />}
+      {data && phase === 'ready' && <AnalyticsBody data={data} agents={agents} metric={metric} panel={panel} updatedAt={updatedAt} onMetric={setMetric} onPanel={setPanel} onRefresh={() => setRetry((value) => value + 1)} />}
     </>}
   </Frame>
 }
@@ -206,164 +179,55 @@ function AnalyticsTabs({ panel, onPanel, children }: { panel: AnalyticsViewPrefs
   </>
 }
 
-function AnalyticsBody({ data, agents, runtimes, budgets, agentId, metric, panel, updatedAt, onMetric, onPanel, onRefresh, onSetPrices }: {
+function AnalyticsBody({ data, agents, metric, panel, updatedAt, onMetric, onPanel, onRefresh }: {
   data: UsageAnalytics
   agents: readonly Agent[]
-  runtimes: readonly Runtime[]
-  budgets: readonly Record<string, unknown>[]
-  agentId: string | null
   metric: AnalyticsMetric
   panel: AnalyticsViewPrefs['panel']
   updatedAt: Date | null
   onMetric: (metric: AnalyticsMetric) => void
   onPanel: (panel: AnalyticsViewPrefs['panel']) => void
   onRefresh: () => void
-  onSetPrices?: () => void
 }) {
-  const notes = analyticsNotes(data.totals)
   const bars = chartBars(data.series, metric, data.range.bucket, data.range.tz)
   const rects = chartRects(bars)
   const summary = chartSummary(bars, metric, data.range.bucket)
   const leaderboard = useMemo(() => foldLeaderboard(data.leaderboard, agents), [data.leaderboard, agents])
-  const activeBudget = applicableAnalyticsBudget(budgets, agents, runtimes, agentId)
-  const fractions = leaderboardFractions(leaderboard.map((row) => row.cost.amountMinor))
-  const empty = isEmptyAnalytics(data)
-  const cost = data.totals.cost
-  const tokenTotal = formatBoundNumber(data.totals.tokens.total, cost.lowerBound)
-  const cancelled = formatCancelledCount(data.totals.cancelledRuns)
+  const fractions = leaderboardFractions(leaderboard.map((row) => row.tokens.total))
+  const tokenTotal = formatBoundNumber(data.totals.tokens.total, data.totals.unreportedRuns > 0)
   const runsDetail = [
     `${formatExactNumber(data.totals.failedRuns)} failed`,
-    cancelled,
+    formatCancelledCount(data.totals.cancelledRuns),
     data.totals.activeRuns > 0 ? `${formatExactNumber(data.totals.activeRuns)} active` : null,
   ].filter((part): part is string => !!part).join(' · ')
-  const metricNoun = metric === 'tokens' ? 'token' : metric === 'cost' ? 'cost' : metric === 'time' ? 'time' : 'run'
+  const metricNoun = metric === 'tokens' ? 'token' : metric === 'time' ? 'time' : 'run'
   const metricEmpty = bars.length > 0 && bars.every((bar) => bar.gap)
   const clock = updatedAt ? formatUpdatedClock(updatedAt, data.range.tz) : null
   return <>
-    <p className="analytics-freshness" role="status">
-      <span>Time zone {data.range.tz}</span>
-      {clock && <span>Updated {clock}</span>}
-      <button type="button" className="secondary-button" aria-label="Refresh analytics" onClick={onRefresh}>Refresh</button>
-    </p>
-    {notes.length > 0 && <div className="analytics-notes" role="note">{notes.map((note) => <p key={note}>{note}{(note.toLowerCase().includes('unpriced') || note.includes('did not report usage')) && onSetPrices && <> <button type="button" className="ghost-button small" onClick={onSetPrices}>Set prices</button></>}</p>)}</div>}
-    {empty && <p className="blob-muted" role="status" data-analytics-empty="usage">No usage in this range.</p>}
+    <p className="analytics-freshness" role="status"><span>Time zone {data.range.tz}</span>{clock && <span>Updated {clock}</span>}<button type="button" className="secondary-button" aria-label="Refresh analytics" onClick={onRefresh}>Refresh</button></p>
     <div className="analytics-cards">
-      <article className="analytics-card" data-analytics-card="cost" aria-label={`Cost ${formatBoundMoney(cost.amountMinor, cost.currency, cost.lowerBound)}`}>
-        <h3>Cost</h3>
-        <strong data-figure>{formatBoundMoney(cost.amountMinor, cost.currency, cost.lowerBound)}</strong>
-        <small>Actual {formatBoundMoney(cost.actualMinor, cost.currency, false)} · Estimated {formatBoundMoney(cost.estimatedMinor, cost.currency, false)}</small>
-      </article>
-      <article className="analytics-card" data-analytics-card="tokens" aria-label={`Tokens ${tokenTotal}`}>
-        <h3>Tokens</h3>
-        <strong data-figure>{tokenTotal}</strong>
-        <small className="analytics-buckets">Input {formatExactNumber(data.totals.tokens.input)} · Output {formatExactNumber(data.totals.tokens.output)} · Cache read {formatExactNumber(data.totals.tokens.cacheRead)} · Cache write {formatExactNumber(data.totals.tokens.cacheWrite)} · Reasoning {formatExactNumber(data.totals.tokens.reasoning)}</small>
-      </article>
-      <article className="analytics-card" data-analytics-card="runtime" aria-label={`Run time ${formatRunTime(data.totals.runTimeMs)}`}>
-        <h3>Run time</h3>
-        <strong data-figure>{formatRunTime(data.totals.runTimeMs)}</strong>
-        <small>Completed and failed turns</small>
-      </article>
-      <article className="analytics-card" data-analytics-card="runs" aria-label={`Runs ${formatExactNumber(data.totals.runs)}, ${runsDetail}`}>
-        <h3>Runs</h3>
-        <strong data-figure>{formatExactNumber(data.totals.runs)}</strong>
-        <small>{runsDetail}</small>
-      </article>
+      <article className="analytics-card" data-analytics-card="tokens"><h3>Tokens</h3><strong data-figure>{tokenTotal}</strong><small>Input {formatExactNumber(data.totals.tokens.input)} · Output {formatExactNumber(data.totals.tokens.output)} · Cache read {formatExactNumber(data.totals.tokens.cacheRead)} · Cache write {formatExactNumber(data.totals.tokens.cacheWrite)} · Reasoning {formatExactNumber(data.totals.tokens.reasoning)}</small></article>
+      <article className="analytics-card" data-analytics-card="runtime"><h3>Run time</h3><strong data-figure>{formatRunTime(data.totals.runTimeMs)}</strong><small>Completed and failed turns</small></article>
+      <article className="analytics-card" data-analytics-card="runs" aria-label={`Runs ${formatExactNumber(data.totals.runs)}, ${runsDetail}`}><h3>Runs</h3><strong data-figure>{formatExactNumber(data.totals.runs)}</strong><small>{runsDetail}</small></article>
     </div>
     <AnalyticsTabs panel={panel} onPanel={onPanel}>
       {panel === 'overview' ? <div className="analytics-chart-block">
-        {activeBudget && <AnalyticsBudgetCard budget={activeBudget} />}
-        <div className="analytics-switch" role="group" aria-label="Chart metric">
-          {METRICS.map((item) => <button key={item.id} type="button" aria-pressed={metric === item.id} onClick={() => onMetric(item.id)}>{item.label}</button>)}
-        </div>
+        <div className="analytics-switch" role="group" aria-label="Chart metric">{METRICS.map((item) => <button key={item.id} type="button" aria-pressed={metric === item.id} onClick={() => onMetric(item.id)}>{item.label}</button>)}</div>
         <p role="img" className="sr-only">{summary}</p>
         {metricEmpty && <p className="blob-muted" role="status" data-analytics-empty="metric">No {metricNoun} data in this range.</p>}
-        {rects.length === 0 ? <p className="blob-muted" role="status" data-analytics-empty="chart">No buckets in this range.</p> : <svg className="analytics-chart" viewBox="0 0 640 160" role="group" aria-label={summary}>
-          <line x1="0" y1="159" x2="640" y2="159" />
-          {rects.map((rect) => <rect
-            key={rect.bucketStart}
-            x={rect.x}
-            y={rect.y}
-            width={rect.width}
-            height={rect.height}
-            rx="3"
-            className={rect.gap ? 'analytics-gap' : rect.value === 0 ? 'analytics-zero' : 'analytics-bar'}
-            tabIndex={0}
-            focusable="true"
-            role="img"
-            aria-label={rect.name}
-            data-value={rect.value === null ? 'null' : String(rect.value)}
-            data-gap={rect.gap ? 'true' : 'false'}
-            data-bucket-start={rect.bucketStart}
-          ><title>{rect.name}</title></rect>)}
-        </svg>}
-        <div className="analytics-leader">
-          <h3>Blobs</h3>
-          {leaderboard.length === 0 ? <p className="blob-muted" role="status" data-analytics-empty="leaderboard">No blobs reported usage in this range.</p> : leaderboard.map((row, index) => {
-            const fraction = fractions[index] ?? null
-            const agent = row.kind === 'agent' && row.agentId ? agents.find((item) => item.id === row.agentId) : undefined
-            const color = agent ? agentColorHex(agent.color) : ''
-            const costText = formatBoundMoney(row.cost.amountMinor, row.cost.currency, row.cost.lowerBound)
-            const tokenText = formatBoundNumber(row.tokens.total, row.tokensLowerBound)
-            const rowCancelled = formatCancelledCount(row.cancelledRuns)
-            const rowNotes = [unreportedRunsNote(row.unreportedRuns), unpricedModelsNote(row.unpricedModels)].filter((note): note is string => !!note)
-            const detail = `${costText} · ${tokenText} tokens · ${formatExactNumber(row.runs)} runs · ${formatExactNumber(row.failedRuns)} failed${rowCancelled ? ` · ${rowCancelled}` : ''}`
-            return <div className="analytics-leader-row" key={row.key} data-agent-id={row.agentId ?? (row.kind === 'other' ? 'other' : 'null')} data-leader-kind={row.kind} role="group" aria-label={`${row.name}. ${detail}${rowNotes.length ? `. ${rowNotes.join('. ')}` : ''}`}>
-              <div className="analytics-leader-top"><strong>{row.name}</strong><span>{detail}</span></div>
-              <div className="analytics-leader-track" role="img" aria-label={`${row.name} bar, ${costText}`} data-fraction={fraction === null ? 'null' : String(fraction)}>
-                {fraction !== null && <div className={color ? 'analytics-leader-fill' : 'analytics-leader-fill is-unassigned'} style={{ width: `${fraction * 100}%`, background: color || undefined }} />}
-              </div>
-              {rowNotes.length > 0 && <p className="analytics-leader-note" role="note">{rowNotes.join(' ')} {onSetPrices && <button type="button" className="ghost-button small" onClick={onSetPrices}>Set prices</button>}</p>}
-            </div>
-          })}
-        </div>
+        {rects.length === 0 ? <p className="blob-muted" role="status" data-analytics-empty="chart">No buckets in this range.</p> : <svg className="analytics-chart" viewBox="0 0 640 160" role="group" aria-label={summary}><line x1="0" y1="159" x2="640" y2="159" />{rects.map((rect) => <rect key={rect.bucketStart} x={rect.x} y={rect.y} width={rect.width} height={rect.height} rx="3" className={rect.gap ? 'analytics-gap' : rect.value === 0 ? 'analytics-zero' : 'analytics-bar'} tabIndex={0} focusable="true" role="img" aria-label={rect.name} data-value={rect.value === null ? 'null' : String(rect.value)} data-gap={rect.gap ? 'true' : 'false'} data-bucket-start={rect.bucketStart}><title>{rect.name}</title></rect>)}</svg>}
+        <div className="analytics-leader"><h3>Blobs</h3>{leaderboard.length === 0 ? <p className="blob-muted" role="status" data-analytics-empty="leaderboard">No blobs reported usage in this range.</p> : leaderboard.map((row, index) => {
+          const fraction = fractions[index] ?? null
+          const agent = row.kind === 'agent' && row.agentId ? agents.find((item) => item.id === row.agentId) : undefined
+          const color = agent ? agentColorHex(agent.color) : ''
+          const tokenText = formatBoundNumber(row.tokens.total, row.tokensLowerBound)
+          const detail = `${tokenText} tokens · ${formatExactNumber(row.runs)} runs · ${formatExactNumber(row.failedRuns)} failed`
+          const missing = unreportedRunsNote(row.unreportedRuns)
+          return <div className="analytics-leader-row" key={row.key} data-agent-id={row.agentId ?? (row.kind === 'other' ? 'other' : 'null')} data-leader-kind={row.kind} role="group" aria-label={`${row.name}. ${detail}${missing ? `. ${missing}` : ''}`}><div className="analytics-leader-top"><strong>{row.name}</strong><span>{detail}</span></div><div className="analytics-leader-track" role="img" aria-label={`${row.name} bar, ${tokenText} tokens`} data-fraction={fraction === null ? 'null' : String(fraction)}>{fraction !== null && <div className={color ? 'analytics-leader-fill' : 'analytics-leader-fill is-unassigned'} style={{ width: `${fraction * 100}%`, background: color || undefined }} />}</div>{missing && <p className="analytics-leader-note" role="note">{missing}</p>}</div>
+        })}</div>
       </div> : <ErrorsPanel data={data} agents={agents} leaderboard={leaderboard} />}
     </AnalyticsTabs>
-    <section className="blob-card analytics-subscriptions" aria-label="Subscriptions (not included in usage cost)">
-      <h3>Subscriptions (not included in usage cost)</h3>
-      {data.subscriptions.length === 0 ? <p className="blob-muted">No subscription fees are configured.</p> : <div className="blob-facts">
-        {data.subscriptions.map((plan) => <div className="blob-fact" key={`${plan.provider}-${plan.currency}`}><span>{labelize(plan.provider)}</span><strong>{formatBoundMoney(plan.monthlyMinor, plan.currency, false)} / month · quota {labelize(plan.quotaState)}</strong></div>)}
-      </div>}
-    </section>
   </>
-}
-
-function applicableAnalyticsBudget(budgets: readonly Record<string, unknown>[], agents: readonly Agent[], runtimes: readonly Runtime[], agentId: string | null) {
-  const selectedAgent = agentId ? agents.find((agent) => agent.id === agentId) : null
-  const applicable = budgets.filter((budget) => budget.enabled !== false && !isCostBudgetMetric(budget.metric)).filter((budget) => {
-    const scope = String(budget.scopeType ?? 'global')
-    if (scope === 'global') return true
-    if (!selectedAgent) return false
-    const provider = runtimes.find((runtime) => runtime.id === selectedAgent.runtimeId)?.provider
-    return scope === 'runtime' && budget.scopeId === selectedAgent.runtimeId || scope === 'agent' && budget.scopeId === provider
-  })
-  const specificity = (budget: Record<string, unknown>) => budget.scopeType === 'global' ? 0 : 1
-  const fraction = (budget: Record<string, unknown>) => typeof budget.hardLimit === 'number' && budget.hardLimit > 0 && typeof budget.remaining === 'number' ? 1 - budget.remaining / budget.hardLimit : -1
-  return applicable.sort((a, b) => specificity(b) - specificity(a) || fraction(b) - fraction(a) || String(a.id ?? '').localeCompare(String(b.id ?? '')))[0] ?? null
-}
-
-function isCostBudgetMetric(metric: unknown) {
-  return metric === 'cost_minor' || metric === 'estimated_cost_minor' || metric === 'actual_cost_minor'
-}
-
-function AnalyticsBudgetCard({ budget }: { budget: Record<string, unknown> }) {
-  const limit = typeof budget.hardLimit === 'number' ? budget.hardLimit : null
-  const used = typeof budget.consumed === 'number' ? budget.consumed + (typeof budget.reserved === 'number' ? budget.reserved : 0) : null
-  const remaining = typeof budget.remaining === 'number' ? budget.remaining : null
-  if (limit === null || used === null || remaining === null || limit <= 0) return null
-  const currency = typeof budget.currency === 'string' ? budget.currency : ''
-  const progress = Math.max(0, Math.min(1, used / limit))
-  const thresholds = Array.isArray(budget.warningThresholds) ? budget.warningThresholds.map(Number).filter((value) => Number.isFinite(value) && value > 0 && value < 100) : []
-  const warningLevel = thresholds.length ? Math.min(...thresholds) / 100 : 0.5
-  const severity = used > limit ? 'over' : progress >= warningLevel ? 'warning' : 'normal'
-  const metric = budget.metric === 'cost_minor' ? formatBoundMoney(used, currency, false) : formatExactNumber(used)
-  const cap = budget.metric === 'cost_minor' ? formatBoundMoney(limit, currency, false) : formatExactNumber(limit)
-  const left = budget.metric === 'cost_minor' ? formatBoundMoney(remaining, currency, false) : formatExactNumber(remaining)
-  return <section className={`analytics-budget-card is-${severity}`} aria-label="Budget" data-budget-progress={progress}>
-    <div><strong>Budget</strong><span>{labelize(budget.period, 'Period')}</span></div>
-    <p>Limit {cap} · Used {metric} · Remaining {left}</p>
-    {budget.period === 'turn' && <small>Used and remaining describe the latest turn; each new turn starts with a fresh limit.</small>}
-    <div className="analytics-budget-track" role="img" aria-label={`${Math.round(progress * 100)}% of budget used`}><span style={{ width: `${progress * 100}%` }} /></div>
-  </section>
 }
 
 function ErrorsPanel({ data, agents, leaderboard }: { data: UsageAnalytics; agents: readonly Agent[]; leaderboard: readonly LeaderboardViewRow[] }) {

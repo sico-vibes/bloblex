@@ -12,12 +12,12 @@ import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, unl
 import { CompanionFsm, type CompanionMode } from '../blob/companionFsm'
 import { buildConversationItems, groupConversationActivity, type ConversationItem, type GroupedConversationItem } from './conversation'
 import { deriveCompanionStatus } from './companionStatus'
-import { moneyMinor, records, tokenValue, usageTokenBuckets, valuationLabel } from './usagePresentation'
+import { AnalyticsView } from './AnalyticsView'
+import { tokenValue, usageTokenBuckets } from './usagePresentation'
 import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermission } from './permissionSelection'
 import { ApprovalCard } from './ApprovalCard'
 import bloblexLogo from '../assets/bloblex-128.png'
 import { sessionsForPauseRequest } from './trayActions'
-import { budgetValue, findApplicableBudget } from './budgetPresentation'
 import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, type Agent, type ConnectionState, type DaemonEvent, type PermissionRequest, type Runtime, type Session, type Snapshot } from '../types'
 import { agentColorHex } from './agentColor'
 import { AgentRoster } from './AgentRoster'
@@ -28,7 +28,6 @@ import { parseExecSnapshot } from '../executionContract'
 import { turnFailureTitle } from './analyticsFormat'
 import { createDraft, createParams, daemonCodeOf, draftFromAgent, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, starterDraft, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
 import { activeAgents, agentSessions, agentsForRuntime, companionPills, duplicateAgentName, emptyExpandedState, garbageCollectExpanded, legacySessions, nextAgentAfterArchive, parseExpandedState, projectFolderName, projectGroups, projectKey, recentProjects, runtimeUsable, sessionDisplayTitle, sessionForSelection, sessionNewParams, sessionSelectionTarget, type ExpandedState } from './rosterSelectors'
-import { AnalyticsView } from './AnalyticsView'
 import { conversationMarkdown } from './conversationMarkdown'
 import { parseSharedBlob, serializeBlob, type SharedBlob } from './blobShare'
 import { ApprovalPill } from './approvalUi'
@@ -74,6 +73,7 @@ export function App() {
   }, [companion])
   useEffect(() => () => { if (companion) disposeCompanionAudio() }, [companion])
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
+  const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [launchVisible, setLaunchVisible] = useState(() => inDesktop && !companion && import.meta.env.MODE !== 'test')
   const [launchChecks, setLaunchChecks] = useState<LaunchCheck[]>([])
   const [launchServiceDown, setLaunchServiceDown] = useState(false)
@@ -104,7 +104,6 @@ export function App() {
   const notificationStatesBooted = useRef(false)
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [blobPage, setBlobPage] = useState<{ mode: 'create' | 'edit'; agentId: string | null } | null>(null)
-  const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [draft, setDraft] = useState<AgentDraft | null>(null)
   const [baseline, setBaseline] = useState<AgentDraft | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -133,6 +132,7 @@ export function App() {
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
   const [pendingBlobImport, setPendingBlobImport] = useState<SharedBlob | null>(null)
   const [usageSummary, setUsageSummary] = useState<Record<string, unknown> | null>(null)
+  const [quotaRefreshing, setQuotaRefreshing] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const agentEventSeq = useRef(new Map<string, number>())
   const hydrateAgentChanges = useCallback((events: DaemonEvent[]) => {
@@ -168,7 +168,6 @@ export function App() {
       }).catch(() => undefined)
     }
   }, [])
-  const [budgetAlertActive, setBudgetAlertActive] = useState(false)
   const [permissionClock, setPermissionClock] = useState(() => Date.now())
   const [inspectorOpen, setInspectorOpen] = useState(() => storageFlag('bloblex.inspector.open'))
   const [search, setSearch] = useState('')
@@ -391,12 +390,9 @@ export function App() {
   const companionSession = companionSessionRecord
   const companionAgent = agents.find((agent) => agent.id === companionSession?.agentId && !agent.archived) ?? activeSelectedAgent
   const companionRuntime = runtimes.find((runtime) => runtime.id === companionAgent?.runtimeId) ?? runtimes.find((runtime) => runtime.id === companionSession?.runtimeId) ?? selectedRuntime
-  const alertSessionId = typeof snapshot?.latestBudgetAlert?.sessionId === 'string' ? snapshot.latestBudgetAlert.sessionId : null
-  const budgetWarningFor = (item: Session | null) => budgetAlertActive && (!alertSessionId || alertSessionId === item?.id)
-  const companionStatus = deriveCompanionStatus({ connected: connection === 'connected', runtime: companionRuntime, session: companionSession, permissionPending: !!companionPermission, budgetWarning: budgetWarningFor(companionSession), now })
+  const companionStatus = deriveCompanionStatus({ connected: connection === 'connected', runtime: companionRuntime, session: companionSession, permissionPending: !!companionPermission, now })
   const previousCueMood = useRef<string | null>(null)
   const previousPermissionCue = useRef<string | null>(null)
-  const selectedBudget = findApplicableBudget(snapshot?.budgets, selectedRuntime, selectedSession, selectedRuntime?.hostId)
   const currentProjectName = selectedSession?.projectPath?.split(/[\\/]/).filter(Boolean).pop()
   const headerAgent = selectedSession
     ? (selectedSession.agentId ? agents.find((agent) => agent.id === selectedSession.agentId) ?? null : null)
@@ -612,13 +608,6 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [snapshot?.permissions, permissionClock])
 
-  useEffect(() => {
-    if (!snapshot?.latestBudgetAlert) { setBudgetAlertActive(false); return }
-    setBudgetAlertActive(true)
-    const timer = window.setTimeout(() => setBudgetAlertActive(false), 4200)
-    return () => window.clearTimeout(timer)
-  }, [snapshot?.latestBudgetAlert])
-
   useLayoutEffect(() => {
     const element = messageListRef.current
     if (element && stickToBottom.current) element.scrollTop = element.scrollHeight
@@ -630,6 +619,7 @@ export function App() {
     let unlistenConnection: (() => void) | undefined
     let cancelled = false
     void listenForDaemonEvents((event) => {
+      if (event.type === 'quota.updated') setQuotaRefreshing(false)
       if (event.type === 'replay.gap') {
         queuedEvents.current = []
         hydrating.current = true
@@ -651,6 +641,15 @@ export function App() {
     }).then((stop) => { if (cancelled) stop(); else unlistenConnection = stop })
     return () => { cancelled = true; unlistenEvents?.(); unlistenConnection?.() }
   }, [hydrateAgentChanges, refreshAppliedModelFromEvent])
+
+  useEffect(() => {
+    if (!inDesktop || companion || connection !== 'connected') return
+    let current = true
+    void rpc<{ quotas?: Record<string, unknown>[] }>('quota.list').then((result) => {
+      if (current) setSnapshot((snapshot) => snapshot ? { ...snapshot, quotas: result.quotas ?? [] } : snapshot)
+    }).catch(() => undefined)
+    return () => { current = false }
+  }, [companion, connection])
 
   useEffect(() => {
     if (!inDesktop || companion) return
@@ -945,7 +944,6 @@ export function App() {
   }
 
   const openEdit = (agent: Agent) => {
-    setAnalyticsOpen(false)
     const next = draftFromAgent(agent)
     setDraft(next)
     setBaseline(next)
@@ -963,25 +961,12 @@ export function App() {
 
   const openCreate = () => {
     setCreateMenuOpen(false)
-    setAnalyticsOpen(false)
     const next = createDraft(runtimes, activeSelectedAgent?.runtimeId ?? selectedRuntime?.id ?? null)
     setDraft(next)
     setBaseline(next)
     setFormError(null)
     setRemoteNotice(null)
     setBlobPage({ mode: 'create', agentId: null })
-  }
-
-  const closeAnalytics = () => {
-    setAnalyticsOpen(false)
-    window.setTimeout(() => usageLinkRef.current?.focus(), 0)
-  }
-
-  const openUsageSettings = () => {
-    setAnalyticsOpen(false)
-    setSettingsInitialPage('Usage & limits')
-    setSettingsFocus(null)
-    setSettingsSheet(true)
   }
 
   const restoreMoreFocus = () => window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[aria-label="More options"]')?.focus())
@@ -1036,7 +1021,6 @@ export function App() {
     next.approvalMode = blob.defaultApprovalMode ?? null
     setDraft(next)
     setBaseline(next)
-    setAnalyticsOpen(false)
     setBlobPage({ mode: 'create', agentId: null })
     setPendingBlobImport(null)
     setFormError(null)
@@ -1049,6 +1033,11 @@ export function App() {
       const row = focusId ? document.querySelector<HTMLButtonElement>(`[data-agent-id="${CSS.escape(focusId)}"]`) : null
       ;(row ?? document.querySelector<HTMLButtonElement>('[aria-label="Create blob"]'))?.focus()
     }, 0)
+  }
+
+  const closeAnalytics = () => {
+    setAnalyticsOpen(false)
+    window.setTimeout(() => usageLinkRef.current?.focus(), 0)
   }
 
   const saveBlob = async () => {
@@ -1223,8 +1212,16 @@ export function App() {
     } catch { setUsageSummary(null) }
   }
 
+  const refreshQuota = () => {
+    setQuotaRefreshing(true)
+    void rpc('quota.refresh').catch((reason) => {
+      setQuotaRefreshing(false)
+      setError(messageOf(reason))
+    })
+    window.setTimeout(() => setQuotaRefreshing(false), 15_000)
+  }
+
   const selectAgent = (agent: Agent) => {
-    setAnalyticsOpen(false)
     const latest = agentSessions(sessions, agent.id)[0] ?? null
     setSelectedAgentId(agent.id)
     setSelectedRuntimeId(agent.runtimeId)
@@ -1234,7 +1231,6 @@ export function App() {
     setBlobPage((page) => page && page.agentId !== agent.id ? null : page)
   }
   const selectSession = (session: Session) => {
-    setAnalyticsOpen(false)
     const target = sessionSelectionTarget(agents, activeSelectedAgent, session)
     if (!target) return
     const owner = activeAgents(agents).find((item) => item.id === target.agentId)
@@ -1281,12 +1277,12 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion agent={companionAgent} agents={agents} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} budgetWarning={budgetWarningFor(companionSession)} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
+      <Companion agent={companionAgent} agents={agents} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
       {chooserView}
     </>
   }
 
-  const selectedMood = deriveCompanionStatus({ connected: connection === 'connected', runtime: selectedRuntime, session: selectedSession, budgetWarning: budgetWarningFor(selectedSession), composing: !!composer.trim(), now }).mood
+  const selectedMood = deriveCompanionStatus({ connected: connection === 'connected', runtime: selectedRuntime, session: selectedSession, composing: !!composer.trim(), now }).mood
   const sessionBusy = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
   const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
   const runtimeReady = runtimeUsable(selectedRuntime)
@@ -1418,7 +1414,7 @@ export function App() {
       <section className="conversation-pane">
         {updateOffer.version && <UpdateAvailableBanner version={updateOffer.version} onView={() => { setSettingsInitialPage('General'); setSettingsFocus('updates'); setSettingsSheet(true) }} onLater={updateOffer.dismiss} />}
         {launchWarnings.length > 0 && !agentWarningDismissed && <LaunchWarnings warnings={launchWarnings} onSettings={() => { setSettingsInitialPage('Agents'); setSettingsSheet(true) }} onDismiss={() => setAgentWarningDismissed(true)} />}
-        {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} runtimes={runtimes} budgets={Array.isArray(snapshot?.budgets) ? snapshot.budgets : []} connected={connection === 'connected'} onBack={closeAnalytics} onSetPrices={openUsageSettings} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} budgets={Array.isArray(snapshot?.budgets) ? snapshot.budgets : []} onSetPrices={openUsageSettings} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
+        {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} connected={connection === 'connected'} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         {showCreateBlobPrompt && <div className="first-run-prompt" role="status"><span>No blobs yet. Create one to organize these conversations.</span><button type="button" className="secondary-button small" onClick={openCreate}>Create blob</button></div>}
         <header className="chat-header">
           <div className="chat-title">
@@ -1486,13 +1482,14 @@ export function App() {
         </section>
         <div className="context-tabs" role="tablist" aria-label="Conversation context">{(['Details', 'Runtime', 'Files'] as ContextTab[]).map((name, index, tabs) => <button key={name} type="button" id={`context-tab-${name.toLowerCase()}`} role="tab" aria-controls="context-panel" aria-selected={tab === name} tabIndex={tab === name ? 0 : -1} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} onKeyDown={(event) => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); const targetIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length; const target = tabs[targetIndex]; setTab(target); document.getElementById(`context-tab-${target.toLowerCase()}`)?.focus() }}>{name}</button>)}</div>
         <div id="context-panel" role="tabpanel" aria-labelledby={`context-tab-${tab.toLowerCase()}`} tabIndex={0} className="context-tab-panel">
-          {tab === 'Details' && <DetailsPane session={selectedSession} model={appliedModelForDetails} budgetWarning={budgetWarningFor(selectedSession)} budget={selectedBudget} usage={snapshot?.usageSummary ?? null} onUsage={() => void showUsage()} />}
+          {tab === 'Details' && <DetailsPane session={selectedSession} model={appliedModelForDetails} usage={snapshot?.usageSummary ?? null} onUsage={() => void showUsage()} />}
           {tab === 'Runtime' && <RuntimePane runtime={selectedRuntime} connected={connection === 'connected'} onRefresh={() => void refreshRuntimes()} refreshing={refreshing} />}
           {tab === 'Files' && <FilesPane session={selectedSession} onOpen={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onReveal={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopy={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} />}
         </div>
       </aside>
 
-      {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} loading={busy && usageSummary === null} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onClose={() => setUsageSheet(false)} />}
+      {!companion && <QuotaMeter quotas={snapshot?.quotas ?? []} onOpen={() => void showUsage()} />}
+      {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} quotas={snapshot?.quotas ?? []} loading={busy && usageSummary === null} quotaRefreshing={quotaRefreshing} onRefreshQuota={refreshQuota} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onClose={() => setUsageSheet(false)} />}
       {quickSwitcherOpen && <QuickSwitcher items={quickSwitcherItems} onChoose={chooseQuickSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />}
       {settingsSheet && <SettingsSheet snapshot={snapshot} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
@@ -1668,7 +1665,7 @@ function DetailRow({ label, value, mono = false }: { label: string; value: React
   return <div className="detail-row"><span>{label}</span><strong className={mono ? 'mono' : undefined}>{value}</strong></div>
 }
 
-function DetailsPane({ session, model, budgetWarning, budget, usage, onUsage }: { session: Session | null; model: string | null; budgetWarning: boolean; budget: Record<string, unknown> | null; usage: Record<string, unknown> | null; onUsage: () => void }) {
+function DetailsPane({ session, model, usage, onUsage }: { session: Session | null; model: string | null; usage: Record<string, unknown> | null; onUsage: () => void }) {
   return <div className="context-scroll">
     <section className="context-section">
       <h3>Conversation</h3>
@@ -1684,13 +1681,9 @@ function DetailsPane({ session, model, budgetWarning, budget, usage, onUsage }: 
       <div className="detail-list">
         <DetailRow label="Input tokens" value={tokenValue(usage?.inputTokens)} />
         <DetailRow label="Output tokens" value={tokenValue(usage?.outputTokens)} />
-        <DetailRow label="Provider cost" value={moneyMinor(usage?.providerReportedCostMinor, usage?.providerReportedCurrency)} />
-        <DetailRow label="API estimate" value={moneyMinor(usage?.apiEstimateMinor, usage?.apiEstimateCurrency)} />
-        {budget && <DetailRow label={`${labelize(budget.period)} budget`} value={`${budgetValue(budget.remaining, budget.metric)} of ${budgetValue(budget.hardLimit, budget.metric)} left`} />}
       </div>
-      {budgetWarning && <p className="budget-inline-warning" role="status">A budget warning was reported for this session.</p>}
       <button type="button" className="secondary-button small context-action" onClick={onUsage}>Usage details</button>
-      <p className="honesty-note">Provider cost and API estimates are separate. Unknown prices stay unknown.</p>
+      <p className="honesty-note">Token usage is recorded when providers report it. Account quota is shown separately.</p>
     </section>
   </div>
 }
@@ -1775,25 +1768,55 @@ function DiffViewer({ path, content, onClose }: { path: string; content: string;
   </section></div>
 }
 
-function UsageSheet({ summary, period, loading, onPeriodChange, onClose }: { summary: Record<string, unknown> | null; period: 'today' | 'month'; loading: boolean; onPeriodChange: (period: 'today' | 'month') => void; onClose: () => void }) {
+function QuotaMeter({ quotas, onOpen }: { quotas: Record<string, unknown>[]; onOpen: () => void }) {
+  const available = quotas.filter((item) => item.provider === 'codex' && item.snapshot && typeof item.snapshot === 'object')
+  return <button type="button" className="quota-meter-row" aria-label="Provider quota details" onClick={onOpen}>
+    <span className="quota-meter-label"><Gauge size={14} />Provider quota</span>
+    {available.length ? available.map((item) => <QuotaSummary key={String(item.provider)} item={item} compact />) : <span className="quota-meter-empty">No supported account quota source available</span>}
+    <span className="quota-meter-open">Usage details <ArrowUpRight size={13} /></span>
+  </button>
+}
+
+function QuotaDetails({ quotas, refreshing, onRefresh }: { quotas: Record<string, unknown>[]; refreshing: boolean; onRefresh: () => void }) {
+  const available = quotas.filter((item) => item.provider === 'codex' && item.snapshot && typeof item.snapshot === 'object')
+  return <section className="usage-block quota-details" aria-label="Provider quota">
+    <div className="usage-block-heading"><h3>Provider quota</h3><span>Separate from token usage</span><button type="button" className="secondary-button small" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Checking…' : 'Refresh quota'}</button></div>
+    {available.length ? available.map((item) => <QuotaSummary key={String(item.provider)} item={item} />) : <p className="usage-empty-line">No supported provider account quota source is available.</p>}
+  </section>
+}
+
+function QuotaSummary({ item, compact = false }: { item: Record<string, unknown>; compact?: boolean }) {
+  const snapshot = recordFrom(item.snapshot)
+  const limits = Array.isArray(snapshot.limits) ? snapshot.limits.filter((limit): limit is Record<string, unknown> => !!limit && typeof limit === 'object') : []
+  const fetched = typeof item.fetchedAt === 'string' ? new Date(item.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null
+  const label = labelize(item.provider, 'Provider')
+  return <span className={`quota-provider ${compact ? 'compact' : ''}`} data-provider={String(item.provider ?? 'unknown')}>
+    <strong>{label}</strong>
+    {limits.length ? limits.map((limit, index) => <span className="quota-limit" key={`${String(limit.label)}-${index}`}>
+      <span>{String(limit.label ?? 'Quota')}</span>
+      {(['primary', 'secondary'] as const).map((window) => {
+        const value = recordFrom(limit[window])
+        if (typeof value.usedPercent !== 'number') return null
+        const duration = typeof value.windowDurationMins === 'number' ? value.windowDurationMins : null
+        const durationLabel = duration === null ? (window === 'primary' ? 'Primary' : 'Secondary') : duration % 1440 === 0 ? `${duration / 1440}d` : duration % 60 === 0 ? `${duration / 60}h` : `${duration}m`
+        const reset = quotaResetLabel(value.resetsAt)
+        return <span className="quota-window" key={window} title={`${durationLabel} window`}><span>{durationLabel}</span><i><b style={{ width: `${Math.max(0, Math.min(100, value.usedPercent))}%` }} /></i><b>{value.usedPercent}%</b>{reset && <small>{reset}</small>}</span>
+      })}
+    </span>) : <span className="quota-unknown">Quota unavailable</span>}
+    {fetched && !compact && <small>Updated {fetched}</small>}
+  </span>
+}
+
+function UsageSheet({ summary, period, quotas, loading, quotaRefreshing, onRefreshQuota, onPeriodChange, onClose }: { summary: Record<string, unknown> | null; period: 'today' | 'month'; quotas: Record<string, unknown>[]; loading: boolean; quotaRefreshing: boolean; onRefreshQuota: () => void; onPeriodChange: (period: 'today' | 'month') => void; onClose: () => void }) {
   const { ref: dialogRef, close } = useDialogAccessibility(onClose)
-  const valuations = records(summary?.valuations)
-  const subscriptions = records(summary?.subscriptions)
   return <div className="sheet-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}><section ref={dialogRef} className="usage-sheet" role="dialog" aria-modal="true" aria-labelledby="usage-title">
     <header><div><p className="eyebrow">{summary ? `${shortDate(summary.from)} – ${shortDate(summary.to)}` : 'USAGE'}</p><h2 id="usage-title">Usage summary</h2><small className="usage-scope">All runtimes on this device · requested period</small></div><button className="icon-button" data-dialog-initial-focus aria-label="Close usage summary" onClick={close}><X size={17} /></button></header>
     <div className="usage-period-switch" aria-label="Usage date range"><button className={period === 'today' ? 'active' : ''} aria-pressed={period === 'today'} onClick={() => onPeriodChange('today')}>Today</button><button className={period === 'month' ? 'active' : ''} aria-pressed={period === 'month'} onClick={() => onPeriodChange('month')}>This month</button></div>
     {loading ? <div className="sheet-loading"><LoaderCircle className="spinning" /><span>Loading the daemon summary…</span></div> : summary ? <div className="usage-sheet-body">
       <section className="usage-block"><div className="usage-block-heading"><h3>Token usage</h3><span>Mutually exclusive buckets</span></div><div className="usage-token-grid">{usageTokenBuckets(summary).map((bucket) => <div className="usage-token" key={bucket.key}><span>{bucket.label}</span><strong>{bucket.value}</strong></div>)}</div></section>
-      <section className="usage-block"><div className="usage-block-heading"><h3>Cost basis</h3><span>Values stay separate</span></div><div className="usage-cost-grid">
-        <div><span>Recorded provider actual</span><strong>{moneyMinor(summary.providerReportedCostMinor, summary.providerReportedCurrency)}</strong><small>{typeof summary.providerReportedCurrency === 'string' ? summary.providerReportedCurrency : 'Currency unknown'}</small></div>
-        <div><span>Recorded API-rate estimate</span><strong>{moneyMinor(summary.apiEstimateMinor, summary.apiEstimateCurrency)}</strong><small>{typeof summary.apiEstimateCurrency === 'string' ? summary.apiEstimateCurrency : 'Currency unknown'}</small></div>
-        <div><span>Monthly subscription total</span><strong>{moneyMinor(summary.subscriptionFixedMinor, summary.subscriptionCurrency)}</strong><small>{typeof summary.subscriptionCurrency === 'string' ? summary.subscriptionCurrency : 'Plans are listed separately below'}</small></div>
-      </div><p className="usage-honesty">{summary.pricingStatus === 'available' ? 'Recorded API-equivalent values use configured rates; they are not the provider’s bill and may cover only records with known prices.' : 'No API-rate valuation is available for this period. Unknown amounts are not shown as zero.'} Provider totals may be partial when some events have no known price.</p>
-        {valuations.length > 0 && <div className="usage-valuation-list">{valuations.map((item, index) => <div key={String(item.basis ?? index)}><strong>{valuationLabel(item.basis)}</strong><span>{moneyMinor(item.amountMinor, item.currency)}</span><small>{typeof item.eventCount === 'number' ? `${item.eventCount} usage records` : 'Record count unknown'} · {String(item.status ?? 'status unknown')}</small></div>)}</div>}
-      </section>
-      <section className="usage-block"><div className="usage-block-heading"><h3>Configured subscriptions</h3><span>Monthly user-entered fees</span></div>{subscriptions.length ? <div className="usage-subscriptions">{subscriptions.map((plan, index) => <div key={String(plan.id ?? `${plan.provider ?? 'plan'}-${index}`)}><strong>{String(plan.provider ?? 'Provider')}</strong><span>{moneyMinor(plan.monthlyMinor, plan.currency)} / month</span><small>Renewal day {typeof plan.renewalDay === 'number' ? plan.renewalDay : 'unknown'} · quota {String(plan.quotaState ?? 'unknown')}</small></div>)}</div> : <p className="usage-empty-line">No subscription fees have been configured.</p>}</section>
-    </div> : <div className="sheet-empty"><CircleHelp size={20} /><strong>Usage summary unavailable</strong><p>The daemon did not return a summary. Bloblex will not estimate a zero cost from missing data.</p></div>}
-    <footer>Provider-reported charges, API-rate estimates, and subscription fees are separate values.</footer>
+      <QuotaDetails quotas={quotas} refreshing={quotaRefreshing} onRefresh={onRefreshQuota} />
+    </div> : <div className="sheet-empty"><CircleHelp size={20} /><strong>Usage summary unavailable</strong><p>The daemon did not return token usage for this period.</p></div>}
+    <footer>Token counts describe recorded activity. Provider quota is a separate account limit.</footer>
   </section></div>
 }
 
@@ -1803,9 +1826,22 @@ function shortDate(value: unknown) {
   return Number.isNaN(date.getTime()) ? 'unknown' : date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
+function quotaResetLabel(value: unknown) {
+  if (typeof value !== 'string') return null
+  const resetAt = new Date(value)
+  if (Number.isNaN(resetAt.getTime())) return null
+  const remaining = Math.max(0, Math.floor((resetAt.getTime() - Date.now()) / 1000))
+  const relative = remaining === 0 ? 'now' : remaining >= 86_400
+    ? `${Math.floor(remaining / 86_400)}d ${Math.floor((remaining % 86_400) / 3600)}h`
+    : remaining >= 3600 ? `${Math.floor(remaining / 3600)}h ${Math.floor((remaining % 3600) / 60)}m`
+      : `${Math.max(1, Math.ceil(remaining / 60))}m`
+  const localTime = resetAt.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  return `Resets ${localTime} · in ${relative}`
+}
+
 function recordFrom(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
 
-function Companion({ agent, agents, runtime, runtimes, session, usage, connected, appError, activityLabel, budgetWarning, permission, approvalMode, onReply, onNewSession, onOpenMain, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; budgetWarning: boolean; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
+function Companion({ agent, agents, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onNewSession, onOpenMain, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
   const [view, setView] = useState<'overview' | 'chat' | 'activity' | 'settings'>('overview')
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -1831,7 +1867,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
   sessionRef.current = session
   const latestTool = session?.tools?.at(-1)
   const clock = useClock(10_000)
-  const derived = deriveCompanionStatus({ connected, runtime, session, permissionPending: !!permission, budgetWarning, composing: !!draft.trim(), now: clock })
+  const derived = deriveCompanionStatus({ connected, runtime, session, permissionPending: !!permission, composing: !!draft.trim(), now: clock })
   const displayMood = derived.mood
   const activity = derived.mood === 'listening' ? derived.label : activityLabel
   const fileStage = dropActive ? 'drop' : preparingFile ? 'preparing' : fileError ? 'error' : droppedFile ? (sending ? 'sending' : 'ready') : undefined
@@ -2015,8 +2051,6 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
   const inputTokens = typeof usage?.inputTokens === 'number' ? usage.inputTokens : null
   const outputTokens = typeof usage?.outputTokens === 'number' ? usage.outputTokens : null
   const tokenGlance = inputTokens !== null && outputTokens !== null ? formatCount(inputTokens + outputTokens) : inputTokens !== null ? `${formatCount(inputTokens)} in · out ?` : outputTokens !== null ? `in ? · ${formatCount(outputTokens)} out` : 'Unknown'
-  const apiCost = typeof usage?.apiEstimateMinor === 'number' ? formatMinor(usage.apiEstimateMinor, usage.apiEstimateCurrency) : 'Unknown'
-  const actualCost = typeof usage?.providerReportedCostMinor === 'number' ? formatMinor(usage.providerReportedCostMinor, usage.providerReportedCurrency) : 'Unknown'
   const recentMessages = (session?.messages ?? []).slice(-4)
   const recentActivities: Array<Record<string, unknown> & { activityKind: 'tool' | 'file' }> = [
     ...(session?.tools ?? []).slice(-4).map((item): Record<string, unknown> & { activityKind: 'tool' } => ({ ...item, activityKind: 'tool' })),
@@ -2030,7 +2064,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
   const statusLine = confused ? 'A little dizzy… back to normal shortly' : appError ?? fileError ?? dropError ?? (preparingFile ? 'Checking local file access…' : activity)
   const shimmering = ['working', 'thinking', 'tool_activity', 'file_activity'].includes(displayMood)
   const sessionBusy = !!session && ['working', 'starting', 'waiting_permission'].includes(session.state ?? '')
-  const wash = displayMood === 'success' ? 'green' : displayMood === 'error' ? 'red' : displayMood === 'rate_limited' || displayMood === 'budget_warning' ? 'amber' : null
+  const wash = displayMood === 'success' ? 'green' : displayMood === 'error' || displayMood === 'rate_limited' ? 'red' : null
   const lastReply = [...(session?.messages ?? [])].reverse().find((message) => message.role !== 'user')
   const tickerLines = [...new Set([
     lastReply ? plainText(String(lastReply.content ?? lastReply.text ?? '')) : null,
@@ -2084,7 +2118,7 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
               <div className="card-stack">
                 <div className="who"><span className="name">{name}</span><span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
                 <div className="ticker">{tickerLines.map((line, index) => <div key={index} className={`ticker-row ${index === tickerLines.length - 1 ? 'current' : ''}`}><span className={index === tickerLines.length - 1 && shimmering ? 'shimmer' : ''}>{line}</span></div>)}</div>
-                <div className="glance" title={`Totals across all blobs. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()} · API estimate ${apiCost}`}><span>All blobs: Tokens <b>{tokenGlance}</b> · Cost <b>{actualCost}</b></span></div>
+                <div className="glance" title={`Reported tokens across all blobs. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}><span>All blobs: Tokens <b>{tokenGlance}</b></span></div>
               </div>
             </div>
             <div className="island-card pills-card">
@@ -2132,11 +2166,6 @@ function fileNameForPath(path: string) { return path.split('\\').pop()?.split('/
 function formatBytes(bytes: number) { return bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB` }
 
 function formatCount(value: number) { return new Intl.NumberFormat(undefined, { notation: value >= 10_000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value) }
-function formatMinor(value: number, currency: unknown) {
-  if (typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency)) return 'Unknown'
-  const digits = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: digits }).format(value / (10 ** digits))
-}
 
 function messageOf(reason: unknown) {
   if (reason instanceof Error) return reason.message

@@ -2,13 +2,15 @@
 
 Current as of 5 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
+Current worktree follow-up: usage is being kept to reported token analytics plus an account-quota meter. Active budget admission/warnings and monetary valuation, pricing and subscription UI are retired; migration 10 adds only a quota cache and preserves all existing usage, valuation, pricing, subscription and budget records. The only supported quota source found is Codex's structured `account/rateLimits/read` app-server method, matched against the checked-in Codex 0.159.3 schema. This has fake-process/schema evidence only. Claude and OpenCode are omitted from the quota meter. No live Codex/OpenCode turn, live quota fetch, or native-window proof has been run for this worktree. The earlier isolated live Claude turn remains the only live provider-turn proof.
+
 `v0.1.0-beta.7` is the current release candidate; `v0.1.0-beta.6` remains the latest published release until beta.7 is uploaded. Acceptance evidence includes unit, mounted, fake-process and one live Claude daemon session on an isolated database. The desktop development app starts, but no native chat interaction or clean-machine installer pass has been recorded for this candidate.
 
 The recovered Claude UI, daemon, and wardrobe scope is released as `v0.1.0-beta.6` from branch `beta/claude-resume-2026-10-04`. See [the release notes](docs/releases/0.1.0-beta.6.md) and [implementation status](docs/implementation-status.md). The release feed is published, but a native-window or installed upgrade check remains open.
 
 ## What exists
 
-Bloblex is a Windows desktop app: a React/Tauri shell (`apps/desktop`) and a separate daemon (`bloblexd`) that owns sessions, permissions, budgets, and usage. The shell and the companion read the daemon's normalized state. Provider CLIs (Claude Code, Codex, OpenCode) keep their own login.
+Bloblex is a Windows desktop app: a React/Tauri shell (`apps/desktop`) and a separate daemon (`bloblexd`) that owns sessions, permissions, token usage and normalized quota state. The shell and the companion read the daemon's normalized state. Provider CLIs (Claude Code, Codex, OpenCode) keep their own login.
 
 On main:
 
@@ -17,15 +19,16 @@ On main:
 - The interface redesign: chat-style main window, one-page blob editor, custom dropdowns, blob moods that settle over time, favourites and pinned conversations/projects, companion launch with the full welcome.
 - Conversation management: unread markers, Windows notifications, rename/archive/delete (migration 6), grouped tool activity, Start with Windows.
 - Honest model lists: catalog source and update time, suggestions vs validated lists, display names, default marker and family groups.
-- Settings > Usage & limits (token/turn/minute budgets, price overrides, subscription fees), Markdown export of a conversation, export/import of a blob setup.
+- Token analytics with no monetary valuation, plus a compact quota row and an extended Usage sheet. Codex is the only provider with a structured quota source in this checkout; Claude and OpenCode are omitted.
+- Markdown export of a conversation, export/import of a blob setup.
 - Batch B: Ctrl+K quick switcher, composer model and thinking switch, safe Markdown, unified diff view and approval shortcuts. The companion uses the same approval card.
 - Batch B1: one shared Codex app-server or OpenCode ACP process per runtime key, per-session queues that coalesce streaming deltas only, idle shutdown, crash restart and resume, and bounded per-session cancel. Claude Code remains one process per session.
 - Batch C: first-run setup on an empty install, companion start position and Ctrl+Alt+B hotkey, system/dark/light themes and text size, and reorderable favourites and pins. A contrast test checks the light theme against AA.
 - Blob wardrobe: per-blob outfits with seasonal automatic selection, drawn to match the blob and stored by migration 7.
 - Launch intro with startup checks, companion off by default with a sidebar toggle and an open-at-startup setting, and three-step first-run onboarding with verified install and sign-in guides.
-- OpenCode Go models and official model prices: 150 rows with exact decimals, tiers, and per-field sources, stored with migration 8. Each row records its source URL and checked date. Re-check the official price list in `crates/bloblex-usage/data` against vendor pages when prices change; the current checked date is 2026-10-04.
+- Historical OpenCode Go model price catalog and pricing records remain in the database/source tree for history, but are not read by the active usage UI or token recording path.
 
-The beta.7 candidate gates passed: `cargo test --workspace`, desktop typecheck, Vitest (341/341), and production build. One live Claude session returned the expected sentinel after changing the model before the first prompt. That session used an isolated database; the native app's message flow and a clean-machine installer remain unverified.
+The beta.7 candidate gates passed before this uncommitted follow-up: `cargo test --workspace`, desktop typecheck, Vitest (341/341), and production build. Those counts do not cover the quota/usage-retirement changes below. One live Claude session returned the expected sentinel after changing the model before the first prompt. That session used an isolated database; the native app's message flow and a clean-machine installer remain unverified.
 
 ## Lanes
 
@@ -67,10 +70,9 @@ Releases: [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). The update sig
 
 ## Known gaps
 
-- No live Claude, Codex, or OpenCode session has been accepted against the current tree.
-- Official model prices can change. The checked date in `crates/bloblex-usage/data/official-prices.json` is 2026-10-04; verify its source pages again when prices change.
+- One isolated live Claude daemon turn returned the expected sentinel after changing the model before the first prompt. This does not prove current UI/native behavior. Codex and OpenCode live turns, Codex quota polling, and native behavior remain unverified.
 - Codex blob instructions stay thread-level: the installed app-server schema has no per-turn context field.
-- Cost budgets are not offered: turn admission cannot estimate cost yet. Existing cost policies are listed with a note.
+- Budget admission, budget warnings, pricing/subscription valuation and monetary analytics are retired in the active product path. Existing database history is preserved and no longer presented as current usage.
 - The daemon does not emit a `context` failure class; session turn JSON omits `failureClass`.
 - WSL.
 - Tracked `apps/desktop/tsconfig.tsbuildinfo` is rewritten by `tsc -b`; restore it before committing if it changes.

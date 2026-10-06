@@ -914,25 +914,26 @@ fn parse_catalog_model(m: &Value) -> Result<ModelInfo, AdapterError> {
         is_default: m["isDefault"].as_bool(),
         group: None,
         availability: None,
-        reported_price: None,
+
     })
 }
 async fn read_reply(
     lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     id: u64,
+    timeout: std::time::Duration,
 ) -> Result<Value, AdapterError> {
     loop {
-        let line = tokio::time::timeout(CATALOG_TIMEOUT, lines.next_line())
+        let line = tokio::time::timeout(timeout, lines.next_line())
             .await
-            .map_err(|_| AdapterError::Process("Codex model catalog timed out".into()))?
+            .map_err(|_| AdapterError::Process("Codex app-server request timed out".into()))?
             .map_err(|e| AdapterError::Process(e.to_string()))?
-            .ok_or_else(|| AdapterError::Process("Codex app-server catalog exited".into()))?;
+            .ok_or_else(|| AdapterError::Process("Codex app-server exited".into()))?;
         let v: Value = serde_json::from_str(&line)
             .map_err(|_| AdapterError::Protocol("Codex catalog returned malformed JSON".into()))?;
         if v["id"].as_u64() == Some(id) {
             if v.get("error").is_some() {
                 return Err(AdapterError::Protocol(
-                    "Codex model catalog request failed".into(),
+                    "Codex app-server request failed".into(),
                 ));
             }
             return Ok(v["result"].clone());
@@ -982,7 +983,7 @@ async fn catalog_pages(r: &RuntimeSpec) -> Result<Vec<Value>, AdapterError> {
             .ok_or_else(|| AdapterError::Process("catalog stdout unavailable".into()))?;
         let mut lines = BufReader::new(stdout).lines();
         write_rpc(&stdin,1,"initialize",json!({"clientInfo":{"name":"Bloblex","version":"0.1.0"},"capabilities":{"experimentalApi":false}})).await?;
-        let _ = read_reply(&mut lines, 1).await?;
+        let _ = read_reply(&mut lines, 1, CATALOG_TIMEOUT).await?;
         let mut b =
             serde_json::to_vec(&json!({"jsonrpc":"2.0","method":"initialized","params":{}}))
                 .unwrap();
@@ -1004,7 +1005,7 @@ async fn catalog_pages(r: &RuntimeSpec) -> Result<Vec<Value>, AdapterError> {
                 json!({"cursor":cursor,"includeHidden":false,"limit":100}),
             )
             .await?;
-            let page = read_reply(&mut lines, id).await?;
+            let page = read_reply(&mut lines, id, CATALOG_TIMEOUT).await?;
             let next = page["nextCursor"].clone();
             pages.push(page);
             if next.is_null() {
@@ -1023,6 +1024,40 @@ async fn catalog_pages(r: &RuntimeSpec) -> Result<Vec<Value>, AdapterError> {
         .await
         .map_err(|_| AdapterError::Process("Codex model catalog timed out".into()))
         .and_then(|v| v);
+    let _ = process_tree.terminate();
+    let _ = child.kill().await;
+    result
+}
+
+async fn account_rate_limits(r: &RuntimeSpec) -> Result<Value, AdapterError> {
+    let mut cmd = Command::new(&r.executable);
+    prepare_command(&mut cmd);
+    cmd.args(&r.args)
+        .args(["app-server", "--listen", "stdio://"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    if let Some(cwd) = &r.cwd { cmd.current_dir(cwd); }
+    let mut child = cmd.spawn().map_err(|_| AdapterError::Process("Codex quota app-server could not start".into()))?;
+    let process_tree = ProcessTree::attach(&mut child).map_err(|error| AdapterError::Process(error.to_string()))?;
+    let result = async {
+        let stdin = child.stdin.take().ok_or_else(|| AdapterError::Process("Codex quota stdin unavailable".into()))?;
+        let stdin = StdinWriter::new(stdin);
+        let stdout = child.stdout.take().ok_or_else(|| AdapterError::Process("Codex quota stdout unavailable".into()))?;
+        let mut lines = BufReader::new(stdout).lines();
+        write_rpc(&stdin, 1, "initialize", json!({"clientInfo":{"name":"Bloblex","version":"0.1.0"},"capabilities":{"experimentalApi":false}})).await?;
+        let _ = read_reply(&mut lines, 1, std::time::Duration::from_secs(10)).await?;
+        let mut initialized = serde_json::to_vec(&json!({"jsonrpc":"2.0","method":"initialized","params":{}})).unwrap();
+        initialized.push(b'\n');
+        stdin.write(&initialized).await.map_err(|error| AdapterError::Process(error.to_string()))?;
+        write_rpc(&stdin, 2, "account/rateLimits/read", json!({"excludeResetCreditDetails":true})).await?;
+        read_reply(&mut lines, 2, std::time::Duration::from_secs(10)).await
+    };
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), result)
+        .await
+        .map_err(|_| AdapterError::Timeout)
+        .and_then(|result| result);
     let _ = process_tree.terminate();
     let _ = child.kill().await;
     result
@@ -1050,6 +1085,9 @@ impl AgentAdapter for CodexAdapter {
             source: "live_query".into(),
             validated: true,
         })
+    }
+    async fn read_account_quota(&self, r: &RuntimeSpec) -> Result<Value, AdapterError> {
+        account_rate_limits(r).await
     }
     async fn preflight_exec_options(&self, options: &ExecOptions) -> Result<(), AdapterError> {
         if options.service_tier.as_deref() == Some("fast") {

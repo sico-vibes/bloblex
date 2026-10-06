@@ -8,10 +8,9 @@ import { ChevronLeft } from 'lucide-react'
 import { BlobOverview } from './BlobOverview'
 import { BlobSessions } from './BlobSessions'
 import { BlobSettings } from './BlobSettings'
-import { BlobUsage } from './BlobUsage'
 import { useDialogAccessibility } from './dialogFocus'
 
-export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], budgets = [], onSetPrices = () => undefined, onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
+export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
   mode: 'create' | 'edit'
   agent: Agent | null
   draft: AgentDraft
@@ -31,8 +30,6 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
   execution: StoredExecution
   autoApprovals?: readonly AutoResolvedAction[]
   bypassNotices?: readonly BypassNotice[]
-  budgets?: readonly Record<string, unknown>[]
-  onSetPrices?: () => void
   onDraftChange: (draft: AgentDraft) => void
   onExecutionGate?: (gate: ExecutionSendGate) => void
   onBack: () => void
@@ -42,7 +39,6 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
   onNewSession: () => void
   onOpenSession: (session: Session) => void
 }) {
-  const [usageOpen, setUsageOpen] = useState(false)
   const [discardOpen, setDiscardOpen] = useState(false)
   const backRef = useRef<HTMLButtonElement>(null)
   useEffect(() => { backRef.current?.focus() }, [])
@@ -78,15 +74,6 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
         {bypassLine && <p className="blob-page-notice warning" role="status">Bypass is active for this blob. New requests are approved without asking.</p>}
         <BlobSettings draft={draft} runtimes={runtimes} errors={errors} execution={execution} agentId={agent?.id ?? null} createdAt={agent?.createdAt ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} />
         {mode === 'edit' && <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />}
-        <section className="settings-group blob-group" aria-label="Usage">
-          <div className="settings-group-head">
-            <h3>Usage</h3>
-            {mode === 'edit' && agent && <button type="button" className="ghost-button small" aria-expanded={usageOpen} onClick={() => setUsageOpen((open) => !open)}>{usageOpen ? 'Hide usage' : 'Show usage'}</button>}
-          </div>
-          {mode === 'create' || !agent
-            ? <div className="settings-card"><p className="settings-empty">Save this blob to see its usage.</p></div>
-            : usageOpen ? <BlobUsage agentId={agent.id} sessions={sessions} agents={[agent]} runtimes={runtimes} budgets={budgets} connected={connected} onSetPrices={onSetPrices} /> : <div className="settings-card"><p className="settings-empty">Tokens, cost and run time for this blob.</p></div>}
-        </section>
         {mode === 'edit' && <section className="settings-group blob-group" aria-label="Archive">
           <div className="settings-group-head"><h3>Archive</h3><button type="button" className="ghost-button small danger-button" onClick={onArchive}>Archive blob</button></div>
           <div className="settings-card"><p className="settings-empty">This blob leaves the sidebar. Its conversations stay saved.</p></div>

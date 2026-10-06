@@ -12,8 +12,8 @@ describe('honest local file-reference states', () => {
     expect(moodWithFileReference('idle', stage)).toBe(expected)
   })
 
-  it('does not mask approval, offline, budget, rate-limit or provider failure states', () => {
-    for (const protectedMood of ['permission', 'offline', 'budget_warning', 'rate_limited', 'error'] as const) {
+  it('does not mask approval, offline, rate-limit or provider failure states', () => {
+    for (const protectedMood of ['permission', 'offline', 'rate_limited', 'error'] as const) {
       expect(moodWithFileReference(protectedMood, 'drop')).toBe(protectedMood)
       expect(moodWithFileReference(protectedMood, 'ready')).toBe(protectedMood)
       expect(moodWithFileReference(protectedMood, 'sending')).toBe(protectedMood)
@@ -29,7 +29,7 @@ describe('honest local file-reference states', () => {
   it('lets an explicit local action replace stale completion while preserving active barriers and failures', () => {
     expect(moodWithFileReference('success', 'drop')).toBe('file_drop')
     expect(moodWithFileReference('success', 'ready')).toBe('file_ready')
-    for (const protectedMood of ['permission', 'offline', 'budget_warning', 'rate_limited', 'error'] as const) {
+    for (const protectedMood of ['permission', 'offline', 'rate_limited', 'error'] as const) {
       expect(moodWithFileReference(protectedMood, 'ready')).toBe(protectedMood)
     }
   })

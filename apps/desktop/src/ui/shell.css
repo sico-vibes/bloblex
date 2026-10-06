@@ -3,7 +3,7 @@
 
 .blob-canvas { display: block; flex: 0 0 auto; }
 
-.app-shell { width: 100%; height: 100%; min-width: 860px; min-height: 560px; display: grid; grid-template-columns: 280px minmax(0, 1fr) 0; background: var(--surface-app); color: var(--text-1); transition: grid-template-columns 220ms cubic-bezier(0.22, 1, 0.36, 1); animation: launch-fade-in 220ms ease-out both; }
+.app-shell { width: 100%; height: 100%; min-width: 860px; min-height: 560px; display: grid; grid-template-columns: 280px minmax(0, 1fr) 0; grid-template-rows: minmax(0, 1fr) auto; background: var(--surface-app); color: var(--text-1); transition: grid-template-columns 220ms cubic-bezier(0.22, 1, 0.36, 1); animation: launch-fade-in 220ms ease-out both; }
 .app-shell.inspector-open { grid-template-columns: 280px minmax(0, 1fr) 320px; }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
@@ -228,6 +228,24 @@
 @keyframes typing { 0%, 100% { transform: scale(0.6); } 50% { transform: scale(1.15); } }
 
 .composer-wrap { flex: 0 0 auto; width: min(800px, calc(100% - 40px)); margin: 0 auto; padding: 6px 0 14px; }
+.quota-meter-row { grid-column: 1 / -1; grid-row: 2; width: 100%; min-height: 38px; display: flex; align-items: center; gap: 20px; padding: 5px 18px; border: 0; border-top: 1px solid var(--line); background: var(--surface-sidebar); color: var(--text-2); text-align: left; cursor: pointer; }
+.quota-meter-label, .quota-meter-open { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-size: var(--fs-xs); }
+.quota-meter-label { color: var(--text-1); font-weight: 600; }
+.quota-meter-empty { color: var(--text-3); font-size: var(--fs-xs); }
+.quota-meter-open { margin-left: auto; color: var(--text-3); }
+.quota-provider { display: inline-flex; align-items: center; gap: 10px; font-size: var(--fs-xs); }
+.quota-provider > strong { color: var(--text-1); }
+.quota-provider.compact { gap: 8px; }
+.quota-limit { display: inline-flex; align-items: center; gap: 8px; color: var(--text-3); }
+.quota-window { display: inline-flex; align-items: center; gap: 5px; }
+.quota-window i { display: inline-block; width: 42px; height: 4px; overflow: hidden; border-radius: 4px; background: var(--surface-raised); }
+.quota-window i b { display: block; height: 100%; border-radius: inherit; background: var(--agent-accent, var(--accent)); }
+.quota-window > b { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.quota-unknown { color: var(--text-3); }
+.quota-details { display: flex; flex-direction: column; gap: 14px; }
+.quota-details .quota-provider { flex-wrap: wrap; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); }
+.quota-details .quota-provider > strong { min-width: 80px; }
+.quota-details .quota-provider small { width: 100%; color: var(--text-3); }
 .composer-box { min-height: 50px; padding: 7px 7px 7px 8px; display: flex; align-items: flex-end; gap: 6px; border: 1px solid var(--line); border-radius: 26px; background: var(--surface-raised); transition: border-color 140ms ease; }
 .composer-box:focus-within { border-color: var(--line-strong); }
 .composer-tool { width: 36px; height: 36px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border: 0; border-radius: 50%; background: transparent; }

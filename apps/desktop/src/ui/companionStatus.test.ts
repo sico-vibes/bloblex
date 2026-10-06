@@ -10,10 +10,9 @@ describe('companion status from live app state', () => {
     expect(deriveCompanionStatus({ connected: true, runtime: { ...runtime, status: 'offline' }, session: { id: 's-1', runtimeId: runtime.id, state: 'working' } }).mood).toBe('offline')
   })
 
-  it('prioritizes a pending approval, then budget warning and active tool activity', () => {
+  it('prioritizes a pending approval and active tool activity', () => {
     const session = { id: 's-1', runtimeId: runtime.id, state: 'working', tools: [{ id: 'tool-1', state: 'running', title: 'Run tests' }] }
     expect(deriveCompanionStatus({ connected: true, runtime, session, permissionPending: true }).mood).toBe('permission')
-    expect(deriveCompanionStatus({ connected: true, runtime, session, budgetWarning: true }).mood).toBe('budget_warning')
     expect(deriveCompanionStatus({ connected: true, runtime, session })).toEqual({ mood: 'tool_activity', label: 'Run tests' })
   })
 
@@ -30,7 +29,6 @@ describe('companion status from live app state', () => {
     expect(deriveCompanionStatus({ connected: true, runtime, session: completed, composing: true })).toEqual({ mood: 'listening', label: 'Ready for your message' })
     expect(deriveCompanionStatus({ connected: true, runtime, session: { ...completed, state: 'failed' }, composing: true }).mood).toBe('error')
     expect(deriveCompanionStatus({ connected: true, runtime, session: completed, composing: true, permissionPending: true }).mood).toBe('permission')
-    expect(deriveCompanionStatus({ connected: true, runtime, session: completed, composing: true, budgetWarning: true }).mood).toBe('budget_warning')
   })
 
   it('composes completed-session interaction with local file cues while retaining safety and failure priority', () => {
@@ -40,7 +38,6 @@ describe('companion status from live app state', () => {
     expect(moodWithFileReference(listening.mood, 'ready')).toBe('file_ready')
     expect(moodWithFileReference(deriveCompanionStatus({ connected: false, runtime, session: completed }).mood, 'drop')).toBe('offline')
     expect(moodWithFileReference(deriveCompanionStatus({ connected: true, runtime, session: completed, permissionPending: true }).mood, 'ready')).toBe('permission')
-    expect(moodWithFileReference(deriveCompanionStatus({ connected: true, runtime, session: completed, budgetWarning: true }).mood, 'ready')).toBe('budget_warning')
     expect(moodWithFileReference(deriveCompanionStatus({ connected: true, runtime, session: { ...completed, state: 'failed' } }).mood, 'ready')).toBe('error')
   })
 

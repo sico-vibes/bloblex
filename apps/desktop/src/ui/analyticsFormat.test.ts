@@ -10,7 +10,6 @@ import {
   chartBars,
   chartRects,
   chartSummary,
-  formatBoundMoney,
   formatBoundNumber,
   formatBucketLabel,
   formatExactNumber,
@@ -31,7 +30,6 @@ import {
   formatUpdatedClock,
   offenderRateLabel,
   readAnalyticsPrefs,
-  unpricedModelsNote,
   turnFailureTitle,
   unreportedRunsNote,
   writeAnalyticsPrefs,
@@ -40,24 +38,15 @@ import {
 const london = 'Europe/London'
 
 describe('analytics formatting', () => {
-  it('keeps null money and token totals unknown and never zero', () => {
-    expect(formatBoundMoney(null, 'USD', false)).toBe('Unknown')
-    expect(formatBoundMoney(null, 'USD', true)).toBe('Unknown')
-    expect(formatBoundMoney(null, 'USD', true)).not.toContain('0')
-    expect(formatBoundMoney(null, 'USD', true)).not.toContain('≥')
+  it('keeps unknown token totals unknown and never zero', () => {
     expect(formatBoundNumber(null, true)).toBe('Unknown')
     expect(formatExactNumber(null)).toBe('Unknown')
     expect(formatRunTime(null)).toBe('Unknown')
-    expect(formatBoundMoney(0, 'USD', false)).not.toBe('Unknown')
     expect(formatBoundNumber(0, false)).toBe('0')
     expect(formatRunTime(0)).toBe('0s')
   })
 
-  it('prefixes a known lower bound and formats currency, counts, and duration with Intl', () => {
-    const money = formatBoundMoney(1234, 'USD', true)
-    expect(money.startsWith('≥ ')).toBe(true)
-    expect(money).toContain('12.34')
-    expect(formatBoundMoney(1234, 'USD', false)).not.toContain('≥')
+  it('prefixes a known token lower bound and formats counts and duration with Intl', () => {
     expect(formatBoundNumber(1500, true)).toBe('≥ 1,500')
     expect(formatBoundNumber(1500, false)).toBe('1,500')
     expect(formatRunTime(123456)).toBe('2m 3s')
@@ -117,7 +106,6 @@ describe('analytics formatting', () => {
     expect(barAccessibleName('Oct 1', 0, '0')).toBe('Oct 1, 0')
     const gap = analyticsFixtures.full.series[2] as AnalyticsSeriesPoint
     expect(seriesMetricValue(gap, 'tokens')).toBeNull()
-    expect(seriesMetricValue(gap, 'cost')).toBeNull()
     expect(seriesMetricValue(gap, 'runs')).toBe(0)
     const bars = chartBars(analyticsFixtures.full.series, 'tokens', 'day', london)
     const missing = bars.find((bar) => bar.value === null)
@@ -142,12 +130,8 @@ describe('analytics formatting', () => {
   it('writes the lower-bound notes and the unassigned leaderboard label', () => {
     expect(unreportedRunsNote(7)).toBe('7 runs did not report usage')
     expect(unreportedRunsNote(0)).toBeNull()
-    expect(unpricedModelsNote(['provider/model'])).toBe('Unpriced models: provider/model')
     expect(analyticsNotes(analyticsFixtures.partial.totals)).toEqual([
-      'Totals are a lower bound.',
       '7 runs did not report usage',
-      'Unpriced models: provider/model',
-      'Excluded currencies: EUR',
     ])
     expect(analyticsNotes(analyticsFixtures.empty.totals)).toEqual([])
     expect(leaderboardName({ agentId: null, agentName: null })).toBe('Unassigned sessions')
@@ -165,8 +149,7 @@ describe('analytics formatting', () => {
     expect(JSON.stringify(parsed)).not.toContain('SECRET_PROMPT')
     expect(JSON.stringify(parsed)).not.toContain('SECRET_ENV')
     expect(parsed?.errors[0]?.message).toBe('safe short text')
-    expect(parsed?.totals.cost.amountMinor).toBe(1234)
-    expect(parsed?.totals.cost.lowerBound).toBe(true)
+    expect(JSON.stringify(parsed)).not.toContain('cost')
     expect(parsed?.totals.tokens.output).toBeNull()
   })
 
@@ -206,10 +189,10 @@ describe('analytics formatting', () => {
     const claude = analyticsFixtures.full.leaderboard[1]
     if (!codex || !claude) throw new Error('fixture rows missing')
     const folded = foldLeaderboard([
-      { ...codex, cancelledRuns: 2, unreportedRuns: 2, unpricedModels: ['provider/model'] },
-      { ...claude, agentId: 'archived-claude', agentName: 'Claude', runs: 4, failedRuns: 1, cancelledRuns: 1, unreportedRuns: 1, unpricedModels: ['other/model'], cost: { ...claude.cost, lowerBound: true } },
-      { ...claude, agentId: 'missing', agentName: 'Ghost', runs: 1, failedRuns: 1, unreportedRuns: 0, unpricedModels: [], cost: { ...claude.cost, amountMinor: null, actualMinor: null, estimatedMinor: null, lowerBound: false } },
-      { ...codex, agentId: null, agentName: null, runs: 3, failedRuns: 0, cost: { ...codex.cost, amountMinor: 10, actualMinor: 10, estimatedMinor: null } },
+      { ...codex, cancelledRuns: 2, unreportedRuns: 2 },
+      { ...claude, agentId: 'archived-claude', agentName: 'Claude', runs: 4, failedRuns: 1, cancelledRuns: 1, unreportedRuns: 1 },
+      { ...claude, agentId: 'missing', agentName: 'Ghost', runs: 1, failedRuns: 1, unreportedRuns: 0 },
+      { ...codex, agentId: null, agentName: null, runs: 3, failedRuns: 0 },
     ], [
       { id: 'agent-codex', name: 'Codex', archived: false },
       { id: 'archived-claude', name: 'Claude', archived: true },
@@ -220,9 +203,7 @@ describe('analytics formatting', () => {
     expect(other?.cancelledRuns).toBeUndefined()
     expect(other?.unreportedRuns).toBe(1)
     expect(unreportedRunsNote(other?.unreportedRuns ?? 0)).toBe('1 run did not report usage')
-    expect(unpricedModelsNote(other?.unpricedModels ?? [])).toBe('Unpriced models: other/model')
-    expect(formatBoundMoney(other?.cost.amountMinor ?? null, other?.cost.currency ?? 'USD', other?.cost.lowerBound ?? false).startsWith('≥ ')).toBe(true)
-    expect(formatBoundMoney(null, 'USD', true)).toBe('Unknown')
+    expect(other?.tokensLowerBound).toBe(true)
     expect(folded.find((row) => row.name === 'Codex')?.cancelledRuns).toBe(2)
     expect(folded.some((row) => row.name === 'Ghost' || row.name === 'Claude')).toBe(false)
   })
@@ -294,12 +275,7 @@ describe('analytics formatting', () => {
     if (!parsed) return
     expect(JSON.stringify(parsed)).not.toContain('SECRET_PROMPT')
     expect(parsed.range).toEqual(daemonAnalyticsWire.range)
-    expect(parsed.totals.cost).toEqual({ amountMinor: null, currency: 'USD', actualMinor: null, estimatedMinor: null, lowerBound: true })
-    const blankCurrency = normalizeAnalytics({
-      ...daemonAnalyticsWire,
-      totals: { ...daemonAnalyticsWire.totals, cost: { ...daemonAnalyticsWire.totals.cost, currency: '' } },
-    })
-    expect(blankCurrency?.totals.cost.currency).toBe('USD')
+    expect(JSON.stringify(parsed)).not.toContain('cost')
     expect(parsed.totals.tokens).toEqual({ input: 12, output: null, cacheRead: null, cacheWrite: null, reasoning: null, total: 12 })
     expect(parsed.totals.runTimeMs).toBe(3600000)
     expect(parsed.totals.runs).toBe(2)
@@ -307,21 +283,18 @@ describe('analytics formatting', () => {
     expect(parsed.totals.cancelledRuns).toBe(1)
     expect(parsed.totals.activeRuns).toBe(0)
     expect(parsed.totals.unreportedRuns).toBe(1)
-    expect(parsed.totals.unpricedModels).toEqual(['codex/model-x'])
-    expect(parsed.totals.excludedCurrencies).toEqual(['EUR'])
     expect(parsed.series.map((point) => point.bucketStart)).toEqual(['2026-03-28T00:00:00.000Z', '2026-03-29T23:00:00.000Z'])
     expect(parsed.series[0]?.bucketStart).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
     expect(parsed.series[0]?.cancelledRuns).toBe(0)
     expect(parsed.series[0]?.tokens.total).toBeNull()
-    expect(parsed.series[0]?.cost.amountMinor).toBeNull()
-    expect(parsed.series[1]?.cost).toEqual({ amountMinor: 1234, currency: 'USD', actualMinor: 1000, estimatedMinor: 234, lowerBound: true })
+    expect(parsed.series[0]?.tokensLowerBound).toBe(false)
     expect(parsed.leaderboard[0]).toMatchObject({
       agentId: null,
       agentName: null,
       runtimeId: 'rt',
       cancelledRuns: 1,
       unreportedRuns: 1,
-      unpricedModels: ['codex/model-x'],
+      tokensLowerBound: true,
       runTimeMs: 3600000,
     })
     expect(parsed.errors[0]).toEqual({
@@ -334,7 +307,7 @@ describe('analytics formatting', () => {
     })
     expect(parsed.errors[1]?.failureClass).toBe('context')
     expect(failureClassLabel(parsed.errors[1]?.failureClass)).toBe('Context full')
-    expect(parsed.subscriptions).toEqual([{ provider: 'claude', monthlyMinor: 2000, currency: 'USD', quotaState: 'unknown' }])
+    expect('subscriptions' in parsed).toBe(false)
     expect(formatBucketLabel(parsed.series[1]?.bucketStart ?? '', 'day', 'Europe/London')).toContain('30')
   })
 
@@ -357,8 +330,8 @@ describe('analytics formatting', () => {
     })
     store.set(ANALYTICS_STORAGE_KEY, '{')
     expect(readAnalyticsPrefs()).toEqual(DEFAULT_ANALYTICS_PREFS)
-    writeAnalyticsPrefs({ ...DEFAULT_ANALYTICS_PREFS, days: 90, bucket: 'week', metric: 'cost', panel: 'errors', projectKey: 'c:\\work' })
-    expect(readAnalyticsPrefs()).toEqual({ days: 90, bucket: 'week', metric: 'cost', panel: 'errors', projectKey: 'c:\\work' })
+    writeAnalyticsPrefs({ ...DEFAULT_ANALYTICS_PREFS, days: 90, bucket: 'week', metric: 'tokens', panel: 'errors', projectKey: 'c:\\work' })
+    expect(readAnalyticsPrefs()).toEqual({ days: 90, bucket: 'week', metric: 'tokens', panel: 'errors', projectKey: 'c:\\work' })
     vi.unstubAllGlobals()
   })
 })

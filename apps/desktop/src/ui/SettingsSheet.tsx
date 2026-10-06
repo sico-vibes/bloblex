@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { emit, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { Bot, Check, ChevronDown, ChevronRight, Download, Gauge, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
+import { Bot, Check, ChevronDown, ChevronRight, Download, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
@@ -11,17 +11,15 @@ import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
 import { UpdatesPanel } from './UpdatesPanel'
 import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
-import { UsageLimitsSettings } from './UsageLimitsSettings'
 import { applyAppearance } from './appearance'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
 
-export type SettingsPageId = 'General' | 'Agents' | 'Usage & limits' | 'Updates'
+export type SettingsPageId = 'General' | 'Agents' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
   { id: 'Agents', label: 'Agents', icon: Bot },
-  { id: 'Usage & limits', label: 'Usage & limits', icon: Gauge },
   { id: 'Updates', label: 'Updates', icon: Download },
 ]
 
@@ -413,7 +411,6 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
             </SettingsGroup>
           </>}
 
-          {!loading && page === 'Usage & limits' && <UsageLimitsSettings agents={agents} runtimes={runtimes} sessions={snapshot?.sessions ?? []} />}
         </div>
     </section>
   </div>

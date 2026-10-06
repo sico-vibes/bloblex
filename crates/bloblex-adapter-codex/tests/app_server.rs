@@ -129,6 +129,19 @@ fn pid_is_live(pid: u32) -> bool {
         }
     }
 }
+
+#[tokio::test]
+async fn account_rate_limits_read_uses_the_checked_app_server_method() {
+    let (runtime, record) = setup(None);
+    let response = CodexAdapter::default().read_account_quota(&runtime).await.unwrap();
+    assert_eq!(response["ordinaryUsageAllowed"], true);
+    assert_eq!(response["rateLimitsByLimitId"]["codex"]["primary"]["usedPercent"], 42);
+    let calls = log(&record);
+    let request = calls.iter().find(|call| call["method"] == "account/rateLimits/read").unwrap();
+    assert_eq!(request["params"]["excludeResetCreditDetails"], true);
+    assert!(calls.iter().any(|call| call["method"] == "initialize"));
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
 #[cfg(not(windows))]
 fn pid_is_live(pid: u32) -> bool {
     std::path::Path::new("/proc").join(pid.to_string()).exists()

@@ -1,14 +1,14 @@
 # Release checklist
 
-Updated 6 October 2026. Source metadata is prepared for manual-only `v0.1.0-beta.8`. The latest manual GitHub release is `v0.1.0-beta.7`; the signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`. Beta.8 has not been built, tagged, or published. The planned artifact is an unsigned manual NSIS installer after its source commit is reviewed and pushed. This beta.8 workflow will not create a `.sig`, `latest.json`, or update `channel-beta`. The installer remains unsigned with no recorded clean-machine install. Status values are `done`, `needs user`, or `blocked`.
+Updated 6 October 2026. Manual-only `v0.1.0-beta.8` is published. It is the latest manual GitHub release; the signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`. The beta.8 NSIS installer is unsigned and has no updater `.sig` or `latest.json`; the beta.8 workflow did not update `channel-beta`. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
 
 Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.8`. Cargo.lock entries for crates that inherit the workspace version are beta.8; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
 
-`docs/releases/0.1.0-beta.8.md` is the note for this candidate. The signed release script is not part of the planned beta.8 manual-only workflow. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
+`docs/releases/0.1.0-beta.8.md` is the published note for this beta. The signed release script was not used for beta.8. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
 
 ## Release command
 
-Status: **done for the historical beta.6 signed updater release and beta.7 manual-only GitHub release**. The [`v0.1.0-beta.6`](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.6) signed updater release and rolling `channel-beta` manifest are published; the later `v0.1.0-beta.7` manual-only release is published separately. Beta.8 is pending a manual-only unsigned installer after source review/push; no beta.8 tag, GitHub upload, updater signature, manifest, or channel asset has been produced.
+Status: **done**. The [`v0.1.0-beta.8`](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.8) manual-only prerelease is published with its installer and `SHA256SUMS.txt`. Earlier manual-only beta.7 is also available. The signed updater feed remains at beta.6; beta.8 has no updater signature/manifest and did not change `channel-beta`.
 
 The release script's dry run completed the production bundle and manifest validation on the requested beta branch. It warned that direct publishing normally requires `main`; after validating the installer/signature/manifest, the equivalent GitHub release and channel upload commands were run against this explicitly requested beta branch. For the standard scripted flow on a future release, use a clean `main` checkout.
 
@@ -26,7 +26,7 @@ Pre-release versions (for example `0.1.0-beta.1`) are published with `gh release
 
 ## Produce an installer
 
-Status: **done for beta.6** (NSIS build and updater signature verified). Beta.8's unsigned manual NSIS build is pending the reviewed source commit being pushed; no bundle build was run while preparing this metadata.
+Status: **done for beta.8 manual install**. `Bloblex_0.1.0-beta.8_x64-setup.exe` (7,352,283 bytes; SHA-256 `a4b8af9587078b808cf4675af3f3cbeac1c07adf600f02e395c31d2042e93fed`) was built from commit `e9e4bd7` in a short-path checkout. Windows Authenticode reports `NotSigned`; no Tauri updater signature was generated. The historical beta.6 NSIS build had an updater signature.
 
 `npm run desktop:bundle` runs `scripts/bundle-windows.ps1`, which:
 
@@ -37,7 +37,7 @@ Status: **done for beta.6** (NSIS build and updater signature verified). Beta.8'
 
 The release artifact is the NSIS installer only. An MSI is not a Bloblex release artifact: an MSI version cannot carry a `-beta.N` pre-release. `docs/UPDATER.md` sets the Windows bundle target to `nsis` only. The release script globs `<CARGO_TARGET_DIR>\release\bundle\nsis\*-setup.exe`, keeps the file whose name matches the release version, and requires the sibling `<installer>.sig`. It does not upload an MSI.
 
-`tauri.conf.json` has `bundle.targets: ["nsis"]`, `createUpdaterArtifacts: true`, the updater public key, and stable/beta endpoints. The historical beta.6 release produced `C:\bxluna\release\bundle\nsis\Bloblex_0.1.0-beta.6_x64-setup.exe` (6,755,692 bytes) and the matching `.sig` (456 bytes); its versioned release and rolling channel manifest were verified remotely. The planned beta.8 manual artifact will be unsigned and will not update the updater manifest or channels.
+`tauri.conf.json` has `bundle.targets: ["nsis"]`, `createUpdaterArtifacts: true`, the updater public key, and stable/beta endpoints. For beta.8 only, the build overrode `bundle.createUpdaterArtifacts` to `false` and passed `--no-sign`; this produced no `.sig` and no `latest.json`. The rolling beta channel was left unchanged.
 
 The beta.6 bundle run staged both `bloblexd-x86_64-pc-windows-msvc.exe` and `bloblex-hook-x86_64-pc-windows-msvc.exe` in `apps/desktop/src-tauri/binaries/` for packaging. These are local bundle outputs, not source changes.
 
@@ -47,7 +47,7 @@ Configured bundle icons exist on disk: `assets/icon/bloblex.ico` and `assets/ico
 
 ## Update manifest and channels
 
-Status: **done**. The signed `latest.json` is attached to `v0.1.0-beta.6` and the rolling `channel-beta` asset has been updated to version `0.1.0-beta.6`.
+Status: **done for beta.6**. The signed `latest.json` is attached to `v0.1.0-beta.6` and the rolling `channel-beta` asset remains at version `0.1.0-beta.6`; unsigned manual-only beta.7 and beta.8 do not replace it.
 
 `scripts/make-update-manifest.mjs` writes the Tauri updater static file `latest.json`:
 

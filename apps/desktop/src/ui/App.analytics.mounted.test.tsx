@@ -168,13 +168,15 @@ afterEach(() => {
 })
 
 describe('sidebar usage analytics', () => {
-  it('shows only structured Codex quota in the shell and opens it in the existing Usage sheet', async () => {
+  it('shows all supported structured provider quotas in the shell and Usage sheet', async () => {
     h.rpc.mockImplementation(async (method: string) => {
       if (method === 'events.replay') return { replayAvailable: true, events: [] }
       if (method === 'settings.get') return { settings: {} }
       if (method === 'quota.list') return { quotas: [
-        { provider: 'codex', runtimeId: 'runtime-codex', fetchedAt: '2026-10-02T11:55:00Z', snapshot: { limits: [{ label: 'Codex', primary: { usedPercent: 62, remainingPercent: 38, windowDurationMins: 300, resetsAt: '2026-10-02T17:00:00Z' }, secondary: null }] } },
-        { provider: 'claude', runtimeId: 'runtime-claude', snapshot: { limits: [{ label: 'Claude', primary: { usedPercent: 10 } }] } },
+        { provider: 'codex', runtimeId: 'runtime-codex', fetchedAt: '2026-10-02T11:55:00Z', snapshot: { limits: [{ label: 'Codex', primary: { usedPercent: 62, remainingPercent: 38, windowDurationMins: 300, resetsAt: '2026-10-02T17:00:00Z' }, secondary: { usedPercent: 27, remainingPercent: 73, windowDurationMins: 10080, resetsAt: '2026-10-09T17:00:00Z' } }] } },
+        { provider: 'claude', runtimeId: 'runtime-claude', fetchedAt: '2026-10-02T11:55:00Z', snapshot: { limits: [{ label: 'Claude Code', primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: '2026-10-02T17:00:00Z' }, secondary: null }] } },
+        { provider: 'opencode', runtimeId: 'runtime-opencode', fetchedAt: '2026-10-02T11:55:00Z', lastError: 'unavailable', snapshot: { limits: [{ label: '5-hour', primary: { usedPercent: 120, windowDurationMins: 300, resetsAt: '2026-10-02T17:00:00Z' }, secondary: null }] } },
+        { provider: 'generic-opencode', snapshot: { limits: [{ label: 'Generic provider', primary: { usedPercent: 99 } }] } },
       ] }
       if (method === 'usage.summary') return { from: '2026-10-02T00:00:00Z', to: '2026-10-02T12:00:00Z', inputTokens: 120, outputTokens: 80 }
       if (method === 'agent.get') return { agent: claude }
@@ -185,13 +187,31 @@ describe('sidebar usage analytics', () => {
     const row = view.host.querySelector<HTMLButtonElement>('.quota-meter-row')
     expect(row?.textContent).toContain('Codex')
     expect(row?.textContent).toContain('62%')
-    expect(row?.textContent).not.toContain('Claude')
+    expect(row?.textContent).toContain('Claude Code')
+    expect(row?.textContent).toContain('OpenCode Go')
+    expect(row?.textContent).not.toContain('Generic provider')
+    expect(row?.textContent).toContain('5h')
+    expect(row?.textContent).not.toContain('7d')
+    expect(row?.querySelectorAll('.quota-compact-window')).toHaveLength(3)
+    expect(row?.querySelector('.quota-window')).toBeNull()
+    expect(row?.textContent).not.toContain('Resets')
+    expect(row?.querySelector('.quota-provider[data-provider="codex"]')?.getAttribute('aria-label')).toContain('62% used')
+    expect(row?.querySelector('.quota-provider[data-provider="codex"] .quota-compact-bar > b')?.getAttribute('style')).toContain('width: 62%')
+    expect(row?.querySelector('.quota-provider[data-provider="opencode"]')?.getAttribute('aria-label')).toContain('100% used')
+    expect(row?.querySelector('.quota-provider[data-provider="opencode"] .quota-compact-bar > b')?.getAttribute('style')).toContain('width: 100%')
+    for (const provider of ['claude', 'codex', 'opencode']) {
+      expect(view.host.querySelector(`.quota-provider[data-provider="${provider}"] .provider-logo`)?.getAttribute('aria-hidden')).toBe('true')
+    }
     await click(row)
     await view.settle()
     expect(view.host.querySelector('.usage-sheet')).not.toBeNull()
     expect(view.host.querySelector('.quota-details')?.textContent).toContain('62%')
+    expect(view.host.querySelector('.quota-details')?.textContent).toContain('27%')
     expect(view.host.querySelector('.quota-details')?.textContent).toContain('Resets ')
-    expect(view.host.querySelector('.quota-details')?.textContent).not.toContain('Claude')
+    expect(view.host.querySelector('.quota-details')?.textContent).toContain('Claude Code')
+    expect(view.host.querySelector('.quota-details')?.textContent).toContain('OpenCode Go')
+    expect(view.host.querySelector('.quota-details')?.textContent).toContain('last successful reading retained')
+    expect(view.host.querySelector('.quota-details')?.textContent).not.toContain('Generic provider')
     expect(view.host.textContent).toContain('Token usage')
     await click(buttonNamed(view.host, 'Refresh quota'))
     expect(h.rpc).toHaveBeenCalledWith('quota.refresh')

@@ -37,6 +37,7 @@ import { SettingsSheet, type SettingsPageId } from './SettingsSheet'
 import { ProfileMenu, saveProfileName } from './ProfileMenu'
 import { emptyPins, moveFavoriteRelative, movePinnedItemRelative, readPins, toggleFavorite, togglePinnedProject, togglePinnedSession, writePins, type SidebarPins } from './sidebarPins'
 import { Select } from './Select'
+import { ProviderLogo } from './providerBrand'
 import { useClock } from './useClock'
 import { useDialogAccessibility } from './dialogFocus'
 import { initialiseSeen, isUnread, markSeen, unreadNeedsApproval, type SeenSessions } from './sessionSeen'
@@ -1769,28 +1770,65 @@ function DiffViewer({ path, content, onClose }: { path: string; content: string;
 }
 
 function QuotaMeter({ quotas, onOpen }: { quotas: Record<string, unknown>[]; onOpen: () => void }) {
-  const available = quotas.filter((item) => item.provider === 'codex' && item.snapshot && typeof item.snapshot === 'object')
-  return <button type="button" className="quota-meter-row" aria-label="Provider quota details" onClick={onOpen}>
-    <span className="quota-meter-label"><Gauge size={14} />Provider quota</span>
+  const available = quotas.filter(isQuotaProvider)
+  return <button type="button" className="quota-meter-row" aria-label="Open provider quota details" onClick={onOpen}>
+    <span className="quota-meter-label"><Gauge size={14} />Account quota</span>
     {available.length ? available.map((item) => <QuotaSummary key={String(item.provider)} item={item} compact />) : <span className="quota-meter-empty">No supported account quota source available</span>}
     <span className="quota-meter-open">Usage details <ArrowUpRight size={13} /></span>
   </button>
 }
 
 function QuotaDetails({ quotas, refreshing, onRefresh }: { quotas: Record<string, unknown>[]; refreshing: boolean; onRefresh: () => void }) {
-  const available = quotas.filter((item) => item.provider === 'codex' && item.snapshot && typeof item.snapshot === 'object')
+  const available = quotas.filter(isQuotaProvider)
   return <section className="usage-block quota-details" aria-label="Provider quota">
     <div className="usage-block-heading"><h3>Provider quota</h3><span>Separate from token usage</span><button type="button" className="secondary-button small" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Checking…' : 'Refresh quota'}</button></div>
     {available.length ? available.map((item) => <QuotaSummary key={String(item.provider)} item={item} />) : <p className="usage-empty-line">No supported provider account quota source is available.</p>}
   </section>
 }
 
+function isQuotaProvider(item: Record<string, unknown>) {
+  return ['codex', 'claude', 'opencode'].includes(String(item.provider))
+}
+
 function QuotaSummary({ item, compact = false }: { item: Record<string, unknown>; compact?: boolean }) {
   const snapshot = recordFrom(item.snapshot)
   const limits = Array.isArray(snapshot.limits) ? snapshot.limits.filter((limit): limit is Record<string, unknown> => !!limit && typeof limit === 'object') : []
   const fetched = typeof item.fetchedAt === 'string' ? new Date(item.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null
-  const label = labelize(item.provider, 'Provider')
+  const label = item.provider === 'opencode' ? 'OpenCode Go' : item.provider === 'claude' ? 'Claude Code' : labelize(item.provider, 'Provider')
+  const lastError = typeof item.lastError === 'string' ? item.lastError : null
+  const errorCopy: Record<string, string> = {
+    no_credentials: item.provider === 'opencode' ? 'OpenCode Go sign-in not found' : 'Claude Code sign-in not found',
+    unauthorized: 'Sign-in rejected; check the CLI sign-in',
+    no_subscription: 'No OpenCode Go subscription',
+    protocol: 'Quota response unreadable',
+    timeout: 'Check timed out; last successful reading retained',
+    unavailable: 'Temporarily unavailable; last successful reading retained',
+  }
+  const staleErrorCopy: Record<string, string> = {
+    no_credentials: 'No matching CLI sign-in; showing last successful reading',
+    unauthorized: 'CLI sign-in was rejected; showing last successful reading',
+    no_subscription: 'No Go subscription on latest check; showing last successful reading',
+    protocol: 'Latest quota response was unreadable; showing last successful reading',
+    timeout: 'Check timed out; last successful reading retained',
+    unavailable: 'Refresh failed; last successful reading retained',
+  }
+  if (compact) {
+    const primaryLimit = limits.find((limit) => typeof recordFrom(limit.primary).usedPercent === 'number')
+    const primary = primaryLimit ? recordFrom(primaryLimit.primary) : null
+    const usedPercent = primary && typeof primary.usedPercent === 'number' ? primary.usedPercent : null
+    const displayedPercent = usedPercent === null ? null : Math.max(0, Math.min(100, usedPercent))
+    const duration = primary && typeof primary.windowDurationMins === 'number' ? primary.windowDurationMins : null
+    const windowLabel = duration === 300 ? '5h' : duration === 10080 ? '7d' : String(primaryLimit?.label ?? 'quota')
+    const compactStatus = lastError ? errorCopy[lastError] ?? 'Quota unavailable' : 'Quota unavailable'
+    const accessibleSummary = displayedPercent === null ? `${label}: ${compactStatus}` : `${label}, ${windowLabel} window, ${displayedPercent}% used`
+    return <span className="quota-provider compact" data-provider={String(item.provider ?? 'unknown')} role="group" aria-label={accessibleSummary} title={accessibleSummary}>
+      <ProviderLogo provider={String(item.provider ?? '')} size={16} />
+      <strong>{label}</strong>
+      {displayedPercent === null ? <span className="quota-compact-status">{compactStatus}</span> : <span className="quota-compact-window"><span>{windowLabel}</span><i className="quota-compact-bar" aria-hidden="true"><b style={{ width: `${displayedPercent}%` }} /></i><b>{displayedPercent}%</b></span>}
+    </span>
+  }
   return <span className={`quota-provider ${compact ? 'compact' : ''}`} data-provider={String(item.provider ?? 'unknown')}>
+    <ProviderLogo provider={String(item.provider ?? '')} size={16} />
     <strong>{label}</strong>
     {limits.length ? limits.map((limit, index) => <span className="quota-limit" key={`${String(limit.label)}-${index}`}>
       <span>{String(limit.label ?? 'Quota')}</span>
@@ -1802,7 +1840,8 @@ function QuotaSummary({ item, compact = false }: { item: Record<string, unknown>
         const reset = quotaResetLabel(value.resetsAt)
         return <span className="quota-window" key={window} title={`${durationLabel} window`}><span>{durationLabel}</span><i><b style={{ width: `${Math.max(0, Math.min(100, value.usedPercent))}%` }} /></i><b>{value.usedPercent}%</b>{reset && <small>{reset}</small>}</span>
       })}
-    </span>) : <span className="quota-unknown">Quota unavailable</span>}
+    </span>) : <span className="quota-unknown">{lastError ? errorCopy[lastError] ?? 'Quota unavailable' : 'Quota unavailable'}</span>}
+    {limits.length > 0 && lastError && <small className="quota-stale">{staleErrorCopy[lastError] ?? 'Latest refresh failed; showing last successful reading'}</small>}
     {fetched && !compact && <small>Updated {fetched}</small>}
   </span>
 }

@@ -228,14 +228,20 @@
 @keyframes typing { 0%, 100% { transform: scale(0.6); } 50% { transform: scale(1.15); } }
 
 .composer-wrap { flex: 0 0 auto; width: min(800px, calc(100% - 40px)); margin: 0 auto; padding: 6px 0 14px; }
-.quota-meter-row { grid-column: 1 / -1; grid-row: 2; width: 100%; min-height: 38px; display: flex; align-items: center; gap: 20px; padding: 5px 18px; border: 0; border-top: 1px solid var(--line); background: var(--surface-sidebar); color: var(--text-2); text-align: left; cursor: pointer; }
+.quota-meter-row { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; min-height: 38px; display: flex; align-items: center; gap: clamp(7px, 1.3vw, 16px); padding: 5px 18px; overflow: hidden; border: 0; border-top: 1px solid var(--line); background: var(--surface-sidebar); color: var(--text-2); text-align: left; cursor: pointer; }
 .quota-meter-label, .quota-meter-open { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-size: var(--fs-xs); }
 .quota-meter-label { color: var(--text-1); font-weight: 600; }
 .quota-meter-empty { color: var(--text-3); font-size: var(--fs-xs); }
-.quota-meter-open { margin-left: auto; color: var(--text-3); }
+.quota-meter-open { flex: 0 0 auto; margin-left: auto; color: var(--text-3); }
 .quota-provider { display: inline-flex; align-items: center; gap: 10px; font-size: var(--fs-xs); }
-.quota-provider > strong { color: var(--text-1); }
-.quota-provider.compact { gap: 8px; }
+.quota-provider > strong { min-width: 0; color: var(--text-1); }
+.quota-provider.compact { min-width: 0; flex: 0 1 auto; gap: 6px; white-space: nowrap; }
+.quota-provider.compact > strong { max-width: 76px; overflow: hidden; text-overflow: ellipsis; }
+.quota-compact-window { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.quota-compact-window b { color: var(--text-2); }
+.quota-compact-bar { display: inline-block; width: 28px; height: 4px; overflow: hidden; border-radius: 4px; background: var(--surface-raised); }
+.quota-compact-bar > b { display: block; height: 100%; border-radius: inherit; background: var(--agent-accent, var(--accent)); }
+.quota-compact-status { max-width: 92px; overflow: hidden; color: var(--text-3); text-overflow: ellipsis; }
 .quota-limit { display: inline-flex; align-items: center; gap: 8px; color: var(--text-3); }
 .quota-window { display: inline-flex; align-items: center; gap: 5px; }
 .quota-window i { display: inline-block; width: 42px; height: 4px; overflow: hidden; border-radius: 4px; background: var(--surface-raised); }
@@ -245,7 +251,16 @@
 .quota-details { display: flex; flex-direction: column; gap: 14px; }
 .quota-details .quota-provider { flex-wrap: wrap; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); }
 .quota-details .quota-provider > strong { min-width: 80px; }
+.quota-details .quota-stale { width: 100%; color: var(--text-3); }
 .quota-details .quota-provider small { width: 100%; color: var(--text-3); }
+@media (max-width: 940px) {
+  .quota-meter-row { gap: 7px; padding-inline: 10px; }
+  .quota-meter-label { font-size: 0; }
+  .quota-meter-open { font-size: 0; }
+  .quota-meter-open svg { width: 13px; height: 13px; }
+  .quota-provider.compact > strong { display: none; }
+  .quota-compact-bar { width: 24px; }
+}
 .composer-box { min-height: 50px; padding: 7px 7px 7px 8px; display: flex; align-items: flex-end; gap: 6px; border: 1px solid var(--line); border-radius: 26px; background: var(--surface-raised); transition: border-color 140ms ease; }
 .composer-box:focus-within { border-color: var(--line-strong); }
 .composer-tool { width: 36px; height: 36px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border: 0; border-radius: 50%; background: transparent; }

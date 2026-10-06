@@ -718,7 +718,7 @@ impl Storage {
         Ok(())
     }
     pub fn record_quota_failure(&self, provider: &str, runtime_id: &str, attempted_at: &str, failure_count: u32, retry_after: &str, error_code: &str) -> Result<(), StorageError> {
-        if !["timeout", "unavailable", "protocol", "other"].contains(&error_code) { return Err(StorageError::InvalidAnalytics); }
+        if !["timeout", "unavailable", "protocol", "other", "no_credentials", "unauthorized", "no_subscription"].contains(&error_code) { return Err(StorageError::InvalidAnalytics); }
         let conn = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         conn.execute(
             "INSERT INTO quota_snapshots(provider,runtime_id,snapshot_json,fetched_at,last_attempt_at,failure_count,retry_after,last_error) VALUES(?1,?2,NULL,NULL,?3,?4,?5,?6) ON CONFLICT(provider) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,failure_count=excluded.failure_count,retry_after=excluded.retry_after,last_error=excluded.last_error",

@@ -35,6 +35,7 @@ use uuid::Uuid;
 
 mod model_presentation;
 mod quota;
+mod quota_sources;
 
 use quota::{normalize_codex_quota, PollFailure, PollOutcome, QuotaPollGate, QUOTA_POLL_INTERVAL, QUOTA_REQUEST_TIMEOUT};
 
@@ -380,6 +381,9 @@ fn quota_failure_code(failure: PollFailure) -> &'static str {
         PollFailure::Timeout => "timeout",
         PollFailure::Unavailable => "unavailable",
         PollFailure::Protocol => "protocol",
+        PollFailure::NoCredentials => "no_credentials",
+        PollFailure::Unauthorized => "unauthorized",
+        PollFailure::NoSubscription => "no_subscription",
     }
 }
 
@@ -431,8 +435,10 @@ async fn poll_codex_quota(st: &AppState, runtime_value: Value) {
 
 async fn emit_quota_snapshot(st: &AppState) {
     if let Ok(quotas) = st.db.quota_snapshots() {
-        if let Some(quota) = quotas.into_iter().find(|quota| quota["provider"] == "codex") {
-            st.emit("quota.updated", json!({"provider":"codex","quota":quota})).await;
+        for quota in quotas {
+            if let Some(provider) = quota["provider"].as_str().filter(|provider| ["codex", "claude", "opencode"].contains(provider)) {
+                st.emit("quota.updated", json!({"provider":provider,"quota":quota})).await;
+            }
         }
     }
 }
@@ -441,6 +447,74 @@ async fn poll_provider_quotas(st: &AppState) {
     let runtimes = st.runtimes.read().await.clone();
     if let Some(runtime) = runtimes.into_iter().find(|runtime| runtime["provider"] == "codex" && runtime["status"] == "online") {
         poll_codex_quota(st, runtime).await;
+    }
+    let runtimes = st.runtimes.read().await.clone();
+    if let Some(runtime) = runtimes.iter().find(|runtime| runtime["provider"] == "claude") {
+        if let Some(runtime_id) = runtime["id"].as_str() {
+            poll_local_quota(st, "claude", runtime_id, quota_sources::fetch_claude_quota).await;
+        }
+    }
+    if let Some(runtime) = runtimes.iter().find(|runtime| runtime["provider"] == "opencode") {
+        if let Some(runtime_id) = runtime["id"].as_str() {
+            poll_local_quota(st, "opencode", runtime_id, quota_sources::fetch_opencode_go_quota).await;
+        }
+    }
+}
+
+async fn poll_local_quota<F, Fut>(
+    st: &AppState,
+    provider: &str,
+    runtime_id: &str,
+    fetch: F,
+)
+where
+    F: FnOnce(String, String) -> Fut,
+    Fut: std::future::Future<Output = Result<quota::ProviderQuota, quota_sources::SourceFailure>>,
+{
+    let runtime_id = runtime_id.to_owned();
+    let normalize_runtime_id = runtime_id.clone();
+    let provider_name = provider.to_owned();
+    let outcome = quota::poll_with_timeout(&st.quota_poll_gate, provider, QUOTA_REQUEST_TIMEOUT, || async move {
+        let fetched_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let snapshot = fetch(normalize_runtime_id, fetched_at.clone()).await.map_err(|failure| match failure {
+            quota_sources::SourceFailure::NoCredentials => PollFailure::NoCredentials,
+            quota_sources::SourceFailure::Unauthorized => PollFailure::Unauthorized,
+            quota_sources::SourceFailure::NoSubscription => PollFailure::NoSubscription,
+            quota_sources::SourceFailure::Unavailable => PollFailure::Unavailable,
+            quota_sources::SourceFailure::Protocol => PollFailure::Protocol,
+        })?;
+        Ok((snapshot, fetched_at))
+    }).await;
+    persist_quota_outcome(st, &provider_name, &runtime_id, outcome).await;
+}
+
+async fn persist_quota_outcome(
+    st: &AppState,
+    provider: &str,
+    runtime_id: &str,
+    outcome: PollOutcome<(quota::ProviderQuota, String)>,
+) {
+    match outcome {
+        PollOutcome::Skipped => {}
+        PollOutcome::Updated((snapshot, fetched_at)) => {
+            let normalized = serde_json::to_value(snapshot).unwrap_or(Value::Null);
+            if let Err(error) = st.db.save_quota_snapshot(provider, runtime_id, &normalized, &fetched_at) {
+                tracing::warn!("{provider} quota snapshot could not be saved: {error}");
+                return;
+            }
+            emit_quota_snapshot(st).await;
+        }
+        PollOutcome::Failed { failure, failure_count, backoff } => {
+            let attempted = Utc::now();
+            let retry_after = attempted + chrono::Duration::from_std(backoff).unwrap_or_default();
+            let attempted = attempted.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let retry_after = retry_after.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            if let Err(error) = st.db.record_quota_failure(provider, runtime_id, &attempted, failure_count, &retry_after, quota_failure_code(failure)) {
+                tracing::warn!("{provider} quota failure state could not be saved: {error}");
+                return;
+            }
+            emit_quota_snapshot(st).await;
+        }
     }
 }
 

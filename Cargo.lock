@@ -422,12 +422,15 @@ dependencies = [
  "bloblex-usage",
  "chrono",
  "futures-util",
+ "reqwest 0.12.28",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

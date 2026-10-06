@@ -1,16 +1,16 @@
 # Release checklist
 
-Updated 6 October 2026. Manual-only `v0.1.0-beta.8` is published. The current source is `v0.1.0-beta.9`, being prepared as the next manual-only beta. The signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`; manual-only betas do not change that feed. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
+Updated 6 October 2026. Manual-only `v0.1.0-beta.9` is published and is the latest GitHub release. The signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`; manual-only betas do not change that feed. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
 
 Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.9`. Cargo.lock entries for crates that inherit the workspace version are beta.9; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
 
-`docs/releases/0.1.0-beta.9.md` is the note for the current manual-only beta. The signed release script is not used for unsigned manual releases. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
+`docs/releases/0.1.0-beta.9.md` is the published note for the current manual-only beta. The signed release script is not used for unsigned manual releases. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
 
 ## Release command
 
-Status: **done**. The [`v0.1.0-beta.8`](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.8) manual-only prerelease is published with its installer and `SHA256SUMS.txt`. Earlier manual-only beta.7 is also available. The signed updater feed remains at beta.6; beta.8 has no updater signature/manifest and did not change `channel-beta`.
+Status: **done**. The [`v0.1.0-beta.9`](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.9) manual-only prerelease is published with its installer and `SHA256SUMS.txt`; beta.8 and beta.7 are also available as earlier manual-only releases. The signed updater feed remains at beta.6; beta.9 has no updater signature/manifest and did not change `channel-beta`.
 
-The release script's dry run completed the production bundle and manifest validation on the requested beta branch. It warned that direct publishing normally requires `main`; after validating the installer/signature/manifest, the equivalent GitHub release and channel upload commands were run against this explicitly requested beta branch. For the standard scripted flow on a future release, use a clean `main` checkout.
+Historical beta.8 workflow: the release script's dry run completed the production bundle and manifest validation on the requested beta branch. It warned that direct publishing normally requires `main`; after validating the installer/signature/manifest, the equivalent GitHub release and channel upload commands were run against that explicitly requested beta branch. For the standard scripted flow on a future signed release, use a clean `main` checkout.
 
 For a future signed release, from the repository root:
 
@@ -25,6 +25,8 @@ The script checks a clean `main` checkout, exact version equality across the fou
 Pre-release versions (for example `0.1.0-beta.1`) are published with `gh release create ... --prerelease --latest=false`. A version with no pre-release part omits both flags so GitHub can mark it Latest.
 
 ## Produce an installer
+
+Status: **done for beta.9 manual install**. `Bloblex_0.1.0-beta.9_x64-setup.exe` (7,366,759 bytes; SHA-256 `ad1525a8ecce9d1aba9a89da42bb662053c6582a68c9da562a5104d52a700746`) was built from commit `b6b3c95` in `D:\b9`, a short-path checkout. Windows Authenticode reports `NotSigned`; no Tauri updater signature or manifest was generated.
 
 Status: **done for beta.8 manual install**. `Bloblex_0.1.0-beta.8_x64-setup.exe` (7,352,283 bytes; SHA-256 `a4b8af9587078b808cf4675af3f3cbeac1c07adf600f02e395c31d2042e93fed`) was built from commit `e9e4bd7` in a short-path checkout. Windows Authenticode reports `NotSigned`; no Tauri updater signature was generated. The historical beta.6 NSIS build had an updater signature.
 
@@ -148,4 +150,4 @@ Status: **done** as a review; the file was not edited.
 
 Status: **done** (source reviewed for beta.6; not a native UI check).
 
-Settings → Updates includes an About group with `Code signing: Not configured`, matching the unsigned Windows installer. The source version metadata is now `0.1.0-beta.8` across the package, Tauri and Cargo workspace manifests. This source review is not a native window or installed-app verification, and beta.8 has not yet been built or installed.
+Settings → Updates includes an About group with `Code signing: Not configured`, matching the unsigned Windows installer. The source version metadata is `0.1.0-beta.9` across the package, Tauri and Cargo workspace manifests. This source review is not a native window or installed-app verification; beta.9 has not had a clean-machine install pass.

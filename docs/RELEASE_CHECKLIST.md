@@ -1,21 +1,21 @@
 # Release checklist
 
-Updated 6 October 2026. `v0.1.0-beta.7` is the current release candidate; `v0.1.0-beta.6` remains the latest published release until beta.7 is uploaded. The installer remains unsigned with no recorded clean-machine install. Status values are `done`, `needs user`, or `blocked`.
+Updated 6 October 2026. Source metadata is prepared for manual-only `v0.1.0-beta.8`. The latest manual GitHub release is `v0.1.0-beta.7`; the signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`. Beta.8 has not been built, tagged, or published. The planned artifact is an unsigned manual NSIS installer after its source commit is reviewed and pushed. This beta.8 workflow will not create a `.sig`, `latest.json`, or update `channel-beta`. The installer remains unsigned with no recorded clean-machine install. Status values are `done`, `needs user`, or `blocked`.
 
-Versions read from this worktree: root `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.7`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
+Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.8`. Cargo.lock entries for crates that inherit the workspace version are beta.8; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
 
-`docs/releases/0.1.0-beta.7.md` is the note for this beta. Outside `-DryRun`, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
+`docs/releases/0.1.0-beta.8.md` is the note for this candidate. The signed release script is not part of the planned beta.8 manual-only workflow. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
 
 ## Release command
 
-Status: **done**. GitHub prerelease [`v0.1.0-beta.6`](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.6) and the rolling `channel-beta` manifest are published.
+Status: **done for the historical beta.6 signed updater release and beta.7 manual-only GitHub release**. The [`v0.1.0-beta.6`](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.6) signed updater release and rolling `channel-beta` manifest are published; the later `v0.1.0-beta.7` manual-only release is published separately. Beta.8 is pending a manual-only unsigned installer after source review/push; no beta.8 tag, GitHub upload, updater signature, manifest, or channel asset has been produced.
 
 The release script's dry run completed the production bundle and manifest validation on the requested beta branch. It warned that direct publishing normally requires `main`; after validating the installer/signature/manifest, the equivalent GitHub release and channel upload commands were run against this explicitly requested beta branch. For the standard scripted flow on a future release, use a clean `main` checkout.
 
-From the repository root:
+For a future signed release, from the repository root:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -Version 0.1.0-beta.7
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -Version <version>
 ```
 
 `-DryRun` runs preflight, the bundle build, and manifest generation, prints the `gh` commands it would run, and does not execute `gh`, create a tag, or push. Add `-SkipBuild` to reuse an existing NSIS output directory, and `-BundleDir` to point that directory at a folder of `*-setup.exe` and matching `.sig` files (used to exercise the script without a real bundle). `-Repo` defaults to `sico-vibes/bloblex`.
@@ -26,7 +26,7 @@ Pre-release versions (for example `0.1.0-beta.1`) are published with `gh release
 
 ## Produce an installer
 
-Status: **done for beta.6** (NSIS build and updater signature verified).
+Status: **done for beta.6** (NSIS build and updater signature verified). Beta.8's unsigned manual NSIS build is pending the reviewed source commit being pushed; no bundle build was run while preparing this metadata.
 
 `npm run desktop:bundle` runs `scripts/bundle-windows.ps1`, which:
 
@@ -37,7 +37,7 @@ Status: **done for beta.6** (NSIS build and updater signature verified).
 
 The release artifact is the NSIS installer only. An MSI is not a Bloblex release artifact: an MSI version cannot carry a `-beta.N` pre-release. `docs/UPDATER.md` sets the Windows bundle target to `nsis` only. The release script globs `<CARGO_TARGET_DIR>\release\bundle\nsis\*-setup.exe`, keeps the file whose name matches the release version, and requires the sibling `<installer>.sig`. It does not upload an MSI.
 
-`tauri.conf.json` now has `bundle.targets: ["nsis"]`, `createUpdaterArtifacts: true`, the updater public key, and stable/beta endpoints. The release build produced `C:\bxluna\release\bundle\nsis\Bloblex_0.1.0-beta.6_x64-setup.exe` (6,755,692 bytes) and the matching `.sig` (456 bytes). The versioned release and rolling channel manifest were verified remotely.
+`tauri.conf.json` has `bundle.targets: ["nsis"]`, `createUpdaterArtifacts: true`, the updater public key, and stable/beta endpoints. The historical beta.6 release produced `C:\bxluna\release\bundle\nsis\Bloblex_0.1.0-beta.6_x64-setup.exe` (6,755,692 bytes) and the matching `.sig` (456 bytes); its versioned release and rolling channel manifest were verified remotely. The planned beta.8 manual artifact will be unsigned and will not update the updater manifest or channels.
 
 The beta.6 bundle run staged both `bloblexd-x86_64-pc-windows-msvc.exe` and `bloblex-hook-x86_64-pc-windows-msvc.exe` in `apps/desktop/src-tauri/binaries/` for packaging. These are local bundle outputs, not source changes.
 
@@ -148,4 +148,4 @@ Status: **done** as a review; the file was not edited.
 
 Status: **done** (source reviewed for beta.6; not a native UI check).
 
-Settings → Updates includes an About group with `Code signing: Not configured`, matching the unsigned Windows installer. The app version is `0.1.0-beta.6` across the package, Tauri and Cargo workspace manifests. This source review is not a native window or installed-app verification.
+Settings → Updates includes an About group with `Code signing: Not configured`, matching the unsigned Windows installer. The source version metadata is now `0.1.0-beta.8` across the package, Tauri and Cargo workspace manifests. This source review is not a native window or installed-app verification, and beta.8 has not yet been built or installed.

@@ -38,6 +38,10 @@ This remains an application-specific port, not a verbatim clone: provider metada
 
 Provider defaults can be pinned to a concrete model/effort only when validated metadata reports them. Otherwise explicit null remains the provider-default choice, without guessing an actual model identity. Older sessions without a lock pin daemon-resolved options when resumed.
 
-## References
+## Release verification
+
+The source is committed as `146db44`, versioned in `4aa48f4`, pushed to `main`, and published as manual-only `v0.1.0-beta.10`. A separate short-path checkout (`D:\b10`) passed all 361 frontend tests, the production build, full offline Rust workspace tests with installed-provider smoke disabled, and the unsigned NSIS bundle. The installer is 7,383,216 bytes and GitHub's uploaded SHA-256 matches `f418d1799f2aa3200d992500cf74a1f02b076731588782c40936c114d02727fc`. The signed `channel-beta` tag/feed is unchanged. This packaging pass does not establish native UI, live-provider, or clean-machine install acceptance.
+
+## Reference artifacts
 
 The reference components are recorded with their commit provenance and MIT notices in [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md). Browser artifacts are in the local, untracked `output/playwright/composer-20261007/` directory.

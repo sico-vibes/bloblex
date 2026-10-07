@@ -52,6 +52,8 @@ import { LAUNCH_OVERALL_TIMEOUT_REASON, LAUNCH_TIMEOUTS, launchWarningsFor, runL
 import { providerBrand } from './providerBrand'
 import { applyAppearance, applySurfaceAppearance, type TextSizeChoice, type ThemeChoice } from './appearance'
 import { SessionExecutionControls } from './SessionExecutionControls'
+import { ContextWindowIndicator } from './ContextWindowIndicator'
+import { ConversationOutline, outlineItemsFromMessages } from './ConversationOutline'
 import { SafeMarkdown } from './SafeMarkdown'
 import { parseUnifiedDiff } from './diffParser'
 import type { QuickSwitcherItem } from './quickSwitcherModel'
@@ -384,6 +386,10 @@ export function App() {
   const groupedConversationItems = groupConversationActivity(conversationItems)
   const activePermission = selectPendingPermission(snapshot?.permissions ?? [], selectedSession?.id, activeSessionId, permissionClock)
   const agentName = activeSelectedAgent?.name ?? (selectedRuntime ? labelize(selectedRuntime.provider) : 'No runtime selected')
+  const outlineItems = outlineItemsFromMessages(
+    groupedConversationItems.filter((item): item is ConversationItem & { kind: 'message' } => item.kind === 'message'),
+    agentName,
+  )
   const accent = activeSelectedAgent ? agentColorHex(activeSelectedAgent.color) : ''
   const companionPermission = activePermission ?? undefined
   const companionSessionRecord = sessions.find((session) => session.id === companionPermission?.sessionId)
@@ -1454,7 +1460,7 @@ export function App() {
         {!selectedSession ? <>{activePermission && <ApprovalCard permission={activePermission} onReply={(choice) => answerPermission(activePermission, choice)} /> }<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} accent={accent} mood={selectedMood} agentName={agentName} outfit={activeSelectedAgent?.outfit ?? 'auto'} createdAt={activeSelectedAgent?.createdAt ?? null} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={openCreate} onRefresh={() => void refreshRuntimes()} /></> : <>
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
             <div className="conversation-layout">
-              <ConversationOutline items={groupedConversationItems.filter((item): item is ConversationItem & { kind:'message' } => item.kind === 'message').map((item, index) => ({ anchor: `conversation-message-${encodeURIComponent(item.id)}`, label: `${isUserMessage(item.value) ? 'You' : agentName}: ${plainText(typeof item.value?.text === 'string' ? item.value.text : typeof item.value?.content === 'string' ? item.value.content : '').slice(0, 160) || 'Message'}`, index }))} />
+              <ConversationOutline key={selectedSession.id} sessionId={selectedSession.id} items={outlineItems} />
               <div className="chat-column">
               {groupedConversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} outfit={activeSelectedAgent?.outfit ?? 'auto'} createdAt={activeSelectedAgent?.createdAt ?? null} label={activeSelectedAgent?.name ?? agentName} /><h2>Ready when you are.</h2><p>Ask {agentName} to explore <code>{currentProjectName ?? 'the project'}</code> or make a change.</p></div> : groupedConversationItems.map((item, index) => item.kind === 'activity-group'
                 ? <ActivityGroupRow key={item.id} group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
@@ -1469,9 +1475,11 @@ export function App() {
           <div className="composer-wrap">
             <div className="composer-box">
               <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() } }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
-              <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} />
-              {selectedSession && activeSelectedAgent && <SessionExecutionControls session={selectedSession} agent={activeSelectedAgent} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} />}
-              <button className={`send-button ${turnLive ? 'cancel' : ''}`} onClick={turnLive ? () => void cancelTurn() : () => void sendPrompt()} disabled={busy || (!turnLive && (!composer.trim() || !runtimeReady))} aria-label={turnLive ? 'Cancel turn' : 'Send message'}>{busy ? <LoaderCircle size={16} className="spinning" /> : turnLive ? <Square size={12} fill="currentColor" /> : <ArrowUp size={17} />}</button>
+              <div className="composer-control-strip">
+                <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} />
+                {selectedSession && activeSelectedAgent && <SessionExecutionControls session={selectedSession} agent={activeSelectedAgent} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} />}
+                <button className={`send-button ${turnLive ? 'cancel' : ''}`} onClick={turnLive ? () => void cancelTurn() : () => void sendPrompt()} disabled={busy || (!turnLive && (!composer.trim() || !runtimeReady))} aria-label={turnLive ? 'Cancel turn' : 'Send message'}>{busy ? <LoaderCircle size={16} className="spinning" /> : turnLive ? <Square size={12} fill="currentColor" /> : <ArrowUp size={17} />}</button>
+              </div>
             </div>
             <div className="composer-note">{currentProjectName ? <><FolderOpen size={11} />{currentProjectName}<span>·</span></> : null}Agent actions run on your device. You approve what matters.</div>
           </div>
@@ -1500,7 +1508,7 @@ export function App() {
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
       {chooserView}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body="It leaves the roster. Its conversations stay saved. Restoring a blob is not available yet." confirmLabel="Archive" cancelLabel="Cancel" onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
-      {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bloblex. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm onConfirm={() => { const target = sessionDeleteTarget; setSessionDeleteTarget(null); void rpc('session.delete', { sessionId: target.id }).then(() => focusSidebarBlob()).catch((reason) => { setError(messageOf(reason)); focusSidebarSession(target.id) }) }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
+      {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bloblex. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm successTitle="Conversation deleted" successBody="This conversation and its messages were removed from Bloblex." onConfirm={async () => { await rpc('session.delete', { sessionId: sessionDeleteTarget.id }) }} onComplete={() => { setSessionDeleteTarget(null); focusSidebarBlob() }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
       {pendingBlobImport && <ImportBlobDialog blob={pendingBlobImport} runtimes={runtimes} onCancel={() => { setPendingBlobImport(null); restoreCreateFocus() }} onCreate={(runtimeId) => createImportedBlob(pendingBlobImport, runtimeId)} />}
     </main>
   )
@@ -1542,30 +1550,6 @@ function MessageItem({ id, message, accent, agentName, showAvatar, mood }: { id:
       {stamp && <div className="message-time">{stamp}</div>}
     </div>
   </article>
-}
-
-function ConversationOutline({ items }: { items: Array<{ anchor: string; label: string; index: number }> }) {
-  const [active, setActive] = useState(0)
-  if (items.length < 3) return null
-  const jump = (index: number) => {
-    const item = items[index]
-    if (!item) return
-    setActive(index)
-    const target = document.getElementById(item.anchor)
-    target?.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
-    target?.focus({ preventScroll: true })
-  }
-  return <nav className="conversation-outline" aria-label="Conversation message outline">
-    {items.map((item, index) => <button key={item.anchor} type="button" className={active === index ? 'active' : ''} aria-label={`Jump to message ${index + 1}: ${item.label}`} aria-controls={item.anchor} aria-current={active === index ? 'location' : undefined} tabIndex={active === index ? 0 : -1} onClick={() => jump(index)} onFocus={() => setActive(index)} onKeyDown={(event) => {
-      let next: number | null = null
-      if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % items.length
-      else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index + items.length - 1) % items.length
-      else if (event.key === 'Home') next = 0
-      else if (event.key === 'End') next = items.length - 1
-      else if (event.key === 'Escape') { event.currentTarget.blur(); return }
-      if (next !== null) { event.preventDefault(); jump(next); document.querySelector<HTMLButtonElement>(`.conversation-outline button:nth-child(${next + 1})`)?.focus() }
-    }}><span aria-hidden="true" /> <span className="conversation-outline-preview">{item.label}</span></button>)}
-  </nav>
 }
 
 function storageFlag(key: string) {
@@ -1807,36 +1791,6 @@ function QuotaMeter({ quotas, onOpen }: { quotas: Record<string, unknown>[]; onO
     {available.length ? available.map((item) => <QuotaSummary key={String(item.provider)} item={item} compact />) : <span className="quota-meter-empty">No supported account quota source available</span>}
     <span className="quota-meter-open">Usage details <ArrowUpRight size={13} /></span>
   </button>
-}
-
-function ContextWindowIndicator({ used, size }: { used?: number | null; size?: number | null }) {
-  const hasUsed = typeof used === 'number' && Number.isFinite(used) && used >= 0
-  const hasSize = typeof size === 'number' && Number.isFinite(size) && size > 0
-  const percentage = hasUsed && hasSize ? Math.max(0, Math.min(100, Math.round((used / size) * 100))) : null
-  const valueText = hasUsed && hasSize
-    ? `${contextTokenCount(used)} / ${contextTokenCount(size)} tokens`
-    : hasUsed
-      ? `${contextTokenCount(used)} tokens used · window size unknown`
-      : hasSize
-        ? `Window ${contextTokenCount(size)} tokens · usage unknown`
-        : 'Context usage unavailable'
-  const accessibleName = percentage === null ? `Context window: ${valueText}` : `Context window: ${used} of ${size} tokens used, ${percentage}% full`
-  return <span className={`context-window-indicator ${percentage === null ? 'unknown' : ''}`} aria-label={accessibleName} title={accessibleName}>
-    {percentage === null
-      ? <span>{valueText}</span>
-      : <>
-          <span>{valueText}</span>
-          <span className="context-window-progress" role="progressbar" aria-label="Context window used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage}>
-            <i><b style={{ width: `${percentage}%` }} /></i><strong>{percentage}%</strong>
-          </span>
-        </>}
-  </span>
-}
-
-function contextTokenCount(value: number) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`
-  if (value >= 1_000) return `${Math.round(value / 1_000)}k`
-  return String(value)
 }
 
 function QuotaDetails({ quotas, refreshing, onRefresh }: { quotas: Record<string, unknown>[]; refreshing: boolean; onRefresh: () => void }) {

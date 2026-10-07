@@ -1,6 +1,8 @@
 # Implementation status
 
-Current as of 5 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
+Current as of 7 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
+
+**7 October uncommitted scope:** source-derived Claude/Codex effort engines with advertised levels, context ring/details, paired-message outline springs, and awaited hold-to-delete shared-element transitions. Daemon regressions in initial agent options, completed-state changes, context reset order, and resume/turn lock races are corrected. All 361 desktop tests, typecheck/build, the offline backend workspace gate excluding unchanged native desktop, independent source comparison, and browser fixtures pass. Live-provider smoke was explicitly disabled; native/live interaction remains open. This is a themed React port with intentional metadata/RPC differences, not a literal clone of the reference demos. [Evidence and boundaries](evidence/composer-controls-2026-10-07.md).
 
 **6 October beta.9 scope:** lazy prompt-time session resume, provider title events (Codex/OpenCode; no verified structured Claude title source), persisted context fields, and independently persisted session model/effort lock with explicit model-change confirmation are included. The composer separates model and effort, shows individually reported context fields and displays a percentage only when both used and size are known; the chat adds a keyboard-operable actual-message outline plus hold-to-confirm for conversation deletion. Full offline Rust workspace tests, desktop typecheck, 326 Vitest tests and production build passed. Native interaction and live provider behavior for this follow-up are unverified. See the handoff for field-level source limits.
 

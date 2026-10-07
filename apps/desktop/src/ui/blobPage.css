@@ -76,11 +76,27 @@
 /* Dialogs used by the editor and elsewhere */
 .blob-card { padding: 18px; display: grid; gap: 14px; border-radius: var(--radius-lg); background: var(--surface-raised); }
 .blob-card h3 { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
-.blob-dialog { width: min(440px, calc(100% - 32px)); margin: auto; padding: 20px; display: grid; gap: 12px; border-radius: var(--radius-lg); background: var(--surface-overlay); box-shadow: var(--shadow-pop); color: var(--text-1); }
-.blob-dialog h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
+.blob-dialog { width: min(440px, calc(100% - 32px)); margin: auto; padding: 22px; display: grid; gap: 12px; border-radius: var(--radius-lg); background: var(--surface-overlay); box-shadow: var(--shadow-pop); color: var(--text-1); }
+.blob-dialog h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; text-align: left; }
 .blob-dialog p { margin: 0; color: var(--text-2); font-size: var(--fs-sm); line-height: 1.5; }
 .blob-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.sheet-backdrop.blob-dialog-backdrop { align-items: center; }
+.sheet-backdrop.blob-dialog-backdrop { align-items: center; opacity: 0; transition: opacity 180ms cubic-bezier(.16,1,.3,1); }
+.blob-dialog-backdrop.is-entered { opacity: 1; }
+.blob-dialog-backdrop { --shared-dialog-panel-duration: 300ms; --shared-dialog-content-duration: 150ms; --success-content-duration: 80ms; --shared-dialog-ease: cubic-bezier(0.22, 1, 0.36, 1); }
+.blob-dialog-backdrop .blob-dialog { opacity: 0; transform: translateY(10px) scale(.94); transform-origin: 50% 65%; transition: opacity 200ms cubic-bezier(.16,1,.3,1), transform 260ms cubic-bezier(.16,1,.3,1); }
+.blob-dialog-backdrop.is-entered .blob-dialog { opacity: 1; transform: translateY(0) scale(1); }
+.blob-dialog-backdrop .blob-dialog.is-success { width: min(300px, calc(100% - 32px)); padding: 20px; gap: 10px; text-align: center; }
+.hold-confirm-success { display: grid; justify-items: center; gap: 10px; }
+.hold-confirm-success-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-selected); color: var(--accent); animation: hold-confirm-check 260ms cubic-bezier(.22,1,.36,1) both; }
+.hold-confirm-success h2 { text-align: center; }
+.hold-confirm-success p { text-align: center; }
+.hold-confirm-success .primary-button { min-width: 96px; margin-top: 4px; }
+.hold-confirm-error { color: var(--danger, #b43c3c) !important; }
+@keyframes hold-confirm-check { from { opacity: 0; transform: scale(.7); } to { opacity: 1; transform: scale(1); } }
+.blob-dialog-backdrop .hold-confirm-button { user-select: none; -webkit-user-select: none; touch-action: none; }
+.hold-confirm-button::before { transition: width 24ms linear; }
+.hold-confirm-button[aria-busy="true"] { cursor: progress; }
+@media (prefers-reduced-motion: reduce) { .sheet-backdrop.blob-dialog-backdrop, .blob-dialog-backdrop .blob-dialog, .hold-confirm-button::before { transition: none; } .blob-dialog-backdrop:not(.is-entered) { opacity: 1; } .blob-dialog-backdrop:not(.is-entered) .blob-dialog { opacity: 1; transform: none; } .blob-dialog-backdrop .blob-dialog.is-success, .hold-confirm-success-icon { animation: none; } }
 
 /* Shared with Analytics: underline tabs and label/value rows */
 .blob-tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); }

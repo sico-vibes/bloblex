@@ -18,7 +18,7 @@ export interface SelectOption {
  * styled on Windows. The trigger carries `data-value`; the list is a listbox
  * with arrow-key, Home/End, type-ahead, Enter and Escape support.
  */
-export function Select({ value, options, onChange, ariaLabel, disabled = false, variant = 'inline', align = 'right', placeholder, describedBy, className = '' }: {
+export function Select({ value, options, onChange, ariaLabel, disabled = false, variant = 'inline', align = 'right', menuPlacement = 'bottom', triggerLabel, placeholder, describedBy, className = '' }: {
   value: string
   options: readonly SelectOption[]
   onChange: (value: string) => void
@@ -26,6 +26,8 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
   disabled?: boolean
   variant?: 'inline' | 'field' | 'muted'
   align?: 'left' | 'right'
+  menuPlacement?: 'top' | 'bottom'
+  triggerLabel?: string
   placeholder?: string
   describedBy?: string
   className?: string
@@ -38,6 +40,8 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
   const typeahead = useRef({ prefix: '', timer: 0 })
   const listId = useId()
   const selected = options.find((option) => option.value === value)
+  const visibleTriggerLabel = triggerLabel ?? selected?.label ?? placeholder ?? ''
+  const triggerAccessibleName = visibleTriggerLabel ? `${ariaLabel}, ${visibleTriggerLabel}` : ariaLabel
 
   useEffect(() => {
     if (!open) return
@@ -111,7 +115,7 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
       ref={triggerRef}
       type="button"
       className="select-trigger"
-      aria-label={ariaLabel}
+      aria-label={triggerAccessibleName}
       aria-haspopup="listbox"
       aria-expanded={open}
       aria-controls={open ? listId : undefined}
@@ -121,13 +125,13 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
       onClick={() => open ? close() : openMenu()}
       onKeyDown={onTriggerKeyDown}
     >
-      <span className={selected?.provider ? 'select-provider-label' : undefined}>{selected?.provider && <ProviderLogo provider={selected.provider} size={16} />}{selected?.label ?? placeholder ?? ''}</span>
+      <span className={selected?.provider ? 'select-provider-label' : undefined}>{selected?.provider && <ProviderLogo provider={selected.provider} size={16} />}{visibleTriggerLabel}</span>
       <ChevronDown size={14} aria-hidden="true" />
     </button>
     {open && <div
       ref={listRef}
       id={listId}
-      className={`select-menu ${align === 'left' ? 'align-left' : ''}`}
+      className={`select-menu ${align === 'left' ? 'align-left' : ''} ${menuPlacement === 'top' ? 'open-up' : ''}`}
       role="listbox"
       aria-label={ariaLabel}
       tabIndex={-1}

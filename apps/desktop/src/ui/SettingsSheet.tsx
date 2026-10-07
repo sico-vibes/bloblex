@@ -14,6 +14,7 @@ import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
 import { applyAppearance } from './appearance'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
+import { ConfirmDialog } from './BlobPage'
 
 export type SettingsPageId = 'General' | 'Agents' | 'Updates'
 
@@ -66,6 +67,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   const [profilePath, setProfilePath] = useState('')
   const [profileArgs, setProfileArgs] = useState('[]')
   const [launcherFormOpen, setLauncherFormOpen] = useState(false)
+  const [profileDeleteTarget, setProfileDeleteTarget] = useState<{ id: string; name: string } | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [defaultMode, setDefaultMode] = useState<'ask' | 'auto'>('ask')
@@ -263,11 +265,11 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
     if (failure) onError(failure)
   }
 
-  const deleteProfile = (profileId: string) => guarded(async () => {
+  const deleteProfile = async (profileId: string) => {
     await rpc('runtime.profile.delete', { profileId })
     setNotice('Launcher removed.')
     await load()
-  })
+  }
 
   const runtimes = snapshot?.runtimes ?? []
   const agents = (snapshot?.agents ?? []).filter((agent) => !agent.archived)
@@ -383,7 +385,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
             <SettingsGroup title="Custom launchers">
               {profiles.map((profile, index) => <div className="settings-row" key={String(profile.id ?? index)}>
                 <span className="settings-row-copy"><strong>{String(profile.name ?? profile.provider ?? 'Launcher')}</strong><small className="mono">{String(profile.executablePath ?? 'Executable unavailable')}</small></span>
-                {typeof profile.id === 'string' && <button type="button" className="ghost-button small" onClick={() => void deleteProfile(profile.id as string)}>Remove</button>}
+                {typeof profile.id === 'string' && <button type="button" className="ghost-button small" onClick={() => setProfileDeleteTarget({ id: profile.id as string, name: String(profile.name ?? 'this launcher') })}>Remove</button>}
               </div>)}
               {!launcherFormOpen && <div className="settings-row">
                 <span className="settings-row-copy"><strong>{profiles.length === 0 ? 'No custom launchers' : 'Add another launcher'}</strong><small>Run an agent from a specific executable with fixed arguments.</small></span>
@@ -412,8 +414,9 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
           </>}
 
         </div>
-    </section>
-  </div>
+      </section>
+      {profileDeleteTarget && <ConfirmDialog title={`Remove ${profileDeleteTarget.name}?`} body="This removes the custom launcher profile from Bloblex. It does not uninstall the coding agent." confirmLabel="Remove" cancelLabel="Keep launcher" holdToConfirm successTitle="Launcher removed" successBody="The custom launcher profile was removed from Bloblex." onConfirm={async () => { await deleteProfile(profileDeleteTarget.id) }} onComplete={() => setProfileDeleteTarget(null)} onCancel={() => setProfileDeleteTarget(null)} />}
+    </div>
 }
 
 function SettingsGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {

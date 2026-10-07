@@ -1,6 +1,10 @@
 # Bloblex session handoff
 
-Current as of 5 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+Current as of 7 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+
+## Current uncommitted follow-up (7 October 2026)
+
+Composer controls now use source-derived reference motion and real advertised effort levels, a compact reported-context ring, paired-message outline previews and an async hold-to-delete success morph. The daemon fixes initial agent-option lookup, updates after completed turns, context reset ordering/fresh-context resets, and stale resume/turn lock races. Independent source review, all 361 desktop tests, typecheck/build, the offline backend workspace gate (excluding unchanged native desktop, live smoke disabled), and browser-fixture flows passed. Source ports retain intentional differences for metadata, theme and real RPCs; they are not verbatim demo clones. See [the evidence and limits](docs/evidence/composer-controls-2026-10-07.md). Native and real-provider behavior remains unverified, the release version/feed is unchanged, and no commit was made. Preserve the earlier dirty work and local preview artifacts.
 
 ## Current uncommitted follow-up (6 October 2026)
 

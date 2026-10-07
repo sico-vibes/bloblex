@@ -21,6 +21,11 @@ const baseRuntimes: Runtime[] = [
   { id: 'runtime-opencode', provider: 'opencode', status: 'online', protocolFamily: 'acp', version: '1.18.34', authState: 'authenticated', gatewayAuthStates: { opencode: 'authenticated', 'opencode-go': 'authenticated' } },
 ]
 
+// All catalog/session values below are preview-only visual fixtures. They do
+// not represent installed models, provider capabilities, or user conversations.
+const composerPreviewSessionId = 'session-codex-composer-preview'
+const composerPreviewStorageKey = 'bloblex.preview.composer-session.v1'
+
 let agents: Agent[] = [
   { id: 'agent-claude', name: 'Claude', description: 'Default agent for Claude.', instructions: '', color: '#f38c6f', runtimeId: 'runtime-claude', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: minutesAgo(4000), updatedAt: minutesAgo(4000) },
   { id: 'agent-codex', name: 'Codex', description: 'Default agent for Codex.', instructions: '', color: '#82aaff', runtimeId: 'runtime-codex', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: minutesAgo(3000), updatedAt: minutesAgo(3000), approvalMode: 'auto', effectiveApprovalMode: 'auto' },
@@ -39,6 +44,19 @@ let sessions: Session[] = [
     ],
     tools: [{ id: 't1', title: 'npm test', kind: 'command', state: 'running', command: 'npm test -- invoice', sequence: 4 }],
   },
+  {
+    id: composerPreviewSessionId, runtimeId: 'runtime-codex', agentId: 'agent-codex',
+    title: 'Preview: composer controls', projectPath: 'C:/work/korus', state: 'idle',
+    modelLock: { model: 'gpt-5.5', thinking: flags().has('composer-low') ? 'low' : 'high' }, contextUsed: 14_000, contextSize: 1_000_000,
+    updatedAt: minutesAgo(4), previewOnly: true,
+    messages: [
+      { id: 'composer-preview-user-1', role: 'user', content: 'Check the checkout flow and keep the controls in the composer.', createdAt: minutesAgo(9) },
+      { id: 'composer-preview-assistant-1', role: 'assistant', content: 'I reviewed the checkout steps. The selected model and effort are locked to this preview conversation.', createdAt: minutesAgo(8) },
+      { id: 'composer-preview-user-2', role: 'user', content: 'Can you make the confirmation state clearer?', createdAt: minutesAgo(7) },
+      { id: 'composer-preview-assistant-2', role: 'assistant', content: 'The confirmation summary now shows the selected delivery option before submission.', createdAt: minutesAgo(6) },
+      { id: 'composer-preview-user-3', role: 'user', content: 'Check the selected model, effort and context meter.', createdAt: minutesAgo(5) },
+    ],
+  },
   { id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', projectPath: 'C:/work/site', state: 'completed', model: 'claude-opus', updatedAt: minutesAgo(41), messages: [{ id: 'c1', role: 'assistant', content: 'Updated the hero copy and the pricing table.', createdAt: minutesAgo(41) }] },
   { id: 'session-opencode', runtimeId: 'runtime-opencode', agentId: 'agent-opencode', title: 'Refactor auth', projectPath: 'C:/work/api', state: 'idle', updatedAt: minutesAgo(60 * 26), messages: [] },
   { id: 'session-legacy', runtimeId: 'runtime-codex', agentId: null, title: 'Untied notes', projectPath: 'C:/work/notes', state: 'idle', updatedAt: minutesAgo(90), messages: [] },
@@ -54,6 +72,20 @@ let sessions: Session[] = [
     return { id: `session-codex-many-${n}`, runtimeId: 'runtime-codex', agentId: 'agent-codex', title: `Bulk ${n}`, projectPath: 'C:\\work\\korus', state: 'idle' as const, updatedAt: minutesAgo(32 - n), messages: [] }
   }),
 ]
+
+try {
+  const saved = localStorage.getItem(composerPreviewStorageKey)
+  if (saved) {
+    const state = JSON.parse(saved) as { modelLock?:Session['modelLock']; contextUsed?:number|null; contextSize?:number|null }
+    const session = sessions.find((item) => item.id === composerPreviewSessionId)
+    if (session && state.modelLock && typeof state.modelLock === 'object') {
+      session.modelLock = state.modelLock
+      session.model = state.modelLock.model ?? undefined
+      session.contextUsed = typeof state.contextUsed === 'number' ? state.contextUsed : null
+      session.contextSize = typeof state.contextSize === 'number' ? state.contextSize : null
+    }
+  }
+} catch { /* Preview fixture storage is optional. */ }
 
 let sequence = 1
 let agentSerial = 6
@@ -107,6 +139,25 @@ function nameTaken(name: string, exceptId?: string) {
   return agents.some((agent) => !agent.archived && agent.id !== exceptId && agent.name.trim().toLocaleLowerCase('en') === key)
 }
 
+type FixtureModel = { id:string; displayName:string; supportedThinking:string[]; defaultThinking?:string; serviceTiers:unknown[]; isDefault?:boolean }
+
+function fixtureCatalog(runtimeId: string) {
+  const runtime = baseRuntimes.find((item) => item.id === runtimeId)
+  const models: FixtureModel[] = runtimeId === 'runtime-opencode' ? [
+    { id: 'opencode-go/preview', displayName: 'Preview model', supportedThinking: [], serviceTiers: [] },
+    { id: 'opencode-go/alternate-preview', displayName: 'Alternate preview', supportedThinking: [], serviceTiers: [] },
+  ] : runtime?.provider === 'claude' ? [
+    { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5', supportedThinking: ['low', 'medium', 'high', 'max'], defaultThinking: 'high', serviceTiers: [], isDefault: true },
+    { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', supportedThinking: ['low', 'medium', 'high'], defaultThinking: 'medium', serviceTiers: [], isDefault: false },
+    { id: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5', supportedThinking: ['low', 'medium'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
+  ] : [
+    { id: 'gpt-5.5', displayName: 'GPT-5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh'], defaultThinking: 'medium', serviceTiers: [], isDefault: true },
+    { id: 'gpt-5.4', displayName: 'GPT-5.4', supportedThinking: ['low', 'medium', 'high', 'xhigh'], defaultThinking: 'high', serviceTiers: [], isDefault: false },
+    { id: 'gpt-5.3-codex', displayName: 'GPT-5.3 Codex', supportedThinking: ['low', 'medium', 'high'], defaultThinking: 'medium', serviceTiers: [], isDefault: false },
+  ]
+  return { runtimeId, provider: runtime?.provider ?? '', models, validated: true, source: 'fixture', fetchedAt: '2026-10-04T00:00:00Z' }
+}
+
 export const inDesktop = true
 export async function rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   if (method === 'events.replay') return { replayAvailable: true, events: [] } as T
@@ -139,18 +190,42 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     notifyFixtureDaemon('session.deleted', { sessionId: session.id })
     return { deleted: true } as T
   }
+  if (method === 'session.model.update') {
+    const session = sessions.find((item) => item.id === params.sessionId)
+    if (!session) throw rpcError('not_found', 'Conversation not found.')
+    if (['starting', 'working', 'cancelling', 'waiting_permission'].includes(String(session.state))) throw rpcError('conflict', 'Model and effort cannot change during an active turn.')
+    if (params.model != null && (typeof params.model !== 'string' || !params.model.trim())) throw rpcError('invalid_argument', 'model must be a non-empty identifier or null')
+    if (params.thinking != null && (typeof params.thinking !== 'string' || !params.thinking.trim())) throw rpcError('invalid_argument', 'thinking must be a non-empty identifier or null')
+    const nextModel = typeof params.model === 'string' && params.model ? params.model : null
+    const nextThinking = typeof params.thinking === 'string' && params.thinking ? params.thinking : null
+    const previousModel = session.modelLock?.model ?? session.model ?? agents.find((agent) => agent.id === session.agentId)?.model ?? null
+    const modelChanged = previousModel !== nextModel
+    if (modelChanged && params.confirmModelChange !== true) throw rpcError('confirmation_required', 'Confirm the model change before continuing.')
+    const modelRows = fixtureCatalog(session.runtimeId).models
+    if (nextModel && !modelRows.some((item) => item.id === nextModel)) throw rpcError('invalid_argument', 'The selected model is not in the fixture catalog.')
+    const selected = modelRows.find((item) => item.id === nextModel)
+    if (nextThinking && selected && !selected.supportedThinking.includes(nextThinking)) throw rpcError('invalid_argument', 'The selected effort is not advertised for this model.')
+    session.modelLock = { model: nextModel, thinking: nextThinking }
+    session.model = nextModel ?? undefined
+    session.updatedAt = new Date().toISOString()
+    if (modelChanged) {
+      session.contextUsed = null
+      session.contextSize = null
+      notifyFixtureDaemon('session.context.reset', { sessionId: session.id })
+    }
+    if (session.id === composerPreviewSessionId) {
+      try { localStorage.setItem(composerPreviewStorageKey, JSON.stringify({ modelLock:session.modelLock, contextUsed:session.contextUsed, contextSize:session.contextSize })) } catch { /* Preview fixture storage is optional. */ }
+    }
+    notifyFixtureDaemon('session.changed', { session: { ...session } })
+    return { session: { ...session }, modelChanged } as T
+  }
   if (method === 'runtime.capabilities') {
     const supported = { supported: true, enabled: true, scope: 'agent', evidence: 'preview' }
     return { runtimeId: params.runtimeId, settings: { model: supported, thinking: supported, serviceTier: supported, instructions: supported, customEnv: supported } } as T
   }
   if (method === 'runtime.models') {
     const runtimeId = String(params.runtimeId ?? '')
-    const runtime = baseRuntimes.find((item) => item.id === runtimeId)
-    const models = runtimeId === 'runtime-opencode' ? [
-      { id: 'opencode-go/preview', displayName: 'Preview model', supportedThinking: [], serviceTiers: [] },
-      { id: 'opencode-go/alternate-preview', displayName: 'Alternate preview', supportedThinking: [], serviceTiers: [] },
-    ] : runtime?.provider === 'claude' ? [{ id: 'claude-sonnet', displayName: 'Claude Sonnet', supportedThinking: [], serviceTiers: [] }] : [{ id: 'gpt-5.5', displayName: 'GPT-5.5', supportedThinking: [], serviceTiers: [] }]
-    return { runtimeId, provider: runtime?.provider ?? '', models, validated: true, source: 'fixture', fetchedAt: '2026-10-04T00:00:00Z' } as T
+    return fixtureCatalog(runtimeId) as T
   }
   if (method === 'agent.list') {
     const includeArchived = params.includeArchived === true
@@ -241,7 +316,12 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (!resolvedRuntime || !baseRuntimes.some((runtime) => runtime.id === resolvedRuntime)) throw rpcError('not_found', 'That blob is no longer available.')
     if (typeof params.projectPath !== 'string' || !params.projectPath.trim()) throw rpcError('invalid_argument', 'Choose a project folder that exists on this device.')
     const title = typeof params.title === 'string' && params.title.trim() ? params.title : 'New chat'
-    const session: Session = { id: `session-new-${sessions.length + 1}`, runtimeId: resolvedRuntime, agentId: owner, title, projectPath: params.projectPath, state: 'idle', updatedAt: new Date().toISOString(), messages: [] }
+    const agent = owner ? agents.find((item) => item.id === owner) : undefined
+    const catalog = fixtureCatalog(resolvedRuntime)
+    const model = agent?.model ?? catalog.models.find((item) => item.isDefault === true)?.id ?? null
+    const selected = catalog.models.find((item) => item.id === model)
+    const thinking = agent?.thinking ?? selected?.defaultThinking ?? null
+    const session: Session = { id: `session-new-${sessions.length + 1}`, runtimeId: resolvedRuntime, agentId: owner, title, projectPath: params.projectPath, state: 'idle', ...(model ? { model } : {}), modelLock:{ model, thinking }, contextUsed:null, contextSize:null, updatedAt: new Date().toISOString(), messages: [] }
     sessions = [...sessions, session]
     sequence += 1
     return { session } as T
@@ -267,7 +347,7 @@ export async function resolveProjectFile(path: string) { return path }
 export async function showMainWindow() {}
 export async function showMainSettings() {}
 export async function setActiveSession() {}
-export async function getActiveSession() { return 'session-codex' }
+export async function getActiveSession() { return composerPreviewSessionId }
 export async function setActiveRuntime() {}
 export async function getActiveRuntime() { return 'runtime-codex' }
 export async function setCompanionVisibility() {}

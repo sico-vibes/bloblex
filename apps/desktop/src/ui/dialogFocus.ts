@@ -2,15 +2,17 @@ import { useCallback, useLayoutEffect, useRef } from 'react'
 
 const dialogStack: Array<() => void> = []
 
-export function useDialogAccessibility(onClose: () => void) {
+export function useDialogAccessibility(onClose: () => void, canClose: () => boolean = () => true) {
   const ref = useRef<HTMLElement>(null)
   const closeRef = useRef(onClose)
+  const canCloseRef = useRef(canClose)
   const dismissed = useRef(false)
   const restored = useRef(false)
   const restoreFocus = useRef<() => void>(() => undefined)
   closeRef.current = onClose
+  canCloseRef.current = canClose
   const close = useCallback(() => {
-    if (dismissed.current) return
+    if (dismissed.current || !canCloseRef.current()) return
     dismissed.current = true
     closeRef.current()
     restoreFocus.current()

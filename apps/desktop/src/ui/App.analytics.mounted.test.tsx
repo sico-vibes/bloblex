@@ -2,7 +2,7 @@
 import { StrictMode, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Agent, Runtime, Session, Snapshot } from '../types'
+import type { Agent, DaemonEvent, Runtime, Session, Snapshot } from '../types'
 import { analyticsFixtures } from './analyticsFixtures'
 import { buildAnalyticsRequest, resolvedTimeZone } from './analyticsFormat'
 
@@ -184,8 +184,10 @@ describe('sidebar usage analytics', () => {
     })
     const view = startApp()
     await view.settle()
-    expect(view.host.querySelector('.context-window-indicator')?.textContent).toContain('413k / 828k tokens')
+    expect(view.host.querySelector('.context-window-indicator')?.getAttribute('aria-label')).toContain('413,000 of 828,000 tokens used, 50%')
     expect(view.host.querySelector('[role="progressbar"][aria-label="Context window used"]')?.getAttribute('aria-valuenow')).toBe('50')
+    expect(view.host.querySelector('.context-window-ring-value')?.getAttribute('stroke-dasharray')).toBeTruthy()
+    expect(view.host.querySelector('.context-window-center')?.textContent).toBe('50%')
     const row = view.host.querySelector<HTMLButtonElement>('.quota-meter-row')
     expect(row?.textContent).toContain('Codex')
     expect(row?.textContent).toContain('62%')
@@ -246,13 +248,16 @@ describe('sidebar usage analytics', () => {
     h.fetchSnapshot.mockResolvedValue({ ...snapshot(), sessions: [{ ...sessions[0], contextUsed: undefined, contextSize: undefined }] })
     const view = startApp()
     await view.settle()
-    expect(view.host.querySelector('.context-window-indicator')?.textContent).toContain('Context usage unavailable')
+    expect(view.host.querySelector('.context-window-indicator')?.getAttribute('aria-label')).toContain('Context window: Context usage unavailable')
+    expect(view.host.querySelector('.context-window-indicator')?.classList.contains('unknown')).toBe(true)
     expect(view.host.querySelector('[role="progressbar"][aria-label="Context window used"]')).toBeNull()
   })
 
-  it('shows a keyboard-operable message outline with previews for actual messages', async () => {
+  it('syncs the message outline to scroll and supports keyboard navigation, scrubbing, previews and reduced motion', async () => {
     const scrollIntoView = vi.fn()
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable:true, value:scrollIntoView })
+    vi.spyOn(HTMLElement.prototype, 'setPointerCapture').mockImplementation(() => undefined)
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({ matches:query.includes('prefers-reduced-motion'), media:query, onchange:null, addListener:vi.fn(), removeListener:vi.fn(), addEventListener:vi.fn(), removeEventListener:vi.fn(), dispatchEvent:vi.fn(() => true) }))
     h.fetchSnapshot.mockResolvedValue({ ...snapshot(), sessions:[{ ...sessions[0], messages:[
       { id:'outline-1', role:'user', text:'First question about a menu.' },
       { id:'outline-2', role:'assistant', text:'I will inspect the menu behavior.' },
@@ -260,15 +265,73 @@ describe('sidebar usage analytics', () => {
     ] }] })
     const view = startApp()
     await view.settle()
-    const outline = view.host.querySelector<HTMLElement>('[aria-label="Conversation message outline"]')
-    const buttons = [...(outline?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
-    expect(buttons).toHaveLength(3)
-    expect(buttons[0]?.getAttribute('aria-label')).toContain('First question about a menu.')
-    await click(buttons[0])
-    expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block:'center' }))
-    await act(async () => buttons[0]?.dispatchEvent(new KeyboardEvent('keydown', { key:'End', bubbles:true })))
-    expect(document.activeElement).toBe(buttons[2])
+    const outline = view.host.querySelector<HTMLElement>('[role="slider"][aria-label="Conversation message position"]')!
+    expect(outline.getAttribute('aria-valuemax')).toBe('3')
+    act(() => outline.focus())
+    await act(async () => outline.dispatchEvent(new KeyboardEvent('keydown', { key:'End', bubbles:true })))
+    expect(outline.getAttribute('aria-valuenow')).toBe('3')
+    expect(outline.getAttribute('aria-valuetext')).toContain('Message 3 of 3')
+    expect(outline.getAttribute('aria-valuetext')).toContain('You: Please change the menu label.')
+    expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block:'center', behavior:'auto' }))
+    expect(view.host.querySelector('.conversation-outline-preview')?.textContent).toContain('Please change the menu label.')
+    await act(async () => outline.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true })))
+    expect(view.host.querySelector('.conversation-outline-preview')).toBeNull()
+
+    const pointer = (type: string, y: number) => {
+      const event = new Event(type, { bubbles:true })
+      Object.defineProperties(event, { pointerId:{ value:1 }, clientY:{ value:y }, isPrimary:{ value:true } })
+      return event
+    }
+    Object.defineProperty(outline, 'getBoundingClientRect', { configurable:true, value:() => ({ top:0, bottom:100, height:100, left:0, right:18, width:18, x:0, y:0, toJSON:() => ({}) }) })
+    const scrollCallsBeforeHover = scrollIntoView.mock.calls.length
+    await act(async () => { outline.dispatchEvent(pointer('pointermove', 50)) })
+    expect(outline.getAttribute('aria-valuenow')).toBe('3')
+    expect(scrollIntoView).toHaveBeenCalledTimes(scrollCallsBeforeHover)
+    expect(view.host.querySelector('.conversation-outline-preview')).not.toBeNull()
+    await act(async () => { outline.dispatchEvent(pointer('pointerdown', 0)) })
+    await act(async () => { outline.dispatchEvent(pointer('pointermove', 100)); outline.dispatchEvent(pointer('pointerup', 100)) })
+    expect(outline.getAttribute('aria-valuenow')).toBe('3')
+
+    const list = view.host.querySelector<HTMLElement>('.message-list')!
+    Object.defineProperty(list, 'getBoundingClientRect', { configurable:true, value:() => ({ top:0, bottom:300, height:300, left:0, right:600, width:600, x:0, y:0, toJSON:() => ({}) }) })
+    const positions = [['outline-1', 0], ['outline-2', 110], ['outline-3', 270]] as const
+    for (const [id, top] of positions) {
+      const node = document.getElementById(`conversation-message-message%3A${id}`)!
+      Object.defineProperty(node, 'getBoundingClientRect', { configurable:true, value:() => ({ top, bottom:top+30, height:30, left:20, right:500, width:480, x:20, y:top, toJSON:() => ({}) }) })
+    }
+    await act(async () => { list.dispatchEvent(new Event('scroll')); await vi.advanceTimersByTimeAsync(40) })
+    expect(outline.getAttribute('aria-valuenow')).toBe('2')
     expect(document.getElementById('conversation-message-message%3Aoutline-3')).not.toBeNull()
+  })
+
+  it('samples long conversations without losing the full outline range', async () => {
+    h.fetchSnapshot.mockResolvedValue({ ...snapshot(), sessions:[{ ...sessions[0], messages:Array.from({ length:160 }, (_, index) => ({ id:`long-${index}`, role:index % 2 ? 'assistant' : 'user', text:`Message ${index + 1}` })) }] })
+    const view = startApp()
+    await view.settle()
+    const rail = view.host.querySelector<HTMLElement>('[role="slider"][aria-label="Conversation message position"]')!
+    expect(rail.getAttribute('aria-valuemax')).toBe('160')
+    expect(rail.querySelectorAll('.conversation-outline-tick')).toHaveLength(64)
+    await act(async () => rail.dispatchEvent(new KeyboardEvent('keydown', { key:'End', bubbles:true })))
+    expect(rail.getAttribute('aria-valuenow')).toBe('160')
+    expect(rail.getAttribute('aria-valuetext')).toContain('Message 160')
+  })
+
+  it('mounts the message outline when an initially empty selected session receives its first messages', async () => {
+    h.fetchSnapshot.mockResolvedValue({ ...snapshot(), sessions:[{ ...sessions[0], messages:[] }] })
+    let receive: ((event: DaemonEvent) => void) | undefined
+    h.listenForDaemonEvents.mockImplementation(async (handler: (event: DaemonEvent) => void) => { receive = handler; return vi.fn() })
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelector('[aria-label="Conversation message outline"]')).toBeNull()
+    await act(async () => {
+      receive?.({ v:1, type:'session.changed', sequence:5, payload:{ session:{ ...sessions[0], messages:[
+        { id:'first-1', role:'user', text:'First message' },
+        { id:'first-2', role:'assistant', text:'Second message' },
+        { id:'first-3', role:'user', text:'Third message' },
+      ] } } })
+      for (let index=0; index<8; index+=1) await Promise.resolve()
+    })
+    expect(view.host.querySelector('[role="slider"][aria-label="Conversation message position"]')).not.toBeNull()
   })
 
   it('copies and exports the selected conversation through the mocked file bridge', async () => {
@@ -303,12 +366,53 @@ describe('sidebar usage analytics', () => {
     await view.settle()
     expect(h.selectBlobImportPath).toHaveBeenCalledOnce()
     expect(h.readBlobImport).toHaveBeenCalledWith('selected-blob-import-token')
-    expect(view.host.querySelector('[aria-label="Attach imported blob to coding agent"]')).not.toBeNull()
+    expect(view.host.querySelector('[aria-label^="Attach imported blob to coding agent"]')).not.toBeNull()
     await click(buttonNamed(view.host, 'Continue'))
     await view.settle()
     expect(view.host.querySelector('.blob-page')).not.toBeNull()
     expect(view.host.querySelector<HTMLInputElement>('input[aria-label="Blob name"]')?.value).toBe('Imported helper')
     expect(view.host.querySelector('.blob-hero [data-outfit="witch-hat"]')).not.toBeNull()
     expect(h.rpc.mock.calls.some((call) => call[0] === 'agent.create')).toBe(false)
+  })
+
+  it('keeps the parent delete target through the pending request and closes only after the success action', async () => {
+    let resolveDelete!: () => void
+    h.rpc.mockImplementation(async (method: string) => {
+      if (method === 'events.replay') return { replayAvailable:true, events:[] }
+      if (method === 'settings.get') return { settings:{} }
+      if (method === 'session.delete') return new Promise<void>((resolve) => { resolveDelete = resolve })
+      return {}
+    })
+    const view = startApp()
+    await view.settle()
+    const blobRow = view.host.querySelector<HTMLElement>('[data-tree-id="blob:agent-claude"]')
+    if (!blobRow) throw new Error('Missing blob row')
+    await act(async () => { blobRow.querySelector<HTMLElement>('.tree-chevron')?.dispatchEvent(new MouseEvent('click', { bubbles:true, cancelable:true })) })
+    const projectRow = view.host.querySelector<HTMLElement>('[data-tree-kind="project"]')
+    if (!projectRow) throw new Error('Missing project row')
+    await act(async () => { projectRow.click() })
+    const sessionRow = view.host.querySelector<HTMLElement>('[data-session-id="session-claude"]')
+    if (!sessionRow) throw new Error('Missing conversation row')
+    await act(async () => { sessionRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles:true, cancelable:true, clientX:12, clientY:12 })) })
+    await click(buttonNamed(view.host, 'Delete…'))
+    const dialog = view.host.querySelector<HTMLElement>('[role="dialog"]')!
+    const deleteButton = dialog.querySelector<HTMLButtonElement>('.hold-confirm-button')!
+    const pointer = (type: string) => { const event = new Event(type, { bubbles:true }); Object.defineProperty(event, 'pointerId', { value:3 }); return event }
+    await act(async () => { deleteButton.dispatchEvent(pointer('pointerdown')); await vi.advanceTimersByTimeAsync(1050); deleteButton.dispatchEvent(pointer('pointerup')); await Promise.resolve() })
+    expect(h.rpc).toHaveBeenCalledWith('session.delete', { sessionId:'session-claude' })
+    expect(view.host.querySelector('[role="dialog"]')?.getAttribute('aria-busy')).toBe('true')
+    expect(view.host.querySelector('.hold-confirm-success')).toBeNull()
+    expect(view.host.querySelector('[data-session-id="session-claude"]')).not.toBeNull()
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true, cancelable:true })) })
+    expect(view.host.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(view.host.querySelector('.hold-confirm-success')).toBeNull()
+
+    await act(async () => { resolveDelete(); await Promise.resolve(); await Promise.resolve() })
+    expect(view.host.querySelector('.hold-confirm-success')).not.toBeNull()
+    expect(view.host.querySelector('.hold-confirm-success h2')?.textContent).toBe('Conversation deleted')
+    expect(view.host.querySelector('[data-session-id="session-claude"]')).not.toBeNull()
+    await click(buttonNamed(view.host, 'Done'))
+    expect(view.host.querySelector('[role="dialog"]')).toBeNull()
+    expect(h.rpc.mock.calls.filter((call) => call[0] === 'session.delete')).toHaveLength(1)
   })
 })

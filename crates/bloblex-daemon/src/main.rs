@@ -1182,7 +1182,10 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
             StatusCode::BAD_REQUEST,
         )
     })?;
-    let options_session=if let Some(agent_id)=agent_id.as_deref(){st.db.agent_get(agent_id).map_err(agent_error)?}else{json!({"agentId":null})};
+    // exec_options_for_session intentionally accepts a session shaped value.
+    // Keep the agent id in that contract rather than passing agent_get's
+    // differently shaped `{ id, ... }` response.
+    let options_session=if let Some(agent_id)=agent_id.as_deref(){json!({"agentId":agent_id})}else{json!({"agentId":null})};
     let base_options=exec_options_for_session(st,&options_session)?;
     let (exec_options,model_lock)=resolve_session_model_lock(st,&runtime,base_options).await;
     let id = Uuid::new_v4().to_string();
@@ -1289,6 +1292,7 @@ async fn resume_or_start_fresh(
             st.db
                 .clear_session_provider_id(session_id)
                 .map_err(|error| bloblex_agent_core::AdapterError::Other(error.to_string()))?;
+            st.emit("session.context.reset", json!({"sessionId":session_id})).await;
             st.emit(
                 "session.resume_rejected",
                 json!({
@@ -1389,6 +1393,10 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         resume_or_start_fresh(st,adapter.clone(),&spec,&sid,native_id,project.clone(),exec_options)
             .await
     } else {
+        // Starting a fresh provider context must not inherit context usage
+        // reported for the previous provider context.
+        st.db.clear_session_provider_id(&sid).map_err(agent_error)?;
+        st.emit("session.context.reset", json!({"sessionId":sid})).await;
         let (tx, rx) = tokio::sync::mpsc::channel(256);
         adapter.new_session(&spec,NewSessionRequest{session_id:sid.clone(),project_path:project.clone(),exec_options},tx)
             .await.map(|handle| (handle,rx,true))
@@ -1410,7 +1418,7 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         let installed = session_gate_is_current(st, &sid, &gate).await
             && !session_is_deleted(st, &sid).await
             && st.db.session_state(&sid).ok().flatten().as_deref() == Some(previous_state.as_str())
-            && st.db.session_detail(&sid).is_ok_and(|session| session["archived"] != true)
+            && st.db.session_detail(&sid).is_ok_and(|session| session["archived"] != true && session["modelLock"] == model_lock)
             && !st.sessions.lock().await.contains_key(&sid);
         if installed {
             st.db.set_session_provider_id(&sid, &handle.provider_session_id, handle.capabilities.resume).map_err(agent_error)?;
@@ -1481,15 +1489,15 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     let sid = p["sessionId"].as_str().filter(|value| !value.is_empty())
         .ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
     let gate = gate_for_session(st, sid).await;
-    let row = {
-        let _guard = gate.lock().await;
-        if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
-        if st.active_turns.lock().await.contains_key(sid) {
-            return Err(derr("conflict", "model cannot change while a turn is active", StatusCode::CONFLICT));
-        }
-        st.db.session_detail(sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?
-    };
-    if !matches!(row["state"].as_str(), Some("idle" | "closed" | "error")) {
+    // Keep the per-session gate across catalog preflight and persistence. This
+    // prevents a prompt from reserving a turn with stale thinking/model options.
+    let _guard = gate.lock().await;
+    if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
+    if st.active_turns.lock().await.contains_key(sid) {
+        return Err(derr("conflict", "model cannot change while a turn is active", StatusCode::CONFLICT));
+    }
+    let row = st.db.session_detail(sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
+    if !matches!(row["state"].as_str(), Some("idle" | "closed" | "error" | "completed")) {
         return Err(derr("conflict", "model can only change between turns", StatusCode::CONFLICT));
     }
     let model = match p.get("model") {
@@ -1522,25 +1530,17 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
         return Err(error);
     }
     let lock = json!({"model":options.model,"thinking":options.thinking});
-    let (updated, active_to_close) = {
-        let _guard = gate.lock().await;
-        if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
-        if st.active_turns.lock().await.contains_key(sid) {
-            return Err(derr("conflict", "model cannot change while a turn is active", StatusCode::CONFLICT));
-        }
-        let current = st.db.session_detail(sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
-        if current["modelLock"] != row["modelLock"] || current["state"] != row["state"] {
-            return Err(derr("conflict", "conversation changed while the model selection was being checked", StatusCode::CONFLICT));
-        }
-        let active = if model_changed { st.sessions.lock().await.remove(sid) } else { None };
-        if model_changed { st.db.clear_session_provider_id(sid).map_err(agent_error)?; }
-        let _ = st.db.set_session_model_lock(sid, &lock).map_err(agent_error)?;
-        let updated = st.db.session_event_summary(sid).map_err(agent_error)?;
-        (updated, active)
-    };
+    // Persist DB changes before taking the live handle out of the map. A
+    // storage failure must not orphan an adapter process.
+    if model_changed { st.db.clear_session_provider_id(sid).map_err(agent_error)?; }
+    let _ = st.db.set_session_model_lock(sid, &lock).map_err(agent_error)?;
+    let active_to_close = if model_changed { st.sessions.lock().await.remove(sid) } else { None };
+    // The reset event is persisted before the summary so both the RPC result
+    // and subsequent session.changed event report an unknown fresh context.
+    if model_changed { st.emit("session.context.reset", json!({"sessionId":sid})).await; }
+    let updated = st.db.session_event_summary(sid).map_err(agent_error)?;
     if let Some(active) = active_to_close { let _ = active.adapter.close_session(&active.handle).await; }
     st.emit("session.changed", updated.clone()).await;
-    if model_changed { st.emit("session.context.reset", json!({"sessionId":sid})).await; }
     Ok(json!({"session":updated,"modelChanged":model_changed}))
 }
 
@@ -1655,7 +1655,8 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT));
         }
         let live_session = st.db.session_detail(&sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
-        if live_session["archived"] == true || live_session["state"] != previous_state {
+        if live_session["archived"] == true || live_session["state"] != previous_state
+            || live_session["modelLock"] != session_options["modelLock"] {
             return Err(derr("conflict", "session changed while a new turn was being prepared", StatusCode::CONFLICT));
         }
         let mut turns = st.active_turns.lock().await;
@@ -2573,6 +2574,59 @@ mod phase2a_tests {
         async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
         async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
     }
+    struct CaptureLaunchOptionsAdapter {
+        catalog: bloblex_agent_core::ModelCatalog,
+        launch_options: StdMutex<Option<ExecOptions>>,
+        turn_options: StdMutex<Vec<ExecOptions>>,
+        events: StdMutex<Option<tokio::sync::mpsc::Sender<AgentEvent>>>,
+    }
+    struct BlockingResumeAdapter {
+        catalog: bloblex_agent_core::ModelCatalog,
+        started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        close_calls: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl AgentAdapter for BlockingResumeAdapter {
+        async fn model_catalog(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ModelCatalog, bloblex_agent_core::AdapterError> { Ok(self.catalog.clone()) }
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, _: NewSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("unexpected fresh launch".into())) }
+        async fn resume_session(&self, _: &RuntimeSpec, request: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(SessionHandle { session_id:request.session_id, provider_session_id:request.provider_session_id, capabilities:bloblex_agent_core::AgentCapabilities { resume:true, ..Default::default() } })
+        }
+        async fn prompt(&self, _: &SessionHandle, _: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> {
+            self.close_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    #[async_trait::async_trait]
+    impl AgentAdapter for CaptureLaunchOptionsAdapter {
+        async fn model_catalog(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ModelCatalog, bloblex_agent_core::AdapterError> { Ok(self.catalog.clone()) }
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, request: NewSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            *self.launch_options.lock().unwrap() = Some(request.exec_options);
+            *self.events.lock().unwrap() = Some(events);
+            Ok(SessionHandle { session_id:request.session_id, provider_session_id:"captured-new-context".into(), capabilities:bloblex_agent_core::AgentCapabilities::default() })
+        }
+        async fn resume_session(&self, _: &RuntimeSpec, _: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn preflight_exec_options(&self, options: &ExecOptions) -> Result<(), bloblex_agent_core::AdapterError> {
+            self.turn_options.lock().unwrap().push(options.clone());
+            Ok(())
+        }
+        async fn prompt(&self, _: &SessionHandle, _: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> {
+            let events = self.events.lock().unwrap().clone();
+            if let Some(events) = events { let _ = events.send(AgentEvent::TurnCompleted).await; }
+            Ok(())
+        }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+    }
     #[test] fn normalized_permission_requests_map_provider_tool_names_and_fail_closed(){
         let(kind,body)=normalized_permission("claude",&json!({"request":{"tool_name":"Bash","input":{"command":"git status"}}}));assert_eq!(kind,"shell");assert_eq!(body["command"],"git status");
         let(kind,body)=normalized_permission("claude",&json!({"request":{"tool_name":"Read","input":{"file_path":"src/lib.rs"}}}));assert_eq!(kind,"read");assert_eq!(body["file_path"],"src/lib.rs");
@@ -2777,6 +2831,7 @@ mod phase2a_tests {
         let(st,mut events)=state();
         st.db.create_session("resume-test","rt-test","codex",".","Resume test").unwrap();
         st.db.set_session_provider_id("resume-test","saved-provider-session",true).unwrap();
+        st.db.push_event("session.context.updated", &json!({"sessionId":"resume-test","contextUsed":420,"contextSize":1000})).unwrap();
         let adapter=Arc::new(LifecycleAdapter{reject_resume:true,allow_resume:false,resume_calls:Default::default(),new_calls:Default::default(),close_calls:Default::default()});
         let runtime=RuntimeSpec{runtime_id:"rt-test".into(),provider:"codex".into(),executable:PathBuf::from("fake"),args:vec![],cwd:None};
         let(handle,_rx,fallback)=resume_or_start_fresh(&st,adapter.clone(),&runtime,"resume-test","saved-provider-session".into(),PathBuf::from("."),ExecOptions::default()).await.unwrap();
@@ -2785,6 +2840,9 @@ mod phase2a_tests {
         assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst),1);
         assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst),1);
         assert_eq!(st.db.session_detail("resume-test").unwrap()["providerSessionId"],Value::Null);
+        assert_eq!(st.db.session_context("resume-test").unwrap(), (None, None));
+        let event=events.recv().await.unwrap();
+        assert_eq!(event.event_type,"session.context.reset");
         let event=events.recv().await.unwrap();
         assert_eq!(event.event_type,"session.resume_rejected");
         assert!(event.payload["outcomeNote"].as_str().unwrap().contains("new provider session was started"));
@@ -2808,6 +2866,7 @@ mod phase2a_tests {
             *st.runtimes.write().await = vec![runtime];
             st.db.create_session(sid, "rt-test", "codex", &project.to_string_lossy(), "Saved chat").unwrap();
             st.db.set_session_provider_id(sid, "saved-provider-id", true).unwrap();
+            st.db.push_event("session.context.updated", &json!({"sessionId":sid,"contextUsed":420,"contextSize":1000})).unwrap();
             st.db.update_session_state(sid, "idle").unwrap();
             st.adapters = Arc::new(Adapters {
                 acp: Arc::new(AcpAdapter::default()),
@@ -2839,6 +2898,7 @@ mod phase2a_tests {
         assert_eq!(*adapter.prompts.lock().unwrap(), ["continue the saved task"]);
         let detail = st.db.session_detail("restart-resume").unwrap();
         assert_eq!(detail["messages"].as_array().unwrap().iter().filter(|message| message["role"] == "user").count(), 1);
+        assert_eq!(st.db.session_context("restart-resume").unwrap(), (Some(420), Some(1000)));
         std::fs::remove_dir_all(project).unwrap();
 
         let adapter = Arc::new(PromptResumeAdapter {
@@ -2864,6 +2924,23 @@ mod phase2a_tests {
         let detail = st.db.session_detail("expired-resume").unwrap();
         assert_eq!(detail["messages"].as_array().unwrap().iter().filter(|message| message["role"] == "user").count(), 1);
         assert_eq!(detail["providerSessionId"], "fresh-after-rejection");
+        assert_eq!(st.db.session_context("expired-resume").unwrap(), (None, None));
+        std::fs::remove_dir_all(project).unwrap();
+
+        let adapter = Arc::new(PromptResumeAdapter {
+            reject_resume: false,
+            fail_resume: false,
+            resume_calls: Default::default(),
+            new_calls: Default::default(),
+            prompts: StdMutex::new(Vec::new()),
+            events: StdMutex::new(None),
+        });
+        let (st, project) = prepare(adapter.clone(), "no-provider-handle").await;
+        st.db.clear_session_provider_id("no-provider-handle").unwrap();
+        dispatch(&st, "session.resume", json!({"sessionId":"no-provider-handle"})).await.unwrap();
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(st.db.session_context("no-provider-handle").unwrap(), (None, None));
         std::fs::remove_dir_all(project).unwrap();
 
         let adapter = Arc::new(PromptResumeAdapter {
@@ -3150,6 +3227,56 @@ mod phase2a_tests {
         assert_eq!(dispatch(&st,"session.new",json!({"projectPath":".","runtimeId":"missing"})).await.unwrap_err().1.code,"not_found");
     }
     #[tokio::test]
+    async fn session_new_agent_launch_uses_blob_options_and_later_turn_keeps_model_lock() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-session-new-lock";
+        st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
+        *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
+        let catalog = bloblex_agent_core::ModelCatalog {
+            models: vec![
+                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None },
+                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["high".into()], default_thinking:Some("high".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None },
+            ],
+            fetched_at:"2026-10-07T00:00:00Z".into(), expires_at:"2026-10-07T00:01:00Z".into(), fallback:false, source:"fake_test_catalog".into(), validated:true,
+        };
+        let adapter = Arc::new(CaptureLaunchOptionsAdapter { catalog, launch_options:StdMutex::new(None), turn_options:StdMutex::new(Vec::new()), events:StdMutex::new(None) });
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter.clone(), claude:Arc::new(ClaudeAdapter::default()) });
+        for setting in ["model", "thinking", "instructions"] { st.db.set_setting(&format!("exec_gate.codex.{setting}"), &json!(true)).unwrap(); }
+        let agent = st.db.agent_create(&json!({
+            "name":"Configured blob", "runtimeId":runtime_id, "model":"beta", "thinking":"high",
+            "instructions":"Use the blob-specific instructions.", "approvalMode":"auto",
+            "customArgs":[], "customEnv":{"LANG":"en_GB.UTF-8"}, "maxConcurrency":2
+        })).unwrap().0;
+        let project = std::env::temp_dir().join(format!("bloblex-session-new-lock-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        let created = dispatch(&st, "session.new", json!({"agentId":agent["id"],"projectPath":project.to_string_lossy()})).await.unwrap();
+        let sid = created["id"].as_str().unwrap().to_owned();
+        assert_eq!(created["agentId"], agent["id"]);
+        let launch = adapter.launch_options.lock().unwrap().clone().expect("captured launch request");
+        assert_eq!(launch.model.as_deref(), Some("beta"));
+        assert_eq!(launch.thinking.as_deref(), Some("high"));
+        assert_eq!(launch.instructions.as_deref(), Some("Use the blob-specific instructions."));
+        assert_eq!(launch.approval_mode, ApprovalMode::Auto);
+        assert!(launch.extra_args.is_empty());
+        assert_eq!(launch.env.get("LANG").map(String::as_str), Some("en_GB.UTF-8"));
+        assert_eq!(launch.max_concurrency, 2);
+        assert_eq!(st.db.session_detail(&sid).unwrap()["modelLock"], json!({"model":"beta","thinking":"high"}));
+
+        st.db.agent_update(agent["id"].as_str().unwrap(), &json!({"model":"alpha","thinking":"low","instructions":"Changed blob defaults."})).unwrap();
+        let session = st.db.session_detail(&sid).unwrap();
+        let later = exec_options_for_session(&st, &session).unwrap();
+        assert_eq!(later.model.as_deref(), Some("beta"));
+        assert_eq!(later.thinking.as_deref(), Some("high"));
+        dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"Continue with the locked session."})).await.unwrap();
+        let turn_options = adapter.turn_options.lock().unwrap();
+        let turn = turn_options.last().expect("captured turn options");
+        assert_eq!(turn.model.as_deref(), Some("beta"));
+        assert_eq!(turn.thinking.as_deref(), Some("high"));
+        drop(turn_options);
+        let _ = std::fs::remove_dir_all(project);
+    }
+    #[tokio::test]
     async fn execution_snapshot_rpc_shapes_and_stable_errors(){
         let(st,_)=state();
         assert_eq!(dispatch(&st,"exec.snapshot.get",json!({})).await.unwrap_err().1.code,"invalid_argument");
@@ -3322,13 +3449,23 @@ mod phase2a_tests {
         let sid = "session-model-lock";
         st.db.create_session_for_agent_with_model_lock(sid,runtime_id,"codex",".","Locked",agent["id"].as_str(),Some(&json!({"model":"alpha","thinking":"low"}))).unwrap();
         st.db.set_session_provider_id(sid,"old-provider-context",true).unwrap();
-        st.db.update_session_state(sid,"idle").unwrap();
+        st.db.update_session_state(sid,"completed").unwrap();
+        st.db.push_event("session.context.updated", &json!({"sessionId":sid,"contextUsed":420,"contextSize":1000})).unwrap();
 
         let unconfirmed = dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"beta","thinking":"high"})).await.unwrap_err();
         assert_eq!(unconfirmed.1.code,"confirmation_required");
         assert_eq!(st.db.session_detail(sid).unwrap()["modelLock"],json!({"model":"alpha","thinking":"low"}));
         let updated = dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"beta","thinking":"high","confirmModelChange":true})).await.unwrap();
         assert_eq!(updated["session"]["modelLock"],json!({"model":"beta","thinking":"high"}));
+        assert!(updated["session"]["contextUsed"].is_null());
+        assert!(updated["session"]["contextSize"].is_null());
+        let event_types: Vec<String> = st.db.replay_events(0, 1000).unwrap().into_iter().filter_map(|event| {
+            let relevant = if event["type"] == "session.changed" { event["payload"]["id"] == sid } else { event["payload"]["sessionId"] == sid };
+            (relevant && ["session.context.reset", "session.changed"].contains(&event["type"].as_str().unwrap_or(""))).then(|| event["type"].as_str().unwrap().to_owned())
+        }).collect();
+        let reset = event_types.iter().rposition(|event| event == "session.context.reset").unwrap();
+        let changed = event_types.iter().rposition(|event| event == "session.changed").unwrap();
+        assert!(reset < changed, "the reset must be sequenced before the updated session snapshot");
         assert!(st.db.session_detail(sid).unwrap()["providerSessionId"].is_null());
         let resumed = resume_session(&st,json!({"sessionId":sid})).await.unwrap();
         assert_eq!(resumed["outcomeNote"],"A new provider context was started; saved Bloblex messages remain available.");
@@ -3341,6 +3478,53 @@ mod phase2a_tests {
         let options = exec_options_for_session(&st,&session).unwrap();
         assert_eq!(options.model.as_deref(),Some("beta"));
         assert_eq!(options.thinking.as_deref(),Some("high"));
+    }
+
+    #[tokio::test]
+    async fn lazy_resume_rejects_a_handle_if_a_legacy_session_lock_changes_mid_startup() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-lazy-resume-lock-race";
+        st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
+        *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
+        let catalog = bloblex_agent_core::ModelCatalog {
+            models: vec![
+                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None },
+                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["high".into()], default_thinking:Some("high".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None },
+            ],
+            fetched_at:"2026-10-07T00:00:00Z".into(), expires_at:"2026-10-07T00:01:00Z".into(), fallback:false, source:"fake_test_catalog".into(), validated:true,
+        };
+        let adapter = Arc::new(BlockingResumeAdapter {
+            catalog,
+            started:tokio::sync::Notify::new(),
+            release:tokio::sync::Notify::new(),
+            close_calls:std::sync::atomic::AtomicUsize::new(0),
+        });
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter.clone(), claude:Arc::new(ClaudeAdapter::default()) });
+        let agent = st.db.agent_create(&json!({"name":"Legacy lock","runtimeId":runtime_id,"model":"alpha","thinking":"low"})).unwrap().0;
+        let sid = "legacy-resume-lock-race";
+        st.db.create_session_for_agent_with_model_lock(sid,runtime_id,"codex",".","Legacy lock",agent["id"].as_str(),None).unwrap();
+        // The session has a saved provider handle but no lock, as in a legacy row.
+        st.db.set_session_provider_id(sid,"saved-provider-context",true).unwrap();
+        st.db.update_session_state(sid,"idle").unwrap();
+        for setting in ["model", "thinking"] { st.db.set_setting(&format!("exec_gate.codex.{setting}"), &json!(true)).unwrap(); }
+
+        let started = adapter.started.notified();
+        let prompt_state = st.clone();
+        let prompt = tokio::spawn(async move {
+            dispatch(&prompt_state,"session.prompt",json!({"sessionId":sid,"text":"must not be stored"})).await
+        });
+        started.await;
+        assert_eq!(st.db.session_detail(sid).unwrap()["modelLock"],json!({"model":"alpha","thinking":"low"}));
+
+        dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"beta","thinking":"high","confirmModelChange":true})).await.unwrap();
+        adapter.release.notify_one();
+        let error = prompt.await.unwrap().unwrap_err();
+        assert_eq!(error.1.code,"conflict");
+        assert_eq!(adapter.close_calls.load(std::sync::atomic::Ordering::SeqCst),1);
+        let session = st.db.session_detail(sid).unwrap();
+        assert_eq!(session["modelLock"],json!({"model":"beta","thinking":"high"}));
+        assert_eq!(session["messages"].as_array().unwrap().len(),0);
+        assert!(!st.sessions.lock().await.contains_key(sid));
     }
 
     #[tokio::test]

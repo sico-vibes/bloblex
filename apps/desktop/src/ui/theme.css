@@ -19,6 +19,10 @@
   /* Lines */
   --line: #ffffff12;
   --line-strong: #ffffff22;
+  --meter-claude: #b8a0f0;
+  --meter-cyan: #65c9e8;
+  --meter-blue: #7798ee;
+  --meter-violet: #a780ed;
 
   /* Text */
   --text-1: #f4f4f4;
@@ -163,6 +167,10 @@
   --surface-selected-strong: #d7d7d7;
   --line: #00000014;
   --line-strong: #0000002b;
+  --meter-claude: #8264ca;
+  --meter-cyan: #1386a7;
+  --meter-blue: #526fd4;
+  --meter-violet: #7952c7;
   --text-1: #191919;
   --text-2: #4b4b4b;
   --text-3: #595959;
@@ -363,6 +371,7 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
   border-radius: var(--radius-md); background: var(--surface-overlay); box-shadow: var(--shadow-pop); scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent;
 }
 .select-menu { top: calc(100% + 4px); right: 0; width: max-content; }
+.select-menu.open-up { top: auto; bottom: calc(100% + 4px); }
 .select-menu.align-left { left: 0; right: auto; }
 .select-option, .menu-item {
   width: 100%; min-height: 32px; padding: 0 10px; display: flex; align-items: center; gap: 9px;

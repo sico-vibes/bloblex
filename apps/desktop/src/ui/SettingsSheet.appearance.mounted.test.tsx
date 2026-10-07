@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chooseOption, selectOptions } from './testSelect'
+import { chooseOption, selectOptions, selectTrigger } from './testSelect'
 import { SettingsSheet } from './SettingsSheet'
 
 const mocks = vi.hoisted(() => ({ rpc: vi.fn(), invoke: vi.fn(), setCompanionMonitor: vi.fn(), setCompanionVisibility: vi.fn(), setCloseToTray: vi.fn() }))
@@ -51,7 +51,7 @@ describe('General settings mounted controls', () => {
       expect.objectContaining({ value: 'light', label: 'Light' }),
     ]))
     expect((await selectOptions(host, 'Text size')).map((item) => item.value)).toEqual(['small', 'default', 'large', 'larger'])
-    expect(host.querySelector('[aria-label="Companion start position"]')).not.toBeNull()
+    expect(selectTrigger(host, 'Companion start position')).not.toBeNull()
     expect(host.querySelector('[aria-label="Show/hide with Ctrl+Alt+B"]')).not.toBeNull()
     await chooseOption(host, 'Theme', 'light')
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.theme', value: 'light' })

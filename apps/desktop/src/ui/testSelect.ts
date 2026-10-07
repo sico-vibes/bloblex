@@ -2,7 +2,10 @@
 import { act } from 'react'
 
 export function selectTrigger(root: ParentNode, label: string) {
-  return root.querySelector<HTMLButtonElement>(`.select-trigger[aria-label="${label}"]`)
+  return [...root.querySelectorAll<HTMLButtonElement>('.select-trigger[aria-label]')].find((button) => {
+    const name = button.getAttribute('aria-label') ?? ''
+    return name === label || name.startsWith(`${label}, `)
+  }) ?? null
 }
 
 export function selectValue(root: ParentNode, label: string) {

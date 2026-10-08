@@ -26,6 +26,7 @@ use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 mod updates;
+mod speech;
 
 #[cfg(test)]
 mod file_inspection_tests;
@@ -1910,9 +1911,17 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, _shortcut, event| {
-            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| {
+            if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                return;
+            }
+            use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+            let companion = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
+            let dictation = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyE);
+            if shortcut == &companion {
                 let _ = toggle_companion(app.clone());
+            } else if shortcut == &dictation {
+                let _ = app.emit("bloblex-dictation-toggle", ());
             }
         }).build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
@@ -1924,6 +1933,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(AppState::default())
         .manage(updates::UpdateService::default())
+        .manage(speech::SpeechState::default())
         .setup(|app| {
             let mut start_at_last_position = false;
             let mut hotkey_enabled = true;
@@ -1955,6 +1965,13 @@ pub fn run() {
                 let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
                 if let Err(error) = app.global_shortcut().register(shortcut) {
                     eprintln!("Bloblex companion shortcut unavailable: {error}");
+                }
+            }
+            {
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+                let dictation = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyE);
+                if let Err(error) = app.global_shortcut().register(dictation) {
+                    eprintln!("Bloblex dictation shortcut unavailable: {error}");
                 }
             }
             let companion = make_companion(app.handle(), start_at_last_position)?;
@@ -2015,6 +2032,13 @@ pub fn run() {
             set_companion_monitor,
             refresh_tray_menu,
             quit_bloblex,
+            speech::speech_models,
+            speech::speech_model_status,
+            speech::speech_model_download,
+            speech::dictation_start,
+            speech::dictation_stop,
+            speech::dictation_cancel,
+            speech::dictation_state,
             updates::updates_get_state,
             updates::updates_set_preferences,
             updates::updates_check,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { emit, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { Bot, Check, ChevronDown, ChevronRight, Download, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
+import { Bot, Check, ChevronDown, ChevronRight, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
@@ -16,13 +16,16 @@ import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
 import { ConfirmDialog } from './BlobPage'
 
-export type SettingsPageId = 'General' | 'Agents' | 'Updates'
+export type SettingsPageId = 'General' | 'Agents' | 'Speech' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
   { id: 'Agents', label: 'Agents', icon: Bot },
+  { id: 'Speech', label: 'Speech', icon: Mic },
   { id: 'Updates', label: 'Updates', icon: Download },
 ]
+
+type SpeechModelRow = { id: string; label: string; description: string; language: string; streaming: boolean; recommended: boolean; sizeBytes: number }
 
 export function providerDisplayName(provider: string | undefined) {
   return providerBrand(provider ?? '').name || labelize(provider, 'Coding agent')
@@ -72,6 +75,10 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   const [notice, setNotice] = useState<string | null>(null)
   const [defaultMode, setDefaultMode] = useState<'ask' | 'auto'>('ask')
   const [openRuntimes, setOpenRuntimes] = useState<Record<string, boolean>>({})
+  const [speechModels, setSpeechModels] = useState<SpeechModelRow[]>([])
+  const [speechReady, setSpeechReady] = useState<Record<string, boolean>>({})
+  const [speechProgress, setSpeechProgress] = useState<Record<string, number>>({})
+  const [speechBusy, setSpeechBusy] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!inDesktop) return
@@ -147,6 +154,41 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
     if (!inDesktop) return
     void autostartEnabled().then((enabled) => { setStartWithWindows(enabled); setAutostartLoaded(true) }).catch((reason) => { setAutostartLoaded(true); setFormError(messageOf(reason)) })
   }, [])
+
+  const loadSpeech = useCallback(async () => {
+    if (!inDesktop) return
+    try {
+      const models = await invoke<SpeechModelRow[]>('speech_models')
+      setSpeechModels(models)
+      const entries = await Promise.all(models.map(async (model) => {
+        try { return [model.id, (await invoke<{ ready: boolean }>('speech_model_status', { modelId: model.id })).ready] as const }
+        catch { return [model.id, false] as const }
+      }))
+      setSpeechReady(Object.fromEntries(entries))
+    } catch (reason) { setFormError(messageOf(reason)) }
+  }, [])
+
+  useEffect(() => { if (page === 'Speech') void loadSpeech() }, [page, loadSpeech])
+
+  const downloadModel = async (modelId: string) => {
+    setSpeechBusy(modelId)
+    setSpeechProgress((current) => ({ ...current, [modelId]: 0 }))
+    let unlisten: (() => void) | undefined
+    try {
+      unlisten = await listen<{ modelId: string; completed: number; total: number }>('bloblex-speech-download', ({ payload }) => {
+        if (payload.modelId !== modelId) return
+        setSpeechProgress((current) => ({ ...current, [modelId]: payload.total ? payload.completed / payload.total : 0 }))
+      })
+      await invoke('speech_model_download', { modelId })
+      setSpeechReady((current) => ({ ...current, [modelId]: true }))
+      setNotice('Speech model ready for dictation.')
+    } catch (reason) { setFormError(messageOf(reason)) }
+    finally {
+      unlisten?.()
+      setSpeechBusy(null)
+      setSpeechProgress((current) => ({ ...current, [modelId]: 0 }))
+    }
+  }
 
   useEffect(() => {
     if (!focusUpdates || loading || page !== 'Updates') return
@@ -404,6 +446,34 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
             </SettingsGroup>
           </>}
 
+          {!loading && page === 'Speech' && <>
+            <p className="settings-intro">Dictation runs on this device with sherpa-onnx. Download a model once; your audio is never uploaded.</p>
+            <SettingsGroup title="Speech models">
+              {speechModels.length === 0 && <p className="settings-empty">No speech models reported.</p>}
+              {speechModels.map((model) => {
+                const ready = speechReady[model.id] === true
+                const busy = speechBusy === model.id
+                const percent = Math.round((speechProgress[model.id] ?? 0) * 100)
+                return <div className="settings-row" key={model.id}>
+                  <span className="settings-row-copy">
+                    <strong>{model.label}{model.recommended ? ' · Recommended' : ''}</strong>
+                    <small>{model.description} · {formatBytes(model.sizeBytes)}</small>
+                  </span>
+                  <span className="settings-row-control">
+                    {busy
+                      ? <span className="settings-value">{percent}%</span>
+                      : ready
+                        ? <span className="settings-value">Ready</span>
+                        : <button type="button" className="secondary-button small" onClick={() => void downloadModel(model.id)} disabled={saving || speechBusy !== null}><Download size={13} />Download</button>}
+                  </span>
+                </div>
+              })}
+            </SettingsGroup>
+            <SettingsGroup title="Dictation">
+              <SettingsRow label="Keyboard shortcut" hint="Start or stop dictation from any window."><span className="settings-value">Ctrl+E</span></SettingsRow>
+            </SettingsGroup>
+          </>}
+
           {!loading && page === 'Updates' && <>
             <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />
             <SettingsGroup title="About">
@@ -450,6 +520,10 @@ function approvalLabel(mode: string) {
 function monitorLabel(monitor: string) {
   const match = /DISPLAY(\d+)$/i.exec(monitor)
   return match ? `Display ${match[1]}` : monitor
+}
+
+function formatBytes(bytes: number) {
+  return bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(0)} MB`
 }
 
 function messageOf(reason: unknown) {

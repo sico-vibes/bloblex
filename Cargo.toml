@@ -14,13 +14,14 @@ members = [
   "crates/bloblex-budget",
   "crates/bloblex-process",
   "crates/bloblex-wsl",
+  "crates/bloblex-speech",
   "crates/bloblex-daemon",
   "apps/desktop/src-tauri",
   "tools/bloblex-hook",
 ]
 
 [workspace.package]
-version = "0.1.0-beta.10"
+version = "0.1.0-beta.11"
 edition = "2021"
 license = "UNLICENSED"
 
@@ -36,6 +37,7 @@ rusqlite = { version = "0.37", features = ["bundled", "chrono", "backup"] }
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }

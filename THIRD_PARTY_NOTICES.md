@@ -29,6 +29,18 @@ Copyright (c) 2026 Shared Element Transition Dialog contributors
 - `table-of-content-model.js` and `table-of-content.js`: `tickInfluence`, `stepSpring`, `_updateMagnification`, `_animate` and `_renderTickFrame` are represented in `meterMotion.ts` and `ConversationOutline.tsx`. The rail samples long conversations for display while preserving the full selectable message range.
 - `delete-confirm-dialog.js`: `_startSuccessMorph`, `_startMatchedGeometry` and the geometry-pair capture/animation flow are represented in `BlobPage.tsx` with Web Animations API FLIP. Bloblex waits for its real asynchronous delete result; pending RPC cancellation is unavailable, so the dialog prevents dismissal until it resolves.
 
+## On-device dictation
+
+The dictation engine in `crates/bloblex-speech` and `apps/desktop/src-tauri/src/speech.rs` is an independent Rust implementation. It reuses the *approach* and the pinned model metadata (file names, sizes and SHA-256 hashes) of the MIT-licensed reference project [stablyai/orca](https://github.com/stablyai/orca) (`src/main/speech/model-download-catalog.ts`), and does not include that project's Node/Electron source.
+
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — Apache-2.0. Native speech inference (offline and streaming ASR).
+- [sherpa-onnx Rust bindings](https://crates.io/crates/sherpa-onnx) — Apache-2.0.
+- [cpal](https://github.com/RustAudio/cpal) — Apache-2.0.
+
+### Model weights
+
+Speech model weights are downloaded at runtime from Hugging Face at pinned revisions and are **not** distributed with Bloblex. Each model carries its own license; verify before commercial use. The default model, NVIDIA Parakeet TDT 0.6B, is distributed under CC-BY-4.0 and requires attribution.
+
 ## MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:

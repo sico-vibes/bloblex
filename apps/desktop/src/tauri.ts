@@ -252,3 +252,60 @@ export async function fetchUsageAnalytics(request: UsageAnalyticsRequest) {
   if (!parsed) throw new Error('internal: Usage analytics could not be loaded.')
   return parsed
 }
+
+export type SpeechModelSummary = {
+  id: string
+  label: string
+  description: string
+  language: string
+  streaming: boolean
+  recommended: boolean
+  sizeBytes: number
+}
+
+export type DictationEventPayload = { type: string; owner?: string; text?: string }
+
+export async function speechModels(): Promise<SpeechModelSummary[]> {
+  if (!inDesktop) return []
+  return invoke<SpeechModelSummary[]>('speech_models')
+}
+
+export async function dictationModelStatus(modelId: string): Promise<{ modelId: string; ready: boolean; sizeBytes: number }> {
+  if (!inDesktop) return { modelId, ready: false, sizeBytes: 0 }
+  return invoke<{ modelId: string; ready: boolean; sizeBytes: number }>('speech_model_status', { modelId })
+}
+
+export async function downloadSpeechModel(modelId: string): Promise<{ modelId: string; directory: string }> {
+  if (!inDesktop) throw new Error('Speech models are available only in the desktop app.')
+  return invoke<{ modelId: string; directory: string }>('speech_model_download', { modelId })
+}
+
+export async function startDictation(modelId: string, owner = 'desktop'): Promise<void> {
+  if (!inDesktop) throw new Error('Dictation is available only in the desktop app.')
+  await invoke('dictation_start', { modelId, owner })
+}
+
+export async function stopDictation(owner = 'desktop'): Promise<void> {
+  if (!inDesktop) return
+  await invoke('dictation_stop', { owner })
+}
+
+export async function cancelDictation(owner = 'desktop'): Promise<void> {
+  if (!inDesktop) return
+  await invoke('dictation_cancel', { owner })
+}
+
+export async function listenForDictation(handler: (event: DictationEventPayload) => void): Promise<UnlistenFn> {
+  if (!inDesktop) return () => undefined
+  return listen<DictationEventPayload>('bloblex-dictation', (event) => handler(event.payload))
+}
+
+export async function listenForDictationToggle(handler: () => void): Promise<UnlistenFn> {
+  if (!inDesktop) return () => undefined
+  return listen('bloblex-dictation-toggle', () => handler())
+}
+
+export async function listenForSpeechDownload(handler: (progress: { modelId: string; completed: number; total: number }) => void): Promise<UnlistenFn> {
+  if (!inDesktop) return () => undefined
+  return listen<{ modelId: string; completed: number; total: number }>('bloblex-speech-download', (event) => handler(event.payload))
+}

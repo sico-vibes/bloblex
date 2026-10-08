@@ -138,7 +138,7 @@ describe('settings modal', () => {
     await view.settle()
     const page = async (name: string) => { await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === name)?.click() }) }
     const nav = [...view.host.querySelectorAll('.settings-nav button')].map((button) => button.textContent)
-    expect(nav).toEqual(['General', 'Agents', 'Updates'])
+    expect(nav).toEqual(['General', 'Agents', 'Speech', 'Updates'])
     expect(view.host.textContent).not.toMatch(/Add budget|pricing|subscription/i)
     const start = view.host.querySelector<HTMLButtonElement>('[aria-label="Start with Windows"]')!
     expect(start.disabled).toBe(false)

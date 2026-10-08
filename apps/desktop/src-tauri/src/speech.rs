@@ -6,14 +6,15 @@
 //! lifecycle lives in `bloblex_speech`; this module is the native shell.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bloblex_speech::capture::{start_capture, AudioFrame};
 use bloblex_speech::{
-    catalog, downmix_to_mono, get_catalog_model, model_manager, resample_to_rate,
+    catalog, downmix_to_mono, get_catalog_model, model_manager, resample_to_rate, rms_level,
     DictationLifecycle, DictationOwner, EngineEvent, SpeechEngine, SpeechModelManifest,
 };
 use serde_json::{json, Value};
@@ -21,6 +22,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 /// How long a warm worker waits for the next session before releasing the model.
 const IDLE_WORKER_TEARDOWN: Duration = Duration::from_secs(120);
+/// How long the bubble lingers after a session ends so the finish cue is visible.
+const BUBBLE_LINGER: Duration = Duration::from_millis(2400);
+/// Throttle for microphone level events (~16 Hz).
+const LEVEL_INTERVAL: Duration = Duration::from_millis(60);
+
+/// Incremented when a new session claims the bubble; a pending hide is skipped
+/// if the generation moved on (a new dictation started during the linger).
+static BUBBLE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 pub struct SpeechState {
@@ -89,6 +98,31 @@ fn emit_engine_event(app: &AppHandle, owner: DictationOwner, event: EngineEvent)
         EngineEvent::Partial(text) => emit(app, owner, "partial", Some(&text)),
         EngineEvent::Final(text) => emit(app, owner, "final", Some(&text)),
     }
+}
+
+fn companion_visible(app: &AppHandle) -> bool {
+    app.get_webview_window("companion")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false)
+}
+
+fn show_dictation_bubble(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("dictation") {
+        let _ = window.show();
+    }
+}
+
+fn hide_dictation_bubble_after(app: &AppHandle, delay: Duration) {
+    let app = app.clone();
+    let generation = BUBBLE_GENERATION.load(Ordering::SeqCst);
+    thread::spawn(move || {
+        thread::sleep(delay);
+        if BUBBLE_GENERATION.load(Ordering::SeqCst) == generation {
+            if let Some(window) = app.get_webview_window("dictation") {
+                let _ = window.hide();
+            }
+        }
+    });
 }
 
 fn worker_is_alive(handle: &WorkerHandle) -> bool {
@@ -275,6 +309,7 @@ fn run_worker(
     };
 
     let mut start_pending = false;
+    let mut last_level = Instant::now();
     loop {
         if !std::mem::replace(&mut start_pending, false) {
             match receiver.recv() {
@@ -289,12 +324,28 @@ fn run_worker(
             let _ = commands.send(WorkerCommand::Frame(frame));
         }) {
             Ok(capture) => {
+                let surface = if companion_visible(&app) { "companion" } else { "bubble" };
+                let _ = app.emit(
+                    "bloblex-dictation-surface",
+                    json!({ "surface": surface, "owner": owner.as_str() }),
+                );
+                if surface == "bubble" {
+                    BUBBLE_GENERATION.fetch_add(1, Ordering::SeqCst);
+                    show_dictation_bubble(&app);
+                }
                 emit(&app, owner, "ready", None);
                 loop {
                     match receiver.recv() {
                         Ok(WorkerCommand::Frame(frame)) => {
                             let mono = downmix_to_mono(&frame.samples, frame.channels as usize);
                             let resampled = resample_to_rate(&mono, frame.sample_rate, engine.sample_rate());
+                            if last_level.elapsed() >= LEVEL_INTERVAL {
+                                last_level = Instant::now();
+                                let _ = app.emit(
+                                    "bloblex-dictation-level",
+                                    json!({ "level": rms_level(&resampled) }),
+                                );
+                            }
                             for event in engine.accept(&resampled) {
                                 emit_engine_event(&app, owner, event);
                             }
@@ -305,6 +356,7 @@ fn run_worker(
                                 emit_engine_event(&app, owner, event);
                             }
                             emit(&app, owner, "stopped", None);
+                            hide_dictation_bubble_after(&app, BUBBLE_LINGER);
                             engine.reset();
                             break;
                         }
@@ -312,6 +364,7 @@ fn run_worker(
                             capture.stop();
                             let _ = engine.finish();
                             emit(&app, owner, "stopped", None);
+                            hide_dictation_bubble_after(&app, BUBBLE_LINGER);
                             return;
                         }
                         Ok(WorkerCommand::Start) => {}
@@ -346,8 +399,17 @@ fn run_worker(
 }
 
 #[tauri::command]
-pub fn dictation_stop(state: State<'_, SpeechState>, owner: Option<String>) -> Result<(), String> {
+pub fn dictation_stop(
+    app: AppHandle,
+    state: State<'_, SpeechState>,
+    owner: Option<String>,
+) -> Result<(), String> {
     let owner = parse_owner(owner)?;
+    let was_active = state
+        .lifecycle
+        .lock()
+        .map(|lifecycle| lifecycle.is_active())
+        .unwrap_or(false);
     {
         let mut lifecycle = state
             .lifecycle
@@ -356,6 +418,9 @@ pub fn dictation_stop(state: State<'_, SpeechState>, owner: Option<String>) -> R
         lifecycle
             .begin_stop(owner)
             .map_err(|error| error.to_string())?;
+    }
+    if was_active {
+        emit(&app, owner, "processing", None);
     }
     if let Ok(guard) = state.worker.lock() {
         if let Some(handle) = guard.as_ref() {

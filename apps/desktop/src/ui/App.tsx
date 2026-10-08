@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, unlockCompanionAudioFromGesture } from '../blob/soundCues'
+import { playDictationCue } from './dictationSound'
 import { CompanionFsm, type CompanionMode } from '../blob/companionFsm'
 import { buildConversationItems, groupConversationActivity, type ConversationItem, type GroupedConversationItem } from './conversation'
 import { deriveCompanionStatus } from './companionStatus'
@@ -1913,6 +1914,11 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
   const [soundsEnabled, setSoundsEnabled] = useState(false)
   const [soundError, setSoundError] = useState<string | null>(null)
   const [dropError, setDropError] = useState<string | null>(null)
+  const [dictationSurface, setDictationSurface] = useState<'bubble' | 'companion' | 'none'>('none')
+  const [dictationPhase, setDictationPhase] = useState<'idle' | 'listening' | 'processing' | 'error'>('idle')
+  const [dictationError, setDictationError] = useState('')
+  const [dictationLevel, setDictationLevel] = useState(0)
+  const [dictationFrame, setDictationFrame] = useState(0)
   const fileRequest = useRef(0)
   const viewBeforeConfused = useRef<typeof view>('overview')
   const viewBeforeDrop = useRef<typeof view>('overview')
@@ -1920,10 +1926,12 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
   const droppedFileRef = useRef(droppedFile)
   const permissionRef = useRef(permission)
   const sessionRef = useRef(session)
+  const dictationSurfaceRef = useRef<'bubble' | 'companion' | 'none'>('none')
   viewRef.current = view
   droppedFileRef.current = droppedFile
   permissionRef.current = permission
   sessionRef.current = session
+  dictationSurfaceRef.current = dictationSurface
   const latestTool = session?.tools?.at(-1)
   const clock = useClock(10_000)
   const derived = deriveCompanionStatus({ connected, runtime, session, permissionPending: !!permission, composing: !!draft.trim(), now: clock })
@@ -2107,6 +2115,37 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
     })
     return () => { cancelled = true; unlisten?.() }
   }, [])
+  useEffect(() => {
+    let disposed = false
+    const unsubs: Array<() => void> = []
+    const add = (unlisten: () => void) => { if (disposed) unlisten(); else unsubs.push(unlisten) }
+    void (async () => {
+      add(await listen<{ surface: string }>('bloblex-dictation-surface', (event) => {
+        const isCompanion = event.payload.surface === 'companion'
+        setDictationSurface(isCompanion ? 'companion' : 'none')
+        if (isCompanion) { setDictationPhase('listening'); setDictationError(''); playDictationCue('record-start') }
+      }))
+      add(await listen<{ type: string; text?: string }>('bloblex-dictation', (event) => {
+        if (dictationSurfaceRef.current !== 'companion') return
+        const { type, text } = event.payload
+        if (type === 'processing') { setDictationPhase('processing'); playDictationCue('processing-start') }
+        else if (type === 'stopped') { setDictationPhase('idle'); setDictationSurface('none'); playDictationCue('processing-finish') }
+        else if (type === 'error') {
+          setDictationPhase('error'); setDictationError(text || 'Dictation failed.'); playDictationCue('error')
+          window.setTimeout(() => { setDictationPhase('idle'); setDictationSurface('none') }, 1600)
+        }
+      }))
+      add(await listen<{ level: number }>('bloblex-dictation-level', (event) => setDictationLevel(event.payload.level)))
+    })().catch(() => undefined)
+    return () => { disposed = true; unsubs.forEach((unlisten) => unlisten()) }
+  }, [])
+
+  useEffect(() => {
+    if (dictationSurface !== 'companion') return
+    const interval = window.setInterval(() => setDictationFrame((current) => current + 1), 66)
+    return () => window.clearInterval(interval)
+  }, [dictationSurface])
+
   const inputTokens = typeof usage?.inputTokens === 'number' ? usage.inputTokens : null
   const outputTokens = typeof usage?.outputTokens === 'number' ? usage.outputTokens : null
   const tokenGlance = inputTokens !== null && outputTokens !== null ? formatCount(inputTokens + outputTokens) : inputTokens !== null ? `${formatCount(inputTokens)} in · out ?` : outputTokens !== null ? `in ? · ${formatCount(outputTokens)} out` : 'Unknown'
@@ -2131,8 +2170,22 @@ function Companion({ agent, agents, runtime, runtimes, session, usage, connected
     activity,
   ].filter((line): line is string => !!line))].slice(-2)
   const focusBlob = (size: number) => <BlobCanvas color={color} size={size} mood={displayMood} fileStage={fileStage} outfit={agent?.outfit ?? 'auto'} createdAt={agent?.createdAt ?? null} soundCues={soundsEnabled} label={name} onDizzy={beginConfused} onDizzyRecovery={recoverFromConfused} />
+  const responsiveDictation = Math.min(1, Math.pow(Math.max(0, dictationLevel), 0.58) * 2.1)
+  const dictationBars = Array.from({ length: 14 }, (_, index) => {
+    const amplitude = Math.max(0.12, responsiveDictation) * (0.8 + Math.abs(Math.sin(dictationFrame * 0.4 + index * 0.5)))
+    return { key: index, height: Math.max(5, 5 + amplitude * 26), opacity: 0.4 + amplitude * 0.55 }
+  })
 
   return <main className={`companion-root ${popIn ? 'pop-in' : ''}`} data-mode={mode} style={color ? { '--agent-accent': color } as React.CSSProperties : undefined} onMouseEnter={() => fsmRef.current?.mouseEntered()} onMouseLeave={() => fsmRef.current?.mouseLeft()}>
+    {dictationSurface === 'companion' && dictationPhase !== 'idle' && <div className="companion-listening" role="status" aria-live="polite">
+      {dictationPhase === 'processing' ? <>
+        <span className="companion-listening-label">Processing</span>
+        <span className="companion-listening-spinner" aria-hidden="true" />
+      </> : dictationPhase === 'error' ? <span className="companion-listening-label error">{dictationError}</span> : <>
+        <span className="companion-listening-label">Listening</span>
+        <div className="companion-listening-wave">{dictationBars.map((bar) => <span key={bar.key} style={{ height: `${bar.height}px`, opacity: bar.opacity }} />)}</div>
+      </>}
+    </div>}
     <div ref={capsuleRef} className={`companion-capsule island ${mode}`} data-tauri-drag-region>
       {mode === 'petit' ? <div className="companion-compact" data-tauri-drag-region>
         <button className="compact-bot" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}>{focusBlob(40)}</button>

@@ -1703,6 +1703,53 @@ fn make_companion(app: &AppHandle, start_at_last_position: bool) -> tauri::Resul
     Ok(window)
 }
 
+/// A frameless, always-on-top bubble shown only while dictation is active and
+/// the companion is hidden. It mirrors the companion's transparency model.
+fn make_dictation(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+    let window = WebviewWindowBuilder::new(
+        app,
+        "dictation",
+        WebviewUrl::App("index.html?dictation=1".into()),
+    )
+    .title("Bloblex Dictation")
+    .inner_size(240.0, 76.0)
+    .position(500.0, 500.0)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .focused(false)
+    .visible(false)
+    .shadow(false)
+    .build()?;
+    let monitors = window.available_monitors().unwrap_or_default();
+    if let Some(monitor) = window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| monitors.first().cloned())
+    {
+        let area = monitor.work_area();
+        let scale = monitor.scale_factor();
+        let width = (240.0 * scale).round() as i32;
+        let height = (76.0 * scale).round() as i32;
+        // Sit above the companion island so the two never overlap.
+        let gap = (132.0 * scale).round() as i32;
+        let x = area.position.x + (area.size.width as i32 - width) / 2;
+        let y = (area.position.y + area.size.height as i32 - height - gap).max(area.position.y);
+        let _ = window.set_position(PhysicalPosition::new(x, y));
+    }
+    let window_for_event = window.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = window_for_event.hide();
+        }
+    });
+    Ok(window)
+}
+
 fn build_tray_menu(app: &AppHandle, sessions: &[Value]) -> tauri::Result<Menu<tauri::Wry>> {
     let open = MenuItem::with_id(app, "open", "Open Bloblex", true, None::<&str>)?;
     let companion = MenuItem::with_id(
@@ -1928,7 +1975,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["companion"]).build())
+        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["companion", "dictation"]).build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState::default())
@@ -1977,6 +2024,8 @@ pub fn run() {
             let companion = make_companion(app.handle(), start_at_last_position)?;
             let _ = companion.hide();
             let _ = app.emit("bloblex-companion-visible-changed", false);
+            let dictation = make_dictation(app.handle())?;
+            let _ = dictation.hide();
             updates::start_background_checker(app.handle());
             build_tray(app.handle())?;
             if let Some(main) = app.get_webview_window("main") {

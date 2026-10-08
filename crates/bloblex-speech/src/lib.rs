@@ -9,6 +9,7 @@
 pub mod catalog;
 pub mod chunker;
 pub mod error;
+pub mod level;
 pub mod manifest;
 pub mod model_manager;
 pub mod resample;
@@ -22,6 +23,7 @@ pub mod engine;
 pub use catalog::{catalog, default_model, get_catalog_model};
 pub use chunker::OfflineAudioChunker;
 pub use error::{SpeechError, SpeechResult};
+pub use level::rms_level;
 pub use manifest::{SpeechDownloadFile, SpeechModelManifest, SpeechModelType, SpeechProvider};
 pub use resample::{downmix_to_mono, resample_to_rate};
 pub use session::{DictationLifecycle, DictationOwner};

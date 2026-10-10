@@ -1,12 +1,14 @@
 # Release checklist
 
-Updated 10 October 2026. Manual-only `v0.1.0-beta.13` is published and is the latest GitHub release. The signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`; manual-only betas do not change that feed. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
+Updated 10 October 2026. Manual-only `v0.1.0-beta.14` is published and is the latest GitHub release. The signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`; manual-only betas do not change that feed. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
 
-Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.13`. Cargo.lock entries for crates that inherit the workspace version are beta.13; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
+Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.14`. Cargo.lock entries for crates that inherit the workspace version are beta.14; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
 
-`docs/releases/0.1.0-beta.13.md` is the published note for the current manual-only beta. The signed release script is not used for unsigned manual releases. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
+`docs/releases/0.1.0-beta.14.md` is the published note for the current manual-only beta. The signed release script is not used for unsigned manual releases. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
 
 ## Release command
+
+Status: **done for beta.14**. The [v0.1.0-beta.14](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.14) prerelease is published from `5fc1e1b` with its unsigned NSIS installer (12,918,554 bytes; SHA-256 `d70826a1a6d7e2657a05923ca2a5c8ae05db6a4753657ec15d0ee2d8674f76c1`) and `SHA256SUMS.txt`; GitHub's asset digest matches. Commit `5fc1e1b` and the tag `v0.1.0-beta.14` are pushed to `main`. Built in `D:\b14` with `--no-sign` and `createUpdaterArtifacts:false`. The signed updater feed remains at beta.6.
 
 Status: **done for beta.13**. The [v0.1.0-beta.13](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.13) prerelease is published from `1b23d4c` with its unsigned NSIS installer (12,900,017 bytes; SHA-256 `de8345bd6e273cda2256aa4ce744ae6b110e78ecbb48402b23fa179495a1f3e6`) and `SHA256SUMS.txt`; GitHub's asset digest matches. Commit `1b23d4c` and the tag `v0.1.0-beta.13` are pushed to `main`. It was built in `D:\b13` with `--no-sign` and `createUpdaterArtifacts:false`. The signed updater feed remains at beta.6.
 

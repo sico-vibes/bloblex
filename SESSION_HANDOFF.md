@@ -2,6 +2,10 @@
 
 Current as of 7 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
+## Published (10 October 2026, beta.14)
+
+The section below shipped as manual-only [v0.1.0-beta.14](docs/releases/0.1.0-beta.14.md). Release commit `5fc1e1b` is pushed to `main` and tagged `v0.1.0-beta.14`. The unsigned NSIS installer was built in `D:\b14`: 12,918,554 bytes, SHA-256 `d70826a1a6d7e2657a05923ca2a5c8ae05db6a4753657ec15d0ee2d8674f76c1`, `NotSigned`. The signed updater feed remains at beta.6.
+
 ## Uncommitted follow-up (10 October 2026, after beta.13): timeline, activity, companion focus
 
 - **Timeline order.** Live assistant messages and tools arrived without timestamps, and the timestamp sort pushed them below later items: "Message from Gogo" appeared above Fluffy's own "I asked Gogo". The stored data was correct, which a read-only check of the user's database confirmed.

@@ -333,10 +333,11 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.compact-bot [data-color]')?.getAttribute('data-color')).toBe('#F38C6F')
     await click(buttonNamed(view.host, 'Open companion home'))
     await view.settle()
-    const pill = [...view.host.querySelectorAll('.team-pill.on')].find((node) => node.textContent?.includes('Claude'))
-    expect(pill?.querySelector('[data-color]')?.getAttribute('data-color')).toBe('#F38C6F')
-    expect(pill?.querySelector('[data-color]')?.getAttribute('data-color')).not.toBe('#82aaff')
-    expect(pill?.querySelector('.team-pill-name')?.textContent).toBe('Claude')
+    // The focused blob owns the focus card in its colour; teammates fill the grid beside it.
+    expect(view.host.querySelector('.island-card.focus .card-bot [data-color]')?.getAttribute('data-color')).toBe('#F38C6F')
+    const peers = [...view.host.querySelectorAll('.peer')]
+    expect(peers.length).toBeGreaterThan(0)
+    expect(peers.some((peer) => peer.getAttribute('aria-label')?.startsWith('Claude'))).toBe(false)
   })
 
   it('moves focus with Arrow Down and selects only on Enter', async () => {

@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, Project, Runtime, Session } from '../types'
-import { CompanionChatItem, CompanionTeamCard, teamLine } from './CompanionTeam'
+import { CompanionChatItem, CompanionPeers, CompanionTeamPicker, pickPeers, teamLine } from './CompanionTeam'
 
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: ({ label }: { label?: string }) => <span data-face={label} /> }))
 
@@ -31,18 +31,28 @@ beforeEach(() => { vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true) })
 afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } vi.unstubAllGlobals() })
 
 describe('companion team overview', () => {
-  it('groups blobs by project with leader, live state and selection, and selects on click', () => {
+  it('keeps up to four teammates in sight, pinned first, each with the line it is working on', () => {
+    const many = [lead, mate, casual, agent('d', 'Dot'), agent('e', 'Eve'), agent('f', 'Fox')]
+    expect(pickPeers(many, sessions, runtimes, true, 'lead', []).map((item) => item.name)).toEqual(['Mate', 'Casual', 'Dot', 'Eve'])
+    expect(pickPeers(many, sessions, runtimes, true, 'lead', ['f']).map((item) => item.name)[0]).toBe('Fox')
     const onSelect = vi.fn()
-    const host = mount(<CompanionTeamCard agents={[lead, mate, casual]} projects={projects} sessions={sessions} runtimes={runtimes} connected selectedId="lead" onSelect={onSelect} />)
-    expect([...host.querySelectorAll('.team-card-label')].map((label) => label.textContent)).toEqual(['Board', 'Casual'])
-    const pills = [...host.querySelectorAll<HTMLButtonElement>('.team-pill')]
-    expect(pills.map((pill) => pill.getAttribute('aria-label'))).toEqual(['Lead, CTO, team leader', 'Mate, waiting for you', 'Casual'])
-    expect(pills[0].getAttribute('aria-pressed')).toBe('true')
-    expect(pills[0].querySelector('.team-pill-leader')).not.toBeNull()
-    act(() => pills[1].click())
+    const host = mount(<CompanionPeers agents={many} projects={projects} sessions={sessions} runtimes={runtimes} connected focusedId="lead" pinned={[]} onSelect={onSelect} onPinnedChange={vi.fn()} />)
+    const peers = [...host.querySelectorAll<HTMLButtonElement>('.peer')]
+    expect(peers).toHaveLength(4)
+    expect(peers[0].getAttribute('aria-label')).toBe('Mate: Waiting for you')
+    act(() => peers[0].click())
     expect(onSelect).toHaveBeenCalledWith(mate)
-    const offline = mount(<CompanionTeamCard agents={[lead]} projects={projects} sessions={sessions} runtimes={runtimes} connected={false} selectedId={null} onSelect={onSelect} />)
-    expect(offline.querySelector('.team-pill')?.className).toContain('state-offline')
+    expect(host.querySelector('.peers-all')?.getAttribute('aria-label')).toBe('All blobs (5)')
+  })
+
+  it('lists every blob by project and pins up to four to the island', () => {
+    const onPinnedChange = vi.fn()
+    const host = mount(<CompanionTeamPicker agents={[lead, mate, casual]} projects={projects} sessions={sessions} runtimes={runtimes} connected focusedId="lead" pinned={['mate']} onSelect={vi.fn()} onPinnedChange={onPinnedChange} onClose={vi.fn()} />)
+    expect([...host.querySelectorAll('.team-picker-label')].map((label) => label.textContent)).toEqual(['Board', 'Casual'])
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Keep Casual on the island"]')!.click())
+    expect(onPinnedChange).toHaveBeenCalledWith(['mate', 'casual'])
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Unpin Mate from the island"]')!.click())
+    expect(onPinnedChange).toHaveBeenLastCalledWith([])
   })
 
   it('says who the focused blob is waiting on or helping', () => {

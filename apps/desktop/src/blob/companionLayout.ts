@@ -23,3 +23,13 @@ export function companionWindowSize(mode: CompanionPresentation) {
 }
 
 export const ISLAND_GEOMETRY = { compactWidth: COMPACT_W, expandedWidth: EXPANDED_W, overviewHeight: OVERVIEW_H, greetingHeight: GREETING_H }
+
+/** Chat island heights the user can choose in the companion's settings. */
+export const COMPANION_CHAT_SIZES = { small: 264, medium: 360, large: 480 } as const
+export type CompanionChatSize = keyof typeof COMPANION_CHAT_SIZES
+export const COMPANION_CHAT_SIZE_LABELS: Record<CompanionChatSize, string> = { small: 'Compact', medium: 'Comfortable', large: 'Tall' }
+export function isCompanionChatSize(value: unknown): value is CompanionChatSize {
+  return value === 'small' || value === 'medium' || value === 'large'
+}
+/** Teammates shown beside the focused blob on the island (a 2×2 grid). */
+export const MAX_COMPANION_PEERS = 4

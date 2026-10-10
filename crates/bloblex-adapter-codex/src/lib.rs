@@ -797,6 +797,26 @@ async fn write_response(process: &SharedProcess, id: &Value, result: Value) -> R
     process.stdin.lock().await.write(&b).await.map_err(|e| AdapterError::Process(e.to_string()))
 }
 
+/// A readable title for a Codex thread item: the command, the MCP tool, the search.
+fn codex_item_title(item: &Value) -> String {
+    let text = |value: &Value| value.as_str().map(str::trim).filter(|text| !text.is_empty()).map(str::to_owned);
+    match item["type"].as_str().unwrap_or("") {
+        "commandExecution" => text(&item["command"]).unwrap_or_else(|| "Ran a command".into()),
+        "mcpToolCall" => match (text(&item["server"]), text(&item["tool"])) {
+            (Some(server), Some(tool)) => format!("{server} · {tool}"),
+            (_, Some(tool)) => tool,
+            _ => "Used a tool".into(),
+        },
+        "webSearch" => text(&item["query"]).map(|query| format!("Searched: {query}")).unwrap_or_else(|| "Searched the web".into()),
+        "fileChange" => "Edited files".into(),
+        "imageView" => text(&item["path"]).map(|path| format!("Viewed {path}")).unwrap_or_else(|| "Viewed an image".into()),
+        other => text(&item["command"]).or_else(|| text(&item["name"])).unwrap_or_else(|| match other {
+            "" => "Codex step".into(),
+            other => other.chars().enumerate().flat_map(|(index, ch)| if index > 0 && ch.is_uppercase() { vec![' ', ch.to_ascii_lowercase()] } else if index == 0 { vec![ch.to_ascii_uppercase()] } else { vec![ch] }).collect(),
+        }),
+    }
+}
+
 fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
     match method {
         "thread/name/updated" => p["threadName"]
@@ -811,15 +831,12 @@ fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
                 "agentMessage" => i["text"]
                     .as_str()
                     .map(|text| AgentEvent::AssistantDelta { text: text.into() }),
-                "userMessage" | "plan" => None,
+                // Reasoning items carry no user-facing content here; they are not activity.
+                "userMessage" | "plan" | "reasoning" => None,
                 _ => Some(AgentEvent::ToolStarted {
                     tool_call_id: i["id"].as_str().unwrap_or("item").into(),
                     kind: i["type"].as_str().unwrap_or("other").into(),
-                    title: i["command"]
-                        .as_str()
-                        .or(i["name"].as_str())
-                        .unwrap_or("Codex activity")
-                        .into(),
+                    title: codex_item_title(i),
                     raw: i.clone(),
                 }),
             }
@@ -832,7 +849,7 @@ fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
                     .map(|text| AgentEvent::AssistantMessage { text: text.into() }),
                 "plan" => i["text"].as_str().map(str::trim).filter(|text| !text.is_empty())
                     .map(|text| AgentEvent::PlanProposed { markdown: text.into() }),
-                "userMessage" => None,
+                "userMessage" | "reasoning" => None,
                 "fileChange" => i["changes"]
                     .as_array()
                     .and_then(|v| v.first())
@@ -1610,6 +1627,16 @@ impl AgentAdapter for CodexAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reasoning_items_are_not_activity_and_other_items_get_readable_titles() {
+        assert!(map_notification("item/started", &json!({"item":{"type":"reasoning","id":"rs","summary":[],"content":[]}})).is_none());
+        assert!(map_notification("item/completed", &json!({"item":{"type":"reasoning","id":"rs"}})).is_none());
+        let title = |item: Value| match map_notification("item/started", &json!({"item":item})) { Some(AgentEvent::ToolStarted { title, .. }) => title, other => panic!("{other:?}") };
+        assert_eq!(title(json!({"type":"commandExecution","id":"c","command":"npm test"})), "npm test");
+        assert_eq!(title(json!({"type":"mcpToolCall","id":"m","server":"bloblex","tool":"message_blob"})), "bloblex · message_blob");
+        assert_eq!(title(json!({"type":"webSearch","id":"w","query":"tauri drag"})), "Searched: tauri drag");
+        assert_eq!(title(json!({"type":"somethingNew","id":"x"})), "Something new");
+    }
 
     #[test]
     fn inherited_environment_fingerprint_handles_empty_environment() {

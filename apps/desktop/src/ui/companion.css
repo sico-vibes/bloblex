@@ -221,3 +221,68 @@
 @media (prefers-reduced-motion: reduce) { .team-pill, .team-pill.state-working .team-pill-dot { transition: none; animation: none; } }
 .island-card .question-card { width: 100%; margin: 0; padding: 10px 12px; gap: 8px; border-radius: 14px; box-shadow: none; font-size: var(--fs-xs); }
 .island-card:has(.question-card) .card-stack { padding-top: 8px; padding-bottom: 8px; justify-content: flex-start; overflow-y: auto; }
+
+/* ── Focus and peers (after the Grok Bot companion study) ─────────────── */
+.island-overview > .peers-card, .island-overview > .team-picker { flex: 1 1 auto; min-width: 0; }
+.island-card.focus { animation: focus-swap 320ms cubic-bezier(.3, 1.2, .4, 1) both; }
+@keyframes focus-swap { from { opacity: 0; transform: translateX(-10px) scale(.98); } to { opacity: 1; transform: none; } }
+.card-bot .focus-glow { position: absolute; z-index: -1; inset: -14px; border-radius: 50%; background: radial-gradient(closest-side, color-mix(in srgb, var(--focus-glow, #6aa8ff) 42%, transparent), transparent); opacity: .35; transition: opacity 300ms ease; }
+.island-card.focus.is-working .card-bot .focus-glow { background: radial-gradient(closest-side, color-mix(in srgb, #4ea1ff 60%, transparent), transparent); animation: focus-pulse 1.8s ease-in-out infinite; }
+@keyframes focus-pulse { 0%, 100% { opacity: .45; transform: scale(.92); } 50% { opacity: .85; transform: scale(1.06); } }
+.focus-ticker { min-height: 54px; display: flex; flex-direction: column; justify-content: flex-end; gap: 1px; -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 30%); mask-image: linear-gradient(to bottom, transparent 0%, #000 30%); }
+.focus-ticker-row { min-width: 0; height: 18px; display: flex; align-items: center; gap: 6px; color: var(--c-dim-3); font: 500 var(--fs-2xs) var(--c-font); animation: ticker-in 280ms cubic-bezier(.2, .8, .2, 1) both; }
+.focus-ticker-row > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.focus-ticker-row.current { height: 22px; color: var(--c-ink); font-size: var(--fs-sm); }
+.focus-ticker-row svg { flex: 0 0 auto; color: var(--c-dim-2); }
+.focus-ticker-dot { width: 12px; flex: 0 0 auto; display: grid; place-items: center; }
+.focus-ticker-dot::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .7; }
+@keyframes ticker-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.peers-card { position: relative; padding: 8px; }
+.peer-grid { height: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.peer { --peer: var(--companion-white); min-width: 0; padding: 0 12px 0 5px; display: flex; align-items: center; gap: 6px; color: color-mix(in srgb, var(--peer) 72%, var(--c-ink)); text-align: left; border: 1px solid color-mix(in srgb, var(--peer) 22%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--peer) 9%, var(--c-card-flat)); font: 600 var(--fs-2xs) var(--c-font); animation: peer-in 340ms cubic-bezier(.3, 1.2, .4, 1) both; transition: transform 140ms ease, background 140ms ease, border-color 140ms ease; }
+.peer:hover { border-color: color-mix(in srgb, var(--peer) 55%, transparent); background: color-mix(in srgb, var(--peer) 18%, var(--c-card-flat)); transform: translateY(-1px); }
+.peer:active { transform: scale(.97); }
+.peer.state-offline { opacity: .5; }
+.peer.state-waiting { border-color: color-mix(in srgb, var(--companion-status-alert, #f5a524) 60%, transparent); }
+@keyframes peer-in { from { opacity: 0; transform: translateY(6px) scale(.96); } to { opacity: 1; transform: none; } }
+.peer-face { position: relative; flex: 0 0 auto; display: grid; place-items: center; }
+.peer-face .blob-canvas { pointer-events: none; }
+.peer-leader { position: absolute; right: -3px; bottom: -2px; width: 11px; height: 11px; display: grid; place-items: center; color: #fff; border-radius: 50%; background: linear-gradient(160deg, #ffad42, #f27a1a); font-size: 7px; font-style: normal; line-height: 1; box-shadow: 0 0 0 1.5px var(--c-card); }
+.peer-copy { min-width: 0; display: grid; line-height: 1.2; }
+.peer-copy b { overflow: hidden; color: color-mix(in srgb, var(--peer) 78%, var(--c-ink)); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.peer-line { min-width: 0; overflow: hidden; color: var(--c-dim-2); font-weight: 500; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.peer.state-waiting .peer-line { color: var(--companion-status-alert, #f5a524); }
+.peers-all { position: absolute; top: 4px; right: 6px; z-index: 2; height: 18px; padding: 0 7px; display: inline-flex; align-items: center; gap: 4px; color: var(--c-dim-2); border: 1px solid var(--companion-alpha-08); border-radius: 999px; background: var(--c-card); font: 600 10px var(--c-font); opacity: 0; transition: opacity 140ms ease; }
+.peers-card:hover .peers-all, .peers-all:focus-visible { opacity: 1; }
+.peers-all:hover { color: var(--c-ink); background: var(--companion-alpha-08); }
+
+.team-picker { padding: 8px 6px 8px 10px; display: flex; flex-direction: column; gap: 4px; animation: peer-in 220ms ease-out both; }
+.team-picker-head { padding-right: 2px; display: flex; align-items: center; gap: 8px; font: 600 var(--fs-xs) var(--c-font); }
+.team-picker-head span { flex: 1; color: var(--c-dim-3); font-weight: 400; font-size: var(--fs-2xs); }
+.team-picker-close { width: 20px; height: 20px; display: grid; place-items: center; padding: 0; color: var(--c-dim-2); border: 0; border-radius: 50%; background: var(--companion-alpha-07); }
+.team-picker-scroll { min-height: 0; flex: 1; padding-right: 4px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--companion-alpha-18) transparent; }
+.team-picker-group { display: grid; gap: 1px; margin-bottom: 4px; }
+.team-picker-label { padding: 2px 4px; color: var(--c-dim-3); font: 600 9.5px var(--c-font); letter-spacing: .06em; text-transform: uppercase; }
+.team-picker-row { display: flex; align-items: center; gap: 4px; border-radius: 8px; }
+.team-picker-row.focused { background: var(--companion-alpha-05); }
+.team-picker-select { min-width: 0; height: 26px; flex: 1; padding: 0 6px 0 2px; display: flex; align-items: center; gap: 6px; color: var(--c-ink); text-align: left; border: 0; border-radius: 8px; background: transparent; font: 500 var(--fs-2xs) var(--c-font); }
+.team-picker-select:hover { background: var(--companion-alpha-07); }
+.team-picker-select .blob-canvas { pointer-events: none; }
+.team-picker-name { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 5px; }
+.team-picker-name small { color: var(--c-dim-3); font-size: 9.5px; }
+.team-picker-state { min-width: 0; flex: 1; overflow: hidden; color: var(--c-dim-3); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.team-picker-state.state-waiting { color: var(--companion-status-alert, #f5a524); }
+.team-picker-pin { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; color: var(--c-dim-3); border: 0; border-radius: 6px; background: transparent; }
+.team-picker-pin:hover:not(:disabled), .team-picker-pin.on { color: var(--c-ink); background: var(--companion-alpha-08); }
+.team-picker-pin:disabled { opacity: .3; }
+
+.segmented { padding: 2px; display: inline-flex; gap: 2px; border-radius: 9px; background: var(--companion-alpha-07); }
+.segmented button { height: 22px; padding: 0 9px; color: var(--c-dim-2); border: 0; border-radius: 7px; background: transparent; font: 500 var(--fs-2xs) var(--c-font); }
+.segmented button.on { color: var(--c-ink); background: var(--c-tab-on); }
+.settings-line .segmented { margin-left: auto; }
+.settings-pinned { min-width: 0; flex: 1; overflow: hidden; color: var(--c-dim-3); font-size: var(--fs-2xs); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.btn.small { height: 22px; padding: 0 10px; font-size: var(--fs-2xs); }
+.companion-activity-view .activity-step-head { color: var(--c-dim); }
+.island-actions .approval-pill { margin-right: 4px; }
+@media (prefers-reduced-motion: reduce) { .island-card.focus, .peer, .focus-ticker-row, .team-picker, .island-card.focus.is-working .card-bot .focus-glow { animation: none; } }

@@ -2134,7 +2134,7 @@ async fn forward_events_with_timeouts(
                     .unwrap_or(Value::Null);
                 (
                     "message.delta",
-                    json!({"sessionId":sid,"turnId":turn,"id":m["id"],"messageId":m["id"],"sequence":m["sequence"],"role":"assistant","delta":text}),
+                    json!({"sessionId":sid,"turnId":turn,"id":m["id"],"messageId":m["id"],"sequence":m["sequence"],"createdAt":m["createdAt"],"role":"assistant","delta":text}),
                 )
             }
             AgentEvent::AssistantMessage { text } => {
@@ -2144,7 +2144,7 @@ async fn forward_events_with_timeouts(
                     .unwrap_or(Value::Null);
                 (
                     "message.completed",
-                    json!({"id":m["id"],"messageId":m["id"],"sessionId":sid,"turnId":turn,"sequence":m["sequence"],"role":"assistant","content":text}),
+                    json!({"id":m["id"],"messageId":m["id"],"sessionId":sid,"turnId":turn,"sequence":m["sequence"],"createdAt":m["createdAt"],"role":"assistant","content":text}),
                 )
             }
             AgentEvent::ToolStarted {
@@ -2155,38 +2155,38 @@ async fn forward_events_with_timeouts(
             } => {
                 let tool = st
                     .db
-                    .upsert_tool(&sid, &tool_call_id, &kind, &title, "running", &raw)
+                    .upsert_tool_in_turn(&sid, turn.as_deref(), &tool_call_id, &kind, &title, "running", &raw)
                     .unwrap_or(Value::Null);
                 (
                     "tool.changed",
-                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":"running"}),
+                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":"running","startedAt":tool["startedAt"],"completedAt":tool["completedAt"],"detail":tool["detail"]}),
                 )
             }
             AgentEvent::ToolUpdated { tool_call_id, raw } => {
                 let tool = st
                     .db
-                    .upsert_tool(&sid, &tool_call_id, "other", "Activity", "running", &raw)
+                    .upsert_tool_in_turn(&sid, turn.as_deref(), &tool_call_id, "other", "Activity", "running", &raw)
                     .unwrap_or(Value::Null);
                 (
                     "tool.changed",
-                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":"running"}),
+                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":"running","startedAt":tool["startedAt"],"completedAt":tool["completedAt"],"detail":tool["detail"]}),
                 )
             }
             AgentEvent::ToolCompleted { tool_call_id, raw } => {
                 let tool = st
                     .db
-                    .upsert_tool(&sid, &tool_call_id, "other", "Tool", "completed", &raw)
+                    .upsert_tool_in_turn(&sid, turn.as_deref(), &tool_call_id, "other", "Tool", "completed", &raw)
                     .unwrap_or(Value::Null);
                 (
                     "tool.changed",
-                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":"completed"}),
+                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":"completed","startedAt":tool["startedAt"],"completedAt":tool["completedAt"],"detail":tool["detail"]}),
                 )
             }
             AgentEvent::FileChanged { path, raw } => {
-                let _ = st.db.insert_file(&sid, &path, &raw);
+                let _ = st.db.insert_file_in_turn(&sid, turn.as_deref(), &path, &raw);
                 (
                     "file.changed",
-                    json!({"sessionId":sid,"turnId":turn,"path":path}),
+                    json!({"sessionId":sid,"turnId":turn,"path":path,"createdAt":Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),"detail":bloblex_storage::file_detail(&path, &raw)}),
                 )
             }
             AgentEvent::PermissionRequested {

@@ -1716,6 +1716,23 @@ impl Storage {
         state: &str,
         raw: &Value,
     ) -> Result<Value, StorageError> {
+        self.upsert_tool_in_turn(session, None, id, kind, title, state, raw)
+    }
+    /// Records a tool call against its turn, with start/finish times and a
+    /// bounded, provider-neutral `detail` (see `tool_detail`). A completion
+    /// merges into what the start recorded, so a command keeps its input
+    /// once its output arrives.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_tool_in_turn(
+        &self,
+        session: &str,
+        turn: Option<&str>,
+        id: &str,
+        kind: &str,
+        title: &str,
+        state: &str,
+        raw: &Value,
+    ) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let session_exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
         if !session_exists { return Ok(Value::Null); }
@@ -1737,18 +1754,29 @@ impl Storage {
         } else {
             title
         };
-        let v =
-            json!({"id":id,"sessionId":session,"kind":kind,"title":title,"state":state,"raw":raw});
-        c.execute("INSERT INTO tool_calls(id,session_id,state,data) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET state=excluded.state,data=excluded.data",params![id,session,state,v.to_string()])?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let started_at = existing["startedAt"].as_str().map(str::to_owned).unwrap_or_else(|| now.clone());
+        let mut detail = existing["detail"].as_object().cloned().unwrap_or_default();
+        if let Value::Object(fresh) = tool_detail(kind, raw) { detail.extend(fresh); }
+        let mut v =
+            json!({"id":id,"sessionId":session,"kind":kind,"title":title,"state":state,"raw":raw,"startedAt":started_at,"detail":detail});
+        if matches!(state, "completed" | "failed" | "error" | "cancelled") { v["completedAt"] = json!(now); }
+        c.execute("INSERT INTO tool_calls(id,session_id,turn_id,state,data) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET state=excluded.state,data=excluded.data,turn_id=COALESCE(tool_calls.turn_id,excluded.turn_id)",params![id,session,turn,state,v.to_string()])?;
         Ok(v)
     }
     pub fn insert_file(&self, session: &str, path: &str, raw: &Value) -> Result<(), StorageError> {
+        self.insert_file_in_turn(session, None, path, raw)
+    }
+    /// A file change, with its turn, time and a bounded detail (path, change kind, diff excerpt).
+    pub fn insert_file_in_turn(&self, session: &str, turn: Option<&str>, path: &str, raw: &Value) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
         if !exists { return Ok(()); }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let data = json!({"raw":raw,"createdAt":now,"detail":file_detail(path, raw)});
         c.execute(
-            "INSERT INTO file_changes(id,session_id,path,data) VALUES(?1,?2,?3,?4)",
-            params![Uuid::new_v4().to_string(), session, path, raw.to_string()],
+            "INSERT INTO file_changes(id,session_id,turn_id,path,data) VALUES(?1,?2,?3,?4,?5)",
+            params![Uuid::new_v4().to_string(), session, turn, path, data.to_string()],
         )?;
         Ok(())
     }
@@ -1912,6 +1940,16 @@ impl Storage {
             let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same { events.push(push_settings_event(&tx,k,enabled)?); }
+        } else if k.starts_with("experimental.") || k.starts_with("companion.") {
+            // Window-level preferences: the main window and the companion both follow them live.
+            let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
+            if !same {
+                let payload=json!({"key":k,"value":v});
+                let id=Uuid::new_v4().to_string();
+                let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
+                tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'settings.changed',?3)",params![id,ts,payload.to_string()])?;
+                events.push(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"settings.changed","payload":payload}));
+            }
         } else if k=="permissions.default_mode" {
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same {let payload=json!({"key":k,"mode":v});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'settings.changed',?3)",params![id,ts,payload.to_string()])?;events.push(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"settings.changed","payload":payload}));}
@@ -2084,8 +2122,8 @@ impl Storage {
         let msgs=query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at,'attachments',json_extract(data,'$.attachments'),'meta',json_extract(data,'$.meta')) FROM messages WHERE session_id=?1 ORDER BY sequence",id)?;
         v["turns"] = json!(turns);
         v["messages"] = json!(msgs);
-        v["tools"] = json!(query_jsons(c,"SELECT json_object('id',id,'sessionId',session_id,'kind',json_extract(data,'$.kind'),'title',json_extract(data,'$.title'),'state',state) FROM tool_calls WHERE session_id=?1 ORDER BY rowid",id)?);
-        v["files"] = json!(query_jsons(c,"SELECT json_object('id',id,'path',path) FROM file_changes WHERE session_id=?1 ORDER BY rowid",id)?);
+        v["tools"] = json!(query_jsons(c,"SELECT json_object('id',id,'sessionId',session_id,'turnId',turn_id,'kind',json_extract(data,'$.kind'),'title',json_extract(data,'$.title'),'state',state,'startedAt',json_extract(data,'$.startedAt'),'completedAt',json_extract(data,'$.completedAt'),'detail',json(COALESCE(json_extract(data,'$.detail'),'{}'))) FROM tool_calls WHERE session_id=?1 ORDER BY rowid",id)?);
+        v["files"] = json!(query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'path',path,'createdAt',json_extract(data,'$.createdAt'),'detail',json(COALESCE(json_extract(data,'$.detail'),'{}'))) FROM file_changes WHERE session_id=?1 ORDER BY rowid",id)?);
         Ok(v)
     }
     #[cfg(test)]
@@ -2418,6 +2456,68 @@ fn valid_look(look: &Value) -> bool {
     true
 }
 fn look_column(look: &Value) -> Option<String> { (!look.is_null()).then(|| look.to_string()) }
+const DETAIL_TEXT_LIMIT: usize = 4000;
+
+fn clip_text(text: &str, limit: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= limit { return text.to_owned(); }
+    format!("{}…", text.chars().take(limit).collect::<String>())
+}
+
+/// Text from a provider value: a string, or the `text` parts of a content list.
+fn value_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(parts) => {
+            let joined = parts.iter().filter_map(|part| part["text"].as_str().or_else(|| part["content"]["text"].as_str()).or_else(|| part.as_str())).collect::<Vec<_>>().join("\n");
+            (!joined.trim().is_empty()).then_some(joined)
+        }
+        Value::Object(object) => object.get("text").and_then(Value::as_str).map(str::to_owned)
+            .or_else(|| object.get("content").and_then(value_text))
+            .or_else(|| object.get("output").and_then(value_text))
+            .or_else(|| object.get("stdout").and_then(value_text)),
+        _ => None,
+    }
+}
+
+/// A small, provider-neutral description of one tool call for the UI: the
+/// command and its output, the tool and its arguments/result, the search
+/// query or the path. Raw provider payloads stay in the daemon; every text
+/// is clipped, so a long output cannot bloat the snapshot.
+pub fn tool_detail(kind: &str, raw: &Value) -> Value {
+    let mut detail = serde_json::Map::new();
+    let mut put = |key: &str, value: Option<String>| {
+        if let Some(text) = value.map(|text| clip_text(&text, DETAIL_TEXT_LIMIT)).filter(|text| !text.is_empty()) { detail.insert(key.into(), json!(text)); }
+    };
+    let command = raw["command"].as_str().map(str::to_owned)
+        .or_else(|| raw["command"].as_array().map(|parts| parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")))
+        .or_else(|| raw["input"]["command"].as_str().map(str::to_owned))
+        .or_else(|| raw["rawInput"]["command"].as_str().map(str::to_owned));
+    put("command", command);
+    put("output", value_text(&raw["aggregatedOutput"]).or_else(|| value_text(&raw["output"])).or_else(|| value_text(&raw["rawOutput"])).or_else(|| if raw["type"] == "tool_result" { value_text(&raw["content"]) } else { None }));
+    let tool = raw["tool"].as_str().or(raw["name"].as_str()).map(|name| match raw["server"].as_str() { Some(server) if !server.is_empty() => format!("{server} · {name}"), _ => name.to_owned() });
+    put("tool", tool);
+    let arguments = [&raw["arguments"], &raw["input"], &raw["rawInput"]].into_iter().find(|value| value.is_object() && !value.as_object().unwrap().is_empty())
+        .map(|value| serde_json::to_string_pretty(value).unwrap_or_default());
+    put("input", arguments.map(|text| clip_text(&text, 1500)));
+    put("result", value_text(&raw["result"]));
+    put("query", raw["query"].as_str().or(raw["action"]["query"].as_str()).map(str::to_owned));
+    put("path", raw["path"].as_str().or(raw["input"]["file_path"].as_str()).or(raw["input"]["path"].as_str()).or(raw["changes"][0]["path"].as_str()).or(raw["locations"][0]["path"].as_str()).map(str::to_owned));
+    put("error", raw["error"]["message"].as_str().or(raw["error"].as_str()).map(str::to_owned).or_else(|| if raw["is_error"] == true { value_text(&raw["content"]) } else { None }));
+    if let Some(code) = raw["exitCode"].as_i64() { detail.insert("exitCode".into(), json!(code)); }
+    if !detail.is_empty() { detail.insert("kind".into(), json!(kind)); }
+    Value::Object(detail)
+}
+
+/// Path, change kind and a diff excerpt for one changed file.
+pub fn file_detail(path: &str, raw: &Value) -> Value {
+    let change = raw["changes"].as_array().and_then(|changes| changes.iter().find(|change| change["path"].as_str() == Some(path)).or(changes.first())).cloned().unwrap_or(Value::Null);
+    let mut detail = json!({"path": path});
+    if let Some(kind) = change["kind"].as_str().or(change["kind"]["type"].as_str()).or(raw["kind"].as_str()) { detail["change"] = json!(kind); }
+    if let Some(diff) = change["diff"].as_str().or(change["unified_diff"].as_str()).or(raw["diff"].as_str()) { detail["diff"] = json!(clip_text(diff, DETAIL_TEXT_LIMIT)); }
+    detail
+}
+
 fn runtime_exists(c:&Connection,id:&str)->Result<bool,StorageError>{Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM runtimes WHERE id=?1)",[id],|r|r.get(0))?)}
 fn ensure_name_free(c:&Connection,key:&str,except:Option<&str>)->Result<(),StorageError>{let n:i64=c.query_row("SELECT count(*) FROM agents WHERE name_key=?1 AND archived=0 AND (?2 IS NULL OR id!=?2)",params![key,except],|r|r.get(0))?;if n>0{Err(StorageError::AgentConflict)}else{Ok(())}}
 fn project_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
@@ -3515,5 +3615,51 @@ mod tests {
         let listed = db.agent_list(false, None).unwrap();
         assert!(listed.iter().all(|agent| agent.get("look").is_some()));
         assert!(db.snapshot().unwrap()["agents"].as_array().unwrap().iter().all(|agent| agent.get("look").is_some()));
+    }
+    #[test]
+    fn tool_details_are_bounded_provider_neutral_and_merge_start_with_completion() {
+        let codex_command = tool_detail("commandExecution", &json!({"type":"commandExecution","command":"npm test","aggregatedOutput":"2 passing","exitCode":0}));
+        assert_eq!(codex_command, json!({"command":"npm test","output":"2 passing","exitCode":0,"kind":"commandExecution"}));
+        let mcp = tool_detail("mcpToolCall", &json!({"server":"bloblex","tool":"message_blob","arguments":{"blob":"Gogo"},"result":{"content":[{"type":"text","text":"Sent to Gogo."}]}}));
+        assert_eq!(mcp["tool"], "bloblex · message_blob");
+        assert!(mcp["input"].as_str().unwrap().contains("\"blob\": \"Gogo\""));
+        assert_eq!(mcp["result"], "Sent to Gogo.");
+        let claude = tool_detail("Bash", &json!({"type":"tool_use","name":"Bash","input":{"command":"ls"}}));
+        assert_eq!((claude["command"].as_str(), claude["tool"].as_str()), (Some("ls"), Some("Bash")));
+        let claude_result = tool_detail("other", &json!({"type":"tool_result","content":[{"type":"text","text":"a.txt"}],"is_error":false}));
+        assert_eq!(claude_result["output"], "a.txt");
+        assert_eq!(tool_detail("reasoning", &json!({"type":"reasoning","summary":[],"content":[]})), json!({}));
+        let long = "x".repeat(DETAIL_TEXT_LIMIT + 50);
+        assert!(tool_detail("exec", &json!({"command":"cat big","aggregatedOutput":long}))["output"].as_str().unwrap().chars().count() <= DETAIL_TEXT_LIMIT + 1);
+        let file = file_detail("src/a.ts", &json!({"changes":[{"path":"src/a.ts","kind":{"type":"update"},"diff":"+line"}]}));
+        assert_eq!(file, json!({"path":"src/a.ts","change":"update","diff":"+line"}));
+
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-tools","provider":"codex"})).unwrap();
+        db.create_session("s-tools", "rt-tools", "codex", ".", "Tools").unwrap();
+        db.create_turn("t-tools", "s-tools").unwrap();
+        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "call", "commandExecution", "npm test", "running", &json!({"command":"npm test"})).unwrap();
+        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "call", "other", "Tool", "completed", &json!({"aggregatedOutput":"ok","exitCode":0})).unwrap();
+        db.insert_file_in_turn("s-tools", Some("t-tools"), "src/a.ts", &json!({"changes":[{"path":"src/a.ts","diff":"+x"}]})).unwrap();
+        let detail = db.session_detail("s-tools").unwrap();
+        let tool = &detail["tools"][0];
+        assert_eq!((tool["turnId"].as_str(), tool["title"].as_str(), tool["state"].as_str()), (Some("t-tools"), Some("npm test"), Some("completed")));
+        assert_eq!(tool["detail"]["command"], "npm test", "the command from the start survives the completion");
+        assert_eq!(tool["detail"]["output"], "ok");
+        assert!(tool["startedAt"].is_string() && tool["completedAt"].is_string());
+        assert!(tool.get("raw").is_none(), "raw provider payloads stay in the daemon");
+        assert_eq!(detail["files"][0]["turnId"], "t-tools");
+        assert_eq!(detail["files"][0]["detail"]["diff"], "+x");
+    }
+
+    #[test]
+    fn experimental_and_companion_settings_announce_their_changes() {
+        let db = Storage::open_in_memory().unwrap();
+        let events = db.set_setting("experimental.activityDetails", &json!(true)).unwrap();
+        assert_eq!(events[0]["type"], "settings.changed");
+        assert_eq!(events[0]["payload"], json!({"key":"experimental.activityDetails","value":true}));
+        assert!(db.set_setting("experimental.activityDetails", &json!(true)).unwrap().is_empty(), "an unchanged value is not announced");
+        assert_eq!(db.set_setting("companion.chatSize", &json!("large")).unwrap()[0]["payload"]["value"], "large");
+        assert!(db.set_setting("profile.name", &json!("Sam")).unwrap().is_empty());
     }
 }

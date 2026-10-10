@@ -7,7 +7,8 @@ type State = { style: EffortMeterStyle; position: number; highest: boolean; coun
 type Particle = { x: number; y: number; r: number; phase: number; twinkle: number; flow: number }
 type Confetti = { x:number; y:number; vx:number; vy:number; size:number; life:number; ttl:number; color:string }
 
-export function SessionEffortMeter({ style, count, position, selectedLabel, defaultLabel, highest, snapping, burstKey, onChange, onPointerMove, onPointerDown, onPointerUp, onPointerCancel, onLostPointerCapture, onKeyDown, onKeyUp, disabled }: {
+export function SessionEffortMeter({ style, dragging = false, count, position, selectedLabel, defaultLabel, highest, snapping, burstKey, onChange, onPointerMove, onPointerDown, onPointerUp, onPointerCancel, onLostPointerCapture, onKeyDown, onKeyUp, disabled }: {
+  dragging?: boolean
   style: EffortMeterStyle; count: number; position: number; selectedLabel: string; defaultLabel: string; highest: boolean; snapping: boolean; burstKey: number
   onChange: (value: number) => void; onPointerMove: (event: PointerEvent<HTMLInputElement>) => void; onPointerDown: (event: PointerEvent<HTMLInputElement>) => void; onPointerUp: (event: PointerEvent<HTMLInputElement>) => void
   onPointerCancel: () => void; onLostPointerCapture: () => void; onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void; onKeyUp: (event: KeyboardEvent<HTMLInputElement>) => void; disabled: boolean
@@ -100,7 +101,7 @@ export function SessionEffortMeter({ style, count, position, selectedLabel, defa
   const codexColors=codexGradientAt(Math.round(position),count)
   const stopPosition=(ratio:number)=>style==='magnetic'?`calc(${ratio*100}% + ${16-ratio*32}px)`:`${ratio*100}%`
   const fillWidth=style==='magnetic'?`calc(${fraction*100}% + ${32-fraction*32}px)`:`${fraction*100}%`
-  return <div className={`session-effort-track ${style} ${highest?'highest':''} ${snapping?(style==='claude'?'springing':'snapping'):''}`} style={{'--effort-position':`${fraction*100}%`,'--effort-fill-width':fillWidth,'--meter-codex-start':codexRgb(codexColors[0]),'--meter-codex-middle':codexRgb(codexColors[1]),'--meter-codex-end':codexRgb(codexColors[2])} as CSSProperties}>
+  return <div className={`session-effort-track ${style} ${highest?'highest':''} ${snapping?(style==='claude'?'springing':'snapping'):''} ${dragging?'dragging':''}`} style={{'--effort-position':`${fraction*100}%`,'--effort-fill-width':fillWidth,'--meter-codex-start':codexRgb(codexColors[0]),'--meter-codex-middle':codexRgb(codexColors[1]),'--meter-codex-end':codexRgb(codexColors[2])} as CSSProperties}>
     <canvas ref={canvasRef} className="session-effort-canvas" aria-hidden="true"/><canvas ref={confettiRef} className="session-effort-confetti" aria-hidden="true"/><span className="session-effort-fill" aria-hidden="true"/>
     {Array.from({length:count},(_,index)=><i key={index} className="session-effort-tick" style={{left:stopPosition(count<2?0:index/(count-1))}} aria-hidden="true"/>)}
     <span className="session-effort-knob" style={{left:stopPosition(fraction)}} aria-hidden="true"/>

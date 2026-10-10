@@ -204,7 +204,7 @@ export function ConversationOutline({ items, sessionId }: { items: ConversationO
 
   useEffect(() => {
     if (items.length < 2) return
-    const host = trackRef.current?.closest('.message-list')
+    const host = trackRef.current?.closest('.message-list') ?? trackRef.current?.closest('.conversation-frame')?.querySelector('.message-list')
     if (!host) return
     const sync = () => {
       if (scrollFrame.current !== null) return

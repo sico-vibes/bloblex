@@ -106,13 +106,22 @@ sessions.push({
   id: teamMainId, runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Codex', projectPath: 'C:/work/korus', state: 'waiting_permission', updatedAt: minutesAgo(0.5),
   modelLock: { model: 'gpt-5.5', thinking: 'high', planMode: flags().has('plan') }, contextUsed: 52_000, contextSize: 400_000,
   messages: [
-    { id: 'team-u1', role: 'user', content: 'Can you research an effort picker like the one on 21st.dev? @Pololo is great at UI, ask him to find it.', createdAt: minutesAgo(30) },
-    { id: 'team-a1', role: 'assistant', content: 'On it — sending Pololo the brief and asking him to hunt down that effort / reasoning-level picker.', createdAt: minutesAgo(29) },
-    { id: 'team-n1', role: 'notice', content: 'Find an open-source effort picker like the 21st.dev one…', createdAt: minutesAgo(29), meta: { kind: 'delegation', direction: 'sent', peerAgentId: 'agent-pololo', peerName: 'Pololo', sideSessionId: teamSideId } },
-    { id: 'team-r1', role: 'user', content: '[Reply from Pololo]\nNothing pixel-exact exists as a package. Closest: a PostHog ReasoningLevelDropdown (MIT) and a model selector on 21st.dev with Effort, Context and Fast toggles.', createdAt: minutesAgo(12), meta: { kind: 'blob_reply', fromAgentId: 'agent-pololo', fromName: 'Pololo', sideSessionId: teamSideId } },
-    { id: 'team-a2', role: 'assistant', content: 'Pololo found it — nothing is a pixel-exact drop-in, but these are the useful hits:\n\n- **PostHog ReasoningLevelDropdown** (MIT): Faster ↔ Smarter, notched snaps, a Default badge.\n- **AI Model Select** on 21st.dev: Effort, Context and Fast in one popover.\n\nMy take: fork the PostHog one. Want me to plan the port?', createdAt: minutesAgo(11) },
-    { id: 'team-u2', role: 'user', content: 'Yes, plan it.', createdAt: minutesAgo(3) },
-    { id: 'team-p1', role: 'plan', content: '1. Vendor the ReasoningLevelDropdown into `src/ui/effort`.\n2. Replace its token colours with Bloblex theme tokens.\n3. Wire it to the session lock and add keyboard tests.', createdAt: minutesAgo(2), meta: { kind: 'plan' } },
+    { id: 'team-u1', sequence: 1, turnId: 'team-tA', role: 'user', content: 'Can you research an effort picker like the one on 21st.dev? @Pololo is great at UI, ask him to find it.', createdAt: minutesAgo(30) },
+    { id: 'team-a1', sequence: 2, turnId: 'team-tA', role: 'assistant', content: 'On it — sending Pololo the brief and asking him to hunt down that effort / reasoning-level picker.', createdAt: minutesAgo(29) },
+    { id: 'team-n1', sequence: 3, role: 'notice', content: 'Find an open-source effort picker like the 21st.dev one…', createdAt: minutesAgo(29), meta: { kind: 'delegation', direction: 'sent', peerAgentId: 'agent-pololo', peerName: 'Pololo', sideSessionId: teamSideId } },
+    { id: 'team-r1', sequence: 4, turnId: 'team-tB', role: 'user', content: '[Reply from Pololo]\nNothing pixel-exact exists as a package. Closest: a PostHog ReasoningLevelDropdown (MIT) and a model selector on 21st.dev with Effort, Context and Fast toggles.', createdAt: minutesAgo(12), meta: { kind: 'blob_reply', fromAgentId: 'agent-pololo', fromName: 'Pololo', sideSessionId: teamSideId } },
+    { id: 'team-a2', sequence: 5, turnId: 'team-tB', role: 'assistant', content: 'Pololo found it — nothing is a pixel-exact drop-in, but these are the useful hits:\n\n- **PostHog ReasoningLevelDropdown** (MIT): Faster ↔ Smarter, notched snaps, a Default badge.\n- **AI Model Select** on 21st.dev: Effort, Context and Fast in one popover.\n\nMy take: fork the PostHog one. Want me to plan the port?', createdAt: minutesAgo(11) },
+    { id: 'team-u2', sequence: 6, turnId: 'team-tC', role: 'user', content: 'Yes, plan it.', createdAt: minutesAgo(3) },
+    { id: 'team-p1', sequence: 7, turnId: 'team-tC', role: 'plan', content: '1. Vendor the ReasoningLevelDropdown into `src/ui/effort`.\n2. Replace its token colours with Bloblex theme tokens.\n3. Wire it to the session lock and add keyboard tests.', createdAt: minutesAgo(2), meta: { kind: 'plan' } },
+  ],
+  tools: [
+    { id: 'team-tool-1', turnId: 'team-tA', kind: 'mcpToolCall', title: 'bloblex · list_blobs', state: 'completed', startedAt: minutesAgo(29.5), detail: { tool: 'bloblex · list_blobs', result: 'Your team:\n- Codex (you) [leader] — CTO\n- Pololo — UI/UX Designer · available' } },
+    { id: 'team-tool-2', turnId: 'team-tA', kind: 'mcpToolCall', title: 'bloblex · message_blob', state: 'completed', startedAt: minutesAgo(29.2), detail: { tool: 'bloblex · message_blob', input: '{\n  "blob": "Pololo",\n  "message": "Find an open-source effort picker like the 21st.dev one…"\n}', result: 'Sent to Pololo. Their reply will arrive here as a message starting with "[Reply from Pololo]".' } },
+    { id: 'team-tool-3', turnId: 'team-tB', kind: 'commandExecution', title: 'rg -n "ReasoningLevel" node_modules/@posthog', state: 'completed', startedAt: minutesAgo(11), detail: { command: 'rg -n "ReasoningLevel" node_modules/@posthog', output: 'node_modules/@posthog/ui/ReasoningLevelDropdown.tsx:12:export function ReasoningLevelDropdown(', exitCode: 0 } },
+    { id: 'team-tool-4', turnId: 'team-tB', kind: 'webSearch', title: 'Searched: 21st.dev model select effort', state: 'completed', startedAt: minutesAgo(10.5), detail: { query: '21st.dev model select effort' } },
+  ],
+  files: [
+    { id: 'team-file-1', turnId: 'team-tB', path: 'docs/effort-picker.md', createdAt: minutesAgo(10), detail: { path: 'docs/effort-picker.md', change: 'add', diff: '+# Effort picker options\n+- PostHog ReasoningLevelDropdown (MIT)\n+- 21st.dev AI Model Select' } },
   ],
 })
 sessions.push({
@@ -225,7 +234,13 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   if (method === 'events.replay') return { replayAvailable: true, events: [] } as T
   if (method === 'quota.list') return { quotas: fixtureQuotas() } as T
   if (method === 'quota.refresh') { window.setTimeout(() => notifyFixtureDaemon('quota.updated', {}), 600); return { started: true } as T }
-  if (method === 'settings.get') return { settings: { ...fixtureSettings } } as T
+  if (method === 'settings.get') {
+    // Preview flags: ?activity turns on Agent activity, ?usage-bar the usage bar, ?chat=small|medium|large sizes the companion chat.
+    if (flags().has('activity')) fixtureSettings['experimental.activityDetails'] = true
+    if (flags().has('usage-bar')) fixtureSettings['experimental.usageBar'] = true
+    if (flags().get('chat')) fixtureSettings['companion.chatSize'] = flags().get('chat')
+    return { settings: { ...fixtureSettings } } as T
+  }
   if (method === 'settings.set') { fixtureSettings[String(params.key)] = params.value; return { saved: true } as T }
   if (method === 'session.list') return { sessions: sessions.filter((session) => params.includeArchived === true || !session.archived).map((session) => ({ ...session })) } as T
   if (method === 'session.rename') {
@@ -489,8 +504,9 @@ export async function currentCompanionMonitor() { return null }
 export async function setCompanionMonitor() {}
 export async function refreshTrayMenu() {}
 const companionSizes: Record<string, [number, number]> = { petit: [344, 62], hidden: [344, 62], welcome: [640, 160], home: [640, 160], 'home-chat': [640, 264] }
-export async function setCompanionMode(mode: string) {
-  const [width, height] = companionSizes[mode] ?? [640, 160]
+export async function setCompanionMode(mode: string, _animate?: boolean, chatHeight?: number) {
+  const [width, baseHeight] = companionSizes[mode] ?? [640, 160]
+  const height = mode === 'home-chat' && chatHeight ? chatHeight : baseHeight
   let style = document.getElementById('fixture-companion-size')
   if (!style) { style = document.createElement('style'); style.id = 'fixture-companion-size'; document.head.append(style) }
   style.textContent = `:root.companion-surface body { background: radial-gradient(900px 500px at 70% 10%, #3b2f63, #12131a) !important; }

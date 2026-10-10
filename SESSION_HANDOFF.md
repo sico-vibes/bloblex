@@ -2,6 +2,32 @@
 
 Current as of 7 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
+## Uncommitted follow-up (10 October 2026, after beta.13): timeline, activity, companion focus
+
+- **Timeline order.** Live assistant messages and tools arrived without timestamps, and the timestamp sort pushed them below later items: "Message from Gogo" appeared above Fluffy's own "I asked Gogo". The stored data was correct, which a read-only check of the user's database confirmed.
+  - Messages now follow the daemon's per-session sequence.
+  - Tools and files carry their `turnId` and sit after that turn's last message.
+  - Message events now include `createdAt`.
+- **Activity.** "Codex activity" rows were Codex reasoning items with empty content.
+  - The Codex adapter drops reasoning items and titles the rest (command, `server · tool`, search query).
+  - Storage records each tool's turn, `startedAt`/`completedAt` and a bounded, provider-neutral `detail`: command, output, tool, input, result, query, path, error and exit code, clipped to 4,000 characters. Start and completion are merged. Raw payloads never leave the daemon.
+  - The conversation hides all activity unless Settings → Experimental → "Agent activity" (`experimental.activityDetails`) is on. When on, each turn becomes one collapsed "Ran N commands · used N tools" line under its reply, opening into steps with their real details.
+  - The companion's Activity tab shows the same steps.
+  - `experimental.*` and `companion.*` settings now emit `settings.changed`, so both windows follow them live.
+- **Companion**, after the Novra Grok Bot study:
+  - The focused blob has a glow (pulsing while working) and a three-line step ticker.
+  - Up to four teammates sit in a 2×2 grid, each showing name plus the line it is working on. Pinned teammates come first, then those waiting, then working, then recent.
+  - "All blobs" opens a picker that pins up to four (`companion.pinnedBlobs`).
+  - Chat height is a setting: Compact 264, Comfortable 360 (default) or Tall 480 (`companion.chatSize`). It is passed to `set_companion_mode` as `chatHeight`.
+  - Settings also uses the tall island, and header spacing is fixed.
+- **Outline.** It appears only when the conversation scrolls. It is docked at the conversation's left edge beside the sidebar, and faint until hovered.
+- **Effort slider.** While held, the knob follows the pointer with no transitions. Nothing is saved until release, and a release without coordinates keeps the last position.
+- **Evidence.**
+  - Desktop: typecheck, 368/368 Vitest and the build pass.
+  - Rust: the offline workspace tests pass, including new tool-detail, settings-event and Codex-title tests. The desktop crate check passed from `D:\b13` with the new `lib.rs`.
+  - Preview: checked the main timeline, the activity lines and details, the outline, the companion overview, the picker, the Tall chat, settings and activity.
+- **Not verified.** Native windows. The effort slider drag in the desktop app; the cause was inferred, not reproduced.
+
 ## Published (10 October 2026, beta.13)
 
 Everything in the four 10 October sections below shipped as manual-only [v0.1.0-beta.13](docs/releases/0.1.0-beta.13.md): team delegation and projects, plan mode, composer, blob looks, the companion catch-up, sounds, launch, import and the gallery.

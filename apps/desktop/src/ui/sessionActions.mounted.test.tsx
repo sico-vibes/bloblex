@@ -3,7 +3,7 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ConfirmDialog } from './BlobPage'
-import { ActivityGroupRow } from './App'
+import { ActivitySummaryLine } from './ActivityDetails'
 import { groupConversationActivity } from './conversation'
 
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
@@ -41,38 +41,41 @@ describe('mounted conversation controls', () => {
     expect(confirmed).toHaveBeenCalledOnce()
   })
 
-  it('expands grouped activity, starts failed groups open, and keeps expansion across rerenders', async () => {
+  it('collapses a turn into one summary line and opens each step into its real details', async () => {
     const grouped = groupConversationActivity([
       { kind: 'message', id: 'm-1' },
-      { kind: 'activity', id: 'tool-1', activityKind: 'tool', activity: { title: 'Compile', state: 'failed' } },
-      { kind: 'activity', id: 'file-1', activityKind: 'file', activity: { operation: 'edit', path: 'src/a.ts' } },
+      { kind: 'activity', id: 'tool-1', activityKind: 'tool', activity: { title: 'npm test', kind: 'commandExecution', state: 'failed', detail: { command: 'npm test', output: '1 failing', exitCode: 1 } } },
+      { kind: 'activity', id: 'tool-2', activityKind: 'tool', activity: { title: 'bloblex · message_blob', kind: 'mcpToolCall', state: 'completed', detail: { tool: 'bloblex · message_blob', input: '{ "blob": "Gogo" }', result: 'Sent to Gogo.' } } },
+      { kind: 'activity', id: 'file-1', activityKind: 'file', activity: { path: 'src/a.ts', detail: { path: 'src/a.ts', diff: '+one line' } } },
       { kind: 'message', id: 'm-2' },
     ])[1]
     if (grouped.kind !== 'activity-group') throw new Error('expected grouped activity')
-    const view = mount(<ActivityGroupRow group={grouped} />)
+    const view = mount(<ActivitySummaryLine group={grouped} />)
     views.push(view)
-    const button = view.host.querySelector<HTMLButtonElement>('.activity-group-toggle')!
-    expect(button.textContent).toContain('1 failed')
-    expect(button.getAttribute('aria-expanded')).toBe('true')
-    expect(view.host.querySelectorAll('.timeline-activity')).toHaveLength(2)
-    await act(async () => { button.click() })
-    expect(button.getAttribute('aria-expanded')).toBe('false')
-    view.rerender(<ActivityGroupRow group={grouped} />)
-    expect(view.host.querySelector('.activity-group-toggle')?.getAttribute('aria-expanded')).toBe('false')
+    const toggle = view.host.querySelector<HTMLButtonElement>('.activity-summary-toggle')!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.textContent).toBe('Ran 1 command · used 1 tool · edited 1 file · 1 failed')
+    expect(view.host.querySelector('.activity-steps')).toBeNull()
+    await act(async () => { toggle.click() })
+    const steps = [...view.host.querySelectorAll<HTMLButtonElement>('.activity-step-head')]
+    expect(steps.map((step) => step.querySelector('.activity-step-title')?.textContent)).toEqual(['npm test', 'Messaged a teammate', 'src/a.ts'])
+    await act(async () => { steps[0].click(); steps[1].click() })
+    const details = [...view.host.querySelectorAll('.activity-step-detail')].map((detail) => detail.textContent)
+    expect(details[0]).toContain('1 failing')
+    expect(details[0]).toContain('Exit code 1')
+    expect(details[1]).toContain('Sent to Gogo.')
   })
 
-  it('shows an open running summary for a trailing activity run', () => {
+  it('shows a running turn as working without opening it', () => {
     const grouped = groupConversationActivity([
       { kind: 'message', id: 'm-live' },
-      { kind: 'activity', id: 'tool-done', activityKind: 'tool', activity: { title: 'Read files', state: 'completed' } },
-      { kind: 'activity', id: 'tool-live', activityKind: 'tool', activity: { title: 'npm test', state: 'running' } },
+      { kind: 'activity', id: 'tool-live', activityKind: 'tool', activity: { title: 'npm test', kind: 'commandExecution', state: 'running' } },
     ])[1]
     if (grouped.kind !== 'activity-group') throw new Error('expected trailing activity group')
-    const view = mount(<ActivityGroupRow group={grouped} />)
+    const view = mount(<ActivitySummaryLine group={grouped} />)
     views.push(view)
-    const summary = view.host.querySelector<HTMLButtonElement>('.activity-group-toggle')!
-    expect(summary.getAttribute('aria-expanded')).toBe('true')
-    expect(summary.textContent).toContain('Running npm test…')
-    expect(view.host.querySelectorAll('.timeline-activity')).toHaveLength(2)
+    const summary = view.host.querySelector<HTMLButtonElement>('.activity-summary-toggle')!
+    expect(summary.getAttribute('aria-expanded')).toBe('false')
+    expect(summary.textContent).toContain('Working · Ran 1 command')
   })
 })

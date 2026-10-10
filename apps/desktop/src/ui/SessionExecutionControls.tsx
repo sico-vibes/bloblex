@@ -152,6 +152,8 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState(0)
   const [snapping, setSnapping] = useState(false)
+  /** True while a finger or mouse holds the knob: it follows exactly, and nothing is saved until release. */
+  const [dragging, setDragging] = useState(false)
   const [burstKey, setBurstKey] = useState(0)
   const [labelSwap, setLabelSwap] = useState<{ from:string; to:string; forward:boolean } | null>(null)
   const previousLabel = useRef('')
@@ -217,6 +219,7 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
   const cancelGesture = () => {
     stopAnimations()
     gesture.current = null
+    setDragging(false)
     dragGeometry.current = null
     committedDuringGesture.current = false
     positionRef.current = (startIndex.current < 0 ? restIndex : startIndex.current)
@@ -337,7 +340,9 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
 
   const finishPointer = (event: ReactPointerEvent<HTMLInputElement>) => {
     if (gesture.current?.kind !== 'pointer' || gesture.current.pointerId !== event.pointerId) return
-    applyCodexPointer(event)
+    // A release reported outside the window can carry no coordinates; keep the last real position.
+    if (event.clientX !== 0 || event.clientY !== 0) applyCodexPointer(event)
+    setDragging(false)
     const rounded = Math.round(positionRef.current)
     const samplesNow = samples.current
     const velocity = claudePointerVelocity(samplesNow)
@@ -350,6 +355,7 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
     if (disabled || (event.button !== undefined && event.button !== 0)) return
     stopAnimations()
     gesture.current = { kind:'pointer', pointerId:event.pointerId }
+    setDragging(true)
     const bounds=event.currentTarget.parentElement?.getBoundingClientRect()
     dragGeometry.current=providerStyle==='magnetic'&&bounds?{left:bounds.left,width:bounds.width}:null
     committedDuringGesture.current = false
@@ -400,7 +406,7 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
       {efforts.length > 0 ? <>
         <div className="session-effort-meter-frame">
           <div className="session-effort-caption"><span>Faster</span><span>Smarter</span></div>
-          <SessionEffortMeter style={providerStyle} count={efforts.length} position={displayedPosition} selectedLabel={selectedLabel} defaultLabel={defaultLabel} highest={highest} snapping={snapping} burstKey={burstKey} disabled={disabled} onChange={(raw) => { if (gesture.current?.kind === 'pointer' && providerStyle === 'claude') applyPosition(raw) }} onPointerMove={(event) => { if (gesture.current?.kind === 'pointer' && gesture.current.pointerId === event.pointerId) applyCodexPointer(event) }} onPointerDown={beginPointer} onPointerUp={finishPointer} onPointerCancel={() => { if (gesture.current?.kind === 'pointer') cancelGesture() }} onLostPointerCapture={() => { if (gesture.current?.kind === 'pointer') cancelGesture() }} onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} />
+          <SessionEffortMeter style={providerStyle} dragging={dragging} count={efforts.length} position={displayedPosition} selectedLabel={selectedLabel} defaultLabel={defaultLabel} highest={highest} snapping={snapping} burstKey={burstKey} disabled={disabled} onChange={(raw) => { if (gesture.current?.kind === 'pointer' && providerStyle === 'claude') applyPosition(raw) }} onPointerMove={(event) => { if (gesture.current?.kind === 'pointer' && gesture.current.pointerId === event.pointerId) applyCodexPointer(event) }} onPointerDown={beginPointer} onPointerUp={finishPointer} onPointerCancel={() => { if (gesture.current?.kind === 'pointer') cancelGesture() }} onLostPointerCapture={() => { if (gesture.current?.kind === 'pointer') cancelGesture() }} onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} />
         </div>
         <div className="session-effort-labels" role="group" aria-label="Effort levels">{labels.map((label, index) => <button type="button" key={`${efforts[index]}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${efforts[index] === defaultThinking ? 'default' : ''}`} aria-pressed={visibleIndex === index} disabled={disabled} onClick={() => { stopAnimations(); onPreview(efforts[index] ?? null); const result = onCommit(efforts[index] ?? null); if (index === efforts.length - 1 && providerStyle === 'magnetic') void Promise.resolve(result).then((saved) => { if (saved && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) setBurstKey((key) => key + 1) }); setOpen(false) }}>{label}</button>)}</div>
         <div className="session-effort-footer"><span>{defaultThinking ? <>Recommended: <b>{labelizeEffort(defaultThinking)}</b></> : 'The provider chooses its own default.'}</span><button type="button" className={visibleIndex < 0 ? 'selected' : ''} aria-pressed={visibleIndex < 0} disabled={disabled} onClick={() => { stopAnimations(); onPreview(null); void onCommit(null); setOpen(false) }}>Provider default</button></div>

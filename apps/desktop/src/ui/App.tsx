@@ -8,6 +8,7 @@ import {
   RefreshCw, Search, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X,
 } from 'lucide-react'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
+import { COMPANION_CHAT_SIZE_LABELS, COMPANION_CHAT_SIZES, isCompanionChatSize, MAX_COMPANION_PEERS, type CompanionChatSize } from '../blob/companionLayout'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, unlockCompanionAudioFromGesture } from '../blob/soundCues'
 import { playDictationCue } from './dictationSound'
@@ -24,7 +25,8 @@ import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, type
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, mentionMatches } from './TeamMessages'
-import { CompanionChatItem, CompanionTeamActivity, CompanionTeamCard, teamLine } from './CompanionTeam'
+import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
+import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
 import { isSideSession, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
@@ -86,6 +88,17 @@ export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   /** Experimental, off by default: the plan-usage bar along the bottom. */
   const [usageBarEnabled, setUsageBarEnabled] = useState(false)
+  /** Experimental, off by default: each turn's commands, tools and edits as one expandable line. */
+  const [activityDetails, setActivityDetails] = useState(false)
+  /** Companion preferences: chat height and the teammates kept on the island. */
+  const [companionChatSize, setCompanionChatSize] = useState<CompanionChatSize>('medium')
+  const [companionPinned, setCompanionPinned] = useState<string[]>([])
+  const applyWindowSetting = useCallback((key: string, value: unknown) => {
+    if (key === 'experimental.usageBar') setUsageBarEnabled(value === true)
+    else if (key === 'experimental.activityDetails') setActivityDetails(value === true)
+    else if (key === 'companion.chatSize') setCompanionChatSize(isCompanionChatSize(value) ? value : 'medium')
+    else if (key === 'companion.pinnedBlobs') setCompanionPinned(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string').slice(0, MAX_COMPANION_PEERS) : [])
+  }, [])
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [launchVisible, setLaunchVisible] = useState(() => inDesktop && !companion && import.meta.env.MODE !== 'test')
   const [launchChecks, setLaunchChecks] = useState<LaunchCheck[]>([])
@@ -202,6 +215,20 @@ export function App() {
   const updatePins = (change: (current: SidebarPins) => SidebarPins) => setPins((current) => { const next = change(current); writePins(next); return next })
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const messageListRef = useRef<HTMLElement>(null)
+  /** The outline only appears once the conversation is long enough to scroll. */
+  const [conversationScrollable, setConversationScrollable] = useState(false)
+  useEffect(() => {
+    const list = messageListRef.current
+    if (!list) { setConversationScrollable(false); return }
+    // Without layout (clientHeight 0) the size is unknown; keep the outline available.
+    const measure = () => setConversationScrollable(list.clientHeight === 0 || list.scrollHeight - list.clientHeight > 24)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(list)
+    for (const child of Array.from(list.children)) observer.observe(child)
+    return () => observer.disconnect()
+  })
   const stickToBottom = useRef(true)
   const queuedEvents = useRef<DaemonEvent[]>([])
   const hydrating = useRef(true)
@@ -289,14 +316,15 @@ export function App() {
   }, [companion])
 
   useEffect(() => {
-    if (companion || connection !== 'connected') return
+    if (connection !== 'connected') return
     let active = true
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
-      if (active) setUsageBarEnabled(values['experimental.usageBar'] === true)
+      if (!active) return
+      for (const key of ['experimental.usageBar', 'experimental.activityDetails', 'companion.chatSize', 'companion.pinnedBlobs']) applyWindowSetting(key, values[key])
     }).catch(() => undefined)
     return () => { active = false }
-  }, [companion, connection])
+  }, [connection, applyWindowSetting])
 
   useEffect(() => {
     if (companion || !inDesktop) return
@@ -413,7 +441,8 @@ export function App() {
     ...sessions.filter((session) => unreadNeedsApproval(session, seenSessions)).map((session) => session.id),
     ...(snapshot?.permissions ?? []).filter((permission) => typeof permission.sessionId === 'string' && isPendingPermissionLive(permission, permissionClock)).map((permission) => permission.sessionId!),
   ].filter((id) => !(mainAttention && id === selectedSession?.id)))
-  const groupedConversationItems = groupConversationActivity(conversationItems)
+  // Without the experimental activity setting only failed turns stay visible; the working indicator shows progress.
+  const groupedConversationItems = groupConversationActivity(activityDetails ? conversationItems : conversationItems.filter((item) => item.kind === 'message' || item.activityKind === 'turn'))
   // A side conversation only shows its own requests, never the leader's.
   const activePermission = sideSessionId
     ? selectPendingPermission((snapshot?.permissions ?? []).filter((permission) => permission.sessionId === sideSessionId), sideSessionId, sideSessionId, permissionClock)
@@ -669,6 +698,10 @@ export function App() {
     let cancelled = false
     void listenForDaemonEvents((event) => {
       if (event.type === 'quota.updated') setQuotaRefreshing(false)
+      if (event.type === 'settings.changed' && event.payload && typeof event.payload === 'object') {
+        const payload = event.payload as Record<string, unknown>
+        if (typeof payload.key === 'string' && 'value' in payload) applyWindowSetting(payload.key, payload.value)
+      }
       if (event.type === 'replay.gap') {
         queuedEvents.current = []
         hydrating.current = true
@@ -689,7 +722,7 @@ export function App() {
       if (connected) setError(null)
     }).then((stop) => { if (cancelled) stop(); else unlistenConnection = stop })
     return () => { cancelled = true; unlistenEvents?.(); unlistenConnection?.() }
-  }, [hydrateAgentChanges, refreshAppliedModelFromEvent])
+  }, [hydrateAgentChanges, refreshAppliedModelFromEvent, applyWindowSetting])
 
   useEffect(() => {
     if (!inDesktop || companion || connection !== 'connected') return
@@ -1423,7 +1456,7 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
+      <Companion agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
     </>
   }
 
@@ -1619,12 +1652,13 @@ export function App() {
         {archiveNotice && <div className="inline-error" role="status"><span>{archiveNotice}</span><button aria-label="Dismiss notice" onClick={() => setArchiveNotice(null)}><X size={15} /></button></div>}
 
         {!selectedSession ? <>{activePermission && <ApprovalCard permission={activePermission} onReply={(choice) => answerPermission(activePermission, choice)} /> }<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} accent={accent} mood={selectedMood} agentName={agentName} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={() => openCreate()} onRefresh={() => void refreshRuntimes()} /></> : <>
+          <div className="conversation-frame">
+            {conversationScrollable && <ConversationOutline key={selectedSession.id} sessionId={selectedSession.id} items={outlineItems} />}
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
             <div className="conversation-layout">
-              <ConversationOutline key={selectedSession.id} sessionId={selectedSession.id} items={outlineItems} />
               <div className="chat-column">
               {groupedConversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} label={activeSelectedAgent?.name ?? agentName} /><h2>Ready when you are.</h2><p>Ask {agentName} to explore <code>{currentProjectName ?? 'the project'}</code> or make a change.</p></div> : groupedConversationItems.map((item, index) => item.kind === 'activity-group'
-                ? <ActivityGroupRow key={item.id} group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
+                ? <ActivitySummaryLine key={item.id} group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
                 : item.kind === 'message' && teamItem(item.value!, item.id)
                   ? teamItem(item.value!, item.id)
                 : item.kind === 'message'
@@ -1638,6 +1672,7 @@ export function App() {
               </div>
             </div>
           </section>
+          </div>
           {sideSession ? <div className="side-close"><button type="button" className="secondary-button" onClick={() => setSideSessionId(null)}>Close chat</button></div> : <div className="composer-wrap">
             {dictationPartial && <div className="dictation-partial" role="status"><span className="dictation-partial-label">Listening</span>{dictationPartial}</div>}
             <div className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
@@ -1688,7 +1723,7 @@ export function App() {
       {!companion && usageBarEnabled && <QuotaBar quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={() => void showUsage()} />}
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} quotas={snapshot?.quotas ?? []} loading={busy && usageSummary === null} quotaRefreshing={quotaRefreshing} onRefreshQuota={refreshQuota} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onOpenHistory={() => { setUsageSheet(false); setAnalyticsOpen(true) }} onClose={() => setUsageSheet(false)} />}
       {quickSwitcherOpen && <QuickSwitcher items={quickSwitcherItems} onChoose={chooseQuickSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />}
-      {settingsSheet && <SettingsSheet snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
+      {settingsSheet && <SettingsSheet snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body="It leaves the sidebar and companion. Its conversations stay saved. Restoring a blob is not available yet." confirmLabel="Archive blob" cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
       {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bloblex. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm successTitle="Conversation deleted" successBody="This conversation and its messages were removed from Bloblex." onConfirm={async () => { await rpc('session.delete', { sessionId: sessionDeleteTarget.id }) }} onComplete={() => { setSessionDeleteTarget(null); focusSidebarBlob() }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
@@ -1822,31 +1857,6 @@ function writeStoredAgentId(id: string | null) {
 
 function isUserMessage(message: Record<string, unknown> | undefined) {
   return String(message?.role ?? message?.kind ?? 'assistant').toLowerCase() === 'user'
-}
-
-/** Compact surfaces show prose without markdown markers or code fences. */
-function plainText(text: string) {
-  return text.replace(/```[\s\S]*?```/g, ' [code] ').replace(/\*\*|__|`/g, '').replace(/\s+/g, ' ').trim()
-}
-
-export function ActivityGroupRow({ group, onDiff }: { group: Extract<GroupedConversationItem, { kind: 'activity-group' }>; onDiff?: (path: string, content: string) => void }) {
-  const startsExpanded = group.failed > 0 || group.runningTitle !== null
-  const [expanded, setExpanded] = useState(startsExpanded)
-  useEffect(() => { if (startsExpanded) setExpanded(true) }, [startsExpanded])
-  const commandLabel = `${group.commands} ${group.commands === 1 ? 'command' : 'commands'}`
-  const fileLabel = `${group.files} ${group.files === 1 ? 'file' : 'files'}`
-  const summary = group.runningTitle
-    ? `Running ${group.runningTitle}…`
-    : [group.commands ? `Ran ${commandLabel}` : '', group.files ? `edited ${fileLabel}` : ''].filter(Boolean).join(' · ')
-  return <section className={`activity-group ${group.failed ? 'error' : ''}`}>
-    <button type="button" className="ghost-button small activity-group-toggle" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-      {group.failed > 0 && <ShieldAlert size={14} aria-hidden="true" />}
-      {group.runningTitle ? <span className="typing" aria-hidden="true"><i /><i /><i /></span> : null}
-      <span>{summary || `${group.items.length} activities`}{group.failed > 0 ? ` · ${group.failed} failed` : ''}</span>
-      {expanded ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
-    </button>
-    {expanded && <div className="activity-group-items">{group.items.map((item) => <ActivityItem key={item.id} item={item} onDiff={onDiff} />)}</div>}
-  </section>
 }
 
 function isPreviousItemNonMessageOrUser(items: GroupedConversationItem[], index: number) {
@@ -2066,7 +2076,7 @@ function shortDate(value: unknown) {
 
 function recordFrom(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
 
-function Companion({ agent, agents, projects = [], sessions = [], runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
+function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'medium', pinned = [], activityDetails = false, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
   // The browser preview can open a view directly: /?companion&mode=home&view=chat.
   const previewParams = previewMode ? new URLSearchParams(location.search) : null
   const [view, setView] = useState<'overview' | 'chat' | 'activity' | 'settings'>(() => {
@@ -2103,7 +2113,6 @@ function Companion({ agent, agents, projects = [], sessions = [], runtime, runti
   permissionRef.current = permission
   sessionRef.current = session
   dictationSurfaceRef.current = dictationSurface
-  const latestTool = session?.tools?.at(-1)
   const clock = useClock(10_000)
   const derived = deriveCompanionStatus({ connected, runtime, session, permissionPending: !!permission, composing: !!draft.trim(), now: clock })
   const displayMood = derived.mood
@@ -2115,8 +2124,8 @@ function Companion({ agent, agents, projects = [], sessions = [], runtime, runti
   const [mode, setMode] = useState<CompanionMode>('petit')
   const [popIn, setPopIn] = useState(false)
   if (!fsmRef.current) fsmRef.current = new CompanionFsm()
-  // Chat, activity and inline questions use the taller island; approvals keep the overview size.
-  const tall = mode === 'home' && (permission ? permission.kind === 'question' : (view === 'chat' || view === 'activity'))
+  // Chat, activity, settings and inline questions use the taller island; approvals keep the overview size.
+  const tall = mode === 'home' && (permission ? permission.kind === 'question' : (view === 'chat' || view === 'activity' || view === 'settings'))
   const presentation = mode === 'home' && tall ? 'home-chat' : mode
   useEffect(() => {
     const fsm = fsmRef.current!
@@ -2138,7 +2147,7 @@ function Companion({ agent, agents, projects = [], sessions = [], runtime, runti
     }).then((stop) => { if (cancelled) stop(); else unlisten = stop })
     return () => { cancelled = true; unlisten?.(); window.clearTimeout(timer) }
   }, [])
-  useEffect(() => { void setCompanionMode(presentation) }, [presentation])
+  useEffect(() => { void setCompanionMode(presentation, undefined, COMPANION_CHAT_SIZES[chatSize]) }, [presentation, chatSize])
   // Sounds for the island's own moments: it peeks in, opens, closes, and pops on a new reply.
   const previousMode = useRef(mode)
   useEffect(() => {
@@ -2238,6 +2247,7 @@ function Companion({ agent, agents, projects = [], sessions = [], runtime, runti
   const selectTeamBlob = (item: Agent) => { if (item.id !== agent?.id) playCompanionCue('blip'); onSelectAgent(item) }
   const replyToPermission = (request: PermissionRequest, choice: string) => { if (/allow|approve|accept|yes/i.test(choice)) playCompanionCue('approve'); return onReply(request, choice) }
   const focusTeam = teamLine(agent, agents, sessions)
+  const focusSteps = sessionSteps(session)
   const beginConfused = () => { viewBeforeConfused.current = view; setConfused(true); if (mode !== 'home') fsmRef.current?.forceHome() }
   const recoverFromConfused = () => { setConfused(false); setView(viewBeforeConfused.current) }
   const prepareLocalReference = async (path: string) => {
@@ -2346,11 +2356,8 @@ function Companion({ agent, agents, projects = [], sessions = [], runtime, runti
   const inputTokens = typeof usage?.inputTokens === 'number' ? usage.inputTokens : null
   const outputTokens = typeof usage?.outputTokens === 'number' ? usage.outputTokens : null
   const tokenGlance = inputTokens !== null && outputTokens !== null ? formatCount(inputTokens + outputTokens) : inputTokens !== null ? `${formatCount(inputTokens)} in · out ?` : outputTokens !== null ? `in ? · ${formatCount(outputTokens)} out` : 'Unknown'
-  const recentMessages = (session?.messages ?? []).filter((message) => message.role !== 'thinking').slice(-6)
-  const recentActivities: Array<Record<string, unknown> & { activityKind: 'tool' | 'file' }> = [
-    ...(session?.tools ?? []).slice(-4).map((item): Record<string, unknown> & { activityKind: 'tool' } => ({ ...item, activityKind: 'tool' })),
-    ...(session?.files ?? []).slice(-4).map((item): Record<string, unknown> & { activityKind: 'file' } => ({ ...item, activityKind: 'file' })),
-  ].sort((a, b) => Number(a['sequence'] ?? 0) - Number(b['sequence'] ?? 0)).slice(-5)
+  const recentMessages = (session?.messages ?? []).filter((message) => message.role !== 'thinking').slice(-8)
+  const recentSteps = session ? buildConversationItems(session).filter((item) => item.kind === 'activity' && item.activityKind !== 'turn').slice(-12) : []
   const color = agent ? agentColorHex(agent.color) : ''
   const name = agent?.name ?? (runtime ? labelize(runtime.provider) : 'Bloblex')
   const peers = activeAgents(agents).filter((item) => item.id !== agent?.id).slice(0, 4)
@@ -2359,12 +2366,6 @@ function Companion({ agent, agents, projects = [], sessions = [], runtime, runti
   const shimmering = ['working', 'thinking', 'tool_activity', 'file_activity'].includes(displayMood)
   const sessionBusy = !!session && ['working', 'starting', 'waiting_permission'].includes(session.state ?? '')
   const wash = displayMood === 'success' ? 'green' : displayMood === 'error' || displayMood === 'rate_limited' ? 'red' : null
-  const lastReply = [...(session?.messages ?? [])].reverse().find((message) => message.role !== 'user')
-  const tickerLines = [...new Set([
-    lastReply ? plainText(String(lastReply.content ?? lastReply.text ?? '')) : null,
-    latestTool && typeof latestTool.command === 'string' ? latestTool.command : null,
-    activity,
-  ].filter((line): line is string => !!line))].slice(-2)
   const focusBlob = (size: number) => <BlobCanvas color={color} size={size} mood={displayMood} fileStage={fileStage} look={agent ? agentLook(agent) : null} soundCues={soundsEnabled} label={name} onDizzy={beginConfused} onDizzyRecovery={recoverFromConfused} />
   const responsiveDictation = Math.min(1, Math.pow(Math.max(0, dictationLevel), 0.58) * 2.1)
   const dictationBars = Array.from({ length: 14 }, (_, index) => {
@@ -2398,8 +2399,8 @@ function Companion({ agent, agents, projects = [], sessions = [], runtime, runti
             <button className="tab" aria-label="New conversation" title="New conversation" disabled={!canStart} onClick={(event) => { openView('chat'); onNewSession(event.currentTarget) }}><Plus size={14} /></button>
           </nav>
           <span className="island-drag" data-tauri-drag-region title="Drag companion" aria-hidden="true" />
-          <ApprovalPill mode={approvalMode} compact />
           <div className="island-actions">
+            <ApprovalPill mode={approvalMode} compact />
             <button className={view === 'settings' ? 'on' : ''} aria-label="Settings" title="Settings" onClick={() => openView('settings')}><Settings2 size={14} /></button>
             <button className={soundsEnabled ? 'on' : ''} aria-label={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} aria-pressed={soundsEnabled} title={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} onClick={toggleSounds}>{soundsEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}</button>
             <button className="companion-collapse" aria-label="Collapse companion" title="Collapse" disabled={!!permission} onClick={toggleExpanded}><ChevronDown size={15} /></button>
@@ -2422,17 +2423,17 @@ function Companion({ agent, agents, projects = [], sessions = [], runtime, runti
             <span className="card-bot">{focusBlob(58)}</span>
             <div className="card-stack"><div className="title">Drop to hand this file to {name}</div><div className="drop-tags"><span>Name</span><span>Size</span><span>Access</span></div><div className="sub">Bloblex checks the path only. It never reads file contents.</div></div>
           </div> : view === 'overview' ? <div className="island-overview">
-            <div className={`island-card focus ${wash ? `wash ${wash}` : ''}`}>
-              <span className="card-bot">{focusBlob(58)}</span>
+            <div key={agent?.id ?? 'none'} className={`island-card focus ${wash ? `wash ${wash}` : ''}${shimmering ? ' is-working' : ''}`} style={color ? { ['--focus-glow' as string]: color } : undefined}>
+              <span className="card-bot"><span className="focus-glow" aria-hidden="true" />{focusBlob(58)}</span>
               <button className="icon-btn jump" aria-label="Open in Bloblex" title="Open in Bloblex" onClick={onOpenMain}><ArrowUpRight size={9} /></button>
               <div className="card-stack">
                 <div className="who"><span className="name">{name}</span>{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}{agent?.leader && <span className="companion-leader" title="Team leader" aria-label="Team leader">★</span>}<span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
-                <div className="ticker">{tickerLines.map((line, index) => <div key={index} className={`ticker-row ${index === tickerLines.length - 1 ? 'current' : ''}`}><span className={index === tickerLines.length - 1 && shimmering ? 'shimmer' : ''}>{line}</span></div>)}</div>
+                <FocusTicker steps={focusSteps} current={statusLine} shimmering={shimmering} />
                 {focusTeam ? <button type="button" className="glance team-glance" onClick={() => onOpenSession?.(focusTeam.sessionId)} title="Open the side conversation in Bloblex">{focusTeam.peer && <BlobCanvas decorative color={agentColorHex(focusTeam.peer.color)} size={14} mini look={agentLook(focusTeam.peer)} label={focusTeam.peer.name} />}<span>{focusTeam.text}</span></button>
                   : <div className="glance" title={`Reported tokens across all blobs. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}><span>All blobs: Tokens <b>{tokenGlance}</b></span></div>}
               </div>
             </div>
-            <CompanionTeamCard agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} connected={connected} selectedId={agent?.id ?? null} onSelect={selectTeamBlob} />
+            <CompanionPeers agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} connected={connected} focusedId={agent?.id ?? null} pinned={pinned} onSelect={selectTeamBlob} onPinnedChange={(ids) => { playCompanionCue('tick'); onPinnedChange?.(ids) }} />
           </div> : view === 'chat' ? <div className="island-card chat-card companion-chat-view">
             <span className="card-bot small">{focusBlob(44)}</span>
             <div className="chat-body">
@@ -2456,11 +2457,15 @@ function Companion({ agent, agents, projects = [], sessions = [], runtime, runti
           </div> : view === 'activity' ? <div className="island-card list-card companion-activity-view">
             <div className="list-head"><strong>Recent activity</strong><button className="link-btn" onClick={onOpenMain}>View conversation</button></div>
             <CompanionTeamActivity agent={agent} agents={agents} sessions={sessions} onOpen={(sessionId) => onOpenSession?.(sessionId)} />
-            {recentActivities.length ? recentActivities.map((item, index) => <div key={String(item.id ?? index)} className="companion-activity-row"><span className={`activity-mark ${item.activityKind}`} /><span><strong>{formatUnknownSafe(item.title, formatUnknownSafe(item.path, item.activityKind === 'file' ? 'File change' : 'Agent activity'))}</strong><small>{formatUnknownSafe(item.state, formatUnknownSafe(item.operation, 'Reported'))}{typeof item.command === 'string' ? ` · ${item.command}` : ''}</small></span></div>) : <p className="companion-empty">No tool or file changes reported for this session.</p>}
+            {activityDetails
+              ? recentSteps.length ? <ActivitySteps items={recentSteps} /> : <p className="companion-empty">No commands, tools or file changes reported for this conversation.</p>
+              : <p className="companion-empty">Turn on Agent activity in Settings → Experimental to see each command, tool and file change here.</p>}
           </div> : <div className="island-card companion-settings-view">
             <div className="card-stack wide">
               <div className="settings-rows">
                 <div className="settings-line"><span>Companion sounds</span><button className={`switch ${soundsEnabled ? 'on' : ''}`} role="switch" aria-checked={soundsEnabled} aria-label="Companion sounds" onClick={toggleSounds} /></div>
+                <div className="settings-line"><span>Chat height</span><div className="segmented" role="radiogroup" aria-label="Chat height">{(Object.keys(COMPANION_CHAT_SIZES) as CompanionChatSize[]).map((size) => <button key={size} type="button" role="radio" aria-checked={chatSize === size} className={chatSize === size ? 'on' : undefined} onClick={() => { playCompanionCue('tick'); onChatSizeChange?.(size) }}>{COMPANION_CHAT_SIZE_LABELS[size]}</button>)}</div></div>
+                <div className="settings-line"><span>Teammates on the island</span><span className="settings-pinned">{pinned.length ? pinned.map((id) => agents.find((item) => item.id === id)?.name).filter(Boolean).join(', ') : 'Picked for you'}</span><button type="button" className="btn secondary small" onClick={() => { openView('overview'); window.setTimeout(() => document.querySelector<HTMLButtonElement>('.peers-all')?.click(), 60) }}>Choose</button></div>
                 <div className="settings-line"><span>Drag the island to place it anywhere.</span></div>
               </div>
               {soundError && <p className="companion-drop-error" role="alert">{soundError}</p>}

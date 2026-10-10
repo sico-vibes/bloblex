@@ -303,7 +303,7 @@ describe('companion drag and usage labels', () => {
     await view.settle()
     expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('home')
     expect(resolvesToDrag(view.host.querySelector('.island-card.focus .card-bot canvas.blob-canvas')), 'home face').toBe(true)
-    const pills = [...view.host.querySelectorAll('.team-pill')]
+    const pills = [...view.host.querySelectorAll('.peer')]
     expect(pills.length).toBeGreaterThan(0)
     for (const pill of pills) {
       expect(pill.hasAttribute(DRAG), 'pill').toBe(false)
@@ -324,7 +324,9 @@ describe('companion drag and usage labels', () => {
 
     await press(view.host, 'Activity')
     await view.settle()
-    expect(resolvesToDrag(view.host.querySelector('.companion-activity-row')), 'activity row').toBe(true)
+    // With Agent activity off, the tab explains where to turn it on; the hint is not interactive.
+    expect(view.host.querySelector('.companion-activity-view')?.textContent).toContain('Settings → Experimental')
+    expect(resolvesToDrag(view.host.querySelector('.companion-activity-view .companion-empty')), 'activity hint').toBe(true)
     expect(view.host.querySelector('.link-btn')?.hasAttribute(DRAG), 'activity link').toBe(false)
     assertIsland(view.host, 'activity')
 

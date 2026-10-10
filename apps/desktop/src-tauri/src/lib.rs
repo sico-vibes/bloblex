@@ -966,13 +966,16 @@ fn set_companion_mode(
     state: State<'_, AppState>,
     mode: String,
     animate: bool,
+    chat_height: Option<f64>,
 ) -> Result<(), String> {
     let window = app
         .get_webview_window("companion")
         .ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    // The chat island's height is a user preference (Compact, Comfortable, Tall).
+    let chat_height = chat_height.filter(|height| height.is_finite()).map(|height| height.clamp(240.0, 560.0)).unwrap_or(264.0);
     let (desired_width, desired_height) = match mode.as_str() {
         "home" => (640.0, 160.0),
-        "home-chat" => (640.0, 264.0),
+        "home-chat" => (640.0, chat_height),
         "petit" | "hidden" => (344.0, 62.0),
         _ => return Err("Unknown companion presentation state.".to_string()),
     };

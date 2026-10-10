@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { AutoResolvedAction, BypassNotice } from '../approvalContract'
 import { visibleApprovalMode } from '../approvalContract'
-import type { Agent, Runtime, Session } from '../types'
+import type { Agent, Project, Runtime, Session } from '../types'
 import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
 import type { ExecutionSendGate } from '../executionContract'
-import { Check, ChevronLeft } from 'lucide-react'
+import { Archive, Check, ChevronLeft, Trash2 } from 'lucide-react'
 import { BlobOverview } from './BlobOverview'
 import { BlobSessions } from './BlobSessions'
 import { BlobSettings } from './BlobSettings'
@@ -13,13 +13,14 @@ import { useDialogAccessibility } from './dialogFocus'
 type MorphPairSnapshot = { rect: DOMRect; fontSize: number; ghost: HTMLElement }
 type MorphSnapshot = { surface: DOMRect; radius: string; shadow: string; pairs: Map<string, MorphPairSnapshot> }
 
-export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
+export function BlobPage({ mode, agent, draft, runtime, session, runtimes, projects = [], sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
   mode: 'create' | 'edit'
   agent: Agent | null
   draft: AgentDraft
   runtime: Runtime | null
   session: Session | null
   runtimes: Runtime[]
+  projects?: Project[]
   sessions: Session[]
   legacyCount: number
   connected: boolean
@@ -70,16 +71,19 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
     </header>
     <div className="blob-page-scroll">
       <div className="blob-page-column">
-        <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} approvalMode={badgeMode} createdAt={agent?.createdAt ?? null} />
+        <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} approvalMode={badgeMode} agentId={agent?.id ?? null} />
         {error && <p className="blob-page-notice error" role="alert">{error}</p>}
         {remoteNotice && <p className="blob-page-notice" role="status">{remoteNotice}</p>}
         {fieldErrors.map((message) => <p className="blob-page-notice error" role="alert" key={message}>{message}</p>)}
         {bypassLine && <p className="blob-page-notice warning" role="status">Bypass is active for this blob. New requests are approved without asking.</p>}
-        <BlobSettings draft={draft} runtimes={runtimes} errors={errors} execution={execution} agentId={agent?.id ?? null} createdAt={agent?.createdAt ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} />
+        <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} />
         {mode === 'edit' && <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />}
         {mode === 'edit' && <section className="settings-group blob-group" aria-label="Archive">
-          <div className="settings-group-head"><h3>Archive</h3><button type="button" className="ghost-button small danger-button" onClick={onArchive}>Archive blob</button></div>
-          <div className="settings-card"><p className="settings-empty">This blob leaves the sidebar. Its conversations stay saved.</p></div>
+          <div className="settings-card blob-archive-card">
+            <span className="blob-archive-icon" aria-hidden="true"><Archive size={17} /></span>
+            <span className="blob-archive-copy"><strong>Archive {draft.name.trim() || 'this blob'}</strong><small>It leaves the sidebar and companion. Its conversations stay saved.</small></span>
+            <button type="button" className="secondary-button small blob-archive-button" onClick={onArchive}>Archive</button>
+          </div>
         </section>}
       </div>
     </div>
@@ -87,9 +91,12 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, sessi
   </div>
 }
 
-export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, confirmDisabled = false, holdToConfirm = false, successTitle = 'Completed', successBody = 'The action completed successfully.', onConfirm, onCancel, onComplete }: {
+export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, confirmDisabled = false, holdToConfirm = false, tone, icon, successTitle = 'Completed', successBody = 'The action completed successfully.', onConfirm, onCancel, onComplete }: {
   title: string
   body?: string
+  /** Destructive dialogs tint the icon and confirm button. Hold-to-confirm implies danger. */
+  tone?: 'danger' | 'warning'
+  icon?: ReactNode
   confirmLabel: string
   cancelLabel: string
   confirmDisabled?: boolean
@@ -328,6 +335,8 @@ export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, confirmD
     if (event.clientX < rect.left - tolerance || event.clientX > rect.right + tolerance || event.clientY < rect.top - tolerance || event.clientY > rect.bottom + tolerance) cancelHold()
   }
   const { ref, close } = useDialogAccessibility(cancel, () => !pendingRef.current && (!successRef.current || morphFinished))
+  const dialogTone = tone ?? (holdToConfirm ? 'danger' : undefined)
+  const dialogIcon = icon ?? (holdToConfirm ? <Trash2 size={18} /> : null)
   useLayoutEffect(() => { dialogNode.current = ref.current }, [ref])
   return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`}>
     <section ref={ref} className={`blob-dialog ${holdToConfirm && success ? 'is-success' : ''}`} role="dialog" aria-modal="true" aria-labelledby="blob-dialog-title" tabIndex={-1} aria-busy={pending || (holdToConfirm && success && !morphFinished) || undefined}>
@@ -337,6 +346,7 @@ export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, confirmD
         <p data-morph="body">{successBody}</p>
         <button ref={doneRef} type="button" className="primary-button" data-morph="done" data-dialog-initial-focus disabled={!morphFinished} onClick={close}>Done</button>
       </div> : <>
+        {dialogIcon && <span className={`blob-dialog-icon ${dialogTone ?? ''}`} aria-hidden="true">{dialogIcon}</span>}
         <h2 id="blob-dialog-title" data-morph="title">{title}</h2>
         {body && <p data-morph="body">{body}</p>}
         {failure && <p className="hold-confirm-error" role="alert">{failure}</p>}
@@ -344,9 +354,9 @@ export function ConfirmDialog({ title, body, confirmLabel, cancelLabel, confirmD
           {holdToConfirm
             ? <button type="button" className="secondary-button" data-morph="cancel" data-dialog-initial-focus disabled={pending} onClick={close}>{cancelLabel}</button>
             : <button type="button" className="secondary-button" data-dialog-initial-focus onClick={close}>{cancelLabel}</button>}
-          <button type="button" className={`primary-button ${holdToConfirm ? 'hold-confirm-button' : ''}`} disabled={confirmDisabled || pending || (holdToConfirm && completed.current)} aria-label={holdToConfirm ? (pending ? 'Action in progress' : holdArmed.current ? `Release to ${confirmLabel.toLowerCase()}` : `Press and hold to ${confirmLabel.toLowerCase()}`) : undefined} aria-describedby={holdToConfirm ? 'hold-confirm-hint' : undefined} aria-busy={holdToConfirm && (holding || pending) ? 'true' : undefined} style={holdToConfirm ? { '--hold-progress': `${holdProgress * 100}%` } as CSSProperties : undefined} onClick={holdToConfirm ? (event) => { event.preventDefault(); event.stopPropagation() } : () => { void onConfirm() }} onContextMenu={holdToConfirm ? (event) => event.preventDefault() : undefined} onPointerDown={holdToConfirm ? (event) => { if (event.button !== undefined && event.button !== 0) return; event.preventDefault(); pointerId.current = event.pointerId; try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* capture is optional */ } beginHold('pointer') } : undefined} onPointerMove={holdToConfirm ? onPointerMove : undefined} onPointerUp={holdToConfirm ? (event) => { if (pointerId.current === event.pointerId) finishHold() } : undefined} onPointerCancel={holdToConfirm ? cancelHold : undefined} onLostPointerCapture={holdToConfirm ? () => { if (holdSource.current === 'pointer') cancelHold() } : undefined} onKeyDown={holdToConfirm ? (event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (!event.repeat && holdStarted.current === null) { activeKey.current = event.key; beginHold('keyboard') } } } : undefined}><span className={holdToConfirm ? 'hold-confirm-label' : undefined}>{pending ? 'Working…' : holding ? holdArmed.current ? `Release to ${confirmLabel.toLowerCase()}` : 'Keep holding…' : confirmLabel}</span></button>
+          <button type="button" className={holdToConfirm ? `hold-confirm-button ${holding ? 'holding' : ''} ${holding && holdArmed.current ? 'armed' : ''}` : `primary-button ${dialogTone === 'danger' ? 'danger-confirm-button' : ''}`} disabled={confirmDisabled || pending || (holdToConfirm && completed.current)} aria-label={holdToConfirm ? (pending ? 'Action in progress' : holdArmed.current ? `Release to ${confirmLabel.toLowerCase()}` : `Press and hold to ${confirmLabel.toLowerCase()}`) : undefined} aria-describedby={holdToConfirm ? 'hold-confirm-hint' : undefined} aria-busy={holdToConfirm && (holding || pending) ? 'true' : undefined} style={holdToConfirm ? { '--hold-progress': `${holdProgress * 100}%` } as CSSProperties : undefined} onClick={holdToConfirm ? (event) => { event.preventDefault(); event.stopPropagation() } : () => { void onConfirm() }} onContextMenu={holdToConfirm ? (event) => event.preventDefault() : undefined} onPointerDown={holdToConfirm ? (event) => { if (event.button !== undefined && event.button !== 0) return; event.preventDefault(); pointerId.current = event.pointerId; try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* capture is optional */ } beginHold('pointer') } : undefined} onPointerMove={holdToConfirm ? onPointerMove : undefined} onPointerUp={holdToConfirm ? (event) => { if (pointerId.current === event.pointerId) finishHold() } : undefined} onPointerCancel={holdToConfirm ? cancelHold : undefined} onLostPointerCapture={holdToConfirm ? () => { if (holdSource.current === 'pointer') cancelHold() } : undefined} onKeyDown={holdToConfirm ? (event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (!event.repeat && holdStarted.current === null) { activeKey.current = event.key; beginHold('keyboard') } } } : undefined}>{holdToConfirm && <span className="hold-confirm-fill" aria-hidden="true" />}<span className={holdToConfirm ? 'hold-confirm-label' : undefined}>{holdToConfirm ? (pending ? 'Working…' : holding ? holdArmed.current ? `Release to ${confirmLabel.toLowerCase()}` : 'Keep holding…' : `Hold to ${confirmLabel.toLowerCase()}`) : confirmLabel}</span></button>
         </div>
-        {holdToConfirm && <><p id="hold-confirm-hint" className="hold-confirm-hint">{pending ? 'Please wait for the action to finish.' : holding ? holdArmed.current ? '' : 'Keep holding for one second. Releasing early cancels.' : 'Press and hold for one second. Releasing early cancels.'}</p><span className="sr-only" role="progressbar" aria-label="Hold to confirm progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(holdProgress * 100)} /></>}
+        {holdToConfirm && <><p id="hold-confirm-hint" className="sr-only">{pending ? 'Please wait for the action to finish.' : holding ? holdArmed.current ? '' : 'Keep holding for one second. Releasing early cancels.' : 'Press and hold for one second. Releasing early cancels.'}</p><span className="sr-only" role="progressbar" aria-label="Hold to confirm progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(holdProgress * 100)} /></>}
       </>}
     </section>
   </div>

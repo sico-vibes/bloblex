@@ -10,7 +10,7 @@ const h = vi.hoisted(() => ({
   companionMonitorOptions: vi.fn(), currentCompanionMonitor: vi.fn(), setCompanionMonitor: vi.fn(), refreshTrayMenu: vi.fn(),
   listenForDaemonEvents: vi.fn(), listenForDaemonConnection: vi.fn(), listenForActiveSession: vi.fn(),
   listenForActiveRuntime: vi.fn(), listenForOpenSettings: vi.fn(), directListen: vi.fn(), emit: vi.fn(),
-  getCurrentWindow: vi.fn(), openProjectFolder: vi.fn(),
+  getCurrentWindow: vi.fn(), openProjectFolder: vi.fn(), stagePromptAttachment: vi.fn(),
   daemonEventHandlers: [] as Array<(event: any) => void>,
   nextGetName: 'Claude',
   claudeArchived: false,
@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  previewMode: false,
   rpc: h.rpc,
   permissionsPolicyGet: async () => ({ defaultMode: 'ask', perAgent: [] }),
   fetchSnapshot: h.fetchSnapshot,
@@ -48,6 +49,7 @@ vi.mock('../tauri', () => ({
   listenForActiveRuntime: h.listenForActiveRuntime,
   listenForOpenSettings: h.listenForOpenSettings,
   openProjectFolder: h.openProjectFolder,
+  stagePromptAttachment: h.stagePromptAttachment,
   selectLocalFile: vi.fn(), inspectLocalFile: vi.fn(),
   openInEditor: vi.fn(), revealInExplorer: vi.fn(), resolveProjectFile: vi.fn(),
   quitBloblex: vi.fn(), setCloseToTray: vi.fn(),
@@ -310,23 +312,6 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.app-shell')).not.toBeNull()
   })
 
-  it('moves a favourite blob into a Favourites section and back', async () => {
-    const view = startApp()
-    await view.settle()
-    expect(view.host.querySelector('.roster-section-label')).toBeNull()
-    await openMenu(rows(view.host)[2]!)
-    await click(menuItem(view.host, 'Add to favourites'))
-    await view.settle()
-    const labels = [...view.host.querySelectorAll('.bot-list .roster-section-label')].map((node) => node.textContent)
-    expect(labels).toEqual(['Favourites', 'Blobs'])
-    expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Invoice helper', 'Claude', 'Codex', 'OpenCode'])
-    await openMenu(rows(view.host)[0]!)
-    await click(menuItem(view.host, 'Remove from favourites'))
-    await view.settle()
-    expect(view.host.querySelector('.roster-section-label')).toBeNull()
-    expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Claude', 'Codex', 'Invoice helper', 'OpenCode'])
-  })
-
   it('renders active blobs in roster order and hides archived ones', async () => {
     const view = startApp()
     await view.settle()
@@ -348,22 +333,10 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.compact-bot [data-color]')?.getAttribute('data-color')).toBe('#F38C6F')
     await click(buttonNamed(view.host, 'Open companion home'))
     await view.settle()
-    const pill = [...view.host.querySelectorAll('.pill.on')].find((node) => node.textContent?.includes('Claude'))
+    const pill = [...view.host.querySelectorAll('.team-pill.on')].find((node) => node.textContent?.includes('Claude'))
     expect(pill?.querySelector('[data-color]')?.getAttribute('data-color')).toBe('#F38C6F')
     expect(pill?.querySelector('[data-color]')?.getAttribute('data-color')).not.toBe('#82aaff')
-    expect(view.host.querySelector('.pill .lbl')?.textContent).toBe('Claude')
-  })
-
-  it('searches session titles and keeps the matching blob', async () => {
-    const view = startApp()
-    await view.settle()
-    const search = view.host.querySelector<HTMLInputElement>('[aria-label="Search agents and conversations"]')
-    await typeInto(search, 'parser')
-    expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Codex'])
-    expect(rows(view.host)[0]?.textContent).toContain('Conversation: Invoice parser tests')
-    await typeInto(search, 'C:/work/korus')
-    expect(rows(view.host)).toHaveLength(0)
-    expect(view.host.textContent).toContain('Nothing matches “C:/work/korus”.')
+    expect(pill?.querySelector('.team-pill-name')?.textContent).toBe('Claude')
   })
 
   it('moves focus with Arrow Down and selects only on Enter', async () => {
@@ -400,6 +373,7 @@ describe('blob roster and editor', () => {
     await typeInto(field(view.host, 'Instructions') as HTMLTextAreaElement, 'keep\0out')
     expect(view.host.textContent).toContain('Instructions cannot include a null character.')
     await typeInto(field(view.host, 'Instructions') as HTMLTextAreaElement, 'Be brief')
+    await click(buttonNamed(view.host, 'Choose a custom colour'))
     await typeInto(field(view.host, 'Custom colour') as HTMLInputElement, 'abc')
     expect(view.host.textContent).toContain('Enter a colour as #RRGGBB, or choose a swatch.')
     await click(buttonNamed(view.host, 'Mint'))
@@ -481,14 +455,14 @@ describe('blob roster and editor', () => {
     const create = h.rpc.mock.calls.find((call) => call[0] === 'agent.create')
     expect(create?.[1]).toStrictEqual({
       name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default agent for Claude.', instructions: '', color: '#f38c6f',
-      outfit: 'auto', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
+      look: { shape: 'round', seed: 'agent-claude' }, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
     })
     expect(create?.[1]).not.toHaveProperty('archived')
     expect(rows(view.host).some((row) => row.textContent?.includes('Copy of Claude'))).toBe(true)
   })
 
-  it('copies a selected outfit on duplicate', async () => {
-    const source = agent({ ...claude, outfit: 'witch-hat' })
+  it('copies a chosen look on duplicate', async () => {
+    const source = agent({ ...claude, look: { shape: 'sun', seed: 'claude', traits: { 'sun.n': 0.2 } } })
     h.fetchSnapshot.mockResolvedValue(snapshot({ agents: [source, codex, invoice, opencode, retired] }))
     const view = startApp()
     await view.settle()
@@ -498,8 +472,29 @@ describe('blob roster and editor', () => {
     const create = h.rpc.mock.calls.find((call) => call[0] === 'agent.create')
     expect(create?.[1]).toStrictEqual({
       name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default agent for Claude.', instructions: '', color: '#f38c6f',
-      outfit: 'witch-hat', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
+      look: { shape: 'sun', seed: 'claude', traits: { 'sun.n': 0.2 } }, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
     })
+  })
+
+  it('stages a pasted image, sends its path with the prompt and clears the tray', async () => {
+    h.stagePromptAttachment.mockResolvedValue('C:/data/attachments/one.png')
+    const view = startApp()
+    await view.settle()
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')!
+    const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'image.png', { type:'image/png' })
+    const paste = new Event('paste', { bubbles:true, cancelable:true })
+    Object.defineProperty(paste, 'clipboardData', { value:{ files:[image] } })
+    await act(async () => { textarea.dispatchEvent(paste) })
+    await view.settle()
+    expect(paste.defaultPrevented).toBe(true)
+    expect(h.stagePromptAttachment).toHaveBeenCalledOnce()
+    expect(view.host.querySelector('.composer-attachment.ready img')?.getAttribute('alt')).toMatch(/^Pasted image/)
+    const send = view.host.querySelector<HTMLButtonElement>('.send-button')!
+    expect(send.disabled).toBe(false)
+    await act(async () => { send.click() })
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId:'session-claude', text:'', attachments:[{ path:'C:/data/attachments/one.png', name:expect.stringMatching(/^Pasted image/) }] })
+    expect(view.host.querySelector('.composer-attachment')).toBeNull()
   })
 
   it('archives after confirmation and removes the row', async () => {
@@ -509,9 +504,10 @@ describe('blob roster and editor', () => {
     await click(buttonNamed(view.host, 'Archive'))
     const dialog = view.host.querySelector('[role="dialog"]')
     expect(dialog?.textContent).toContain('Archive Claude?')
-    expect(dialog?.textContent).toContain('It leaves the roster. Its conversations stay saved. Restoring a blob is not available yet.')
+    expect(dialog?.textContent).toContain('It leaves the sidebar and companion. Its conversations stay saved. Restoring a blob is not available yet.')
+    expect(dialog?.querySelector('.blob-dialog-icon.warning')).not.toBeNull()
     await view.settle()
-    expect(document.activeElement?.textContent).toBe('Cancel')
+    expect(document.activeElement?.textContent).toBe('Keep it')
     await click(dialog?.querySelector('.primary-button') ?? null)
     await view.settle()
     expect(h.rpc).toHaveBeenCalledWith('agent.delete', { agentId: 'agent-claude' })
@@ -528,6 +524,7 @@ describe('blob roster and editor', () => {
     await click(buttonNamed(view.host, 'Pink'))
     expect(buttonNamed(view.host, 'Pink, selected')?.getAttribute('aria-pressed')).toBe('true')
     expect(buttonNamed(view.host, 'Coral')?.getAttribute('aria-pressed')).toBe('false')
+    await click(buttonNamed(view.host, 'Choose a custom colour'))
     await typeInto(field(view.host, 'Custom colour') as HTMLInputElement, 'abc')
     expect(view.host.querySelector('#custom-colour-error')?.textContent).toBe('Enter a colour as #RRGGBB, or choose a swatch.')
     await typeInto(field(view.host, 'Custom colour') as HTMLInputElement, 'F0A0C4')
@@ -564,7 +561,7 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('[aria-live="polite"]')?.textContent).toContain('Archived Claude. Now showing Codex.')
   })
 
-  it('shows Runtime offline on Codex and disables New session', async () => {
+  it('shows Runtime offline on Codex and disables New conversation', async () => {
     h.fetchSnapshot.mockResolvedValue(snapshot({
       runtimes: [claudeRuntime, { ...codexRuntime, status: 'offline' }, opencodeRuntime],
     }))
@@ -572,39 +569,8 @@ describe('blob roster and editor', () => {
     await view.settle()
     const codexRow = rows(view.host)[1]
     expect(codexRow?.textContent).toContain('Runtime offline')
-    await openMenu(codexRow!)
-    const item = buttonNamed(view.host, 'New session')
-    expect(item?.hasAttribute('disabled')).toBe(true)
     await click(codexRow!)
-    expect(buttonNamed(view.host, 'New session')?.hasAttribute('disabled')).toBe(true)
-  })
-
-  it('starts a session with agentId and projectPath only', async () => {
-    const view = startApp()
-    await view.settle()
-    await click(buttonNamed(view.host, 'New session'))
-    await click(menuItem(view.host, 'site'))
-    await view.settle()
-    const call = h.rpc.mock.calls.find((entry) => entry[0] === 'session.new')
-    expect(call?.[1]).toEqual({ agentId: 'agent-claude', projectPath: 'C:/work/site' })
-    expect(Object.keys(call?.[1] as object)).toEqual(['agentId', 'projectPath'])
-  })
-
-  it('maps session.new conflict and invalid_argument onto the stable sentences', async () => {
-    const view = startApp()
-    await view.settle()
-    h.sessionError = 'invalid_argument: missing folder'
-    await click(buttonNamed(view.host, 'New session'))
-    await click(menuItem(view.host, 'site'))
-    await view.settle()
-    expect(view.host.textContent).toContain('Choose a project folder that exists on this device.')
-    const invalidCall = h.rpc.mock.calls.filter((entry) => entry[0] === 'session.new').at(-1)
-    expect(invalidCall?.[1]).not.toHaveProperty('runtimeId')
-    h.sessionError = 'conflict: archived'
-    await click(buttonNamed(view.host, 'New session'))
-    await click(menuItem(view.host, 'site'))
-    await view.settle()
-    expect(view.host.textContent).toContain('This blob is archived, so a new session cannot be started.')
+    expect(buttonNamed(view.host, 'New conversation')?.hasAttribute('disabled')).toBe(true)
   })
 
   it('keeps a dirty edit when Escape is pressed on the discard dialog', async () => {
@@ -712,321 +678,6 @@ describe('blob roster and editor', () => {
     expect(document.activeElement?.textContent).toContain('Fresh blob')
   })
 
-  it('starts collapsed so a session row is not mounted on first paint', async () => {
-    const view = startApp()
-    await view.settle()
-    expect(rows(view.host).every((row) => row.getAttribute('aria-expanded') === 'false')).toBe(true)
-    expect(view.host.querySelector('[data-session-id]')).toBeNull()
-  })
-
-  it('expands in place with Right and keeps Arrow Down on blob rows while collapsed', async () => {
-    const view = startApp()
-    await view.settle()
-    const [first, second] = rows(view.host)
-    first?.focus()
-    await press(first!, 'ArrowDown')
-    expect(document.activeElement).toBe(second)
-    expect(first?.getAttribute('aria-current')).toBe('true')
-    await press(second!, 'ArrowUp')
-    const claude = rows(view.host)[0]!
-    await press(claude, 'ArrowRight')
-    expect(claude.getAttribute('aria-expanded')).toBe('true')
-    expect(claude.getAttribute('aria-current')).toBe('true')
-    await press(claude, 'ArrowDown')
-    const project = document.activeElement as HTMLElement
-    expect(project.getAttribute('data-tree-kind')).toBe('project')
-    expect(project.tabIndex).toBe(0)
-    expect(claude.tabIndex).toBe(-1)
-    expect(claude.getAttribute('aria-current')).toBe('true')
-    await press(project, 'Enter')
-    expect(project.getAttribute('aria-expanded')).toBe('true')
-    await press(project, 'ArrowDown')
-    const sessionRow = document.activeElement as HTMLElement
-    await press(sessionRow, 'Enter')
-    expect(sessionRow.getAttribute('aria-selected')).toBe('true')
-    expect(claude.getAttribute('aria-current')).toBe('true')
-    await press(sessionRow, 'ArrowLeft')
-    const focusedProject = document.activeElement as HTMLElement
-    expect(focusedProject.getAttribute('data-tree-kind')).toBe('project')
-    expect(focusedProject.getAttribute('aria-expanded')).toBe('true')
-    await press(focusedProject, 'ArrowLeft')
-    expect(focusedProject.getAttribute('aria-expanded')).toBe('false')
-    expect(document.activeElement).toBe(focusedProject)
-    expect(focusedProject.tabIndex).toBe(0)
-  })
-
-  it('moves type-ahead to OpenCode without changing the current blob', async () => {
-    const view = startApp()
-    await view.settle()
-    const claude = rows(view.host)[0]!
-    claude.focus()
-    await press(claude, 'o')
-    const open = rows(view.host).find((row) => row.getAttribute('data-agent-id') === 'agent-opencode')
-    expect(document.activeElement).toBe(open)
-    expect(open?.tabIndex).toBe(0)
-    expect(claude.getAttribute('aria-current')).toBe('true')
-  })
-
-  it('focuses the project after its session unmounts on collapse', async () => {
-    const view = startApp()
-    await view.settle()
-    const claude = rows(view.host)[0]!
-    claude.focus()
-    await press(claude, 'ArrowRight')
-    await press(claude, 'ArrowDown')
-    const project = document.activeElement as HTMLElement
-    await press(project, 'Enter')
-    await press(project, 'ArrowDown')
-    const sessionRow = document.activeElement as HTMLElement
-    expect(sessionRow.tabIndex).toBe(0)
-    const chevron = project.querySelector('.tree-chevron')
-    await act(async () => {
-      chevron?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
-      ;(chevron as HTMLElement).click()
-    })
-    await view.settle()
-    expect(view.host.querySelector('[data-session-id]')).toBeNull()
-    expect(document.activeElement?.getAttribute('data-tree-kind')).toBe('project')
-    expect((document.activeElement as HTMLElement | null)?.tabIndex).toBe(0)
-  })
-
-  it('numbers blob positions across headings and session positions inside one project', async () => {
-    const view = startApp()
-    await view.settle()
-    expect(rows(view.host).map((row) => row.getAttribute('aria-setsize'))).toEqual(['4', '4', '4', '4'])
-    expect(rows(view.host).map((row) => row.getAttribute('aria-posinset'))).toEqual(['1', '2', '3', '4'])
-    const codex = rows(view.host)[1]!
-    codex.focus()
-    await press(codex, 'ArrowRight')
-    const level2 = [...view.host.querySelectorAll<HTMLElement>('[aria-level="2"]')]
-    expect(level2.map((row) => row.getAttribute('aria-setsize'))).toEqual(level2.map(() => String(level2.length)))
-    expect(level2.some((row) => row.getAttribute('aria-label') === 'Other sessions')).toBe(true)
-    view.unmount()
-    h.fetchSnapshot.mockResolvedValue(snapshot({
-      sessions: [...sessions, session({ id: 'session-codex-b', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Second site', projectPath: 'C:/work/site', updatedAt: '2026-10-02T02:00:00.000Z' })],
-    }))
-    const again = startApp()
-    await again.settle()
-    const codexAgain = rows(again.host)[1]!
-    codexAgain.focus()
-    await press(codexAgain, 'ArrowRight')
-    const project = again.host.querySelector<HTMLElement>('[data-tree-kind="project"]')!
-    project.focus()
-    await press(project, 'Enter')
-    const level3 = [...again.host.querySelectorAll<HTMLElement>('[data-tree-kind="session"]')]
-    expect(level3.map((row) => row.getAttribute('aria-setsize'))).toEqual(['2', '2'])
-    expect(level3.map((row) => row.getAttribute('aria-posinset'))).toEqual(['1', '2'])
-  })
-
-  it('shows 12 projects and reveals the oldest after Show 1 more project', async () => {
-    const many = Array.from({ length: 13 }, (_, index) => session({
-      id: `proj-${index}`, runtimeId: 'runtime-claude', agentId: 'agent-claude', title: `Project ${index}`,
-      projectPath: `C:\\work\\folder-${String(index).padStart(2, '0')}`, updatedAt: `2026-10-02T${String(index).padStart(2, '0')}:00:00.000Z`,
-    }))
-    h.fetchSnapshot.mockResolvedValue(snapshot({ sessions: many }))
-    const view = startApp()
-    await view.settle()
-    const claude = rows(view.host)[0]!
-    claude.focus()
-    await press(claude, 'ArrowRight')
-    const projects = [...view.host.querySelectorAll('[data-tree-kind="project"]')]
-    expect(projects).toHaveLength(12)
-    const more = view.host.querySelector('[data-tree-kind="more"]')
-    expect(more?.textContent).toBe('Show 1 more project')
-    const labels = projects.map((row) => row.querySelector('.tree-label')?.textContent)
-    expect(labels).toContain('folder-12')
-    expect(labels).not.toContain('folder-00')
-    await press(more!, 'Enter')
-    expect(view.host.querySelectorAll('[data-tree-kind="project"]')).toHaveLength(13)
-    expect([...view.host.querySelectorAll('.tree-label')].some((node) => node.textContent === 'folder-00')).toBe(true)
-  })
-
-  it('selects the activated session instead of substituting the latest one', async () => {
-    h.fetchSnapshot.mockResolvedValue(snapshot({
-      sessions: [...sessions,
-        session({ id: 'session-invoice-a', runtimeId: 'runtime-codex', agentId: 'agent-invoice', title: 'North site', projectPath: 'C:\\client\\site', updatedAt: '2026-10-02T03:00:00.000Z' }),
-        session({ id: 'session-invoice-b', runtimeId: 'runtime-codex', agentId: 'agent-invoice', title: 'South site', projectPath: 'D:\\other\\site', state: 'working', updatedAt: '2026-10-01T00:00:00.000Z' }),
-      ],
-    }))
-    const view = startApp()
-    await view.settle()
-    const invoiceRow = rows(view.host).find((row) => row.getAttribute('data-agent-id') === 'agent-invoice')!
-    invoiceRow.focus()
-    await press(invoiceRow, 'ArrowRight')
-    for (const project of [...view.host.querySelectorAll<HTMLElement>('[data-tree-kind="project"]')]) {
-      project.focus()
-      await press(project, 'Enter')
-    }
-    const target = view.host.querySelector<HTMLElement>('[data-session-id="session-invoice-b"]')!
-    const other = view.host.querySelector<HTMLElement>('[data-session-id="session-invoice-a"]')!
-    target.focus()
-    await press(target, 'Enter')
-    await view.settle()
-    expect(invoiceRow.getAttribute('aria-current')).toBe('true')
-    expect(target.getAttribute('aria-selected')).toBe('true')
-    expect(other.getAttribute('aria-selected')).toBe('false')
-    expect(h.setActiveSession).toHaveBeenCalledWith('session-invoice-b')
-  })
-
-  it('places Untied notes only on the host and leaves a ghost runtime unselected', async () => {
-    const view = startApp()
-    await view.settle()
-    const codexRow = rows(view.host)[1]!
-    await click(codexRow)
-    await view.settle()
-    codexRow.focus()
-    await press(codexRow, 'ArrowRight')
-    const other = view.host.querySelector<HTMLElement>('[aria-label="Other sessions"]')!
-    other.focus()
-    await press(other, 'Enter')
-    const notes = view.host.querySelector<HTMLElement>('[data-session-id="session-legacy"]')!
-    notes.focus()
-    await press(notes, 'Enter')
-    await view.settle()
-    expect(codexRow.getAttribute('aria-current')).toBe('true')
-    expect(notes.getAttribute('aria-selected')).toBe('true')
-    const invoiceRow = rows(view.host).find((row) => row.getAttribute('data-agent-id') === 'agent-invoice')!
-    invoiceRow.focus()
-    await press(invoiceRow, 'ArrowRight')
-    const invoiceGroup = view.host.querySelector('#blob-group-agent-invoice')
-    expect(invoiceGroup?.querySelector('[aria-label="Other sessions"]')).toBeNull()
-    expect(invoiceGroup?.textContent ?? '').not.toContain('Untied notes')
-    view.unmount()
-    h.fetchSnapshot.mockResolvedValue(snapshot({ agents: [claude, { ...codex, archived: true }, invoice, opencode, retired] }))
-    const moved = startApp()
-    await moved.settle()
-    const host = rows(moved.host).find((row) => row.getAttribute('data-agent-id') === 'agent-invoice')!
-    host.focus()
-    await press(host, 'ArrowRight')
-    expect(moved.host.querySelector('#blob-group-agent-invoice [aria-label="Other sessions"]')).not.toBeNull()
-    moved.unmount()
-    h.fetchSnapshot.mockResolvedValue(snapshot({
-      sessions: [...sessions, session({ id: 'session-ghost', runtimeId: 'runtime-ghost', agentId: null, title: 'Ghost notes' })],
-    }))
-    const ghost = startApp()
-    await ghost.settle()
-    expect(ghost.host.textContent).not.toContain('Ghost notes')
-    expect(rows(ghost.host)[0]?.getAttribute('aria-current')).toBe('true')
-  })
-
-  it('sends the stored project path from + and from Choose folder...', async () => {
-    const view = startApp()
-    await view.settle()
-    const claude = rows(view.host)[0]!
-    claude.focus()
-    await press(claude, 'ArrowRight')
-    await click(view.host.querySelector('[aria-label="New session in site"]'))
-    await view.settle()
-    const plus = h.rpc.mock.calls.filter((entry) => entry[0] === 'session.new').at(-1)
-    expect(plus?.[1]).toEqual({ agentId: 'agent-claude', projectPath: 'C:/work/site' })
-    expect(Object.keys(plus?.[1] as object)).toEqual(['agentId', 'projectPath'])
-    await click(buttonNamed(view.host, 'New session'))
-    await click(menuItem(view.host, 'Choose folder...'))
-    await view.settle()
-    const picked = h.rpc.mock.calls.filter((entry) => entry[0] === 'session.new').at(-1)
-    expect(picked?.[1]).toEqual({ agentId: 'agent-claude', projectPath: 'C:/work/site' })
-    expect(Object.keys(picked?.[1] as object)).toEqual(['agentId', 'projectPath'])
-  })
-
-  it('pins a default project and opens the folder picker once when that path is rejected', async () => {
-    h.fetchSnapshot.mockResolvedValue(snapshot({ agents: [{ ...claude, defaultProject: 'C:/work/site' }, codex, invoice, opencode, retired] }))
-    const view = startApp()
-    await view.settle()
-    await click(buttonNamed(view.host, 'New session'))
-    const first = view.host.querySelector('[role="menu"] [role="menuitem"]')
-    expect(first?.textContent?.trim().endsWith('Default')).toBe(true)
-    h.sessionError = 'invalid_argument: missing folder'
-    await click(first)
-    await view.settle()
-    expect(view.host.textContent).toContain('Choose a project folder that exists on this device.')
-    expect(h.openProjectFolder).toHaveBeenCalledTimes(1)
-    expect(h.rpc.mock.calls.filter((entry) => entry[0] === 'agent.update')).toHaveLength(0)
-  })
-
-  it('expands a title match without writing bloblex.roster.expanded', async () => {
-    h.fetchSnapshot.mockResolvedValue(snapshot({
-      sessions: [...sessions, session({ id: 'session-claude-2', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Hero follow-up', projectPath: 'c:\\work\\site\\', updatedAt: '2026-10-02T04:00:00.000Z' })],
-    }))
-    const view = startApp()
-    await view.settle()
-    const search = view.host.querySelector<HTMLInputElement>('[aria-label="Search agents and conversations"]')
-    await typeInto(search, 'follow-up')
-    expect(rows(view.host)[0]?.getAttribute('aria-expanded')).toBe('true')
-    expect(view.host.querySelector('[data-tree-kind="project"]')?.getAttribute('aria-expanded')).toBe('true')
-    expect((localStorage.setItem as ReturnType<typeof vi.fn>).mock.calls.some((call) => call[0] === 'bloblex.roster.expanded')).toBe(false)
-    await typeInto(search, '')
-    expect(view.host.querySelector('[data-session-id]')).toBeNull()
-    await typeInto(search, 'Invoice')
-    expect(rows(view.host).find((row) => row.getAttribute('data-agent-id') === 'agent-invoice')?.getAttribute('aria-expanded')).toBe('false')
-  })
-
-  it('restores expanded blobs and keeps the chevron when storage throws', async () => {
-    vi.stubGlobal('localStorage', {
-      getItem: vi.fn((key: string) => key === 'bloblex.roster.expanded' ? JSON.stringify({ v: 1, blobs: { 'agent-claude': { open: true, projects: {}, other: false } } }) : null),
-      setItem: vi.fn(),
-      removeItem: vi.fn(),
-      clear: vi.fn(),
-    })
-    const view = startApp()
-    await view.settle()
-    const claude = rows(view.host)[0]!
-    expect(claude.getAttribute('aria-expanded')).toBe('true')
-    await click(claude.querySelector('.tree-chevron'))
-    expect(claude.getAttribute('aria-expanded')).toBe('false')
-    const saved = (localStorage.setItem as ReturnType<typeof vi.fn>).mock.calls.find((call) => call[0] === 'bloblex.roster.expanded')
-    expect(JSON.parse(String(saved?.[1])).blobs['agent-claude'].open).toBe(false)
-    ;(localStorage.setItem as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error('blocked') })
-    await click(claude.querySelector('.tree-chevron'))
-    expect(claude.getAttribute('aria-expanded')).toBe('true')
-    expect(rows(view.host)).toHaveLength(4)
-    view.unmount()
-    vi.stubGlobal('localStorage', {
-      getItem: () => { throw new Error('blocked') },
-      setItem: () => { throw new Error('blocked') },
-      removeItem: () => { throw new Error('blocked') },
-      clear: () => { throw new Error('blocked') },
-    })
-    const again = startApp()
-    await again.settle()
-    expect(rows(again.host)).toHaveLength(4)
-    expect(rows(again.host).every((row) => row.getAttribute('aria-expanded') === 'false')).toBe(true)
-  })
-
-  it('caps one project at 30 conversations and reveals Bulk 1 from show more', async () => {
-    const bulk = Array.from({ length: 31 }, (_, index) => {
-      const n = index + 1
-      return session({ id: `session-codex-many-${n}`, runtimeId: 'runtime-codex', agentId: 'agent-codex', title: `Bulk ${n}`, projectPath: 'C:\\work\\korus', updatedAt: `2026-10-02T00:${String(n).padStart(2, '0')}:00.000Z` })
-    })
-    h.fetchSnapshot.mockResolvedValue(snapshot({ sessions: [...sessions.filter((item) => item.agentId !== 'agent-codex'), ...bulk] }))
-    const view = startApp()
-    await view.settle()
-    const codex = rows(view.host)[1]!
-    codex.focus()
-    await press(codex, 'ArrowRight')
-    const project = [...view.host.querySelectorAll<HTMLElement>('[data-tree-kind="project"]')].find((row) => row.getAttribute('title') === 'C:\\work\\korus')!
-    project.focus()
-    await press(project, 'Enter')
-    const titles = [...view.host.querySelectorAll('[data-tree-kind="session"]')].map((row) => row.querySelector('.tree-label')?.textContent)
-    expect(titles).toHaveLength(30)
-    expect(titles).toContain('Bulk 31')
-    expect(titles).not.toContain('Bulk 1')
-    const more = [...view.host.querySelectorAll('[data-tree-kind="more"]')].find((row) => row.textContent === 'Show 1 more conversation')
-    await press(more!, 'Enter')
-    expect([...view.host.querySelectorAll('.tree-label')].some((node) => node.textContent === 'Bulk 1')).toBe(true)
-  })
-
-  it('shows offline Codex conversations and disables New session', async () => {
-    h.fetchSnapshot.mockResolvedValue(snapshot({ runtimes: [claudeRuntime, { ...codexRuntime, status: 'offline' }, opencodeRuntime] }))
-    const view = startApp()
-    await view.settle()
-    const codex = rows(view.host)[1]!
-    codex.focus()
-    await press(codex, 'ArrowRight')
-    expect(view.host.querySelector('[data-tree-kind="project"]')).not.toBeNull()
-    await openMenu(codex)
-    expect(buttonNamed(view.host, 'New session')?.hasAttribute('disabled')).toBe(true)
-  })
-
   it('omits archived agents and their conversations from the tree', async () => {
     h.fetchSnapshot.mockResolvedValue(snapshot({
       sessions: [...sessions, session({ id: 'session-retired', runtimeId: 'runtime-codex', agentId: 'agent-old', title: 'Archived chat', projectPath: 'C:\\old\\repo' })],
@@ -1054,33 +705,185 @@ describe('blob roster and editor', () => {
     expect(rows(view.host)[0]?.getAttribute('aria-current')).toBe('true')
   })
 
-  it('syncs the companion title to the selected session and a pill to the latest owned session', async () => {
-    const follow = session({ id: 'session-claude-2', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Hero follow-up', projectPath: 'c:\\work\\site\\', updatedAt: '2026-10-02T04:00:00.000Z' })
-    h.fetchSnapshot.mockResolvedValue(snapshot({ sessions: [...sessions, follow] }))
+  // ── Team: projects, leader, side conversations, plans and questions ──
+  const board = { id: 'project-board', name: 'Board', path: 'C:/work/site', sortOrder: 0, collapsed: false }
+  const withRpc = (handler: (method: string, params: Record<string, unknown>) => unknown) => {
+    const base = h.rpc.getMockImplementation()
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      const handled = await handler(method, params)
+      return handled === undefined ? base?.(method, params) : handled
+    })
+  }
+
+  it('groups blobs under projects, keeps casual blobs in Unassigned and marks the leader', async () => {
+    configure(snapshot({ projects: [board], agents: [{ ...claude, projectId: board.id, role: 'CTO', leader: true }, codex, invoice, opencode, retired] }))
     const view = startApp()
     await view.settle()
-    const claude = rows(view.host)[0]!
-    claude.focus()
-    await press(claude, 'ArrowRight')
-    const project = view.host.querySelector<HTMLElement>('[data-tree-kind="project"]')!
-    project.focus()
-    await press(project, 'Enter')
-    const row = view.host.querySelector<HTMLElement>('[data-session-id="session-claude-2"]')!
-    row.focus()
-    await press(row, 'Enter')
-    await view.settle()
-    expect(h.setActiveSession).toHaveBeenCalledWith('session-claude-2')
-    view.unmount()
-    h.getActiveSession.mockResolvedValue('session-claude-2')
-    const companion = startApp('?companion=1')
-    await companion.settle()
-    await click(buttonNamed(companion.host, 'Open companion home'))
-    await companion.settle()
-    expect(companion.host.querySelector('.tool')?.textContent).toBe('Hero follow-up')
-    h.setActiveSession.mockClear()
-    await click([...companion.host.querySelectorAll('.pill')].find((node) => node.textContent?.includes('Codex')))
-    await companion.settle()
-    expect(h.setActiveSession).toHaveBeenCalledWith('session-codex')
-    expect(h.setActiveSession.mock.calls.some((call) => call[0] === 'session-claude-2')).toBe(false)
+    const groups = [...view.host.querySelectorAll('.team-group')].map((group) => group.getAttribute('aria-label'))
+    expect(groups).toEqual(['Board', 'Unassigned'])
+    const leader = view.host.querySelector('.team-row[data-agent-id="agent-claude"]')!
+    expect(leader.getAttribute('aria-label')).toBe('Claude, CTO, team leader')
+    expect(leader.querySelector('.leader-badge')).not.toBeNull()
+    expect(leader.querySelector('.role-chip')?.textContent).toBe('CTO')
+    expect([...view.host.querySelectorAll('.team-group[aria-label="Unassigned"] .team-row strong')].map((node) => node.textContent)).toEqual(['Codex', 'Invoice helper', 'OpenCode'])
   })
+
+  it('pins and unpins a blob from its context menu', async () => {
+    const view = startApp()
+    await view.settle()
+    await openMenu(rows(view.host)[1]!)
+    expect(view.host.querySelector('[role="menu"]')?.getAttribute('aria-label')).toBe('Codex actions')
+    await click(menuItem(view.host, 'Pin'))
+    expect([...view.host.querySelectorAll('.team-group[aria-label="Pinned"] .team-row strong')].map((node) => node.textContent)).toEqual(['Codex'])
+    await openMenu(view.host.querySelector<HTMLButtonElement>('.team-group[aria-label="Pinned"] .team-row')!)
+    await click(menuItem(view.host, 'Unpin'))
+    expect(view.host.querySelector('.team-group[aria-label="Pinned"]')).toBeNull()
+  })
+
+  it('moves a blob into a project from the Move to submenu', async () => {
+    configure(snapshot({ projects: [board] }))
+    withRpc((method, params) => {
+      if (method !== 'agent.team.update') return undefined
+      h.fetchSnapshot.mockResolvedValue(snapshot({ projects: [board], agents: [claude, { ...codex, projectId: params.projectId as string }, invoice, opencode, retired] }))
+      return { agent: { ...codex, projectId: params.projectId } }
+    })
+    const view = startApp()
+    await view.settle()
+    await openMenu(view.host.querySelector<HTMLButtonElement>('.team-row[data-agent-id="agent-codex"]')!)
+    await click(menuItem(view.host, 'Move to'))
+    const target = [...view.host.querySelectorAll<HTMLButtonElement>('.team-submenu [role="menuitemradio"]')].find((item) => item.textContent?.includes('Board'))
+    await click(target)
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('agent.team.update', { agentId: 'agent-codex', projectId: 'project-board' })
+    expect([...view.host.querySelectorAll('.team-group[aria-label="Board"] .team-row strong')].map((node) => node.textContent)).toEqual(['Codex'])
+  })
+
+  it('filters blobs by name or role from the search box', async () => {
+    configure(snapshot({ agents: [{ ...claude, role: 'Copywriter' }, codex, invoice, opencode, retired] }))
+    const view = startApp()
+    await view.settle()
+    await typeInto(view.host.querySelector<HTMLInputElement>('input[aria-label="Search blobs"]'), 'copy')
+    expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Claude'])
+    await typeInto(view.host.querySelector<HTMLInputElement>('input[aria-label="Search blobs"]'), 'invoice')
+    expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Invoice helper'])
+  })
+
+  it('opens a blob without a conversation through agent.conversation', async () => {
+    const created = session({ id: 'session-invoice', runtimeId: 'runtime-codex', agentId: 'agent-invoice', title: 'Invoice helper', updatedAt: '2026-10-02T02:00:00.000Z' })
+    withRpc((method) => method === 'agent.conversation' ? { session: created, created: true } : undefined)
+    const view = startApp()
+    await view.settle()
+    await click(view.host.querySelector('.team-row[data-agent-id="agent-invoice"]'))
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('agent.conversation', { agentId: 'agent-invoice' })
+    expect(h.rpc).not.toHaveBeenCalledWith('session.new', expect.anything())
+    expect(view.host.querySelector('.composer-box textarea')?.getAttribute('aria-label')).toBe('Message Invoice helper')
+  })
+
+  it('starts a fresh conversation only after confirmation', async () => {
+    const busy = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'm1', role: 'user', content: 'Hello' }] })
+    const fresh = session({ id: 'session-claude-fresh', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T04:00:00.000Z' })
+    configure(snapshot({ sessions: [busy, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    withRpc((method) => method === 'session.archive' ? { session: { ...busy, archived: true } } : method === 'agent.conversation' ? { session: fresh, created: true } : undefined)
+    const view = startApp()
+    await view.settle()
+    await click(buttonNamed(view.host, 'New conversation'))
+    expect(view.host.querySelector('[role="dialog"]')?.textContent).toContain('Start fresh with Claude?')
+    expect(h.rpc).not.toHaveBeenCalledWith('session.archive', expect.anything())
+    await click(buttonNamed(view.host, 'Start fresh'))
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.archive', { sessionId: 'session-claude', archived: true })
+    expect(h.rpc).toHaveBeenCalledWith('agent.conversation', { agentId: 'agent-claude' })
+  })
+
+  it('shows delegation chips and opens the side conversation read-only', async () => {
+    const main = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T03:00:00.000Z', messages: [
+      { id: 'u1', role: 'user', content: 'Ask @Codex to check the tests.' },
+      { id: 'n1', role: 'notice', content: 'Check the tests', meta: { kind: 'delegation', direction: 'sent', peerAgentId: 'agent-codex', peerName: 'Codex', sideSessionId: 'session-side' } },
+      { id: 'r1', role: 'user', content: '[Reply from Codex]\nAll 12 tests pass.', meta: { kind: 'blob_reply', fromAgentId: 'agent-codex', fromName: 'Codex', sideSessionId: 'session-side' } },
+      { id: 'a1', role: 'assistant', content: 'Codex confirms all tests pass.' },
+    ] })
+    const side = session({ id: 'session-side', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Claude ⇄ Codex', updatedAt: '2026-10-02T02:30:00.000Z', link: { kind: 'side', peerAgentId: 'agent-claude', peerName: 'Claude', originSessionId: 'session-claude' }, messages: [
+      { id: 's1', role: 'user', content: 'Please run the tests.', meta: { kind: 'blob_message', fromAgentId: 'agent-claude', fromName: 'Claude' } },
+      { id: 's2', role: 'assistant', content: 'All 12 tests pass.' },
+    ] })
+    configure(snapshot({ sessions: [main, side, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    const view = startApp()
+    await view.settle()
+    const chips = [...view.host.querySelectorAll('.team-chip')].map((chip) => chip.getAttribute('aria-label'))
+    expect(chips).toEqual(['Messaged Codex. Open side conversation', 'Message from Codex. Open side conversation'])
+    // The relayed text stays in the side conversation; the chip links to it.
+    expect(view.host.querySelector('.team-reply-toggle')).toBeNull()
+    expect(view.host.querySelector('.message-list')?.textContent ?? '').not.toContain('All 12 tests pass.')
+    // Side conversations stay out of the main transcript and the sidebar rows.
+    expect(rows(view.host).filter((row) => row.getAttribute('data-agent-id') === 'agent-codex')).toHaveLength(1)
+    await click(view.host.querySelector('.team-chip'))
+    expect(view.host.querySelector('.side-header')?.getAttribute('aria-label')).toBe('Side conversation between Claude and Codex')
+    expect(view.host.querySelector('.composer-box')).toBeNull()
+    expect(view.host.querySelector('.side-peer .message-author')?.textContent).toContain('Claude')
+    await click(buttonNamed(view.host, 'Close chat'))
+    expect(view.host.querySelector('.side-header')).toBeNull()
+    expect(view.host.querySelector('.composer-box textarea')?.getAttribute('aria-label')).toBe('Message Claude')
+  })
+
+  it('answers an inline question with the chosen option', async () => {
+    const waiting = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', state: 'waiting_permission', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'u1', role: 'user', content: 'Write a script.' }] })
+    const question = { id: 'perm-q', sessionId: 'session-claude', runtimeId: 'runtime-claude', status: 'pending', kind: 'question', title: 'Claude has a question', choices: ['answer', 'dismiss'], questions: [{ id: 'Which language?', header: 'Language', question: 'Which language?', options: [{ label: 'Python', description: '' }, { label: 'JavaScript', description: '' }], multiSelect: false, allowOther: true }] }
+    configure(snapshot({ sessions: [waiting, ...sessions.filter((item) => item.id !== 'session-claude')], permissions: [question] }))
+    withRpc((method) => method === 'permission.reply' ? { resolved: true } : undefined)
+    const view = startApp()
+    await view.settle()
+    const options = [...view.host.querySelectorAll<HTMLButtonElement>('.question-option')]
+    expect(options.map((option) => option.textContent)).toEqual(['APython', 'BJavaScript'])
+    expect(view.host.querySelector('.approval-card, .permission-card')).toBeNull()
+    await click(options[0])
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('permission.reply', { permissionId: 'perm-q', choice: 'answer', answers: { 'Which language?': ['Python'] } })
+  })
+
+  it('does not pull focus to another blob that is waiting on a question', async () => {
+    const waiting = session({ id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Codex', state: 'waiting_permission', updatedAt: '2026-10-01T00:00:00.000Z' })
+    const question = { id: 'perm-q', sessionId: 'session-codex', runtimeId: 'runtime-codex', status: 'pending', kind: 'question', title: 'Codex has a question', choices: ['answer', 'dismiss'], questions: [{ id: 'q', header: 'Q', question: 'Which?', options: [{ label: 'A' }], multiSelect: false, allowOther: true }] }
+    configure(snapshot({ sessions: [waiting, ...sessions.filter((item) => item.id !== 'session-codex')], permissions: [question] }))
+    const view = startApp()
+    await view.settle()
+    await click(view.host.querySelector('.team-row[data-agent-id="agent-claude"]'))
+    await view.settle()
+    expect(view.host.querySelector('.team-row[aria-current="true"]')?.getAttribute('data-agent-id')).toBe('agent-claude')
+    expect(view.host.querySelector('.question-card')).toBeNull()
+    expect(view.host.querySelector('.team-row[data-agent-id="agent-codex"] .bot-row-preview')?.textContent).toBe('Waiting for you')
+  })
+
+  it('approves a proposed plan by leaving plan mode and asking the blob to build', async () => {
+    const planned = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T03:00:00.000Z', modelLock: { model: null, thinking: null, planMode: true }, messages: [
+      { id: 'u1', role: 'user', content: 'Plan the change.' },
+      { id: 'p1', role: 'plan', content: '1. Do it.', meta: { kind: 'plan' } },
+    ] })
+    configure(snapshot({ sessions: [planned, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    withRpc((method, params) => method === 'session.model.update' ? { session: { ...planned, modelLock: { model: null, thinking: null } } } : method === 'session.prompt' ? { accepted: true, params } : undefined)
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelector('.plan-pill')?.getAttribute('aria-pressed')).toBe('true')
+    expect(view.host.querySelector('.plan-card')?.textContent).toContain('Do it.')
+    await click(buttonNamed(view.host, 'Approve & build'))
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.model.update', { sessionId: 'session-claude', planMode: false })
+    expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId: 'session-claude', text: 'Approved. Go ahead and implement the plan.' })
+  })
+
+  it('completes an @mention from the picker with the keyboard', async () => {
+    const view = startApp()
+    await view.settle()
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')!
+    await act(async () => { textarea.focus() })
+    await typeInto(textarea, 'Ask @co')
+    textarea.setSelectionRange(7, 7)
+    await typeInto(textarea, 'Ask @co')
+    expect([...view.host.querySelectorAll('.mention-option strong')].map((node) => node.textContent)).toEqual(['Codex', 'OpenCode'])
+    await press(textarea, 'Enter')
+    expect(textarea.value).toBe('Ask @Codex ')
+    expect(view.host.querySelector('.mention-picker')).toBeNull()
+    expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
+  })
+
 })

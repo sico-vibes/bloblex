@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  previewMode: false,
   rpc: h.rpc,
   permissionsPolicyGet: async () => ({ defaultMode: 'ask', perAgent: [] }),
   fetchSnapshot: h.fetchSnapshot,
@@ -65,7 +66,7 @@ vi.mock('../blob/soundCues', () => ({
   playCompanionCue: vi.fn(), unlockCompanionAudioFromGesture: vi.fn(),
   setCompanionSoundsEnabled: vi.fn(), disposeCompanionAudio: vi.fn(),
 }))
-vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: Record<string, unknown>) => <span data-outfit={props.outfit} /> }))
+vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: Record<string, unknown>) => <span data-shape={(props.look as { shape?: string } | null | undefined)?.shape ?? 'mascot'} /> }))
 
 import { App } from './App'
 
@@ -157,7 +158,7 @@ beforeEach(() => {
   h.selectBlobExportPath.mockResolvedValue('selected-blob-export-token')
   h.writeBlobExport.mockResolvedValue(undefined)
   h.selectBlobImportPath.mockResolvedValue('selected-blob-import-token')
-  h.readBlobImport.mockResolvedValue(JSON.stringify({ format: 'bloblex.blob.v1', name: 'Imported helper', description: 'Shared', colour: '#aabbcc', instructions: 'Use concise answers.', model: null, thinking: null, speed: null, outfit: 'witch-hat', defaultApprovalMode: 'ask' }))
+  h.readBlobImport.mockResolvedValue(JSON.stringify({ format: 'bloblex.blob.v1', name: 'Imported helper', description: 'Shared', colour: '#aabbcc', instructions: 'Use concise answers.', model: null, thinking: null, speed: null, look: { shape: 'droplet', seed: 'imported' }, defaultApprovalMode: 'ask' }))
 })
 
 afterEach(() => {
@@ -171,7 +172,8 @@ describe('sidebar usage analytics', () => {
   it('shows all supported structured provider quotas in the shell and Usage sheet', async () => {
     h.rpc.mockImplementation(async (method: string) => {
       if (method === 'events.replay') return { replayAvailable: true, events: [] }
-      if (method === 'settings.get') return { settings: {} }
+      // The bottom usage bar is an experimental feature, off unless enabled.
+      if (method === 'settings.get') return { settings: { 'experimental.usageBar': true } }
       if (method === 'quota.list') return { quotas: [
         { provider: 'codex', runtimeId: 'runtime-codex', fetchedAt: '2026-10-02T11:55:00Z', snapshot: { limits: [{ label: 'Codex', primary: { usedPercent: 62, remainingPercent: 38, windowDurationMins: 300, resetsAt: '2026-10-02T17:00:00Z' }, secondary: { usedPercent: 27, remainingPercent: 73, windowDurationMins: 10080, resetsAt: '2026-10-09T17:00:00Z' } }] } },
         { provider: 'claude', runtimeId: 'runtime-claude', fetchedAt: '2026-10-02T11:55:00Z', snapshot: { limits: [{ label: 'Claude Code', primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: '2026-10-02T17:00:00Z' }, secondary: null }] } },
@@ -187,34 +189,50 @@ describe('sidebar usage analytics', () => {
     expect(view.host.querySelector('.context-window-indicator')?.getAttribute('aria-label')).toContain('413,000 of 828,000 tokens used, 50%')
     expect(view.host.querySelector('[role="progressbar"][aria-label="Context window used"]')?.getAttribute('aria-valuenow')).toBe('50')
     expect(view.host.querySelector('.context-window-ring-value')?.getAttribute('stroke-dasharray')).toBeTruthy()
-    expect(view.host.querySelector('.context-window-center')?.textContent).toBe('50%')
-    const row = view.host.querySelector<HTMLButtonElement>('.quota-meter-row')
-    expect(row?.textContent).toContain('Codex')
-    expect(row?.textContent).toContain('62%')
-    expect(row?.textContent).toContain('Claude Code')
-    expect(row?.textContent).toContain('OpenCode Go')
+    expect(view.host.querySelector('.context-window-center')).toBeNull()
+    const row = view.host.querySelector<HTMLButtonElement>('.quota-bar-trigger')
+    // Status bar: one chip per supported provider, ordered Claude, Codex, OpenCode Go.
+    expect([...row!.querySelectorAll('.quota-chip')].map((chip) => chip.getAttribute('data-provider'))).toEqual(['claude', 'codex', 'opencode'])
+    expect(row?.textContent).toContain('62% used')
+    expect(row?.textContent).toContain('27% used')
     expect(row?.textContent).not.toContain('Generic provider')
-    expect(row?.textContent).toContain('5h')
-    expect(row?.textContent).not.toContain('7d')
-    expect(row?.querySelectorAll('.quota-compact-window')).toHaveLength(3)
-    expect(row?.querySelector('.quota-window')).toBeNull()
-    expect(row?.textContent).not.toContain('Resets')
-    expect(row?.querySelector('.quota-provider[data-provider="codex"]')?.getAttribute('aria-label')).toContain('62% used')
-    expect(row?.querySelector('.quota-provider[data-provider="codex"] .quota-compact-bar > b')?.getAttribute('style')).toContain('width: 62%')
-    expect(row?.querySelector('.quota-provider[data-provider="opencode"]')?.getAttribute('aria-label')).toContain('100% used')
-    expect(row?.querySelector('.quota-provider[data-provider="opencode"] .quota-compact-bar > b')?.getAttribute('style')).toContain('width: 100%')
+    expect(row?.getAttribute('aria-label')).toContain('Codex: Session 62% used')
+    expect(row?.getAttribute('aria-label')).toContain('OpenCode Go: Session 100% used')
+    expect(row?.querySelector('.quota-chip[data-provider="codex"] .quota-meter > b')?.getAttribute('style')).toContain('width: 62%')
+    expect(row?.querySelector('.quota-chip[data-provider="opencode"] .quota-meter > b')?.getAttribute('style')).toContain('width: 100%')
+    expect(row?.querySelector('.quota-chip[data-provider="opencode"] .quota-meter')?.classList.contains('tone-critical')).toBe(true)
+    expect(row?.querySelector('.quota-chip[data-provider="opencode"] .quota-chip-warning')).not.toBeNull()
     for (const provider of ['claude', 'codex', 'opencode']) {
-      expect(view.host.querySelector(`.quota-provider[data-provider="${provider}"] .provider-logo`)?.getAttribute('aria-hidden')).toBe('true')
+      expect(view.host.querySelector(`.quota-chip[data-provider="${provider}"] .provider-logo`)?.getAttribute('aria-hidden')).toBe('true')
     }
+    // Usage popover with a hover flyout per provider.
     await click(row)
     await view.settle()
+    const popover = view.host.querySelector('.usage-popover')
+    expect(popover?.getAttribute('role')).toBe('dialog')
+    const codexRow = [...popover!.querySelectorAll<HTMLButtonElement>('.usage-row')].find((item) => item.textContent?.includes('Codex'))!
+    expect(codexRow.textContent).toContain('5h')
+    expect(codexRow.textContent).toContain('wk')
+    await act(async () => { codexRow.focus() })
+    expect(view.host.querySelector('.usage-flyout')?.textContent).toContain('Weekly')
+    expect(view.host.querySelector('.usage-flyout')?.textContent).toContain('27% used')
+    await click(buttonNamed(view.host, 'Compact'))
+    expect(view.host.querySelector('.usage-rows')?.classList.contains('compact')).toBe(true)
+    await click(view.host.querySelector<HTMLButtonElement>('.usage-popover-link'))
+    await view.settle()
+    expect(view.host.querySelector('.usage-popover')).toBeNull()
     expect(view.host.querySelector('.usage-sheet')).not.toBeNull()
+    // Plan limits come before token usage in the sheet.
+    const blocks = [...view.host.querySelectorAll('.usage-sheet-body > .usage-block')]
+    expect(blocks[0]?.classList.contains('quota-details')).toBe(true)
+    expect(blocks[1]?.textContent).toContain('Token usage')
     expect(view.host.querySelector('.quota-details')?.textContent).toContain('62%')
     expect(view.host.querySelector('.quota-details')?.textContent).toContain('27%')
-    expect(view.host.querySelector('.quota-details')?.textContent).toContain('Resets ')
-    expect(view.host.querySelector('.quota-details')?.textContent).toContain('Claude Code')
+    expect(view.host.querySelector('.quota-details')?.textContent).toContain('Resets in')
+    expect(view.host.querySelector('.quota-details')?.textContent).toContain('Claude')
     expect(view.host.querySelector('.quota-details')?.textContent).toContain('OpenCode Go')
     expect(view.host.querySelector('.quota-details')?.textContent).toContain('last successful reading retained')
+    expect(view.host.querySelector('.quota-card[data-provider="opencode"]')?.textContent).toContain('Unavailable')
     expect(view.host.querySelector('.quota-details')?.textContent).not.toContain('Generic provider')
     expect(view.host.textContent).toContain('Token usage')
     await click(buttonNamed(view.host, 'Refresh quota'))
@@ -249,7 +267,7 @@ describe('sidebar usage analytics', () => {
     const view = startApp()
     await view.settle()
     expect(view.host.querySelector('.context-window-indicator')?.getAttribute('aria-label')).toContain('Context window: Context usage unavailable')
-    expect(view.host.querySelector('.context-window-indicator')?.classList.contains('unknown')).toBe(true)
+    expect(view.host.querySelector('.context-window-indicator')?.classList.contains('tone-unknown')).toBe(true)
     expect(view.host.querySelector('[role="progressbar"][aria-label="Context window used"]')).toBeNull()
   })
 
@@ -353,7 +371,7 @@ describe('sidebar usage analytics', () => {
   it('exports a blob setup and imports it as a draft without creating it', async () => {
     const view = startApp()
     await view.settle()
-    const blobRow = view.host.querySelector<HTMLElement>('[data-tree-id="blob:agent-claude"]')
+    const blobRow = view.host.querySelector<HTMLElement>('.team-row[data-agent-id="agent-claude"]')
     if (!blobRow) throw new Error('Missing blob row')
     await act(async () => { blobRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 12, clientY: 12 })) })
     await click(buttonNamed(view.host, 'Export blob…'))
@@ -371,7 +389,7 @@ describe('sidebar usage analytics', () => {
     await view.settle()
     expect(view.host.querySelector('.blob-page')).not.toBeNull()
     expect(view.host.querySelector<HTMLInputElement>('input[aria-label="Blob name"]')?.value).toBe('Imported helper')
-    expect(view.host.querySelector('.blob-hero [data-outfit="witch-hat"]')).not.toBeNull()
+    expect(view.host.querySelector('.blob-hero [data-shape="droplet"]')).not.toBeNull()
     expect(h.rpc.mock.calls.some((call) => call[0] === 'agent.create')).toBe(false)
   })
 
@@ -385,16 +403,11 @@ describe('sidebar usage analytics', () => {
     })
     const view = startApp()
     await view.settle()
-    const blobRow = view.host.querySelector<HTMLElement>('[data-tree-id="blob:agent-claude"]')
+    const blobRow = view.host.querySelector<HTMLElement>('.team-row[data-agent-id="agent-claude"]')
     if (!blobRow) throw new Error('Missing blob row')
-    await act(async () => { blobRow.querySelector<HTMLElement>('.tree-chevron')?.dispatchEvent(new MouseEvent('click', { bubbles:true, cancelable:true })) })
-    const projectRow = view.host.querySelector<HTMLElement>('[data-tree-kind="project"]')
-    if (!projectRow) throw new Error('Missing project row')
-    await act(async () => { projectRow.click() })
-    const sessionRow = view.host.querySelector<HTMLElement>('[data-session-id="session-claude"]')
-    if (!sessionRow) throw new Error('Missing conversation row')
-    await act(async () => { sessionRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles:true, cancelable:true, clientX:12, clientY:12 })) })
-    await click(buttonNamed(view.host, 'Delete…'))
+    // Conversations are deleted from the blob's menu (one conversation per blob).
+    await act(async () => { blobRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles:true, cancelable:true, clientX:12, clientY:12 })) })
+    await click(buttonNamed(view.host, 'Delete conversation…'))
     const dialog = view.host.querySelector<HTMLElement>('[role="dialog"]')!
     const deleteButton = dialog.querySelector<HTMLButtonElement>('.hold-confirm-button')!
     const pointer = (type: string) => { const event = new Event(type, { bubbles:true }); Object.defineProperty(event, 'pointerId', { value:3 }); return event }
@@ -402,7 +415,7 @@ describe('sidebar usage analytics', () => {
     expect(h.rpc).toHaveBeenCalledWith('session.delete', { sessionId:'session-claude' })
     expect(view.host.querySelector('[role="dialog"]')?.getAttribute('aria-busy')).toBe('true')
     expect(view.host.querySelector('.hold-confirm-success')).toBeNull()
-    expect(view.host.querySelector('[data-session-id="session-claude"]')).not.toBeNull()
+    expect(view.host.querySelector('.composer-box textarea')?.getAttribute('aria-label')).toBe('Message Claude')
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true, cancelable:true })) })
     expect(view.host.querySelector('[role="dialog"]')).not.toBeNull()
     expect(view.host.querySelector('.hold-confirm-success')).toBeNull()
@@ -410,7 +423,7 @@ describe('sidebar usage analytics', () => {
     await act(async () => { resolveDelete(); await Promise.resolve(); await Promise.resolve() })
     expect(view.host.querySelector('.hold-confirm-success')).not.toBeNull()
     expect(view.host.querySelector('.hold-confirm-success h2')?.textContent).toBe('Conversation deleted')
-    expect(view.host.querySelector('[data-session-id="session-claude"]')).not.toBeNull()
+    expect(view.host.querySelector('.composer-box textarea')?.getAttribute('aria-label')).toBe('Message Claude')
     await click(buttonNamed(view.host, 'Done'))
     expect(view.host.querySelector('[role="dialog"]')).toBeNull()
     expect(h.rpc.mock.calls.filter((call) => call[0] === 'session.delete')).toHaveLength(1)

@@ -3,7 +3,7 @@ import type { ExecutionSendGate } from '../executionContract'
 import type { Agent, Runtime } from '../types'
 import { colorForRpc, colorsEquivalent, parseCustomHex, swatchForColor } from './agentColor'
 import { runtimeUsable, scalarLength } from './rosterSelectors'
-import { isOutfit, normalizeOutfit, type Outfit } from '../blob/outfit'
+import { normalizeLook, sameLook, type BlobLook } from '../blob/look'
 import { providerBrand } from './providerBrand'
 
 export interface AgentDraft {
@@ -11,13 +11,27 @@ export interface AgentDraft {
   description: string
   instructions: string
   color: string
-  outfit: Outfit
+  /** Null keeps the default look (round, seeded by the blob id). */
+  look: BlobLook | null
   runtimeId: string
   defaultProject: string | null
   model: string | null
   thinking: string | null
   serviceTier: string | null
   approvalMode: ApprovalMode | null
+  /** Team placement, saved separately through agent.team.update. */
+  role: string
+  projectId: string | null
+  leader: boolean
+}
+
+/** Team fields that differ from the baseline, as agent.team.update params. */
+export function teamParams(draft: AgentDraft, baseline: AgentDraft | null): Record<string, unknown> {
+  const params: Record<string, unknown> = {}
+  if (!baseline || draft.role.trim() !== baseline.role.trim()) params.role = draft.role.trim()
+  if (!baseline || draft.projectId !== baseline.projectId) params.projectId = draft.projectId
+  if (!baseline || draft.leader !== baseline.leader) params.leader = draft.leader
+  return params
 }
 
 const CLOSED_GATE: ExecutionSendGate = { model: false, thinking: false, serviceTier: false }
@@ -35,10 +49,9 @@ export const CLIENT_MESSAGES = {
   color: 'Enter a colour as #RRGGBB, or choose a swatch.',
   runtime: 'Choose a runtime.',
   nameTaken: 'Another blob already uses this name.',
-  outfit: 'Choose a valid outfit.',
 } as const
 
-export type AgentField = 'name' | 'description' | 'instructions' | 'color' | 'outfit' | 'runtimeId'
+export type AgentField = 'name' | 'description' | 'instructions' | 'color' | 'runtimeId'
 export type FieldErrors = Partial<Record<AgentField, string>>
 
 export type DaemonFailureKind = 'agent.create' | 'agent.update' | 'agent.get' | 'agent.delete' | 'session.new' | 'agent.reorder'
@@ -48,19 +61,27 @@ export function normalizeProject(value: string | null | undefined): string | nul
   return trimmed ? trimmed : null
 }
 
+/** Looks compare by value; two missing looks are the same default. */
+export function lookEquals(a: BlobLook | null, b: BlobLook | null) {
+  return a === null || b === null ? a === b : sameLook(a, b)
+}
+
 export function draftFromAgent(agent: Agent): AgentDraft {
   return {
     name: agent.name,
     description: agent.description,
     instructions: agent.instructions,
     color: agent.color,
-    outfit: normalizeOutfit(agent.outfit),
+    look: normalizeLook(agent.look),
     runtimeId: agent.runtimeId,
     defaultProject: agent.defaultProject,
     model: agent.model,
     thinking: agent.thinking,
     serviceTier: agent.serviceTier,
     approvalMode: agent.approvalMode ?? null,
+    role: typeof agent.role === 'string' ? agent.role : '',
+    projectId: typeof agent.projectId === 'string' ? agent.projectId : null,
+    leader: agent.leader === true,
   }
 }
 
@@ -70,7 +91,7 @@ export function createDraft(runtimes: readonly Runtime[], selectedRuntimeId: str
     ?? runtimes.find((runtime) => runtimeUsable(runtime))?.id
     ?? runtimes[0]?.id
     ?? ''
-  return { name: '', description: '', instructions: '', color: 'mint', outfit: 'auto', runtimeId, defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null }
+  return { name: '', description: '', instructions: '', color: 'mint', look: { shape: 'round', seed: `blob-${Math.floor(Math.random() * 0xffffffff).toString(36)}` }, runtimeId, defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null, role: '', projectId: null, leader: false }
 }
 
 export function starterDraft(runtime: Runtime): AgentDraft {
@@ -87,11 +108,12 @@ function starterColorFor(provider: string) {
 }
 
 export function isAgentDirty(draft: AgentDraft, baseline: AgentDraft) {
-  return draft.name !== baseline.name
+  return Object.keys(teamParams(draft, baseline)).length > 0
+    || draft.name !== baseline.name
     || draft.description !== baseline.description
     || draft.instructions !== baseline.instructions
     || !colorsEquivalent(draft.color, baseline.color)
-    || draft.outfit !== baseline.outfit
+    || !lookEquals(draft.look, baseline.look)
     || draft.runtimeId !== baseline.runtimeId
     || normalizeProject(draft.defaultProject) !== normalizeProject(baseline.defaultProject)
     || nullableText(draft.model) !== nullableText(baseline.model)
@@ -109,7 +131,6 @@ export function validateAgentDraft(draft: AgentDraft, otherActiveNames: readonly
   if (scalarLength(draft.description) > 255) errors.description = CLIENT_MESSAGES.descriptionLong
   if (draft.instructions.includes('\0')) errors.instructions = CLIENT_MESSAGES.instructionsNul
   if (!swatchForColor(draft.color) && !parseCustomHex(draft.color)) errors.color = CLIENT_MESSAGES.color
-  if (!isOutfit(draft.outfit)) errors.outfit = CLIENT_MESSAGES.outfit
   if (!draft.runtimeId.trim()) errors.runtimeId = CLIENT_MESSAGES.runtime
   return errors
 }
@@ -125,7 +146,7 @@ export function createParams(draft: AgentDraft, gate: ExecutionSendGate = CLOSED
     description: draft.description,
     instructions: draft.instructions,
     color: colorForRpc(draft.color),
-    outfit: draft.outfit,
+    ...(draft.look ? { look: draft.look } : {}),
     defaultProject: normalizeProject(draft.defaultProject),
   }
   if (gate.model && nullableText(draft.model)) params.model = nullableText(draft.model)
@@ -142,7 +163,7 @@ export function duplicateParams(source: Agent, name: string): Record<string, unk
     description: source.description,
     instructions: source.instructions,
     color: source.color,
-    outfit: normalizeOutfit(source.outfit),
+    look: normalizeLook(source.look) ?? { shape: 'round', seed: source.id },
     model: source.model,
     thinking: source.thinking,
     serviceTier: source.serviceTier,
@@ -160,7 +181,7 @@ export function updateParams(agentId: string, draft: AgentDraft, baseline: Agent
   if (draft.description !== baseline.description) params.description = draft.description
   if (draft.instructions !== baseline.instructions) params.instructions = draft.instructions
   if (!colorsEquivalent(draft.color, baseline.color)) params.color = colorForRpc(draft.color)
-  if (draft.outfit !== baseline.outfit && isOutfit(draft.outfit)) params.outfit = draft.outfit
+  if (!lookEquals(draft.look, baseline.look)) params.look = draft.look
   if (draft.runtimeId !== baseline.runtimeId) params.runtimeId = draft.runtimeId
   if (normalizeProject(draft.defaultProject) !== normalizeProject(baseline.defaultProject)) params.defaultProject = normalizeProject(draft.defaultProject)
   if (gate.model && nullableText(draft.model) !== nullableText(baseline.model)) params.model = nullableText(draft.model)

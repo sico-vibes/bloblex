@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, unlockCompanionAudioFromGesture } from './soundCues'
+import { MASTER_VOLUME, disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, unlockCompanionAudioFromGesture, type CompanionCue } from './soundCues'
 
 class FakeParam {
   readonly values: number[] = []
   setValueAtTime(value: number) { this.values.push(value) }
   exponentialRampToValueAtTime(value: number) { this.values.push(value) }
+  linearRampToValueAtTime(value: number) { this.values.push(value) }
 }
 
 class FakeOscillator {
@@ -76,38 +77,50 @@ describe('opt-in original companion sound cues', () => {
     expect(playCompanionCue('welcome')).toBe(true)
   })
 
-  it('synthesizes distinct low-volume notes for each original cue', async () => {
+  it('synthesizes a distinct original cue for every companion moment through one master volume', async () => {
     vi.stubGlobal('AudioContext', FakeAudioContext)
     vi.stubGlobal('document', testDocument)
-    vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }))
     setCompanionSoundsEnabled(true)
     expect(await unlockCompanionAudioFromGesture()).toBe(true)
-
-    for (const cue of ['welcome', 'poke', 'approval', 'completion', 'error'] as const) {
-      expect(playCompanionCue(cue)).toBe(true)
-    }
-
     const context = FakeAudioContext.instances[0]
-    expect(context.oscillators).toHaveLength(10)
-    expect(context.oscillators.every((oscillator) => oscillator.type === 'sine')).toBe(true)
-    expect(context.gains.flatMap((gain) => gain.gain.values).filter((value) => value > 0.0001).every((value) => value <= 0.022)).toBe(true)
-    const frequencies = context.oscillators.map((oscillator) => oscillator.frequency.values[0])
-    expect(new Set(frequencies).size).toBeGreaterThan(5)
+    const [masterGain] = context.gains
+    expect(masterGain.gain.values).toEqual([MASTER_VOLUME])
+
+    const cues: CompanionCue[] = ['peek', 'open', 'close', 'hover', 'blip', 'tick', 'send', 'pop', 'poke', 'annoyed', 'dizzy', 'love', 'welcome', 'work', 'finish', 'error', 'approval', 'question', 'approve', 'gulp', 'sleep', 'completion']
+    const signatures = new Set<string>()
+    for (const cue of cues) {
+      const before = context.oscillators.length
+      expect(playCompanionCue(cue)).toBe(true)
+      signatures.add(context.oscillators.slice(before).map((oscillator) => `${oscillator.type}:${oscillator.frequency.values.join(',')}`).join('|'))
+    }
+    // 'completion' is the earlier name for 'finish'; every other moment sounds different.
+    expect(signatures.size).toBe(cues.length - 1)
+    const peaks = context.gains.slice(1).flatMap((gain) => gain.gain.values).filter((value) => value > 0.0001)
+    expect(Math.max(...peaks)).toBeLessThanOrEqual(1)
+    expect(Math.max(...peaks) * MASTER_VOLUME).toBeGreaterThan(0.2)
   })
 
-  it('suppresses cues and silences voices when hidden, reduced-motion, or muted', async () => {
+  it('unlocks on the first click after enabling, and stays audible with reduced motion', async () => {
     vi.stubGlobal('AudioContext', FakeAudioContext)
     vi.stubGlobal('document', testDocument)
-    vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }))
+    reducedMotion = true
+    setCompanionSoundsEnabled(true)
+    testDocument.dispatchEvent(new Event('pointerdown'))
+    await Promise.resolve(); await Promise.resolve()
+    expect(FakeAudioContext.instances).toHaveLength(1)
+    expect(FakeAudioContext.instances[0].state).toBe('running')
+    expect(playCompanionCue('blip')).toBe(true)
+  })
+
+  it('silences voices when hidden or muted', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('document', testDocument)
     setCompanionSoundsEnabled(true)
     expect(await unlockCompanionAudioFromGesture()).toBe(true)
     expect(playCompanionCue('completion')).toBe(true)
     const context = FakeAudioContext.instances[0]
     const voice = context.oscillators[0]
 
-    reducedMotion = true
-    expect(playCompanionCue('poke')).toBe(false)
-    reducedMotion = false
     testDocument.hidden = true
     testDocument.dispatchEvent(new Event('visibilitychange'))
     expect(voice.stop).toHaveBeenCalled()

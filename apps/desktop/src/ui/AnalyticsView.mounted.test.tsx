@@ -14,6 +14,7 @@ const fetchUsageAnalytics = vi.hoisted(() => vi.fn())
 
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  previewMode: false,
   fetchUsageAnalytics,
   rpc: async () => null,
 }))

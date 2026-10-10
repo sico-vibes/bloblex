@@ -245,7 +245,7 @@ async fn session_setup_order_is_model_then_mode_then_effort_before_prompt() {
     let result = adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-1".into(),
                 text: "hello".into(),
                 exec_options: exec,
@@ -300,7 +300,7 @@ async fn mode_and_effort_are_not_selected_without_instructions_or_thinking() {
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-model".into(),
                 text: "hello".into(),
                 exec_options: exec,
@@ -334,7 +334,7 @@ async fn clearing_instructions_restores_provider_default_mode_before_next_turn()
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-with-instructions".into(),
                 text: "first".into(),
                 exec_options: with_instructions,
@@ -345,7 +345,7 @@ async fn clearing_instructions_restores_provider_default_mode_before_next_turn()
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-without-instructions".into(),
                 text: "second".into(),
                 exec_options: options(None, None, None),
@@ -386,7 +386,7 @@ async fn parent_config_is_replaced_and_allowlisted_env_is_kept() {
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-env".into(),
                 text: "hello".into(),
                 exec_options: exec,
@@ -459,7 +459,7 @@ async fn missing_effort_and_service_tier_stop_before_prompt() {
     let missing = adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-missing".into(),
                 text: "hello".into(),
                 exec_options: options(Some("opencode/big-pickle"), Some("low"), Some(SENTINEL)),
@@ -483,7 +483,7 @@ async fn missing_effort_and_service_tier_stop_before_prompt() {
     let tier = adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-tier".into(),
                 text: "hello".into(),
                 exec_options: ExecOptions {
@@ -518,7 +518,7 @@ async fn changed_instructions_do_not_reach_the_prompt() {
     let error = adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-changed".into(),
                 text: "hello".into(),
                 exec_options: options(None, None, Some("OTHER_INSTRUCTION_SHOULD_NOT_APPLY")),
@@ -557,7 +557,7 @@ async fn resume_uses_session_load_then_the_same_option_order() {
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-resume".into(),
                 text: "hello".into(),
                 exec_options: exec,
@@ -587,11 +587,11 @@ async fn usage_maps_first_turn_later_turn_partial_unreported_and_failed_zeros() 
     let args = vec!["--record".into(), temp.record().to_string_lossy().into(), "--usage".into(), "sequence".into()];
     let (handle, mut events) = open_session(&adapter, args, ExecOptions::default()).await;
     adapter
-        .prompt(&handle, PromptRequest { turn_id: "t1".into(), text: "one".into(), exec_options: ExecOptions::default() })
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "t1".into(), text: "one".into(), exec_options: ExecOptions::default() })
         .await
         .unwrap();
     adapter
-        .prompt(&handle, PromptRequest { turn_id: "t2".into(), text: "two".into(), exec_options: ExecOptions::default() })
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "t2".into(), text: "two".into(), exec_options: ExecOptions::default() })
         .await
         .unwrap();
     let mut reports = Vec::new();
@@ -629,7 +629,7 @@ async fn usage_maps_first_turn_later_turn_partial_unreported_and_failed_zeros() 
         let args = vec!["--record".into(), temp.record().to_string_lossy().into(), "--usage".into(), mode.into()];
         let (handle, mut events) = open_session(&adapter, args, ExecOptions::default()).await;
         adapter
-            .prompt(&handle, PromptRequest { turn_id: mode.into(), text: "x".into(), exec_options: ExecOptions::default() })
+            .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: mode.into(), text: "x".into(), exec_options: ExecOptions::default() })
             .await
             .unwrap();
         let mut report = None;
@@ -669,7 +669,7 @@ async fn cancelled_turn_does_not_treat_echo_or_zero_usage_as_applied() {
         adapter2
             .prompt(
                 &handle2,
-                PromptRequest {
+                PromptRequest { attachments: Vec::new(),
                     turn_id: "turn-cancel".into(),
                     text: "wait".into(),
                     exec_options: exec2,
@@ -716,7 +716,7 @@ async fn prompt_rpc_error_is_unreported_and_hides_provider_text() {
     let error = adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-error".into(),
                 text: SENTINEL.into(),
                 exec_options: options(None, None, Some(SENTINEL)),

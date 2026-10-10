@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  previewMode: false,
   rpc: h.rpc,
   permissionsPolicyGet: async () => ({ defaultMode: 'ask', perAgent: [] }),
   fetchSnapshot: h.fetchSnapshot,
@@ -64,8 +65,8 @@ vi.mock('../blob/BlobCanvas', async () => {
         className: 'blob-canvas',
         role: 'img',
         'aria-label': `${String(props.label ?? 'Agent')} ${String(props.mood ?? 'idle')}`,
-        'data-outfit': String(props.outfit ?? 'auto'),
-        'data-created-at': String(props.createdAt ?? ''),
+        'data-shape': String((props.look as { shape?: string } | null | undefined)?.shape ?? 'mascot'),
+        'data-seed': String((props.look as { seed?: string } | null | undefined)?.seed ?? ''),
         width: typeof props.size === 'number' ? props.size : 52,
         height: typeof props.size === 'number' ? props.size : 52,
       },
@@ -241,28 +242,27 @@ async function press(host: ParentNode, label: string) {
 }
 
 describe('companion drag and usage labels', () => {
-  it('passes the selected blob outfit and creation date to the chat state and companion', async () => {
-    const createdAt = '2026-10-04T12:00:00.000Z'
-    const dressedClaude = { ...claude, outfit: 'santa-hat' as const, createdAt }
+  it('passes the selected blob look to the chat state and companion', async () => {
+    const dressedClaude = { ...claude, look: { shape: 'hexagon' as const, seed: 'claude-look' } }
     const emptySession = { ...claudeSession, messages: [], turns: [], tools: [], files: [] }
     const fixture = snapshot({ agents: [dressedClaude, codex], sessions: [emptySession] })
     configure(fixture)
     const main = startApp()
     await main.settle()
     const chatFace = main.host.querySelector<HTMLCanvasElement>('.session-first-state canvas.blob-canvas')
-    expect(chatFace?.getAttribute('data-outfit')).toBe('santa-hat')
-    expect(chatFace?.getAttribute('data-created-at')).toBe(createdAt)
+    expect(chatFace?.getAttribute('data-shape')).toBe('hexagon')
+    expect(chatFace?.getAttribute('data-seed')).toBe('claude-look')
     const detailsFace = main.host.querySelector<HTMLCanvasElement>('.context-head canvas.blob-canvas')
-    expect(detailsFace?.getAttribute('data-outfit')).toBe('santa-hat')
-    expect(detailsFace?.getAttribute('data-created-at')).toBe(createdAt)
+    expect(detailsFace?.getAttribute('data-shape')).toBe('hexagon')
+    expect(detailsFace?.getAttribute('data-seed')).toBe('claude-look')
     main.unmount()
 
     configure(fixture)
     const companion = startApp('?companion=1')
     await companion.settle()
     const companionFace = companion.host.querySelector<HTMLCanvasElement>('.compact-bot canvas.blob-canvas')
-    expect(companionFace?.getAttribute('data-outfit')).toBe('santa-hat')
-    expect(companionFace?.getAttribute('data-created-at')).toBe(createdAt)
+    expect(companionFace?.getAttribute('data-shape')).toBe('hexagon')
+    expect(companionFace?.getAttribute('data-seed')).toBe('claude-look')
   })
 
   it('mounts the main-window companion switch from the hidden native default', async () => {
@@ -303,7 +303,7 @@ describe('companion drag and usage labels', () => {
     await view.settle()
     expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('home')
     expect(resolvesToDrag(view.host.querySelector('.island-card.focus .card-bot canvas.blob-canvas')), 'home face').toBe(true)
-    const pills = [...view.host.querySelectorAll('.pill')]
+    const pills = [...view.host.querySelectorAll('.team-pill')]
     expect(pills.length).toBeGreaterThan(0)
     for (const pill of pills) {
       expect(pill.hasAttribute(DRAG), 'pill').toBe(false)

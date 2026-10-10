@@ -524,7 +524,7 @@ impl AcpAdapter {
         let setup = async {
             let can_load = Self::ensure_initialized(&new).await?;
             let result = if can_load {
-                Self::request(&new, "session/load", json!({"sessionId":prior_id,"cwd":new.cwd.to_string_lossy(),"mcpServers":[]})).await.map_err(|error| match error {
+                Self::request(&new, "session/load", json!({"sessionId":prior_id,"cwd":new.cwd.to_string_lossy(),"mcpServers":exec::acp_mcp_servers(&new.base_options.mcp_servers)})).await.map_err(|error| match error {
                     AdapterError::Protocol(message) if resume_rejected_evidence(&message) => AdapterError::ResumeRejected,
                     other => other,
                 })
@@ -534,7 +534,7 @@ impl AcpAdapter {
             let (provider_id, result, resumed) = match result {
                 Ok(result) => (prior_id, result, true),
                 Err(AdapterError::ResumeRejected | AdapterError::Unsupported(_)) => {
-                    let result = Self::request(&new, "session/new", json!({"cwd":new.cwd.to_string_lossy(),"mcpServers":[]})).await?;
+                    let result = Self::request(&new, "session/new", json!({"cwd":new.cwd.to_string_lossy(),"mcpServers":exec::acp_mcp_servers(&new.base_options.mcp_servers)})).await?;
                     let id = result["sessionId"].as_str().ok_or_else(|| AdapterError::Protocol("session/new returned no sessionId".into()))?.to_owned();
                     (id, result, false)
                 }
@@ -732,34 +732,26 @@ impl AcpAdapter {
                 .await?;
             }
         }
-        if exec::normalize_instructions(&options.instructions).is_some()
-            && c.applied.lock().await.mode.as_deref() != Some(exec::AGENT_NAME)
-        {
-            Self::select(
-                c,
-                provider_session_id,
-                "mode",
-                exec::AGENT_NAME,
-                "mode",
-                exec::ERR_MODE_MISSING,
-                exec::ERR_MODE_REJECTED,
-                turn_id,
-            )
-            .await?;
-        } else if exec::normalize_instructions(&options.instructions).is_none()
-            && c.applied.lock().await.mode.as_deref() == Some(exec::AGENT_NAME)
-        {
+        let applied_mode = c.applied.lock().await.mode.clone();
+        let wanted_mode = if options.plan_mode {
+            Some(exec::PLAN_MODE.to_owned())
+        } else if exec::normalize_instructions(&options.instructions).is_some() {
+            Some(exec::AGENT_NAME.to_owned())
+        } else if matches!(applied_mode.as_deref(), Some(mode) if mode == exec::AGENT_NAME || mode == exec::PLAN_MODE) {
             let default_mode = c.default_mode.lock().await.clone();
             let Some(default_mode) = default_mode else {
                 Self::fail_setting(c, turn_id, "instructions", json!(false), exec::ERR_MODE_MISSING).await;
                 return Err(AdapterError::Protocol(exec::ERR_MODE_MISSING.into()));
             };
+            Some(default_mode)
+        } else { None };
+        if let Some(mode) = wanted_mode.filter(|mode| applied_mode.as_deref() != Some(mode.as_str())) {
             Self::select(
                 c,
                 provider_session_id,
                 "mode",
-                &default_mode,
-                "instructions",
+                &mode,
+                if options.plan_mode { "mode" } else { "instructions" },
                 exec::ERR_MODE_MISSING,
                 exec::ERR_MODE_REJECTED,
                 turn_id,
@@ -960,7 +952,7 @@ impl AgentAdapter for AcpAdapter {
             let result = Self::request(
                 &c,
                 "session/new",
-                json!({"cwd": req.project_path, "mcpServers": []}),
+                json!({"cwd": req.project_path, "mcpServers": exec::acp_mcp_servers(&req.exec_options.mcp_servers)}),
             )
             .await?;
             let provider_id = result["sessionId"]
@@ -1027,7 +1019,7 @@ impl AgentAdapter for AcpAdapter {
             let result = Self::request(
                 &c,
                 "session/load",
-                json!({"sessionId": req.provider_session_id, "cwd": req.project_path, "mcpServers": []}),
+                json!({"sessionId": req.provider_session_id, "cwd": req.project_path, "mcpServers": exec::acp_mcp_servers(&req.exec_options.mcp_servers)}),
             )
             .await
             .map_err(|error| match error {
@@ -1067,6 +1059,9 @@ impl AgentAdapter for AcpAdapter {
     }
 
     async fn prompt(&self, handle: &SessionHandle, req: PromptRequest) -> Result<(), AdapterError> {
+        if !req.attachments.is_empty() {
+            return Err(AdapterError::Unsupported("This runtime does not accept image attachments.".into()));
+        }
         let mut c = self
             .sessions
             .lock()

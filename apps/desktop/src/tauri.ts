@@ -14,10 +14,18 @@ export { parseAutoResolved, parseBypassActive, parsePermissionsPolicy } from './
 export type { AutoResolvedAction, BypassNotice, PermissionsPolicy } from './approvalContract'
 
 export const inDesktop = isTauri()
+/** True only in the browser preview build, which replaces this module with fixtures. */
+export const previewMode = false
 
 export async function rpc<T>(method: string, params: JsonRecord = {}): Promise<T> {
   if (!inDesktop) throw new Error('The local Bloblex daemon is available only in the desktop app.')
   return invoke<T>('daemon_rpc', { method, params })
+}
+
+/** Saves image bytes where the daemon can read them and returns the path. */
+export async function stagePromptAttachment(bytes: Uint8Array): Promise<string> {
+  if (!inDesktop) throw new Error('Attachments are available only in the desktop app.')
+  return invoke<string>('stage_prompt_attachment', bytes)
 }
 
 export async function openProjectFolder(): Promise<string | null> {

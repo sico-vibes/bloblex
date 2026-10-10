@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import type { JsonRecord } from '../types'
 import { outlineTickInfluence, stepOutlineSpring, stepOutlineCardSpring } from './meterMotion'
 
@@ -96,6 +96,7 @@ export function ConversationOutline({ items, sessionId }: { items: ConversationO
   const dragPointer = useRef<number | null>(null)
   const previousSessionId = useRef(sessionId)
   const cardRef=useRef<HTMLSpanElement>(null)
+  const cardInnerRef=useRef<HTMLSpanElement>(null)
   const cardMotion=useRef({y:18,yVelocity:0,targetY:18,height:0,heightVelocity:0,targetHeight:0,last:0,frame:0})
   const cardRunner=useRef<()=>void>(()=>undefined)
   const closeTimer=useRef<number|null>(null)
@@ -139,7 +140,6 @@ export function ConversationOutline({ items, sessionId }: { items: ConversationO
   const activeItem = items[active]
   const activeAssistantName = activeItem?.assistantRole ?? (activeItem?.role !== 'You' ? activeItem?.role : 'Assistant')
   const assistantName = selected?.assistantRole ?? (selected?.role !== 'You' ? selected?.role : 'Assistant')
-  const activePercent = items.length > 1 ? active / (items.length - 1) * 100 : 0
 
   const startCardMotion=()=>{
     const motion=cardMotion.current
@@ -163,11 +163,11 @@ export function ConversationOutline({ items, sessionId }: { items: ConversationO
     if(show){
       setCardShown(true)
       const trackHeight=track?.clientHeight??0
-      const measured=cardRef.current?.scrollHeight??104
-      const height=Math.min(Math.max(72,measured),Math.max(72,trackHeight-36))
+      const measured=cardInnerRef.current?.offsetHeight??104
+      const height=Math.max(52,measured)
       const center=items.length>1?index/Math.max(1,items.length-1)*trackHeight:trackHeight/2
       motion.targetHeight=height
-      motion.targetY=Math.max(18,Math.min(Math.max(18,trackHeight-height-18),center-height/2))
+      motion.targetY=center-height/2
       if(!cardLayout.height&&motion.height===0){motion.y=motion.targetY;motion.height=height;setCardLayout({y:motion.y,height})}
     }else motion.targetHeight=0
     cardRunner.current()
@@ -178,8 +178,8 @@ export function ConversationOutline({ items, sessionId }: { items: ConversationO
   }
   useLayoutEffect(()=>{
     if(previewOpen){
-      const measured=cardRef.current?.scrollHeight??0
-      if(measured>0){const m=cardMotion.current,trackHeight=trackRef.current?.clientHeight??0;m.targetHeight=Math.min(Math.max(72,measured),Math.max(72,trackHeight-36));const center=items.length>1?(floatIndex??previewIndex)/Math.max(1,items.length-1)*trackHeight:trackHeight/2;m.targetY=Math.max(18,Math.min(Math.max(18,trackHeight-m.targetHeight-18),center-m.targetHeight/2));cardRunner.current()}
+      const measured=cardInnerRef.current?.offsetHeight??0
+      if(measured>0){const m=cardMotion.current,trackHeight=trackRef.current?.clientHeight??0;m.targetHeight=Math.max(52,measured);const center=items.length>1?(floatIndex??previewIndex)/Math.max(1,items.length-1)*trackHeight:trackHeight/2;m.targetY=center-m.targetHeight/2;cardRunner.current()}
     }
   },[previewOpen,cardShown,previewIndex,floatIndex,selected?.userText,selected?.assistantText])
   useEffect(()=>()=>{if(cardMotion.current.frame)cancelAnimationFrame(cardMotion.current.frame);if(closeTimer.current!==null)window.clearTimeout(closeTimer.current)},[])
@@ -258,7 +258,7 @@ export function ConversationOutline({ items, sessionId }: { items: ConversationO
 
   if (items.length < 2) return null
   const sampledInfluence = (position:number) => tickInfluence[position] ?? 0
-  return <nav className="conversation-outline" aria-label="Conversation message outline" onPointerEnter={() => { if(closeTimer.current!==null)window.clearTimeout(closeTimer.current);closeTimer.current=null;setPreviewOpen(true);setPinned(false);setCardTarget(true,previewIndex) }} onPointerLeave={(event) => { setHovered(null);setFloatIndex(null);if(event.pointerType==='touch'||dragging||pinned||document.activeElement===trackRef.current)return;scheduleClose(80) }}>
+  return <nav className="conversation-outline" aria-label="Conversation message outline" style={{ '--outline-count': Math.max(1, sampleCount - 1) } as CSSProperties} onPointerEnter={() => { if(closeTimer.current!==null)window.clearTimeout(closeTimer.current);closeTimer.current=null;setPreviewOpen(true);setPinned(false);setCardTarget(true,previewIndex) }} onPointerLeave={(event) => { setHovered(null);setFloatIndex(null);if(event.pointerType==='touch'||dragging||pinned||document.activeElement===trackRef.current)return;scheduleClose(80) }}>
     <div ref={trackRef} className="conversation-outline-track" role="slider" aria-orientation="vertical" aria-label="Conversation message position" aria-valuemin={1} aria-valuemax={items.length} aria-valuenow={active + 1} aria-valuetext={`Message ${active + 1} of ${items.length}${activeItem?.userText ? ` · You: ${activeItem.userText}` : ''}${activeItem?.assistantText ? ` · ${activeAssistantName}: ${activeItem.assistantText}` : ''}${!activeItem?.userText && !activeItem?.assistantText ? ` · ${activeItem?.role ?? 'Message'} preview unavailable` : ''}`} aria-describedby={previewOpen && selected ? previewId : undefined} tabIndex={0} onFocus={() => { setPreviewOpen(true); setHovered(null);setCardTarget(true,activeRef.current) }} onBlur={() => { if (!pinned && dragPointer.current === null) {setPreviewOpen(false);setCardTarget(false,activeRef.current)} }} onKeyDown={onKeyDown} onPointerMove={(event) => {
       const {index,floating} = indexAtPointer(event)
       setHovered(index);setFloatIndex(floating)
@@ -274,13 +274,10 @@ export function ConversationOutline({ items, sessionId }: { items: ConversationO
       setPreviewOpen(true);setCardTarget(true,floating)
       navigate(index, true)
     }} onPointerUp={(event) => { if (dragPointer.current !== event.pointerId) return;dragPointer.current=null;setDragging(false);if(event.pointerType==='touch')scheduleClose(1400);else if(!pinned&&document.activeElement!==trackRef.current)scheduleClose(80) }} onPointerCancel={() => { dragPointer.current = null; setDragging(false) }} onLostPointerCapture={() => { dragPointer.current = null; setDragging(false) }}>
-      <span className="conversation-outline-line" aria-hidden="true" />
-      {ticks.map((index,position) => {const influence=sampledInfluence(position);return <span key={items[index].anchor} className={`conversation-outline-tick ${index === active ? 'active' : ''} ${index === hovered ? 'hovered' : ''}`} style={{ top: `${index / Math.max(1, items.length - 1) * 100}%`, transform: `translateY(-50%) scaleX(${.5+1.75*influence})`, opacity:.19+.78*influence }} aria-hidden="true"/>})}
-      <span className="conversation-outline-thumb" aria-hidden="true" style={{ top: `${activePercent}%` }} />
+      {ticks.map((index,position) => {const influence=sampledInfluence(position);return <span key={items[index].anchor} className={`conversation-outline-tick ${index === active ? 'active' : ''} ${index === hovered ? 'hovered' : ''}`} style={{ top: `${index / Math.max(1, items.length - 1) * 100}%`, transform: `translateY(-50%) scaleX(${.36+.64*influence})`, opacity:.24+.72*influence }} aria-hidden="true"/>})}
       {cardShown && selected && <span ref={cardRef} id={previewId} className="conversation-outline-preview" role="tooltip" style={{ top:`${cardLayout.y}px`,height:`${cardLayout.height}px` }}>
-        {selected.userText && <span><b>You</b>{selected.userText}</span>}
-        {selected.assistantText && <span><b>{assistantName}</b>{selected.assistantText}</span>}
-        {!selected.userText && !selected.assistantText && <span><b>{selected.role}</b>Message preview unavailable</span>}
+        <span ref={cardInnerRef} className="conversation-outline-preview-inner"><span className="conversation-outline-preview-title">{selected.userText ?? (selected.role === 'You' ? 'You' : assistantName)}</span>
+        {selected.assistantText ? <span className="conversation-outline-preview-body"><b>{assistantName}</b> {selected.assistantText}</span> : !selected.userText && <span className="conversation-outline-preview-body">Message preview unavailable</span>}</span>
       </span>}
     </div>
   </nav>

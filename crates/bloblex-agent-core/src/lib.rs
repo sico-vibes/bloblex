@@ -719,11 +719,57 @@ pub struct ExecOptions {
     pub extra_args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub max_concurrency: u32,
+    /// Read-only planning turns: the agent proposes a plan instead of acting.
+    #[serde(default)]
+    pub plan_mode: bool,
+    /// App-owned MCP servers attached to the provider session (Bloblex team tools).
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerSpec>,
 }
 impl Default for ExecOptions {
     fn default() -> Self {
-        Self { approval_mode: ApprovalMode::Ask, model: None, thinking: None, service_tier: None, instructions: None, extra_args: vec![], env: BTreeMap::new(), max_concurrency: 1 }
+        Self { approval_mode: ApprovalMode::Ask, model: None, thinking: None, service_tier: None, instructions: None, extra_args: vec![], env: BTreeMap::new(), max_concurrency: 1, plan_mode: false, mcp_servers: vec![] }
     }
+}
+
+/// A stdio MCP server the provider CLI launches. `env` carries a per-session
+/// capability, so Debug output never prints its values.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerSpec {
+    pub name: String,
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+}
+impl std::fmt::Debug for McpServerSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServerSpec").field("name", &self.name).field("command", &self.command).field("args", &self.args).field("env_keys", &self.env.keys().collect::<Vec<_>>()).finish()
+    }
+}
+
+/// One question an agent asks the user mid-turn, normalized across providers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserQuestion {
+    /// Provider key for the answer (Codex question id; Claude question text).
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub options: Vec<UserQuestionOption>,
+    #[serde(default)]
+    pub multi_select: bool,
+    #[serde(default = "default_true")]
+    pub allow_other: bool,
+}
+fn default_true() -> bool { true }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserQuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
 }
 
 /// A normalized provider catalog. `fallback` catalogs are suggestions only and
@@ -767,7 +813,7 @@ pub struct ModelInfo {
     pub availability: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceTier {
     pub id: String,
@@ -856,6 +902,20 @@ pub struct PromptRequest {
     pub text: String,
     #[serde(default)]
     pub exec_options: ExecOptions,
+    /// Image files validated by the daemon before delivery. Adapters that do
+    /// not accept images must reject a non-empty list instead of dropping it.
+    #[serde(default)]
+    pub attachments: Vec<PromptAttachment>,
+}
+
+/// A local image attached to a prompt. The daemon has already checked the
+/// file signature, size and media type; adapters read it at delivery time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptAttachment {
+    pub path: PathBuf,
+    pub name: String,
+    pub media_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -926,6 +986,10 @@ pub enum AgentEvent {
     },
     /// Provider has evaluated execution settings; values are normalized evidence.
     ExecApplied { turn_id: String, outcomes: BTreeMap<String, SettingOutcome> },
+    /// The agent asks the user structured questions and waits for answers.
+    QuestionRequested { provider_request_id: String, title: String, questions: Vec<UserQuestion> },
+    /// A plan proposed while in plan mode; the turn ends without acting.
+    PlanProposed { markdown: String },
     /// Normalized usage with nullable buckets; emitted only for valid provider reports.
     UsageReport { turn_id: String, report: UsageReport },
     TurnCompleted,
@@ -992,6 +1056,11 @@ pub trait AgentAdapter: Send + Sync {
         provider_request_id: &str,
         choice: &str,
     ) -> Result<(), AdapterError>;
+    /// Answers a `QuestionRequested`; `None` dismisses it. Keys are question ids,
+    /// values the chosen labels or the user's own text.
+    async fn answer_question(&self, _provider_request_id: &str, _answers: Option<BTreeMap<String, Vec<String>>>) -> Result<(), AdapterError> {
+        Err(AdapterError::Unsupported("This runtime does not ask structured questions.".into()))
+    }
     async fn close_session(&self, handle: &SessionHandle) -> Result<(), AdapterError>;
     /// Stops adapter-owned provider processes during daemon shutdown.
     async fn shutdown(&self) {}

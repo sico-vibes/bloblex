@@ -1,5 +1,4 @@
 // @vitest-environment happy-dom
-import { selectValue } from './testSelect'
 import { StrictMode, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,6 +17,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  previewMode: false,
   rpc: h.rpc,
   permissionsPolicyGet: async () => ({ defaultMode: 'ask', perAgent: [] }),
   fetchSnapshot: h.fetchSnapshot,
@@ -222,13 +222,12 @@ describe('App mounted lifecycle', () => {
     configure(snapshot(), { activeSession: 'session-b', activeRuntime: 'runtime-b' })
     const view = startApp()
     await view.settle()
-    expect(selectValue(view.host, 'Current conversation')).toBe('session-b')
     expect(view.host.querySelector('.context-pane')?.textContent).toContain('Beta task')
 
     const handler = h.daemonEventHandlers.at(-1)!
     act(() => handler({ sequence: 21, type: 'session.changed', payload: { session: { ...sessionA, title: 'Alpha updated', state: 'working' } } }))
-    expect(selectValue(view.host, 'Current conversation')).toBe('session-b')
     expect(view.host.querySelector('.context-pane')?.textContent).toContain('Beta task')
+    expect(view.host.querySelector('.context-pane')?.textContent).not.toContain('Alpha updated')
     expect(h.setActiveSession.mock.calls.some(([id]) => id === 'session-a')).toBe(false)
   })
 
@@ -241,7 +240,8 @@ describe('App mounted lifecycle', () => {
     expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('home')
     expect(view.host.querySelector('.companion-collapse')?.hasAttribute('disabled')).toBe(true)
     expect(view.host.textContent).toContain('Run shell command')
-    expect(h.playCompanionCue).toHaveBeenCalledExactlyOnceWith('approval')
+    // The island also opens with its own cue; the approval cue plays exactly once.
+    expect(h.playCompanionCue.mock.calls.filter(([cue]) => cue === 'approval')).toHaveLength(1)
 
     await act(async () => { await vi.advanceTimersByTimeAsync(5001); await settleMicrotasks() })
     expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('petit')
@@ -346,7 +346,7 @@ describe('App mounted lifecycle', () => {
     expect(active).not.toBeNull()
     const completionEvent = { sequence: 21, type: 'session.changed', payload: { session: { ...sessionA, state: 'completed' } } }
     act(() => h.daemonEventHandlers.at(-1)!(completionEvent))
-    expect(h.playCompanionCue).toHaveBeenCalledExactlyOnceWith('completion')
+    expect(h.playCompanionCue.mock.calls.filter(([cue]) => cue === 'finish')).toHaveLength(1)
   })
 
   it('does not unlock audio while hydrating the main Settings surface', async () => {

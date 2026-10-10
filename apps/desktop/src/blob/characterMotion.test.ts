@@ -60,24 +60,22 @@ describe('Bloblex character engine', () => {
     expect(engine.eyeOverride).toBeNull()
   })
 
-  it('fades outfit entry and exit with reduced-motion snapping', () => {
+  it('swaps the silhouette with a squash, and snaps under reduced motion', () => {
     const engine = new BlobEngine()
-    engine.setOutfit('beanie')
-    expect(engine.outfit).toBe('beanie')
-    expect(engine.outfitPresence).toBe(0)
-    step(engine, 175)
-    expect(engine.outfitPresence).toBeGreaterThan(0.4)
-    expect(engine.outfitPresence).toBeLessThan(0.7)
-    step(engine, 200)
-    expect(engine.outfitPresence).toBe(1)
-    expect(engine.busy).toBe(false)
-    engine.setOutfit('none')
-    step(engine, 200)
-    expect(engine.outfit).toBe('none')
-    expect(engine.outfitPresence).toBe(0)
+    expect(engine.form.shape).toBe('round')
+    engine.setLook({ shape: 'sun', seed: 'a' })
+    expect(engine.form.shape).toBe('sun')
+    step(engine, 60)
+    expect(engine.sy).toBeLessThan(0.95)
+    step(engine, 600)
+    expect(engine.sy).toBeCloseTo(1, 2)
+    const form = engine.form
+    engine.setLook({ shape: 'sun', seed: 'a' })
+    expect(engine.form).toBe(form)
     engine.reducedMotion = true
-    engine.setOutfit('pumpkin')
-    expect(engine.outfitPresence).toBe(1)
+    engine.setLook({ shape: 'triangle', seed: 'a' })
+    expect(engine.form.shape).toBe('triangle')
+    expect(engine.busy).toBe(false)
   })
 
   it('rolls once and sparks on completion, but not when mounted already finished', () => {

@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  previewMode: false,
   rpc: h.rpc,
   permissionsPolicyGet: h.permissionsPolicyGet,
   setCompanionVisibility: vi.fn(),

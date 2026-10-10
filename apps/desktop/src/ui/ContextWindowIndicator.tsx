@@ -1,11 +1,21 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { ArrowUpRight } from 'lucide-react'
+import { quotaRows, quotaTone, resetIn } from './quotaModel'
 
-export function ContextWindowIndicator({ used, size }: { used?: number | null; size?: number | null }) {
+export function ContextWindowIndicator({ used, size, quota, onOpenUsage }: {
+  used?: number | null
+  size?: number | null
+  /** This conversation's provider quota snapshot, when the daemon has one. */
+  quota?: Record<string, unknown> | null
+  onOpenUsage?: () => void
+}) {
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
   const [pinned, setPinned] = useState(false)
   const [dismissed, setDismissed] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const hoverTimer = useRef<number | null>(null)
   const detailsId = useId()
   const open = pinned || hovered || (focused && !dismissed)
   const hasUsed = typeof used === 'number' && Number.isFinite(used) && used >= 0
@@ -27,6 +37,7 @@ export function ContextWindowIndicator({ used, size }: { used?: number | null; s
       : hasSize
         ? `${contextCompactCount(size)} capacity · usage unavailable`
         : 'Context usage unavailable'
+  const provider = quota ? quotaRows([quota])[0] ?? null : null
 
   useEffect(() => {
     if (!open) return
@@ -52,24 +63,36 @@ export function ContextWindowIndicator({ used, size }: { used?: number | null; s
       document.removeEventListener('keydown', onKeyDown, true)
     }
   }, [open])
+  useEffect(() => () => { if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current) }, [])
 
-  const ring = 2 * Math.PI * 8
+  const ring = 2 * Math.PI * 7
   const clampedPercent = percentage === null ? null : Math.max(0, Math.min(100, percentage))
-  return <div ref={rootRef} className="context-window-wrap" onMouseEnter={() => { setHovered(true); setDismissed(false) }} onMouseLeave={() => setHovered(false)}>
-    <button type="button" className={`context-window-indicator ${percentage === null ? 'unknown' : ''}`} aria-label={label} aria-expanded={open} aria-controls={open ? detailsId : undefined} onClick={() => { setDismissed(false); setPinned((value) => !value) }} onFocus={() => { setFocused(true); setDismissed(false) }} onBlur={(event) => { if (!rootRef.current?.contains(event.relatedTarget as Node | null)) { setFocused(false); setPinned(false); setDismissed(false) } }}>
-      <svg viewBox="0 0 20 20" aria-hidden="true" className="context-window-ring">
-        <circle className="context-window-ring-track" cx="10" cy="10" r="8" />
-        {clampedPercent !== null && <circle className="context-window-ring-value" cx="10" cy="10" r="8" strokeDasharray={`${ring * clampedPercent / 100} ${ring * (1 - clampedPercent / 100)}`} />}
-        {percentage === null && <circle className="context-window-ring-unknown" cx="10" cy="10" r="2" />}
+  const tone = clampedPercent === null ? 'unknown' : quotaTone(clampedPercent)
+  return <div ref={rootRef} className="context-window-wrap" onMouseEnter={() => { if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current); hoverTimer.current = null; setHovered(true); setDismissed(false) }} onMouseLeave={() => { if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current); hoverTimer.current = window.setTimeout(() => { hoverTimer.current = null; setHovered(false) }, 160) }}>
+    <button ref={buttonRef} type="button" className={`context-window-indicator tone-${tone}`} aria-label={label} aria-expanded={open} aria-controls={open ? detailsId : undefined} onClick={() => { setDismissed(false); setPinned((value) => !value) }} onFocus={() => { setFocused(true); setDismissed(false) }} onBlur={(event) => { if (!rootRef.current?.contains(event.relatedTarget as Node | null)) { setFocused(false); setPinned(false); setDismissed(false) } }}>
+      <svg viewBox="0 0 18 18" aria-hidden="true" className="context-window-ring">
+        <circle className="context-window-ring-track" cx="9" cy="9" r="7" />
+        {clampedPercent !== null && clampedPercent > 0 && <circle className="context-window-ring-value" cx="9" cy="9" r="7" strokeDasharray={`${Math.max(1.2, ring * clampedPercent / 100)} ${ring}`} />}
       </svg>
-      <span className="context-window-center" aria-hidden="true">{percentage === null ? '·' : `${percentage}%`}</span>
       <span className="sr-only">{detail}</span>
       {percentage !== null && <span className="sr-only" role="progressbar" aria-label="Context window used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={clampedPercent!} aria-valuetext={percentDetail}>{percentDetail}</span>}
     </button>
     {open && <div id={detailsId} className="context-window-popover" role="status" aria-live="polite">
-      <strong>Context window</strong>
-      <span>{compactDetail}</span>
-      <span>{percentDetail}</span>
+      <div className="context-popover-row"><strong>Context window</strong><span className="context-popover-value">{hasUsed && hasSize ? `${contextCompactCount(used)} / ${contextCompactCount(size)} (${percentage}%)` : compactDetail}</span></div>
+      <span className="sr-only">{compactDetail}</span>
+      <i className={`context-popover-bar tone-${tone}`} aria-hidden="true"><b style={{ width: `${clampedPercent ?? 0}%` }} /></i>
+      {percentage === null ? <span className="context-popover-note">{percentDetail}</span> : <span className="sr-only">{percentDetail}</span>}
+      {provider && provider.windows.length > 0 && <div className="context-popover-section">
+        <span className="context-popover-section-title">Plan usage limits · {provider.name}{provider.stale && <em> · last reading</em>}</span>
+        {provider.windows.slice(0, 3).map((window) => {
+          const reset = resetIn(window.resetsAt)
+          return <div className="context-popover-limit" key={window.key}>
+            <div className="context-popover-row"><span>{window.label}</span><span className="context-popover-value">{reset && <small>Resets in {reset}</small>}{window.usedPercent}%</span></div>
+            <i className={`context-popover-bar tone-${quotaTone(window.usedPercent)}`} aria-hidden="true"><b style={{ width: `${window.usedPercent}%` }} /></i>
+          </div>
+        })}
+      </div>}
+      {onOpenUsage && <button type="button" className="context-popover-link" onClick={() => { setPinned(false); setHovered(false); onOpenUsage() }}>See usage details<ArrowUpRight size={12} aria-hidden="true" /></button>}
     </div>}
   </div>
 }

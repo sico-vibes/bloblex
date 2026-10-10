@@ -169,7 +169,7 @@ fn new_request(session_id: &str, project_path: PathBuf, exec_options: ExecOption
 
 fn start_prompt(adapter: std::sync::Arc<CodexAdapter>, handle: SessionHandle, turn_id: &'static str, text: &'static str) -> tokio::task::JoinHandle<Result<(), AdapterError>> {
     tokio::spawn(async move {
-        adapter.prompt(&handle, PromptRequest { turn_id: turn_id.into(), text: text.into(), exec_options: opts() }).await
+        adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: turn_id.into(), text: text.into(), exec_options: opts() }).await
     })
 }
 
@@ -186,7 +186,7 @@ async fn exact_start_turn_resume_fields_and_replayed_usage_are_scoped() {
     let first = adapter
         .prompt(
             &h,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "local-1".into(),
                 text: "hello".into(),
                 exec_options: opts(),
@@ -233,7 +233,7 @@ async fn exact_start_turn_resume_fields_and_replayed_usage_are_scoped() {
     adapter
         .prompt(
             &resumed,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "local-2".into(),
                 text: "next".into(),
                 exec_options: ExecOptions {
@@ -377,7 +377,7 @@ async fn resumed_thread_replay_is_filtered_until_the_new_turn_starts() {
     adapter
         .prompt(
             &resumed,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "fresh-turn".into(),
                 text: "new prompt".into(),
                 exec_options: ExecOptions::default(),
@@ -466,7 +466,7 @@ async fn context_overflow_is_reported_as_a_typed_adapter_event() {
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "context-turn".into(),
                 text: "large prompt".into(),
                 exec_options: ExecOptions::default(),
@@ -526,7 +526,7 @@ async fn failed_turn_emits_only_nullable_unreported_usage() {
     adapter
         .prompt(
             &h,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "local-fail".into(),
                 text: "fail".into(),
                 exec_options: opts(),
@@ -578,7 +578,7 @@ async fn turn_start_rpc_rejection_is_reported_without_retry() {
     let err = adapter
         .prompt(
             &h,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "local-reject".into(),
                 text: "do not retry".into(),
                 exec_options: opts(),
@@ -655,7 +655,7 @@ async fn standard_speed_uses_default_only_for_the_single_turn() {
     adapter
         .prompt(
             &h,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "standard-turn".into(),
                 text: "one turn".into(),
                 exec_options: options,
@@ -806,7 +806,7 @@ async fn idle_join_race_never_kills_a_new_codex_attachment() {
             new_request(&format!("idle-race-{index}"), cwd.clone(), opts()),
             tx,
         ).await.unwrap();
-        adapter.prompt(&handle, PromptRequest {
+        adapter.prompt(&handle, PromptRequest { attachments: Vec::new(),
             turn_id: format!("idle-race-turn-{index}"),
             text: "idle race verification".into(),
             exec_options: opts(),

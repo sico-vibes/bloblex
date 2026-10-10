@@ -9,14 +9,14 @@ import type { ExecutionSendGate } from '../executionContract'
 import { BlobSettings } from './BlobSettings'
 
 const rpc = vi.hoisted(() => vi.fn())
-vi.mock('../tauri', () => ({ inDesktop: true, rpc }))
+vi.mock('../tauri', () => ({ inDesktop: true, previewMode: false, rpc }))
 
 const runtime = (provider: string): Runtime => ({ id: 'rt-1', provider, status: 'online' })
 
 function draft(partial: Partial<AgentDraft> = {}): AgentDraft {
   return {
-    name: 'Claude', description: '', instructions: 'Be brief', color: 'mint', outfit: 'auto', runtimeId: 'rt-1', defaultProject: null,
-    model: null, thinking: null, serviceTier: null, approvalMode: null, ...partial,
+    name: 'Claude', description: '', instructions: 'Be brief', color: 'mint', look: null, runtimeId: 'rt-1', defaultProject: null,
+    model: null, thinking: null, serviceTier: null, approvalMode: null, role: '', projectId: null, leader: false, ...partial,
   }
 }
 

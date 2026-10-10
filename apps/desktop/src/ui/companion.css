@@ -95,7 +95,7 @@
 
 /* Overview: focused agent on the left, other agents as pills on the right. */
 .island-overview { height: 100%; display: flex; gap: 10px; }
-.island-overview > .focus { flex: 0 0 322px; width: 322px; }
+.island-overview > .focus { flex: 0 0 280px; width: 280px; }
 .island-overview > .pills-card { flex: 1 1 auto; }
 .island-card.focus .card-stack { padding: 10px 26px 10px 108px; justify-content: flex-start; gap: 4px; }
 .who { min-width: 0; display: flex; align-items: center; gap: 6px; }
@@ -173,3 +173,51 @@
 .switch.on::after { transform: translateX(14px); }
 
 /* Welcome stage: 640×150 greeting canvas. */
+
+/* ── Mini team overview (mirrors the main sidebar: projects, roles, leader) ── */
+.island-overview > .team-card { flex: 1 1 auto; min-width: 0; }
+.team-card { padding: 7px 4px 7px 10px; }
+.team-card-scroll { height: 100%; padding-right: 4px; display: grid; align-content: safe center; gap: 5px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--companion-alpha-18) transparent; }
+.team-card-group { min-width: 0; display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: start; gap: 4px; }
+.team-card-group:only-child { grid-template-columns: minmax(0, 1fr); }
+.team-card-label { padding-top: 5px; overflow: hidden; color: var(--c-dim-3); font: 600 9.5px var(--c-font); letter-spacing: .06em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.team-card-pills { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.team-pill { --pill: var(--companion-white); position: relative; height: 24px; max-width: 96px; padding: 0 8px 0 1px; display: inline-flex; align-items: center; gap: 3px; color: var(--c-dim-2); border: 1px solid transparent; border-radius: 999px; background: var(--companion-alpha-05); font: 600 var(--fs-2xs) var(--c-font); transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease; }
+.team-pill:hover { color: var(--c-ink); background: color-mix(in srgb, var(--pill) 14%, transparent); }
+.team-pill.on { color: var(--c-ink); border-color: color-mix(in srgb, var(--pill) 50%, transparent); background: color-mix(in srgb, var(--pill) 16%, transparent); }
+.team-pill:active { transform: scale(.96); }
+.team-pill.state-offline { opacity: .55; }
+.team-pill-face { position: relative; display: grid; place-items: center; }
+.team-pill-face .blob-canvas { pointer-events: none; }
+.team-pill-leader { position: absolute; right: -3px; bottom: -2px; width: 11px; height: 11px; display: grid; place-items: center; color: #fff; border-radius: 50%; background: linear-gradient(160deg, #ffad42, #f27a1a); font-size: 7px; font-style: normal; line-height: 1; box-shadow: 0 0 0 1.5px var(--c-card); }
+.team-pill-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-pill-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--meter-blue, #6aa8ff); }
+.team-pill.state-working .team-pill-dot { animation: team-dot 1.2s ease-in-out infinite; }
+.team-pill.state-waiting .team-pill-dot { background: var(--companion-status-alert, #f5a524); }
+@keyframes team-dot { 50% { opacity: .35; transform: scale(.75); } }
+
+.companion-role { flex: 0 0 auto; max-width: 96px; padding: 0 6px; overflow: hidden; color: var(--c-dim-2); border: 1px solid var(--companion-alpha-08); border-radius: 6px; font: 500 10px/16px var(--c-font); text-overflow: ellipsis; white-space: nowrap; }
+.companion-leader { flex: 0 0 auto; width: 14px; height: 14px; display: inline-grid; place-items: center; color: #fff; border-radius: 50%; background: linear-gradient(160deg, #ffad42, #f27a1a); font-size: 8px; line-height: 1; }
+.team-glance { padding: 0; display: inline-flex; align-items: center; gap: 5px; color: var(--c-dim-2); border: 0; background: transparent; text-align: left; }
+.team-glance:hover { color: var(--c-ink); }
+.team-glance .blob-canvas { flex: 0 0 auto; pointer-events: none; }
+
+.companion-mention { display: inline-flex; align-items: center; gap: 2px; color: color-mix(in srgb, var(--mention) 82%, var(--c-ink)); font-weight: 600; vertical-align: -2px; white-space: nowrap; }
+.companion-mention .blob-canvas { pointer-events: none; }
+.companion-team-chip-row { display: flex; justify-content: center; }
+.companion-team-chip { --chip-accent: var(--c-ink); height: 20px; padding: 0 6px; display: inline-flex; align-items: center; gap: 4px; color: var(--c-dim-3); border: 0; border-radius: 6px; background: transparent; font: 500 var(--fs-2xs) var(--c-font); }
+.companion-team-chip b { color: var(--chip-accent); font-weight: 600; }
+.companion-team-chip:hover { color: var(--c-dim-2); background: var(--companion-alpha-05); }
+.companion-team-chip.failed { color: var(--companion-status-error); }
+.companion-team-chip .blob-canvas { pointer-events: none; }
+.companion-plan { padding: 6px 8px; display: flex; align-items: flex-start; gap: 6px; color: var(--c-dim-2); border: 1px solid var(--companion-alpha-08); border-radius: 10px; font: 400 var(--fs-2xs)/1.45 var(--c-font); }
+.companion-plan span { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.companion-plan b { color: var(--c-ink); font-weight: 600; }
+.companion-plan svg { flex: 0 0 auto; margin-top: 2px; }
+.companion-activity-row.team { width: 100%; color: inherit; border: 0; text-align: left; }
+.companion-activity-row.team:hover { background: var(--companion-alpha-07); }
+.companion-side-faces { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; color: var(--c-dim-3); }
+.companion-side-faces .blob-canvas { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .team-pill, .team-pill.state-working .team-pill-dot { transition: none; animation: none; } }
+.island-card .question-card { width: 100%; margin: 0; padding: 10px 12px; gap: 8px; border-radius: 14px; box-shadow: none; font-size: var(--fs-xs); }
+.island-card:has(.question-card) .card-stack { padding-top: 8px; padding-bottom: 8px; justify-content: flex-start; overflow-y: auto; }

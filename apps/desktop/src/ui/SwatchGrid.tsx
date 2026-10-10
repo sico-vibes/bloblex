@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Droplet } from 'lucide-react'
 import { AGENT_SWATCHES, parseCustomHex, swatchForColor, swatchLabel } from './agentColor'
 import { CLIENT_MESSAGES } from './agentForm'
 
@@ -7,7 +8,18 @@ export function SwatchGrid({ value, onChange, disabled = false }: { value: strin
   const buttons = useRef<Array<HTMLButtonElement | null>>([])
   const [text, setText] = useState('')
   const [invalid, setInvalid] = useState(false)
+  const [customOpen, setCustomOpen] = useState(false)
+  const customRef = useRef<HTMLDivElement>(null)
   const selected = swatchForColor(value)
+  const customHex = selected ? null : parseCustomHex(value)
+
+  useEffect(() => {
+    if (!customOpen) return
+    inputRef.current?.focus()
+    const outside = (event: PointerEvent) => { if (!customRef.current?.contains(event.target as Node)) setCustomOpen(false) }
+    document.addEventListener('pointerdown', outside)
+    return () => document.removeEventListener('pointerdown', outside)
+  }, [customOpen])
 
   useEffect(() => {
     const parsedText = parseCustomHex(text)
@@ -79,11 +91,34 @@ export function SwatchGrid({ value, onChange, disabled = false }: { value: strin
           <span className="swatch-chip" style={{ background: swatch.hex }} />
         </button>
       })}
+      <div className="swatch-custom-anchor" ref={customRef}>
+        <button
+          type="button"
+          className={`swatch swatch-custom-button${customHex ? ' has-colour' : ''}`}
+          title={customHex ? `Custom ${customHex}` : 'Custom colour'}
+          aria-label={customHex ? `Custom colour ${customHex}, selected` : 'Choose a custom colour'}
+          aria-pressed={!!customHex}
+          aria-expanded={customOpen}
+          disabled={disabled}
+          onClick={() => setCustomOpen((open) => !open)}
+        >
+          <span className="swatch-chip" style={customHex ? { background: customHex } : undefined}><Droplet size={13} aria-hidden="true" /></span>
+        </button>
+        {customOpen && <div className="swatch-custom-popover" role="dialog" aria-label="Custom colour" onKeyDown={(event) => { if (event.key === 'Escape' || event.key === 'Enter') { event.preventDefault(); setCustomOpen(false) } }}>
+          <div className="swatch-custom-field">
+            <label className="swatch-custom-preview" title="Open the colour picker" style={{ background: parseCustomHex(text) ?? customHex ?? undefined }}>
+              <span className="sr-only">Open colour picker</span>
+              <input type="color" tabIndex={-1} disabled={disabled} value={(parseCustomHex(text) ?? customHex ?? '#888888').toLowerCase()} onChange={(event) => edit(event.target.value)} />
+            </label>
+            <label className="swatch-custom-input">
+              <span className="sr-only">Custom colour</span>
+              <span className="swatch-custom-hash" aria-hidden="true">#</span>
+              <input ref={inputRef} value={text.replace(/^#/, '')} placeholder="RRGGBB" maxLength={7} disabled={disabled} aria-invalid={invalid} aria-describedby={invalid ? 'custom-colour-error' : undefined} onChange={(event) => edit(event.target.value)} onBlur={() => { const hex = parseCustomHex(text); if (hex) setText(hex) }} spellCheck={false} autoCapitalize="off" autoComplete="off" />
+            </label>
+          </div>
+          {invalid && <p id="custom-colour-error" className="blob-error" role="alert">{CLIENT_MESSAGES.color}</p>}
+        </div>}
+      </div>
     </div>
-    <label className="blob-field swatch-custom">
-      <span>Custom colour</span>
-      <input ref={inputRef} value={text} disabled={disabled} aria-invalid={invalid} aria-describedby={invalid ? 'custom-colour-error' : undefined} onChange={(event) => edit(event.target.value)} onBlur={() => { const hex = parseCustomHex(text); if (hex) setText(hex) }} spellCheck={false} autoCapitalize="off" />
-    </label>
-    {invalid && <p id="custom-colour-error" className="blob-error" role="alert">{CLIENT_MESSAGES.color}</p>}
   </div>
 }

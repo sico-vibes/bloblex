@@ -11,6 +11,7 @@ const rpc = vi.hoisted(() => vi.fn())
 const policy = vi.hoisted(() => vi.fn())
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  previewMode: false,
   rpc,
   permissionsPolicyGet: policy,
   setCompanionVisibility: vi.fn(),

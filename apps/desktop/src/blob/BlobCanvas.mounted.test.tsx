@@ -226,13 +226,19 @@ describe('BlobCanvas mounted lifecycle', () => {
     expect(canvas.isConnected).toBe(false)
   })
 
-  it('fits tall hat outfits with a uniform body transform so the body stays circular', () => {
-    const view = mount(<BlobCanvas color="#e67f72" size={100} mood="idle" outfit="witch-hat" />)
+  it('traces the look silhouette and defaults to the round mascot', () => {
+    const sun = mount(<BlobCanvas color="#e67f72" size={100} mood="idle" look={{ shape: 'sun', seed: 'petals' }} />)
     flushFrame(clock)
-    const [scaleX, scaleY] = context.scale.mock.calls[0]
-    expect(scaleX).toBeLessThan(1)
-    expect(scaleY).toBeCloseTo(scaleX)
-    view.unmount()
+    // A sun's petals are circles unioned with its core outline.
+    expect(context.arc.mock.calls.length).toBeGreaterThanOrEqual(6)
+    sun.unmount()
+    context.arc.mockClear()
+    context.lineTo.mockClear()
+    const mascot = mount(<BlobCanvas color="#e67f72" size={100} mood="idle" />)
+    flushFrame(clock + 16)
+    expect(context.arc).not.toHaveBeenCalled()
+    expect(context.lineTo.mock.calls.length).toBeGreaterThan(40)
+    mascot.unmount()
   })
 
   it('renders each local reference stage and preserves approval/offline/error barriers', () => {

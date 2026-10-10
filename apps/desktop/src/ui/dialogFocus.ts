@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef } from 'react'
+import { useCallback, useLayoutEffect, useRef, useEffect, useState } from 'react'
 
 const dialogStack: Array<() => void> = []
 
@@ -57,4 +57,14 @@ export function useDialogAccessibility(onClose: () => void, canClose: () => bool
     }
   }, [])
   return { ref, close }
+}
+
+/** True one frame after mount, so `.blob-dialog-backdrop.is-entered` can transition in. */
+export function useDialogEntered() {
+  const [entered, setEntered] = useState(false)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setEntered(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+  return entered
 }

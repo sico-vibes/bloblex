@@ -1,15 +1,16 @@
-// Bloblex character engine: a spherical body tinted with the agent colour,
-// tall capsule eyes, a ring badge and a state table (idle, online, listening,
-// typing, tool, file stages, offline, budget). Tween/lock system, blink cadence,
-// squash/slap, roll, badge swap, particles, mailbox morph and the yaw/pitch
-// projection of the eyes onto the body. Scheduled actions run inside update()
-// instead of setTimeout, and a reduced-motion mode is supported.
+// Bloblex character engine: a blob body in one of the look silhouettes, tinted
+// with the agent colour, with superellipse eyes, a ring badge and a state table
+// (idle, online, listening, typing, tool, file stages, offline, budget).
+// Tween/lock system, blink cadence, squash/slap, roll, badge swap, particles,
+// mailbox morph and the yaw/pitch turn of the eyes across the face. Scheduled
+// actions run inside update() instead of setTimeout, and a reduced-motion mode
+// is supported.
 
 import { Ease, lerp, type EaseFn } from './engine/core/anim'
-import { bodyColorsForOutfit, drawWardrobe, drawWardrobeBehind, fitOutfitToCanvas, type WardrobeEyeFrame } from './wardrobeDrawing'
-import { resolveOutfit, type Outfit } from './outfit'
 import { BADGE_OFFSET, BADGE_RADIUS } from './blobGeometry'
 export { BADGE_OFFSET } from './blobGeometry'
+import { MASCOT_LOOK, resolveForm, type BlobLook, type FormLayout } from './look'
+import { eyeAnchor, eyePath, formReach, traceForm, turnEye, UNITS_PER_RADIUS } from './look/paint'
 
 export type RGB = readonly [number, number, number]
 
@@ -50,20 +51,21 @@ interface StateCfg {
   dim: number
 }
 
+/** One eye, placed on the face for this frame. Sizes are in pixels. */
+export interface EyeFrame {
+  x: number; y: number; rx: number; ry: number; n: number; rot: number
+  lean: number; fx: number; fy: number; visible: boolean; sd: -1 | 1
+}
+
 interface Particle {
   type: 'heart' | 'star' | 'spark' | 'sweat' | 'z'
   x: number; y: number; vx: number; vy: number
   age: number; life: number; rot: number; size: number
 }
 
-// Capsule eyes measured: 0.24R × 0.56R, ±0.31R
-// apart, centred 0.13R above the middle of the sphere.
-const EYE_W = 0.24
-const EYE_H = 0.56
-const EYE_ARC_H = 0.27
-const EYE_SP = Math.asin(0.31)
-const EYE_P = 0.13
 const INK = 'rgb(14,14,16)'
+const SPINNING_SHAPES = new Set<string>(['boxy', 'hexagon', 'sun', 'triangle'])
+const LIGHT_INK = 'rgb(240,242,246)'
 
 const C = {
   idle: [0.902, 0.914, 0.933] as RGB,
@@ -156,34 +158,6 @@ function starPath(x: CanvasRenderingContext2D, ro: number, ri: number) {
   x.closePath()
 }
 
-/** Ray → rounded-rect boundary intersection, for the mailbox morph. */
-function rrPoint(ca: number, sa: number, W: number, H: number, cr: number) {
-  const eps = 1e-6
-  const kx = ca >= 0 ? 1 : -1
-  const ky = sa >= 0 ? 1 : -1
-  const cx = kx * (W - cr)
-  const cy = ky * (H - cr)
-  const dot = ca * cx + sa * cy
-  const disc = dot * dot - (cx * cx + cy * cy - cr * cr)
-  if (disc >= 0) {
-    const t = dot + Math.sqrt(disc)
-    if (t > eps) {
-      const px = ca * t
-      const py = sa * t
-      if (Math.abs(px) >= W - cr - eps && Math.abs(py) >= H - cr - eps) return { x: px, y: py }
-    }
-  }
-  if (Math.abs(sa) > eps) {
-    const t = (ky * H) / sa
-    if (t > eps && Math.abs(ca * t) <= W - cr + eps) return { x: ca * t, y: ky * H }
-  }
-  if (Math.abs(ca) > eps) {
-    const t = (kx * W) / ca
-    if (t > eps && Math.abs(sa * t) <= H - cr + eps) return { x: kx * W, y: sa * t }
-  }
-  return { x: kx * W, y: ky * H }
-}
-
 const FONT = 'system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif'
 const secondsNow = () => performance.now() / 1000
 
@@ -195,14 +169,8 @@ export class BlobEngine {
   isMini = false
   reducedMotion = false
   bodyColor: RGB = C.idle
-  outfit: Outfit = 'auto'
-  outfitPresence = 1
-  private outfitTransition: 'enter' | 'exit' | null = null
-  private outfitTransitionElapsed = 0
-  private outfitTransitionStart = 1
-  private pendingOutfit: Outfit | null = null
-  private outfitTarget: Outfit = 'auto'
-  createdAt: string | null = null
+  /** The resolved silhouette and face. */
+  form: FormLayout = resolveForm(MASCOT_LOOK)
 
   yaw = 0; pitch = 0; roll = 0; tilt = 0; open = 1
   sx = 1; sy = 1; oy = 0; ox = 0
@@ -224,13 +192,6 @@ export class BlobEngine {
 
   lookX = 0
   lookY = 0
-  hatLagX = 0
-  hatLagY = 0
-  private hatLagVx = 0
-  private hatLagVy = 0
-  private prevOutfitYaw = 0
-  private prevOutfitOy = 0
-  private prevOutfitRoll = 0
 
   private tweens = new Map<PropKey, Tween>()
   private locks = new Set<PropKey>()
@@ -395,35 +356,13 @@ export class BlobEngine {
     this.anim('morph', [[target, durationMs ?? (target > 0.5 ? 550 : 650), Ease.inOut]])
   }
 
-  setOutfit(value: Outfit, animated = true) {
-    if (value === this.outfitTarget) return
-    this.outfitTarget = value
-    if (!animated || this.reducedMotion) {
-      this.outfit = value
-      this.pendingOutfit = null
-      this.outfitPresence = value === 'none' ? 0 : 1
-      this.outfitTransition = null
-      return
-    }
-    if (value === 'none') {
-      this.pendingOutfit = null
-      this.outfitTransitionStart = this.outfitPresence
-      this.outfitTransitionElapsed = 0
-      this.outfitTransition = 'exit'
-      return
-    }
-    if (this.outfit !== 'none' && this.outfit !== 'auto' && this.outfitPresence > 0.01) {
-      this.pendingOutfit = value
-      this.outfitTransitionStart = this.outfitPresence
-      this.outfitTransitionElapsed = 0
-      this.outfitTransition = 'exit'
-    } else {
-      this.outfit = value
-      this.pendingOutfit = null
-      this.outfitPresence = 0
-      this.outfitTransitionElapsed = 0
-      this.outfitTransition = 'enter'
-    }
+  /** Changes the silhouette. A new shape lands with a small squash so the swap reads as the blob's own move. */
+  setLook(look: BlobLook | null | undefined, animated = true) {
+    const next = resolveForm(look)
+    if (next === this.form) return
+    const reshaped = next.shape !== this.form.shape
+    this.form = next
+    if (animated && reshaped && !this.reducedMotion) this.squash()
   }
 
   /** True while anything is still moving or animating on screen. */
@@ -431,13 +370,12 @@ export class BlobEngine {
     if (this.reducedMotion) return this.tweens.size > 0
     const animatedBadge = this.badge && this.badgeS > 0.01 && this.badge.kind === 'dots'
     return (
-      this.tweens.size > 0 || this.jobs.length > 0 || this.particles.length > 0 || !!animatedBadge || this.isChewing || this.outfitTransition !== null ||
+      this.tweens.size > 0 || this.jobs.length > 0 || this.particles.length > 0 || !!animatedBadge || this.isChewing ||
       this.cfg.bounces || this.cfg.scans || this.cfg.breathes || this.cfg.zz || this.cfg.sweat ||
       this.state === 'dizzy' || this.eyeOverride === 'spiral' || this.isMini ||
       Math.abs(this.tgYaw - this.yaw) > 0.002 || Math.abs(this.tgPitch - this.pitch) > 0.002 ||
       Math.abs(this.tgTilt - this.tilt) > 0.002 || Math.abs(this.tgSy - this.sy) > 0.002 ||
       Math.abs(this.tgSx - this.sx) > 0.002 || Math.abs(this.tgEs - this.es) > 0.002 ||
-      Math.abs(this.hatLagX) > 0.002 || Math.abs(this.hatLagY) > 0.002 || Math.abs(this.hatLagVx) > 0.004 || Math.abs(this.hatLagVy) > 0.004 ||
       this.slotH > 0.001 || Math.abs(this.slotHVel) > 0.001 ||
       Math.abs(this.col[0] - this.colT[0]) > 0.003 || Math.abs(this.col[1] - this.colT[1]) > 0.003 ||
       Math.abs(this.col[2] - this.colT[2]) > 0.003
@@ -474,34 +412,6 @@ export class BlobEngine {
   update(dt: number) {
     const n = secondsNow()
     const nowMs = performance.now()
-
-    if (this.outfitTransition && this.reducedMotion) {
-      this.outfit = this.outfitTarget
-      this.outfitPresence = this.outfit === 'none' ? 0 : 1
-      this.pendingOutfit = null
-      this.outfitTransition = null
-    } else if (this.outfitTransition) {
-      this.outfitTransitionElapsed += Math.max(0, dt)
-      const duration = this.outfitTransition === 'exit' ? 0.18 : 0.35
-      const p = Math.min(1, this.outfitTransitionElapsed / duration)
-      const eased = p * p * (3 - 2 * p)
-      this.outfitPresence = this.outfitTransition === 'exit'
-        ? this.outfitTransitionStart * (1 - eased)
-        : eased
-      if (p >= 1) {
-        if (this.outfitTransition === 'exit' && this.pendingOutfit) {
-          this.outfit = this.pendingOutfit
-          this.pendingOutfit = null
-          this.outfitPresence = 0
-          this.outfitTransitionElapsed = 0
-          this.outfitTransition = 'enter'
-        } else {
-          if (this.outfitTransition === 'exit') this.outfit = 'none'
-          this.outfitPresence = this.outfit === 'none' ? 0 : 1
-          this.outfitTransition = null
-        }
-      }
-    }
 
     if (this.jobs.length) {
       const due = this.jobs.filter((job) => job.at <= n)
@@ -576,22 +486,6 @@ export class BlobEngine {
     if (!this.locks.has('sy')) this.sy += (this.tgSy - this.sy) * kGen
     if (!this.locks.has('sx')) this.sx += (this.tgSx - this.sx) * kGen
     if (!this.locks.has('es')) this.es += (this.tgEs - this.es) * kGen
-    if (!motion || dt <= 0) {
-      this.hatLagX = 0; this.hatLagY = 0; this.hatLagVx = 0; this.hatLagVy = 0
-      this.prevOutfitYaw = this.yaw; this.prevOutfitOy = this.oy; this.prevOutfitRoll = this.roll
-    } else {
-      const yawVel = (this.yaw - this.prevOutfitYaw) / dt
-      const oyVel = (this.oy - this.prevOutfitOy) / dt
-      const rollVel = (this.roll - this.prevOutfitRoll) / dt
-      this.prevOutfitYaw = this.yaw; this.prevOutfitOy = this.oy; this.prevOutfitRoll = this.roll
-      const centrifugal = this.outfit !== 'none' && this.outfitPresence > 0.05 ? rollVel * 0.18 : 0
-      const targetX = Math.max(-1, Math.min(1, -yawVel * 0.35 - this.tilt * 2 + centrifugal))
-      const targetY = Math.max(-1, Math.min(1, oyVel * 0.5))
-      this.hatLagVx += (60 * (targetX - this.hatLagX) - 9 * this.hatLagVx) * dt
-      this.hatLagVy += (60 * (targetY - this.hatLagY) - 9 * this.hatLagVy) * dt
-      this.hatLagX += this.hatLagVx * dt
-      this.hatLagY += this.hatLagVy * dt
-    }
     this.col = motion ? mix3(this.col, this.colT, 1 - Math.pow(0.002, dt)) : this.colT
 
     if (n > this.nextBlink) {
@@ -621,59 +515,55 @@ export class BlobEngine {
     if (this.morph < 0.05 && this.slotHTarget === 0) { this.slotH = 0; this.slotHVel = 0 }
   }
 
+  /** Eye colour with contrast against the body: light eyes on a dark body. */
+  get ink() {
+    const [r, g, b] = this.bodyColor
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.24 ? LIGHT_INK : INK
+  }
+
+  /** Pixels per layout unit. Every silhouette is fitted to the same footprint: its furthest point sits on R. */
+  private unitFor(R: number) {
+    return R / UNITS_PER_RADIUS / formReach(this.form)
+  }
+
   /** Draw into a `W`×`H` CSS-pixel canvas (DPR transform already applied). */
   draw(x: CanvasRenderingContext2D, W: number, H: number) {
     const R = Math.min(W, H) * BODY_RADIUS
-    const activeOutfit = resolveOutfit(this.outfit, new Date(), this.createdAt)
-    const targetFit = this.isMini ? { scale: 1, offsetX: 0, offsetY: 0 } : fitOutfitToCanvas(activeOutfit, W, H, R)
-    const fitProgress = this.isMini ? 0 : Math.max(0, Math.min(1, this.outfitPresence))
-    const outfitFit = {
-      scale: 1 + (targetFit.scale - 1) * fitProgress,
-      offsetX: targetFit.offsetX * fitProgress,
-      offsetY: targetFit.offsetY * fitProgress,
-    }
-    const cx = W / 2 + this.ox * R + outfitFit.offsetX
-    const cy = H / 2 + this.oy * R + outfitFit.offsetY
-    const bodyR = R * outfitFit.scale
-    const rigidRoll = this.outfitPresence > 0.05 && activeOutfit !== 'none'
+    const unit = this.unitFor(R)
+    const cx = W / 2 + this.ox * R
+    const cy = H / 2 + this.oy * R
+    // Soft bodies roll backwards by turning their face over the top; the
+    // cornered and spiky silhouettes spin as a whole.
+    const spherical = !SPINNING_SHAPES.has(this.form.shape)
 
     x.save()
     x.translate(cx, cy)
-    if (rigidRoll && Math.abs(this.roll) > 0.001) x.rotate(this.roll)
+    if (!spherical && Math.abs(this.roll) > 0.001) x.rotate(this.roll)
     if (this.tilt !== 0) x.rotate(this.tilt)
-    x.scale(this.sx * outfitFit.scale, this.sy * outfitFit.scale)
+    x.scale(this.sx, this.sy)
 
-    const body = () => this.traceBody(x, R)
-    const outfitAlpha = Math.min(1, this.outfitPresence * 2.5) * (1 - Math.min(1, Math.max(0, (this.morph - 0.3) / 0.2)))
-    if (!this.isMini && outfitAlpha > 0.005) {
-      x.save()
-      x.globalAlpha *= outfitAlpha
-      drawWardrobeBehind(x, activeOutfit, R, this.wardrobeEyeFrames(R), this.hatLagX, this.hatLagY, this.yaw, this.pitch, this.roll, this.outfitPresence, !!this.badge && this.badgeS > 0.01 && this.morph < 0.25)
-      x.restore()
-    }
+    const body = () => traceForm(x, this.form, unit, R, this.morph)
     this.drawBody(x, body, R)
+    this.drawCatFeatures(x, body, unit, spherical, 'under')
+    const eyes = this.eyeFrames(R, unit, spherical)
 
     const blushVal = Math.max(this.blush, this.tint * 0.5 * (this.state === 'error' || this.state === 'dizzy' ? 1 : 0.4)) * (1 - this.morph)
     if (blushVal > 0.01 && typeof x.clip === 'function') {
       x.save()
       body(); x.clip()
-      const offset = Math.sin(this.yaw) * R * 0.8
       x.fillStyle = `rgba(255,120,150,${0.5 * blushVal})`
-      for (const sd of [-1, 1]) {
+      const faceScale = this.form.face.rx * unit / R
+      for (const eye of eyes) {
+        if (!eye.visible) continue
         x.beginPath()
-        x.ellipse(sd * R * 0.5 + offset, R * 0.22, R * 0.17, R * 0.1, 0, 0, Math.PI * 2)
+        x.ellipse(eye.x + eye.sd * R * 0.2 * faceScale, eye.y + eye.ry * 1.05 + R * 0.08 * faceScale, R * 0.17 * faceScale, R * 0.1 * faceScale, 0, 0, Math.PI * 2)
         x.fill()
       }
       x.restore()
     }
 
-    this.drawEyes(x, body, R)
-    if (!this.isMini && outfitAlpha > 0.005) {
-      x.save()
-      x.globalAlpha *= outfitAlpha
-      drawWardrobe(x, activeOutfit, R, this.wardrobeEyeFrames(R), this.open, this.hatLagX, this.hatLagY, this.yaw, this.pitch, this.outfitPresence, this.roll, !!this.badge && this.badgeS > 0.01 && this.morph < 0.25)
-      x.restore()
-    }
+    this.drawEyes(x, body, eyes)
+    this.drawCatFeatures(x, body, unit, spherical, 'over')
     if (this.morph > 0.05) this.drawMouth(x, body, R)
     if (this.cfg.dim > 0) {
       x.fillStyle = `rgba(16,18,22,${this.cfg.dim})`
@@ -681,44 +571,14 @@ export class BlobEngine {
     }
     x.restore()
 
-    if (this.badge && this.badgeS > 0.01 && this.morph < 0.25) this.drawBadge(x, this.badge, bodyR, cx, cy)
-    this.drawParticles(x, bodyR, cx, cy)
-  }
-
-  private traceBody(p: CanvasRenderingContext2D, R: number) {
-    const m = this.morph
-    p.beginPath()
-    if (m < 0.005) {
-      p.arc(0, 0, R, 0, Math.PI * 2)
-      return
-    }
-    const n = 72
-    for (let i = 0; i <= n; i++) {
-      const a = (i / n) * Math.PI * 2
-      const ca = Math.cos(a)
-      const sa = Math.sin(a)
-      const rr = rrPoint(ca, sa, R, R * 0.94, R * 0.42)
-      const px = lerp(ca * R, rr.x, m)
-      const py = lerp(sa * R, rr.y, m)
-      if (i === 0) p.moveTo(px, py)
-      else p.lineTo(px, py)
-    }
-    p.closePath()
+    if (this.badge && this.badgeS > 0.01 && this.morph < 0.25) this.drawBadge(x, this.badge, R, cx, cy)
+    this.drawParticles(x, R, cx, cy)
   }
 
   private drawBody(x: CanvasRenderingContext2D, body: () => void, R: number) {
-    const pumpkinColors = this.isMini ? null : bodyColorsForOutfit(resolveOutfit(this.outfit, new Date(), this.createdAt))
-    const pumpkin = !!pumpkinColors && this.outfitPresence > 0
-    const pumpkinTop = mix3(this.bodyColor, pumpkinColors ? hexToRGB(pumpkinColors[0]) : this.bodyColor, this.outfitPresence)
-    const pumpkinBottom = mix3(this.bodyColor, pumpkinColors ? hexToRGB(pumpkinColors[1]) : this.bodyColor, this.outfitPresence)
-    const c = pumpkin ? pumpkinTop : this.bodyColor
-    const g = pumpkin
-      ? x.createLinearGradient(R * 0.7, -R * 0.85, -R * 0.8, R * 0.9)
-      : x.createRadialGradient(-R * 0.38, -R * 0.48, R * 0.05, -R * 0.1, -R * 0.1, R * 1.45)
-    if (pumpkin) {
-      g.addColorStop(0, rgba(pumpkinTop))
-      g.addColorStop(1, rgba(pumpkinBottom))
-    } else if (this.isMini) {
+    const c = this.bodyColor
+    const g = x.createRadialGradient(-R * 0.38, -R * 0.48, R * 0.05, -R * 0.1, -R * 0.1, R * 1.45)
+    if (this.isMini) {
       g.addColorStop(0, rgba(mix3(c, WHITE, 0.22)))
       g.addColorStop(1, rgba(mix3(c, BLACK, 0.12)))
     } else {
@@ -753,71 +613,162 @@ export class BlobEngine {
     body(); x.fill()
   }
 
-  private drawEyes(x: CanvasRenderingContext2D, body: () => void, R: number) {
+  /** Each eye turned across the face by the current yaw and pitch (and roll, on a round body). */
+  eyeFrames(R: number, unit: number, spherical: boolean): EyeFrame[] {
+    const f = this.form
+    const pitch = this.pitch + (spherical ? this.roll : 0)
+    const mult = this.isMini ? 1.15 : 1
+    return f.eyes.map((eye, index) => {
+      const turned = turnEye(eyeAnchor(eye, f), this.yaw, pitch)
+      return {
+        x: (f.face.cx - 50 + turned.x * f.face.rx) * unit,
+        y: (f.face.cy - 50 - turned.y * f.face.ry) * unit + (this.morph > 0 ? R * 0.14 * this.morph : 0),
+        rx: eye.rx * unit * this.es * mult,
+        ry: eye.ry * unit * this.es * mult,
+        n: eye.n,
+        rot: eye.rot,
+        lean: turned.lean,
+        fx: lerp(turned.fx, 1, this.morph * 0.7),
+        fy: lerp(turned.fy, 1, this.morph * 0.7),
+        visible: turned.z > 0.04,
+        sd: index === 0 ? -1 : 1,
+      }
+    })
+  }
+
+  /**
+   * The cat's details. `under` paints what sits on the body below the eyes
+   * (stripes, inner ears, muzzle); `over` paints the nose, mouth and whiskers.
+   * Face details follow the face's turn, so they roll and glance with the eyes.
+   */
+  private drawCatFeatures(x: CanvasRenderingContext2D, body: () => void, unit: number, spherical: boolean, layer: 'under' | 'over') {
+    const f = this.form.features
+    if (!f) return
+    const fade = 1 - Math.min(1, this.morph * 2.5)
+    if (fade <= 0.01) return
+    const c = this.bodyColor
+    const at = (px: number, py: number) => [(px - 50) * unit, (py - 50) * unit] as const
+    const anchor = eyeAnchor({ cx: f.nose.cx, cy: f.nose.cy, rx: 0, ry: 0, n: 2, rot: 0 }, this.form)
+    const turned = turnEye(anchor, this.yaw, this.pitch + (spherical ? this.roll : 0))
+    const dx = (turned.x - anchor.x) * this.form.face.rx * unit
+    const dy = -(turned.y - anchor.y) * this.form.face.ry * unit
+    const faceVisible = turned.z > 0.04
+    const dark = this.ink === INK
+    const stroke = dark ? rgba(mix3(c, [0.22, 0.11, 0.05], 0.86), 0.9) : 'rgba(240,242,246,0.85)'
+    const canClip = typeof x.clip === 'function'
+    x.save()
+    x.globalAlpha *= fade
+    x.lineCap = 'round'
+    x.lineJoin = 'round'
+    if (layer === 'under') {
+      for (const ear of f.innerEars) {
+        x.beginPath()
+        ear.forEach(([px, py], index) => { const [ex, ey] = at(px, py); if (index === 0) x.moveTo(ex, ey); else x.lineTo(ex, ey) })
+        x.closePath()
+        x.fillStyle = rgba(mix3(c, [1, 0.6, 0.64], 0.62))
+        x.fill()
+      }
+      if (canClip) { body(); x.clip() }
+      x.strokeStyle = rgba(mix3(c, BLACK, 0.26), 0.55)
+      x.lineWidth = Math.max(0.8, unit * 2.4)
+      for (const [[x0, y0], [x1, y1]] of f.stripes) {
+        const [ax, ay] = at(x0, y0)
+        const [bx, by] = at(x1, y1)
+        x.beginPath(); x.moveTo(ax, ay); x.lineTo(bx, by); x.stroke()
+      }
+      if (faceVisible) {
+        const [mx, my] = at(f.muzzle.cx, f.muzzle.cy)
+        const g = x.createRadialGradient(mx + dx, my + dy, 0, mx + dx, my + dy, f.muzzle.rx * unit)
+        g.addColorStop(0, rgba(mix3(c, WHITE, 0.7), 0.95))
+        g.addColorStop(0.65, rgba(mix3(c, WHITE, 0.55), 0.6))
+        g.addColorStop(1, rgba(mix3(c, WHITE, 0.4), 0))
+        x.fillStyle = g
+        x.beginPath()
+        x.ellipse(mx + dx, my + dy, f.muzzle.rx * unit, f.muzzle.ry * unit, 0, 0, Math.PI * 2)
+        x.fill()
+      }
+      x.restore()
+      return
+    }
+    if (!faceVisible) { x.restore(); return }
+    x.translate(dx, dy)
+    x.strokeStyle = stroke
+    x.lineWidth = Math.max(0.6, unit * 0.9)
+    for (const [[x0, y0], [x1, y1]] of f.whiskers) {
+      const [ax, ay] = at(x0, y0)
+      const [bx, by] = at(x1, y1)
+      x.beginPath(); x.moveTo(ax, ay); x.quadraticCurveTo((ax + bx) / 2, (ay + by) / 2 - unit * 0.8, bx, by); x.stroke()
+    }
+    if (canClip) { body(); x.clip() }
+    const [mx, my] = at(f.mouth.cx, f.mouth.cy)
+    const w = f.mouth.w * unit
+    x.lineWidth = Math.max(0.8, unit * 1.4)
+    x.beginPath()
+    x.arc(mx - w / 2, my, w / 2, 0.1 * Math.PI, 0.95 * Math.PI)
+    x.moveTo(mx + w, my)
+    x.arc(mx + w / 2, my, w / 2, 0.05 * Math.PI, 0.9 * Math.PI)
+    x.stroke()
+    x.beginPath(); x.moveTo(mx, my - w * 0.55); x.lineTo(mx, my); x.stroke()
+    const [nx, ny] = at(f.nose.cx, f.nose.cy)
+    const r = f.nose.r * unit
+    x.fillStyle = '#ff8f8f'
+    x.beginPath()
+    x.moveTo(nx - r * 1.15, ny - r * 0.6)
+    x.quadraticCurveTo(nx, ny - r * 1.05, nx + r * 1.15, ny - r * 0.6)
+    x.quadraticCurveTo(nx + r * 0.9, ny + r * 0.35, nx, ny + r * 0.75)
+    x.quadraticCurveTo(nx - r * 0.9, ny + r * 0.35, nx - r * 1.15, ny - r * 0.6)
+    x.fill()
+    x.fillStyle = 'rgba(255,255,255,0.7)'
+    x.beginPath(); x.ellipse(nx - r * 0.3, ny - r * 0.45, r * 0.32, r * 0.18, -0.3, 0, Math.PI * 2); x.fill()
+    x.restore()
+  }
+
+  private drawEyes(x: CanvasRenderingContext2D, body: () => void, eyes: readonly EyeFrame[]) {
     let shape: EyeShape = this.eyeOverride ?? this.cfg.eye
     if (this.morph > 0.5) {
       if (this.isChewing) shape = 'happy'
       else if (this.slotHTarget > 0.05 || this.slotH > 0.1) shape = 'cup'
     }
     const canClip = typeof x.clip === 'function'
+    // Glossy eyes stay dark on any body; their catchlights carry the contrast.
+    const ink = this.form.glint ? INK : this.ink
     x.save()
     if (canClip) { body(); x.clip() }
-    x.fillStyle = INK
-    x.strokeStyle = INK
-    for (const sd of [-1, 1] as const) {
-      const eyeYaw = sd * EYE_SP + this.yaw
-      let eyePitch = EYE_P + this.pitch + (this.outfitPresence > 0.05 ? 0 : this.roll)
-      eyePitch = (((eyePitch + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - Math.PI
-      const cp = Math.cos(eyePitch)
-      if (Math.cos(eyeYaw) * cp <= 0.04) continue
-      const ex = Math.sin(eyeYaw) * cp * R
-      const ey = -Math.sin(eyePitch) * R + (this.morph > 0 ? R * 0.14 * this.morph : 0)
-      const fx = lerp(Math.max(0.18, Math.cos(eyeYaw)), 1, this.morph * 0.7)
-      const fy = lerp(Math.max(0.18, cp), 1, this.morph * 0.7)
-      const mult = this.isMini ? 1.15 : 1
+    x.fillStyle = ink
+    x.strokeStyle = ink
+    for (const eye of eyes) {
+      if (!eye.visible) continue
       x.save()
-      x.translate(ex, ey)
-      // Lean the capsule with the surface so a sideways glance reads as a turn.
-      x.rotate(Math.sin(eyeYaw) * Math.sin(eyePitch) * 0.6)
-      x.scale(fx, fy)
-      this.drawEyeShape(x, shape, R * EYE_W * this.es * mult, R * EYE_H * this.es * mult, R * EYE_ARC_H * this.es * mult, sd)
+      x.translate(eye.x, eye.y)
+      // Lean the eye with the surface so a sideways glance reads as a turn.
+      x.rotate(eye.lean)
+      x.scale(eye.fx, eye.fy)
+      // Big glossy eyes would make the expression shapes (arcs, lines, hearts) heavy.
+      const expression = this.form.glint && shape !== 'pill' && shape !== 'wide' ? 0.68 : 1
+      const w = eye.rx * 2 * expression
+      const h = eye.ry * 2 * expression
+      this.drawEyeShape(x, shape, w, h, h * 0.48, eye.sd, eye.n, eye.rot)
+      if (this.form.glint && (shape === 'pill' || shape === 'wide') && this.open > 0.55) {
+        // Glossy eyes: one big catchlight and one small one, fixed to the eye.
+        x.fillStyle = 'rgba(255,255,255,0.92)'
+        x.beginPath(); x.arc(w * 0.16, -h * 0.2, w * 0.17, 0, Math.PI * 2); x.fill()
+        x.beginPath(); x.arc(-w * 0.14, h * 0.17, w * 0.07, 0, Math.PI * 2); x.fill()
+        x.fillStyle = ink
+      }
       x.restore()
     }
     x.restore()
   }
 
-  wardrobeEyeFrames(R: number): WardrobeEyeFrame[] {
-    const frames: WardrobeEyeFrame[] = []
-    for (const sd of [-1, 1] as const) {
-      const eyeYaw = sd * EYE_SP + this.yaw
-      let eyePitch = EYE_P + this.pitch + (this.outfitPresence > 0.05 ? 0 : this.roll)
-      eyePitch = (((eyePitch + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - Math.PI
-      const cp = Math.cos(eyePitch)
-      const visible = Math.cos(eyeYaw) * cp > 0.04
-      const fx = lerp(Math.max(0.18, Math.cos(eyeYaw)), 1, this.morph * 0.7)
-      const fy = lerp(Math.max(0.18, cp), 1, this.morph * 0.7)
-      const mult = this.isMini ? 1.15 : 1
-      frames.push({
-        x: Math.sin(eyeYaw) * cp * R,
-        y: -Math.sin(eyePitch) * R + (this.morph > 0 ? R * 0.14 * this.morph : 0),
-        width: R * EYE_W * this.es * mult * fx,
-        height: R * EYE_H * this.es * mult * fy,
-        rotation: Math.sin(eyeYaw) * Math.sin(eyePitch) * 0.6,
-        visible,
-      })
-    }
-    return frames
-  }
-
-  private drawEyeShape(x: CanvasRenderingContext2D, shape: EyeShape, w: number, h: number, arcH: number, sd: number) {
+  private drawEyeShape(x: CanvasRenderingContext2D, shape: EyeShape, w: number, h: number, arcH: number, sd: number, n = 4.5, lean = 0) {
     const t = secondsNow()
     switch (shape) {
       case 'wide':
-        this.drawEyeShape(x, 'pill', w * 1.16, h * 1.08, arcH, sd)
+        this.drawEyeShape(x, 'pill', w * 1.16, h * 1.08, arcH, sd, n, lean)
         break
       case 'pill': {
         const hh = Math.max(h * this.open, w * 0.32)
-        roundRectPath(x, -w / 2, -hh / 2, w, hh, w / 2)
+        eyePath(x, w / 2, hh / 2, n, lean)
         x.fill()
         break
       }
@@ -860,14 +811,14 @@ export class BlobEngine {
         x.fillStyle = '#FF4D6D'
         heartPath(x, w * 1.2)
         x.fill()
-        x.fillStyle = INK
+        x.fillStyle = this.ink
         break
       case 'star':
         x.fillStyle = '#F7B32B'
         x.rotate(t * 1.5 * sd)
         starPath(x, w * 1.05, w * 0.46)
         x.fill()
-        x.fillStyle = INK
+        x.fillStyle = this.ink
         break
       case 'tired':
         roundRectPath(x, -w / 2, -arcH * 0.02, w, arcH * 0.5, w / 2)
@@ -876,7 +827,7 @@ export class BlobEngine {
         x.fill()
         break
       case 'wink':
-        if (sd < 0) this.drawEyeShape(x, 'pill', w, h, arcH, sd)
+        if (sd < 0) this.drawEyeShape(x, 'pill', w, h, arcH, sd, n, lean)
         else this.drawEyeShape(x, 'happy', w, h, arcH, sd)
         break
       case 'cup': {

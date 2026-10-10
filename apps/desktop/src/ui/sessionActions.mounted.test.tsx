@@ -2,11 +2,9 @@
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Session } from '../types'
 import { ConfirmDialog } from './BlobPage'
 import { ActivityGroupRow } from './App'
 import { groupConversationActivity } from './conversation'
-import { SessionRow } from './SessionTree'
 
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 
@@ -25,47 +23,8 @@ function mount(node: ReactNode) {
 const views: Array<{ unmount: () => void }> = []
 afterEach(() => { for (const view of views.splice(0)) view.unmount() })
 
-const chat: Session = { id: 's-1', runtimeId: 'r-1', provider: 'codex', title: 'Current chat', state: 'waiting_permission', updatedAt: '2026-10-03T10:00:00.000Z' }
 
 describe('mounted conversation controls', () => {
-  it('shows unread approval attention accessibly and saves an inline rename', async () => {
-    const renamed = vi.fn()
-    const view = mount(<SessionRow id="tree-s-1" session={chat} pos={1} setSize={1} selected={false} unread needsApproval activeTreeId="tree-s-1" bindRef={() => undefined} onSelect={() => undefined} onRename={renamed} />)
-    views.push(view)
-    const row = view.host.querySelector<HTMLElement>('[data-session-id="s-1"]')!
-    expect(row.getAttribute('aria-label')).toContain(', needs approval')
-    expect(row.querySelector('.unread-dot.approval')).not.toBeNull()
-    view.rerender(<SessionRow id="tree-s-1" session={{ ...chat, state: 'idle' }} pos={1} setSize={1} selected={false} unread needsApproval={false} activeTreeId="tree-s-1" bindRef={() => undefined} onSelect={() => undefined} onRename={renamed} />)
-    const editableRow = view.host.querySelector<HTMLElement>('[data-session-id="s-1"]')!
-    await act(async () => { editableRow.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })) })
-    const input = view.host.querySelector<HTMLInputElement>('.tree-rename-input')!
-    expect(document.activeElement).toBe(input)
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '  Renamed  ')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-    expect(renamed).toHaveBeenCalledWith('Renamed')
-    expect(document.activeElement).toBe(editableRow)
-  })
-
-  it('cancels an empty inline rename on Enter and restores focus', async () => {
-    const renamed = vi.fn()
-    const view = mount(<SessionRow id="tree-s-1" session={{ ...chat, state: 'idle' }} pos={1} setSize={1} selected={false} unread={false} needsApproval={false} activeTreeId="tree-s-1" bindRef={() => undefined} onSelect={() => undefined} onRename={renamed} />)
-    views.push(view)
-    const row = view.host.querySelector<HTMLElement>('[data-session-id="s-1"]')!
-    await act(async () => { row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })) })
-    const input = view.host.querySelector<HTMLInputElement>('.tree-rename-input')!
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '   ')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-    expect(renamed).not.toHaveBeenCalled()
-    expect(view.host.querySelector('.tree-label')?.textContent).toBe('Current chat')
-    expect(document.activeElement).toBe(row)
-  })
-
   it('shows the exact delete confirmation and returns focus when cancelled', async () => {
     const trigger = document.createElement('button')
     document.body.append(trigger)

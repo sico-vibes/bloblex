@@ -1,12 +1,13 @@
 // Bloblex welcome greeting: timeline, pose equations, seeded particle
 // rings/streaks, halo, hands and badge in a 640×150 reference space. The body is
-// a sphere with capsule eyes in the agent colour; the notch collapse strip is
-// omitted because the companion window shell owns that transition.
+// always the round Bloblex mascot (its silhouette and superellipse eyes) in the
+// agent colour; the notch collapse strip is omitted because the companion
+// window shell owns that transition.
 
 import type { RGB } from './blobEngine'
 import { BADGE_OFFSET } from './blobGeometry'
-import { drawWardrobe } from './wardrobeDrawing'
-import { resolveOutfit, type Outfit } from './outfit'
+import { MASCOT_LOOK, resolveForm } from './look'
+import { eyePath, traceForm, UNITS_PER_RADIUS } from './look/paint'
 
 export const GREETING_REFERENCE = { width: 640, height: 150 } as const
 
@@ -17,6 +18,10 @@ const T = {
 }
 
 export const GREETING_END_MS = T.end * 1000
+/** When the body has finished growing in; a greeting can start here to continue from a visible blob. */
+export const GREETING_GROWN_MS = T.grow * 1000
+/** Where the body sits in the 640×150 reference stage. */
+export const GREETING_BODY = { x: 320, y: 90, radius: 58 * 0.56 } as const
 
 const C0 = { x: 320, y: 90 }
 const HB = 58
@@ -209,7 +214,7 @@ function drawHandR(x: CanvasRenderingContext2D, hw: number, hh: number, p: Scene
   x.restore()
 }
 
-function drawCharacter(x: CanvasRenderingContext2D, p: ScenePose, color: RGB, outfit: Outfit, createdAt?: string | null) {
+function drawCharacter(x: CanvasRenderingContext2D, p: ScenePose, color: RGB) {
   const r = p.hb * SPHERE
   if (r <= 0.4) return
 
@@ -237,7 +242,9 @@ function drawCharacter(x: CanvasRenderingContext2D, p: ScenePose, color: RGB, ou
   drawHandL(x, r * 1.05, r, p, color)
   drawHandR(x, r * 1.05, r, p, color)
 
-  const body = () => { x.beginPath(); x.arc(0, 0, r, 0, Math.PI * 2) }
+  const mascot = resolveForm(MASCOT_LOOK)
+  const unit = r / UNITS_PER_RADIUS
+  const body = () => traceForm(x, mascot, unit, r)
   body()
   x.fillStyle = sphereFill(x, r, color)
   x.fill()
@@ -262,15 +269,12 @@ function drawCharacter(x: CanvasRenderingContext2D, p: ScenePose, color: RGB, ou
   if (typeof x.clip === 'function') { body(); x.clip() }
   x.fillStyle = 'rgb(14,14,16)'
   x.strokeStyle = 'rgb(14,14,16)'
-  const w = r * 0.24
-  const h = r * 0.56
   const er = r * 0.13
-  const sp = r * 0.31
   const lx = p.lookX * r * 0.42
-  const ly = -r * 0.13 + p.lookY * r * 0.28 + p.eyeRoll * r * 1.25
-  for (const sd of [-1, 1]) {
+  const ly = p.lookY * r * 0.28 + p.eyeRoll * r * 1.25
+  for (const eye of mascot.eyes) {
     x.save()
-    x.translate(sd * sp + lx, ly)
+    x.translate((eye.cx - 50) * unit + lx, (eye.cy - 50) * unit + ly)
     if (p.eye === 'happy') {
       x.lineWidth = er * 0.95
       x.lineCap = 'round'
@@ -284,17 +288,13 @@ function drawCharacter(x: CanvasRenderingContext2D, p: ScenePose, color: RGB, ou
       x.arc(0, -er * 0.5, er * 1.25, Math.PI * 0.15, Math.PI * 0.85)
       x.stroke()
     } else {
-      const hh = Math.max(h * p.open, w * 0.32)
-      rr(x, -w / 2, -hh / 2, w, hh, w / 2)
+      const rx = eye.rx * unit
+      eyePath(x, rx, Math.max(eye.ry * unit * p.open, rx * 0.32), eye.n, eye.rot)
       x.fill()
     }
     x.restore()
   }
   x.restore()
-
-  drawWardrobe(x, resolveOutfit(outfit, new Date(), createdAt), r, [-1, 1].map((sd) => ({
-    x: sd * sp + lx, y: ly, width: w, height: h, rotation: 0, visible: true,
-  })), p.open)
 
   if (p.badge > 0.01) {
     x.save()
@@ -342,7 +342,11 @@ function drawParticles(x: CanvasRenderingContext2D, t: number, p: ScenePose) {
 }
 
 /** Draws the welcome scene for `ageMs` into a `W`×`H` CSS-pixel canvas. */
-export function drawGreetingScene(x: CanvasRenderingContext2D, W: number, H: number, ageMs: number, color: RGB, outfit: Outfit = 'auto', createdAt?: string | null) {
+/**
+ * `bare` drops the island card behind the scene and lets the particles spread
+ * over whatever is underneath (the launch screen).
+ */
+export function drawGreetingScene(x: CanvasRenderingContext2D, W: number, H: number, ageMs: number, color: RGB, { bare = false }: { bare?: boolean } = {}) {
   const t = Math.max(0, Math.min(ageMs, GREETING_END_MS)) / 1000
   const scale = Math.min(W / GREETING_REFERENCE.width, H / GREETING_REFERENCE.height)
   const p = greetPose(t)
@@ -350,7 +354,9 @@ export function drawGreetingScene(x: CanvasRenderingContext2D, W: number, H: num
   x.save()
   x.translate((W - GREETING_REFERENCE.width * scale) / 2, (H - GREETING_REFERENCE.height * scale) / 2)
   x.scale(scale, scale)
-  if (p.card > 0) {
+  if (p.card > 0 && bare) {
+    drawParticles(x, t, p)
+  } else if (p.card > 0) {
     x.save()
     x.globalAlpha = p.card
     rr(x, CARD.x, CARD.y, CARD.w, CARD.h, CARD_R)
@@ -363,6 +369,6 @@ export function drawGreetingScene(x: CanvasRenderingContext2D, W: number, H: num
     drawParticles(x, t, p)
     x.restore()
   }
-  drawCharacter(x, p, color, outfit, createdAt)
+  drawCharacter(x, p, color)
   x.restore()
 }

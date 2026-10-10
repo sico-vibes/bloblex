@@ -38,6 +38,9 @@ struct Conn {
     events: SessionEventSink,
     meta: Mutex<ThreadMeta>,
     turn: Mutex<TurnState>,
+    /// Whether the last turn ran in plan collaboration mode; the mode is sticky
+    /// on the thread, so leaving plan mode must be sent explicitly.
+    plan_active: AtomicBool,
 }
 
 struct SharedProcess {
@@ -257,7 +260,7 @@ impl CodexAdapter {
         });
         let key = sha256_fingerprint(&key_data.to_string());
         let process = self.acquire_process(&key, r, cwd, options).await?;
-        Ok(Arc::new(Conn {
+        Ok(Arc::new(Conn { plan_active: AtomicBool::new(false),
             process,
             process_key: key,
             detached: AtomicBool::new(false),
@@ -341,6 +344,35 @@ impl CodexAdapter {
                 let p = &v["params"];
                 let thread_id = p["threadId"].as_str().unwrap_or("");
                 let Some(r) = reader.routes.lock().await.get(thread_id).and_then(Weak::upgrade) else { continue; };
+                if request_id.is_some() && method == "item/tool/requestUserInput" {
+                    let key = format!("{}:{}", thread_id, request_id.as_deref().unwrap_or("unknown-request"));
+                    let questions = codex_questions(p);
+                    if !questions.is_empty() {
+                        r.incoming.lock().await.insert(key.clone(), v["id"].clone());
+                        let _ = r.events.enqueue(AgentEvent::QuestionRequested { provider_request_id: key, title: "Codex has a question".into(), questions });
+                        continue;
+                    }
+                }
+                if request_id.is_some() && method == "mcpServer/elicitation/request" {
+                    if p["serverName"].as_str() == Some("bloblex") {
+                        let _ = write_response(&reader, &v["id"], elicitation_response(p, true, true)).await;
+                    } else {
+                        let key = format!("elicitation:{}:{}", thread_id, request_id.as_deref().unwrap_or("unknown-request"));
+                        r.incoming.lock().await.insert(key.clone(), json!({"rpcId":v["id"],"params":p}));
+                        let _ = r.events.enqueue(AgentEvent::PermissionRequested {
+                            provider_request_id: key,
+                            title: format!("Allow the {} tool?", p["serverName"].as_str().unwrap_or("MCP")),
+                            detail: p["message"].as_str().map(str::to_owned),
+                            choices: vec!["allow_once".into(), "deny".into()],
+                            raw: v.clone(),
+                        });
+                    }
+                    continue;
+                }
+                if request_id.is_some() && method.ends_with("requestApproval") && is_app_tool_request(p) {
+                    let _ = write_response(&reader, &v["id"], json!({"decision":"accept"})).await;
+                    continue;
+                }
                 if request_id.is_some() {
                     if v["method"]
                         .as_str()
@@ -510,7 +542,7 @@ impl CodexAdapter {
     async fn resume_after_crash(&self, session_id: &str, old: &Arc<Conn>) -> Result<Arc<Conn>, AdapterError> {
         let process = self.acquire_process(&old.process_key, &old.runtime, &old.cwd, &old.base_options).await?;
         let previous_id = old.turn.lock().await.thread_id.clone().ok_or_else(|| AdapterError::Process("Codex session has no provider thread".into()))?;
-        let new = Arc::new(Conn {
+        let new = Arc::new(Conn { plan_active: AtomicBool::new(false),
             process,
             process_key: old.process_key.clone(),
             detached: AtomicBool::new(false),
@@ -593,7 +625,7 @@ impl CodexAdapter {
     async fn initialize(c: &Conn) -> Result<(), AdapterError> {
         let _guard = c.process.setup.lock().await;
         if c.process.initialized.load(Ordering::Acquire) { return Ok(()); }
-        Self::call(c,"initialize",json!({"clientInfo":{"name":"Bloblex","version":"0.1.0"},"capabilities":{"experimentalApi":false}})).await.map_err(|e| match e { AdapterError::Rejected(message) => AdapterError::Protocol(message), other => other })?;
+        Self::call(c,"initialize",json!({"clientInfo":{"name":"Bloblex","version":"0.1.0"},"capabilities":{"experimentalApi":true}})).await.map_err(|e| match e { AdapterError::Rejected(message) => AdapterError::Protocol(message), other => other })?;
         Self::notify(c, "initialized", json!({})).await?;
         c.process.initialized.store(true, Ordering::Release);
         Ok(())
@@ -633,11 +665,13 @@ impl CodexAdapter {
         if let Some(v) = &options.instructions {
             p["developerInstructions"] = json!(v)
         }
+        if let Some(config) = mcp_config(&options.mcp_servers) { p["config"] = config; }
         p
     }
     fn resume_params(id: &str, cwd: &Path, options: &ExecOptions) -> Value {
         let (approval,sandbox)=if options.approval_mode==ApprovalMode::Bypass {("never","danger-full-access")}else{("on-request","workspace-write")};
         let mut p = json!({"threadId":id,"cwd":cwd.to_string_lossy(),"approvalPolicy":approval,"sandbox":sandbox});
+        if let Some(config) = mcp_config(&options.mcp_servers) { p["config"] = config; }
         if let Some(v) = &options.model {
             p["model"] = json!(v)
         }
@@ -703,6 +737,66 @@ fn context_exhausted_evidence(message: &str) -> bool {
         .any(|evidence| message.contains(evidence))
 }
 
+/// `config` overrides for app-owned MCP servers (`mcp_servers.<name>`).
+fn mcp_config(servers: &[McpServerSpec]) -> Option<Value> {
+    if servers.is_empty() { return None; }
+    let mut map = serde_json::Map::new();
+    for server in servers {
+        map.insert(server.name.clone(), json!({"command":server.command,"args":server.args,"env":server.env}));
+    }
+    Some(json!({"mcp_servers":map}))
+}
+
+/// Answers an MCP elicitation. Approval forms are filled by choosing the
+/// "allow/accept once" option (or the session option when `for_session`).
+fn elicitation_response(p: &Value, accept: bool, for_session: bool) -> Value {
+    if !accept || p["mode"].as_str() == Some("url") { return json!({"action":"decline"}); }
+    let schema = &p["requestedSchema"];
+    let mut content = serde_json::Map::new();
+    if let Some(properties) = schema["properties"].as_object() {
+        for (key, field) in properties {
+            let options: Vec<String> = field["enum"].as_array().map(|values| values.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                .or_else(|| field["oneOf"].as_array().map(|values| values.iter().filter_map(|v| v["const"].as_str()).map(str::to_owned).collect()))
+                .unwrap_or_default();
+            let persistent = |value: &str| { let lower = value.to_ascii_lowercase(); lower.contains("session") || lower.contains("always") };
+            let approving = |value: &str| { let lower = value.to_ascii_lowercase(); ["once", "accept", "approve", "allow", "yes"].iter().any(|word| lower.contains(word)) };
+            let chosen = options.iter().find(|value| approving(value) && persistent(value) == for_session)
+                .or_else(|| options.iter().find(|value| approving(value) && !persistent(value)));
+            if let Some(chosen) = chosen { content.insert(key.clone(), json!(chosen)); }
+            else if field["type"].as_str() == Some("boolean") { content.insert(key.clone(), json!(for_session && (key.contains("session") || key.contains("remember") || key.contains("persist")))); }
+            else if !field["default"].is_null() { content.insert(key.clone(), field["default"].clone()); }
+        }
+    }
+    let mut response = json!({"action":"accept","content":content});
+    if for_session { response["_meta"] = json!({"persist":"session"}); }
+    response
+}
+
+/// Approval requests for Bloblex's own team tools are accepted without asking.
+fn is_app_tool_request(p: &Value) -> bool {
+    ["server", "serverName"].iter().any(|key| p[*key].as_str() == Some("bloblex"))
+        || p["item"]["server"].as_str() == Some("bloblex")
+}
+
+fn codex_questions(p: &Value) -> Vec<UserQuestion> {
+    p["questions"].as_array().map(|questions| questions.iter().filter_map(|item| {
+        let id = item["id"].as_str()?.to_owned();
+        let question = item["question"].as_str()?.trim().to_owned();
+        if question.is_empty() || item["isSecret"].as_bool() == Some(true) { return None; }
+        let options = item["options"].as_array().map(|options| options.iter().filter_map(|option| {
+            let label = option["label"].as_str()?.trim();
+            (!label.is_empty()).then(|| UserQuestionOption { label: label.into(), description: option["description"].as_str().unwrap_or("").trim().into() })
+        }).collect()).unwrap_or_default();
+        Some(UserQuestion { id, header: item["header"].as_str().unwrap_or("Question").trim().to_owned(), question, options, multi_select: false, allow_other: item["isOther"].as_bool().unwrap_or(true) })
+    }).collect()).unwrap_or_default()
+}
+
+async fn write_response(process: &SharedProcess, id: &Value, result: Value) -> Result<(), AdapterError> {
+    let mut b = serde_json::to_vec(&json!({"jsonrpc":"2.0","id":id,"result":result})).map_err(|e| AdapterError::Protocol(e.to_string()))?;
+    b.push(b'\n');
+    process.stdin.lock().await.write(&b).await.map_err(|e| AdapterError::Process(e.to_string()))
+}
+
 fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
     match method {
         "thread/name/updated" => p["threadName"]
@@ -717,7 +811,7 @@ fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
                 "agentMessage" => i["text"]
                     .as_str()
                     .map(|text| AgentEvent::AssistantDelta { text: text.into() }),
-                "userMessage" => None,
+                "userMessage" | "plan" => None,
                 _ => Some(AgentEvent::ToolStarted {
                     tool_call_id: i["id"].as_str().unwrap_or("item").into(),
                     kind: i["type"].as_str().unwrap_or("other").into(),
@@ -736,6 +830,8 @@ fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
                 "agentMessage" => i["text"]
                     .as_str()
                     .map(|text| AgentEvent::AssistantMessage { text: text.into() }),
+                "plan" => i["text"].as_str().map(str::trim).filter(|text| !text.is_empty())
+                    .map(|text| AgentEvent::PlanProposed { markdown: text.into() }),
                 "userMessage" => None,
                 "fileChange" => i["changes"]
                     .as_array()
@@ -1007,7 +1103,7 @@ async fn catalog_pages(r: &RuntimeSpec) -> Result<Vec<Value>, AdapterError> {
             .take()
             .ok_or_else(|| AdapterError::Process("catalog stdout unavailable".into()))?;
         let mut lines = BufReader::new(stdout).lines();
-        write_rpc(&stdin,1,"initialize",json!({"clientInfo":{"name":"Bloblex","version":"0.1.0"},"capabilities":{"experimentalApi":false}})).await?;
+        write_rpc(&stdin,1,"initialize",json!({"clientInfo":{"name":"Bloblex","version":"0.1.0"},"capabilities":{"experimentalApi":true}})).await?;
         let _ = read_reply(&mut lines, 1, CATALOG_TIMEOUT).await?;
         let mut b =
             serde_json::to_vec(&json!({"jsonrpc":"2.0","method":"initialized","params":{}}))
@@ -1071,7 +1167,7 @@ async fn account_rate_limits(r: &RuntimeSpec) -> Result<Value, AdapterError> {
         let stdin = StdinWriter::new(stdin);
         let stdout = child.stdout.take().ok_or_else(|| AdapterError::Process("Codex quota stdout unavailable".into()))?;
         let mut lines = BufReader::new(stdout).lines();
-        write_rpc(&stdin, 1, "initialize", json!({"clientInfo":{"name":"Bloblex","version":"0.1.0"},"capabilities":{"experimentalApi":false}})).await?;
+        write_rpc(&stdin, 1, "initialize", json!({"clientInfo":{"name":"Bloblex","version":"0.1.0"},"capabilities":{"experimentalApi":true}})).await?;
         let _ = read_reply(&mut lines, 1, std::time::Duration::from_secs(10)).await?;
         let mut initialized = serde_json::to_vec(&json!({"jsonrpc":"2.0","method":"initialized","params":{}})).unwrap();
         initialized.push(b'\n');
@@ -1307,13 +1403,26 @@ impl AgentAdapter for CodexAdapter {
                 })
                 .await;
         }
-        let mut p =
-            json!({"threadId":provider_thread,"input":[{"type":"text","text":q.text}]});
+        // Images are passed by path; the app-server reads them itself.
+        let mut input = if q.text.is_empty() && !q.attachments.is_empty() { Vec::new() } else { vec![json!({"type":"text","text":q.text})] };
+        input.extend(q.attachments.iter().map(|attachment| json!({"type":"localImage","path":attachment.path})));
+        let mut p = json!({"threadId":provider_thread,"input":input});
         if let Some(v) = &q.exec_options.model {
             p["model"] = json!(v)
         }
         if let Some(v) = &q.exec_options.thinking {
             p["effort"] = json!(v)
+        }
+        let was_plan = c.plan_active.load(Ordering::SeqCst);
+        if q.exec_options.plan_mode || was_plan {
+            let model = q.exec_options.model.clone().or_else(|| c.meta.try_lock().ok().and_then(|meta| meta.model.clone()));
+            if let Some(model) = model {
+                // Plan mode keeps Codex's built-in planning instructions; leaving
+                // it restores this blob's own developer instructions.
+                let developer = if q.exec_options.plan_mode { Value::Null } else { json!(q.exec_options.instructions) };
+                p["collaborationMode"] = json!({"mode": if q.exec_options.plan_mode { "plan" } else { "default" }, "settings": {"model": model, "reasoning_effort": q.exec_options.thinking, "developer_instructions": developer}});
+                c.plan_active.store(q.exec_options.plan_mode, Ordering::SeqCst);
+            }
         }
         if let Some(v) = q.exec_options.service_tier.as_ref() {
             if v == "standard" {
@@ -1424,6 +1533,18 @@ impl AgentAdapter for CodexAdapter {
         }
         Ok(())
     }
+    async fn answer_question(&self, id: &str, answers: Option<std::collections::BTreeMap<String, Vec<String>>>) -> Result<(), AdapterError> {
+        for c in self.sessions.lock().await.values().cloned().collect::<Vec<_>>() {
+            if let Some(request_id) = c.incoming.lock().await.remove(id) {
+                let answers = answers.unwrap_or_default().into_iter().map(|(key, values)| (key, json!({"answers": values}))).collect::<serde_json::Map<_, _>>();
+                let mut b = serde_json::to_vec(&json!({"jsonrpc":"2.0","id":request_id,"result":{"answers":answers}})).map_err(|e| AdapterError::Protocol(e.to_string()))?;
+                b.push(b'\n');
+                c.process.stdin.lock().await.write(&b).await.map_err(|e| AdapterError::Process(e.to_string()))?;
+                return Ok(());
+            }
+        }
+        Err(AdapterError::Unsupported("Codex question is unknown or already answered".into()))
+    }
     async fn reply_permission(&self, id: &str, choice: &str) -> Result<(), AdapterError> {
         for c in self
             .sessions
@@ -1434,6 +1555,13 @@ impl AgentAdapter for CodexAdapter {
             .collect::<Vec<_>>()
         {
             if let Some(request_id) = c.incoming.lock().await.remove(id) {
+                if id.starts_with("elicitation:") {
+                    let response = elicitation_response(&request_id["params"], choice == "allow_once", false);
+                    let mut b = serde_json::to_vec(&json!({"jsonrpc":"2.0","id":request_id["rpcId"],"result":response})).map_err(|e| AdapterError::Protocol(e.to_string()))?;
+                    b.push(b'\n');
+                    c.process.stdin.lock().await.write(&b).await.map_err(|e| AdapterError::Process(e.to_string()))?;
+                    return Ok(());
+                }
                 let decision = match choice {
                     "allow_once" => "accept",
                     "deny" => "decline",

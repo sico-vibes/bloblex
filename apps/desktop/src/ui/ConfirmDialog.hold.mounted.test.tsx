@@ -51,7 +51,8 @@ describe('destructive hold confirmation', () => {
     const pointer = (type: string) => { const event = new Event(type,{bubbles:true}); Object.defineProperty(event,'pointerId',{value:4}); return event }
     await act(async () => { button.dispatchEvent(pointer('pointerdown')); await vi.advanceTimersByTimeAsync(1100); button.dispatchEvent(pointer('pointercancel')) })
     expect(confirm).not.toHaveBeenCalled()
-    expect(button.textContent).toContain('Delete')
+    expect(button.textContent).toContain('Hold to delete')
+    expect(button.classList.contains('holding')).toBe(false)
     await act(async () => { button.dispatchEvent(pointer('pointerdown')); await vi.advanceTimersByTimeAsync(1100); window.dispatchEvent(new Event('blur')) })
     expect(confirm).not.toHaveBeenCalled()
     await act(async () => { button.dispatchEvent(pointer('pointerdown')); await vi.advanceTimersByTimeAsync(1100); host.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true })) })

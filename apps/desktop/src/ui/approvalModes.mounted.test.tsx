@@ -20,6 +20,7 @@ vi.mock('../desktopIntegrations', () => ({
 }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  previewMode: false,
   rpc,
   permissionsPolicyGet: policy,
   setCompanionVisibility: vi.fn(),
@@ -37,7 +38,7 @@ vi.mock('../tauri', () => ({
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(), listen: vi.fn(async () => () => undefined) }))
 
 function draft(partial: Partial<AgentDraft> = {}): AgentDraft {
-  return { name: 'Claude', description: '', instructions: '', color: 'mint', outfit: 'auto', runtimeId: 'rt-1', defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null, ...partial }
+  return { name: 'Claude', description: '', instructions: '', color: 'mint', look: null, runtimeId: 'rt-1', defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null, role: '', projectId: null, leader: false, ...partial }
 }
 
 function mount(node: ReactNode) {

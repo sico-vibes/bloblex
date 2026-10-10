@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { emit, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { Bot, Check, ChevronDown, ChevronRight, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
+import { Bot, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
@@ -31,7 +31,7 @@ export function providerDisplayName(provider: string | undefined) {
   return providerBrand(provider ?? '').name || labelize(provider, 'Coding agent')
 }
 
-export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false }: {
+export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange }: {
   snapshot: Snapshot | null
   initialPage: SettingsPageId
   onClose: () => void
@@ -40,6 +40,9 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   onOpenAgent: (agentId: string) => void
   onRunSetup?: () => void
   focusUpdates?: boolean
+  /** Experimental: the plan-usage bar along the bottom of the main window. */
+  usageBarEnabled?: boolean
+  onUsageBarChange?: (enabled: boolean) => void
 }) {
   const { ref: dialogRef, close } = useDialogAccessibility(onClose)
   const [page, setPage] = useState<SettingsPageId>(focusUpdates ? 'Updates' : initialPage)
@@ -380,6 +383,11 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
                 <div className="settings-form-actions"><button className="primary-button small" disabled={saving}>Save editor</button></div>
               </form>
             </SettingsGroup>
+            <SettingsGroup title="Experimental">
+              <SettingsRow label={<span className="experimental-label">Usage bar<span className="experimental-tag">Experimental</span><HelpTip text="Shows each coding agent's plan limits (for example 5-hour and weekly usage) along the bottom of the main window, read from the sign-in each CLI already has. Turn it off if the numbers are not useful to you; the Usage page still has them." /></span>} hint="Plan limits for each coding agent, along the bottom of the window.">
+                <button type="button" className={`toggle ${usageBarEnabled ? 'on' : ''}`} role="switch" aria-label="Usage bar" aria-checked={usageBarEnabled} disabled={saving} onClick={() => { const next = !usageBarEnabled; void saveSetting('experimental.usageBar', next).then((failure) => { if (!failure) onUsageBarChange?.(next) }) }}><i /></button>
+              </SettingsRow>
+            </SettingsGroup>
             <SettingsGroup title="Notifications">
               <SettingsRow label="Notify when a blob finishes or needs approval">
                 <button type="button" className={`toggle ${notificationsEnabled ? 'on' : ''}`} role="switch" aria-label="Notify when a blob finishes or needs approval" aria-checked={notificationsEnabled} onClick={() => void setNotifications(!notificationsEnabled)} disabled={saving}><i /></button>
@@ -496,11 +504,19 @@ function SettingsGroup({ title, action, children }: { title: string; action?: Re
   </section>
 }
 
-function SettingsRow({ label, hint, children }: { label: string; hint?: string; children?: ReactNode }) {
+function SettingsRow({ label, hint, children }: { label: ReactNode; hint?: string; children?: ReactNode }) {
   return <div className="settings-row">
     <span className="settings-row-copy"><strong>{label}</strong>{hint && <small>{hint}</small>}</span>
     {children && <span className="settings-row-control">{children}</span>}
   </div>
+}
+
+/** A "?" that explains a setting on hover or focus. */
+function HelpTip({ text }: { text: string }) {
+  return <span className="help-tip">
+    <button type="button" className="help-tip-trigger" aria-label="What does this do?" aria-describedby={undefined}><CircleHelp size={14} aria-hidden="true" /></button>
+    <span className="help-tip-bubble" role="tooltip">{text}</span>
+  </span>
 }
 
 function BlobLink({ agent, mode, onOpen }: { agent: Agent; mode: string; onOpen: () => void }) {

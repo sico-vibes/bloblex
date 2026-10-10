@@ -1,7 +1,7 @@
 // Development-only stand-in for src/tauri.ts, wired by vite.preview.config.ts
 // so the real App can be inspected in a browser without the daemon. Every
 // value below is a visual fixture, not product data.
-import type { Agent, DaemonEvent, Runtime, Session, Snapshot } from '../types'
+import type { Agent, DaemonEvent, PermissionRequest, Project, Runtime, Session, Snapshot } from '../types'
 import { answerUsageAnalytics } from '../ui/analyticsFixtures'
 import { normalizeAnalytics } from '../ui/analyticsFormat'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from '../executionContract'
@@ -27,10 +27,10 @@ const composerPreviewSessionId = 'session-codex-composer-preview'
 const composerPreviewStorageKey = 'bloblex.preview.composer-session.v1'
 
 let agents: Agent[] = [
-  { id: 'agent-claude', name: 'Claude', description: 'Default agent for Claude.', instructions: '', color: '#f38c6f', runtimeId: 'runtime-claude', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: minutesAgo(4000), updatedAt: minutesAgo(4000) },
+  { id: 'agent-claude', name: 'Claude', look: { shape: 'cloud', seed: 'claude' }, description: 'Default agent for Claude.', instructions: '', color: '#f38c6f', runtimeId: 'runtime-claude', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: minutesAgo(4000), updatedAt: minutesAgo(4000) },
   { id: 'agent-codex', name: 'Codex', description: 'Default agent for Codex.', instructions: '', color: '#82aaff', runtimeId: 'runtime-codex', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: minutesAgo(3000), updatedAt: minutesAgo(3000), approvalMode: 'auto', effectiveApprovalMode: 'auto' },
-  { id: 'agent-invoice', name: 'Invoice helper', description: '', instructions: '', color: 'lemon', runtimeId: 'runtime-codex', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 1, archived: false, createdAt: minutesAgo(2000), updatedAt: minutesAgo(2000) },
-  { id: 'agent-opencode', name: 'OpenCode', description: 'Default agent for OpenCode.', instructions: '', color: 'violet', runtimeId: 'runtime-opencode', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: minutesAgo(1000), updatedAt: minutesAgo(1000) },
+  { id: 'agent-invoice', name: 'Invoice helper', look: { shape: 'capsule', seed: 'invoice' }, description: '', instructions: '', color: 'lemon', runtimeId: 'runtime-codex', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 1, archived: false, createdAt: minutesAgo(2000), updatedAt: minutesAgo(2000) },
+  { id: 'agent-opencode', name: 'OpenCode', look: { shape: 'droplet', seed: 'opencode' }, description: 'Default agent for OpenCode.', instructions: '', color: 'violet', runtimeId: 'runtime-opencode', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: minutesAgo(1000), updatedAt: minutesAgo(1000) },
   { id: 'agent-old', name: 'Retired', description: '', instructions: '', color: 'pink', runtimeId: 'runtime-codex', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 2, archived: true, createdAt: minutesAgo(5000), updatedAt: minutesAgo(10) },
 ]
 
@@ -87,6 +87,44 @@ try {
   }
 } catch { /* Preview fixture storage is optional. */ }
 
+// Team fixture (preview only): projects own blobs; Codex leads, Pololo is a teammate.
+let projects: Project[] = [
+  { id: 'project-board', name: 'Board', path: 'C:/work/korus', sortOrder: 0, collapsed: false },
+  { id: 'project-side', name: 'Side Projects', path: 'C:/work/site', sortOrder: 1, collapsed: false },
+]
+const teamFields: Record<string, Partial<Agent>> = {
+  'agent-codex': { projectId: 'project-board', role: 'CTO', leader: true },
+  'agent-claude': { projectId: 'project-side', role: 'Copywriter' },
+  'agent-invoice': { projectId: 'project-board', role: 'Finance' },
+  'agent-opencode': { role: 'Researcher' },
+}
+agents = agents.map((agent) => ({ projectId: null, role: '', leader: false, hidden: false, ...agent, ...teamFields[agent.id] }))
+agents.push({ id: 'agent-pololo', name: 'Pololo', look: { shape: 'sun', seed: 'pololo' }, description: 'UI/UX designer: finds and adapts component references.', instructions: '', color: '#2fbf9b', runtimeId: 'runtime-opencode', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 2, archived: false, createdAt: minutesAgo(900), updatedAt: minutesAgo(900), projectId: 'project-board', role: 'UI/UX Designer', leader: false, hidden: false })
+const teamMainId = 'session-team-leader'
+const teamSideId = 'session-team-side'
+sessions.push({
+  id: teamMainId, runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Codex', projectPath: 'C:/work/korus', state: 'waiting_permission', updatedAt: minutesAgo(0.5),
+  modelLock: { model: 'gpt-5.5', thinking: 'high', planMode: flags().has('plan') }, contextUsed: 52_000, contextSize: 400_000,
+  messages: [
+    { id: 'team-u1', role: 'user', content: 'Can you research an effort picker like the one on 21st.dev? @Pololo is great at UI, ask him to find it.', createdAt: minutesAgo(30) },
+    { id: 'team-a1', role: 'assistant', content: 'On it — sending Pololo the brief and asking him to hunt down that effort / reasoning-level picker.', createdAt: minutesAgo(29) },
+    { id: 'team-n1', role: 'notice', content: 'Find an open-source effort picker like the 21st.dev one…', createdAt: minutesAgo(29), meta: { kind: 'delegation', direction: 'sent', peerAgentId: 'agent-pololo', peerName: 'Pololo', sideSessionId: teamSideId } },
+    { id: 'team-r1', role: 'user', content: '[Reply from Pololo]\nNothing pixel-exact exists as a package. Closest: a PostHog ReasoningLevelDropdown (MIT) and a model selector on 21st.dev with Effort, Context and Fast toggles.', createdAt: minutesAgo(12), meta: { kind: 'blob_reply', fromAgentId: 'agent-pololo', fromName: 'Pololo', sideSessionId: teamSideId } },
+    { id: 'team-a2', role: 'assistant', content: 'Pololo found it — nothing is a pixel-exact drop-in, but these are the useful hits:\n\n- **PostHog ReasoningLevelDropdown** (MIT): Faster ↔ Smarter, notched snaps, a Default badge.\n- **AI Model Select** on 21st.dev: Effort, Context and Fast in one popover.\n\nMy take: fork the PostHog one. Want me to plan the port?', createdAt: minutesAgo(11) },
+    { id: 'team-u2', role: 'user', content: 'Yes, plan it.', createdAt: minutesAgo(3) },
+    { id: 'team-p1', role: 'plan', content: '1. Vendor the ReasoningLevelDropdown into `src/ui/effort`.\n2. Replace its token colours with Bloblex theme tokens.\n3. Wire it to the session lock and add keyboard tests.', createdAt: minutesAgo(2), meta: { kind: 'plan' } },
+  ],
+})
+sessions.push({
+  id: teamSideId, runtimeId: 'runtime-opencode', agentId: 'agent-pololo', title: 'Codex ⇄ Pololo', projectPath: 'C:/work/korus', state: 'completed', updatedAt: minutesAgo(12),
+  link: { kind: 'side', peerAgentId: 'agent-codex', peerName: 'Codex', originSessionId: teamMainId },
+  messages: [
+    { id: 'side-m1', role: 'user', content: 'Hi Pololo, it\'s Codex. Sam needs a UI research hunt: an Effort / reasoning-level picker with a Faster ↔ Smarter slider, about six snap points and a Recommended mark. Search 21st.dev and GitHub for open-source replicas and reply with the best hits ranked.', createdAt: minutesAgo(29), meta: { kind: 'blob_message', fromAgentId: 'agent-codex', fromName: 'Codex' } },
+    { id: 'side-a1', role: 'assistant', content: 'UI research done.\n\n**Bottom line:** nothing pixel-exact as a drop-in. Closest fork is PostHog; closest install is an AI Model Select on 21st.dev.', createdAt: minutesAgo(12) },
+  ],
+})
+const teamQuestion: PermissionRequest = { id: 'perm-question', sessionId: teamMainId, runtimeId: 'runtime-codex', status: 'pending', kind: 'question', title: 'Codex has a question', choices: ['answer', 'dismiss'], questions: [{ id: 'q-direction', header: 'Direction', question: 'Which direction should the effort picker follow?', options: [{ label: 'PostHog fork', description: 'Closest behaviour, MIT licensed' }, { label: '21st.dev model select', description: 'One popover for effort, context and fast' }, { label: 'Build our own' }], multiSelect: false, allowOther: true }] }
+
 let sequence = 1
 let agentSerial = 6
 let fixtureAutostart = false
@@ -129,9 +167,32 @@ function currentSnapshot(): Snapshot {
     sessions: sessions.filter((session) => !session.archived).map((session) => ({ ...session })),
     permissions: search.has('approval')
       ? [{ id: 'perm-1', sessionId: 'session-codex', runtimeId: 'runtime-codex', status: 'pending', title: 'Run shell command', command: 'npm test -- invoice', choices: ['allow_once', 'allow_session', 'deny'] }]
-      : [],
+      : sessions.some((session) => session.id === teamMainId && session.state === 'waiting_permission') ? [teamQuestion] : [],
+    projects: projects.map((project) => ({ ...project })),
     usageSummary: { inputTokens: 182_400, outputTokens: 24_900 },
+    quotas: fixtureQuotas(),
   }
+}
+
+const hoursFromNow = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString()
+function fixtureQuotas() {
+  if (flags().has('no-quota')) return []
+  const window = (usedPercent: number, hours: number, windowDurationMins: number | null) => ({ usedPercent, remainingPercent: 100 - usedPercent, resetsAt: hoursFromNow(hours), windowDurationMins })
+  const fetchedAt = minutesAgo(1)
+  return [
+    { provider: 'claude', runtimeId: 'runtime-claude', fetchedAt, lastAttemptAt: fetchedAt, failureCount: 0, lastError: null, snapshot: { provider: 'claude', limits: [
+      { label: 'Claude Code', primary: window(1, 3.9, 300), secondary: window(27, 52, 10_080) },
+      { label: 'Claude Opus', primary: window(12, 52, 10_080), secondary: null },
+    ] } },
+    { provider: 'codex', runtimeId: 'runtime-codex', fetchedAt, lastAttemptAt: fetchedAt, failureCount: 0, lastError: null, snapshot: { provider: 'codex', limits: [
+      { label: 'Codex', primary: window(0, 4.98, 300), secondary: window(44, 107, 10_080) },
+    ] } },
+    { provider: 'opencode', runtimeId: 'runtime-opencode', fetchedAt, lastAttemptAt: fetchedAt, failureCount: 0, lastError: flags().has('quota-error') ? 'unauthorized' : null, snapshot: { provider: 'opencode', limits: [
+      { label: '5-hour', primary: window(0, 2.78, 300), secondary: null },
+      { label: 'Weekly', primary: window(4, 48, 10_080), secondary: null },
+      { label: 'Monthly', primary: window(16, 493, null), secondary: null },
+    ] } },
+  ]
 }
 
 function nameTaken(name: string, exceptId?: string) {
@@ -147,20 +208,23 @@ function fixtureCatalog(runtimeId: string) {
     { id: 'opencode-go/preview', displayName: 'Preview model', supportedThinking: [], serviceTiers: [] },
     { id: 'opencode-go/alternate-preview', displayName: 'Alternate preview', supportedThinking: [], serviceTiers: [] },
   ] : runtime?.provider === 'claude' ? [
-    { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5', supportedThinking: ['low', 'medium', 'high', 'max'], defaultThinking: 'high', serviceTiers: [], isDefault: true },
+    { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max'], defaultThinking: 'high', serviceTiers: [{ id: 'fast', name: 'Fast' }], isDefault: true },
     { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', supportedThinking: ['low', 'medium', 'high'], defaultThinking: 'medium', serviceTiers: [], isDefault: false },
     { id: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5', supportedThinking: ['low', 'medium'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
   ] : [
-    { id: 'gpt-5.5', displayName: 'GPT-5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh'], defaultThinking: 'medium', serviceTiers: [], isDefault: true },
-    { id: 'gpt-5.4', displayName: 'GPT-5.4', supportedThinking: ['low', 'medium', 'high', 'xhigh'], defaultThinking: 'high', serviceTiers: [], isDefault: false },
+    { id: 'gpt-5.5', displayName: 'GPT-5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh'], defaultThinking: 'medium', serviceTiers: [{ id: 'priority', name: 'Fast' }], isDefault: true },
+    { id: 'gpt-5.4', displayName: 'GPT-5.4', supportedThinking: ['low', 'medium', 'high', 'xhigh'], defaultThinking: 'high', serviceTiers: [{ id: 'priority', name: 'Fast' }], isDefault: false },
     { id: 'gpt-5.3-codex', displayName: 'GPT-5.3 Codex', supportedThinking: ['low', 'medium', 'high'], defaultThinking: 'medium', serviceTiers: [], isDefault: false },
   ]
   return { runtimeId, provider: runtime?.provider ?? '', models, validated: true, source: 'fixture', fetchedAt: '2026-10-04T00:00:00Z' }
 }
 
 export const inDesktop = true
+export const previewMode = true
 export async function rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   if (method === 'events.replay') return { replayAvailable: true, events: [] } as T
+  if (method === 'quota.list') return { quotas: fixtureQuotas() } as T
+  if (method === 'quota.refresh') { window.setTimeout(() => notifyFixtureDaemon('quota.updated', {}), 600); return { started: true } as T }
   if (method === 'settings.get') return { settings: { ...fixtureSettings } } as T
   if (method === 'settings.set') { fixtureSettings[String(params.key)] = params.value; return { saved: true } as T }
   if (method === 'session.list') return { sessions: sessions.filter((session) => params.includeArchived === true || !session.archived).map((session) => ({ ...session })) } as T
@@ -196,16 +260,31 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (['starting', 'working', 'cancelling', 'waiting_permission'].includes(String(session.state))) throw rpcError('conflict', 'Model and effort cannot change during an active turn.')
     if (params.model != null && (typeof params.model !== 'string' || !params.model.trim())) throw rpcError('invalid_argument', 'model must be a non-empty identifier or null')
     if (params.thinking != null && (typeof params.thinking !== 'string' || !params.thinking.trim())) throw rpcError('invalid_argument', 'thinking must be a non-empty identifier or null')
-    const nextModel = typeof params.model === 'string' && params.model ? params.model : null
-    const nextThinking = typeof params.thinking === 'string' && params.thinking ? params.thinking : null
     const previousModel = session.modelLock?.model ?? session.model ?? agents.find((agent) => agent.id === session.agentId)?.model ?? null
+    const previousThinking = session.modelLock?.thinking ?? agents.find((agent) => agent.id === session.agentId)?.thinking ?? null
+    const nextModel = !('model' in params) ? previousModel : typeof params.model === 'string' && params.model ? params.model : null
+    const nextThinking = !('thinking' in params) ? previousThinking : typeof params.thinking === 'string' && params.thinking ? params.thinking : null
     const modelChanged = previousModel !== nextModel
     if (modelChanged && params.confirmModelChange !== true) throw rpcError('confirmation_required', 'Confirm the model change before continuing.')
     const modelRows = fixtureCatalog(session.runtimeId).models
     if (nextModel && !modelRows.some((item) => item.id === nextModel)) throw rpcError('invalid_argument', 'The selected model is not in the fixture catalog.')
     const selected = modelRows.find((item) => item.id === nextModel)
     if (nextThinking && selected && !selected.supportedThinking.includes(nextThinking)) throw rpcError('invalid_argument', 'The selected effort is not advertised for this model.')
-    session.modelLock = { model: nextModel, thinking: nextThinking }
+    const previousLock = session.modelLock ?? {}
+    const nextLock: NonNullable<Session['modelLock']> = { model: nextModel, thinking: nextThinking }
+    if ('serviceTier' in previousLock && !(modelChanged && !('serviceTier' in params))) nextLock.serviceTier = previousLock.serviceTier
+    if ('approvalMode' in previousLock) nextLock.approvalMode = previousLock.approvalMode
+    if ('serviceTier' in params) {
+      if (params.serviceTier === null) delete nextLock.serviceTier
+      else if (typeof params.serviceTier === 'string' && (selected?.serviceTiers ?? []).some((tier) => (tier as { id?: string }).id === params.serviceTier)) nextLock.serviceTier = params.serviceTier
+      else throw rpcError('invalid_argument', 'The selected speed is not advertised for this model.')
+    }
+    if ('approvalMode' in params) {
+      if (params.approvalMode === null) delete nextLock.approvalMode
+      else if (params.approvalMode === 'ask' || params.approvalMode === 'auto' || params.approvalMode === 'bypass') nextLock.approvalMode = params.approvalMode
+      else throw rpcError('invalid_argument', 'approvalMode must be ask, auto, bypass or null')
+    }
+    session.modelLock = nextLock
     session.model = nextModel ?? undefined
     session.updatedAt = new Date().toISOString()
     if (modelChanged) {
@@ -326,6 +405,47 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     sequence += 1
     return { session } as T
   }
+  if (method === 'agent.conversation') {
+    const agent = agents.find((item) => item.id === params.agentId && !item.archived)
+    if (!agent) throw rpcError('not_found', 'That blob is no longer available.')
+    const existing = sessions.filter((session) => session.agentId === agent.id && !session.archived && !session.link).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0]
+    if (existing) return { session: { ...existing }, created: false } as T
+    const project = projects.find((item) => item.id === agent.projectId)
+    const session: Session = { id: `session-new-${sessions.length + 1}`, runtimeId: agent.runtimeId, agentId: agent.id, title: agent.name, projectPath: project?.path ?? `C:/Bloblex/workspaces/${agent.id}`, state: 'idle', modelLock: { model: agent.model, thinking: agent.thinking }, contextUsed: null, contextSize: null, updatedAt: new Date().toISOString(), messages: [] }
+    sessions = [...sessions, session]
+    return { session, created: true } as T
+  }
+  if (method === 'agent.team.update') {
+    const agent = agents.find((item) => item.id === params.agentId)
+    if (!agent) throw rpcError('not_found', 'That blob is no longer available.')
+    if (params.leader === true) agents = agents.map((item) => item.id === agent.id ? item : { ...item, leader: false })
+    const patch: Partial<Agent> = {}
+    if ('projectId' in params) patch.projectId = typeof params.projectId === 'string' ? params.projectId : null
+    if (typeof params.role === 'string') patch.role = params.role.trim()
+    if (typeof params.leader === 'boolean') patch.leader = params.leader
+    if (typeof params.hidden === 'boolean') patch.hidden = params.hidden
+    agents = agents.map((item) => item.id === agent.id ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item)
+    return { agent: { ...agents.find((item) => item.id === agent.id)! } } as T
+  }
+  if (method === 'project.create') {
+    const project: Project = { id: `project-${projects.length + 1}`, name: String(params.name ?? 'Project'), path: typeof params.path === 'string' ? params.path : null, sortOrder: projects.length, collapsed: false }
+    projects = [...projects, project]
+    return { project } as T
+  }
+  if (method === 'project.update') {
+    projects = projects.map((project) => project.id === params.projectId ? { ...project, ...(typeof params.name === 'string' ? { name: params.name } : {}), ...(typeof params.collapsed === 'boolean' ? { collapsed: params.collapsed } : {}), ...('path' in params ? { path: typeof params.path === 'string' ? params.path : null } : {}) } : project)
+    return { project: projects.find((project) => project.id === params.projectId) } as T
+  }
+  if (method === 'project.delete') {
+    projects = projects.filter((project) => project.id !== params.projectId)
+    agents = agents.map((agent) => agent.projectId === params.projectId ? { ...agent, projectId: null } : agent)
+    return { deleted: true } as T
+  }
+  if (method === 'permission.reply' && params.permissionId === 'perm-question') {
+    sessions = sessions.map((session) => session.id === teamMainId ? { ...session, state: 'idle' } : session)
+    notifyFixtureDaemon('permission.resolved', { permissionId: 'perm-question' })
+    return { resolved: true } as T
+  }
   if (method === 'usage.analytics') return answerUsageAnalytics(params, flags().get('analytics')) as T
   return {} as T
 }
@@ -334,11 +454,23 @@ export async function ensureDaemon() {}
 export async function startDaemonEventStream() {}
 export async function openProjectFolder() { return null }
 export async function selectLocalFile() { return null }
+let stagedAttachmentSerial = 0
+export async function stagePromptAttachment(bytes: Uint8Array) {
+  if (!bytes.length) throw new Error('The image could not be read.')
+  stagedAttachmentSerial += 1
+  return `C:/preview/attachments/staged-${stagedAttachmentSerial}.png`
+}
 export async function selectMarkdownExportPath() { return 'preview-markdown-token' }
 export async function writeMarkdownExport(_selectionToken: string, _text: string) {}
 export async function selectBlobExportPath(_name: string) { return 'preview-blob-export-token' }
 export async function selectBlobImportPath() { return 'preview-blob-import-token' }
-export async function readBlobImport(_selectionToken: string) { return '' }
+export async function readBlobImport(_selectionToken: string) {
+  return JSON.stringify({
+    format: 'bloblex.blob.v1', name: 'Mochi', description: 'Reviews pull requests and keeps the test suite green.', colour: '#f6a04d',
+    instructions: 'Read the diff first. Run the tests before you say something works. Keep reviews short and kind.',
+    model: 'gpt-5.5', thinking: 'high', speed: null, look: { shape: 'cat', seed: 'mochi' }, defaultApprovalMode: 'ask', providerId: 'codex',
+  }, null, 2)
+}
 export async function writeBlobExport(_selectionToken: string, _text: string) {}
 export async function inspectLocalFile(path: string) { return { path, fileName: path.split(/[\\/]/).pop() ?? path, sizeBytes: 2048 } }
 export async function openInEditor() {}

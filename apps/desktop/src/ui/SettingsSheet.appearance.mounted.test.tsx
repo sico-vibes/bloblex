@@ -8,6 +8,7 @@ import { SettingsSheet } from './SettingsSheet'
 const mocks = vi.hoisted(() => ({ rpc: vi.fn(), invoke: vi.fn(), setCompanionMonitor: vi.fn(), setCompanionVisibility: vi.fn(), setCloseToTray: vi.fn() }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  previewMode: false,
   rpc: mocks.rpc,
   permissionsPolicyGet: vi.fn(async () => ({ defaultMode: 'ask', perAgent: [] })),
   companionMonitorOptions: vi.fn(async () => []),
@@ -40,6 +41,23 @@ beforeEach(() => {
 afterEach(() => { if (root) act(() => root.unmount()); host?.remove(); vi.unstubAllGlobals() })
 
 describe('General settings mounted controls', () => {
+  it('offers the usage bar as an explained, experimental switch that saves and reports the change', async () => {
+    mocks.invoke.mockResolvedValue(true)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
+    const onUsageBarChange = vi.fn()
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" usageBarEnabled={false} onUsageBarChange={onUsageBarChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const group = [...host.querySelectorAll('.settings-group')].find((section) => section.querySelector('h3')?.textContent === 'Experimental')
+    expect(group?.querySelector('.experimental-tag')?.textContent).toBe('Experimental')
+    expect(group?.querySelector('[role="tooltip"]')?.textContent).toContain('plan limits')
+    const toggle = group?.querySelector<HTMLButtonElement>('[aria-label="Usage bar"]')
+    expect(toggle?.getAttribute('aria-checked')).toBe('false')
+    await act(async () => { toggle!.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'experimental.usageBar', value: true })
+    expect(onUsageBarChange).toHaveBeenCalledWith(true)
+  })
+
   it('offers theme, text size, companion placement and hotkey controls, and persists appearance changes', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { 'appearance.theme': 'system', 'appearance.textSize': 'default' } } : {})

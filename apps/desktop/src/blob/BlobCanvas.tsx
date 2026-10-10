@@ -4,7 +4,7 @@ import { BlobEngine, hexToRGB, type EngineState } from './blobEngine'
 import { drawGreetingScene, GREETING_END_MS, GREETING_REFERENCE } from './greetingScene'
 import { DizzyRecoveryDeadline, GreetingLifecycle } from './motion'
 import { playCompanionCue, unlockCompanionAudioFromGesture } from './soundCues'
-import { normalizeOutfit, type Outfit } from './outfit'
+import type { BlobLook } from './look'
 
 export type { BlobMood } from './characterState'
 import type { BlobMood } from './characterState'
@@ -21,8 +21,8 @@ interface Props {
   /** Small peer avatars: flatter shading, larger eyes and a wandering gaze. */
   mini?: boolean
   decorative?: boolean
-  outfit?: Outfit | null
-  createdAt?: string | null
+  /** The blob's silhouette and face. Omitted, it is the round Bloblex mascot. */
+  look?: BlobLook | null
   /** Opt in only on the companion surface; main-window avatars stay silent. */
   soundCues?: boolean
   onGreetingComplete?: () => void
@@ -70,7 +70,7 @@ const LOVE_COOLDOWN_MS = 6000
  * avatar, so a blob keeps one face language everywhere. With `greeting`, the
  * canvas plays the companion welcome scene instead.
  */
-export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, decorative = false, outfit = 'auto', createdAt = null, soundCues = false, onGreetingComplete, onDizzy, onDizzyRecovery }: Props) {
+export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, decorative = false, look = null, soundCues = false, onGreetingComplete, onDizzy, onDizzyRecovery }: Props) {
   const effectiveMood = moodWithFileReference(mood, fileStage)
   const canvas = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<BlobEngine | null>(null)
@@ -78,8 +78,7 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
     const engine = new BlobEngine()
     engine.isMini = mini
     engine.bodyColor = hexToRGB(color)
-    engine.setOutfit(normalizeOutfit(outfit), false)
-    engine.createdAt = createdAt
+    engine.setLook(look, false)
     engine.setState(engineStateFor(effectiveMood), { force: true, silent: true })
     engineRef.current = engine
   }
@@ -106,10 +105,9 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
   }, [color, mini])
 
   useEffect(() => {
-    engineRef.current!.setOutfit(normalizeOutfit(outfit))
-    engineRef.current!.createdAt = createdAt ?? null
+    engineRef.current!.setLook(look)
     scheduleRef.current?.()
-  }, [outfit, createdAt])
+  }, [look])
 
   useEffect(() => {
     const life = greetingLife.current!
@@ -164,7 +162,7 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
 
       ctx.clearRect(0, 0, width, height)
       if (greeting) {
-        drawGreetingScene(ctx, width, height, life.active && motionAllowed ? life.age(now) : GREETING_END_MS, engine.bodyColor, engine.outfit, engine.createdAt)
+        drawGreetingScene(ctx, width, height, life.active && motionAllowed ? life.age(now) : GREETING_END_MS, engine.bodyColor)
         if (life.active && motionAllowed) frame = requestAnimationFrame(draw)
         return
       }
@@ -208,6 +206,7 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
     const onPointerEnter = () => {
       hovered = true
       if (greeting) return
+      if (soundCues) playCompanionCue('hover')
       engine.blink()
       engine.tgEs = 1.08
       window.clearTimeout(loveTimer)
@@ -216,6 +215,7 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
         if (!hovered || dizzyActive.current || now - lastLove < LOVE_COOLDOWN_MS) return
         lastLove = now
         engine.triggerEmote('love')
+        if (soundCues) playCompanionCue('love')
         schedule()
       }, LOVE_HOVER_MS)
       schedule()
@@ -228,19 +228,18 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
     }
     const onPointerDown = () => {
       const now = performance.now()
-      if (soundCues && !playCompanionCue('poke')) {
-        // A persisted opt-in can arrive from another WebView before this one
-        // has a user-gesture-unlocked AudioContext. Use this real pointer
-        // gesture to unlock locally, then replay only the poke cue.
-        void unlockCompanionAudioFromGesture().then((unlocked) => {
-          if (unlocked) playCompanionCue('poke')
-        })
-      }
       if (life.interrupt(now)) completionRef.current?.()
       window.clearTimeout(loveTimer)
       if (dizzyActive.current) { schedule(); return }
       taps.current = taps.current.filter((time) => now - time < SLAP_WINDOW_MS)
       taps.current.push(now)
+      const dizzy = taps.current.length >= 3 && !dizzyActive.current
+      if (soundCues) {
+        const cue = dizzy ? 'dizzy' : 'poke'
+        // A persisted opt-in can arrive from another WebView before this one
+        // has a gesture-unlocked AudioContext; this real gesture unlocks it.
+        if (!playCompanionCue(cue)) void unlockCompanionAudioFromGesture().then((unlocked) => { if (unlocked) playCompanionCue(cue) })
+      }
       if (taps.current.length >= 3) {
         taps.current = []
         dizzyActive.current = true

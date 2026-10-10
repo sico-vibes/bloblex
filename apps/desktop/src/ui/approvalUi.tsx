@@ -2,7 +2,7 @@ import { useState, type RefObject } from 'react'
 import { Shield } from 'lucide-react'
 import type { ApprovalMode, AutoResolvedAction } from '../approvalContract'
 import { newestFirst } from '../approvalContract'
-import { useDialogAccessibility } from './dialogFocus'
+import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 
 export function ApprovalBadge({ mode }: { mode: ApprovalMode | null | undefined }) {
   if (mode !== 'auto' && mode !== 'bypass') return null
@@ -34,7 +34,8 @@ export function BypassConfirmDialog({ blobName, onConfirm, onCancel }: { blobNam
   const { ref, close } = useDialogAccessibility(onCancel)
   const [typed, setTyped] = useState('')
   const matches = typed === blobName && blobName.length > 0
-  return <div className="sheet-backdrop blob-dialog-backdrop">
+  const entered = useDialogEntered()
+  return <div className={`sheet-backdrop blob-dialog-backdrop${entered ? ' is-entered' : ''}`}>
     <section ref={ref as RefObject<HTMLElement>} className="blob-dialog" role="dialog" aria-modal="true" aria-labelledby="bypass-dialog-title" aria-describedby="bypass-dialog-body">
       <h2 id="bypass-dialog-title">Turn on bypass for {blobName || 'this blob'}?</h2>
       <div id="bypass-dialog-body">

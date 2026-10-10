@@ -37,21 +37,22 @@ describe('session execution controls', () => {
     })
     const host = mount()
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    const model = host.querySelector<HTMLButtonElement>('.session-model-select .select-trigger')!
+    const model = host.querySelector<HTMLButtonElement>('.model-pill')!
     expect(model.textContent).toContain('Alpha')
-    expect(model.getAttribute('aria-label')).toBe('Conversation model, Alpha')
-    expect(model.textContent).not.toContain('recommended')
+    expect(model.getAttribute('aria-label')).toBe('Conversation model: Alpha')
+    expect(model.textContent).not.toContain('Recommended')
     await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
     const effort = host.querySelector<HTMLInputElement>('[aria-label="Conversation effort"]')!
     expect(effort.type).toBe('range')
     expect(effort.getAttribute('min')).toBe('0')
-    expect(host.querySelector('.session-effort-labels button:first-child')?.textContent).toBe('Provider default')
+    expect(host.querySelector('.session-effort-footer button')?.textContent).toBe('Provider default')
     const chooseBeta = async () => {
       await act(async () => { model.click() })
-      expect(host.querySelector('[role="listbox"]')?.getAttribute('aria-label')).toBe('Conversation model')
-      expect(host.querySelector('[role="option"][data-value=""]')?.textContent).toContain('Provider default')
-      expect(host.querySelector('[role="option"][data-value="alpha"]')?.textContent).toContain('(recommended)')
-      const option = host.querySelector<HTMLElement>('[role="option"][data-value="beta"]')!
+      expect(host.querySelector('[role="menu"]')?.getAttribute('aria-label')).toBe('Conversation model')
+      expect(host.querySelector('[role="menuitemradio"][data-value=""]')?.textContent).toContain('Provider default')
+      expect(host.querySelector('[role="menuitemradio"][data-value="alpha"]')?.textContent).toContain('Recommended')
+      expect(host.querySelector('[role="menuitemradio"][data-value="alpha"]')?.getAttribute('aria-checked')).toBe('true')
+      const option = host.querySelector<HTMLElement>('[role="menuitemradio"][data-value="beta"]')!
       expect(option.textContent).toContain('Beta')
       await act(async () => { option.click() })
     }
@@ -169,7 +170,7 @@ describe('session execution controls', () => {
     act(() => render(b)); await act(async () => { await Promise.resolve() })
     act(() => render(a)); await act(async () => { await Promise.resolve() })
     expect(host.querySelector<HTMLButtonElement>('.session-effort-trigger')?.disabled).toBe(true)
-    expect(host.querySelector<HTMLButtonElement>('.session-model-select .select-trigger')?.disabled).toBe(true)
+    expect(host.querySelector<HTMLButtonElement>('.model-pill')?.disabled).toBe(true)
     await act(async () => { resolveSave({ session:{ ...a, modelLock:{model:'alpha',thinking:'high'} } }); await Promise.resolve(); await Promise.resolve() })
     expect(onSessionUpdated).not.toHaveBeenCalled()
   })
@@ -182,7 +183,7 @@ describe('session execution controls', () => {
     mounted.push({ root, host })
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     const trigger = host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
-    expect(trigger.textContent).toContain('Provider default')
+    expect(trigger.textContent).toBe('Default')
     expect(trigger.textContent).not.toContain('Ultra')
     await act(async () => { trigger.click() })
     expect(host.textContent).toContain('This model does not report selectable effort levels')
@@ -199,9 +200,9 @@ describe('session execution controls', () => {
     await act(async()=>{host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click()})
     const range=host.querySelector<HTMLInputElement>('[aria-label="Conversation effort"]')!
     expect(range.getAttribute('aria-valuemax')).toBe('0')
-    expect(host.querySelectorAll('.session-effort-labels button')).toHaveLength(2)
-    expect(host.querySelector('.session-effort-labels button')?.textContent).toBe('Provider default')
-    await act(async()=>{host.querySelector<HTMLButtonElement>('.session-effort-labels button')!.click();await Promise.resolve();await Promise.resolve()})
+    expect(host.querySelectorAll('.session-effort-labels button')).toHaveLength(1)
+    expect(host.querySelector('.session-effort-footer button')?.textContent).toBe('Provider default')
+    await act(async()=>{host.querySelector<HTMLButtonElement>('.session-effort-footer button')!.click();await Promise.resolve();await Promise.resolve()})
     expect(rpc).toHaveBeenCalledWith('session.model.update',expect.objectContaining({model:'alpha',thinking:null}))
   })
 
@@ -227,16 +228,16 @@ describe('session execution controls', () => {
     const render = (current: Session) => root.render(<SessionExecutionControls session={current} agent={{ ...agent, model:'beta', thinking:'low' }} onSessionUpdated={() => undefined} onError={() => undefined} />)
     act(() => render(session)); mounted.push({ root, host })
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    expect(host.querySelector('.session-model-select .select-trigger')?.textContent).toContain('Alpha')
+    expect(host.querySelector('.model-pill')?.textContent).toContain('Alpha')
     expect(host.querySelector('.session-effort-trigger')?.textContent).toContain('High')
 
-    const model = host.querySelector<HTMLButtonElement>('.session-model-select .select-trigger')!
+    const model = host.querySelector<HTMLButtonElement>('.model-pill')!
     await act(async () => { model.click() })
-    await act(async () => { host.querySelector<HTMLElement>('[role="option"][data-value="beta"]')!.click() })
+    await act(async () => { host.querySelector<HTMLElement>('[role="menuitemradio"][data-value="beta"]')!.click() })
     expect(host.querySelector('[role="dialog"]')).not.toBeNull()
     await act(async () => { render({ ...session, id:'session-2', modelLock:{ model:'beta', thinking:'low' } }); await Promise.resolve() })
     expect(host.querySelector('[role="dialog"]')).toBeNull()
-    expect(host.querySelector('.session-model-select .select-trigger')?.textContent).toContain('Beta')
+    expect(host.querySelector('.model-pill')?.textContent).toContain('Beta')
     expect(rpc.mock.calls.filter(([method]) => method === 'session.model.update')).toHaveLength(0)
   })
 
@@ -266,7 +267,7 @@ describe('session execution controls', () => {
     const nextSession: Session = { ...session, id:'session-2', modelLock:{ model:'alpha', thinking:'high' } }
     await act(async () => { render(nextSession); await Promise.resolve(); await Promise.resolve() })
     await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
-    await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-labels button:nth-child(2)')!.click(); await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-labels button:first-child')!.click(); await Promise.resolve(); await Promise.resolve() })
     expect(onSessionUpdated).toHaveBeenCalledWith(expect.objectContaining({ id:'session-2' }))
     expect(rpc.mock.calls.filter(([method]) => method === 'session.model.update').at(-1)?.[1]).toMatchObject({ sessionId:'session-2' })
   })

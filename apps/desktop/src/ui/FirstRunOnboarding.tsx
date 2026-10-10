@@ -19,7 +19,6 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
   const [creating, setCreating] = useState(false)
   const [celebrated, setCelebrated] = useState(false)
   const [copyNotice, setCopyNotice] = useState('')
-  const [previewCreatedAt] = useState(() => new Date().toISOString())
   const nameRef = useRef<HTMLInputElement>(null)
   const headingRef = useRef<HTMLHeadingElement>(null)
   const celebrationTimer = useRef<number | null>(null)
@@ -50,7 +49,7 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
   }
   const colors = <div className="onboarding-colors" role="group" aria-label="Blob colour">{COLORS.map((item) => <button key={item} type="button" aria-label={'Choose ' + item + ' colour'} aria-pressed={color === item} style={{ backgroundColor: item }} onClick={() => setColor(item)} />)}</div>
   return <main className="onboarding-screen" aria-labelledby="onboarding-title"><section className="onboarding-content">
-    <div className="onboarding-character"><BlobCanvas color={color} size={112} mood={step === 1 ? (scanning ? 'tool_activity' : 'thinking') : celebrated ? 'success' : 'idle'} outfit="auto" createdAt={step === 2 || celebrated ? previewCreatedAt : null} label="Bloblex onboarding companion" /></div>
+    <div className="onboarding-character"><BlobCanvas color={color} size={112} mood={step === 1 ? (scanning ? 'tool_activity' : 'thinking') : celebrated ? 'success' : 'idle'} label="Bloblex onboarding companion" /></div>
     <div className="onboarding-progress" role="group" aria-label={'Step ' + (step + 1) + ' of 3'}>{[0, 1, 2].map((index) => <span key={index} className={index === step ? 'active' : index < step ? 'done' : ''} />)}</div>
     {step === 0 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>What should we call you?</h1><p>This name stays on this device.</p><label className="onboarding-field">Your name<input ref={nameRef} className="text-input" value={name} maxLength={40} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && name.trim()) continueName() }} /></label><div className="onboarding-actions"><button className="ghost-button" onClick={() => continueName(true)}>Skip</button><button className="primary-button" disabled={!name.trim()} onClick={() => continueName()}>Continue</button></div></section>}
     {step === 1 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>Coding agents</h1><p>Bloblex checks which coding agents are installed on this device.</p><div className="onboarding-runtimes" aria-live="polite">{(['claude', 'codex', 'opencode'] as const).map((provider) => {

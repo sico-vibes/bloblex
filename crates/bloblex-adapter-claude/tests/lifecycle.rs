@@ -83,7 +83,7 @@ async fn default_permission_uses_the_stream_json_host_control_protocol() {
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-permission-roundtrip".into(),
                 text: "hello".into(),
                 exec_options: ExecOptions::default(),
@@ -133,7 +133,7 @@ async fn stderr_only_turn_exit_is_forwarded_as_actionable_error() {
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-stderr-error".into(),
                 text: "hello".into(),
                 exec_options: ExecOptions::default(),
@@ -175,7 +175,7 @@ async fn system_api_retry_updates_only_safe_diagnostic_summary() {
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-api-retry".into(),
                 text: "harmless test prompt".into(),
                 exec_options: ExecOptions::default(),
@@ -212,7 +212,7 @@ async fn fake_provider_proves_argv_order_hash_restart_secure_file_lifecycle_and_
     wait_session_start(&mut rx).await;
     let requested = ExecOptions { model: Some("claude-sonnet-test".into()), thinking: Some("high".into()), instructions: Some("PRIVATE_SENTINEL_NEVER_IN_ARGS".into()), ..ExecOptions::default() };
     adapter.set_instruction_hash_context("s-fake", Some("hash-one".into()), None).await;
-    adapter.prompt(&handle, PromptRequest { turn_id: "turn-1".into(), text: "hello".into(), exec_options: requested.clone() }).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-1".into(), text: "hello".into(), exec_options: requested.clone() }).await.unwrap();
     let first = events_through_turn(&mut rx).await;
     let applied = first.iter().find_map(|e| if let AgentEvent::ExecApplied { outcomes, .. } = e { Some(outcomes) } else { None }).unwrap();
     assert_eq!(applied["model"].applied, Some(true));
@@ -224,11 +224,11 @@ async fn fake_provider_proves_argv_order_hash_restart_secure_file_lifecycle_and_
 
     let changed = ExecOptions { model: Some("claude-opus-test".into()), ..requested.clone() };
     adapter.set_instruction_hash_context("s-fake", Some("hash-one".into()), Some("hash-one".into())).await;
-    adapter.prompt(&handle, PromptRequest { turn_id: "turn-2".into(), text: "again".into(), exec_options: changed.clone() }).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-2".into(), text: "again".into(), exec_options: changed.clone() }).await.unwrap();
     let _ = events_through_turn(&mut rx).await;
     adapter.set_instruction_hash_context("s-fake", Some("hash-two".into()), Some("hash-one".into())).await;
     let changed_instruction = ExecOptions { instructions: Some("PRIVATE_SENTINEL_CHANGED".into()), ..changed };
-    adapter.prompt(&handle, PromptRequest { turn_id: "turn-3".into(), text: "third".into(), exec_options: changed_instruction }).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-3".into(), text: "third".into(), exec_options: changed_instruction }).await.unwrap();
     let _ = events_through_turn(&mut rx).await;
 
     let rows = audit(&audit_path);
@@ -287,7 +287,7 @@ async fn fake_provider_error_keeps_usage_and_applied_outcomes_unreported() {
     wait_session_start(&mut rx).await;
     let options = ExecOptions { model: Some("requested-model".into()), thinking: Some("high".into()), instructions: Some("never-persist-this".into()), ..ExecOptions::default() };
     adapter.set_instruction_hash_context("s-error", Some("desired-hash".into()), None).await;
-    adapter.prompt(&handle, PromptRequest { turn_id: "turn-error".into(), text: "hello".into(), exec_options: options }).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-error".into(), text: "hello".into(), exec_options: options }).await.unwrap();
     let seen = events_through_turn(&mut rx).await;
     let usage = seen.iter().find_map(|e| if let AgentEvent::UsageReport { report, .. } = e { Some(report) } else { None }).unwrap();
     assert_eq!(usage.usage_status, "unreported");
@@ -326,7 +326,7 @@ async fn failed_option_resume_reports_changed_names_and_provider_reason_without_
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-before-option-change".into(),
                 text: "hello".into(),
                 exec_options: ExecOptions::default(),
@@ -356,7 +356,7 @@ async fn failed_option_resume_reports_changed_names_and_provider_reason_without_
     let error = adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-option-resume-reject".into(),
                 text: "hello".into(),
                 exec_options: options,
@@ -417,7 +417,7 @@ async fn model_change_before_first_prompt_starts_fresh_when_resume_is_rejected()
     adapter
         .prompt(
             &handle,
-            PromptRequest {
+            PromptRequest { attachments: Vec::new(),
                 turn_id: "turn-first-model-change".into(),
                 text: "hello".into(),
                 exec_options: changed_options,
@@ -460,7 +460,7 @@ async fn init_model_echo_alone_is_not_model_application_evidence() {
     wait_session_start(&mut rx).await;
     let options = ExecOptions { model: Some("echoed-request-model".into()), ..ExecOptions::default() };
     adapter.set_instruction_hash_context("s-init-echo", None, None).await;
-    adapter.prompt(&handle, PromptRequest { turn_id: "turn-init-only".into(), text: "hello".into(), exec_options: options }).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-init-only".into(), text: "hello".into(), exec_options: options }).await.unwrap();
     let seen = events_through_turn(&mut rx).await;
     let outcomes = seen.iter().find_map(|event| if let AgentEvent::ExecApplied { outcomes, .. } = event { Some(outcomes) } else { None }).unwrap();
     assert_eq!(outcomes["model"].applied, Some(false));

@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import type { Agent, Session } from '../types'
+import { Check, ChevronDown, LoaderCircle, Zap } from 'lucide-react'
+import type { Agent, Session, SessionModelLock } from '../types'
 import { rpc } from '../tauri'
-import { parseModelCatalog, type ModelCatalog } from '../executionContract'
+import { parseModelCatalog, type CatalogModel, type ModelCatalog, type ServiceTierOption } from '../executionContract'
 import { ConfirmDialog } from './BlobPage'
-import { Select } from './Select'
+import { moveMenuFocus, usePopoverDismiss } from './ComposerControls'
+import { providerBrand } from './providerBrand'
 import { SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
 import { applyClaudeMagnet, claudePointerVelocity, codexDragPosition, CLAUDE_SPRING } from './meterMotion'
 
-type Lock = { model?: string | null; thinking?: string | null }
+type Lock = SessionModelLock
 type PendingModel = { sessionId: string; model: string | null }
 type EffortDraft = { sessionId: string; model: string | null; value: string | null }
 type Sample = { time: number; value: number }
@@ -53,7 +55,10 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   const lock = (session.modelLock && typeof session.modelLock === 'object' ? session.modelLock : {}) as Lock
   const model = lock.model === undefined ? agent.model : lock.model
   const thinking = lock.thinking === undefined ? agent.thinking : lock.thinking
-  const selectedModel = useMemo(() => catalog?.models.find((item) => item.id === model) ?? null, [catalog, model])
+  const serviceTier = lock.serviceTier === undefined ? agent.serviceTier : lock.serviceTier
+  // "Provider default" resolves to the catalog's default model for display and
+  // advertised effort levels; the saved lock still stores null.
+  const selectedModel = useMemo(() => catalog?.models.find((item) => item.id === model) ?? (!model ? catalog?.models.find((item) => item.isDefault) ?? null : null), [catalog, model])
   const efforts = selectedModel?.supportedThinking ?? []
   const activeDraft = effortDraft?.sessionId === session.id && effortDraft.model === model ? effortDraft.value : undefined
   const saving = savingSessionIds.has(session.id)
@@ -90,14 +95,29 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   const providerStyle = resolveProviderStyle(catalog?.provider ?? '', selectedModel?.providerId, selectedModel?.id ?? model, selectedModel?.displayName)
   const pendingForSession = pendingModel?.sessionId === session.id ? pendingModel : null
   const modelLabel = selectedModel?.displayName ?? (model || 'Provider default')
+  const modelAriaLabel = !model && selectedModel ? `Provider default (${selectedModel.displayName})` : modelLabel
+  const fastTier = fastTierFor(selectedModel)
+  const fastOn = !!fastTier && serviceTier === fastTier.id
+  const setFast = async (enabled: boolean) => {
+    if (!fastTier || savingRef.current.has(session.id)) return
+    const sessionId = session.id
+    savingRef.current.add(sessionId)
+    setSavingSessionIds((current) => new Set(current).add(sessionId))
+    try {
+      const result = await rpc<{ session?: Session }>('session.model.update', { sessionId, serviceTier: enabled ? fastTier.id : null })
+      if (mounted.current && currentSessionId.current === sessionId && result.session?.id === sessionId) onSessionUpdated(result.session)
+    } catch (reason) { if (mounted.current && currentSessionId.current === sessionId) onError(reason) } finally {
+      savingRef.current.delete(sessionId)
+      if (mounted.current) setSavingSessionIds((current) => { const next = new Set(current); next.delete(sessionId); return next })
+    }
+  }
 
   return <div className="session-execution-controls" aria-label="Conversation model controls">
-    <div className="session-model-control"><span className="session-control-label">Model</span>{catalog && catalog.models.length > 0
-      ? <Select ariaLabel="Conversation model" variant="muted" align="left" menuPlacement="top" triggerLabel={selectedModel?.displayName ?? 'Provider default'} className="session-model-select" disabled={controlsDisabled} value={model ?? ''} options={[{ value:'', label:'Provider default' }, ...catalog.models.map((item) => ({ value:item.id, label:`${item.displayName}${item.isDefault ? ' (recommended)' : ''}` }))]} onChange={(value) => {
-        const next = value || null
+    {catalog && catalog.models.length > 0
+      ? <ModelMenu provider={catalog.provider} models={catalog.models} model={model ?? null} label={modelLabel} ariaLabel={modelAriaLabel} fastTier={fastTier} fastOn={fastOn} disabled={sessionBusy} saving={saving} onSelect={(next) => {
         if (next !== model) { setEffortDraft(null); setPendingModel({ sessionId:session.id, model:next }) }
-      }} />
-      : <button type="button" className="session-model-unavailable" aria-label={`Conversation model, ${modelLabel}; model catalog unavailable`} title="Model choices are unavailable until the runtime reports a validated catalog." disabled><b>{modelLabel}</b><span aria-hidden="true">⌄</span></button>}</div>
+      }} onFast={(enabled) => void setFast(enabled)} />
+      : <button type="button" className="composer-pill model-pill unavailable" aria-label={`Conversation model, ${modelLabel}; model catalog unavailable`} title="Model choices are unavailable until the runtime reports a validated catalog." disabled><span>{shortModelName(modelLabel)}</span></button>}
     <EffortControl
       key={`${session.id}:${model ?? 'provider-default'}:${pendingForSession?.model ?? 'no-pending-model'}`}
       providerStyle={providerStyle}
@@ -150,11 +170,14 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
   const currentValueIndex = value == null ? -1 : efforts.indexOf(value)
   const draftIndex = draftValue === undefined ? undefined : draftValue === null ? -1 : efforts.indexOf(draftValue)
   const visibleIndex = draftIndex ?? currentValueIndex
-  const displayedPosition = snapping || gesture.current ? position : Math.max(0, visibleIndex < 0 ? 0 : visibleIndex)
+  // With no saved effort the knob rests on the provider's default level.
+  const defaultIndex = defaultThinking ? efforts.indexOf(defaultThinking) : -1
+  const restIndex = currentValueIndex >= 0 ? currentValueIndex : Math.max(0, defaultIndex)
+  const displayedPosition = snapping || gesture.current ? position : (visibleIndex < 0 ? restIndex : visibleIndex)
   const selectedTierIndex = Math.max(0, Math.min(efforts.length - 1, Math.round(displayedPosition)))
   const selectedLabel = visibleIndex >= 0 && efforts[visibleIndex] ? labelizeEffort(efforts[visibleIndex]) : ''
   const unlistedValue = value && !efforts.includes(value) ? value : null
-  const visibleLabel = visibleIndex >= 0 && efforts[visibleIndex] ? labelizeEffort(efforts[visibleIndex]) : unlistedValue ? `Saved selection: ${labelizeEffort(unlistedValue)}` : 'Provider default'
+  const visibleLabel = visibleIndex >= 0 && efforts[visibleIndex] ? labelizeEffort(efforts[visibleIndex]) : unlistedValue ? `Saved selection: ${labelizeEffort(unlistedValue)}` : defaultThinking ? `${labelizeEffort(defaultThinking)} · default` : 'Provider default'
   const defaultLabel = defaultThinking ? `Provider default (${labelizeEffort(defaultThinking)})` : 'Provider default'
   const highest = efforts.length > 0 && selectedTierIndex === efforts.length - 1 && (visibleIndex >= 0 || snapping || gesture.current !== null)
 
@@ -196,7 +219,7 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
     gesture.current = null
     dragGeometry.current = null
     committedDuringGesture.current = false
-    positionRef.current = Math.max(0, startIndex.current < 0 ? 0 : startIndex.current)
+    positionRef.current = (startIndex.current < 0 ? restIndex : startIndex.current)
     setPosition(positionRef.current)
     samples.current = []
     onCancel()
@@ -228,10 +251,10 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
   useEffect(() => () => { stopAnimations(); gesture.current = null; if(labelTimer.current!==null)window.clearTimeout(labelTimer.current) }, [])
   useEffect(() => {
     if (gesture.current) return
-    const next = Math.max(0, currentValueIndex < 0 ? 0 : currentValueIndex)
+    const next = restIndex
     positionRef.current = next
     setPosition(next)
-  }, [currentValueIndex, efforts.length])
+  }, [currentValueIndex, restIndex, efforts.length])
 
   const announce = (nextPosition: number) => {
     const index = Math.round(Math.max(0, Math.min(Math.max(0, efforts.length - 1), nextPosition)))
@@ -331,7 +354,7 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
     dragGeometry.current=providerStyle==='magnetic'&&bounds?{left:bounds.left,width:bounds.width}:null
     committedDuringGesture.current = false
     startIndex.current = currentValueIndex
-    const initial = providerStyle === 'magnetic' ? positionRef.current : Math.max(0, currentValueIndex < 0 ? 0 : currentValueIndex)
+    const initial = providerStyle === 'magnetic' ? positionRef.current : restIndex
     positionRef.current = initial
     setPosition(initial)
     samples.current = [{ time:performance.now(), value:initial }]
@@ -347,7 +370,7 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
       gesture.current = { kind:'keyboard', key:event.key }
       committedDuringGesture.current = false
       startIndex.current = currentValueIndex
-      positionRef.current = Math.max(0, currentValueIndex < 0 ? 0 : currentValueIndex)
+      positionRef.current = restIndex
     } else gesture.current.key = event.key
     const current = Math.round(positionRef.current)
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? efforts.length - 1 : current + (['ArrowRight','ArrowUp','PageUp'].includes(event.key) ? 1 : -1)
@@ -362,25 +385,90 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
   const toggle = () => {
     if (disabled) return
     if (open) cancelCurrent()
-    else { stopAnimations(); setPosition(Math.max(0, currentValueIndex < 0 ? 0 : currentValueIndex)); setOpen(true) }
+    else { stopAnimations(); setPosition(restIndex); setOpen(true) }
   }
 
   const labels = efforts.map(labelizeEffort)
-  return <div ref={rootRef} className={`session-effort-control ${providerStyle}`}>
-    <button type="button" className="session-effort-trigger" aria-haspopup="dialog" aria-expanded={open} disabled={disabled} onClick={toggle}>
-      <span className="session-control-label">Effort</span>
-      <b>{value && efforts.includes(value) ? labelizeEffort(value) : unlistedValue ? labelizeEffort(unlistedValue) : 'Provider default'}</b>
+  const triggerLabel = value && efforts.includes(value) ? labelizeEffort(value) : unlistedValue ? labelizeEffort(unlistedValue) : defaultThinking ? labelizeEffort(defaultThinking) : 'Default'
+  const highestSaved = efforts.length > 1 && value === efforts[efforts.length - 1]
+  return <div ref={rootRef} className={`session-effort-control composer-popover-anchor ${providerStyle}`}>
+    <button type="button" className={`composer-pill session-effort-trigger ${highestSaved ? 'highest' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={`Effort: ${triggerLabel}`} disabled={disabled} onClick={toggle}>
+      <span>{triggerLabel}</span>
     </button>
     {open && <div className={`session-effort-popover ${providerStyle}`} role="dialog" aria-label={`Effort for ${modelName}`}>
-      <div className="session-effort-popover-heading"><strong>Effort</strong><span className="session-effort-value" aria-live="polite">{providerStyle==='claude'&&labelSwap?.to===visibleLabel&&<span className={`session-effort-value-out ${labelSwap.forward?'forward':'backward'}`} aria-hidden="true">{labelSwap.from}</span>}<span key={visibleLabel} className={`session-effort-value-in ${labelSwap?.forward?'forward':'backward'}`}>{visibleLabel}</span></span></div>
+      <div className="session-effort-popover-heading"><span className="session-effort-title">Effort</span><span className="session-effort-value" aria-live="polite">{providerStyle==='claude'&&labelSwap?.to===visibleLabel&&<span className={`session-effort-value-out ${labelSwap.forward?'forward':'backward'}`} aria-hidden="true">{labelSwap.from}</span>}<span key={visibleLabel} className={`session-effort-value-in ${labelSwap?.forward?'forward':'backward'}`}>{visibleLabel}</span></span></div>
       {efforts.length > 0 ? <>
         <div className="session-effort-meter-frame">
-          <div className="session-effort-caption"><span>Faster</span><span>Deeper reasoning</span></div>
+          <div className="session-effort-caption"><span>Faster</span><span>Smarter</span></div>
           <SessionEffortMeter style={providerStyle} count={efforts.length} position={displayedPosition} selectedLabel={selectedLabel} defaultLabel={defaultLabel} highest={highest} snapping={snapping} burstKey={burstKey} disabled={disabled} onChange={(raw) => { if (gesture.current?.kind === 'pointer' && providerStyle === 'claude') applyPosition(raw) }} onPointerMove={(event) => { if (gesture.current?.kind === 'pointer' && gesture.current.pointerId === event.pointerId) applyCodexPointer(event) }} onPointerDown={beginPointer} onPointerUp={finishPointer} onPointerCancel={() => { if (gesture.current?.kind === 'pointer') cancelGesture() }} onLostPointerCapture={() => { if (gesture.current?.kind === 'pointer') cancelGesture() }} onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} />
         </div>
-        <div className="session-effort-labels"><button type="button" className={visibleIndex < 0 ? 'selected' : ''} disabled={disabled} onClick={() => { stopAnimations(); onPreview(null); void onCommit(null); setOpen(false) }}>Provider default</button>{labels.map((label, index) => <button type="button" key={`${efforts[index]}-${index}`} className={visibleIndex === index ? 'selected' : ''} disabled={disabled} onClick={() => { stopAnimations(); onPreview(efforts[index] ?? null); const result = onCommit(efforts[index] ?? null); if (index === efforts.length - 1 && providerStyle === 'magnetic') void Promise.resolve(result).then((saved) => { if (saved && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) setBurstKey((key) => key + 1) }); setOpen(false) }}>{label}</button>)}</div>
-        <p className="session-effort-help">{defaultThinking ? `Provider default is ${labelizeEffort(defaultThinking)} for this model.` : 'The provider chooses its own default.'} Higher effort may spend more time reasoning.</p>
+        <div className="session-effort-labels" role="group" aria-label="Effort levels">{labels.map((label, index) => <button type="button" key={`${efforts[index]}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${efforts[index] === defaultThinking ? 'default' : ''}`} aria-pressed={visibleIndex === index} disabled={disabled} onClick={() => { stopAnimations(); onPreview(efforts[index] ?? null); const result = onCommit(efforts[index] ?? null); if (index === efforts.length - 1 && providerStyle === 'magnetic') void Promise.resolve(result).then((saved) => { if (saved && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) setBurstKey((key) => key + 1) }); setOpen(false) }}>{label}</button>)}</div>
+        <div className="session-effort-footer"><span>{defaultThinking ? <>Recommended: <b>{labelizeEffort(defaultThinking)}</b></> : 'The provider chooses its own default.'}</span><button type="button" className={visibleIndex < 0 ? 'selected' : ''} aria-pressed={visibleIndex < 0} disabled={disabled} onClick={() => { stopAnimations(); onPreview(null); void onCommit(null); setOpen(false) }}>Provider default</button></div>
       </> : <div className="session-effort-unavailable"><strong>{unlistedValue ? `Saved selection: ${labelizeEffort(unlistedValue)}` : 'Provider default'}</strong><p>{unavailableReason ?? 'This model does not report selectable effort levels. Bloblex cannot change effort for it.'}</p>{defaultThinking && <p>Catalog default: {labelizeEffort(defaultThinking)}.</p>}</div>}
+    </div>}
+  </div>
+}
+
+/** The catalog tier that means "fast": Claude reports `fast`, Codex names its priority tier Fast. */
+export function fastTierFor(model: CatalogModel | null | undefined): ServiceTierOption | null {
+  return model?.serviceTiers.find((tier) => /\bfast\b|priority/i.test(`${tier.id} ${tier.name}`)) ?? null
+}
+
+/** Compact pill label: drop a leading provider family word ("Claude Opus 5.5" -> "Opus 5.5"). */
+export function shortModelName(name: string) {
+  return name.replace(/^claude\s+(?=\S)/i, '')
+}
+
+function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn, disabled, saving, onSelect, onFast }: {
+  provider: string
+  models: CatalogModel[]
+  model: string | null
+  label: string
+  ariaLabel: string
+  fastTier: ServiceTierOption | null
+  fastOn: boolean
+  disabled: boolean
+  saving: boolean
+  onSelect: (model: string | null) => void
+  onFast: (enabled: boolean) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const close = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus()) }
+  usePopoverDismiss(open, rootRef, close)
+  useEffect(() => { if (open) requestAnimationFrame(() => (menuRef.current?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]') ?? menuRef.current?.querySelector<HTMLElement>('[role^="menuitem"]'))?.focus()) }, [open])
+  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
+  const recommended = models.find((item) => item.isDefault)
+  const choose = (next: string | null) => { close(true); onSelect(next) }
+  const brand = providerBrand(provider).name
+  return <div ref={rootRef} className="composer-popover-anchor">
+    <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''}`} aria-haspopup="menu" aria-expanded={open} aria-label={`Conversation model: ${ariaLabel}${fastOn ? ', fast mode on' : ''}`} disabled={disabled || (saving && !open)} onClick={() => setOpen((value) => !value)}>
+      {saving ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : fastOn ? <Zap size={13} aria-hidden="true" className="model-pill-fast" /> : null}
+      <span>{shortModelName(label)}</span>
+      <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
+    </button>
+    {open && <div ref={menuRef} className="composer-menu model-menu align-right" role="menu" aria-label="Conversation model" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
+      <div className="composer-menu-heading">{brand} models</div>
+      <div className="composer-menu-scroll">
+        <button type="button" role="menuitemradio" aria-checked={!model} className="composer-menu-item" data-value="" disabled={saving} onClick={() => choose(null)}><span className="composer-menu-text"><strong>Provider default</strong>{recommended && <small>Currently {recommended.displayName}</small>}</span>{!model && <Check size={14} className="composer-menu-check" aria-hidden="true" />}</button>
+        {models.map((item, index) => <div key={item.id} role="none">
+          {item.group && item.group !== models[index - 1]?.group && <div className="composer-menu-group" role="presentation">{item.group}</div>}
+          <button type="button" role="menuitemradio" aria-checked={model === item.id} className="composer-menu-item" data-value={item.id} disabled={saving} onClick={() => choose(item.id)}>
+            <span className="composer-menu-text"><strong>{item.displayName}{item.isDefault && <small className="composer-menu-tag">Recommended</small>}</strong></span>
+            {model === item.id && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
+          </button>
+        </div>)}
+      </div>
+      {fastTier && <>
+        <div className="composer-menu-separator" role="separator" />
+        <button type="button" role="menuitemcheckbox" aria-checked={fastOn} className="composer-menu-item toggle-row" disabled={saving} onClick={() => onFast(!fastOn)}>
+          <span className="composer-menu-icon"><Zap size={15} aria-hidden="true" /></span>
+          <span className="composer-menu-text"><strong>Fast mode</strong><small>Quicker replies; uses your plan faster</small></span>
+          <span className={`toggle ${fastOn ? 'on' : ''}`} aria-hidden="true"><i /></span>
+        </button>
+      </>}
     </div>}
   </div>
 }

@@ -1,3 +1,4 @@
+import { rpc } from '../tauri'
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
 import { ChevronsUpDown, Gauge, LogOut, Pencil, RefreshCw, Settings2 } from 'lucide-react'
 import type { ConnectionState } from '../types'
@@ -13,6 +14,12 @@ function writeProfileName(name: string) {
     if (name) localStorage.setItem(NAME_KEY, name)
     else localStorage.removeItem(NAME_KEY)
   } catch { /* A blocked Storage API keeps the name for this run only. */ }
+  syncProfileName(name)
+}
+
+/** Blobs address the user by this name; the daemon builds their instructions. */
+export function syncProfileName(name: string) {
+  void rpc('settings.set', { key: 'profile.name', value: name.trim() }).catch(() => undefined)
 }
 export { writeProfileName as saveProfileName }
 

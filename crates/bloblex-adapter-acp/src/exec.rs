@@ -90,6 +90,18 @@ fn env_key_allowed(key: &str) -> bool {
 
 /// Bloblex-owned config document. The caller removes any inherited
 /// `OPENCODE_CONFIG_CONTENT` before placing this value in the child environment.
+pub(crate) const PLAN_MODE: &str = "plan";
+
+/// ACP `mcpServers` entries for app-owned stdio servers.
+pub(crate) fn acp_mcp_servers(servers: &[bloblex_agent_core::McpServerSpec]) -> Value {
+    Value::Array(servers.iter().map(|server| json!({
+        "name": server.name,
+        "command": server.command,
+        "args": server.args,
+        "env": server.env.iter().map(|(name, value)| json!({"name": name, "value": value})).collect::<Vec<_>>(),
+    })).collect())
+}
+
 pub(crate) fn config_content(options: &ExecOptions) -> String {
     let model = nonempty(&options.model);
     let instructions = normalize_instructions(&options.instructions);

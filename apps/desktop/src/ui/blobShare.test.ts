@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseSharedBlob, serializeBlob } from './blobShare'
 
-const base = { format: 'bloblex.blob.v1', name: 'Helper', description: '', colour: '#AABBCC', instructions: '', model: null, thinking: null, speed: null, outfit: 'santa-hat', providerId: 'codex' }
+const base = { format: 'bloblex.blob.v1', name: 'Helper', description: '', colour: '#AABBCC', instructions: '', model: null, thinking: null, speed: null, look: { shape: 'cloud', seed: 'helper' }, providerId: 'codex' }
 
 describe('blob share format', () => {
   it('ignores unknown fields and accepts only safe approval modes', () => {
@@ -15,15 +15,16 @@ describe('blob share format', () => {
     expect(parseSharedBlob(JSON.stringify(withoutProvider)).providerId).toBeUndefined()
   })
 
-  it('round trips outfits and defaults older files to auto', () => {
-    const agent = { name: 'Helper', description: '', instructions: '', color: '#aabbcc', outfit: 'witch-hat', model: null, thinking: null, serviceTier: null } as never
+  it('round trips looks and gives older files a round look', () => {
+    const agent = { id: 'agent-1', name: 'Helper', description: '', instructions: '', color: '#aabbcc', look: { shape: 'sun', seed: 'x', traits: { 'sun.n': 0.4 } }, model: null, thinking: null, serviceTier: null } as never
     const value = JSON.parse(serializeBlob(agent, 'codex'))
-    expect(value.outfit).toBe('witch-hat')
-    expect(parseSharedBlob(JSON.stringify(value)).outfit).toBe('witch-hat')
-    const { outfit: _oldField, ...older } = base
-    expect(parseSharedBlob(JSON.stringify(older)).outfit).toBe('auto')
-    expect(parseSharedBlob(JSON.stringify({ ...base, outfit: 'bunny-ears' })).outfit).toBe('bunny-ears')
-    expect(() => parseSharedBlob(JSON.stringify({ ...base, outfit: 'unrecognized-outfit' }))).toThrow(/valid outfit/)
+    expect(value.look).toEqual({ shape: 'sun', seed: 'x', traits: { 'sun.n': 0.4 } })
+    expect(parseSharedBlob(JSON.stringify(value)).look).toEqual(value.look)
+    const plain = JSON.parse(serializeBlob({ ...(agent as object), look: null } as never, 'codex'))
+    expect(plain.look).toEqual({ shape: 'round', seed: 'agent-1' })
+    const { look: _look, ...older } = base
+    expect(parseSharedBlob(JSON.stringify(older)).look).toEqual({ shape: 'round', seed: 'Helper' })
+    expect(() => parseSharedBlob(JSON.stringify({ ...base, look: { shape: 'star' } }))).toThrow(/look is not valid/)
   })
 
   it('rejects wrong versions, malformed colours, and oversized content', () => {

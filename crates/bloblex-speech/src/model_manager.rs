@@ -5,6 +5,10 @@
 //! per-file hashes, resumable transport) without the Node runtime.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// Minimum spacing between progress reports while streaming a file.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(150);
 
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -90,6 +94,7 @@ where
     tokio::fs::create_dir_all(&directory).await?;
     let total = manifest.size_bytes;
     let mut completed: u64 = 0;
+    progress(completed, total);
     for file in &manifest.download_files {
         let destination = directory.join(&file.name);
         if has_expected_size(&destination, file) {
@@ -97,18 +102,34 @@ where
             progress(completed, total);
             continue;
         }
-        download_one(client, file, &destination).await?;
-        completed += file.size_bytes;
+        let base = completed;
+        let mut last_emit: Option<Instant> = None;
+        download_one(client, file, &destination, |written| {
+            let now = Instant::now();
+            let due = last_emit
+                .map(|previous| now.duration_since(previous) >= PROGRESS_INTERVAL)
+                .unwrap_or(true);
+            if due {
+                last_emit = Some(now);
+                progress(base + written, total);
+            }
+        })
+        .await?;
+        completed = base + file.size_bytes;
         progress(completed, total);
     }
     Ok(directory)
 }
 
-async fn download_one(
+async fn download_one<F>(
     client: &reqwest::Client,
     file: &SpeechDownloadFile,
     destination: &Path,
-) -> SpeechResult<()> {
+    mut on_bytes: F,
+) -> SpeechResult<()>
+where
+    F: FnMut(u64) + Send,
+{
     let partial = destination.with_file_name(format!("{}.partial", file.name));
     let existing = tokio::fs::metadata(&partial)
         .await
@@ -139,12 +160,16 @@ async fn download_one(
             .await?
     };
 
+    let mut written: u64 = if resume { existing } else { 0 };
+    on_bytes(written);
     while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|error| SpeechError::Download(error.to_string()))?
     {
         handle.write_all(&chunk).await?;
+        written += chunk.len() as u64;
+        on_bytes(written);
     }
     handle.flush().await?;
     drop(handle);

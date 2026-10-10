@@ -41,6 +41,16 @@ The dictation engine in `crates/bloblex-speech` and `apps/desktop/src-tauri/src/
 
 Speech model weights are downloaded at runtime from Hugging Face at pinned revisions and are **not** distributed with Bloblex. Each model carries its own license; verify before commercial use. The default model, NVIDIA Parakeet TDT 0.6B, is distributed under CC-BY-4.0 and requires attribution.
 
+## Blob looks (blobatar)
+
+Copyright (c) 2026 Alain
+
+Blob silhouettes and faces are adapted from the MIT-licensed [blobatar](https://github.com/Alain00/blobatar/tree/a7fd546ebede49d0a9fa638945b9e534489782a2) (`a7fd546ebede49d0a9fa638945b9e534489782a2`, reviewed on 10 October 2026). `apps/desktop/src/blob/look/seed.ts` ports `src/hash.ts` and `src/traits.ts`, and `apps/desktop/src/blob/look/forms.ts` ports the primitives in `src/shape.ts`, nine of the ten silhouettes in `src/styles/shapes.ts` (`nub` is not used), the eye fitting in `src/styles/compose.ts` and the seed bands in `src/styles/blob.ts`. The trait keys, ranges and silhouette parameters are kept as published. Bloblex samples the outlines into canvas point lists instead of SVG path strings, centres the body, and draws and animates the figure with its own engine (states, blinking, gaze, roll, squash and the mailbox morph). The cat silhouette, its features and its glossy eyes are Bloblex's own. blobatar's palette, motion stylesheet, expressions, framework adapters, site and assets are not included. The editor credits blobatar under the shape picker.
+
+## Companion sounds
+
+The moments the companion plays a sound for (peek, open, close, switching, sending, a new reply, pokes, and agent work, finish, error, approval and question) follow the desktop companion [Coucou](https://github.com/Louis-CFM/coucou) (reviewed at `dd344853dc36e1edbce098d28c4e63a4ed2433c1`). Coucou's sound files are not licensed for reuse and none are included: every Bloblex cue in `apps/desktop/src/blob/soundCues.ts` is an original tone synthesized with Web Audio oscillators.
+
 ## MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:

@@ -110,7 +110,10 @@ fn parse_model_catalog(value: &Value) -> Result<Vec<ModelInfo>, AdapterError> {
         normalized.push(ModelInfo {
             id: id.into(), display_name: model["displayName"].as_str().or_else(|| model["name"].as_str()).unwrap_or(id).into(),
             provider_id: model["providerId"].as_str().map(str::to_owned), supported_thinking: levels,
-            default_thinking: model["defaultEffort"].as_str().map(str::to_owned), service_tiers: vec![],
+            default_thinking: model["defaultEffort"].as_str().map(str::to_owned),
+            // Claude reports fast-mode support per model; it is applied through
+            // the documented `fastMode` setting rather than a service tier id.
+            service_tiers: if model["supportsFastMode"].as_bool() == Some(true) { vec![ServiceTier { id: FAST_MODE_TIER.into(), name: "Fast".into() }] } else { vec![] },
             default_service_tier: None, variants: None, host_dependent: true,
             is_default: model["isDefault"].as_bool().or_else(|| {
                 value["default"].as_str().map(|default_id| {
@@ -131,13 +134,39 @@ fn fallback_catalog() -> Vec<ModelInfo> {
         is_default: None, group: None, availability: None,
     }).collect()
 }
+const FAST_MODE_TIER: &str = "fast";
 fn typed_args(options: &ExecOptions, instruction_file: Option<&std::path::Path>, instruction_changed: bool) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(model) = options.model.as_deref() { args.extend(["--model".into(), model.into()]); }
     if let Some(effort) = options.thinking.as_deref() { args.extend(["--effort".into(), effort.into()]); }
+    if options.service_tier.as_deref() == Some(FAST_MODE_TIER) { args.extend(["--settings".into(), r#"{"fastMode":true}"#.into()]); }
     if let Some(path) = instruction_file { args.extend(["--append-system-prompt-file".into(), path.to_string_lossy().into_owned()]); }
     if instruction_changed { args.extend(["--system-prompt-snapshot".into(), "off".into()]); }
     args
+}
+/// Plain prompts keep the string form Claude has always received; prompts
+/// with images use content blocks, with the text block last as Claude expects.
+fn prompt_content(text: &str, attachments: &[bloblex_agent_core::PromptAttachment]) -> Result<Value, AdapterError> {
+    if attachments.is_empty() { return Ok(json!(text)); }
+    let mut blocks = Vec::with_capacity(attachments.len() + 1);
+    for attachment in attachments {
+        let bytes = std::fs::read(&attachment.path).map_err(|_| AdapterError::Unsupported(format!("Attached image {} could not be read.", attachment.name)))?;
+        blocks.push(json!({"type":"image","source":{"type":"base64","media_type":attachment.media_type,"data":base64_encode(&bytes)}}));
+    }
+    if !text.is_empty() { blocks.push(json!({"type":"text","text":text})); }
+    Ok(Value::Array(blocks))
+}
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16) | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8) | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
 }
 fn permission_args(mode: bloblex_agent_core::ApprovalMode) -> Vec<&'static str>{if mode==bloblex_agent_core::ApprovalMode::Bypass{vec!["--permission-mode","bypassPermissions","--allow-dangerously-skip-permissions"]}else{vec!["--permission-mode","default"]}}
 fn exact_usd_minor(decimal: &str) -> Option<i64> {
@@ -162,6 +191,7 @@ struct Conn {
     permission_requests: Mutex<HashMap<String, (Value, Value)>>,
     local_session_id: String,
     instruction_file: Option<PrivateInstructionFile>,
+    mcp_config_file: Option<PrivateInstructionFile>,
     runtime: RuntimeSpec,
     cwd: PathBuf,
     launch_options: ExecOptions,
@@ -196,6 +226,82 @@ fn claude_context_size(model_usage: &Value, model: Option<&str>) -> Option<u64> 
     let model = model.or_else(|| (models.len() == 1).then(|| models.keys().next().map(String::as_str)).flatten())?;
     models.get(model)?["contextWindow"].as_u64()
 }
+/// Claude's `--mcp-config` document for app-owned stdio servers.
+fn mcp_config_json(servers: &[McpServerSpec]) -> String {
+    let mut map = serde_json::Map::new();
+    for server in servers {
+        map.insert(server.name.clone(), json!({"type":"stdio","command":server.command,"args":server.args,"env":server.env}));
+    }
+    json!({"mcpServers":map}).to_string()
+}
+
+/// Pre-approves every tool of the app-owned servers (rule `mcp__<server>`).
+fn mcp_allowed_tools(servers: &[McpServerSpec]) -> Vec<String> {
+    if servers.is_empty() { return Vec::new(); }
+    vec!["--allowedTools".into(), servers.iter().map(|server| format!("mcp__{}", server.name)).collect::<Vec<_>>().join(",")]
+}
+
+/// Normalizes `AskUserQuestion` input. Claude keys answers by question text.
+fn claude_questions(input: &Value) -> Vec<UserQuestion> {
+    input["questions"].as_array().map(|questions| questions.iter().enumerate().filter_map(|(index, item)| {
+        let question = item["question"].as_str()?.trim();
+        if question.is_empty() { return None; }
+        let options = item["options"].as_array().map(|options| options.iter().filter_map(|option| {
+            let label = option["label"].as_str()?.trim();
+            (!label.is_empty()).then(|| UserQuestionOption { label: label.into(), description: option["description"].as_str().unwrap_or("").trim().into() })
+        }).collect()).unwrap_or_default();
+        Some(UserQuestion {
+            id: question.into(),
+            header: item["header"].as_str().map(str::trim).filter(|h| !h.is_empty()).map(str::to_owned).unwrap_or_else(|| format!("Question {}", index + 1)),
+            question: question.into(),
+            options,
+            multi_select: item["multiSelect"].as_bool().unwrap_or(false),
+            allow_other: true,
+        })
+    }).collect()).unwrap_or_default()
+}
+
+fn claude_answers(answers: &std::collections::BTreeMap<String, Vec<String>>) -> Value {
+    Value::Object(answers.iter().map(|(question, values)| (question.clone(), json!(values.iter().map(|v| v.trim()).filter(|v| !v.is_empty()).collect::<Vec<_>>().join(", ")))).collect())
+}
+
+async fn write_control(c: &Conn, wire: Value) -> Result<(), AdapterError> {
+    let mut bytes = serde_json::to_vec(&wire).map_err(|e| AdapterError::Protocol(e.to_string()))?;
+    bytes.push(b'\n');
+    c.stdin.lock().await.write(&bytes).await.map_err(|e| AdapterError::Process(format!("writing Claude control reply: {e}")))
+}
+
+/// Handles control requests Bloblex answers itself: app-owned tools run
+/// without a prompt, plans become a plan card, and `AskUserQuestion` becomes
+/// a question card. Everything else falls through to the permission flow.
+async fn intercept_control_request(c: &Conn, v: &Value) -> bool {
+    if v["type"].as_str() != Some("control_request") || v["request"]["subtype"].as_str() != Some("can_use_tool") { return false; }
+    let original_id = v["request_id"].clone();
+    let tool = v["request"]["tool_name"].as_str().unwrap_or("");
+    let input = v["request"]["input"].clone();
+    if tool.starts_with("mcp__bloblex__") {
+        let _ = write_control(c, json!({"type":"control_response","response":{"subtype":"success","request_id":original_id,"response":{"behavior":"allow","updatedInput":input}}})).await;
+        return true;
+    }
+    if tool == "ExitPlanMode" {
+        if let Some(markdown) = input["plan"].as_str().map(str::trim).filter(|plan| !plan.is_empty()) {
+            let _ = c.events.send(AgentEvent::PlanProposed { markdown: markdown.to_owned() }).await;
+        }
+        let _ = write_control(c, json!({"type":"control_response","response":{"subtype":"success","request_id":original_id,"response":{"behavior":"deny","message":"Bloblex showed your plan to the user. Stop here and wait for their approval or feedback in a later message."}}})).await;
+        return true;
+    }
+    if tool == "AskUserQuestion" {
+        let questions = claude_questions(&input);
+        if questions.is_empty() { return false; }
+        let provider_request_id = original_id.as_str().map(str::to_owned).unwrap_or_else(|| original_id.to_string());
+        let id = format!("{}:{provider_request_id}", c.local_session_id);
+        c.permission_requests.lock().await.insert(id.clone(), (original_id, input));
+        let _ = c.events.send(AgentEvent::QuestionRequested { provider_request_id: id, title: "Claude has a question".into(), questions }).await;
+        return true;
+    }
+    false
+}
+
 fn control_response(original_id: Value, input: Value, choice: &str) -> Result<Value, AdapterError> {
     let response = match choice {
         "allow" => json!({"behavior":"allow","updatedInput":input}),
@@ -498,7 +604,7 @@ impl ClaudeAdapter {
             "--include-partial-messages",
             "--include-hook-events",
         ]);
-        c.args(permission_args(options.approval_mode));
+        if options.plan_mode { c.args(["--permission-mode", "plan"]); } else { c.args(permission_args(options.approval_mode)); }
         for (key, value) in &options.env {
             if !["LANG", "LC_ALL", "TZ", "NO_COLOR", "TERM"].contains(&key.as_str())
                 || value.contains('\0')
@@ -511,6 +617,18 @@ impl ClaudeAdapter {
             Some(self.create_instruction_file(instructions).map_err(|e| AdapterError::Process(format!("private instruction file unavailable: {e}")))?)
         } else { None };
         c.args(typed_args(options, instruction_file.as_ref().map(|f|f.path.as_path()), instruction_changed));
+        // The MCP config carries a per-session capability, so it goes in a
+        // private file rather than the command line.
+        let mcp_config_file = if options.mcp_servers.is_empty() { None } else {
+            match self.create_instruction_file(&mcp_config_json(&options.mcp_servers)) {
+                Ok(file) => Some(file),
+                Err(error) => { if let Some(pair) = instruction_file.as_ref() { remove_private_pair(pair); } return Err(AdapterError::Process(format!("private MCP config unavailable: {error}"))); }
+            }
+        };
+        if let Some(file) = mcp_config_file.as_ref() {
+            c.args(["--mcp-config".into(), file.path.to_string_lossy().into_owned()]);
+            c.args(mcp_allowed_tools(&options.mcp_servers));
+        }
         if let Some(id) = provider_session_id {
             c.args(["--resume", id]);
         } else {
@@ -521,11 +639,11 @@ impl ClaudeAdapter {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = match c.spawn() { Ok(child) => child, Err(e) => { if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);} return Err(AdapterError::Process(e.to_string())); } };
+        let mut child = match c.spawn() { Ok(child) => child, Err(e) => { if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}if let Some(pair)=mcp_config_file.as_ref(){remove_private_pair(pair);} return Err(AdapterError::Process(e.to_string())); } };
         let process_tree = ProcessTree::attach(&mut child).map_err(|e| AdapterError::Process(e.to_string()))?;
-        let Some(stdin)=child.stdin.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdin unavailable".into()))};
-        let Some(stdout)=child.stdout.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdout unavailable".into()))};
-        let Some(stderr)=child.stderr.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stderr unavailable".into()))};
+        let Some(stdin)=child.stdin.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}if let Some(pair)=mcp_config_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdin unavailable".into()))};
+        let Some(stdout)=child.stdout.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}if let Some(pair)=mcp_config_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stdout unavailable".into()))};
+        let Some(stderr)=child.stderr.take()else{let _=child.start_kill();if let Some(pair)=instruction_file.as_ref(){remove_private_pair(pair);}if let Some(pair)=mcp_config_file.as_ref(){remove_private_pair(pair);}return Err(AdapterError::Process("Claude stderr unavailable".into()))};
         let stderr_tail = Arc::new(Mutex::new(String::new()));
         let stderr_capture = tokio::spawn(capture_stderr_tail(stderr, stderr_tail.clone()));
         let conn = Arc::new(Conn {
@@ -540,6 +658,7 @@ impl ClaudeAdapter {
             permission_requests: Mutex::new(HashMap::new()),
             local_session_id: local_session_id.into(),
             instruction_file: instruction_file.clone(),
+            mcp_config_file: mcp_config_file.clone(),
             runtime: r.clone(), cwd: cwd.clone(), launch_options: options.clone(),
             desired_instruction_sha256,
             event_sender: events.clone(),
@@ -597,6 +716,7 @@ impl ClaudeAdapter {
                                 if !outcomes.is_empty(){let turn_id=reader.active_turn_id.lock().await.clone().unwrap_or_default();let _=reader.events.send(AgentEvent::ExecApplied{turn_id,outcomes}).await;}
                             }
                         }
+                    if intercept_control_request(&reader, &v).await { continue; }
                     parse_line(
                         &reader.events,
                         &v,
@@ -611,6 +731,7 @@ impl ClaudeAdapter {
             }
             let _ = stderr_capture.await;
             if let Some(pair) = reader.instruction_file.as_ref() { remove_private_pair(pair); }
+            if let Some(pair) = reader.mcp_config_file.as_ref() { remove_private_pair(pair); }
             if reader.active_turn.swap(false, Ordering::SeqCst) {
                 let stderr = reader.stderr_tail.lock().await.trim().to_owned();
                 let event = if reader.cancellation_requested.swap(false, Ordering::SeqCst) {
@@ -791,6 +912,8 @@ impl AgentAdapter for ClaudeAdapter {
         if c.launch_options.model != q.exec_options.model { changed_fields.push("model"); }
         if c.launch_options.thinking != q.exec_options.thinking { changed_fields.push("thinking"); }
         if c.launch_options.service_tier != q.exec_options.service_tier { changed_fields.push("serviceTier"); }
+        if c.launch_options.plan_mode != q.exec_options.plan_mode { changed_fields.push("planMode"); }
+        if c.launch_options.mcp_servers != q.exec_options.mcp_servers { changed_fields.push("mcpServers"); }
         if c.launch_options.instructions != q.exec_options.instructions { changed_fields.push("instructions"); }
         if c.launch_options.env != q.exec_options.env { changed_fields.push("customEnv"); }
         if instruction_changed { changed_fields.push("instruction hash"); }
@@ -811,8 +934,9 @@ impl AgentAdapter for ClaudeAdapter {
             })?;
             self.sessions.lock().await.insert(h.session_id.clone(), c.clone());
         }
+        let content = prompt_content(&q.text, &q.attachments)?;
         let mut bytes =
-            serde_json::to_vec(&json!({"type":"user","message":{"role":"user","content":q.text}}))
+            serde_json::to_vec(&json!({"type":"user","message":{"role":"user","content":content}}))
                 .map_err(|e| AdapterError::Protocol(e.to_string()))?;
         bytes.push(b'\n');
         c.cancellation_requested.store(false, Ordering::SeqCst);
@@ -897,6 +1021,22 @@ impl AgentAdapter for ClaudeAdapter {
             "Claude permission request is unknown or already answered".into(),
         ))
     }
+    async fn answer_question(&self, id: &str, answers: Option<std::collections::BTreeMap<String, Vec<String>>>) -> Result<(), AdapterError> {
+        let all = self.sessions.lock().await.values().cloned().collect::<Vec<_>>();
+        for c in all {
+            let request = c.permission_requests.lock().await.get(id).cloned();
+            if let Some((original_id, input)) = request {
+                let response = match answers {
+                    Some(answers) => json!({"behavior":"allow","updatedInput":{"questions":input["questions"],"answers":claude_answers(&answers)}}),
+                    None => json!({"behavior":"deny","message":"The user dismissed the question. Continue with your best judgement or ask in plain text."}),
+                };
+                write_control(&c, json!({"type":"control_response","response":{"subtype":"success","request_id":original_id,"response":response}})).await?;
+                c.permission_requests.lock().await.remove(id);
+                return Ok(());
+            }
+        }
+        Err(AdapterError::Unsupported("Claude question is unknown or already answered".into()))
+    }
     async fn close_session(&self, h: &SessionHandle) -> Result<(), AdapterError> {
         if let Some(c) = self.sessions.lock().await.remove(&h.session_id) {
             c.stdin.lock().await.close(&mut *c.child.lock().await, &c.process_tree).await;
@@ -936,6 +1076,30 @@ mod tests {
         let options=ExecOptions{model:Some("claude-sonnet-5-5".into()),thinking:Some("low".into()),instructions:Some("sentinel only".into()),..ExecOptions::default()};
         assert_eq!(typed_args(&options,Some(std::path::Path::new("C:\\private\\instruction.txt")),true),vec!["--model","claude-sonnet-5-5","--effort","low","--append-system-prompt-file","C:\\private\\instruction.txt","--system-prompt-snapshot","off"]);
         assert!(!typed_args(&options,None,false).iter().any(|v|v=="--system-prompt"));
+    }
+
+    #[test]
+    fn fast_mode_comes_from_the_catalog_and_is_applied_through_settings() {
+        let rows=parse_model_catalog(&json!({"models":[{"value":"opus","displayName":"Opus","supportsFastMode":true},{"value":"haiku","displayName":"Haiku"}]})).unwrap();
+        assert_eq!(rows[0].service_tiers,vec![ServiceTier{id:"fast".into(),name:"Fast".into()}]);
+        assert!(rows[1].service_tiers.is_empty());
+        let fast=ExecOptions{model:Some("opus".into()),service_tier:Some("fast".into()),..ExecOptions::default()};
+        assert_eq!(typed_args(&fast,None,false),vec!["--model","opus","--settings",r#"{"fastMode":true}"#]);
+        assert!(!typed_args(&ExecOptions::default(),None,false).iter().any(|v|v=="--settings"));
+    }
+
+    #[test]
+    fn image_prompts_use_base64_content_blocks_and_plain_prompts_stay_strings() {
+        assert_eq!(prompt_content("hello",&[]).unwrap(),json!("hello"));
+        let path=std::env::temp_dir().join(format!("bloblex-claude-image-{}.png",Uuid::new_v4()));
+        std::fs::write(&path,b"Man").unwrap();
+        let attachment=bloblex_agent_core::PromptAttachment{path:path.clone(),name:"shot.png".into(),media_type:"image/png".into()};
+        assert_eq!(prompt_content("look",std::slice::from_ref(&attachment)).unwrap(),json!([{"type":"image","source":{"type":"base64","media_type":"image/png","data":"TWFu"}},{"type":"text","text":"look"}]));
+        assert_eq!(prompt_content("",std::slice::from_ref(&attachment)).unwrap().as_array().unwrap().len(),1);
+        assert_eq!(base64_encode(b"Ma"),"TWE=");
+        assert_eq!(base64_encode(b"M"),"TQ==");
+        let _=std::fs::remove_file(&path);
+        assert!(matches!(prompt_content("x",&[attachment]),Err(AdapterError::Unsupported(_))));
     }
 
     #[test]

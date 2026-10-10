@@ -12,7 +12,7 @@ use bloblex_adapter_acp::AcpAdapter;
 use bloblex_adapter_claude::ClaudeAdapter;
 use bloblex_adapter_codex::CodexAdapter;
 use bloblex_agent_core::{
-    AgentAdapter, AgentEvent, ApprovalMode, ExecOptions, NewSessionRequest, PromptRequest, ResumeSessionRequest, RuntimeSpec,
+    AgentAdapter, AgentEvent, ApprovalMode, ExecOptions, NewSessionRequest, PromptAttachment, PromptRequest, ResumeSessionRequest, RuntimeSpec,
     SessionHandle,
 };
 use bloblex_protocol::{
@@ -33,7 +33,9 @@ use tokio::{
 };
 use uuid::Uuid;
 
+mod mcp_bridge;
 mod model_presentation;
+mod team;
 mod quota;
 mod quota_sources;
 
@@ -56,6 +58,7 @@ struct AppState {
     deleted_sessions: Arc<Mutex<HashSet<String>>>,
     quota_poll_gate: Arc<Mutex<QuotaPollGate>>,
     stopping: Arc<tokio::sync::Notify>,
+    team: Arc<team::Team>,
 }
 #[derive(Clone)]
 struct Adapters {
@@ -114,6 +117,20 @@ fn adapter_failure_class(error: &bloblex_agent_core::AdapterError, permission_de
         bloblex_agent_core::AdapterError::Process(_)
         | bloblex_agent_core::AdapterError::Other(_) => "other",
     }
+}
+
+/// Provider CLIs keep their own login; when a turn fails because it expired,
+/// tell the user which CLI to sign in to instead of a generic provider error.
+fn sign_in_hint(provider: &str, detail: &str) -> Option<&'static str> {
+    let lower = detail.to_ascii_lowercase();
+    let auth = ["failed to authenticate", "oauth", "not logged in", "please log in", "login required", "unauthorized", "invalid api key", "credential problem", "401"].iter().any(|needle| lower.contains(needle));
+    if !auth { return None; }
+    Some(match provider {
+        "claude" => "Claude Code needs you to sign in again: run claude in a terminal and use /login, then retry.",
+        "codex" => "Codex needs you to sign in again: run codex login in a terminal, then retry.",
+        "opencode" => "OpenCode needs you to sign in again: run opencode auth login in a terminal, then retry.",
+        _ => "The coding agent needs you to sign in again in its CLI, then retry.",
+    })
 }
 
 fn safe_provider_error_detail(raw: &str) -> Option<String> {
@@ -229,6 +246,9 @@ fn provider_error_detail_tests() {
     assert!(credential.contains("authentication or credential problem"));
     assert!(!credential.contains("sk-ant-test-secret"));
     assert!(safe_provider_error_detail(&"x".repeat(500)).unwrap().len() <= 240);
+    assert!(sign_in_hint("claude", "Failed to authenticate: OAuth session expired and could not be refreshed").unwrap().contains("/login"));
+    assert!(sign_in_hint("codex", &credential).unwrap().contains("codex login"));
+    assert!(sign_in_hint("claude", "429 rate limit exceeded; retry later").is_none());
     let timeout = safe_timeout_diagnostic(
         "claude",
         Some(bloblex_agent_core::AgentDiagnostic {
@@ -285,6 +305,17 @@ async fn main_rpc(
             StatusCode::FORBIDDEN,
             Json(error(req.id, "unauthorized", "loopback clients only")),
         );
+    }
+    if req.method.starts_with("mcp.") {
+        let bearer = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
+        let Some(session) = st.team.grant(bearer) else {
+            return (StatusCode::UNAUTHORIZED, Json(error(req.id, "unauthorized", "missing or invalid team capability")));
+        };
+        let id = req.id.clone();
+        return match team::mcp_rpc(&st, &session, &req.method, &req.params).await {
+            Ok(v) => (StatusCode::OK, Json(RpcResponse { v: PROTOCOL_VERSION, id, ok: true, result: Some(v), error: None })),
+            Err((status, e)) => (status, Json(RpcResponse { v: PROTOCOL_VERSION, id, ok: false, result: None, error: Some(e) })),
+        };
     }
     if !auth(&headers, &st.token) {
         return (
@@ -536,6 +567,7 @@ async fn quota_poll_loop(st: AppState, mut events: broadcast::Receiver<EventEnve
 
 async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, DispatchError> {
     match method {
+        "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" => team::team_rpc(st, method, &p).await,
         "exec.snapshot.get" => {
             let id=p["snapshotId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","snapshotId is required",StatusCode::BAD_REQUEST))?;
             st.db.exec_snapshot_get(id).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?.ok_or_else(||derr("not_found","execution snapshot not found",StatusCode::NOT_FOUND))
@@ -670,6 +702,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 let active = st.sessions.lock().await.remove(id);
                 let active_turn = st.active_turns.lock().await.remove(id);
                 if let Some(turn) = active_turn.as_deref() { st.denied_turns.lock().await.remove(turn); }
+                st.team.forget(id);
                 st.emit("session.deleted", json!({"sessionId":id})).await;
                 remove_session_gate(st, id, &gate).await;
                 (active, active_turn)
@@ -761,7 +794,16 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::BAD_GATEWAY,
                 ));
             };
-            if let Err(e) = active.adapter.reply_permission(&provider_id, choice).await {
+            let is_question = st.db.permission_kind(id).ok().flatten().as_deref() == Some("question");
+            let reply = if is_question {
+                let answers = (choice == "answer").then(|| p["answers"].as_object().map(|map| map.iter().map(|(key, value)| (key.clone(), match value {
+                    Value::Array(items) => items.iter().filter_map(Value::as_str).map(str::to_owned).collect(),
+                    Value::String(text) => vec![text.clone()],
+                    _ => Vec::new(),
+                })).collect::<std::collections::BTreeMap<String, Vec<String>>>()).unwrap_or_default());
+                active.adapter.answer_question(&provider_id, answers).await
+            } else { active.adapter.reply_permission(&provider_id, choice).await };
+            if let Err(e) = reply {
                 let _guard = gate.lock().await;
                 if !session_is_deleted(st, &session_id).await { let _ = st.db.finish_permission_reply(id, false); }
                 return Err(derr("unsupported", &e.to_string(), StatusCode::BAD_REQUEST));
@@ -921,7 +963,7 @@ fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,Dis
         let a=st.db.agent_get(agent_id).map_err(agent_error)?;
         let env=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
         let mode=a["approvalMode"].as_str().unwrap_or(&default);
-        ExecOptions{approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32}
+        ExecOptions{plan_mode:false,mcp_servers:Vec::new(),approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32}
     } else { ExecOptions{approval_mode:parse_mode(&default),max_concurrency:4,..ExecOptions::default()} };
     if let Some(lock) = session["modelLock"].as_object() {
         // Presence of the lock object is significant: explicit null means the
@@ -929,6 +971,14 @@ fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,Dis
         // later changes to the mutable blob model/effort fields.
         options.model = lock.get("model").and_then(Value::as_str).map(str::to_owned);
         options.thinking = lock.get("thinking").and_then(Value::as_str).map(str::to_owned);
+        // Speed and permission mode are optional lock members: absent keys
+        // keep following the blob, explicit values pin this conversation.
+        if let Some(tier) = lock.get("serviceTier") { options.service_tier = tier.as_str().map(str::to_owned); }
+        if let Some(mode) = lock.get("approvalMode").and_then(Value::as_str) { options.approval_mode = parse_mode(mode); }
+        options.plan_mode = lock.get("planMode").and_then(Value::as_bool).unwrap_or(false);
+    }
+    if let Some(session_id) = session["id"].as_str() {
+        team::attach(st, session_id, session["agentId"].as_str(), &session["link"], &mut options);
     }
     Ok(options)
 }
@@ -959,6 +1009,11 @@ async fn resolve_session_model_lock(
     options.model = lock["model"].as_str().map(str::to_owned);
     options.thinking = lock["thinking"].as_str().map(str::to_owned);
     (options, lock)
+}
+/// Bloblex's own MCP tools (list_blobs, message_blob) are app-owned and safe.
+fn is_team_tool_permission(raw: &Value) -> bool {
+    let text = raw.to_string();
+    ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob"].iter().any(|needle| text.contains(needle))
 }
 fn parse_mode(s:&str)->ApprovalMode{match s{"auto"=>ApprovalMode::Auto,"bypass"=>ApprovalMode::Bypass,_=>ApprovalMode::Ask}}
 fn provider_mode(provider:&str)->&'static str{match provider{"claude"=>"bypassPermissions","codex"=>"never",_=>"daemon_allow_all"}}
@@ -1076,13 +1131,16 @@ async fn preflight_exec_options(st:&AppState,runtime:&Value,provider:&str,option
     }
     None
 }
+/// Gates seeded before a setting existed have no stored row. Claude fast mode
+/// is validated against the model catalog, so it is open unless disabled.
+fn gate_default(provider: &str, setting: &str) -> bool { provider == "claude" && setting == "serviceTier" }
 const EXEC_UNAVAILABLE: &str = "The requested setting is unavailable for this runtime until its execution check passes.";
 fn safe_requested_options(options: &ExecOptions) -> Value {
     json!({"model":options.model,"thinking":options.thinking,"serviceTier":options.service_tier,"approvalMode":options.approval_mode.as_str(),"instructionsPresent":options.instructions.is_some(),"extraArgs":[],"maxConcurrency":options.max_concurrency,"customEnvKeys":options.env.keys().collect::<Vec<_>>()})
 }
 fn exec_option_rejection(st: &AppState, provider: &str, options: &ExecOptions) -> Result<Option<(&'static str, &'static str)>, DispatchError> {
     let capabilities: &[(&str, bool)] = match provider {
-        "claude" => &[("model",true),("thinking",true),("serviceTier",false),("instructions",true)],
+        "claude" => &[("model",true),("thinking",true),("serviceTier",true),("instructions",true)],
         "codex" => &[("model",true),("thinking",true),("serviceTier",true),("instructions",true)],
         "opencode" => &[("model",true),("thinking",true),("serviceTier",false),("instructions",true)],
         _ => &[],
@@ -1092,7 +1150,7 @@ fn exec_option_rejection(st: &AppState, provider: &str, options: &ExecOptions) -
         if !value { continue; }
         let supported = capabilities.iter().find(|(key,_)| *key == name).is_some_and(|(_,yes)| *yes);
         let gate_name = if name == "serviceTier" { "serviceTier" } else { name };
-        let enabled = if name == "serviceTier" && provider == "claude" { false } else { supported && settings[&format!("exec_gate.{provider}.{gate_name}")].as_bool().unwrap_or(false) };
+        let enabled = supported && settings[&format!("exec_gate.{provider}.{gate_name}")].as_bool().unwrap_or(gate_default(provider, name));
         if !enabled { return Ok(Some((name, EXEC_UNAVAILABLE))); }
     }
     Ok(None)
@@ -1102,7 +1160,7 @@ async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError
     let runtime=st.runtimes.read().await.iter().find(|r|r["id"]==runtime_id).cloned().ok_or_else(||derr("not_found","runtime not found",StatusCode::NOT_FOUND))?;
     let provider=runtime["provider"].as_str().unwrap_or("");
     let table:[(&str,bool,&str,&str);5]=match provider{
-        "claude"=>[("model",true,"spawn","provider_echo"),("thinking",true,"spawn","usage_effect"),("serviceTier",false,"turn","none"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape")],
+        "claude"=>[("model",true,"spawn","provider_echo"),("thinking",true,"spawn","usage_effect"),("serviceTier",true,"spawn","request_shape"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape")],
         "codex"=>[("model",true,"spawn","provider_echo"),("thinking",true,"turn","usage_effect"),("serviceTier",true,"turn","provider_echo"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape")],
         "opencode"=>[("model",true,"session","provider_echo"),("thinking",true,"session","none"),("serviceTier",false,"session","none"),("instructions",true,"session","successful_turn"),("customEnv",true,"process","request_shape")],
         _=>[("model",false,"turn","none"),("thinking",false,"turn","none"),("serviceTier",false,"turn","none"),("instructions",false,"turn","none"),("customEnv",false,"process","none")],
@@ -1111,7 +1169,7 @@ async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError
     let mut reported=serde_json::Map::new();
     for (setting,supported,scope,evidence) in table {
         let key=match setting{"model"=>format!("exec_gate.{provider}.model"),"thinking"=>format!("exec_gate.{provider}.thinking"),"serviceTier"=>format!("exec_gate.{provider}.serviceTier"),"instructions"=>format!("exec_gate.{provider}.instructions"),_=>String::new()};
-        let gate=if key.is_empty(){true}else{settings[&key].as_bool().unwrap_or(false)};
+        let gate=if key.is_empty(){true}else{settings[&key].as_bool().unwrap_or(gate_default(provider,setting))};
         let mut value=json!({"supported":supported,"enabled":supported&&gate,"scope":scope,"evidence":evidence});
         if setting=="customEnv"{value["allowedKeys"]=json!(["LANG","LC_ALL","TZ","NO_COLOR","TERM"]);}
         if !supported{value["reason"]=json!(if setting=="customEnv"{"environment options are unsupported for this runtime"}else{"setting is unsupported by this runtime"});}
@@ -1187,8 +1245,9 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     // differently shaped `{ id, ... }` response.
     let options_session=if let Some(agent_id)=agent_id.as_deref(){json!({"agentId":agent_id})}else{json!({"agentId":null})};
     let base_options=exec_options_for_session(st,&options_session)?;
-    let (exec_options,model_lock)=resolve_session_model_lock(st,&runtime,base_options).await;
+    let (mut exec_options,model_lock)=resolve_session_model_lock(st,&runtime,base_options).await;
     let id = Uuid::new_v4().to_string();
+    team::attach(st, &id, agent_id.as_deref(), &p["link"], &mut exec_options);
     if let Some((setting, error)) = preflight_exec_options(st,&runtime,&provider,&exec_options).await {
         st.emit("exec.options.rejected", json!({"sessionId":id,"agentId":agent_id,"runtimeId":runtime_id,"setting":setting,"code":error.1.code,"reason":error.1.message})).await;
         return Err(error);
@@ -1209,6 +1268,7 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
             Some(&model_lock),
         )
         .map_err(agent_error)?;
+    if p["link"].is_object() { st.db.set_session_link(&id, &p["link"]).map_err(agent_error)?; }
     let startup_options=exec_options.clone();
     let (tx, rx) = tokio::sync::mpsc::channel(256);
     let handle_result = adapter
@@ -1500,15 +1560,39 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     if !matches!(row["state"].as_str(), Some("idle" | "closed" | "error" | "completed")) {
         return Err(derr("conflict", "model can only change between turns", StatusCode::CONFLICT));
     }
+    // Omitted model/thinking keep the conversation's current values so speed
+    // and permission changes can be sent on their own.
+    let current = exec_options_for_session(st, &row)?;
     let model = match p.get("model") {
-        None | Some(Value::Null) => None,
+        None => current.model.clone(),
+        Some(Value::Null) => None,
         Some(Value::String(value)) if !value.trim().is_empty() => Some(value.clone()),
         _ => return Err(derr("invalid_argument", "model must be a non-empty identifier or null", StatusCode::BAD_REQUEST)),
     };
     let thinking = match p.get("thinking") {
-        None | Some(Value::Null) => None,
+        None => current.thinking.clone(),
+        Some(Value::Null) => None,
         Some(Value::String(value)) if !value.trim().is_empty() => Some(value.clone()),
         _ => return Err(derr("invalid_argument", "thinking must be a non-empty identifier or null", StatusCode::BAD_REQUEST)),
+    };
+    // Speed and permission mode are optional: an absent key keeps the
+    // conversation's current pin, null returns it to the blob setting.
+    let service_tier = match p.get("serviceTier") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::String(value)) if !value.trim().is_empty() => Some(Some(value.clone())),
+        _ => return Err(derr("invalid_argument", "serviceTier must be a non-empty identifier or null", StatusCode::BAD_REQUEST)),
+    };
+    let plan_mode = match p.get("planMode") {
+        None => None,
+        Some(Value::Bool(value)) => Some(*value),
+        _ => return Err(derr("invalid_argument", "planMode must be a boolean", StatusCode::BAD_REQUEST)),
+    };
+    let approval_mode = match p.get("approvalMode") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::String(value)) if matches!(value.as_str(), "ask" | "auto" | "bypass") => Some(Some(value.clone())),
+        _ => return Err(derr("invalid_argument", "approvalMode must be ask, auto, bypass or null", StatusCode::BAD_REQUEST)),
     };
     let previous = row["modelLock"].clone();
     let previous_model = if previous.is_object() {
@@ -1526,10 +1610,39 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     let mut options = exec_options_for_session(st, &row)?;
     options.model = model.clone();
     options.thinking = thinking.clone();
+    let mut lock = json!({"model":options.model,"thinking":options.thinking});
+    for key in ["serviceTier", "approvalMode", "planMode"] {
+        if let Some(value) = previous.get(key) { lock[key] = value.clone(); }
+    }
+    if let Some(plan) = plan_mode {
+        options.plan_mode = plan;
+        if plan { lock["planMode"] = json!(true); } else if let Some(map) = lock.as_object_mut() { map.remove("planMode"); }
+    }
+    match service_tier.clone() {
+        Some(Some(tier)) => { options.service_tier = Some(tier.clone()); lock["serviceTier"] = json!(tier); }
+        Some(None) => {
+            if let Some(map) = lock.as_object_mut() { map.remove("serviceTier"); }
+            options.service_tier = exec_options_for_session(st, &json!({"agentId": row["agentId"]}))?.service_tier;
+        }
+        None => {}
+    }
+    // A pinned speed belongs to the previous model's catalog; a model change
+    // without an explicit speed returns to the blob setting.
+    if model_changed && service_tier.is_none() && lock.get("serviceTier").is_some() {
+        if let Some(map) = lock.as_object_mut() { map.remove("serviceTier"); }
+        options.service_tier = exec_options_for_session(st, &json!({"agentId": row["agentId"]}))?.service_tier;
+    }
+    match approval_mode.clone() {
+        Some(Some(mode)) => { options.approval_mode = parse_mode(&mode); lock["approvalMode"] = json!(mode); }
+        Some(None) => {
+            if let Some(map) = lock.as_object_mut() { map.remove("approvalMode"); }
+            options.approval_mode = exec_options_for_session(st, &json!({"agentId": row["agentId"]}))?.approval_mode;
+        }
+        None => {}
+    }
     if let Some((_, error)) = preflight_exec_options(st, &runtime, row["provider"].as_str().unwrap_or(""), &options).await {
         return Err(error);
     }
-    let lock = json!({"model":options.model,"thinking":options.thinking});
     // Persist DB changes before taking the live handle out of the map. A
     // storage failure must not orphan an adapter process.
     if model_changed { st.db.clear_session_provider_id(sid).map_err(agent_error)?; }
@@ -1547,7 +1660,8 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
 async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
     let text = p["text"].as_str().unwrap_or("").to_owned();
-    if text.is_empty() || text.len() > 1_000_000 {
+    let attachments = prompt_attachments(&p["attachments"])?;
+    if (text.is_empty() && attachments.is_empty()) || text.len() > 1_000_000 {
         return Err(derr(
             "invalid_argument",
             "text must contain 1 to 1000000 UTF-8 bytes",
@@ -1575,6 +1689,9 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
         (active, row, state)
     };
     let exec_options=exec_options_for_session(st,&session_options)?;
+    if !attachments.is_empty() && !matches!(active.runtime.provider.as_str(), "claude" | "codex") {
+        return Err(derr("unsupported", "This coding agent does not accept image attachments.", StatusCode::BAD_REQUEST));
+    }
     let turn = Uuid::new_v4().to_string();
     let runtime_value=st.runtimes.read().await.iter().find(|r|r["id"]==active.runtime.runtime_id).cloned().unwrap_or(Value::Null);
     let desired_instruction_hash=bloblex_agent_core::instruction_sha256(exec_options.instructions.as_deref().unwrap_or(""));
@@ -1686,8 +1803,12 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
         if !admitted {
             return Err(derr("conflict", "daemon or agent concurrency limit reached", StatusCode::CONFLICT));
         }
-        st.db
-            .append_message(&sid, &turn, "user", &text)
+        let mut message_data = if attachments.is_empty() { json!({}) } else {
+            json!({"attachments": attachments.iter().map(|a| json!({"name":a.name,"mediaType":a.media_type,"path":a.path})).collect::<Vec<_>>()})
+        };
+        if p["meta"].is_object() { message_data["meta"] = p["meta"].clone(); }
+        let user_message = st.db
+            .append_message_with_data(&sid, &turn, "user", &text, &message_data)
             .map_err(|e| {
                     let _ = st.db.update_turn_outcome(&turn, "error", Some("other"));
                 derr(
@@ -1696,6 +1817,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
                     StatusCode::INTERNAL_SERVER_ERROR,
                 )
             })?;
+        if !user_message.is_null() { st.emit("message.completed", json!({"sessionId":sid,"turnId":turn,"messageId":user_message["id"],"role":"user","message":user_message})).await; }
         let snapshot_id = Uuid::new_v4().to_string();
         let requested = safe_requested_options(&exec_options);
         let requested_any = exec_options.model.is_some() || exec_options.thinking.is_some() || exec_options.service_tier.is_some() || exec_options.instructions.is_some() || !exec_options.env.is_empty() || exec_options.approval_mode!=ApprovalMode::Ask;
@@ -1726,12 +1848,14 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
     let state = st.clone();
     let sid2 = sid.clone();
     let turn2 = turn.clone();
+    let provider_for_error = active.runtime.provider.clone();
     tokio::spawn(async move {
         if let Err(e) = active
             .adapter
             .prompt(
                 &active.handle,
                 PromptRequest {
+                    attachments,
                     turn_id: turn2.clone(),
                     text,
                     exec_options,
@@ -1748,7 +1872,10 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
                 "permission_denied" => "A required permission was denied.",
                 _ => "The turn could not be completed.",
             };
-            let detail = if failure_class == "permission_denied" { None } else { safe_provider_error_detail(&e.to_string()) };
+            let mut detail = if failure_class == "permission_denied" { None } else { safe_provider_error_detail(&e.to_string()) };
+            let sign_in = detail.as_deref().and_then(|text| sign_in_hint(&provider_for_error, text));
+            if let Some(hint) = sign_in { detail = Some(format!("{hint} ({})", detail.unwrap_or_default())); }
+            let public_message = if sign_in.is_some() { "The coding agent's sign-in expired." } else { public_message };
             let gate = gate_for_session(&state, &sid2).await;
             let _guard = gate.lock().await;
             if !session_gate_is_current(&state, &sid2, &gate).await || session_is_deleted(&state, &sid2).await
@@ -1760,10 +1887,48 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             // concurrency slot is released because this execution ended.
             state.active_turns.lock().await.remove(&sid2);
             if let Ok(summary) = state.db.session_event_summary(&sid2) { state.emit("session.changed", summary).await; }
-            state.emit("turn.error", json!({"sessionId":sid2,"turnId":turn2,"message":public_message,"failureClass":failure_class,"detail":detail})).await;
+            state.emit("turn.error", json!({"sessionId":sid2,"turnId":turn2,"message":public_message,"failureClass":failure_class,"detail":detail.clone()})).await;
+            team::after_turn(&state, &sid2, Some(turn2.clone()), "turn.error", detail.or(Some(public_message.to_owned())));
         }
     });
     Ok(json!({"turnId":turn,"accepted":true}))
+}
+
+const MAX_PROMPT_ATTACHMENTS: usize = 8;
+const MAX_ATTACHMENT_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Accepts staged local image paths. Media type comes from the file
+/// signature, never from the caller, and every file is checked again here.
+fn prompt_attachments(value: &Value) -> Result<Vec<PromptAttachment>, DispatchError> {
+    let invalid = |message: &str| derr("invalid_argument", message, StatusCode::BAD_REQUEST);
+    let items = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::Array(items) => items,
+        _ => return Err(invalid("attachments must be an array")),
+    };
+    if items.len() > MAX_PROMPT_ATTACHMENTS { return Err(invalid("A message can include up to 8 images.")); }
+    items.iter().map(|item| {
+        let path = item["path"].as_str().filter(|path| !path.is_empty()).map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .ok_or_else(|| invalid("Each attachment needs an absolute file path."))?;
+        let metadata = std::fs::metadata(&path).map_err(|_| invalid("An attached image is no longer available."))?;
+        if !metadata.is_file() || metadata.len() == 0 { return Err(invalid("An attachment is not a readable image file.")); }
+        if metadata.len() > MAX_ATTACHMENT_BYTES { return Err(invalid("Images must be 10 MB or smaller.")); }
+        let mut header = [0u8; 12];
+        let read = std::fs::File::open(&path).and_then(|mut file| { use std::io::Read; file.read(&mut header) }).unwrap_or(0);
+        let media_type = image_media_type(&header[..read]).ok_or_else(|| invalid("Only PNG, JPEG, GIF and WebP images can be attached."))?;
+        let fallback = path.file_name().and_then(|name| name.to_str()).unwrap_or("image").to_owned();
+        let name = item["name"].as_str().unwrap_or(&fallback).chars().filter(|c| !c.is_control()).take(120).collect::<String>();
+        Ok(PromptAttachment { path, name: if name.trim().is_empty() { fallback } else { name }, media_type: media_type.into() })
+    }).collect()
+}
+
+fn image_media_type(header: &[u8]) -> Option<&'static str> {
+    if header.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) { return Some("image/png"); }
+    if header.starts_with(&[0xFF, 0xD8, 0xFF]) { return Some("image/jpeg"); }
+    if header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a") { return Some("image/gif"); }
+    if header.len() >= 12 && &header[..4] == b"RIFF" && &header[8..12] == b"WEBP" { return Some("image/webp"); }
+    None
 }
 
 async fn gate_for_session(st: &AppState, id: &str) -> Arc<Mutex<()>> {
@@ -2043,11 +2208,12 @@ async fn forward_events_with_timeouts(
                 );
                 let session=st.db.session_detail(&sid).unwrap_or(Value::Null);
                 let default=st.db.default_approval_mode().unwrap_or_else(|_|"ask".into());
-                let mode=session["agentId"].as_str().and_then(|agent|st.db.agent_get(agent).ok()).and_then(|a|a["approvalMode"].as_str().map(str::to_owned)).unwrap_or(default);
+                let mode=exec_options_for_session(&st,&session).map(|options|options.approval_mode.as_str().to_owned()).unwrap_or(default);
                 let turn_id=turn.clone();
                 let (kind,normalized)=normalized_permission(&provider,&raw);
                 let base_summary=bloblex_agent_core::permission_summary(&kind,&normalized);
-                let (summary,decision)=if mode=="bypass" { (base_summary,Some(("policy:bypass".to_owned(),"BYPASS".to_owned()))) }
+                let (summary,decision)=if is_team_tool_permission(&raw) { (base_summary,Some(("policy:team".to_owned(),"TEAM".to_owned()))) }
+                else if mode=="bypass" { (base_summary,Some(("policy:bypass".to_owned(),"BYPASS".to_owned()))) }
                 else if mode=="auto" {
                     let project=PathBuf::from(session["projectPath"].as_str().unwrap_or(""));
                     let classified=bloblex_agent_core::classify_permission(&kind,&normalized,&project);let category=classified.category.to_owned();let decision=classified.allowed.then(||("policy:auto".to_owned(),category));(classified.summary,decision)
@@ -2186,13 +2352,17 @@ async fn forward_events_with_timeouts(
                     let _ = st.db.update_turn_outcome(t, "error", Some(class));
                     denied
                 } else { false };
+                let mut detail = if denied { None } else { safe_provider_error_detail(&provider_message) };
+                let sign_in = detail.as_deref().and_then(|text| sign_in_hint(&provider, text));
+                if let Some(hint) = sign_in { detail = Some(format!("{hint} ({})", detail.unwrap_or_default())); }
                 let message = if denied {
                     "A required permission was denied."
+                } else if sign_in.is_some() {
+                    "The coding agent's sign-in expired."
                 } else {
                     "The provider reported a turn error."
                 };
                 let failure_class = if denied { "permission_denied" } else { "provider_error" };
-                let detail = if denied { None } else { safe_provider_error_detail(&provider_message) };
                 let _ = st.db.update_session_state(&sid, "error");
                 st.active_turns.lock().await.remove(&sid);
                 if let Ok(summary) = st.db.session_event_summary(&sid) {
@@ -2218,6 +2388,19 @@ async fn forward_events_with_timeouts(
                     json!({"sessionId":sid,"turnId":turn,"id":m["id"],"messageId":m["id"],"sequence":m["sequence"],"role":"thinking","delta":text}),
                 )
             }
+            AgentEvent::QuestionRequested { provider_request_id, title, questions } => {
+                let id = Uuid::new_v4().to_string();
+                let questions = serde_json::to_value(&questions).unwrap_or(Value::Null);
+                if st.db.insert_question(&id, &sid, &provider_request_id, &title, &questions).is_err() { continue; }
+                let _ = st.db.update_session_state(&sid, "waiting_permission");
+                if let Ok(summary) = st.db.session_event_summary(&sid) { st.emit("session.changed", summary).await; }
+                ("permission.requested", json!({"id":id,"sessionId":sid,"runtimeId":runtime_id,"kind":"question","category":"question","title":title,"detail":null,"risk":"none","choices":["answer","dismiss"],"questions":questions,"expiresAt":null,"status":"pending"}))
+            }
+            AgentEvent::PlanProposed { markdown } => {
+                let message = st.db.append_message_with_data(&sid, turn.as_deref().unwrap_or(""), "plan", &markdown, &json!({"meta":{"kind":"plan"}})).unwrap_or(Value::Null);
+                if message.is_null() { continue; }
+                ("message.completed", json!({"sessionId":sid,"turnId":turn,"messageId":message["id"],"role":"plan","message":message}))
+            }
             AgentEvent::SessionIdle => {
                 let _ = st.db.update_session_state(&sid, "idle");
                 let session = st.db.session_event_summary(&sid).unwrap_or(Value::Null);
@@ -2225,7 +2408,9 @@ async fn forward_events_with_timeouts(
             }
         };
         if ty == "exec.options.changed" && payload.get("snapshotId").is_some() { continue; }
+        let finished = matches!(ty, "turn.completed" | "turn.error" | "turn.cancelled").then(|| payload["detail"].as_str().or_else(|| payload["message"].as_str()).map(str::to_owned));
         st.emit(ty, payload).await;
+        if let Some(detail) = finished { team::after_turn(&st, &sid, turn.clone(), ty, detail); }
     }
 }
 
@@ -2304,6 +2489,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?
     }
+    let data_dir = db_path.parent().map(PathBuf::from);
     let db = Arc::new(Storage::open(db_path)?);
     let recovered_sessions = db.recover_after_restart()?;
     let token = new_capability();
@@ -2327,6 +2513,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         deleted_sessions: Arc::new(Mutex::new(HashSet::new())),
         quota_poll_gate: Arc::new(Mutex::new(QuotaPollGate::default())),
         stopping: Arc::new(tokio::sync::Notify::new()),
+        team: Arc::new(team::Team::default()),
     };
     for id in recovered_sessions {
         if let Ok(session) = st.db.session_event_summary(&id) {
@@ -2339,6 +2526,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(st.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
+    *st.team.address.lock().unwrap() = Some(addr.to_string());
+    *st.team.data_dir.lock().unwrap() = data_dir;
     let quota_state = st.clone();
     tokio::spawn(quota_poll_loop(quota_state, st.events.subscribe()));
     let discovery_state = st.clone();
@@ -2372,6 +2561,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 #[tokio::main]
 async fn main() {
+    if std::env::args().nth(1).as_deref() == Some("mcp-bridge") {
+        mcp_bridge::run().await;
+        return;
+    }
     if let Err(error) = bloblex_usage::shipped_official_price_rules() {
         eprintln!("official price table validation failed: {error}");
         std::process::exit(1);
@@ -2672,9 +2865,112 @@ mod phase2a_tests {
         assert!(validate_spawn_target(&extra).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
+    /// Answers every prompt with "handled: <first line>" and records the
+    /// instructions each session launched with.
+    #[derive(Default)]
+    struct TeamAdapter {
+        events: StdMutex<HashMap<String, tokio::sync::mpsc::Sender<AgentEvent>>>,
+        instructions: StdMutex<HashMap<String, String>>,
+    }
+    #[async_trait::async_trait]
+    impl AgentAdapter for TeamAdapter {
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, request: NewSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.instructions.lock().unwrap().insert(request.session_id.clone(), request.exec_options.instructions.clone().unwrap_or_default());
+            self.events.lock().unwrap().insert(request.session_id.clone(), events);
+            Ok(SessionHandle { session_id:request.session_id.clone(), provider_session_id:format!("provider-{}", request.session_id), capabilities:bloblex_agent_core::AgentCapabilities::default() })
+        }
+        async fn resume_session(&self, _: &RuntimeSpec, _: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn prompt(&self, handle: &SessionHandle, request: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> {
+            let events = self.events.lock().unwrap().get(&handle.session_id).cloned();
+            if let Some(events) = events {
+                let first = request.text.lines().next().unwrap_or("").to_owned();
+                let _ = events.send(AgentEvent::AssistantMessage { text: format!("handled: {first}") }).await;
+                let _ = events.send(AgentEvent::TurnCompleted).await;
+            }
+            Ok(())
+        }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+    }
+    async fn wait_for_messages(st: &AppState, session: &str, done: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+        for _ in 0..250 {
+            let messages = st.db.session_detail(session).unwrap()["messages"].as_array().cloned().unwrap_or_default();
+            if done(&messages) { return messages; }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("timed out waiting for {session}: {}", st.db.session_detail(session).unwrap()["messages"]);
+    }
+    async fn call_tool(st: &AppState, session: &str, name: &str, args: Value) -> Value {
+        team::mcp_rpc(st, session, "mcp.tools.call", &json!({"name":name,"arguments":args})).await.unwrap()
+    }
+    #[tokio::test]
+    async fn leader_delegates_to_a_teammate_and_is_woken_by_the_relayed_reply() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-team";
+        st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
+        *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
+        let adapter = Arc::new(TeamAdapter::default());
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter.clone(), claude:Arc::new(ClaudeAdapter::default()) });
+        st.db.set_setting("exec_gate.codex.instructions", &json!(true)).unwrap();
+        let data_dir = std::env::temp_dir().join(format!("bloblex-team-{}", Uuid::new_v4()));
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        let lead = st.db.agent_create(&json!({"name":"Lead","runtimeId":runtime_id,"description":"Plans the work."})).unwrap().0;
+        let mate = st.db.agent_create(&json!({"name":"Mate","runtimeId":runtime_id})).unwrap().0;
+        let (lead_id, mate_id) = (lead["id"].as_str().unwrap().to_owned(), mate["id"].as_str().unwrap().to_owned());
+        dispatch(&st, "agent.team.update", json!({"agentId":lead_id,"leader":true,"role":"CTO"})).await.unwrap();
+
+        let opened = dispatch(&st, "agent.conversation", json!({"agentId":lead_id})).await.unwrap();
+        assert_eq!(opened["created"], true);
+        let main = opened["session"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(dispatch(&st, "agent.conversation", json!({"agentId":lead_id})).await.unwrap()["session"]["id"], main.as_str(), "one main conversation per blob");
+        let lead_instructions = adapter.instructions.lock().unwrap()[&main].clone();
+        for expected in ["You are Lead", "Your role: CTO.", "What you are for: Plans the work.", "address them as the admin", "You are a casual blob", "You are the team leader", "message_blob"] {
+            assert!(lead_instructions.contains(expected), "missing {expected:?} in {lead_instructions}");
+        }
+
+        let listed = call_tool(&st, &main, "list_blobs", json!({})).await;
+        let roster = listed["content"][0]["text"].as_str().unwrap();
+        assert!(roster.contains("- Lead (you) [leader] — CTO") && roster.contains("- Mate"), "{roster}");
+        for (args, error) in [(json!({"blob":"Lead","message":"hi"}), "cannot message yourself"), (json!({"blob":"Nobody","message":"hi"}), "No teammate is called that"), (json!({"blob":"Mate","message":"  "}), "message is required")] {
+            let result = call_tool(&st, &main, "message_blob", args).await;
+            assert_eq!(result["isError"], true);
+            assert!(result["content"][0]["text"].as_str().unwrap().contains(error), "{result}");
+        }
+
+        let sent = call_tool(&st, &main, "message_blob", json!({"blob":"@mate","message":"Check the build\nDetails follow."})).await;
+        assert!(sent.get("isError").is_none() && sent["content"][0]["text"].as_str().unwrap().starts_with("Sent to Mate."), "{sent}");
+        let side = st.db.side_session(&mate_id, &lead_id).unwrap().expect("side conversation");
+        assert_eq!(st.db.session_detail(&side).unwrap()["link"], json!({"kind":"side","peerAgentId":lead_id,"peerName":"Lead","originSessionId":main}));
+        assert!(adapter.instructions.lock().unwrap()[&side].contains("This is a side conversation. Messages here come from Lead"));
+
+        // The teammate answers; its reply is relayed into the leader's conversation, which wakes the leader.
+        let side_messages = wait_for_messages(&st, &side, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert_eq!(side_messages[0]["meta"]["kind"], "blob_message");
+        let main_messages = wait_for_messages(&st, &main, |m| m.iter().any(|m| m["role"] == "assistant" && m["content"] == "handled: [Reply from Mate]")).await;
+        assert_eq!(main_messages[0]["role"], "notice");
+        assert_eq!(main_messages[0]["meta"]["kind"], "delegation");
+        assert_eq!(main_messages[0]["meta"]["sideSessionId"], side.as_str());
+        let reply = main_messages.iter().find(|m| m["meta"]["kind"] == "blob_reply").expect("relayed reply");
+        assert_eq!(reply["content"], "[Reply from Mate]\nhandled: Check the build");
+        assert_eq!(reply["meta"]["fromName"], "Mate");
+
+        // A follow-up reuses the same side conversation instead of opening another.
+        call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"One more thing"})).await;
+        assert_eq!(st.db.side_session(&mate_id, &lead_id).unwrap().as_deref(), Some(side.as_str()));
+        wait_for_messages(&st, &main, |m| m.iter().filter(|m| m["meta"]["kind"] == "blob_reply").count() == 2).await;
+        assert_eq!(st.db.session_list(false).unwrap().iter().filter(|s| s["agentId"] == mate_id.as_str()).count(), 1);
+
+        // A chain that has already hopped too often refuses to go further.
+        st.team.set_depth(&main, 6);
+        let refused = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"again"})).await;
+        assert!(refused["content"][0]["text"].as_str().unwrap().contains("too many blobs"));
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new())};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default())};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -3256,7 +3552,9 @@ mod phase2a_tests {
         let launch = adapter.launch_options.lock().unwrap().clone().expect("captured launch request");
         assert_eq!(launch.model.as_deref(), Some("beta"));
         assert_eq!(launch.thinking.as_deref(), Some("high"));
-        assert_eq!(launch.instructions.as_deref(), Some("Use the blob-specific instructions."));
+        let instructions = launch.instructions.as_deref().unwrap_or("");
+        assert!(instructions.starts_with("<bloblex_team>") && instructions.ends_with("Use the blob-specific instructions."), "team context precedes the blob instructions");
+        assert_eq!(launch.mcp_servers.len(), 0, "no daemon address in tests, so no MCP bridge");
         assert_eq!(launch.approval_mode, ApprovalMode::Auto);
         assert!(launch.extra_args.is_empty());
         assert_eq!(launch.env.get("LANG").map(String::as_str), Some("en_GB.UTF-8"));
@@ -3306,7 +3604,7 @@ mod phase2a_tests {
         dispatch(&st,"settings.set",json!({"key":"exec_gate.codex.model","value":false})).await.unwrap();let event=events.recv().await.unwrap();assert_eq!(event.event_type,"settings.changed");assert_eq!(event.payload,json!({"key":"exec_gate.codex.model","enabled":false}));
         let after=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-test"})).await.unwrap();assert_eq!(after["settings"]["model"]["supported"],true);assert_eq!(after["settings"]["model"]["enabled"],false);
         dispatch(&st,"settings.set",json!({"key":"exec_gate.codex.model","value":false})).await.unwrap();assert!(events.try_recv().is_err());
-        let claude=json!({"id":"rt-claude","provider":"claude"});*st.runtimes.write().await=vec![claude];let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-claude"})).await.unwrap();assert_eq!(caps["settings"]["serviceTier"]["supported"],false);assert_eq!(caps["settings"]["serviceTier"]["enabled"],false);assert_eq!(caps["settings"]["thinking"]["evidence"],"usage_effect");
+        let claude=json!({"id":"rt-claude","provider":"claude"});*st.runtimes.write().await=vec![claude];let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-claude"})).await.unwrap();assert_eq!(caps["settings"]["serviceTier"]["supported"],true);assert_eq!(caps["settings"]["serviceTier"]["enabled"],true,"Claude fast mode is catalog-validated and open unless its gate is disabled");assert_eq!(caps["settings"]["thinking"]["evidence"],"usage_effect");
         *st.runtimes.write().await=vec![json!({"id":"rt-opencode","provider":"opencode"})];st.db.upsert_runtime(&json!({"id":"rt-opencode","provider":"opencode"})).unwrap();let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(caps["settings"]["thinking"]["supported"],true);assert_eq!(caps["settings"]["thinking"]["enabled"],false);assert_eq!(caps["settings"]["serviceTier"]["supported"],false);st.db.set_setting("exec_gate.opencode.thinking",&json!(true)).unwrap();let enabled=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(enabled["settings"]["thinking"]["supported"],true);assert_eq!(enabled["settings"]["thinking"]["enabled"],true);
         let agent=st.db.agent_create(&json!({"name":"Capped","runtimeId":"rt-opencode","maxConcurrency":8})).unwrap().0;let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode","agentId":agent["id"]})).await.unwrap();assert_eq!(caps["agentConcurrency"]["configuredMaxConcurrency"],8);assert_eq!(caps["agentConcurrency"]["effectiveMaxConcurrency"],4);
     }
@@ -3478,6 +3776,75 @@ mod phase2a_tests {
         let options = exec_options_for_session(&st,&session).unwrap();
         assert_eq!(options.model.as_deref(),Some("beta"));
         assert_eq!(options.thinking.as_deref(),Some("high"));
+    }
+
+    #[tokio::test]
+    async fn session_lock_pins_speed_and_permission_mode_without_a_model_change() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-session-speed-lock";
+        st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
+        *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
+        let tier = bloblex_agent_core::ServiceTier { id:"priority".into(), name:"Fast".into() };
+        let catalog = bloblex_agent_core::ModelCatalog {
+            models: vec![
+                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:vec![tier], default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None },
+                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None },
+            ],
+            fetched_at:"2026-10-10T00:00:00Z".into(), expires_at:"2026-10-10T00:01:00Z".into(), fallback:false, source:"fake_test_catalog".into(), validated:true,
+        };
+        let adapter = Arc::new(ModelLockAdapter { catalog, new_calls:std::sync::atomic::AtomicUsize::new(0), resume_calls:std::sync::atomic::AtomicUsize::new(0) });
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter, claude:Arc::new(ClaudeAdapter::default()) });
+        let agent = st.db.agent_create(&json!({"name":"Speedy","runtimeId":runtime_id,"model":"alpha","thinking":"low"})).unwrap().0;
+        let sid = "session-speed-lock";
+        st.db.create_session_for_agent_with_model_lock(sid,runtime_id,"codex",".","Speedy",agent["id"].as_str(),Some(&json!({"model":"alpha","thinking":"low"}))).unwrap();
+        st.db.update_session_state(sid,"idle").unwrap();
+
+        let updated = dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"alpha","thinking":"low","serviceTier":"priority","approvalMode":"bypass"})).await.unwrap();
+        assert_eq!(updated["modelChanged"],false);
+        assert_eq!(updated["session"]["modelLock"],json!({"model":"alpha","thinking":"low","serviceTier":"priority","approvalMode":"bypass"}));
+        let options = exec_options_for_session(&st,&st.db.session_detail(sid).unwrap()).unwrap();
+        assert_eq!(options.service_tier.as_deref(),Some("priority"));
+        assert_eq!(options.approval_mode,ApprovalMode::Bypass);
+
+        // Omitted keys keep the pins; an unknown tier is rejected by the catalog.
+        let kept = dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"alpha","thinking":"low"})).await.unwrap();
+        assert_eq!(kept["session"]["modelLock"]["serviceTier"],"priority");
+        // A speed-only or mode-only update keeps the model and effort.
+        let mode_only = dispatch(&st,"session.model.update",json!({"sessionId":sid,"approvalMode":"auto"})).await.unwrap();
+        assert_eq!(mode_only["session"]["modelLock"],json!({"model":"alpha","thinking":"low","serviceTier":"priority","approvalMode":"auto"}));
+        assert_eq!(mode_only["modelChanged"],false);
+        assert_eq!(dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"alpha","thinking":"low","serviceTier":"warp"})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"alpha","thinking":"low","approvalMode":"yolo"})).await.unwrap_err().1.code,"invalid_argument");
+
+        // Null returns permission mode to the blob; a model change drops the old model's tier.
+        let reset = dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"beta","thinking":"low","approvalMode":null,"confirmModelChange":true})).await.unwrap();
+        assert_eq!(reset["session"]["modelLock"],json!({"model":"beta","thinking":"low"}));
+        let options = exec_options_for_session(&st,&st.db.session_detail(sid).unwrap()).unwrap();
+        assert_eq!(options.service_tier,None);
+        assert_eq!(options.approval_mode,ApprovalMode::Ask);
+    }
+
+    #[test]
+    fn prompt_attachments_accept_only_signed_images_within_limits() {
+        let dir = std::env::temp_dir().join(format!("bloblex-attachment-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("shot.png");
+        std::fs::write(&png, [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]).unwrap();
+        let fake = dir.join("notes.png");
+        std::fs::write(&fake, b"not an image at all").unwrap();
+        let webp = dir.join("photo");
+        std::fs::write(&webp, b"RIFF\x10\0\0\0WEBPVP8 ").unwrap();
+
+        let parsed = prompt_attachments(&json!([{"path":png,"name":"Screen\u{7}shot.png"},{"path":webp}])).unwrap();
+        assert_eq!(parsed[0].media_type, "image/png");
+        assert_eq!(parsed[0].name, "Screenshot.png");
+        assert_eq!(parsed[1].media_type, "image/webp");
+        assert_eq!(parsed[1].name, "photo");
+        assert!(prompt_attachments(&Value::Null).unwrap().is_empty());
+        for bad in [json!([{"path":fake}]), json!([{"path":"relative.png"}]), json!([{"path":dir.join("missing.png")}]), json!({"path":png}), json!(vec![json!({"path":png}); 9])] {
+            assert_eq!(prompt_attachments(&bad).unwrap_err().1.code, "invalid_argument", "{bad}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

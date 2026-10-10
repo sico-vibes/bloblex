@@ -128,7 +128,7 @@ async fn new_session_with(
 
 fn prompt(adapter: Arc<AcpAdapter>, handle: bloblex_agent_core::SessionHandle, text: &'static str) -> tokio::task::JoinHandle<Result<(), bloblex_agent_core::AdapterError>> {
     tokio::spawn(async move {
-        adapter.prompt(&handle, PromptRequest { turn_id: format!("turn-{text}"), text: text.into(), exec_options: Default::default() }).await
+        adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: format!("turn-{text}"), text: text.into(), exec_options: Default::default() }).await
     })
 }
 
@@ -154,7 +154,7 @@ async fn fake_child_roundtrips_unknown_rpc_stream_and_prompt_stop_reason() {
         adapter_for_prompt
             .prompt(
                 &prompt_handle,
-                PromptRequest {
+                PromptRequest { attachments: Vec::new(),
                     turn_id: "turn-1".into(),
                     text: "Return fixture text".into(),
                     exec_options: Default::default(),
@@ -191,7 +191,7 @@ async fn fake_child_permission_reply_reaches_provider_and_resolves_prompt() {
         adapter_for_prompt
             .prompt(
                 &prompt_handle_a,
-                PromptRequest {
+                PromptRequest { attachments: Vec::new(),
                     turn_id: "turn-permission".into(),
                     text: "Ask permission".into(),
                     exec_options: Default::default(),
@@ -205,7 +205,7 @@ async fn fake_child_permission_reply_reaches_provider_and_resolves_prompt() {
         adapter_for_prompt
             .prompt(
                 &prompt_handle_b,
-                PromptRequest {
+                PromptRequest { attachments: Vec::new(),
                     turn_id: "turn-permission-b".into(),
                     text: "Ask permission".into(),
                     exec_options: Default::default(),
@@ -417,7 +417,7 @@ async fn idle_join_race_never_kills_a_new_acp_attachment() {
             },
             tx,
         ).await.unwrap();
-        adapter.prompt(&handle, PromptRequest {
+        adapter.prompt(&handle, PromptRequest { attachments: Vec::new(),
             turn_id: format!("acp-idle-race-turn-{index}"),
             text: "idle race verification".into(),
             exec_options: ExecOptions::default(),
@@ -581,7 +581,7 @@ async fn fake_child_cancel_uses_provider_stop_reason() {
         adapter_for_prompt
             .prompt(
                 &prompt_handle,
-                PromptRequest {
+                PromptRequest { attachments: Vec::new(),
                     turn_id: "turn-cancel".into(),
                     text: "Wait for cancellation".into(),
                     exec_options: Default::default(),
@@ -617,7 +617,7 @@ async fn cancelling_pending_approval_settles_provider_request_and_rejects_late_r
         adapter_for_prompt
             .prompt(
                 &prompt_handle,
-                PromptRequest {
+                PromptRequest { attachments: Vec::new(),
                     turn_id: "turn-permission-cancel".into(),
                     text: "Wait for permission".into(),
                     exec_options: Default::default(),

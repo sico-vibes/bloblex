@@ -25,8 +25,10 @@ export function BlobSessions({ agent, sessions, legacyCount, canCreate, onOpenSe
   return <section className="settings-group blob-group" aria-label="Conversations">
     <div className="settings-group-head">
       <h3>Conversations</h3>
-      {agent && canCreate && <button type="button" className="ghost-button small" onClick={onNewSession}><Plus size={13} />New session</button>}
-      {agent && <button type="button" className="ghost-button small" aria-expanded={showArchived} onClick={() => { const next = !showArchived; setShowArchived(next); if (next) void loadArchived().catch(() => setArchived([])) }}>{showArchived ? 'Hide archived' : 'Show archived'}</button>}
+      <span className="settings-group-actions">
+        {agent && <button type="button" className="ghost-button small" aria-expanded={showArchived} onClick={() => { const next = !showArchived; setShowArchived(next); if (next) void loadArchived().catch(() => setArchived([])) }}>{showArchived ? 'Hide archived' : 'Show archived'}</button>}
+        {agent && canCreate && <button type="button" className="ghost-button small" onClick={onNewSession}><Plus size={13} />New session</button>}
+      </span>
     </div>
     <div className="settings-card">
       {recent.length === 0 && <p className="settings-empty">No conversations yet.</p>}

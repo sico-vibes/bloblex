@@ -1,5 +1,5 @@
 import type { AutoResolvedAction, BypassNotice } from './approvalContract'
-import type { Outfit } from './blob/outfit'
+import type { BlobLook } from './blob/look'
 import { parseAutoResolved, parseBypassActive } from './approvalContract'
 
 export type { AutoResolvedAction, BypassNotice } from './approvalContract'
@@ -19,6 +19,7 @@ export interface Snapshot extends JsonRecord {
   usage?: JsonRecord[]
   usageSummary?: JsonRecord
   quotas?: JsonRecord[]
+  projects?: Project[]
   autoApprovals?: AutoResolvedAction[]
   bypassNotices?: BypassNotice[]
   /** Client-side tombstones prevent delayed events from reviving deleted sessions. */
@@ -46,7 +47,8 @@ export interface Agent extends JsonRecord {
   description: string
   instructions: string
   color: string
-  outfit?: Outfit | null
+  /** Silhouette and face; absent means a round blob seeded by the id. */
+  look?: BlobLook | null
   runtimeId: string
   model: string | null
   thinking: string | null
@@ -61,6 +63,47 @@ export interface Agent extends JsonRecord {
   updatedAt: string
   approvalMode?: ApprovalMode | null
   effectiveApprovalMode?: ApprovalMode | null
+  /** Team placement: owning project (null = casual), role label, leader, sidebar visibility. */
+  projectId?: string | null
+  role?: string
+  leader?: boolean
+  hidden?: boolean
+}
+
+export interface Project extends JsonRecord {
+  id: string
+  name: string
+  path: string | null
+  sortOrder: number
+  collapsed?: boolean
+}
+
+/** Side conversation between two blobs; absent on a blob's main conversation. */
+export interface SessionLink extends JsonRecord {
+  kind: 'side'
+  peerAgentId: string
+  peerName?: string
+  originSessionId?: string
+}
+
+/** Team metadata on a stored message. */
+export interface MessageMeta extends JsonRecord {
+  kind: 'delegation' | 'blob_message' | 'blob_reply' | 'plan' | string
+  direction?: 'sent' | 'failed'
+  peerAgentId?: string
+  peerName?: string
+  fromAgentId?: string
+  fromName?: string
+  sideSessionId?: string
+}
+
+export interface UserQuestion extends JsonRecord {
+  id: string
+  header: string
+  question: string
+  options: Array<{ label: string; description?: string }>
+  multiSelect?: boolean
+  allowOther?: boolean
 }
 
 export interface ChatMessage extends JsonRecord {
@@ -73,6 +116,23 @@ export interface ChatMessage extends JsonRecord {
   turnId?: string
   toolName?: string
   eventType?: string
+  attachments?: MessageAttachment[] | null
+  meta?: MessageMeta | null
+}
+
+export interface MessageAttachment extends JsonRecord {
+  name: string
+  mediaType?: string
+  path?: string
+}
+
+/** Per-conversation execution pins. Absent speed/mode keys follow the blob. */
+export interface SessionModelLock {
+  model?: string | null
+  thinking?: string | null
+  serviceTier?: string | null
+  approvalMode?: ApprovalMode | null
+  planMode?: boolean
 }
 
 export interface Session extends JsonRecord {
@@ -93,7 +153,8 @@ export interface Session extends JsonRecord {
   updatedAt?: string
   turnId?: string
   model?: string
-  modelLock?: { model?: string | null; thinking?: string | null } | null
+  modelLock?: SessionModelLock | null
+  link?: SessionLink | null
   contextUsed?: number | null
   contextSize?: number | null
   files?: JsonRecord[]
@@ -109,6 +170,8 @@ export interface PermissionRequest extends JsonRecord {
   tool?: string
   command?: string
   choices?: string[]
+  kind?: 'question' | string | null
+  questions?: UserQuestion[] | null
 }
 
 export interface DaemonEvent extends JsonRecord {
@@ -232,6 +295,16 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
     return { ...snapshot, sequence, bypassNotices: [parsed, ...(snapshot.bypassNotices ?? [])].sort((a, b) => b.sequence - a.sequence).slice(0, 50) }
   }
 
+  if (event.type === 'project.changed') {
+    const projects = snapshot.projects ?? []
+    if (payload.action === 'deleted') {
+      const projectId = payload.projectId
+      return { ...snapshot, sequence, projects: projects.filter((project) => project.id !== projectId), agents: (snapshot.agents ?? []).map((agent) => agent.projectId === projectId ? { ...agent, projectId: null } : agent) }
+    }
+    const project = payload.project as Project | undefined
+    if (!project?.id) return { ...snapshot, sequence }
+    return { ...snapshot, sequence, projects: [...projects.filter((item) => item.id !== project.id), project] }
+  }
   if (event.type === 'permission.resolved') {
     const permissionId = payload.permissionId ?? (payload.permission as JsonRecord | undefined)?.id ?? payload.id
     return { ...snapshot, sequence, permissions: (snapshot.permissions ?? []).filter((permission) => permission.id !== permissionId) }

@@ -690,6 +690,56 @@ fn read_blob_import(state: State<'_, AppState>, selection_token: String) -> Resu
     String::from_utf8(bytes).map_err(|_| "This blob file is not UTF-8 text.".to_string())
 }
 
+const MAX_STAGED_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
+const STAGED_ATTACHMENT_RETENTION: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+/// Writes a pasted or picked image to Bloblex's local attachment folder so the
+/// daemon can hand the provider a file path. The body is the raw image bytes;
+/// the extension comes from the file signature, not from the caller.
+#[tauri::command]
+fn stage_prompt_attachment(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("The image could not be read.".to_string());
+    };
+    if bytes.is_empty() || bytes.len() > MAX_STAGED_ATTACHMENT_BYTES {
+        return Err("Images must be 10 MB or smaller.".to_string());
+    }
+    let extension = attachment_extension(bytes)
+        .ok_or_else(|| "Only PNG, JPEG, GIF and WebP images can be attached.".to_string())?;
+    let mut dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|_| "The attachment folder is unavailable.".to_string())?;
+    dir.push("attachments");
+    fs::create_dir_all(&dir).map_err(|_| "The attachment folder could not be created.".to_string())?;
+    prune_staged_attachments(&dir);
+    let path = dir.join(format!("{}.{extension}", Uuid::new_v4()));
+    fs::write(&path, bytes).map_err(|_| "The image could not be saved for sending.".to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn attachment_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) { return Some("png"); }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) { return Some("jpg"); }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") { return Some("gif"); }
+    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" { return Some("webp"); }
+    None
+}
+
+/// Staged images are only needed until the provider has read them; old ones
+/// are removed opportunistically when a new image is staged.
+fn prune_staged_attachments(dir: &std::path::Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let old = entry.metadata().ok().filter(|metadata| metadata.is_file())
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > STAGED_ATTACHMENT_RETENTION);
+        if old { let _ = fs::remove_file(entry.path()); }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalFileInspection {
@@ -2060,6 +2110,7 @@ pub fn run() {
             select_blob_import_path,
             read_blob_import,
             inspect_local_file,
+            stage_prompt_attachment,
             open_in_editor,
             resolve_project_file,
             reveal_in_explorer,

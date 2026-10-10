@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { Runtime } from '../types'
+import type { Project, Runtime } from '../types'
 import { labelize } from '../types'
 import { rpc } from '../tauri'
 import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
 import { runtimeOptionLabel, scalarLength } from './rosterSelectors'
-import { SwatchGrid } from './SwatchGrid'
 import { approvalDescription } from '../approvalContract'
 import type { ApprovalMode, AutoResolvedAction } from '../approvalContract'
 import {
@@ -17,16 +16,17 @@ import { Select } from './Select'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { AutoApprovedList, BypassConfirmDialog } from './approvalUi'
 import { RefreshCw } from 'lucide-react'
-import { WardrobeGrid } from './WardrobeGrid'
+import { LookEditor } from './LookEditor'
+import { draftLook } from '../blob/look'
 import { agentColorHex, previewHex } from './agentColor'
 
-export function BlobSettings({ draft, runtimes, errors, execution, agentId, createdAt, sessionId, autoApprovals, onDraftChange, onArchive, onExecutionGate }: {
+export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, sessionId, autoApprovals, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
   runtimes: Runtime[]
+  projects?: Project[]
   errors: FieldErrors
   execution: StoredExecution
   agentId?: string | null
-  createdAt?: string | null
   sessionId?: string | null
   /** Shown under the approval mode for saved blobs. */
   autoApprovals?: readonly AutoResolvedAction[]
@@ -150,13 +150,15 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, crea
   }
 
   return <>
-    <EditGroup title="Appearance">
-      <div className="blob-form">
-        <SwatchGrid value={draft.color} onChange={(color) => onDraftChange({ ...draft, color })} />
-      </div>
-      <div className="wardrobe-form">
-        <WardrobeGrid color={previewHex(draft.color, agentColorHex('mint'))} value={draft.outfit} createdAt={createdAt} onChange={(outfit) => onDraftChange({ ...draft, outfit })} />
-      </div>
+    <EditGroup title="Look" label="Appearance">
+      <LookEditor
+        look={draftLook(draft, agentId)}
+        color={draft.color}
+        colorHex={previewHex(draft.color, agentColorHex('mint'))}
+        name={draft.name.trim() || 'New blob'}
+        onLookChange={(look) => onDraftChange({ ...draft, look })}
+        onColorChange={(color) => onDraftChange({ ...draft, color })}
+      />
     </EditGroup>
 
     <EditGroup title="Profile">
@@ -169,6 +171,22 @@ export function BlobSettings({ draft, runtimes, errors, execution, agentId, crea
           <textarea aria-label="Description" rows={2} aria-invalid={!!errors.description} aria-describedby={described('blob-description-count', errors.description ? 'blob-description-error' : undefined)} value={draft.description} onChange={(event) => onDraftChange({ ...draft, description: event.target.value })} />
         </label>
         {errors.description && <p className="blob-error" id="blob-description-error">{errors.description}</p>}
+        <p className="blob-help">Teammates read this when deciding who to ask, and the blob reads it as part of its instructions.</p>
+      </div>
+    </EditGroup>
+
+    <EditGroup title="Team">
+      <div className="settings-row">
+        <span className="settings-row-copy"><strong>Role</strong><small>A short label shown next to the name, like CTO or Researcher.</small></span>
+        <span className="settings-row-control"><input className="text-input role-input" aria-label="Role" maxLength={40} placeholder="No role" value={draft.role} onChange={(event) => onDraftChange({ ...draft, role: event.target.value })} /></span>
+      </div>
+      <div className="settings-row">
+        <span className="settings-row-copy"><strong>Project</strong><small>The blob works in the project's folder. Without one it is a casual blob for general requests.</small></span>
+        <span className="settings-row-control"><Select ariaLabel="Project" variant="muted" value={draft.projectId ?? ''} onChange={(value) => onDraftChange({ ...draft, projectId: value || null })} options={[{ value: '', label: 'No project (casual)' }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} /></span>
+      </div>
+      <div className="settings-row">
+        <span className="settings-row-copy"><strong>Team leader</strong><small>The leader coordinates the other blobs and reports back. Only one blob leads.</small></span>
+        <span className="settings-row-control"><button type="button" role="switch" aria-checked={draft.leader} aria-label="Team leader" className={`toggle ${draft.leader ? 'on' : ''}`} onClick={() => onDraftChange({ ...draft, leader: !draft.leader })}><i /></button></span>
       </div>
     </EditGroup>
 

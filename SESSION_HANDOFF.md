@@ -2,6 +2,15 @@
 
 Current as of 7 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
+## Published (10 October 2026, beta.13)
+
+Everything in the four 10 October sections below shipped as manual-only [v0.1.0-beta.13](docs/releases/0.1.0-beta.13.md): team delegation and projects, plan mode, composer, blob looks, the companion catch-up, sounds, launch, import and the gallery.
+
+- Release commit `1b23d4c` is pushed to `main` and tagged `v0.1.0-beta.13`.
+- The unsigned NSIS installer was built in `D:\b13`: 12,900,017 bytes, SHA-256 `de8345bd6e273cda2256aa4ce744ae6b110e78ecbb48402b23fa179495a1f3e6`, `NotSigned`.
+- The signed updater feed remains at beta.6.
+- The sections below keep their original "Uncommitted" headings as history.
+
 ## Uncommitted follow-up (10 October 2026): companion catch-up, sounds, launch, import, gallery
 
 Done directly at the user's request. Not committed.

@@ -1,6 +1,17 @@
 # Bloblex session handoff
 
-Current as of 7 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+Current as of 11 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+
+## Published (11 October 2026, beta.16)
+
+Claude's combined follow-up shipped as manual-only [v0.1.0-beta.16](docs/releases/0.1.0-beta.16.md), including the additional Close chat fix, parallel agent discovery with background retries and Settings feedback, the Codex cloud logo, and seven individually opt-in experimental features (change review, message actions, search, automatic titles, Undo, shortcut sheet and approval badge). The companion no longer announces side conversations back to the main window after closing them.
+
+- Release source commit `41ad15e` and tag `v0.1.0-beta.16` are pushed to GitHub.
+- Independently verified: desktop typecheck, 408/408 desktop tests, web build, 290 Rust workspace tests excluding desktop, 24 native desktop library tests, native compile check and Windows NSIS bundle. The release checkout's 38 changed source/version files match the committed source; staged daemon/hook hashes match the freshly compiled release binaries.
+- The unsigned NSIS installer was built in `D:\b16`: 13,145,402 bytes, SHA-256 `cbdef090e7011743ba020bf899d6768c9a9624c007170f2d7a41a3f24aec4828`, `NotSigned`. GitHub's uploaded digest matches. The installer and `SHA256SUMS.txt` are published.
+- The signed updater feed was checked and remains at beta.6. Install beta.16 manually over the existing app.
+- Still unverified: native taskbar/tray behavior, startup retries with real CLIs, Revert on a real user project and clean-machine installation.
+- Local `output/` and `.playwright-cli/` artifacts were excluded from the source commit and preserved.
 
 ## Published (11 October 2026, beta.15)
 

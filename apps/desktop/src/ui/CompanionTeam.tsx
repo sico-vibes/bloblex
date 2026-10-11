@@ -11,7 +11,7 @@ import { MAX_COMPANION_PEERS } from '../blob/companionLayout'
 import { agentColorHex } from './agentColor'
 import { activityTitle } from './ActivityDetails'
 import { buildConversationItems } from './conversation'
-import { conversationPreview, groupAgentsByProject, mainSessionFor, sessionIsBusy, sideSessionsFor, splitMentions } from './teamSelectors'
+import { conversationPreview, groupAgentsByProject, mainSessionFor, sessionIsBusy, sideSessionsFor, sideTitle, splitMentions } from './teamSelectors'
 
 export type BlobState = 'waiting' | 'working' | 'offline' | 'idle'
 
@@ -226,7 +226,7 @@ export function CompanionTeamActivity({ agent, agents, sessions, onOpen }: { age
     const busy = sessionIsBusy(side)
     return <button type="button" key={side.id} className="companion-activity-row team" onClick={() => onOpen(side.id)}>
       <span className="companion-side-faces">{from && <Face agent={from} size={16} />}<ArrowLeftRight size={10} aria-hidden="true" />{to && <Face agent={to} size={16} />}</span>
-      <span><strong>{from?.name ?? 'Teammate'} ⇄ {to?.name ?? 'Teammate'}</strong><small className={busy ? 'shimmer' : undefined}>{busy ? 'Working on it' : side.state === 'waiting_permission' ? 'Waiting for you' : 'Side conversation'}</small></span>
+      <span><strong>{sideTitle(side, agents)}</strong><small className={busy ? 'shimmer' : undefined}>{busy ? 'Working on it' : side.state === 'waiting_permission' ? 'Waiting for you' : `${from?.name ?? 'Teammate'} asked ${to?.name ?? 'a teammate'}`}</small></span>
     </button>
   })}</>
 }

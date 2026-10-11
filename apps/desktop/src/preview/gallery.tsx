@@ -25,6 +25,23 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: 'onboarding', title: 'Onboarding', scale: 0.62,
+    description: 'The first-run steps after the launch checks: your name, your coding agents, and your first blob.',
+    frames: [
+      { label: 'Step 1', src: `/launch-preview.html?fixture=onboarding-step-1${t}`, width: 1100, height: 720 },
+      { label: 'Step 2', src: `/launch-preview.html?fixture=onboarding-step-2${t}`, width: 1100, height: 720 },
+      { label: 'Step 3', src: `/launch-preview.html?fixture=onboarding-step-3${t}`, width: 1100, height: 720 },
+    ],
+  },
+  {
+    id: 'dictation', title: 'Dictation', scale: 0.8,
+    description: 'The dictation island: a live loop (the model warms up, words arrive, it transcribes and finishes) and every state, as the floating bubble and inside the companion.',
+    frames: [
+      { label: 'Live bubble', src: `/dictation-preview.html?state=live${t}`, width: 560, height: 200 },
+      { label: 'All states', src: `/dictation-preview.html${t ? '?theme=light' : ''}`, width: 1040, height: 900 },
+    ],
+  },
+  {
     id: 'companion', title: 'Companion',
     description: 'The floating island on a simulated desktop, at its real window sizes: the compact bar, the mini team overview, chat with team chips and mentions, team activity, and in-island settings.',
     frames: [

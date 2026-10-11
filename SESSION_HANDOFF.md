@@ -2,6 +2,39 @@
 
 Current as of 7 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
+## Uncommitted 1.0 polish (11 October 2026, after beta.14)
+
+- **Effort.**
+  - Levels come from each CLI's catalog. Codex lists Low…Max plus **Ultra** on Sol, Astra and Terra models; Luna does not offer Ultra.
+  - Claude gains a synthetic **Ultracode** stop after Max when `get_settings` reports `applied.ultracodeAvailable`. Claude allows Ultracode when dynamic workflows are on and the model supports Extra high. It runs as `--effort max --settings {"ultracode":true}`.
+  - The slider is a pointer-captured `role="slider"` div (no native range input) and commits only on release.
+  - "Provider default" moved to the top right. The recommended level is a short line, captioned "Recommended" for Claude.
+  - Claude style lights only the cells nearest the knob.
+  - OpenCode's gated effort is a greyed pill with a tooltip instead of an error.
+- **Side conversations.**
+  - OpenCode `thinking` messages are hidden. This was the "second Fluffy reply".
+  - Opening a side conversation no longer switches the selection to its owner (Tauri active-session listener), and Close chat returns to where it was opened.
+  - Each conversation has a topic: `message_blob` takes `topic`/`conversation`, and there is a new `list_conversations` tool. The header pill is centred and shows the topic.
+  - The blob header has a side-conversation menu.
+  - `#` in the composer references a conversation; the daemon appends its id and latest reply to the prompt only, and stores `references` on the message.
+- **Dictation.**
+  - Fixed the first-click stall: a freshly spawned worker never received Start.
+  - The worker opens the mic before the model loads and queues audio. `dictation_warm` preloads at launch, and idle teardown is now 10 minutes.
+  - New settings `speech.enabled` and `speech.model`.
+  - Ctrl+E is registered only while dictation is on (`set_dictation_shortcut`) and goes to the companion while it is shown, else to the main window.
+  - New Kaze-adapted island for the bubble (it grows to show live words via `set_dictation_bubble_size`) and for the companion.
+- **Other.**
+  - Removed the header Resume button (prompts already resume). New conversation is disabled on an empty conversation.
+  - Every menu item has an icon.
+  - Experimental runtime logos (`experimental.runtimeLogos`).
+  - New gallery sections: Onboarding and Dictation (`/dictation-preview.html`).
+- **Evidence.**
+  - Rust workspace tests pass.
+  - Desktop: typecheck, 373/373 Vitest and the build pass.
+  - The desktop crate compiled in `D:\b14` with the new `lib.rs`/`speech.rs`.
+  - Checked in the browser preview: effort (Claude, Codex, locked OpenCode), side conversation menu, pill, close, `#` references, runtime logos, Speech settings and the dictation island.
+- **Not verified:** native dictation (warm-up, queued audio, bubble resize, Ctrl+E routing) and Ultracode on a real Claude turn.
+
 ## Published (10 October 2026, beta.14)
 
 The section below shipped as manual-only [v0.1.0-beta.14](docs/releases/0.1.0-beta.14.md). Release commit `5fc1e1b` is pushed to `main` and tagged `v0.1.0-beta.14`. The unsigned NSIS installer was built in `D:\b14`: 12,918,554 bytes, SHA-256 `d70826a1a6d7e2657a05923ca2a5c8ae05db6a4753657ec15d0ee2d8674f76c1`, `NotSigned`. The signed updater feed remains at beta.6.

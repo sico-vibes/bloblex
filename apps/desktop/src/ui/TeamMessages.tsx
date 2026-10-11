@@ -1,11 +1,12 @@
 // Team surfaces inside a conversation: delegation chips, relayed replies,
 // side-conversation header, proposed plans, inline questions and @mentions.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeftRight, Check, ClipboardList, Send, X } from 'lucide-react'
-import type { Agent, PermissionRequest, UserQuestion } from '../types'
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { ArrowLeftRight, Check, ChevronDown, ClipboardList, Hash, Send, X } from 'lucide-react'
+import type { Agent, PermissionRequest, Session, UserQuestion } from '../types'
 import { agentLook } from '../blob/look'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentColorHex } from './agentColor'
+import { sideTitle } from './teamSelectors'
 
 function MiniBlob({ agent, name, size = 18 }: { agent: Agent | null | undefined; name: string; size?: number }) {
   return agent
@@ -16,10 +17,10 @@ function MiniBlob({ agent, name, size = 18 }: { agent: Agent | null | undefined;
 const accentOf = (agent: Agent | null | undefined) => agent ? { ['--chip-accent' as string]: agentColorHex(agent.color) } : undefined
 
 /** "Messaged Codex" in the sender's conversation; opens the side conversation. */
-export function DelegationChip({ peer, name, failed, detail, onOpen }: { peer: Agent | null | undefined; name: string; failed?: boolean; detail?: string; onOpen?: () => void }) {
+export function DelegationChip({ peer, name, topic, failed, detail, onOpen }: { peer: Agent | null | undefined; name: string; topic?: string; failed?: boolean; detail?: string; onOpen?: () => void }) {
   return <div className="team-chip-row">
-    <button type="button" className={`team-chip ${failed ? 'failed' : ''}`} style={accentOf(peer)} disabled={!onOpen} onClick={onOpen} aria-label={failed ? `${name} could not start${detail ? `: ${detail}` : ''}` : `Messaged ${name}. Open side conversation`} title={detail ?? (onOpen ? 'Open the side conversation' : undefined)}>
-      <span>{failed ? 'Could not reach' : 'Messaged'}</span><MiniBlob agent={peer} name={name} /><b>{name}</b>
+    <button type="button" className={`team-chip ${failed ? 'failed' : ''}`} style={accentOf(peer)} disabled={!onOpen} onClick={onOpen} aria-label={failed ? `${name} could not start${detail ? `: ${detail}` : ''}` : `Messaged ${name}${topic ? ` about ${topic}` : ''}. Open side conversation`} title={detail ?? (onOpen ? 'Open the side conversation' : undefined)}>
+      <span>{failed ? 'Could not reach' : 'Messaged'}</span><MiniBlob agent={peer} name={name} /><b>{name}</b>{topic && !failed && <em className="team-chip-topic">{topic}</em>}
     </button>
   </div>
 }
@@ -33,11 +34,97 @@ export function ReplyChip({ from, name, onOpen }: { from: Agent | null | undefin
   </div>
 }
 
-/** Header for a side conversation between two blobs. */
-export function SideConversationHeader({ peer, peerName, target, targetName }: { peer: Agent | null | undefined; peerName: string; target: Agent | null | undefined; targetName: string }) {
-  return <div className="side-header" aria-label={`Side conversation between ${peerName} and ${targetName}`}>
-    <span className="side-header-pill"><MiniBlob agent={peer} name={peerName} size={20} /><b>{peerName}</b><ArrowLeftRight size={13} aria-hidden="true" /><MiniBlob agent={target} name={targetName} size={20} /><b>{targetName}</b></span>
+/** Header for a side conversation between two blobs: a centred pill with both blobs and its topic. */
+export function SideConversationHeader({ peer, peerName, target, targetName, topic }: { peer: Agent | null | undefined; peerName: string; target: Agent | null | undefined; targetName: string; topic?: string | null }) {
+  return <div className="side-header" aria-label={`Side conversation between ${peerName} and ${targetName}${topic ? `: ${topic}` : ''}`}>
+    <span className="side-header-pill">
+      <span className="side-header-pair"><MiniBlob agent={peer} name={peerName} size={20} /><b style={accentOf(peer)}>{peerName}</b><ArrowLeftRight size={13} aria-hidden="true" /><MiniBlob agent={target} name={targetName} size={20} /><b style={accentOf(target)}>{targetName}</b></span>
+      {topic && <span className="side-header-topic" title={topic}>{topic}</span>}
+    </span>
   </div>
+}
+
+function relativeTime(value: unknown) {
+  const time = Date.parse(String(value ?? ''))
+  if (!Number.isFinite(time)) return ''
+  const minutes = Math.max(0, Math.round((Date.now() - time) / 60_000))
+  if (minutes < 1) return 'now'
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.round(hours / 24)
+  return days < 7 ? `${days}d` : new Date(time).toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+/** One side conversation as a row: both blobs, its topic, and who asked whom. */
+function SideConversationRow({ session, agents, ownerId }: { session: Session; agents: readonly Agent[]; ownerId?: string }) {
+  const asker = agents.find((agent) => agent.id === session.link?.peerAgentId)
+  const asked = agents.find((agent) => agent.id === session.agentId)
+  const askerName = asker?.name ?? session.link?.peerName ?? 'Teammate'
+  const askedName = asked?.name ?? 'Teammate'
+  const other = ownerId && asker?.id === ownerId ? askedName : askerName
+  const relation = ownerId === asker?.id ? `asked ${askedName}` : ownerId === asked?.id ? `${askerName} asked` : `${askerName} asked ${askedName}`
+  return <>
+    <span className="side-row-pair" aria-hidden="true"><MiniBlob agent={asker} name={askerName} size={20} /><MiniBlob agent={asked} name={askedName} size={20} /></span>
+    <span className="side-row-copy"><strong>{sideTitle(session, agents)}</strong><small>{ownerId ? relation : `${askerName} and ${askedName}`}{relativeTime(session.updatedAt) && ` · ${relativeTime(session.updatedAt)}`}</small></span>
+    <span className="sr-only">{`with ${other}`}</span>
+  </>
+}
+
+function useDismiss(open: boolean, rootRef: RefObject<HTMLElement | null>, close: (restoreFocus: boolean) => void) {
+  const closeRef = useRef(close)
+  closeRef.current = close
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => { if (!rootRef.current?.contains(event.target as Node)) closeRef.current(false) }
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeRef.current(true) } }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => { document.removeEventListener('pointerdown', onPointerDown, true); document.removeEventListener('keydown', onKeyDown, true) }
+  }, [open, rootRef])
+}
+
+/** The blob header's list of its side conversations, newest first. */
+export function SideConversationMenu({ sessions, agents, ownerId, onOpen }: { sessions: readonly Session[]; agents: readonly Agent[]; ownerId: string; onOpen: (sessionId: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  useDismiss(open, rootRef, (restore) => { setOpen(false); if (restore) triggerRef.current?.focus() })
+  if (!sessions.length) return null
+  return <div ref={rootRef} className="side-menu-wrap">
+    <button ref={triggerRef} type="button" className="side-menu-trigger" aria-haspopup="menu" aria-expanded={open} aria-label="Side conversations" onClick={() => setOpen((value) => !value)}>
+      <span className="side-menu-faces" aria-hidden="true">{[...new Map(sessions.flatMap((session) => [session.link?.peerAgentId, session.agentId]).filter((id): id is string => !!id && id !== ownerId).map((id) => [id, agents.find((agent) => agent.id === id)])).values()].filter(Boolean).slice(0, 3).map((agent) => <MiniBlob key={agent!.id} agent={agent} name={agent!.name} size={16} />)}</span>
+      <span>{sessions.length} side conversation{sessions.length === 1 ? '' : 's'}</span><ChevronDown size={13} aria-hidden="true" />
+    </button>
+    {open && <div className="menu-surface side-menu" role="menu" aria-label="Side conversations" onKeyDown={(event) => {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+      event.preventDefault()
+      const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      const index = items.indexOf(document.activeElement as HTMLElement)
+      items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus()
+    }}>
+      {sessions.map((session) => <button key={session.id} type="button" role="menuitem" className="side-menu-item" onClick={() => { setOpen(false); onOpen(session.id) }}><SideConversationRow session={session} agents={agents} ownerId={ownerId} /></button>)}
+    </div>}
+  </div>
+}
+
+/** Autocomplete for #conversation references in the composer. */
+export function ConversationPicker({ sessions, agents, ownerId, query, activeIndex, onPick, onHover }: { sessions: readonly Session[]; agents: readonly Agent[]; ownerId?: string; query: string; activeIndex: number; onPick: (session: Session) => void; onHover: (index: number) => void }) {
+  const matches = conversationMatches(sessions, agents, query)
+  if (!matches.length) return null
+  return <div className="mention-picker conversation-picker" role="listbox" aria-label="Reference a side conversation">
+    <div className="mention-picker-heading"><Hash size={12} aria-hidden="true" />Side conversations</div>
+    {matches.map((session, index) => <button key={session.id} type="button" role="option" aria-selected={index === activeIndex} className={`mention-option side-option ${index === activeIndex ? 'active' : ''}`} onMouseDown={(event) => { event.preventDefault(); onPick(session) }} onMouseEnter={() => onHover(index)}>
+      <SideConversationRow session={session} agents={agents} ownerId={ownerId} />
+    </button>)}
+  </div>
+}
+
+export { sideTitle }
+
+export function conversationMatches(sessions: readonly Session[], agents: readonly Agent[], query: string) {
+  const needle = query.trim().toLowerCase()
+  return sessions.filter((session) => !needle || sideTitle(session, agents).toLowerCase().includes(needle)).slice(0, 6)
 }
 
 export function PlanCard({ text, renderText, canApprove, onApprove, onRevise }: { text: string; renderText: (text: string) => ReactNode; canApprove: boolean; onApprove: () => void; onRevise: () => void }) {

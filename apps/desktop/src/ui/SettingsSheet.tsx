@@ -5,7 +5,7 @@ import { Bot, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus,
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
-import { companionMonitorOptions, currentCompanionMonitor, inDesktop, permissionsPolicyGet, rpc, setCloseToTray, setCompanionMonitor, setCompanionVisibility } from '../tauri'
+import { companionMonitorOptions, currentCompanionMonitor, inDesktop, permissionsPolicyGet, previewMode, rpc, setCloseToTray, setCompanionMonitor, setCompanionVisibility } from '../tauri'
 import { agentColorHex } from './agentColor'
 import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
@@ -26,12 +26,17 @@ const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHori
 ]
 
 type SpeechModelRow = { id: string; label: string; description: string; language: string; streaming: boolean; recommended: boolean; sizeBytes: number }
+const PREVIEW_SPEECH_MODELS: SpeechModelRow[] = [
+  { id: 'parakeet-tdt-0.6b-v3-int8', label: 'Parakeet TDT v3', description: 'Highest accuracy for 25 European languages. Punctuation, capitalization, and word-level timestamps.', language: 'multilingual', streaming: false, recommended: true, sizeBytes: 671_000_000 },
+  { id: 'parakeet-tdt-0.6b-v2-int8', label: 'Parakeet TDT v2', description: 'English only. Faster than v3 with similar accuracy. Punctuation and capitalization.', language: 'en', streaming: false, recommended: false, sizeBytes: 661_000_000 },
+  { id: 'zipformer-streaming-en-20m', label: 'Zipformer Streaming EN', description: 'English only. Lightweight 20M-param model with low-latency real-time partials.', language: 'en', streaming: true, recommended: false, sizeBytes: 128_000_000 },
+]
 
 export function providerDisplayName(provider: string | undefined) {
   return providerBrand(provider ?? '').name || labelize(provider, 'Coding agent')
 }
 
-export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, activityDetails = false, onActivityDetailsChange }: {
+export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
   snapshot: Snapshot | null
   initialPage: SettingsPageId
   onClose: () => void
@@ -46,6 +51,14 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   /** Experimental: each turn's commands, tools and edits, expandable under the reply. */
   activityDetails?: boolean
   onActivityDetailsChange?: (enabled: boolean) => void
+  /** Experimental: each blob's coding-agent logo beside its name. */
+  runtimeLogos?: boolean
+  onRuntimeLogosChange?: (enabled: boolean) => void
+  /** Speech: whether dictation is on at all, and the downloaded model it uses. */
+  speechEnabled?: boolean
+  onSpeechEnabledChange?: (enabled: boolean) => void
+  speechModel?: string
+  onSpeechModelChange?: (modelId: string) => void
 }) {
   const { ref: dialogRef, close } = useDialogAccessibility(onClose)
   const [page, setPage] = useState<SettingsPageId>(focusUpdates ? 'Updates' : initialPage)
@@ -162,6 +175,12 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   }, [])
 
   const loadSpeech = useCallback(async () => {
+    if (previewMode) {
+      // The browser preview has no speech engine; show the catalog as the app would.
+      setSpeechModels(PREVIEW_SPEECH_MODELS)
+      setSpeechReady({ [PREVIEW_SPEECH_MODELS[0].id]: true })
+      return
+    }
     if (!inDesktop) return
     try {
       const models = await invoke<SpeechModelRow[]>('speech_models')
@@ -186,7 +205,10 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
         setSpeechProgress((current) => ({ ...current, [modelId]: payload.total ? payload.completed / payload.total : 0 }))
       })
       await invoke('speech_model_download', { modelId })
+      const firstReady = !Object.values(speechReady).some(Boolean)
       setSpeechReady((current) => ({ ...current, [modelId]: true }))
+      // The first model you download becomes the one dictation uses.
+      if (firstReady) { const failure = await saveSetting('speech.model', modelId); if (!failure) onSpeechModelChange?.(modelId) }
       setNotice('Speech model ready for dictation.')
     } catch (reason) { setFormError(messageOf(reason)) }
     finally {
@@ -390,6 +412,9 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
               <SettingsRow label={<span className="experimental-label">Usage bar<span className="experimental-tag">Experimental</span><HelpTip text="Shows each coding agent's plan limits (for example 5-hour and weekly usage) along the bottom of the main window, read from the sign-in each CLI already has. Turn it off if the numbers are not useful to you; the Usage page still has them." /></span>} hint="Plan limits for each coding agent, along the bottom of the window.">
                 <button type="button" className={`toggle ${usageBarEnabled ? 'on' : ''}`} role="switch" aria-label="Usage bar" aria-checked={usageBarEnabled} disabled={saving} onClick={() => { const next = !usageBarEnabled; void saveSetting('experimental.usageBar', next).then((failure) => { if (!failure) onUsageBarChange?.(next) }) }}><i /></button>
               </SettingsRow>
+              <SettingsRow label={<span className="experimental-label">Runtime logos<span className="experimental-tag">Experimental</span><HelpTip text="Shows the logo of the coding agent each blob runs on (Claude Code, Codex or OpenCode) just before its name, in the sidebar and the conversation header. Hover the logo to see which runtime it is." /></span>} hint="See at a glance which coding agent each blob uses.">
+                <button type="button" className={`toggle ${runtimeLogos ? 'on' : ''}`} role="switch" aria-label="Runtime logos" aria-checked={runtimeLogos} disabled={saving} onClick={() => { const next = !runtimeLogos; void saveSetting('experimental.runtimeLogos', next).then((failure) => { if (!failure) onRuntimeLogosChange?.(next) }) }}><i /></button>
+              </SettingsRow>
               <SettingsRow label={<span className="experimental-label">Agent activity<span className="experimental-tag">Experimental</span><HelpTip text="Shows what each coding agent did during a reply as one line under it, for example “Ran 3 commands · edited 1 file”. Open it to see every step, then open a step for the command and its output, the tool and its result, or the file and its diff. In the companion, the Activity tab shows the same steps. When it is off you only see that a blob is working." /></span>} hint="Commands, tools and file edits under each reply, in the app and the companion.">
                 <button type="button" className={`toggle ${activityDetails ? 'on' : ''}`} role="switch" aria-label="Agent activity" aria-checked={activityDetails} disabled={saving} onClick={() => { const next = !activityDetails; void saveSetting('experimental.activityDetails', next).then((failure) => { if (!failure) onActivityDetailsChange?.(next) }) }}><i /></button>
               </SettingsRow>
@@ -462,29 +487,35 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
 
           {!loading && page === 'Speech' && <>
             <p className="settings-intro">Dictation runs on this device with sherpa-onnx. Download a model once; your audio is never uploaded.</p>
-            <SettingsGroup title="Speech models">
+            <SettingsGroup title="Dictation">
+              <SettingsRow label="Dictation" hint="Shows the microphone in the composer and the companion, and listens for Ctrl+E.">
+                <button type="button" className={`toggle ${speechEnabled ? 'on' : ''}`} role="switch" aria-label="Dictation" aria-checked={speechEnabled} disabled={saving} onClick={() => { const next = !speechEnabled; void saveSetting('speech.enabled', next).then((failure) => { if (!failure) onSpeechEnabledChange?.(next) }) }}><i /></button>
+              </SettingsRow>
+              <SettingsRow label="Keyboard shortcut" hint={speechEnabled ? 'Starts or stops dictation from any window.' : 'Free for other apps while dictation is off.'}><kbd className="settings-kbd">Ctrl</kbd><kbd className="settings-kbd">E</kbd></SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup title="Speech model">
               {speechModels.length === 0 && <p className="settings-empty">No speech models reported.</p>}
+              <div className={`speech-models ${speechEnabled ? '' : 'muted'}`} role="radiogroup" aria-label="Speech model for dictation">
               {speechModels.map((model) => {
                 const ready = speechReady[model.id] === true
                 const busy = speechBusy === model.id
                 const percent = Math.round((speechProgress[model.id] ?? 0) * 100)
-                return <div className="settings-row" key={model.id}>
+                const inUse = ready && (speechModel ? speechModel === model.id : model.recommended)
+                return <div className={`settings-row speech-model-row ${inUse ? 'in-use' : ''}`} key={model.id}>
                   <span className="settings-row-copy">
-                    <strong>{model.label}{model.recommended ? ' · Recommended' : ''}</strong>
+                    <strong>{model.label}{model.recommended && <span className="speech-model-tag">Recommended</span>}</strong>
                     <small>{model.description} · {formatBytes(model.sizeBytes)}</small>
                   </span>
                   <span className="settings-row-control">
                     {busy
-                      ? <span className="settings-value">{percent}%</span>
+                      ? <span className="speech-model-progress" role="progressbar" aria-label={`Downloading ${model.label}`} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${percent}%` }} /><b>{percent}%</b></span>
                       : ready
-                        ? <span className="settings-value">Ready</span>
+                        ? <button type="button" role="radio" aria-checked={inUse} className={`speech-model-use ${inUse ? 'on' : ''}`} disabled={saving || inUse} onClick={() => { void saveSetting('speech.model', model.id).then((failure) => { if (!failure) onSpeechModelChange?.(model.id) }) }}>{inUse ? <><Check size={13} aria-hidden="true" />In use</> : 'Use'}</button>
                         : <button type="button" className="secondary-button small" onClick={() => void downloadModel(model.id)} disabled={saving || speechBusy !== null}><Download size={13} />Download</button>}
                   </span>
                 </div>
               })}
-            </SettingsGroup>
-            <SettingsGroup title="Dictation">
-              <SettingsRow label="Keyboard shortcut" hint="Start or stop dictation from any window."><span className="settings-value">Ctrl+E</span></SettingsRow>
+              </div>
             </SettingsGroup>
           </>}
 

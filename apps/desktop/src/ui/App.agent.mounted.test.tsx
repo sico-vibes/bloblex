@@ -806,6 +806,7 @@ describe('blob roster and editor', () => {
     ] })
     const side = session({ id: 'session-side', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Claude ⇄ Codex', updatedAt: '2026-10-02T02:30:00.000Z', link: { kind: 'side', peerAgentId: 'agent-claude', peerName: 'Claude', originSessionId: 'session-claude' }, messages: [
       { id: 's1', role: 'user', content: 'Please run the tests.', meta: { kind: 'blob_message', fromAgentId: 'agent-claude', fromName: 'Claude' } },
+      { id: 's1t', role: 'thinking', content: 'Private reasoning about the request.' },
       { id: 's2', role: 'assistant', content: 'All 12 tests pass.' },
     ] })
     configure(snapshot({ sessions: [main, side, ...sessions.filter((item) => item.id !== 'session-claude')] }))
@@ -822,6 +823,8 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.side-header')?.getAttribute('aria-label')).toBe('Side conversation between Claude and Codex')
     expect(view.host.querySelector('.composer-box')).toBeNull()
     expect(view.host.querySelector('.side-peer .message-author')?.textContent).toContain('Claude')
+    // The teammate's private reasoning is not shown as a message from either blob.
+    expect(view.host.querySelector('.message-list')?.textContent ?? '').not.toContain('Private reasoning')
     await click(buttonNamed(view.host, 'Close chat'))
     expect(view.host.querySelector('.side-header')).toBeNull()
     expect(view.host.querySelector('.composer-box textarea')?.getAttribute('aria-label')).toBe('Message Claude')

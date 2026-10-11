@@ -1,18 +1,35 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 export type DictationPhase = 'idle' | 'starting' | 'downloading' | 'listening'
 
 type DictationEvent = { type: string; owner?: string; text?: string }
+
+export const DEFAULT_SPEECH_MODEL_ID = 'parakeet-tdt-0.6b-v3-int8'
+
+/**
+ * Turns dictation on or off for this run: registers Ctrl+E and preloads the
+ * chosen model when on, frees both when off. Safe to call repeatedly; inert
+ * outside the desktop app.
+ */
+export async function configureDictation(enabled: boolean, modelId: string): Promise<void> {
+  if (!isTauri()) return
+  await invoke('set_dictation_shortcut', { enabled }).catch(() => undefined)
+  if (enabled) await invoke('dictation_warm', { modelId }).catch(() => undefined)
+  else await invoke('dictation_release').catch(() => undefined)
+}
 
 /**
  * Drives one dictation session for a composer. Uses the Tauri API directly so
  * that component tests, which mock `../tauri`, never touch this path: outside a
  * Tauri host `isTauri()` is false and the hook is inert.
  *
- * If the chosen model is not cached, the first toggle downloads it (with
- * progress) and then starts listening.
+ * The microphone opens at once; while the model loads (`warming`) audio is
+ * queued natively and transcribed as soon as it is ready. If the chosen model
+ * is not downloaded, the first toggle downloads it (with progress) first.
+ * Events from the other window's dictation are ignored.
  */
 export function useDictation({
   owner = 'desktop',
@@ -26,6 +43,7 @@ export function useDictation({
   onPartial?: (text: string) => void
 }) {
   const [phase, setPhase] = useState<DictationPhase>('idle')
+  const [warming, setWarming] = useState(false)
   const [partial, setPartial] = useState('')
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -42,8 +60,13 @@ export function useDictation({
     let unlisten: UnlistenFn | undefined
     void listen<DictationEvent>('bloblex-dictation', (event) => {
       const payload = event.payload
+      if (payload.owner && payload.owner !== owner) return
       if (payload.type === 'ready') {
         setPhase('listening')
+      } else if (payload.type === 'loading') {
+        setWarming(true)
+      } else if (payload.type === 'loaded') {
+        setWarming(false)
       } else if (payload.type === 'partial') {
         const text = payload.text ?? ''
         setPartial(text)
@@ -54,10 +77,12 @@ export function useDictation({
         if (payload.text) onFinalRef.current(payload.text)
       } else if (payload.type === 'stopped') {
         setPhase('idle')
+        setWarming(false)
         setPartial('')
         onPartialRef.current?.('')
       } else if (payload.type === 'error') {
         setPhase('idle')
+        setWarming(false)
         setPartial('')
         onPartialRef.current?.('')
         setError(payload.text ?? 'Dictation failed.')
@@ -72,7 +97,7 @@ export function useDictation({
       disposed = true
       unlisten?.()
     }
-  }, [supported])
+  }, [owner, supported])
 
   const toggle = useCallback(async () => {
     if (!supported) return
@@ -97,14 +122,16 @@ export function useDictation({
             unlisten?.()
             setProgress(0)
           }
+          setPhase('starting')
         }
         await invoke('dictation_start', { modelId, owner })
       } catch (reason) {
         setPhase('idle')
         setError(String(reason))
       }
-    } else {
+    } else if (phase !== 'downloading') {
       setPhase('idle')
+      setWarming(false)
       try {
         await invoke('dictation_stop', { owner })
       } catch {
@@ -117,7 +144,9 @@ export function useDictation({
     if (!supported) return
     let disposed = false
     let unlisten: UnlistenFn | undefined
-    void listen('bloblex-dictation-toggle', () => {
+    // Scoped to this window: Ctrl+E is sent to the companion while it is on
+    // screen and to the main window otherwise, never to both.
+    void getCurrentWebviewWindow().listen('bloblex-dictation-toggle', () => {
       void toggle()
     })
       .then((fn) => {
@@ -131,5 +160,5 @@ export function useDictation({
     }
   }, [supported, toggle])
 
-  return { phase, partial, progress, error, toggle, active: phase === 'starting' || phase === 'listening' }
+  return { phase, warming, partial, progress, error, toggle, active: phase === 'starting' || phase === 'listening' }
 }

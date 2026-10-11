@@ -916,6 +916,22 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.query_row("SELECT id FROM sessions WHERE agent_id=?1 AND archived=0 AND json_extract(data,'$.link.kind')='side' AND json_extract(data,'$.link.peerAgentId')=?2 ORDER BY updated_at DESC LIMIT 1", params![agent_id, peer_agent_id], |r| r.get(0)).optional()?)
     }
+    /// Open side conversations a blob takes part in, either as the one asked
+    /// (`agentId`) or the one asking (`peerAgentId`), newest first.
+    pub fn side_conversations(&self, agent_id: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT s.id, s.agent_id, json_extract(s.data,'$.link.peerAgentId'), s.title, json_extract(s.data,'$.link.topic'), s.updated_at, (SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.role IN ('user','assistant')) FROM sessions s WHERE s.archived=0 AND json_extract(s.data,'$.link.kind')='side' AND (s.agent_id=?1 OR json_extract(s.data,'$.link.peerAgentId')=?1) ORDER BY s.updated_at DESC LIMIT 40")?;
+        let rows = q.query_map([agent_id], |r| Ok(json!({
+            "id": r.get::<_, String>(0)?, "agentId": r.get::<_, Option<String>>(1)?, "peerAgentId": r.get::<_, Option<String>>(2)?,
+            "title": r.get::<_, String>(3)?, "topic": r.get::<_, Option<String>>(4)?, "updatedAt": r.get::<_, String>(5)?, "messages": r.get::<_, i64>(6)?,
+        })))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+    /// The newest assistant text in a session, for short recaps.
+    pub fn last_reply(&self, session: &str) -> Result<Option<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT content FROM messages WHERE session_id=?1 AND role='assistant' AND trim(content)<>'' ORDER BY sequence DESC LIMIT 1", [session], |r| r.get(0)).optional()?)
+    }
     /// A blob's main conversation: its newest open session that is not a side conversation.
     pub fn main_session(&self, agent_id: &str) -> Result<Option<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -1611,6 +1627,7 @@ impl Storage {
         let mut message = json!({"id":id,"sessionId":session,"turnId":turn,"sequence":sequence,"role":role,"content":content,"createdAt":now});
         if let Some(attachments) = data.get("attachments") { message["attachments"] = attachments.clone(); }
         if let Some(meta) = data.get("meta") { message["meta"] = meta.clone(); }
+        if let Some(references) = data.get("references") { message["references"] = references.clone(); }
         Ok(message)
     }
     pub fn append_message_delta(
@@ -1940,7 +1957,7 @@ impl Storage {
             let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same { events.push(push_settings_event(&tx,k,enabled)?); }
-        } else if k.starts_with("experimental.") || k.starts_with("companion.") {
+        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") {
             // Window-level preferences: the main window and the companion both follow them live.
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same {
@@ -2119,7 +2136,7 @@ impl Storage {
         v["contextUsed"] = json!(context_used);
         v["contextSize"] = json!(context_size);
         let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
-        let msgs=query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at,'attachments',json_extract(data,'$.attachments'),'meta',json_extract(data,'$.meta')) FROM messages WHERE session_id=?1 ORDER BY sequence",id)?;
+        let msgs=query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at,'attachments',json_extract(data,'$.attachments'),'meta',json_extract(data,'$.meta'),'references',json_extract(data,'$.references')) FROM messages WHERE session_id=?1 ORDER BY sequence",id)?;
         v["turns"] = json!(turns);
         v["messages"] = json!(msgs);
         v["tools"] = json!(query_jsons(c,"SELECT json_object('id',id,'sessionId',session_id,'turnId',turn_id,'kind',json_extract(data,'$.kind'),'title',json_extract(data,'$.title'),'state',state,'startedAt',json_extract(data,'$.startedAt'),'completedAt',json_extract(data,'$.completedAt'),'detail',json(COALESCE(json_extract(data,'$.detail'),'{}'))) FROM tool_calls WHERE session_id=?1 ORDER BY rowid",id)?);
@@ -3660,6 +3677,7 @@ mod tests {
         assert_eq!(events[0]["payload"], json!({"key":"experimental.activityDetails","value":true}));
         assert!(db.set_setting("experimental.activityDetails", &json!(true)).unwrap().is_empty(), "an unchanged value is not announced");
         assert_eq!(db.set_setting("companion.chatSize", &json!("large")).unwrap()[0]["payload"]["value"], "large");
+        assert_eq!(db.set_setting("speech.enabled", &json!(false)).unwrap()[0]["payload"], json!({"key":"speech.enabled","value":false}));
         assert!(db.set_setting("profile.name", &json!("Sam")).unwrap().is_empty());
     }
 }

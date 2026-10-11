@@ -135,11 +135,34 @@ fn fallback_catalog() -> Vec<ModelInfo> {
     }).collect()
 }
 const FAST_MODE_TIER: &str = "fast";
+/// Synthetic effort id for Claude's Ultracode session setting.
+const ULTRACODE: &str = "ultracode";
+
+/// Adds Ultracode after the effort levels of the models that can run it. Claude
+/// allows Ultracode when dynamic workflows are on and the model supports Extra
+/// high; `get_settings` reports that for the session's current model.
+fn offer_ultracode(models: &mut [ModelInfo], available: bool) {
+    if !available { return; }
+    for model in models.iter_mut() {
+        if model.supported_thinking.iter().any(|level| level == "xhigh") && !model.supported_thinking.iter().any(|level| level == ULTRACODE) {
+            model.supported_thinking.push(ULTRACODE.into());
+        }
+    }
+}
 fn typed_args(options: &ExecOptions, instruction_file: Option<&std::path::Path>, instruction_changed: bool) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(model) = options.model.as_deref() { args.extend(["--model".into(), model.into()]); }
-    if let Some(effort) = options.thinking.as_deref() { args.extend(["--effort".into(), effort.into()]); }
-    if options.service_tier.as_deref() == Some(FAST_MODE_TIER) { args.extend(["--settings".into(), r#"{"fastMode":true}"#.into()]); }
+    // Ultracode is Claude's standing dynamic-workflow switch, on top of an effort
+    // level. Bloblex offers it as the last stop after Max and runs it at Max.
+    let ultracode = options.thinking.as_deref() == Some(ULTRACODE);
+    if let Some(effort) = options.thinking.as_deref() { args.extend(["--effort".into(), if ultracode { "max".into() } else { effort.into() }]); }
+    let fast = options.service_tier.as_deref() == Some(FAST_MODE_TIER);
+    match (fast, ultracode) {
+        (true, true) => args.extend(["--settings".into(), r#"{"fastMode":true,"ultracode":true}"#.into()]),
+        (true, false) => args.extend(["--settings".into(), r#"{"fastMode":true}"#.into()]),
+        (false, true) => args.extend(["--settings".into(), r#"{"ultracode":true}"#.into()]),
+        (false, false) => {}
+    }
     if let Some(path) = instruction_file { args.extend(["--append-system-prompt-file".into(), path.to_string_lossy().into_owned()]); }
     if instruction_changed { args.extend(["--system-prompt-snapshot".into(), "off".into()]); }
     args
@@ -780,16 +803,43 @@ impl AgentAdapter for ClaudeAdapter {
             let mut bytes = serde_json::to_vec(&request).map_err(|e| AdapterError::Protocol(e.to_string()))?; bytes.push(b'\n');
             let stdin = StdinWriter::new(stdin);
             stdin.write(&bytes).await.map_err(|e| AdapterError::Process(e.to_string()))?;
+            let settings_request = json!({"type":"control_request","request_id":"bloblex-get-settings","request":{"subtype":"get_settings"}});
+            let mut settings_bytes = serde_json::to_vec(&settings_request).map_err(|e| AdapterError::Protocol(e.to_string()))?; settings_bytes.push(b'\n');
+            stdin.write(&settings_bytes).await.map_err(|e| AdapterError::Process(e.to_string()))?;
             let mut lines = BufReader::new(stdout).lines();
             let mut found = None;
-            while let Some(line) = tokio::time::timeout(std::time::Duration::from_secs(8), lines.next_line()).await.map_err(|_| AdapterError::Process("Claude catalog timed out".into()))?.map_err(|e| AdapterError::Process(e.to_string()))? {
+            let mut ultracode = None;
+            let mut deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+            loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let next = tokio::time::timeout(remaining, lines.next_line()).await;
+                let line = match next {
+                    Ok(Ok(Some(line))) => line,
+                    // The settings reply is optional; a catalog without it still stands.
+                    Ok(Ok(None)) | Err(_) if found.is_some() => break,
+                    Err(_) => return Err(AdapterError::Process("Claude catalog timed out".into())),
+                    Ok(Ok(None)) => break,
+                    Ok(Err(e)) => return Err(AdapterError::Process(e.to_string())),
+                };
                 let parsed: Value = serde_json::from_str(&line).map_err(|_| AdapterError::Protocol("Claude catalog response was malformed".into()))?;
-                if parsed["type"] == "control_response" && parsed["response"]["subtype"] == "success" { found = Some(parsed["response"].clone()); break; }
+                if parsed["type"] != "control_response" { continue; }
+                match parsed["response"]["request_id"].as_str() {
+                    Some("bloblex-get-settings") => { ultracode = Some(parsed["response"]["response"]["applied"]["ultracodeAvailable"].as_bool() == Some(true)); }
+                    _ if parsed["response"]["subtype"] == "success" && found.is_none() => {
+                        found = Some(parsed["response"].clone());
+                        // Older CLIs may not answer get_settings; do not hold the catalog for it.
+                        deadline = deadline.min(tokio::time::Instant::now() + std::time::Duration::from_secs(2));
+                    }
+                    _ => {}
+                }
+                if found.is_some() && ultracode.is_some() { break; }
             }
             let _ = process_tree.terminate();
             let _ = child.kill().await;
             let body = found.ok_or_else(|| AdapterError::Protocol("Claude catalog response was missing".into()))?;
-            parse_model_catalog(&body["response"])
+            let mut models = parse_model_catalog(&body["response"])?;
+            offer_ultracode(&mut models, ultracode.unwrap_or(false));
+            Ok(models)
         }.await;
         let (models, fallback, source, validated) = match result {
             Ok(models) => (models, false, "live_query", true),
@@ -1086,6 +1136,21 @@ mod tests {
         let fast=ExecOptions{model:Some("opus".into()),service_tier:Some("fast".into()),..ExecOptions::default()};
         assert_eq!(typed_args(&fast,None,false),vec!["--model","opus","--settings",r#"{"fastMode":true}"#]);
         assert!(!typed_args(&ExecOptions::default(),None,false).iter().any(|v|v=="--settings"));
+    }
+
+    #[test]
+    fn ultracode_is_offered_after_extra_high_and_runs_at_max_with_the_session_setting() {
+        let mut rows=parse_model_catalog(&json!({"models":[{"value":"opus","displayName":"Opus","supportedEffortLevels":["low","medium","high","xhigh","max"]},{"value":"sonnet-old","displayName":"Old","supportedEffortLevels":["low","high"]}]})).unwrap();
+        offer_ultracode(&mut rows,false);
+        assert!(!rows[0].supported_thinking.iter().any(|l|l=="ultracode"));
+        offer_ultracode(&mut rows,true);
+        offer_ultracode(&mut rows,true);
+        assert_eq!(rows[0].supported_thinking,vec!["low","medium","high","xhigh","max","ultracode"]);
+        assert_eq!(rows[1].supported_thinking,vec!["low","high"]);
+        let ultra=ExecOptions{model:Some("opus".into()),thinking:Some("ultracode".into()),..ExecOptions::default()};
+        assert_eq!(typed_args(&ultra,None,false),vec!["--model","opus","--effort","max","--settings",r#"{"ultracode":true}"#]);
+        let both=ExecOptions{thinking:Some("ultracode".into()),service_tier:Some("fast".into()),..ExecOptions::default()};
+        assert_eq!(typed_args(&both,None,false),vec!["--effort","max","--settings",r#"{"fastMode":true,"ultracode":true}"#]);
     }
 
     #[test]

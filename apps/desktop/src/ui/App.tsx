@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
 import {
-  Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronUp, CircleHelp, ClipboardList, Code2, Copy, FileText, FolderOpen,
-  Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelRight, Paperclip, Play, Plus,
+  Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, Copy, FileDown, FileText, FolderOpen, FolderPlus, Hash, Import,
+  Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelRight, Paperclip, Plus,
   RefreshCw, Search, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X,
 } from 'lucide-react'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
@@ -24,10 +25,10 @@ import { sessionsForPauseRequest } from './trayActions'
 import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, type Agent, type ConnectionState, type DaemonEvent, type PermissionRequest, type Project, type Runtime, type Session, type Snapshot } from '../types'
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
-import { DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, mentionMatches } from './TeamMessages'
+import { ConversationPicker, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
-import { isSideSession, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions } from './teamSelectors'
+import { hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
@@ -39,12 +40,13 @@ import { parseSharedBlob, serializeBlob, type SharedBlob } from './blobShare'
 import { ApprovalPill } from './approvalUi'
 import { BlobPage, ConfirmDialog } from './BlobPage'
 import { DictationButton } from './DictationButton'
+import { DictationIsland, type IslandPhase } from './DictationIsland'
+import { configureDictation, DEFAULT_SPEECH_MODEL_ID } from './dictation'
 import { UpdateAvailableBanner, useMainUpdateOffer } from './UpdateBanner'
 import { SettingsSheet, type SettingsPageId } from './SettingsSheet'
 import { ProfileMenu, readProfileName, saveProfileName, syncProfileName } from './ProfileMenu'
 import { emptyPins, readPins, toggleFavorite, writePins, type SidebarPins } from './sidebarPins'
-import { Select } from './Select'
-import { ProviderLogo } from './providerBrand'
+import { ProviderLogo, RuntimeMark } from './providerBrand'
 import { useClock } from './useClock'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { initialiseSeen, isUnread, markSeen, unreadNeedsApproval, type SeenSessions } from './sessionSeen'
@@ -93,11 +95,20 @@ export function App() {
   /** Companion preferences: chat height and the teammates kept on the island. */
   const [companionChatSize, setCompanionChatSize] = useState<CompanionChatSize>('medium')
   const [companionPinned, setCompanionPinned] = useState<string[]>([])
+  /** Speech: dictation can be switched off entirely, and uses the chosen downloaded model. */
+  const [speechEnabled, setSpeechEnabled] = useState(true)
+  const [speechModel, setSpeechModel] = useState(DEFAULT_SPEECH_MODEL_ID)
+  const [windowSettingsLoaded, setWindowSettingsLoaded] = useState(false)
+  /** Experimental, off by default: each blob's runtime logo beside its name. */
+  const [runtimeLogos, setRuntimeLogos] = useState(false)
   const applyWindowSetting = useCallback((key: string, value: unknown) => {
     if (key === 'experimental.usageBar') setUsageBarEnabled(value === true)
     else if (key === 'experimental.activityDetails') setActivityDetails(value === true)
     else if (key === 'companion.chatSize') setCompanionChatSize(isCompanionChatSize(value) ? value : 'medium')
     else if (key === 'companion.pinnedBlobs') setCompanionPinned(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string').slice(0, MAX_COMPANION_PEERS) : [])
+    else if (key === 'speech.enabled') setSpeechEnabled(value !== false)
+    else if (key === 'speech.model') setSpeechModel(typeof value === 'string' && value ? value : DEFAULT_SPEECH_MODEL_ID)
+    else if (key === 'experimental.runtimeLogos') setRuntimeLogos(value === true)
   }, [])
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [launchVisible, setLaunchVisible] = useState(() => inDesktop && !companion && import.meta.env.MODE !== 'test')
@@ -127,6 +138,11 @@ export function App() {
   const [projectDelete, setProjectDelete] = useState<Project | null>(null)
   const [freshTarget, setFreshTarget] = useState<Agent | null>(null)
   const [mention, setMention] = useState<{ start: number; query: string; index: number } | null>(null)
+  /** The `#conversation` being typed, and the side conversations already referenced in the draft. */
+  const [hashRef, setHashRef] = useState<{ start: number; query: string; index: number } | null>(null)
+  const [conversationRefs, setConversationRefs] = useState<Array<{ id: string; title: string }>>([])
+  /** Where "Close chat" returns: the blob and conversation a side conversation was opened from. */
+  const sideReturn = useRef<{ agentId: string | null; sessionId: string | null } | null>(null)
   const ensuringConversation = useRef(new Set<string>())
   const [mainAttention, setMainAttention] = useState(() => !companion && document.visibilityState === 'visible' && document.hasFocus())
   const [seenSessions, setSeenSessions] = useState<SeenSessions>({})
@@ -321,10 +337,16 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['experimental.usageBar', 'experimental.activityDetails', 'companion.chatSize', 'companion.pinnedBlobs']) applyWindowSetting(key, values[key])
+      for (const key of ['experimental.usageBar', 'experimental.activityDetails', 'experimental.runtimeLogos', 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
+      setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }
   }, [connection, applyWindowSetting])
+  // The main window owns dictation's shortcut and warm-up; the companion only follows.
+  useEffect(() => {
+    if (companion || !windowSettingsLoaded) return
+    void configureDictation(speechEnabled, speechModel)
+  }, [companion, windowSettingsLoaded, speechEnabled, speechModel])
 
   useEffect(() => {
     if (companion || !inDesktop) return
@@ -882,6 +904,15 @@ export function App() {
       if (!sessionId) { setSelectedSessionId(null); return }
       const session = snapshotRef.current?.sessions?.find((item) => item.id === sessionId)
       if (!session) { setSelectedSessionId(sessionId); return }
+      // A side conversation opens over the current blob; it never switches the
+      // selection to the teammate who owns it, so "Close chat" can return.
+      if (isSideSession(session)) {
+        setSideSessionId((current) => {
+          if (current !== session.id && !current) sideReturn.current = { agentId: selectedAgentIdRef.current, sessionId: null }
+          return session.id
+        })
+        return
+      }
       if (session.agentId) {
         const owner = (snapshotRef.current?.agents ?? []).find((agent) => agent.id === session.agentId && !agent.archived)
         if (owner) { setSelectedAgentId(owner.id); setSelectedRuntimeId(owner.runtimeId) }
@@ -1234,6 +1265,15 @@ export function App() {
       await refresh()
     } catch (reason) { await refresh(); setError(messageOf(reason)) }
   }
+  const pickConversation = (session: Session) => {
+    if (!hashRef) return
+    const title = sideTitle(session, agents)
+    const caret = composerRef.current?.selectionStart ?? composer.length
+    setComposer(`${composer.slice(0, hashRef.start)}#${title} ${composer.slice(caret)}`)
+    setConversationRefs((current) => [...current.filter((ref) => ref.id !== session.id), { id: session.id, title }])
+    setHashRef(null)
+    requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = hashRef.start + title.length + 2; node.focus(); node.setSelectionRange(position, position) })
+  }
   const pickMention = (agent: Agent) => {
     if (!mention) return
     const caret = composerRef.current?.selectionStart ?? composer.length
@@ -1245,11 +1285,11 @@ export function App() {
   const renderText = (text: string) => <SafeMessageText text={text} />
   /** Team messages render as chips and cards instead of chat bubbles. */
   const teamItem = (message: Record<string, unknown>, key: string) => {
-    const meta = (message.meta && typeof message.meta === 'object' ? message.meta : null) as { kind?: string; direction?: string; peerAgentId?: string; peerName?: string; fromAgentId?: string; fromName?: string; sideSessionId?: string } | null
+    const meta = (message.meta && typeof message.meta === 'object' ? message.meta : null) as { kind?: string; direction?: string; peerAgentId?: string; peerName?: string; fromAgentId?: string; fromName?: string; sideSessionId?: string; topic?: string } | null
     const role = String(message.role ?? '')
     const text = typeof message.content === 'string' ? message.content : ''
     if (role === 'notice' && meta?.kind === 'delegation') {
-      return <DelegationChip key={key} peer={agents.find((agent) => agent.id === meta.peerAgentId)} name={meta.peerName ?? 'Teammate'} failed={meta.direction === 'failed'} detail={meta.direction === 'failed' ? text : undefined} onOpen={meta.sideSessionId ? () => openSideConversation(meta.sideSessionId) : undefined} />
+      return <DelegationChip key={key} peer={agents.find((agent) => agent.id === meta.peerAgentId)} name={meta.peerName ?? 'Teammate'} topic={typeof meta.topic === 'string' ? meta.topic : undefined} failed={meta.direction === 'failed'} detail={meta.direction === 'failed' ? text : undefined} onOpen={meta.sideSessionId ? () => openSideConversation(meta.sideSessionId) : undefined} />
     }
     if (role === 'user' && meta?.kind === 'blob_reply') {
       return <ReplyChip key={key} from={agents.find((agent) => agent.id === meta.fromAgentId)} name={meta.fromName ?? 'Teammate'} onOpen={meta.sideSessionId ? () => openSideConversation(meta.sideSessionId) : undefined} />
@@ -1279,8 +1319,10 @@ export function App() {
     const ready = attachments.filter((item) => item.status === 'ready' && item.path)
     if ((!text && ready.length === 0) || attachments.some((item) => item.status === 'staging') || !selectedSession || busy || selectedSession.state === 'waiting_permission' || !runtimeUsable(selectedRuntime)) return
     try {
-      await doRpc('session.prompt', { sessionId: selectedSession.id, text, ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}) })
+      const refs = conversationRefs.filter((ref) => text.includes(`#${ref.title}`)).map((ref) => ref.id)
+      await doRpc('session.prompt', { sessionId: selectedSession.id, text, ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}) })
       setComposer('')
+      setConversationRefs([])
       clearAttachments()
       await refresh()
     } catch { /* The actionable error is shown inline. */ }
@@ -1315,10 +1357,6 @@ export function App() {
     try { await doRpc('session.cancel', { sessionId: session.id }); void refreshTrayMenu().catch(() => undefined); await refresh() } catch { /* inline */ }
   }
 
-  const resumeSession = async (session: Session | null = selectedSession) => {
-    if (!session?.resumable || busy) return
-    try { await doRpc('session.resume', { sessionId: session.id }); void refreshTrayMenu().catch(() => undefined); await refresh() } catch { /* inline */ }
-  }
 
   const answerPermission = async (permission: PermissionRequest, choice: string): Promise<boolean> => {
     const now = Date.now()
@@ -1406,9 +1444,20 @@ export function App() {
   }
   const openSideConversation = (sessionId: string | undefined | null) => {
     if (!sessionId) return
+    if (!sideSessionId) sideReturn.current = { agentId: activeSelectedAgent?.id ?? null, sessionId: selectedSession?.id ?? null }
     const session = sessions.find((item) => item.id === sessionId)
     if (!session) { void refresh().then(() => setSideSessionId(sessionId)); return }
     setSideSessionId(sessionId)
+  }
+  /** Back to the conversation the side conversation was opened from. */
+  const closeSideConversation = () => {
+    const back = sideReturn.current
+    sideReturn.current = null
+    setSideSessionId(null)
+    if (back?.agentId && agents.some((agent) => agent.id === back.agentId && !agent.archived)) {
+      setSelectedAgentId(back.agentId)
+      if (back.sessionId) setSelectedSessionId(back.sessionId)
+    }
   }
   const teamUpdate = async (agent: Agent, params: Record<string, unknown>) => {
     try {
@@ -1456,7 +1505,7 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
+      <Companion agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
     </>
   }
 
@@ -1468,6 +1517,7 @@ export function App() {
   const runtimeReady = runtimeUsable(selectedRuntime)
   const approvalFocusOnMount = !composerTypingRef.current || connection !== 'connected' || busy || selectedSession?.state === 'waiting_permission' || !runtimeReady
   const canStartSession = connection === 'connected' && !busy && !!activeSelectedAgent && runtimeReady && !sideSession
+  const conversationEmpty = !selectedSession || (selectedSession.messages ?? []).length === 0
   const lastAgentIndex = conversationItems.reduce((last, item, index) => item.kind === 'message' && !isUserMessage(item.value) ? index : last, -1)
   // The details panel describes the open conversation, so it steps aside for the blob editor and Analytics.
   const detailsVisible = inspectorOpen && !blobPage && !analyticsOpen
@@ -1480,11 +1530,12 @@ export function App() {
   const draftRuntime = draft ? runtimes.find((runtime) => runtime.id === draft.runtimeId) ?? null : selectedRuntime
   const pageSessions = editingAgent ? agentSessions(sessions, editingAgent.id) : []
   const pageLegacy = legacySessions(sessions, (editingAgent ?? activeSelectedAgent)?.runtimeId ?? draft?.runtimeId ?? '')
-  const sideOptions = activeSelectedAgent ? sideSessionsFor(sessions, activeSelectedAgent.id).map((session) => ({ value: session.id, label: formatUnknownSafe(session.title, 'Side conversation') })) : []
   const planOn = selectedSession?.modelLock?.planMode === true
   const latestPlanId = [...(selectedSession?.messages ?? [])].reverse().find((message) => message.role === 'plan')?.id ?? null
   const lastTurnWasPlan = planOn && !sessionBusy && (selectedSession?.messages ?? []).some((message) => message.role === 'assistant' || message.role === 'plan')
   const mentionCandidates = mention ? mentionMatches(agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden), mention.query) : []
+  const blobSideSessions = activeSelectedAgent ? sideSessionsFor(sessions, activeSelectedAgent.id) : []
+  const hashCandidates = hashRef ? conversationMatches(blobSideSessions, agents, hashRef.query) : []
   const visibleSessions = sessions.filter((session) => session.archived !== true)
   const quickSwitcherItems: QuickSwitcherItem[] = [
     ...activeAgents(agents).map((agent) => ({ id: agent.id, kind: 'blob' as const, title: agent.name, subtitle: agent.description, searchText: `${agent.name} ${agent.description}` })),
@@ -1574,12 +1625,12 @@ export function App() {
             <button className="icon-button" title="Create blob" aria-label="Create blob" disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={() => openCreate()}><Plus size={17} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setCreateMenuOpen(false); restoreCreateFocus() } }}>
               <button type="button" className="icon-button small" title="Import a blob setup" aria-label="Blob actions" aria-haspopup="menu" aria-expanded={createMenuOpen} disabled={connection !== 'connected' || busy} onClick={() => setCreateMenuOpen((open) => !open)}><ChevronDown size={14} /></button>
-              {createMenuOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" onClick={() => { setCreateMenuOpen(false); void createProject() }}>New project…</button><button className="menu-item" role="menuitem" onClick={() => void importBlob()}>Import blob…</button></div>}
+              {createMenuOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" onClick={() => { setCreateMenuOpen(false); void createProject() }}><FolderPlus size={15} />New project…</button><button className="menu-item" role="menuitem" onClick={() => void importBlob()}><Import size={15} />Import blob…</button></div>}
             </div>
           </div>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <TeamSidebar agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} query={search} onQueryChange={setSearch} actions={{
+        <TeamSidebar agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} query={search} onQueryChange={setSearch} actions={{
           onSelect: selectAgent,
           onCreate: (projectId) => openCreate(projectId),
           onCreateProject: () => void createProject(),
@@ -1621,29 +1672,19 @@ export function App() {
         <header className="chat-header">
           <div className="chat-title">
             {sideSession
-              ? <SideConversationHeader peer={sidePeer} peerName={sideSession.link?.peerName ?? sidePeer?.name ?? 'Teammate'} target={sideAgent} targetName={sideAgent?.name ?? 'Teammate'} />
+              ? <SideConversationHeader peer={sidePeer} peerName={sidePeer?.name ?? sideSession.link?.peerName ?? 'Teammate'} target={sideAgent} targetName={sideAgent?.name ?? 'Teammate'} topic={sideTopic(sideSession)} />
               : activeSelectedAgent
-                ? <><button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title="Blob settings" onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button>{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}</>
+                ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title="Blob settings" onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button>{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}</>
                 : <strong className="chat-title-text">{agentName}</strong>}
-            {!sideSession && activeSelectedAgent && sideOptions.length > 0 && <Select
-              ariaLabel="Side conversations"
-              variant="muted"
-              align="left"
-              className="session-switcher"
-              value=""
-              placeholder={`${sideOptions.length} side conversation${sideOptions.length === 1 ? '' : 's'}`}
-              onChange={(value) => openSideConversation(value)}
-              options={sideOptions}
-            />}
+            {!sideSession && activeSelectedAgent && <SideConversationMenu sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent.id} onOpen={openSideConversation} />}
           </div>
           <div className="header-actions">
             <ApprovalPill mode={headerMode} />
-            {selectedSession?.resumable && !sessionBusy && <button className="icon-button" title="Resume conversation" aria-label="Resume conversation" disabled={busy || connection !== 'connected' || !runtimeReady} onClick={() => void resumeSession()}><Play size={15} /></button>}
-            {!sideSession && <button className="icon-button" title="Start a fresh conversation" aria-label="New conversation" disabled={!canStartSession} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>}
+            {!sideSession && <button className="icon-button" title={conversationEmpty ? 'This conversation is already fresh' : 'Start a fresh conversation'} aria-label="New conversation" disabled={!canStartSession || conversationEmpty} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>}
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setMoreOpen(false); restoreMoreFocus() } }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
-              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}>Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}>Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />Blob settings</button>}<span className="menu-separator" /><button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
+              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />Blob settings</button>}<span className="menu-separator" /><button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
             </div>
           </div>
         </header>
@@ -1662,7 +1703,7 @@ export function App() {
                 : item.kind === 'message' && teamItem(item.value!, item.id)
                   ? teamItem(item.value!, item.id)
                 : item.kind === 'message'
-                  ? <MessageItem key={item.id} id={`conversation-message-${encodeURIComponent(item.id)}`} message={item.value!} accent={accent} agentName={agentName} showAvatar={!isUserMessage(item.value) && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))} mood={index === lastAgentIndex ? selectedMood : 'idle'}  agents={agents}/>
+                  ? <MessageItem key={item.id} id={`conversation-message-${encodeURIComponent(item.id)}`} message={item.value!} accent={accent} agentName={agentName} showAvatar={!isUserMessage(item.value) && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))} mood={index === lastAgentIndex ? selectedMood : 'idle'} agents={agents} onOpenReference={openSideConversation} />
                   : <ActivityItem key={item.id} item={item} onDiff={(path, content) => setDiffViewer({ path, content })} />)}
               {activePermission && (activePermission.kind === 'question'
                 ? <QuestionCard request={activePermission} onAnswer={(answers) => answerQuestion(activePermission, answers)} onDismiss={() => void answerQuestion(activePermission, null)} />
@@ -1673,16 +1714,22 @@ export function App() {
             </div>
           </section>
           </div>
-          {sideSession ? <div className="side-close"><button type="button" className="secondary-button" onClick={() => setSideSessionId(null)}>Close chat</button></div> : <div className="composer-wrap">
-            {dictationPartial && <div className="dictation-partial" role="status"><span className="dictation-partial-label">Listening</span>{dictationPartial}</div>}
+          {sideSession ? <div className="side-close"><button type="button" className="secondary-button" onClick={closeSideConversation}>Close chat</button></div> : <div className="composer-wrap">
+            {dictationPartial && <div className="dictation-partial" role="status" aria-label={`Listening: ${dictationPartial}`}><span className="dictation-partial-dot" aria-hidden="true" />{dictationPartial}</div>}
             <div className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
               <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
+              {hashRef && !mention && <ConversationPicker sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent?.id} query={hashRef.query} activeIndex={hashRef.index} onPick={pickConversation} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
               {mention && <MentionPicker agents={agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden)} query={mention.query} activeIndex={mention.index} onPick={pickMention} onHover={(index) => setMention((current) => current ? { ...current, index } : current)} />}
-              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => { setComposer(event.target.value); const found = mentionQuery(event.target.value, event.target.selectionStart ?? event.target.value.length); setMention(found ? { ...found, index: 0 } : null) }} onPaste={(event) => { if (!imagesSupported) return; const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/')); if (!files.length) return; event.preventDefault(); addAttachments(files) }} onKeyDown={(event) => {
+              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => { setComposer(event.target.value); const caret = event.target.selectionStart ?? event.target.value.length; const found = mentionQuery(event.target.value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = found ? null : hashQuery(event.target.value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={(event) => { if (!imagesSupported) return; const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/')); if (!files.length) return; event.preventDefault(); addAttachments(files) }} onKeyDown={(event) => {
                 if (mention && mentionCandidates.length) {
                   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setMention({ ...mention, index: (mention.index + (event.key === 'ArrowDown' ? 1 : mentionCandidates.length - 1)) % mentionCandidates.length }); return }
                   if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickMention(mentionCandidates[Math.min(mention.index, mentionCandidates.length - 1)]); return }
                   if (event.key === 'Escape') { event.preventDefault(); setMention(null); return }
+                }
+                if (hashRef && hashCandidates.length) {
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setHashRef({ ...hashRef, index: (hashRef.index + (event.key === 'ArrowDown' ? 1 : hashCandidates.length - 1)) % hashCandidates.length }); return }
+                  if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickConversation(hashCandidates[Math.min(hashRef.index, hashCandidates.length - 1)]); return }
+                  if (event.key === 'Escape') { event.preventDefault(); setHashRef(null); return }
                 }
                 if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() }
               }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
@@ -1695,7 +1742,7 @@ export function App() {
                 <div className="composer-controls-end">
                   {selectedSession && activeSelectedAgent && <SessionExecutionControls session={selectedSession} agent={activeSelectedAgent} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} />}
                   <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} quota={sessionQuota} onOpenUsage={() => void showUsage()} />
-                  <DictationButton owner="desktop" onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />
+                  {speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
                   <button className={`send-button ${turnLive ? 'cancel' : ''}`} onClick={turnLive ? () => void cancelTurn() : () => void sendPrompt()} disabled={busy || (!turnLive && ((!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady))} aria-label={turnLive ? 'Cancel turn' : 'Send message'}>{busy ? <LoaderCircle size={16} className="spinning" /> : turnLive ? <Square size={12} fill="currentColor" /> : <ArrowUp size={17} />}</button>
                 </div>
               </div>
@@ -1723,7 +1770,7 @@ export function App() {
       {!companion && usageBarEnabled && <QuotaBar quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={() => void showUsage()} />}
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} quotas={snapshot?.quotas ?? []} loading={busy && usageSummary === null} quotaRefreshing={quotaRefreshing} onRefreshQuota={refreshQuota} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onOpenHistory={() => { setUsageSheet(false); setAnalyticsOpen(true) }} onClose={() => setUsageSheet(false)} />}
       {quickSwitcherOpen && <QuickSwitcher items={quickSwitcherItems} onChoose={chooseQuickSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />}
-      {settingsSheet && <SettingsSheet snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
+      {settingsSheet && <SettingsSheet snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} runtimeLogos={runtimeLogos} onRuntimeLogosChange={setRuntimeLogos} speechEnabled={speechEnabled} onSpeechEnabledChange={setSpeechEnabled} speechModel={speechModel} onSpeechModelChange={setSpeechModel} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body="It leaves the sidebar and companion. Its conversations stay saved. Restoring a blob is not available yet." confirmLabel="Archive blob" cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
       {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bloblex. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm successTitle="Conversation deleted" successBody="This conversation and its messages were removed from Bloblex." onConfirm={async () => { await rpc('session.delete', { sessionId: sessionDeleteTarget.id }) }} onComplete={() => { setSessionDeleteTarget(null); focusSidebarBlob() }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
@@ -1792,17 +1839,20 @@ function EmptyConversation({ connected, hasRuntime, hasAgent, accent, mood, agen
 }
 
 /** Your own message, with @mentions of team blobs shown as their avatar and name in their colour. */
-function UserMessageText({ text, agents }: { text: string; agents: readonly Agent[] }) {
-  const segments = splitMentions(text, agents)
-  if (!segments.some((segment) => segment.agent)) return <SafeMessageText text={text} />
-  return <p className="message-mentions">{segments.map((segment, index) => segment.agent
+function UserMessageText({ text, agents, references, onOpenReference }: { text: string; agents: readonly Agent[]; references?: Array<{ id: string; title: string }> | null; onOpenReference?: (sessionId: string) => void }) {
+  type Segment = { text: string; agent?: Agent; reference?: { id: string; title: string } }
+  const segments: Segment[] = splitReferences(text, references).flatMap((part): Segment[] => part.reference ? [part] : splitMentions(part.text, agents))
+  if (!segments.some((segment) => segment.agent || segment.reference)) return <SafeMessageText text={text} />
+  return <p className="message-mentions">{segments.map((segment, index) => segment.reference
+    ? <button key={index} type="button" className="conversation-ref" title="Open this side conversation" onClick={() => onOpenReference?.(segment.reference!.id)}><Hash size={12} aria-hidden="true" />{segment.reference.title}</button>
+    : segment.agent
     ? <span key={index} className="mention" style={{ ['--mention' as string]: agentColorHex(segment.agent.color) }} title={`@${segment.agent.name}`}>
         <BlobCanvas decorative color={agentColorHex(segment.agent.color)} size={18} mood="idle" look={agentLook(segment.agent)} label={segment.agent.name} />{segment.agent.name}
       </span>
     : <span key={index}>{segment.text}</span>)}</p>
 }
 
-function MessageItem({ id, message, accent, agentName, showAvatar, mood, agents = [] }: { id: string; message: Record<string, unknown>; accent: string; agentName: string; showAvatar: boolean; mood: BlobMood; agents?: readonly Agent[] }) {
+function MessageItem({ id, message, accent, agentName, showAvatar, mood, agents = [], onOpenReference }: { id: string; message: Record<string, unknown>; accent: string; agentName: string; showAvatar: boolean; mood: BlobMood; agents?: readonly Agent[]; onOpenReference?: (sessionId: string) => void }) {
   const isUser = isUserMessage(message)
   const role = String(message.role ?? message.kind ?? 'assistant').toLowerCase()
   const text = typeof message.text === 'string' ? message.text : typeof message.content === 'string' ? message.content : typeof message.delta === 'string' ? message.delta : ''
@@ -1815,7 +1865,7 @@ function MessageItem({ id, message, accent, agentName, showAvatar, mood, agents 
   return <article id={id} tabIndex={-1} className={`message-row ${isUser ? 'user' : 'agent'} ${showAvatar ? 'group-start' : ''}`} aria-label={isUser ? 'You' : agentName} data-mood={isError ? 'error' : mood} data-accent={accent || undefined}>
     <div className="message-content">
       {isUser && <MessageAttachments attachments={message.attachments} />}
-      {isTool ? <div className={`activity-card ${isError ? 'error' : ''}`}><div className="activity-heading"><Terminal size={14} /><strong>{labelize(toolName ?? eventType.replace('.', ' '))}</strong><span>{isError ? 'Failed' : formatUnknownSafe(String(message.status ?? ''), 'Activity')}</span></div><p>{text || (typeof message.command === 'string' ? message.command : typeof message.summary === 'string' ? message.summary : 'Details are unavailable for this event.')}</p>{typeof message.path === 'string' && <code>{message.path}</code>}</div> : text || !(isUser && Array.isArray(message.attachments) && message.attachments.length) ? <div className={`message-bubble ${isError ? 'message-error' : ''}`}>{isUser && text ? <UserMessageText text={text} agents={agents} /> : <SafeMessageText text={text || 'Message content unavailable.'} />}</div> : null}
+      {isTool ? <div className={`activity-card ${isError ? 'error' : ''}`}><div className="activity-heading"><Terminal size={14} /><strong>{labelize(toolName ?? eventType.replace('.', ' '))}</strong><span>{isError ? 'Failed' : formatUnknownSafe(String(message.status ?? ''), 'Activity')}</span></div><p>{text || (typeof message.command === 'string' ? message.command : typeof message.summary === 'string' ? message.summary : 'Details are unavailable for this event.')}</p>{typeof message.path === 'string' && <code>{message.path}</code>}</div> : text || !(isUser && Array.isArray(message.attachments) && message.attachments.length) ? <div className={`message-bubble ${isError ? 'message-error' : ''}`}>{isUser && text ? <UserMessageText text={text} agents={agents} references={Array.isArray(message.references) ? message.references as Array<{ id: string; title: string }> : null} onOpenReference={onOpenReference} /> : <SafeMessageText text={text || 'Message content unavailable.'} />}</div> : null}
       {stamp && <div className="message-time">{stamp}</div>}
     </div>
   </article>
@@ -2076,7 +2126,7 @@ function shortDate(value: unknown) {
 
 function recordFrom(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
 
-function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'medium', pinned = [], activityDetails = false, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
+function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
   // The browser preview can open a view directly: /?companion&mode=home&view=chat.
   const previewParams = previewMode ? new URLSearchParams(location.search) : null
   const [view, setView] = useState<'overview' | 'chat' | 'activity' | 'settings'>(() => {
@@ -2096,10 +2146,13 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
   const [soundError, setSoundError] = useState<string | null>(null)
   const [dropError, setDropError] = useState<string | null>(null)
   const [dictationSurface, setDictationSurface] = useState<'bubble' | 'companion' | 'none'>('none')
-  const [dictationPhase, setDictationPhase] = useState<'idle' | 'listening' | 'processing' | 'error'>('idle')
+  const [dictationPhase, setDictationPhase] = useState<'idle' | IslandPhase>('idle')
   const [dictationError, setDictationError] = useState('')
   const [dictationLevel, setDictationLevel] = useState(0)
-  const [dictationFrame, setDictationFrame] = useState(0)
+  const [dictationWarming, setDictationWarming] = useState(false)
+  const [dictationFinals, setDictationFinals] = useState('')
+  const [dictationClock, setDictationClock] = useState<{ since: number | null; stoppedAt: number | null }>({ since: null, stoppedAt: null })
+  const dictationHeard = useRef(false)
   const fileRequest = useRef(0)
   const viewBeforeConfused = useRef<typeof view>('overview')
   const viewBeforeDrop = useRef<typeof view>('overview')
@@ -2244,6 +2297,24 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
   })
   const toggleExpanded = () => { if (mode === 'home') fsmRef.current?.forcePetit(); else fsmRef.current?.click() }
   const openView = (next: typeof view) => { if (next !== view) playCompanionCue('blip'); setView(next); if (mode !== 'home') fsmRef.current?.forceHome() }
+  // Ctrl+E reaches the companion while it is on screen. With the chat open its
+  // dictation button handles it; otherwise open the chat and start there.
+  const [dictateOnOpen, setDictateOnOpen] = useState(false)
+  const chatOpenRef = useRef(false)
+  chatOpenRef.current = mode === 'home' && view === 'chat' && !permission
+  const openViewRef = useRef(openView)
+  openViewRef.current = openView
+  useEffect(() => {
+    if (!isTauri() || !speechEnabled) return
+    let unlisten: (() => void) | undefined
+    let cancelled = false
+    void getCurrentWebviewWindow().listen('bloblex-dictation-toggle', () => {
+      if (chatOpenRef.current) return
+      openViewRef.current('chat')
+      setDictateOnOpen(true)
+    }).then((stop) => { if (cancelled) stop(); else unlisten = stop }).catch(() => undefined)
+    return () => { cancelled = true; unlisten?.() }
+  }, [speechEnabled])
   const selectTeamBlob = (item: Agent) => { if (item.id !== agent?.id) playCompanionCue('blip'); onSelectAgent(item) }
   const replyToPermission = (request: PermissionRequest, choice: string) => { if (/allow|approve|accept|yes/i.test(choice)) playCompanionCue('approve'); return onReply(request, choice) }
   const focusTeam = teamLine(agent, agents, sessions)
@@ -2330,16 +2401,31 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
       add(await listen<{ surface: string }>('bloblex-dictation-surface', (event) => {
         const isCompanion = event.payload.surface === 'companion'
         setDictationSurface(isCompanion ? 'companion' : 'none')
-        if (isCompanion) { setDictationPhase('listening'); setDictationError(''); playDictationCue('record-start') }
+        if (isCompanion) {
+          dictationHeard.current = false
+          setDictationPhase('listening'); setDictationError(''); setDictationFinals(''); setDictationWarming(false)
+          setDictationClock({ since: Date.now(), stoppedAt: null })
+          playDictationCue('record-start')
+        }
       }))
       add(await listen<{ type: string; text?: string }>('bloblex-dictation', (event) => {
         if (dictationSurfaceRef.current !== 'companion') return
         const { type, text } = event.payload
-        if (type === 'processing') { setDictationPhase('processing'); playDictationCue('processing-start') }
-        else if (type === 'stopped') { setDictationPhase('idle'); setDictationSurface('none'); playDictationCue('processing-finish') }
+        if (type === 'loading') setDictationWarming(true)
+        else if (type === 'loaded') setDictationWarming(false)
+        else if (type === 'partial') { if (text) dictationHeard.current = true }
+        else if (type === 'final') { if (text) { dictationHeard.current = true; setDictationFinals((current) => (current ? `${current} ${text}` : text)) } }
+        else if (type === 'processing') { setDictationClock((clock) => ({ ...clock, stoppedAt: Date.now() })); setDictationPhase('processing'); playDictationCue('processing-start') }
+        else if (type === 'stopped') {
+          setDictationWarming(false)
+          setDictationClock((clock) => ({ ...clock, stoppedAt: clock.stoppedAt ?? Date.now() }))
+          setDictationPhase(dictationHeard.current ? 'done' : 'silent'); playDictationCue('processing-finish')
+          window.setTimeout(() => { setDictationPhase('idle'); setDictationSurface('none') }, 1400)
+        }
         else if (type === 'error') {
+          setDictationWarming(false)
           setDictationPhase('error'); setDictationError(text || 'Dictation failed.'); playDictationCue('error')
-          window.setTimeout(() => { setDictationPhase('idle'); setDictationSurface('none') }, 1600)
+          window.setTimeout(() => { setDictationPhase('idle'); setDictationSurface('none') }, 2400)
         }
       }))
       add(await listen<{ level: number }>('bloblex-dictation-level', (event) => setDictationLevel(event.payload.level)))
@@ -2347,11 +2433,6 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
     return () => { disposed = true; unsubs.forEach((unlisten) => unlisten()) }
   }, [])
 
-  useEffect(() => {
-    if (dictationSurface !== 'companion') return
-    const interval = window.setInterval(() => setDictationFrame((current) => current + 1), 66)
-    return () => window.clearInterval(interval)
-  }, [dictationSurface])
 
   const inputTokens = typeof usage?.inputTokens === 'number' ? usage.inputTokens : null
   const outputTokens = typeof usage?.outputTokens === 'number' ? usage.outputTokens : null
@@ -2367,22 +2448,13 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
   const sessionBusy = !!session && ['working', 'starting', 'waiting_permission'].includes(session.state ?? '')
   const wash = displayMood === 'success' ? 'green' : displayMood === 'error' || displayMood === 'rate_limited' ? 'red' : null
   const focusBlob = (size: number) => <BlobCanvas color={color} size={size} mood={displayMood} fileStage={fileStage} look={agent ? agentLook(agent) : null} soundCues={soundsEnabled} label={name} onDizzy={beginConfused} onDizzyRecovery={recoverFromConfused} />
-  const responsiveDictation = Math.min(1, Math.pow(Math.max(0, dictationLevel), 0.58) * 2.1)
-  const dictationBars = Array.from({ length: 14 }, (_, index) => {
-    const amplitude = Math.max(0.12, responsiveDictation) * (0.8 + Math.abs(Math.sin(dictationFrame * 0.4 + index * 0.5)))
-    return { key: index, height: Math.max(5, 5 + amplitude * 26), opacity: 0.4 + amplitude * 0.55 }
-  })
+  const dictating = dictationSurface === 'companion' && dictationPhase !== 'idle'
+  const dictationText = `${dictationFinals}${dictationFinals && dictationPartial ? ' ' : ''}${dictationPartial}`
+  const dictationIsland = dictating ? <DictationIsland variant="companion" phase={dictationPhase as IslandPhase} level={dictationLevel} since={dictationClock.since} stoppedAt={dictationClock.stoppedAt} text={dictationText} warming={dictationWarming} errorText={dictationError} /> : null
+  const chatShown = mode === 'home' && view === 'chat' && !permission
 
   return <main className={`companion-root ${popIn ? 'pop-in' : ''}`} data-mode={mode} style={color ? { '--agent-accent': color } as React.CSSProperties : undefined} onMouseEnter={() => fsmRef.current?.mouseEntered()} onMouseLeave={() => fsmRef.current?.mouseLeft()}>
-    {dictationSurface === 'companion' && dictationPhase !== 'idle' && <div className="companion-listening" role="status" aria-live="polite">
-      {dictationPhase === 'processing' ? <>
-        <span className="companion-listening-label">Processing</span>
-        <span className="companion-listening-spinner" aria-hidden="true" />
-      </> : dictationPhase === 'error' ? <span className="companion-listening-label error">{dictationError}</span> : <>
-        <span className="companion-listening-label">Listening</span>
-        <div className="companion-listening-wave">{dictationBars.map((bar) => <span key={bar.key} style={{ height: `${bar.height}px`, opacity: bar.opacity }} />)}</div>
-      </>}
-    </div>}
+    {dictating && !chatShown && <div className="companion-listening">{dictationIsland}</div>}
     <div ref={capsuleRef} className={`companion-capsule island ${mode}`} data-tauri-drag-region>
       {mode === 'petit' ? <div className="companion-compact" data-tauri-drag-region>
         <button className="compact-bot" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}>{focusBlob(40)}</button>
@@ -2446,11 +2518,11 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
               {droppedFile && fileInfo && <div className="chip settled companion-file-ready"><Paperclip size={11} /><span><strong>{fileInfo.fileName}</strong> · {formatBytes(fileInfo.sizeBytes)} · path only</span><button aria-label="Remove local file reference" onClick={() => { fileRequest.current++; setDroppedFile(null); setFileInfo(null); setPreparingFile(false); setFileError(null) }}><X size={11} /></button></div>}
               {preparingFile && <p className="companion-file-note" role="status">Checking the selected path is a readable file… <button type="button" onClick={() => { fileRequest.current++; setPreparingFile(false); setFileInfo(null); setDroppedFile(null) }}>Cancel</button></p>}
               {(fileError ?? dropError ?? appError) && <p className="companion-drop-error" role="alert">{fileError ?? dropError ?? appError}</p>}
-              {dictationPartial && <div className="dictation-partial companion" role="status"><span className="dictation-partial-label">Listening</span>{dictationPartial}</div>}
+              {dictating && dictationIsland}
               <form className="chat-bar companion-chat-composer" data-companion-no-drag="" onSubmit={(event) => void sendCompanionPrompt(event)}>
                 <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !session || preparingFile}><Paperclip size={13} /></button>
                 <textarea className="chat-input" aria-label="Message agent" placeholder={connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !session || sending || session.state === 'waiting_permission'} rows={1} />
-                <DictationButton owner="companion" onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={!connected || !session || sending || session.state === 'waiting_permission'} />
+                {speechEnabled && <DictationButton owner="companion" modelId={speechModel} autoStart={dictateOnOpen} onAutoStarted={() => setDictateOnOpen(false)} onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={!connected || !session || sending || session.state === 'waiting_permission'} />}
                 <button className="send-btn" type={sessionBusy ? 'button' : 'submit'} disabled={!session || sending || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={sessionBusy ? cancelCompanionTurn : undefined} aria-label={sessionBusy ? 'Cancel turn' : 'Send message'}>{sending ? <LoaderCircle size={13} className="spinning" /> : sessionBusy ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
               </form>
             </div>

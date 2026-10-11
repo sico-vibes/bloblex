@@ -84,6 +84,8 @@ export interface SessionLink extends JsonRecord {
   peerAgentId: string
   peerName?: string
   originSessionId?: string
+  /** Short title the sender gave the conversation, also its session title. */
+  topic?: string
 }
 
 /** Team metadata on a stored message. */
@@ -95,6 +97,7 @@ export interface MessageMeta extends JsonRecord {
   fromAgentId?: string
   fromName?: string
   sideSessionId?: string
+  topic?: string
 }
 
 export interface UserQuestion extends JsonRecord {
@@ -118,6 +121,8 @@ export interface ChatMessage extends JsonRecord {
   eventType?: string
   attachments?: MessageAttachment[] | null
   meta?: MessageMeta | null
+  /** Side conversations the user tagged with # in this message. */
+  references?: Array<{ id: string; title: string }> | null
 }
 
 export interface MessageAttachment extends JsonRecord {

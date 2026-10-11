@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Archive, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Star, Trash2, Copy as Duplicate, Download } from 'lucide-react'
 import type { Agent, Project, Runtime, Session } from '../types'
 import { agentLook } from '../blob/look'
+import { RuntimeMark } from './providerBrand'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
@@ -89,11 +90,13 @@ export type TeamSidebarActions = {
   onToggleProjectCollapsed: (project: Project) => void
 }
 
-export function TeamSidebar({ agents, projects, sessions, runtimes, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, query, onQueryChange, actions }: {
+export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, query, onQueryChange, actions }: {
   agents: Agent[]
   projects: Project[]
   sessions: Session[]
   runtimes: Runtime[]
+  /** Experimental: show each blob's runtime logo before its name. */
+  runtimeLogos?: boolean
   connected: boolean
   now: number
   pinnedIds: string[]
@@ -182,7 +185,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, connected, n
       </span>
       <span className="bot-row-copy">
         <span className="bot-row-line">
-          <span className="team-row-name"><strong>{agent.name}</strong>{agent.role?.trim() && <span className="role-chip">{agent.role.trim()}</span>}</span>
+          <span className="team-row-name">{runtimeLogos && <RuntimeMark provider={runtime?.provider} />}<strong>{agent.name}</strong>{agent.role?.trim() && <span className="role-chip">{agent.role.trim()}</span>}</span>
           {(unread || approval) && <i className={`unread-dot ${approval ? 'approval' : ''}`} aria-hidden="true" />}
           {session?.updatedAt && <time>{shortTime(session.updatedAt)}</time>}
         </span>

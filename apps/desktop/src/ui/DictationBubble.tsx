@@ -2,33 +2,33 @@ import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { LoaderCircle, Mic, ShieldAlert } from 'lucide-react'
 import { playDictationCue } from './dictationSound'
+import { DictationIsland, type IslandPhase } from './DictationIsland'
 
-type Phase = 'idle' | 'listening' | 'processing' | 'error'
+type Phase = 'idle' | IslandPhase
 type DictationEvent = { type: string; owner?: string; text?: string }
 
 const HOLD_TO_DRAG_MS = 140
 const TAP_MAX_MOVEMENT_PX = 6
 
 /**
- * The floating dictation bubble. Rendered in its own always-on-top window and
- * only shown by the backend while dictation is active and the companion is
- * hidden. Adapted from the Waveora bubble without its logo.
+ * The floating dictation bubble, in its own always-on-top window, shown by the
+ * backend while dictation runs and the companion is hidden. It shows the words
+ * as they arrive and grows to fit them. Tap to open Bloblex; hold to move it.
  */
 export function DictationBubble() {
   const [phase, setPhase] = useState<Phase>('idle')
   const [level, setLevel] = useState(0)
+  const [warming, setWarming] = useState(false)
   const [errorText, setErrorText] = useState('')
-  const [frame, setFrame] = useState(0)
+  const [finals, setFinals] = useState('')
+  const [partial, setPartial] = useState('')
+  const [since, setSince] = useState<number | null>(null)
+  const [stoppedAt, setStoppedAt] = useState<number | null>(null)
   const responsible = useRef(false)
+  const heard = useRef(false)
   const pressStart = useRef<{ x: number; y: number; time: number } | null>(null)
   const dragTimer = useRef<number | null>(null)
-
-  useEffect(() => {
-    const interval = window.setInterval(() => setFrame((current) => current + 1), 66)
-    return () => window.clearInterval(interval)
-  }, [])
 
   useEffect(() => {
     let disposed = false
@@ -38,31 +38,45 @@ export function DictationBubble() {
       else unsubs.push(unlisten)
     }
     void (async () => {
-      add(
-        await listen<{ surface: string }>('bloblex-dictation-surface', (event) => {
-          responsible.current = event.payload.surface === 'bubble'
-        }),
-      )
-      add(
-        await listen<DictationEvent>('bloblex-dictation', (event) => {
-          if (!responsible.current) return
-          const { type, text } = event.payload
-          if (type === 'ready') {
-            setPhase('listening')
-            playDictationCue('record-start')
-          } else if (type === 'processing') {
-            setPhase('processing')
-            playDictationCue('processing-start')
-          } else if (type === 'stopped') {
-            setPhase('idle')
-            playDictationCue('processing-finish')
-          } else if (type === 'error') {
-            setPhase('error')
-            setErrorText(text || 'Dictation failed.')
-            playDictationCue('error')
-          }
-        }),
-      )
+      add(await listen<{ surface: string }>('bloblex-dictation-surface', (event) => {
+        responsible.current = event.payload.surface === 'bubble'
+      }))
+      add(await listen<DictationEvent>('bloblex-dictation', (event) => {
+        if (!responsible.current) return
+        const { type, text } = event.payload
+        if (type === 'ready') {
+          heard.current = false
+          setFinals(''); setPartial(''); setErrorText(''); setWarming(false)
+          setSince(Date.now()); setStoppedAt(null)
+          setPhase('listening')
+          playDictationCue('record-start')
+        } else if (type === 'loading') {
+          setWarming(true)
+        } else if (type === 'loaded') {
+          setWarming(false)
+        } else if (type === 'partial') {
+          if (text) heard.current = true
+          setPartial(text ?? '')
+        } else if (type === 'final') {
+          if (text) { heard.current = true; setFinals((current) => (current ? `${current} ${text}` : text)) }
+          setPartial('')
+        } else if (type === 'processing') {
+          setStoppedAt(Date.now())
+          setPhase('processing')
+          playDictationCue('processing-start')
+        } else if (type === 'stopped') {
+          setWarming(false)
+          setPartial('')
+          setStoppedAt((current) => current ?? Date.now())
+          setPhase(heard.current ? 'done' : 'silent')
+          playDictationCue('processing-finish')
+        } else if (type === 'error') {
+          setWarming(false)
+          setPhase('error')
+          setErrorText(text || 'Dictation failed.')
+          playDictationCue('error')
+        }
+      }))
       add(await listen<{ level: number }>('bloblex-dictation-level', (event) => setLevel(event.payload.level)))
     })().catch(() => undefined)
     return () => {
@@ -70,6 +84,12 @@ export function DictationBubble() {
       unsubs.forEach((unlisten) => unlisten())
     }
   }, [])
+
+  const text = `${finals}${finals && partial ? ' ' : ''}${partial}`
+  const expanded = (phase === 'listening' || phase === 'processing') ? text.trim().length > 0 : phase === 'error'
+  useEffect(() => {
+    void invoke('set_dictation_bubble_size', { expanded }).catch(() => undefined)
+  }, [expanded])
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
@@ -94,47 +114,9 @@ export function DictationBubble() {
     }
   }
 
-  const responsive = Math.min(1, Math.pow(Math.max(0, level), 0.58) * 2.1)
-  const bars = Array.from({ length: 12 }, (_, index) => {
-    const amplitude = Math.max(0.1, responsive) * (0.8 + Math.abs(Math.sin(frame * 0.4 + index * 0.37)))
-    return { key: index, height: Math.max(4, 4 + amplitude * 22), opacity: 0.45 + amplitude * 0.5 }
-  })
-
   return (
-    <div className="dictation-bubble-root">
-      <div
-        className={`dictation-bubble ${phase}`}
-        role="status"
-        aria-live="polite"
-        onPointerDown={onPointerDown}
-        onPointerUp={onPointerUp}
-      >
-        <div className="dictation-bubble-glyph">
-          <Mic size={16} aria-hidden="true" />
-        </div>
-        <div className="dictation-bubble-body">
-          {phase === 'listening' && (
-            <div className="dictation-bubble-wave" aria-label="Listening">
-              {bars.map((bar) => (
-                <span key={bar.key} style={{ height: `${bar.height}px`, opacity: bar.opacity }} />
-              ))}
-            </div>
-          )}
-          {phase === 'processing' && (
-            <div className="dictation-bubble-processing">
-              <LoaderCircle size={14} className="spinning" aria-hidden="true" />
-              <span>Processing</span>
-            </div>
-          )}
-          {phase === 'error' && (
-            <div className="dictation-bubble-error">
-              <ShieldAlert size={13} aria-hidden="true" />
-              <span>{errorText}</span>
-            </div>
-          )}
-          {phase === 'idle' && <div className="dictation-bubble-idle">Dictation</div>}
-        </div>
-      </div>
+    <div className="dictation-bubble-root" onPointerDown={onPointerDown} onPointerUp={onPointerUp}>
+      {phase !== 'idle' && <DictationIsland phase={phase} level={level} since={since} stoppedAt={stoppedAt} text={text} warming={warming} errorText={errorText} />}
     </div>
   )
 }

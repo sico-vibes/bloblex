@@ -1756,6 +1756,40 @@ fn make_companion(app: &AppHandle, start_at_last_position: bool) -> tauri::Resul
     Ok(window)
 }
 
+/// Registers Ctrl+E for dictation while it is turned on, and releases it when off.
+#[tauri::command]
+fn set_dictation_shortcut(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+    let shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyE);
+    let shortcuts = app.global_shortcut();
+    let registered = shortcuts.is_registered(shortcut);
+    if enabled && !registered {
+        shortcuts.register(shortcut).map_err(|error| format!("Ctrl+E is in use by another app: {error}"))?;
+    } else if !enabled && registered {
+        shortcuts.unregister(shortcut).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// Grows the dictation bubble to show the words as they arrive, or shrinks it
+/// back to the compact pill. The bottom centre stays put, so it grows upwards.
+#[tauri::command]
+fn set_dictation_bubble_size(app: AppHandle, expanded: bool) -> Result<(), String> {
+    let window = app.get_webview_window("dictation").ok_or_else(|| "The dictation bubble is unavailable.".to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let (width, height) = if expanded { (DICTATION_EXPANDED.0, DICTATION_EXPANDED.1) } else { (DICTATION_COMPACT.0, DICTATION_COMPACT.1) };
+    let size = window.outer_size().map_err(|error| error.to_string())?;
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let (next_width, next_height) = ((width * scale).round() as i32, (height * scale).round() as i32);
+    let center = position.x + size.width as i32 / 2;
+    let bottom = position.y + size.height as i32;
+    let _ = window.set_size(LogicalSize::new(width, height));
+    let _ = window.set_position(PhysicalPosition::new(center - next_width / 2, bottom - next_height));
+    Ok(())
+}
+const DICTATION_COMPACT: (f64, f64) = (260.0, 76.0);
+const DICTATION_EXPANDED: (f64, f64) = (460.0, 136.0);
+
 /// A frameless, always-on-top bubble shown only while dictation is active and
 /// the companion is hidden. It mirrors the companion's transparency model.
 fn make_dictation(app: &AppHandle) -> tauri::Result<WebviewWindow> {
@@ -1765,7 +1799,7 @@ fn make_dictation(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         WebviewUrl::App("index.html?dictation=1".into()),
     )
     .title("Bloblex Dictation")
-    .inner_size(240.0, 76.0)
+    .inner_size(DICTATION_COMPACT.0, DICTATION_COMPACT.1)
     .position(500.0, 500.0)
     .decorations(false)
     .transparent(true)
@@ -1785,8 +1819,8 @@ fn make_dictation(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     {
         let area = monitor.work_area();
         let scale = monitor.scale_factor();
-        let width = (240.0 * scale).round() as i32;
-        let height = (76.0 * scale).round() as i32;
+        let width = (DICTATION_COMPACT.0 * scale).round() as i32;
+        let height = (DICTATION_COMPACT.1 * scale).round() as i32;
         // Sit above the companion island so the two never overlap.
         let gap = (132.0 * scale).round() as i32;
         let x = area.position.x + (area.size.width as i32 - width) / 2;
@@ -2021,7 +2055,9 @@ pub fn run() {
             if shortcut == &companion {
                 let _ = toggle_companion(app.clone());
             } else if shortcut == &dictation {
-                let _ = app.emit("bloblex-dictation-toggle", ());
+                // One window dictates: the companion while it is on screen, else the main window.
+                let companion_shown = app.get_webview_window("companion").and_then(|window| window.is_visible().ok()).unwrap_or(false);
+                let _ = app.emit_to(if companion_shown { "companion" } else { "main" }, "bloblex-dictation-toggle", ());
             }
         }).build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
@@ -2067,13 +2103,9 @@ pub fn run() {
                     eprintln!("Bloblex companion shortcut unavailable: {error}");
                 }
             }
-            {
-                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-                let dictation = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyE);
-                if let Err(error) = app.global_shortcut().register(dictation) {
-                    eprintln!("Bloblex dictation shortcut unavailable: {error}");
-                }
-            }
+            // Ctrl+E is registered by the main window once it knows dictation is
+            // on (set_dictation_shortcut), so it is never taken from other apps
+            // while dictation is off.
             let companion = make_companion(app.handle(), start_at_last_position)?;
             let _ = companion.hide();
             let _ = app.emit("bloblex-companion-visible-changed", false);
@@ -2139,6 +2171,10 @@ pub fn run() {
             speech::speech_model_status,
             speech::speech_model_download,
             speech::dictation_start,
+            speech::dictation_warm,
+            speech::dictation_release,
+            set_dictation_shortcut,
+            set_dictation_bubble_size,
             speech::dictation_stop,
             speech::dictation_cancel,
             speech::dictation_state,

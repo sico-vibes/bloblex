@@ -57,6 +57,8 @@ fn main() {
         let Ok(input) = serde_json::from_str::<Value>(&line) else { continue };
         if input["type"] == "control_request" && input["request"]["subtype"] == "list_models" {
             emit(json!({"type":"control_response","response":{"subtype":"success","request_id":input["request_id"],"response":{"models":[{"value":"claude-sonnet-test","displayName":"Test Sonnet","providerId":"anthropic","supportedEffortLevels":["low","high"],"defaultEffort":"low","supportsFastMode":true}],"resolvedModel":"claude-sonnet-test"}}}));
+        } else if input["type"] == "control_request" && input["request"]["subtype"] == "get_settings" {
+            emit(json!({"type":"control_response","response":{"subtype":"success","request_id":input["request_id"],"response":{"effective":{},"sources":[],"applied":{"model":"claude-sonnet-test","effort":"low","ultracodeAvailable":false}}}}));
         } else if input["type"] == "user" {
             if let Some(count) = args.iter().find_map(|arg| arg.strip_prefix("--fake-api-retry-count=")).and_then(|count| count.parse::<u32>().ok()) {
                 for attempt in 1..=count {

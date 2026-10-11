@@ -6,13 +6,12 @@ import { parseModelCatalog, type CatalogModel, type ModelCatalog, type ServiceTi
 import { ConfirmDialog } from './BlobPage'
 import { moveMenuFocus, usePopoverDismiss } from './ComposerControls'
 import { providerBrand } from './providerBrand'
-import { SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
-import { applyClaudeMagnet, claudePointerVelocity, codexDragPosition, CLAUDE_SPRING } from './meterMotion'
+import { knobInset, positionFromPointer, SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
+import { Tip } from './Tip'
 
 type Lock = SessionModelLock
 type PendingModel = { sessionId: string; model: string | null }
 type EffortDraft = { sessionId: string; model: string | null; value: string | null }
-type Sample = { time: number; value: number }
 
 export function SessionExecutionControls({ session, agent, onSessionUpdated, onError }: {
   session: Session
@@ -43,6 +42,21 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
         setCatalogUnavailable(!parsed || parsed.models.length === 0)
       }
     }).catch(() => { if (!cancelled) { setCatalog(null); setCatalogUnavailable(true) } })
+    return () => { cancelled = true }
+  }, [session.runtimeId])
+
+  // OpenCode keeps effort behind an execution check; until it passes the pill
+  // is shown greyed out with an explanation instead of failing on use.
+  const [thinkingLocked, setThinkingLocked] = useState<'unsupported' | 'gated' | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setThinkingLocked(null)
+    void rpc<{ settings?: { thinking?: { supported?: boolean; enabled?: boolean } } }>('runtime.capabilities', { runtimeId: session.runtimeId }).then((caps) => {
+      const thinkingGate = caps?.settings?.thinking
+      if (cancelled || !thinkingGate) return
+      if (thinkingGate.supported === false) setThinkingLocked('unsupported')
+      else if (thinkingGate.enabled === false) setThinkingLocked('gated')
+    }).catch(() => undefined)
     return () => { cancelled = true }
   }, [session.runtimeId])
 
@@ -125,6 +139,7 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
       efforts={efforts}
       defaultThinking={selectedModel?.defaultThinking ?? null}
       unavailableReason={catalogUnavailable ? 'Runtime model capabilities are unavailable. Bloblex cannot verify or change effort levels without a validated catalog.' : selectedModel ? null : catalog ? 'The selected model is not in the validated runtime catalog. Bloblex cannot verify selectable effort levels.' : 'Runtime model capabilities are still unavailable.'}
+      lockedReason={thinkingLocked ? `${providerBrand(catalog?.provider ?? "").name || "This runtime"} doesn't let Bloblex pick an effort level yet, so it uses the model's own default.` : null}
       value={thinking}
       draftValue={activeDraft}
       disabled={controlsDisabled}
@@ -136,12 +151,14 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   </div>
 }
 
-function EffortControl({ providerStyle, modelName, efforts, defaultThinking, unavailableReason, value, draftValue, disabled, onPreview, onCancel, onCommit }: {
+function EffortControl({ providerStyle, modelName, efforts, defaultThinking, unavailableReason, lockedReason, value, draftValue, disabled, onPreview, onCancel, onCommit }: {
   providerStyle: EffortMeterStyle
   modelName: string
   efforts: string[]
   defaultThinking: string | null
   unavailableReason: string | null
+  /** Set when the runtime cannot change effort at all: the pill is greyed out with this tooltip. */
+  lockedReason?: string | null
   value: string | null | undefined
   draftValue: string | null | undefined
   disabled: boolean
@@ -151,269 +168,167 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
 }) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState(0)
-  const [snapping, setSnapping] = useState(false)
-  /** True while a finger or mouse holds the knob: it follows exactly, and nothing is saved until release. */
-  const [dragging, setDragging] = useState(false)
-  const [burstKey, setBurstKey] = useState(0)
-  const [labelSwap, setLabelSwap] = useState<{ from:string; to:string; forward:boolean } | null>(null)
-  const previousLabel = useRef('')
-  const labelTimer = useRef<number | null>(null)
+  /** 'drag': the knob follows the pointer exactly. 'settle': it glides to the released stop. */
+  const [mode, setMode] = useState<'rest' | 'drag' | 'settle'>('rest')
   const rootRef = useRef<HTMLDivElement>(null)
-  const gesture = useRef<{ kind:'pointer'|'keyboard'; pointerId?: number; key?: string } | null>(null)
+  const trackRef = useRef<HTMLDivElement>(null)
+  const gesture = useRef<{ kind: 'pointer' | 'keyboard'; pointerId?: number; left?: number; width?: number } | null>(null)
   const positionRef = useRef(0)
-  const samples = useRef<Sample[]>([])
-  const dragGeometry = useRef<{ left:number; width:number } | null>(null)
-  const springFrame = useRef<number | null>(null)
-  const snapTimer = useRef<number | null>(null)
-  const snapHandler = useRef<((event:TransitionEvent)=>void) | null>(null)
   const startIndex = useRef(-1)
-  const committedDuringGesture = useRef(false)
-  const cancelRef = useRef<() => void>(() => undefined)
+  const settleTimer = useRef<number | null>(null)
   const currentValueIndex = value == null ? -1 : efforts.indexOf(value)
   const draftIndex = draftValue === undefined ? undefined : draftValue === null ? -1 : efforts.indexOf(draftValue)
   const visibleIndex = draftIndex ?? currentValueIndex
   // With no saved effort the knob rests on the provider's default level.
   const defaultIndex = defaultThinking ? efforts.indexOf(defaultThinking) : -1
   const restIndex = currentValueIndex >= 0 ? currentValueIndex : Math.max(0, defaultIndex)
-  const displayedPosition = snapping || gesture.current ? position : (visibleIndex < 0 ? restIndex : visibleIndex)
-  const selectedTierIndex = Math.max(0, Math.min(efforts.length - 1, Math.round(displayedPosition)))
-  const selectedLabel = visibleIndex >= 0 && efforts[visibleIndex] ? labelizeEffort(efforts[visibleIndex]) : ''
+  const displayedPosition = mode === 'rest' ? (visibleIndex < 0 ? restIndex : visibleIndex) : position
+  const stop = Math.max(0, Math.min(efforts.length - 1, Math.round(displayedPosition)))
   const unlistedValue = value && !efforts.includes(value) ? value : null
-  const visibleLabel = visibleIndex >= 0 && efforts[visibleIndex] ? labelizeEffort(efforts[visibleIndex]) : unlistedValue ? `Saved selection: ${labelizeEffort(unlistedValue)}` : defaultThinking ? `${labelizeEffort(defaultThinking)} · default` : 'Provider default'
-  const defaultLabel = defaultThinking ? `Provider default (${labelizeEffort(defaultThinking)})` : 'Provider default'
-  const highest = efforts.length > 0 && selectedTierIndex === efforts.length - 1 && (visibleIndex >= 0 || snapping || gesture.current !== null)
+  const visibleLabel = visibleIndex >= 0 && efforts[visibleIndex] ? labelizeEffort(efforts[visibleIndex]) : unlistedValue ? `Saved: ${labelizeEffort(unlistedValue)}` : defaultThinking ? `${labelizeEffort(defaultThinking)} · default` : 'Provider default'
+  const lastIsUltra = isUltraEffort(efforts[efforts.length - 1])
+  const atTop = efforts.length > 1 && stop === efforts.length - 1 && (visibleIndex >= 0 || mode !== 'rest')
 
+  const clearSettle = () => { if (settleTimer.current !== null) window.clearTimeout(settleTimer.current); settleTimer.current = null }
+  useEffect(() => () => { clearSettle(); gesture.current = null }, [])
   useEffect(() => {
-    const previous = previousLabel.current
-    previousLabel.current = visibleLabel
-    if (!previous || previous === visibleLabel) return
-    setLabelSwap({ from:previous, to:visibleLabel, forward:visibleIndex > (efforts.indexOf(value ?? '') ?? -1) })
-    if (labelTimer.current !== null) window.clearTimeout(labelTimer.current)
-    labelTimer.current = window.setTimeout(() => { labelTimer.current = null; setLabelSwap(null) }, providerStyle === 'claude' ? 200 : 130)
-  }, [visibleLabel, providerStyle])
+    if (gesture.current) return
+    positionRef.current = restIndex
+    setPosition(restIndex)
+  }, [currentValueIndex, restIndex, efforts.length])
 
-  const stopAnimations = () => {
-    const snapKnob=rootRef.current?.querySelector<HTMLElement>('.session-effort-knob')
-    if(snapHandler.current&&snapKnob){snapKnob.removeEventListener('transitionend',snapHandler.current);snapHandler.current=null}
-    if (providerStyle === 'magnetic' && snapping) {
-      const track = rootRef.current?.querySelector<HTMLElement>('.session-effort-track')
-      const knob = track?.querySelector<HTMLElement>('.session-effort-knob')
-      const width = track?.getBoundingClientRect().width ?? 0
-      const fill=track?.querySelector<HTMLElement>('.session-effort-fill')
-      const left = Number.parseFloat(knob ? getComputedStyle(knob).left : '')
-      if (Number.isFinite(left) && width > 32) {
-        const normalized = Math.max(0, Math.min(1, (left - 16) / (width - 32)))
-        if(knob)knob.style.left=`${left}px`
-        if(fill)fill.style.width=getComputedStyle(fill).width
-        positionRef.current = normalized * Math.max(0, efforts.length - 1)
-        setPosition(positionRef.current)
-        requestAnimationFrame(()=>{if(fill)fill.style.removeProperty('width')})
-      }
-    }
-    if (springFrame.current !== null) cancelAnimationFrame(springFrame.current)
-    if (snapTimer.current !== null) window.clearTimeout(snapTimer.current)
-    springFrame.current = null
-    snapTimer.current = null
-    setSnapping(false)
-  }
   const cancelGesture = () => {
-    stopAnimations()
+    clearSettle()
     gesture.current = null
-    setDragging(false)
-    dragGeometry.current = null
-    committedDuringGesture.current = false
-    positionRef.current = (startIndex.current < 0 ? restIndex : startIndex.current)
+    positionRef.current = startIndex.current < 0 ? restIndex : startIndex.current
     setPosition(positionRef.current)
-    samples.current = []
+    setMode('rest')
     onCancel()
   }
-  cancelRef.current = cancelGesture
-
-  const cancelCurrent = () => {
-    if (gesture.current) cancelRef.current()
+  const close = (restoreFocus = false) => {
+    if (gesture.current) cancelGesture()
     setOpen(false)
+    if (restoreFocus) rootRef.current?.querySelector<HTMLButtonElement>('.session-effort-trigger')?.focus()
   }
-
+  const closeRef = useRef(close)
+  closeRef.current = close
   useEffect(() => {
     if (!open) return
-    const onPointerDown = (event: globalThis.PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) cancelCurrentRef.current()
-    }
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelCurrentRef.current(); rootRef.current?.querySelector<HTMLButtonElement>('.session-effort-trigger')?.focus() }
-    }
-    const onWindowBlur = () => cancelCurrentRef.current()
+    const onPointerDown = (event: globalThis.PointerEvent) => { if (!rootRef.current?.contains(event.target as Node)) closeRef.current() }
+    const onKeyDown = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeRef.current(true) } }
+    const onWindowBlur = () => closeRef.current()
     document.addEventListener('pointerdown', onPointerDown, true)
     document.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('blur', onWindowBlur)
     return () => { document.removeEventListener('pointerdown', onPointerDown, true); document.removeEventListener('keydown', onKeyDown, true); window.removeEventListener('blur', onWindowBlur) }
   }, [open])
 
-  const cancelCurrentRef = useRef(cancelCurrent)
-  cancelCurrentRef.current = cancelCurrent
-  useEffect(() => () => { stopAnimations(); gesture.current = null; if(labelTimer.current!==null)window.clearTimeout(labelTimer.current) }, [])
-  useEffect(() => {
-    if (gesture.current) return
-    const next = restIndex
-    positionRef.current = next
-    setPosition(next)
-  }, [currentValueIndex, restIndex, efforts.length])
-
-  const announce = (nextPosition: number) => {
-    const index = Math.round(Math.max(0, Math.min(Math.max(0, efforts.length - 1), nextPosition)))
-    onPreview(index < 0 ? null : efforts[index] ?? null)
+  const move = (next: number) => {
+    const safe = Math.max(0, Math.min(Math.max(0, efforts.length - 1), next))
+    positionRef.current = safe
+    setPosition(safe)
+    onPreview(efforts[Math.round(safe)] ?? null)
   }
-  const applyPosition = (raw: number) => {
-    const track=rootRef.current?.querySelector<HTMLElement>('.session-effort-track')
-    track?.querySelector<HTMLElement>('.session-effort-fill')?.style.removeProperty('width')
-    track?.querySelector<HTMLElement>('.session-effort-knob')?.style.removeProperty('left')
-    const safe = Math.max(0, Math.min(Math.max(0, efforts.length - 1), raw))
-    const next = providerStyle === 'claude' ? applyClaudeMagnet(safe) : safe
-    positionRef.current = next
-    setPosition(next)
-    announce(next)
-    const now = performance.now()
-    samples.current = [...samples.current, { time:now, value:next }].filter((sample) => now - sample.time < 90).slice(-5)
-  }
-  const applyCodexPointer = (event: ReactPointerEvent<HTMLInputElement>) => {
-    if (providerStyle !== 'magnetic' || !dragGeometry.current) return
-    const {left,width}=dragGeometry.current
-    const normalized=codexDragPosition(event.clientX,left,width,width,32)
-    if(normalized!==null)applyPosition(normalized*Math.max(0,efforts.length-1))
-  }
-
-  const commit = (index: number, animate: boolean, velocity = 0) => {
-    if (committedDuringGesture.current) return
-    committedDuringGesture.current = true
+  /** Saves the stop and lets the knob glide there; the save happens once, on release. */
+  const commit = (index: number) => {
     const target = Math.max(0, Math.min(efforts.length - 1, index))
-    const changed = target !== currentValueIndex
-    const valueToSave = efforts[target] ?? null
-    const result = onCommit(valueToSave)
-    const settled = async () => {
-      if (changed && target === efforts.length - 1 && providerStyle === 'magnetic' && await result) setBurstKey((key) => key + 1)
-    }
-    if (!animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      positionRef.current = target
-      setPosition(target)
-      setSnapping(false)
-      void settled()
-      return
-    }
-    if (providerStyle === 'claude') {
-      stopAnimations()
-      setSnapping(true)
-      let current = positionRef.current
-      let speed = velocity
-      let previous = performance.now()
-      const step = (time: number) => {
-        const dt = Math.min((time - previous) / 1000, 0.032)
-        previous = time
-        const acceleration = -CLAUDE_SPRING.stiffness * (current - target) - CLAUDE_SPRING.damping * speed
-        speed += acceleration * dt
-        current = Math.max(0, Math.min(efforts.length - 1, current + speed * dt))
-        positionRef.current = current
-        setPosition(current)
-        if (Math.abs(current - target) < 0.001 && Math.abs(speed) < 0.01) {
-          positionRef.current = target
-          setPosition(target)
-          springFrame.current = null
-          setSnapping(false)
-          void settled()
-          return
-        }
-        springFrame.current = requestAnimationFrame(step)
-      }
-      springFrame.current = requestAnimationFrame(step)
-    } else {
-      setSnapping(true)
-      positionRef.current = target
-      setPosition(target)
-      let finished=false
-      const finish=()=>{if(finished)return;finished=true;if(snapTimer.current!==null)window.clearTimeout(snapTimer.current);snapTimer.current=null;const knob=rootRef.current?.querySelector<HTMLElement>('.session-effort-knob');if(snapHandler.current&&knob)knob.removeEventListener('transitionend',snapHandler.current);snapHandler.current=null;setSnapping(false);void settled()}
-      const handler=(event:TransitionEvent)=>{if(event.propertyName==='left')finish()}
-      const knob=rootRef.current?.querySelector<HTMLElement>('.session-effort-knob')
-      snapHandler.current=handler
-      knob?.addEventListener('transitionend',handler)
-      snapTimer.current = window.setTimeout(finish, 460)
-    }
+    positionRef.current = target
+    setPosition(target)
+    clearSettle()
+    setMode('settle')
+    settleTimer.current = window.setTimeout(() => { settleTimer.current = null; setMode('rest') }, 260)
+    void onCommit(efforts[target] ?? null)
   }
-
-  const finishPointer = (event: ReactPointerEvent<HTMLInputElement>) => {
+  const pointerPosition = (clientX: number) => {
+    const g = gesture.current
+    if (!g || g.left === undefined || g.width === undefined) return positionRef.current
+    return positionFromPointer(clientX, g.left, g.width, efforts.length, providerStyle)
+  }
+  const beginPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (disabled || (event.button !== undefined && event.button !== 0)) return
+    event.preventDefault()
+    clearSettle()
+    const bounds = event.currentTarget.getBoundingClientRect()
+    gesture.current = { kind: 'pointer', pointerId: event.pointerId, left: bounds.left, width: bounds.width }
+    startIndex.current = currentValueIndex
+    try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* capture may be unavailable */ }
+    event.currentTarget.focus({ preventScroll: true })
+    setMode('drag')
+    move(pointerPosition(event.clientX))
+  }
+  const movePointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (gesture.current?.kind !== 'pointer' || gesture.current.pointerId !== event.pointerId) return
+    move(pointerPosition(event.clientX))
+  }
+  const finishPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (gesture.current?.kind !== 'pointer' || gesture.current.pointerId !== event.pointerId) return
     // A release reported outside the window can carry no coordinates; keep the last real position.
-    if (event.clientX !== 0 || event.clientY !== 0) applyCodexPointer(event)
-    setDragging(false)
-    const rounded = Math.round(positionRef.current)
-    const samplesNow = samples.current
-    const velocity = claudePointerVelocity(samplesNow)
+    if (event.clientX !== 0 || event.clientY !== 0) move(pointerPosition(event.clientX))
     gesture.current = null
-    dragGeometry.current = null
-    commit(rounded, true, velocity)
+    try { event.currentTarget.releasePointerCapture(event.pointerId) } catch { /* already released */ }
+    commit(Math.round(positionRef.current))
   }
-
-  const beginPointer = (event: ReactPointerEvent<HTMLInputElement>) => {
-    if (disabled || (event.button !== undefined && event.button !== 0)) return
-    stopAnimations()
-    gesture.current = { kind:'pointer', pointerId:event.pointerId }
-    setDragging(true)
-    const bounds=event.currentTarget.parentElement?.getBoundingClientRect()
-    dragGeometry.current=providerStyle==='magnetic'&&bounds?{left:bounds.left,width:bounds.width}:null
-    committedDuringGesture.current = false
-    startIndex.current = currentValueIndex
-    const initial = providerStyle === 'magnetic' ? positionRef.current : restIndex
-    positionRef.current = initial
-    setPosition(initial)
-    samples.current = [{ time:performance.now(), value:initial }]
-    try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* capture may be unavailable */ }
-    if(providerStyle==='magnetic')applyCodexPointer(event)
+  const abandonPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (gesture.current?.kind === 'pointer' && gesture.current.pointerId === event.pointerId) cancelGesture()
   }
-
-  const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (disabled || !['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown'].includes(event.key)) return
+  const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (disabled || !keys.includes(event.key)) return
     event.preventDefault()
-    if (!gesture.current || gesture.current.kind !== 'keyboard') {
-      stopAnimations()
-      gesture.current = { kind:'keyboard', key:event.key }
-      committedDuringGesture.current = false
+    if (gesture.current?.kind !== 'keyboard') {
+      clearSettle()
+      gesture.current = { kind: 'keyboard' }
       startIndex.current = currentValueIndex
       positionRef.current = restIndex
-    } else gesture.current.key = event.key
+      setMode('drag')
+    }
     const current = Math.round(positionRef.current)
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? efforts.length - 1 : current + (['ArrowRight','ArrowUp','PageUp'].includes(event.key) ? 1 : -1)
-    applyPosition(Math.max(0, Math.min(efforts.length - 1, next)))
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? efforts.length - 1 : current + (['ArrowRight', 'ArrowUp', 'PageUp'].includes(event.key) ? 1 : -1)
+    move(next)
   }
-  const handleKeyUp = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (gesture.current?.kind !== 'keyboard' || !['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown'].includes(event.key)) return
+  const handleKeyUp = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (gesture.current?.kind !== 'keyboard' || !keys.includes(event.key)) return
     event.preventDefault()
     gesture.current = null
-    commit(Math.round(positionRef.current), false)
+    commit(Math.round(positionRef.current))
   }
+  const choose = (next: string | null) => { clearSettle(); setMode('rest'); onPreview(next); void onCommit(next); setOpen(false) }
   const toggle = () => {
-    if (disabled) return
-    if (open) cancelCurrent()
-    else { stopAnimations(); setPosition(restIndex); setOpen(true) }
+    if (disabled || lockedReason) return
+    if (open) close()
+    else { clearSettle(); setMode('rest'); setPosition(restIndex); positionRef.current = restIndex; setOpen(true) }
   }
 
-  const labels = efforts.map(labelizeEffort)
   const triggerLabel = value && efforts.includes(value) ? labelizeEffort(value) : unlistedValue ? labelizeEffort(unlistedValue) : defaultThinking ? labelizeEffort(defaultThinking) : 'Default'
-  const highestSaved = efforts.length > 1 && value === efforts[efforts.length - 1]
+  const savedTop = efforts.length > 1 && value === efforts[efforts.length - 1]
+  const recommendedRatio = efforts.length < 2 || defaultIndex < 0 ? 0 : defaultIndex / (efforts.length - 1)
+  const inset = knobInset(providerStyle)
+  const trigger = <button type="button" className={`composer-pill session-effort-trigger ${savedTop ? 'highest' : ''} ${lockedReason ? 'locked' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={lockedReason ? `Effort: ${triggerLabel}. ${lockedReason}` : `Effort: ${triggerLabel}`} aria-disabled={lockedReason ? true : undefined} disabled={disabled && !lockedReason} onClick={toggle}>
+    <span>{triggerLabel}</span>
+  </button>
   return <div ref={rootRef} className={`session-effort-control composer-popover-anchor ${providerStyle}`}>
-    <button type="button" className={`composer-pill session-effort-trigger ${highestSaved ? 'highest' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={`Effort: ${triggerLabel}`} disabled={disabled} onClick={toggle}>
-      <span>{triggerLabel}</span>
-    </button>
-    {open && <div className={`session-effort-popover ${providerStyle}`} role="dialog" aria-label={`Effort for ${modelName}`}>
-      <div className="session-effort-popover-heading"><span className="session-effort-title">Effort</span><span className="session-effort-value" aria-live="polite">{providerStyle==='claude'&&labelSwap?.to===visibleLabel&&<span className={`session-effort-value-out ${labelSwap.forward?'forward':'backward'}`} aria-hidden="true">{labelSwap.from}</span>}<span key={visibleLabel} className={`session-effort-value-in ${labelSwap?.forward?'forward':'backward'}`}>{visibleLabel}</span></span></div>
+    {lockedReason ? <Tip text={lockedReason}>{trigger}</Tip> : trigger}
+    {open && <div className={`session-effort-popover ${providerStyle} ${lastIsUltra ? 'has-ultra' : ''}`} role="dialog" aria-label={`Effort for ${modelName}`}>
+      <div className="session-effort-popover-heading">
+        <span className="session-effort-title">Effort</span>
+        <span className={`session-effort-value ${atTop && lastIsUltra ? 'ultra' : ''}`} aria-live="polite"><span key={visibleLabel} className="session-effort-value-in">{visibleLabel}</span></span>
+        {efforts.length > 0 && <button type="button" className={`session-effort-default ${visibleIndex < 0 ? 'selected' : ''}`} aria-pressed={visibleIndex < 0} disabled={disabled} title={defaultThinking ? `Let the provider choose (currently ${labelizeEffort(defaultThinking)})` : 'Let the provider choose'} onClick={() => choose(null)}>Provider default</button>}
+      </div>
       {efforts.length > 0 ? <>
         <div className="session-effort-meter-frame">
           <div className="session-effort-caption"><span>Faster</span><span>Smarter</span></div>
-          <SessionEffortMeter style={providerStyle} dragging={dragging} count={efforts.length} position={displayedPosition} selectedLabel={selectedLabel} defaultLabel={defaultLabel} highest={highest} snapping={snapping} burstKey={burstKey} disabled={disabled} onChange={(raw) => { if (gesture.current?.kind === 'pointer' && providerStyle === 'claude') applyPosition(raw) }} onPointerMove={(event) => { if (gesture.current?.kind === 'pointer' && gesture.current.pointerId === event.pointerId) applyCodexPointer(event) }} onPointerDown={beginPointer} onPointerUp={finishPointer} onPointerCancel={() => { if (gesture.current?.kind === 'pointer') cancelGesture() }} onLostPointerCapture={() => { if (gesture.current?.kind === 'pointer') cancelGesture() }} onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} />
+          <SessionEffortMeter trackRef={trackRef} style={providerStyle} count={efforts.length} position={displayedPosition} recommendedIndex={defaultIndex} top={atTop} dragging={mode === 'drag'} settling={mode === 'settle'} valueText={mode === 'rest' && visibleIndex < 0 ? visibleLabel : labelizeEffort(efforts[stop] ?? '')} disabled={disabled} onPointerDown={beginPointer} onPointerMove={movePointer} onPointerUp={finishPointer} onPointerCancel={abandonPointer} onLostPointerCapture={abandonPointer} onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} />
+          {providerStyle === 'claude'
+            ? defaultIndex >= 0 && <div className="session-effort-recommended" aria-hidden="true"><span style={{ left: `calc(${inset}px + (100% - ${inset * 2}px) * ${recommendedRatio})` }} className={recommendedRatio < .15 ? 'start' : recommendedRatio > .85 ? 'end' : ''}>Recommended</span></div>
+            : <div className="session-effort-labels" role="group" aria-label="Effort levels">{efforts.map((effort, index) => <button type="button" key={`${effort}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${index === defaultIndex ? 'default' : ''} ${isUltraEffort(effort) ? 'ultra' : ''}`} aria-pressed={visibleIndex === index} title={index === defaultIndex ? 'Recommended' : undefined} disabled={disabled} onClick={() => choose(effort)}>{labelizeEffort(effort)}</button>)}</div>}
         </div>
-        <div className="session-effort-labels" role="group" aria-label="Effort levels">{labels.map((label, index) => <button type="button" key={`${efforts[index]}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${efforts[index] === defaultThinking ? 'default' : ''}`} aria-pressed={visibleIndex === index} disabled={disabled} onClick={() => { stopAnimations(); onPreview(efforts[index] ?? null); const result = onCommit(efforts[index] ?? null); if (index === efforts.length - 1 && providerStyle === 'magnetic') void Promise.resolve(result).then((saved) => { if (saved && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) setBurstKey((key) => key + 1) }); setOpen(false) }}>{label}</button>)}</div>
-        <div className="session-effort-footer"><span>{defaultThinking ? <>Recommended: <b>{labelizeEffort(defaultThinking)}</b></> : 'The provider chooses its own default.'}</span><button type="button" className={visibleIndex < 0 ? 'selected' : ''} aria-pressed={visibleIndex < 0} disabled={disabled} onClick={() => { stopAnimations(); onPreview(null); void onCommit(null); setOpen(false) }}>Provider default</button></div>
+        {lastIsUltra && atTop && <p className="session-effort-note">{providerStyle === 'claude' ? 'Ultracode runs at Max and lets Claude plan and fan out the work with dynamic workflows.' : 'Ultra reasons at the maximum and may hand parts of the task to extra agents.'}</p>}
       </> : <div className="session-effort-unavailable"><strong>{unlistedValue ? `Saved selection: ${labelizeEffort(unlistedValue)}` : 'Provider default'}</strong><p>{unavailableReason ?? 'This model does not report selectable effort levels. Bloblex cannot change effort for it.'}</p>{defaultThinking && <p>Catalog default: {labelizeEffort(defaultThinking)}.</p>}</div>}
     </div>}
   </div>
 }
+
+function isUltraEffort(value: string | null | undefined) { return value === 'ultra' || value === 'ultracode' }
 
 /** The catalog tier that means "fast": Claude reports `fast`, Codex names its priority tier Fast. */
 export function fastTierFor(model: CatalogModel | null | undefined): ServiceTierOption | null {
@@ -486,7 +401,9 @@ function resolveProviderStyle(runtimeProvider: string, modelProvider: string | n
   return 'neutral'
 }
 
-function labelizeEffort(value: string) {
-  if (value.trim().toLowerCase() === 'xhigh') return 'Extra high'
+export function labelizeEffort(value: string) {
+  const key = value.trim().toLowerCase()
+  if (key === 'xhigh') return 'Extra high'
+  if (key === 'ultracode') return 'Ultracode'
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }

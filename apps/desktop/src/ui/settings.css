@@ -129,3 +129,18 @@
 .help-tip:hover .help-tip-bubble, .help-tip:focus-within .help-tip-bubble { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition: opacity 120ms ease, transform 120ms ease; }
 :root[data-theme="light"] .experimental-tag { color: #fff; background: #111; }
 @media (prefers-reduced-motion: reduce) { .help-tip-bubble { transition: none; } }
+
+/* Speech: shortcut keys, the model in use, download progress. */
+.settings-kbd { min-width: 22px; height: 22px; padding: 0 6px; display: inline-grid; place-items: center; color: var(--text-2); border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 6px; background: var(--surface-subtle); font: 500 var(--fs-2xs) var(--font-sans, system-ui); }
+.settings-kbd + .settings-kbd { margin-left: 4px; }
+.speech-models { display: grid; transition: opacity 160ms ease; }
+.speech-models.muted { opacity: .55; }
+.speech-model-row strong { display: inline-flex; align-items: center; gap: 7px; }
+.speech-model-tag { padding: 1px 6px; color: var(--text-2); border-radius: var(--radius-pill); background: var(--surface-selected); font-size: var(--fs-2xs); font-weight: 500; }
+.speech-model-use { height: 26px; min-width: 64px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: transparent; font-size: var(--fs-xs); cursor: pointer; }
+.speech-model-use:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }
+.speech-model-use.on, .speech-model-use.on:disabled { color: var(--text-1); border-color: transparent; background: var(--surface-selected); opacity: 1; cursor: default; }
+.speech-model-use.on svg { color: var(--success-ink, #6fcf97); }
+.speech-model-progress { position: relative; width: 96px; height: 22px; overflow: hidden; display: grid; place-items: center; border-radius: var(--radius-pill); background: var(--surface-subtle); }
+.speech-model-progress i { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--text-1) 16%, transparent); transition: width 200ms ease; }
+.speech-model-progress b { position: relative; color: var(--text-1); font-size: var(--fs-2xs); font-weight: 600; }

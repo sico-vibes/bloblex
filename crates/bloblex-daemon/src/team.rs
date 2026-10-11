@@ -1,7 +1,8 @@
 //! Team engine. Blobs belong to projects, carry a role, and one of them can lead.
 //! Each provider session gets Bloblex's runtime instructions and an app-owned
-//! MCP server (`bloblexd mcp-bridge`) with `list_blobs` and `message_blob`.
-//! `message_blob` opens a side conversation with the teammate; when the
+//! MCP server (`bloblexd mcp-bridge`) with `list_blobs`, `list_conversations`
+//! and `message_blob`. `message_blob` opens a side conversation with the
+//! teammate, titled by its topic, or continues an earlier one; when the
 //! teammate's turn ends, its reply is relayed back into the sender's
 //! conversation, which wakes the sender to report to the user.
 
@@ -93,12 +94,14 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
         lines.push("You are the team leader. The user usually talks to you first; you coordinate the other blobs and report back.".into());
     }
     lines.push(String::new());
-    lines.push("Teammates are separate agents with their own tools and memory. Use the bloblex tools: `list_blobs` shows the team (name, role, what each is for, whether they are busy); `message_blob` sends one teammate a message in a private side conversation between the two of you.".into());
-    lines.push("When the user tags a blob with @Name, or asks you to hand work to someone, write that teammate a self-contained brief (they cannot see this conversation: include the goal, context, paths, constraints and what to send back) and send it with `message_blob`. Then tell the user in one short sentence who you asked and end your turn: do not wait, poll or sleep. The reply arrives later in this conversation as a message starting with \"[Reply from <name>]\". When it arrives, report to the user: what they did or found, your own verdict, and any open questions. You can follow up with the same teammate through `message_blob`.".into());
+    lines.push("Teammates are separate agents with their own tools and memory. Use the bloblex tools: `list_blobs` shows the team (name, role, what each is for, whether they are busy); `message_blob` sends one teammate a message in a private side conversation between the two of you; `list_conversations` lists your side conversations, each with a short topic.".into());
+    lines.push("When the user tags a blob with @Name, or asks you to hand work to someone, write that teammate a self-contained brief (they cannot see this conversation: include the goal, context, paths, constraints and what to send back) and send it with `message_blob`. Then tell the user in one short sentence who you asked and end your turn: do not wait, poll or sleep. The reply arrives later in this conversation as a message starting with \"[Reply from <name>]\". When it arrives, report to the user: what they did or found, your own verdict, and any open questions.".into());
+    lines.push("Each side conversation has a topic, like a chat title. Before messaging a teammate, check `list_conversations`: if one you started with them is about the same subject, continue it by passing its id as `conversation` (they keep the context there). Otherwise start a new one and give it a short `topic` of 3 to 6 words. When the user references a conversation with #, continue that one.".into());
     if link["kind"] == "side" {
         let peer = link["peerName"].as_str().unwrap_or("another blob");
         lines.push(String::new());
         lines.push(format!("This is a side conversation. Messages here come from {peer}, another blob, not from the user. Do what {peer} asks and answer them directly; your final message each turn is delivered back to {peer} automatically. Keep it focused: results, evidence and open questions."));
+        if let Some(topic) = link["topic"].as_str().filter(|topic| !topic.trim().is_empty()) { lines.push(format!("Topic of this conversation: {topic}.")); }
     }
     format!("<bloblex_team>\n{}\n</bloblex_team>", lines.join("\n"))
 }
@@ -127,7 +130,8 @@ pub fn attach(st: &AppState, session_id: &str, agent_id: Option<&str>, link: &Va
 fn tools() -> Value {
     json!([
         {"name":"list_blobs","description":"List your teammates in Bloblex: name, role, what each is for, project, whether they are busy, and which one is the leader.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
-        {"name":"message_blob","description":"Send a message to one teammate in your private side conversation with them. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."}},"required":["blob","message"],"additionalProperties":false}}
+        {"name":"list_conversations","description":"List your side conversations with teammates, newest first: id, topic, teammate, who started it, size and the latest reply. Use it to find a conversation to continue.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"Only conversations with this teammate (optional)."}},"additionalProperties":false}},
+        {"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}}
     ])
 }
 
@@ -140,6 +144,7 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
             let args = &params["arguments"];
             let result = match name {
                 "list_blobs" => list_blobs(st, session_id).await,
+                "list_conversations" => list_conversations(st, session_id, args).await,
                 "message_blob" => message_blob(st, session_id, args).await,
                 _ => Err(format!("Unknown tool {name}.")),
             };
@@ -200,23 +205,122 @@ async fn message_blob(st: &AppState, session_id: &str, args: &Value) -> Result<S
     if depth > MAX_DEPTH { return Err("This request has already passed between too many blobs. Report back to the user instead.".into()); }
     let from_name = agent_name(&from);
     let target_name = agent_name(&target);
-    let link = json!({"kind":"side","peerAgentId":from_id,"peerName":from_name,"originSessionId":session_id});
-    let side = match st.db.side_session(&target_id, &from_id).map_err(|error| error.to_string())? {
-        Some(side) => { let _ = st.db.set_session_link(&side, &link); side }
+    let topic = args["topic"].as_str().and_then(clean_topic);
+    let wanted = args["conversation"].as_str().map(str::trim).filter(|id| !id.is_empty());
+    let existing = match wanted {
+        Some(id) => Some(continuable(st, id, &from_id, &target_id, &target_name)?),
+        // Without a topic or an id, keep talking in the latest conversation with them.
+        None if topic.is_none() => st.db.side_session(&target_id, &from_id).map_err(|error| error.to_string())?,
+        None => None,
+    };
+    let (side, title) = match existing {
+        Some(side) => {
+            let row = st.db.session_detail(&side).map_err(|error| error.to_string())?;
+            let mut link = row["link"].clone();
+            link["peerName"] = json!(from_name);
+            link["originSessionId"] = json!(session_id);
+            let _ = st.db.set_session_link(&side, &link);
+            (side, row["title"].as_str().unwrap_or("").to_owned())
+        }
         None => {
-            let created = new_session(st, json!({"agentId":target_id,"projectPath":workspace_for(st, &target),"title":format!("{from_name} ⇄ {target_name}"),"link":link})).await
+            let title = topic.unwrap_or_else(|| topic_from(&message));
+            let link = json!({"kind":"side","peerAgentId":from_id,"peerName":from_name,"originSessionId":session_id,"topic":title});
+            let created = new_session(st, json!({"agentId":target_id,"projectPath":workspace_for(st, &target),"title":title,"link":link})).await
                 .map_err(|error| format!("Could not open a conversation with {target_name}: {}", error.1.message))?;
-            created["id"].as_str().unwrap_or("").to_owned()
+            (created["id"].as_str().unwrap_or("").to_owned(), title)
         }
     };
     let preview = message.chars().take(280).collect::<String>();
-    note(st, session_id, &preview, json!({"kind":"delegation","direction":"sent","peerAgentId":target_id,"peerName":target_name,"sideSessionId":side})).await;
+    note(st, session_id, &preview, json!({"kind":"delegation","direction":"sent","peerAgentId":target_id,"peerName":target_name,"sideSessionId":side,"topic":title})).await;
     let state = st.clone();
     let side_for_task = side.clone();
     tokio::spawn(async move {
         deliver(&state, &side_for_task, message, json!({"kind":"blob_message","fromAgentId":from_id,"fromName":from_name}), depth).await;
     });
-    Ok(format!("Sent to {target_name}. They are working on it in your side conversation; their reply will arrive here as a message starting with \"[Reply from {target_name}]\". Tell the user you asked {target_name} and end your turn now."))
+    Ok(format!("Sent to {target_name} in \"{title}\" (conversation {side}). They are working on it; their reply will arrive here as a message starting with \"[Reply from {target_name}]\". Tell the user you asked {target_name} and end your turn now."))
+}
+
+/// A conversation id the sender may continue: one they started with this teammate.
+fn continuable(st: &AppState, id: &str, from_id: &str, target_id: &str, target_name: &str) -> Result<String, String> {
+    let row = st.db.session_detail(id).map_err(|_| format!("No conversation has the id {id}. Call list_conversations to see yours."))?;
+    let link = &row["link"];
+    if link["kind"] != "side" || row["archived"] == true { return Err(format!("{id} is not an open side conversation. Call list_conversations to see yours.")); }
+    let title = row["title"].as_str().unwrap_or("that conversation");
+    if row["agentId"] == target_id && link["peerAgentId"] == from_id { return Ok(id.to_owned()); }
+    if row["agentId"] == from_id && link["peerAgentId"] == target_id {
+        return Err(format!("{target_name} started \"{title}\" with you, and your final message there goes back to them automatically. To ask {target_name} something, continue a conversation you started or start a new one with a topic."));
+    }
+    Err(format!("\"{title}\" is not a conversation between you and {target_name}."))
+}
+
+/// A topic the sender gave, tidied: no quotes or leading #, at most 60 characters.
+fn clean_topic(raw: &str) -> Option<String> {
+    let topic = raw.trim().trim_matches(|c| c == '"' || c == '\'' || c == '#').trim();
+    (!topic.is_empty()).then(|| topic.chars().take(60).collect())
+}
+
+/// A title for a conversation started without a topic: the brief's first words.
+fn topic_from(message: &str) -> String {
+    let line = message.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("Conversation");
+    let words = line.split_whitespace().take(7).collect::<Vec<_>>().join(" ");
+    let mut topic = words.trim_end_matches(|c: char| ",.;:!?".contains(c)).to_owned();
+    if topic.chars().count() > 48 { topic = topic.chars().take(47).collect::<String>() + "…"; }
+    if topic.is_empty() { "Conversation".into() } else { topic }
+}
+
+fn one_line(text: &str, limit: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > limit { flat.chars().take(limit - 1).collect::<String>() + "…" } else { flat }
+}
+
+async fn list_conversations(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
+    let me = st.db.session_detail(session_id).ok().and_then(|row| row["agentId"].as_str().map(str::to_owned)).ok_or("Only blob conversations have side conversations.")?;
+    let agents = st.db.agent_list(true, None).map_err(|error| error.to_string())?;
+    let only = args["blob"].as_str().map(str::trim).filter(|name| !name.is_empty()).map(|name| resolve_blob(&agents, name).ok_or_else(|| format!("No teammate is called {name}."))).transpose()?;
+    let name_of = |id: &str| agents.iter().find(|agent| agent["id"] == id).map(agent_name).unwrap_or_else(|| "A former teammate".into());
+    let mut rows = Vec::new();
+    for row in st.db.side_conversations(&me).map_err(|error| error.to_string())? {
+        let id = row["id"].as_str().unwrap_or("");
+        let mine = row["peerAgentId"] == me.as_str();
+        let other = if mine { row["agentId"].as_str().unwrap_or("") } else { row["peerAgentId"].as_str().unwrap_or("") };
+        if only.as_ref().is_some_and(|agent| agent["id"] != other) { continue; }
+        let when = row["updatedAt"].as_str().unwrap_or("").get(..16).unwrap_or("").replace('T', " ");
+        let mut line = format!("- {id} · \"{}\" with {} · {} · {} messages · last active {when} UTC", row["title"].as_str().unwrap_or("Conversation"), name_of(other), if mine { "you started it" } else { "they started it" }, row["messages"]);
+        if let Some(reply) = st.db.last_reply(id).ok().flatten() { line.push_str(&format!("\n  Latest reply: {}", one_line(&reply, 180))); }
+        rows.push(line);
+        if rows.len() >= 15 { break; }
+    }
+    if rows.is_empty() { return Ok("You have no side conversations yet. Start one with message_blob and a short topic.".into()); }
+    Ok(format!("Your side conversations, newest first:\n{}\n\nTo continue one you started, call message_blob with its id as `conversation`. Conversations a teammate started with you are answered automatically when they message you.", rows.join("\n")))
+}
+
+/// Context for side conversations the user referenced with # in a prompt.
+/// Returns the text appended to the prompt the blob receives, and the
+/// references kept on the stored message (the visible text stays as typed).
+pub fn reference_context(st: &AppState, session_id: &str, refs: &Value) -> Option<(String, Value)> {
+    let ids = refs.as_array()?.iter().filter_map(Value::as_str).take(5).collect::<Vec<_>>();
+    if ids.is_empty() { return None; }
+    let me = st.db.session_detail(session_id).ok()?["agentId"].as_str()?.to_owned();
+    let agents = st.db.agent_list(true, None).ok()?;
+    let name_of = |id: &str| agents.iter().find(|agent| agent["id"] == id).map(agent_name).unwrap_or_else(|| "a former teammate".into());
+    let mut lines = Vec::new();
+    let mut kept = Vec::new();
+    for id in ids {
+        let Ok(row) = st.db.session_detail(id) else { continue };
+        let link = &row["link"];
+        let (agent, peer) = (row["agentId"].as_str().unwrap_or(""), link["peerAgentId"].as_str().unwrap_or(""));
+        if link["kind"] != "side" || (agent != me && peer != me) { continue; }
+        let title = row["title"].as_str().unwrap_or("Conversation");
+        let mine = peer == me;
+        let other = if mine { agent } else { peer };
+        let mut line = format!("- \"{title}\" (conversation {id}) with {}, {}.", name_of(other), if mine { "which you started" } else { "which they started" });
+        if mine { line.push_str(&format!(" To follow up there, call message_blob with blob \"{}\" and conversation \"{id}\".", name_of(other))); }
+        if let Some(reply) = st.db.last_reply(id).ok().flatten() { line.push_str(&format!("\n  Latest reply: {}", one_line(&reply, 600))); }
+        lines.push(line);
+        kept.push(json!({"id":id,"title":title}));
+    }
+    if kept.is_empty() { return None; }
+    Some((format!("\n\n<bloblex_references>\nThe user referenced these side conversations with #:\n{}\n</bloblex_references>", lines.join("\n")), Value::Array(kept)))
 }
 
 /// A visible note in a conversation that is not a prompt (e.g. "Messaged Codex").

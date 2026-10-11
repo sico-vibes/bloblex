@@ -118,3 +118,53 @@ export function splitMentions(text: string, agents: readonly Agent[]): MentionSe
   if (plainStart < text.length) segments.push({ text: text.slice(plainStart) })
   return segments
 }
+
+/** The `#query` being typed at the caret, if any: a side conversation reference. */
+export function hashQuery(text: string, caret: number): { start: number; query: string } | null {
+  const before = text.slice(0, caret)
+  const match = /(^|\s)#([^\n#@]{0,60})$/u.exec(before)
+  if (!match) return null
+  const query = match[2]
+  if (query.trim().split(/\s+/).length > 6) return null
+  return { start: before.length - query.length - 1, query }
+}
+
+export type ReferenceSegment = { text: string; reference?: { id: string; title: string } }
+
+/** Splits a sent prompt into plain text and the `#Title` references it carried (longest titles first). */
+export function splitReferences(text: string, references: ReadonlyArray<{ id: string; title: string }> | null | undefined): ReferenceSegment[] {
+  const refs = [...(references ?? [])].filter((ref) => ref.title.trim()).sort((a, b) => b.title.length - a.title.length)
+  if (!refs.length) return [{ text }]
+  const segments: ReferenceSegment[] = []
+  let plainStart = 0
+  let index = 0
+  while (index < text.length) {
+    const hash = text.indexOf('#', index)
+    if (hash < 0) break
+    const reference = refs.find((ref) => text.startsWith(ref.title, hash + 1))
+    if (!reference) { index = hash + 1; continue }
+    if (hash > plainStart) segments.push({ text: text.slice(plainStart, hash) })
+    segments.push({ text: `#${reference.title}`, reference })
+    index = hash + 1 + reference.title.length
+    plainStart = index
+  }
+  if (plainStart < text.length) segments.push({ text: text.slice(plainStart) })
+  return segments
+}
+
+/** The topic a side conversation was given, if any (older ones are titled by the pair). */
+export function sideTopic(session: Session): string | null {
+  const topic = typeof session.link?.topic === 'string' ? session.link.topic.trim() : ''
+  if (topic) return topic
+  const title = typeof session.title === 'string' ? session.title.trim() : ''
+  return title && !title.includes('⇄') ? title : null
+}
+
+/** A side conversation's title: its topic, or the pair for older conversations. */
+export function sideTitle(session: Session, agents: readonly Agent[]) {
+  const topic = sideTopic(session)
+  if (topic) return topic
+  const peer = agents.find((agent) => agent.id === session.link?.peerAgentId)?.name ?? session.link?.peerName ?? 'Teammate'
+  const target = agents.find((agent) => agent.id === session.agentId)?.name ?? 'Teammate'
+  return `${peer} and ${target}`
+}

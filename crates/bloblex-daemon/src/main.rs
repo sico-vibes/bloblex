@@ -1010,10 +1010,10 @@ async fn resolve_session_model_lock(
     options.thinking = lock["thinking"].as_str().map(str::to_owned);
     (options, lock)
 }
-/// Bloblex's own MCP tools (list_blobs, message_blob) are app-owned and safe.
+/// Bloblex's own MCP tools (list_blobs, list_conversations, message_blob) are app-owned and safe.
 fn is_team_tool_permission(raw: &Value) -> bool {
     let text = raw.to_string();
-    ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob"].iter().any(|needle| text.contains(needle))
+    ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob", "bloblex_list_conversations", "bloblex__list_conversations"].iter().any(|needle| text.contains(needle))
 }
 fn parse_mode(s:&str)->ApprovalMode{match s{"auto"=>ApprovalMode::Auto,"bypass"=>ApprovalMode::Bypass,_=>ApprovalMode::Ask}}
 fn provider_mode(provider:&str)->&'static str{match provider{"claude"=>"bypassPermissions","codex"=>"never",_=>"daemon_allow_all"}}
@@ -1673,6 +1673,9 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
     // appending its user message. A resume failure therefore leaves the
     // composer text untouched and creates no partial conversation message.
     ensure_session_active(st, &sid).await?;
+    // Side conversations the user tagged with # reach the blob as context; the
+    // stored message keeps the text exactly as typed.
+    let references = team::reference_context(st, &sid, &p["conversationRefs"]);
     let mut gate = gate_for_session(st, &sid).await;
     let (mut active, session_options, previous_state) = {
         let _guard = gate.lock().await;
@@ -1807,6 +1810,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
             json!({"attachments": attachments.iter().map(|a| json!({"name":a.name,"mediaType":a.media_type,"path":a.path})).collect::<Vec<_>>()})
         };
         if p["meta"].is_object() { message_data["meta"] = p["meta"].clone(); }
+        if let Some((_, kept)) = &references { message_data["references"] = kept.clone(); }
         let user_message = st.db
             .append_message_with_data(&sid, &turn, "user", &text, &message_data)
             .map_err(|e| {
@@ -1857,7 +1861,7 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
                 PromptRequest {
                     attachments,
                     turn_id: turn2.clone(),
-                    text,
+                    text: match references { Some((extra, _)) => format!("{text}{extra}"), None => text },
                     exec_options,
                 },
             )
@@ -2871,6 +2875,7 @@ mod phase2a_tests {
     struct TeamAdapter {
         events: StdMutex<HashMap<String, tokio::sync::mpsc::Sender<AgentEvent>>>,
         instructions: StdMutex<HashMap<String, String>>,
+        prompts: StdMutex<Vec<String>>,
     }
     #[async_trait::async_trait]
     impl AgentAdapter for TeamAdapter {
@@ -2883,6 +2888,7 @@ mod phase2a_tests {
         async fn resume_session(&self, _: &RuntimeSpec, _: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
         async fn prompt(&self, handle: &SessionHandle, request: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> {
             let events = self.events.lock().unwrap().get(&handle.session_id).cloned();
+            self.prompts.lock().unwrap().push(request.text.clone());
             if let Some(events) = events {
                 let first = request.text.lines().next().unwrap_or("").to_owned();
                 let _ = events.send(AgentEvent::AssistantMessage { text: format!("handled: {first}") }).await;
@@ -2940,9 +2946,13 @@ mod phase2a_tests {
         }
 
         let sent = call_tool(&st, &main, "message_blob", json!({"blob":"@mate","message":"Check the build\nDetails follow."})).await;
-        assert!(sent.get("isError").is_none() && sent["content"][0]["text"].as_str().unwrap().starts_with("Sent to Mate."), "{sent}");
+        assert!(sent.get("isError").is_none() && sent["content"][0]["text"].as_str().unwrap().starts_with("Sent to Mate in \"Check the build\""), "{sent}");
         let side = st.db.side_session(&mate_id, &lead_id).unwrap().expect("side conversation");
-        assert_eq!(st.db.session_detail(&side).unwrap()["link"], json!({"kind":"side","peerAgentId":lead_id,"peerName":"Lead","originSessionId":main}));
+        // Without a topic, the conversation is titled from the brief's first words.
+        assert_eq!(st.db.session_detail(&side).unwrap()["link"], json!({"kind":"side","peerAgentId":lead_id,"peerName":"Lead","originSessionId":main,"topic":"Check the build"}));
+        assert_eq!(st.db.session_detail(&side).unwrap()["title"], "Check the build");
+        assert!(adapter.instructions.lock().unwrap()[&side].contains("Topic of this conversation: Check the build."));
+        assert!(lead_instructions.contains("list_conversations"));
         assert!(adapter.instructions.lock().unwrap()[&side].contains("This is a side conversation. Messages here come from Lead"));
 
         // The teammate answers; its reply is relayed into the leader's conversation, which wakes the leader.
@@ -2961,6 +2971,37 @@ mod phase2a_tests {
         assert_eq!(st.db.side_session(&mate_id, &lead_id).unwrap().as_deref(), Some(side.as_str()));
         wait_for_messages(&st, &main, |m| m.iter().filter(|m| m["meta"]["kind"] == "blob_reply").count() == 2).await;
         assert_eq!(st.db.session_list(false).unwrap().iter().filter(|s| s["agentId"] == mate_id.as_str()).count(), 1);
+
+        // A topic starts a separate, titled conversation; an id continues an earlier one.
+        let topical = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"Draft the release notes","topic":"\"Release notes\""})).await;
+        assert!(topical["content"][0]["text"].as_str().unwrap().starts_with("Sent to Mate in \"Release notes\""), "{topical}");
+        wait_for_messages(&st, &main, |m| m.iter().filter(|m| m["meta"]["kind"] == "blob_reply").count() == 3).await;
+        let notes = st.db.side_session(&mate_id, &lead_id).unwrap().unwrap();
+        assert_ne!(notes, side);
+        assert_eq!(st.db.session_detail(&notes).unwrap()["title"], "Release notes");
+        call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"Back to the build","conversation":side})).await;
+        wait_for_messages(&st, &main, |m| m.iter().filter(|m| m["meta"]["kind"] == "blob_reply").count() == 4).await;
+        assert_eq!(st.db.session_list(false).unwrap().iter().filter(|s| s["agentId"] == mate_id.as_str()).count(), 2);
+        assert_eq!(st.db.session_detail(&side).unwrap()["link"]["topic"], "Check the build", "continuing keeps the topic");
+        let listed = call_tool(&st, &main, "list_conversations", json!({"blob":"Mate"})).await;
+        let listed = listed["content"][0]["text"].as_str().unwrap();
+        assert!(listed.contains(&format!("- {side} · \"Check the build\" with Mate · you started it")) && listed.contains("\"Release notes\"") && listed.contains("Latest reply: handled:"), "{listed}");
+        let unknown = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"hi","conversation":"missing"})).await;
+        assert!(unknown["content"][0]["text"].as_str().unwrap().contains("No conversation has the id missing"));
+        // The teammate cannot continue a conversation the leader started; it answers there automatically.
+        let mate_main = dispatch(&st, "agent.conversation", json!({"agentId":mate_id})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+        let reversed = call_tool(&st, &mate_main, "message_blob", json!({"blob":"Lead","message":"hi","conversation":side})).await;
+        assert!(reversed["content"][0]["text"].as_str().unwrap().contains("Lead started \"Check the build\" with you"), "{reversed}");
+        assert!(call_tool(&st, &mate_main, "list_conversations", json!({})).await["content"][0]["text"].as_str().unwrap().contains("they started it"));
+
+        // A # reference reaches the blob as context while the stored message keeps the typed text.
+        dispatch(&st, "session.prompt", json!({"sessionId":main,"text":"Follow up on #Check the build","conversationRefs":[side, "missing"]})).await.unwrap();
+        let stored = wait_for_messages(&st, &main, |m| m.iter().any(|m| m["content"] == "Follow up on #Check the build")).await;
+        let stored = stored.iter().find(|m| m["content"] == "Follow up on #Check the build").unwrap();
+        assert_eq!(stored["references"], json!([{"id":side,"title":"Check the build"}]));
+        wait_for_messages(&st, &main, |m| m.iter().any(|m| m["content"] == "handled: Follow up on #Check the build")).await;
+        let sent_prompt = adapter.prompts.lock().unwrap().iter().rev().find(|text| text.starts_with("Follow up on #Check the build")).cloned().expect("referenced prompt");
+        assert!(sent_prompt.contains("<bloblex_references>") && sent_prompt.contains(&format!("conversation \"{side}\"")), "{sent_prompt}");
 
         // A chain that has already hopped too often refuses to go further.
         st.team.set_depth(&main, 6);

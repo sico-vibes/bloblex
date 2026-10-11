@@ -31,8 +31,6 @@
 .model-pill { color: var(--text-1); }
 .model-pill.unavailable { color: var(--text-3); }
 .model-pill-fast { flex: 0 0 auto; color: var(--mode-fast); fill: color-mix(in srgb, var(--mode-fast) 20%, transparent); }
-.session-effort-trigger { color: var(--text-2); }
-.session-effort-trigger.highest > span { background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .permission-pill.mode-auto { color: var(--text-2); }
 .permission-pill.mode-auto svg:first-child { color: var(--good); }
 .permission-pill.mode-bypass { color: var(--mode-bypass); border-color: transparent; background: transparent; font-weight: 500; }
@@ -68,24 +66,6 @@
 .permission-menu { width: 330px; }
 
 /* Effort popover: compact, slider-first. */
-.session-effort-control { min-width: 0; }
-.session-effort-popover { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 10px); width: min(320px, calc(100vw - 32px)); padding: 14px 14px 10px; display: grid; gap: 12px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-overlay); box-shadow: var(--shadow-pop); transform-origin: bottom right; animation: composer-menu-in 140ms cubic-bezier(.2,.8,.2,1) both; }
-.session-effort-popover-heading { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-sm); }
-.session-effort-title { color: var(--text-3); font-weight: 500; }
-.session-effort-popover-heading .session-effort-value { position: relative; min-height: 1em; display: grid; overflow: hidden; color: var(--text-1); font-weight: 600; }
-.session-effort-popover.claude .session-effort-value { color: var(--meter-claude); }
-.session-effort-meter-frame { display: grid; gap: 7px; padding: 0 2px; }
-.session-effort-caption { display: flex; justify-content: space-between; color: var(--text-3); font-size: var(--fs-2xs); }
-.session-effort-labels { display: flex; align-items: center; justify-content: space-between; gap: 2px; margin-top: -2px; }
-.session-effort-labels button { min-width: 0; padding: 3px 5px; overflow: hidden; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.session-effort-labels button.default { text-decoration: underline dotted; text-underline-offset: 3px; }
-.session-effort-labels button:hover:not(:disabled), .session-effort-labels button.selected { color: var(--text-1); background: var(--surface-hover); }
-.session-effort-labels button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.session-effort-footer { padding-top: 8px; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-3); border-top: 1px solid var(--line); font-size: var(--fs-xs); }
-.session-effort-footer b { color: var(--text-2); font-weight: 500; }
-.session-effort-footer button { padding: 3px 8px; color: var(--text-2); border: 1px solid var(--line); border-radius: var(--radius-pill); background: transparent; font-size: var(--fs-2xs); cursor: pointer; }
-.session-effort-footer button:hover:not(:disabled), .session-effort-footer button.selected { color: var(--text-1); background: var(--surface-hover); }
-.session-effort-unavailable p { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.45; }
 
 /* Context ring: a small progress circle; details on hover/click. */
 .context-window-wrap { position: relative; z-index: 6; flex: 0 0 auto; }
@@ -141,11 +121,84 @@
 }
 .composer-menu-item:disabled { cursor: default; opacity: .6; }
 
-/* Meter knobs follow the reference selectors: a light block for Claude, a
-   white disc for Codex. The animated fills stay provider-coloured. */
-.session-effort-track.claude { background: color-mix(in srgb, var(--text-1) 7%, var(--surface-overlay)); }
-.session-effort-track.claude .session-effort-fill { background: color-mix(in srgb, var(--text-1) 34%, transparent); opacity: 1; }
-.session-effort-track.claude.highest .session-effort-fill { background: color-mix(in srgb, var(--meter-claude) 45%, transparent); }
-.session-effort-track.claude .session-effort-knob { width: 22px; height: 24px; margin-left: -11px; border: 0; border-radius: 6px; background: #f1f1f1; box-shadow: 0 1px 2px #0006, 0 2px 8px #0004; }
-.session-effort-track.claude .session-effort-tick { background: color-mix(in srgb, var(--text-1) 42%, transparent); }
-.session-effort-track.magnetic .session-effort-knob { width: 30px; height: 30px; margin-left: -15px; border: 0; background: #fbfbfb; box-shadow: 0 1px 3px #0005, 0 4px 12px #0004; }
+/* Effort selector. One track for every provider: dots for the levels, a short
+   line for the recommended one. Claude's style lights only the cells nearest
+   the knob; Codex keeps its gradient with drifting sparks. The knob follows the
+   pointer exactly while held and glides to the released stop. */
+.session-effort-control { min-width: 0; }
+.session-effort-trigger { color: var(--text-2); }
+.session-effort-trigger.highest > span { background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.session-effort-control.claude .session-effort-trigger.highest > span { background: none; color: var(--meter-claude); }
+.session-effort-trigger.locked { color: var(--text-3); opacity: .55; cursor: not-allowed; }
+.session-effort-trigger.locked:hover { background: transparent; }
+.session-effort-popover { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 10px); width: min(320px, calc(100vw - 32px)); padding: 13px 14px 12px; display: grid; gap: 12px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-overlay); box-shadow: var(--shadow-pop); transform-origin: bottom right; animation: composer-menu-in 140ms cubic-bezier(.2,.8,.2,1) both; }
+.session-effort-popover-heading { min-height: 24px; display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); }
+.session-effort-title { color: var(--text-3); font-weight: 500; }
+.session-effort-value { position: relative; min-width: 0; flex: 1 1 auto; display: grid; overflow: hidden; color: var(--text-1); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.session-effort-popover.claude .session-effort-value { color: var(--meter-claude); }
+.session-effort-value.ultra > span { background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet) 60%, #f0b6e8); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.session-effort-value-in { grid-area: 1 / 1; animation: effort-label-in 160ms cubic-bezier(.2,0,0,1) both; }
+@keyframes effort-label-in { from { opacity: 0; transform: translateY(2px); filter: blur(1.5px) } to { opacity: 1; transform: none; filter: none } }
+.session-effort-default { flex: 0 0 auto; height: 24px; padding: 0 10px; color: var(--text-3); border: 1px solid var(--line); border-radius: var(--radius-pill); background: transparent; font-size: var(--fs-2xs); font-weight: 500; white-space: nowrap; cursor: pointer; transition: color 120ms ease, background 120ms ease, border-color 120ms ease; }
+.session-effort-default:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }
+.session-effort-default.selected { color: var(--text-1); border-color: var(--line-strong); background: var(--surface-selected); }
+.session-effort-default:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.session-effort-meter-frame { display: grid; gap: 7px; padding: 0 2px; }
+.session-effort-caption { display: flex; justify-content: space-between; color: var(--text-3); font-size: var(--fs-2xs); }
+
+.session-effort-track { position: relative; height: 28px; overflow: visible; border-radius: 8px; background: color-mix(in srgb, var(--text-1) 6%, var(--surface-overlay)); isolation: isolate; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; outline: none; }
+.session-effort-track.dragging { cursor: grabbing; }
+.session-effort-track:focus-visible { box-shadow: 0 0 0 2px var(--surface-overlay), 0 0 0 4px color-mix(in srgb, var(--meter-blue) 70%, transparent); }
+.session-effort-track[aria-disabled="true"] { cursor: default; opacity: .6; }
+.session-effort-track.magnetic { border-radius: 999px; background: color-mix(in srgb, var(--surface-selected) 82%, var(--surface-overlay)); }
+.session-effort-canvas { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; overflow: hidden; border-radius: inherit; pointer-events: none; }
+.session-effort-fill { position: absolute; z-index: 0; inset: 0 auto 0 0; width: var(--effort-fill); max-width: 100%; border-radius: inherit; pointer-events: none; }
+.session-effort-track.claude .session-effort-fill { display: none; }
+.session-effort-track.neutral .session-effort-fill { background: color-mix(in srgb, var(--text-1) 16%, transparent); }
+@property --meter-codex-start { syntax: "<color>"; inherits: true; initial-value: #0371dd; }
+@property --meter-codex-middle { syntax: "<color>"; inherits: true; initial-value: #0371dd; }
+@property --meter-codex-end { syntax: "<color>"; inherits: true; initial-value: #0371dd; }
+.session-effort-track.magnetic .session-effort-fill { background: linear-gradient(90deg, var(--meter-codex-start), var(--meter-codex-middle) 52%, var(--meter-codex-end)); opacity: .78; transition: --meter-codex-start 260ms ease, --meter-codex-middle 260ms ease, --meter-codex-end 260ms ease; }
+.session-effort-track.magnetic.top .session-effort-fill { box-shadow: 0 0 18px color-mix(in srgb, var(--meter-violet) 45%, transparent); }
+
+.session-effort-tick { position: absolute; z-index: 2; top: 50%; width: 3px; height: 3px; border-radius: 50%; background: color-mix(in srgb, var(--text-1) 38%, transparent); transform: translate(-50%, -50%); pointer-events: none; }
+.session-effort-tick.recommended { width: 2px; height: 11px; border-radius: 1px; background: color-mix(in srgb, var(--text-1) 62%, transparent); }
+.session-effort-track.magnetic .session-effort-tick { background: color-mix(in srgb, #fff 55%, transparent); }
+.session-effort-track.magnetic .session-effort-tick.recommended { background: color-mix(in srgb, #fff 80%, transparent); }
+
+.session-effort-knob { position: absolute; z-index: 3; top: 50%; left: var(--effort-knob); width: 22px; height: 24px; border-radius: 6px; background: #f3f3f5; box-shadow: 0 1px 2px #0006, 0 2px 8px #0004; transform: translate(-50%, -50%); pointer-events: none; transition: scale 140ms ease-out; }
+.session-effort-track.magnetic .session-effort-knob { width: 30px; height: 30px; border-radius: 50%; background: #fbfbfb; box-shadow: 0 1px 3px #0005, 0 4px 12px #0004; }
+.session-effort-track.dragging .session-effort-knob { scale: 1.06; }
+.session-effort-track.settling .session-effort-knob { transition: left 240ms cubic-bezier(.32,.72,0,1), scale 140ms ease-out; }
+.session-effort-track.magnetic.settling .session-effort-fill { transition: width 240ms cubic-bezier(.32,.72,0,1), --meter-codex-start 260ms ease, --meter-codex-middle 260ms ease, --meter-codex-end 260ms ease; }
+@supports (transition-timing-function: linear(0, 1)) {
+  .session-effort-track.settling .session-effort-knob { transition: left 260ms linear(0, .062 3.4%, .24 7.5%, .51 12.5%, .76 17.9%, .905 22.4%, .997 27.2%, 1.038 32.4%, 1.05 37.4%, 1.044 42.7%, 1.028 49.2%, 1.012 56.9%, 1.003 65.7%, .999 76%, 1), scale 140ms ease-out; }
+}
+
+.session-effort-recommended { position: relative; height: 14px; margin-top: -2px; color: var(--text-3); font-size: var(--fs-2xs); }
+.session-effort-recommended span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.session-effort-recommended span.start { transform: translateX(-12px); }
+.session-effort-recommended span.end { transform: translateX(calc(-100% + 12px)); }
+.session-effort-labels { display: flex; align-items: center; justify-content: space-between; gap: 2px; margin-top: -1px; }
+.session-effort-labels button { min-width: 0; padding: 3px 5px; overflow: hidden; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.session-effort-labels button.default { text-decoration: underline dotted; text-underline-offset: 3px; }
+.session-effort-labels button:hover:not(:disabled), .session-effort-labels button.selected { color: var(--text-1); background: var(--surface-hover); }
+.session-effort-labels button.ultra.selected { color: transparent; background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet)) text, var(--surface-hover); -webkit-background-clip: text; }
+.session-effort-labels button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.session-effort-note { margin: -2px 0 0; color: var(--text-3); font-size: var(--fs-2xs); line-height: 1.45; }
+.session-effort-unavailable { display: grid; gap: 5px; }
+.session-effort-unavailable strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; }
+.session-effort-unavailable p { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.45; }
+@media (prefers-reduced-motion: reduce) {
+  .session-effort-value-in { animation: none; }
+  .session-effort-track .session-effort-knob, .session-effort-track.settling .session-effort-knob { transition: none; }
+}
+
+/* Shared tooltip (Tip.tsx). */
+.tip { position: relative; display: inline-flex; }
+.tip-bubble { position: absolute; z-index: 60; left: 50%; bottom: calc(100% + 8px); width: max-content; max-width: 260px; padding: 7px 10px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-raised); box-shadow: 0 10px 28px #00000066; font-size: var(--fs-xs); font-weight: 400; line-height: 1.45; text-align: left; white-space: normal; opacity: 0; visibility: hidden; transform: translate(-50%, 4px); transition: opacity 120ms ease, transform 120ms ease, visibility 0s linear 120ms; pointer-events: none; }
+.tip.bottom .tip-bubble { top: calc(100% + 8px); bottom: auto; transform: translate(-50%, -4px); }
+.tip:hover .tip-bubble, .tip:focus-within .tip-bubble { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition: opacity 120ms ease 220ms, transform 120ms ease 220ms; }
+.composer-control-strip .tip .tip-bubble { left: auto; right: 0; transform: translate(0, 4px); }
+.composer-control-strip .tip:hover .tip-bubble, .composer-control-strip .tip:focus-within .tip-bubble { transform: translate(0, 0); }
+@media (prefers-reduced-motion: reduce) { .tip-bubble { transition: none !important; } }

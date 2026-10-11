@@ -1,9 +1,11 @@
 //! Dictation command surface.
 //!
-//! Owns the audio capture thread and a decode worker. The worker is kept warm
-//! across sessions (reused when the model and owner match) and tears itself
-//! down after an idle period, mirroring Orca's session lifecycle. The pure
-//! lifecycle lives in `bloblex_speech`; this module is the native shell.
+//! Owns the audio capture thread and a decode worker. The worker can be warmed
+//! ahead of time (`dictation_warm`), is reused across sessions for the same
+//! model whichever window starts them, and tears itself down after an idle
+//! period. A session opens the microphone before the model finishes loading,
+//! so audio queues instead of being lost. The pure lifecycle lives in
+//! `bloblex_speech`; this module is the native shell.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +23,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// How long a warm worker waits for the next session before releasing the model.
-const IDLE_WORKER_TEARDOWN: Duration = Duration::from_secs(120);
+const IDLE_WORKER_TEARDOWN: Duration = Duration::from_secs(600);
 /// How long the bubble lingers after a session ends so the finish cue is visible.
 const BUBBLE_LINGER: Duration = Duration::from_millis(2400);
 /// Throttle for microphone level events (~16 Hz).
@@ -41,11 +43,10 @@ struct WorkerHandle {
     commands: Sender<WorkerCommand>,
     join: Option<JoinHandle<()>>,
     model_id: String,
-    owner: DictationOwner,
 }
 
 enum WorkerCommand {
-    Start,
+    Start(DictationOwner),
     Stop,
     Teardown,
     Frame(AudioFrame),
@@ -231,22 +232,18 @@ pub fn dictation_start(
 
     reap_finished(&state);
 
-    // Reuse a warm worker when the model and owner match.
+    // Reuse a warm worker for the same model, whoever used it last.
     let reusable = {
         let guard = state
             .worker
             .lock()
             .map_err(|_| "speech state is unavailable".to_string())?;
         guard.as_ref().and_then(|handle| {
-            if handle.model_id == model_id && handle.owner == owner && worker_is_alive(handle) {
-                Some(handle.commands.clone())
-            } else {
-                None
-            }
+            (handle.model_id == model_id && worker_is_alive(handle)).then(|| handle.commands.clone())
         })
     };
     if let Some(commands) = reusable {
-        if commands.send(WorkerCommand::Start).is_ok() {
+        if commands.send(WorkerCommand::Start(owner)).is_ok() {
             if let Ok(mut lifecycle) = state.lifecycle.lock() {
                 let _ = lifecycle.mark_active(owner);
             }
@@ -255,146 +252,186 @@ pub fn dictation_start(
     }
 
     teardown_worker(&state);
+    spawn_worker(&app, &state, manifest, directory, model_id, Some(owner))?;
+    if let Ok(mut lifecycle) = state.lifecycle.lock() {
+        let _ = lifecycle.mark_active(owner);
+    }
+    Ok(())
+}
 
+/// Loads the model in the background so the first dictation starts at once.
+/// Does nothing while a session runs, when the model is not downloaded, or
+/// when a worker for the same model is already warm.
+#[tauri::command]
+pub fn dictation_warm(app: AppHandle, state: State<'_, SpeechState>, model_id: String) -> Result<bool, String> {
+    let Some(manifest) = get_catalog_model(&model_id).cloned() else { return Ok(false) };
+    let root = resolve_cache_root(&app);
+    let directory = model_manager::model_directory(&root, &model_id);
+    if !model_manager::model_is_ready(&directory, &manifest) {
+        return Ok(false);
+    }
+    if state.lifecycle.lock().map(|lifecycle| lifecycle.phase_name() != "idle").unwrap_or(true) {
+        return Ok(false);
+    }
+    reap_finished(&state);
+    let warm = state
+        .worker
+        .lock()
+        .map(|guard| guard.as_ref().is_some_and(|handle| handle.model_id == model_id && worker_is_alive(handle)))
+        .unwrap_or(false);
+    if warm {
+        return Ok(true);
+    }
+    teardown_worker(&state);
+    spawn_worker(&app, &state, manifest, directory, model_id, None)?;
+    Ok(true)
+}
+
+/// Frees the model, for example when dictation is turned off.
+#[tauri::command]
+pub fn dictation_release(state: State<'_, SpeechState>) -> Result<(), String> {
+    if state.lifecycle.lock().map(|lifecycle| lifecycle.phase_name() != "idle").unwrap_or(false) {
+        return Ok(());
+    }
+    teardown_worker(&state);
+    Ok(())
+}
+
+fn spawn_worker(
+    app: &AppHandle,
+    state: &SpeechState,
+    manifest: SpeechModelManifest,
+    directory: PathBuf,
+    model_id: String,
+    start: Option<DictationOwner>,
+) -> Result<(), String> {
     let (commands, receiver) = std::sync::mpsc::channel::<WorkerCommand>();
     let capture_commands = commands.clone();
     let worker_app = app.clone();
     let lifecycle = Arc::clone(&state.lifecycle);
-    let worker_model = model_id.clone();
     let join = thread::spawn(move || {
-        run_worker(
-            worker_app,
-            manifest,
-            directory,
-            owner,
-            lifecycle,
-            receiver,
-            capture_commands,
-        );
+        run_worker(worker_app, manifest, directory, lifecycle, receiver, capture_commands, start);
     });
-
-    if let Ok(mut lifecycle) = state.lifecycle.lock() {
-        let _ = lifecycle.mark_active(owner);
-    }
     *state
         .worker
         .lock()
         .map_err(|_| "speech state is unavailable".to_string())? = Some(WorkerHandle {
         commands,
         join: Some(join),
-        model_id: worker_model,
-        owner,
+        model_id,
     });
     Ok(())
+}
+
+/// Ends a session that could not run and tells the window why.
+fn fail_session(app: &AppHandle, lifecycle: &Arc<Mutex<DictationLifecycle>>, owner: DictationOwner, message: &str) {
+    emit(app, owner, "error", Some(message));
+    if let Ok(mut lifecycle) = lifecycle.lock() {
+        let _ = lifecycle.begin_stop(owner);
+    }
+    hide_dictation_bubble_after(app, BUBBLE_LINGER);
 }
 
 fn run_worker(
     app: AppHandle,
     manifest: SpeechModelManifest,
     directory: PathBuf,
-    owner: DictationOwner,
     lifecycle: Arc<Mutex<DictationLifecycle>>,
     receiver: Receiver<WorkerCommand>,
     capture_commands: Sender<WorkerCommand>,
+    start: Option<DictationOwner>,
 ) {
-    let mut engine = match SpeechEngine::load(&manifest, &directory) {
-        Ok(engine) => engine,
-        Err(error) => {
-            emit(&app, owner, "error", Some(&error.to_string()));
-            if let Ok(mut lifecycle) = lifecycle.lock() {
-                lifecycle.cancel_start(owner);
-            }
-            return;
-        }
-    };
-
-    let mut start_pending = false;
+    let mut engine: Option<SpeechEngine> = None;
+    if start.is_none() {
+        // Warm-up: load now. A failure is reported by the next real start.
+        engine = SpeechEngine::load(&manifest, &directory).ok();
+    }
+    let mut pending = start;
     let mut last_level = Instant::now();
     loop {
-        if !std::mem::replace(&mut start_pending, false) {
-            match receiver.recv() {
-                Ok(WorkerCommand::Start) => {}
+        let owner = match pending.take() {
+            Some(owner) => owner,
+            // Idle: wait for a session, dropping stray frames, then release the model.
+            None => match receiver.recv_timeout(IDLE_WORKER_TEARDOWN) {
+                Ok(WorkerCommand::Start(owner)) => owner,
                 Ok(WorkerCommand::Teardown) | Err(_) => break,
                 Ok(_) => continue,
-            }
-        }
+            },
+        };
 
+        // Open the microphone before the model is ready: audio queues in the
+        // channel while it loads, so the first words are never lost.
         let commands = capture_commands.clone();
-        match start_capture(move |frame| {
+        let capture = match start_capture(move |frame| {
             let _ = commands.send(WorkerCommand::Frame(frame));
         }) {
-            Ok(capture) => {
-                let surface = if companion_visible(&app) { "companion" } else { "bubble" };
-                let _ = app.emit(
-                    "bloblex-dictation-surface",
-                    json!({ "surface": surface, "owner": owner.as_str() }),
-                );
-                if surface == "bubble" {
-                    BUBBLE_GENERATION.fetch_add(1, Ordering::SeqCst);
-                    show_dictation_bubble(&app);
+            Ok(capture) => capture,
+            Err(error) => {
+                fail_session(&app, &lifecycle, owner, &error.to_string());
+                continue;
+            }
+        };
+        let surface = if companion_visible(&app) { "companion" } else { "bubble" };
+        let _ = app.emit(
+            "bloblex-dictation-surface",
+            json!({ "surface": surface, "owner": owner.as_str() }),
+        );
+        if surface == "bubble" {
+            BUBBLE_GENERATION.fetch_add(1, Ordering::SeqCst);
+            show_dictation_bubble(&app);
+        }
+        emit(&app, owner, "ready", None);
+        if engine.is_none() {
+            emit(&app, owner, "loading", None);
+            match SpeechEngine::load(&manifest, &directory) {
+                Ok(loaded) => {
+                    engine = Some(loaded);
+                    emit(&app, owner, "loaded", None);
                 }
-                emit(&app, owner, "ready", None);
-                loop {
-                    match receiver.recv() {
-                        Ok(WorkerCommand::Frame(frame)) => {
-                            let mono = downmix_to_mono(&frame.samples, frame.channels as usize);
-                            let resampled = resample_to_rate(&mono, frame.sample_rate, engine.sample_rate());
-                            if last_level.elapsed() >= LEVEL_INTERVAL {
-                                last_level = Instant::now();
-                                let _ = app.emit(
-                                    "bloblex-dictation-level",
-                                    json!({ "level": rms_level(&resampled) }),
-                                );
-                            }
-                            for event in engine.accept(&resampled) {
-                                emit_engine_event(&app, owner, event);
-                            }
-                        }
-                        Ok(WorkerCommand::Stop) | Err(_) => {
-                            capture.stop();
-                            for event in engine.finish() {
-                                emit_engine_event(&app, owner, event);
-                            }
-                            emit(&app, owner, "stopped", None);
-                            hide_dictation_bubble_after(&app, BUBBLE_LINGER);
-                            engine.reset();
-                            break;
-                        }
-                        Ok(WorkerCommand::Teardown) => {
-                            capture.stop();
-                            let _ = engine.finish();
-                            emit(&app, owner, "stopped", None);
-                            hide_dictation_bubble_after(&app, BUBBLE_LINGER);
-                            return;
-                        }
-                        Ok(WorkerCommand::Start) => {}
+                Err(error) => {
+                    capture.stop();
+                    fail_session(&app, &lifecycle, owner, &error.to_string());
+                    continue;
+                }
+            }
+        }
+        let Some(engine) = engine.as_mut() else { continue };
+        loop {
+            match receiver.recv() {
+                Ok(WorkerCommand::Frame(frame)) => {
+                    let mono = downmix_to_mono(&frame.samples, frame.channels as usize);
+                    let resampled = resample_to_rate(&mono, frame.sample_rate, engine.sample_rate());
+                    if last_level.elapsed() >= LEVEL_INTERVAL {
+                        last_level = Instant::now();
+                        let _ = app.emit(
+                            "bloblex-dictation-level",
+                            json!({ "level": rms_level(&resampled) }),
+                        );
+                    }
+                    for event in engine.accept(&resampled) {
+                        emit_engine_event(&app, owner, event);
                     }
                 }
-            }
-            Err(error) => {
-                emit(&app, owner, "error", Some(&error.to_string()));
-                if let Ok(mut lifecycle) = lifecycle.lock() {
-                    lifecycle.cancel_start(owner);
-                }
-            }
-        }
-
-        // Idle: wait for a new session before releasing the model.
-        let mut restart = false;
-        loop {
-            match receiver.recv_timeout(IDLE_WORKER_TEARDOWN) {
-                Ok(WorkerCommand::Start) => {
-                    restart = true;
+                Ok(WorkerCommand::Stop) | Err(_) => {
+                    capture.stop();
+                    for event in engine.finish() {
+                        emit_engine_event(&app, owner, event);
+                    }
+                    emit(&app, owner, "stopped", None);
+                    hide_dictation_bubble_after(&app, BUBBLE_LINGER);
+                    engine.reset();
                     break;
                 }
-                Ok(WorkerCommand::Teardown) | Err(_) => break,
-                Ok(_) => continue,
+                Ok(WorkerCommand::Teardown) => {
+                    capture.stop();
+                    let _ = engine.finish();
+                    emit(&app, owner, "stopped", None);
+                    hide_dictation_bubble_after(&app, BUBBLE_LINGER);
+                    return;
+                }
+                Ok(WorkerCommand::Start(_)) => {}
             }
         }
-        if !restart {
-            break;
-        }
-        start_pending = true;
     }
 }
 
@@ -408,7 +445,7 @@ pub fn dictation_stop(
     let was_active = state
         .lifecycle
         .lock()
-        .map(|lifecycle| lifecycle.is_active())
+        .map(|lifecycle| lifecycle.active_owner() == Some(owner))
         .unwrap_or(false);
     {
         let mut lifecycle = state
@@ -421,10 +458,8 @@ pub fn dictation_stop(
     }
     if was_active {
         emit(&app, owner, "processing", None);
-    }
-    if let Ok(guard) = state.worker.lock() {
-        if let Some(handle) = guard.as_ref() {
-            if handle.owner == owner {
+        if let Ok(guard) = state.worker.lock() {
+            if let Some(handle) = guard.as_ref() {
                 let _ = handle.commands.send(WorkerCommand::Stop);
             }
         }
@@ -435,12 +470,17 @@ pub fn dictation_stop(
 #[tauri::command]
 pub fn dictation_cancel(state: State<'_, SpeechState>, owner: Option<String>) -> Result<(), String> {
     let owner = parse_owner(owner)?;
+    let was_active = state
+        .lifecycle
+        .lock()
+        .map(|lifecycle| lifecycle.active_owner() == Some(owner))
+        .unwrap_or(false);
     if let Ok(mut lifecycle) = state.lifecycle.lock() {
-        lifecycle.cancel_start(owner);
+        let _ = lifecycle.begin_stop(owner);
     }
-    if let Ok(guard) = state.worker.lock() {
-        if let Some(handle) = guard.as_ref() {
-            if handle.owner == owner {
+    if was_active {
+        if let Ok(guard) = state.worker.lock() {
+            if let Some(handle) = guard.as_ref() {
                 let _ = handle.commands.send(WorkerCommand::Stop);
             }
         }

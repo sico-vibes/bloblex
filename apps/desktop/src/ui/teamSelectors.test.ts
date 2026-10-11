@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Project, Session } from '../types'
-import { conversationPreview, groupAgentsByProject, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, sideSessionsFor, splitMentions } from './teamSelectors'
+import { conversationPreview, groupAgentsByProject, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 
 const agent = (id: string, name: string, extra: Partial<Agent> = {}): Agent => ({ id, name, description: '', instructions: '', color: 'mint', runtimeId: 'rt', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', ...extra })
 const session = (id: string, extra: Partial<Session> = {}): Session => ({ id, runtimeId: 'rt', updatedAt: '2026-10-01T00:00:00Z', ...extra })
 
 describe('team selectors', () => {
+  it('finds the #conversation being typed and splits sent references back out', () => {
+    expect(hashQuery('Ask Fluffy about #Model', 23)).toEqual({ start: 17, query: 'Model' })
+    expect(hashQuery('#', 1)).toEqual({ start: 0, query: '' })
+    expect(hashQuery('issue#4', 7)).toBeNull()
+    const refs = [{ id: 'c1', title: 'Model check' }, { id: 'c2', title: 'Model' }]
+    expect(splitReferences('See #Model check and #Model, not #other', refs)).toEqual([
+      { text: 'See ' }, { text: '#Model check', reference: refs[0] }, { text: ' and ' }, { text: '#Model', reference: refs[1] }, { text: ', not #other' },
+    ])
+    expect(splitReferences('plain', null)).toEqual([{ text: 'plain' }])
+  })
+
   it('keeps one main conversation per blob and lists side conversations for both sides', () => {
     const sessions = [
       session('old', { agentId: 'a', updatedAt: '2026-10-01T00:00:00Z' }),

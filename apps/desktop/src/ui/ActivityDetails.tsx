@@ -9,6 +9,7 @@ import { activityCategory, activitySummary, type ActivityGroup, type Conversatio
 
 const TEAM_TOOLS: Record<string, string> = {
   list_blobs: 'Checked the team',
+  list_conversations: 'Looked up side conversations',
   message_blob: 'Messaged a teammate',
 }
 

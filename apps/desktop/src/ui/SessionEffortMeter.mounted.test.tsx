@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
+import { positionFromPointer, SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
 
 const mounted: Array<{ root: Root; host: HTMLDivElement }> = []
 const draw = {
@@ -10,8 +10,8 @@ const draw = {
   createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
 }
 const drawFunctions = [draw.setTransform, draw.clearRect, draw.fillRect, draw.beginPath, draw.arc, draw.fill, draw.save, draw.restore, draw.clip, draw.roundRect, draw.createLinearGradient]
-function props(style: EffortMeterStyle, position = 0, count = 4, highest = false) {
-  return { style, position, count, selectedLabel:'Low', defaultLabel:'Provider default', highest, snapping:false, burstKey:0, onChange:vi.fn(), onPointerMove:vi.fn(), onPointerDown:vi.fn(), onPointerUp:vi.fn(), onPointerCancel:vi.fn(), onLostPointerCapture:vi.fn(), onKeyDown:vi.fn(), onKeyUp:vi.fn(), disabled:false }
+function props(style: EffortMeterStyle, position = 0, count = 4, top = false) {
+  return { style, position, count, recommendedIndex:1, top, dragging:false, settling:false, valueText:'Low', onPointerMove:vi.fn(), onPointerDown:vi.fn(), onPointerUp:vi.fn(), onPointerCancel:vi.fn(), onLostPointerCapture:vi.fn(), onKeyDown:vi.fn(), onKeyUp:vi.fn(), disabled:false }
 }
 function mount(initial: ReturnType<typeof props>) {
   const host = document.createElement('div'); document.body.append(host)
@@ -32,6 +32,19 @@ beforeEach(() => {
 afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('effort meter canvas lifecycle', () => {
+  it('maps pointers inside the knob travel and marks the recommended level with a line', () => {
+    expect(positionFromPointer(12, 0, 320, 5, 'claude')).toBe(0)
+    expect(positionFromPointer(160, 0, 320, 5, 'claude')).toBe(2)
+    expect(positionFromPointer(400, 0, 320, 5, 'claude')).toBe(4)
+    expect(positionFromPointer(-20, 0, 320, 5, 'magnetic')).toBe(0)
+    const view = mount(props('claude', 0, 5, false))
+    const ticks = view.host.querySelectorAll('.session-effort-tick')
+    expect(ticks).toHaveLength(5)
+    expect(ticks[1].classList.contains('recommended')).toBe(true)
+    expect(view.host.querySelectorAll('.session-effort-tick.recommended')).toHaveLength(1)
+    expect(view.host.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')).toBe('Low')
+  })
+
   it('redraws current props under reduced motion without scheduling animation frames', async () => {
     const frame = vi.spyOn(window, 'requestAnimationFrame')
     const view = mount(props('claude', 0, 4, false))

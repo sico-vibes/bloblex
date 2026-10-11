@@ -36,7 +36,7 @@ let agents: Agent[] = [
 
 let sessions: Session[] = [
   {
-    id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Invoice parser tests', projectPath: 'C:/work/korus', state: 'working', model: 'gpt-5.5', updatedAt: minutesAgo(2),
+    id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Invoice parser tests', projectPath: 'C:/work/korus', state: flags().has('idle') ? 'idle' : 'working', model: 'gpt-5.5', updatedAt: minutesAgo(2),
     messages: [
       { id: 'm1', role: 'user', content: 'Can you make the invoice parser tests pass?', createdAt: minutesAgo(9) },
       { id: 'm2', role: 'assistant', content: 'Sure. I found two failing cases in **tests/invoice.test.ts**: the currency field is parsed before the locale is known, and totals use floats.\n\nI will switch totals to integer minor units and parse the locale first.', createdAt: minutesAgo(8) },
@@ -103,12 +103,12 @@ agents.push({ id: 'agent-pololo', name: 'Pololo', look: { shape: 'sun', seed: 'p
 const teamMainId = 'session-team-leader'
 const teamSideId = 'session-team-side'
 sessions.push({
-  id: teamMainId, runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Codex', projectPath: 'C:/work/korus', state: 'waiting_permission', updatedAt: minutesAgo(0.5),
+  id: teamMainId, runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Codex', projectPath: 'C:/work/korus', state: flags().has('idle') ? 'idle' : 'waiting_permission', updatedAt: minutesAgo(0.5),
   modelLock: { model: 'gpt-5.5', thinking: 'high', planMode: flags().has('plan') }, contextUsed: 52_000, contextSize: 400_000,
   messages: [
     { id: 'team-u1', sequence: 1, turnId: 'team-tA', role: 'user', content: 'Can you research an effort picker like the one on 21st.dev? @Pololo is great at UI, ask him to find it.', createdAt: minutesAgo(30) },
     { id: 'team-a1', sequence: 2, turnId: 'team-tA', role: 'assistant', content: 'On it — sending Pololo the brief and asking him to hunt down that effort / reasoning-level picker.', createdAt: minutesAgo(29) },
-    { id: 'team-n1', sequence: 3, role: 'notice', content: 'Find an open-source effort picker like the 21st.dev one…', createdAt: minutesAgo(29), meta: { kind: 'delegation', direction: 'sent', peerAgentId: 'agent-pololo', peerName: 'Pololo', sideSessionId: teamSideId } },
+    { id: 'team-n1', sequence: 3, role: 'notice', content: 'Find an open-source effort picker like the 21st.dev one…', createdAt: minutesAgo(29), meta: { kind: 'delegation', direction: 'sent', peerAgentId: 'agent-pololo', peerName: 'Pololo', topic: 'Effort picker research', sideSessionId: teamSideId } },
     { id: 'team-r1', sequence: 4, turnId: 'team-tB', role: 'user', content: '[Reply from Pololo]\nNothing pixel-exact exists as a package. Closest: a PostHog ReasoningLevelDropdown (MIT) and a model selector on 21st.dev with Effort, Context and Fast toggles.', createdAt: minutesAgo(12), meta: { kind: 'blob_reply', fromAgentId: 'agent-pololo', fromName: 'Pololo', sideSessionId: teamSideId } },
     { id: 'team-a2', sequence: 5, turnId: 'team-tB', role: 'assistant', content: 'Pololo found it — nothing is a pixel-exact drop-in, but these are the useful hits:\n\n- **PostHog ReasoningLevelDropdown** (MIT): Faster ↔ Smarter, notched snaps, a Default badge.\n- **AI Model Select** on 21st.dev: Effort, Context and Fast in one popover.\n\nMy take: fork the PostHog one. Want me to plan the port?', createdAt: minutesAgo(11) },
     { id: 'team-u2', sequence: 6, turnId: 'team-tC', role: 'user', content: 'Yes, plan it.', createdAt: minutesAgo(3) },
@@ -125,11 +125,20 @@ sessions.push({
   ],
 })
 sessions.push({
-  id: teamSideId, runtimeId: 'runtime-opencode', agentId: 'agent-pololo', title: 'Codex ⇄ Pololo', projectPath: 'C:/work/korus', state: 'completed', updatedAt: minutesAgo(12),
-  link: { kind: 'side', peerAgentId: 'agent-codex', peerName: 'Codex', originSessionId: teamMainId },
+  id: teamSideId, runtimeId: 'runtime-opencode', agentId: 'agent-pololo', title: 'Effort picker research', projectPath: 'C:/work/korus', state: 'completed', updatedAt: minutesAgo(12),
+  link: { kind: 'side', peerAgentId: 'agent-codex', peerName: 'Codex', originSessionId: teamMainId, topic: 'Effort picker research' },
   messages: [
     { id: 'side-m1', role: 'user', content: 'Hi Pololo, it\'s Codex. Sam needs a UI research hunt: an Effort / reasoning-level picker with a Faster ↔ Smarter slider, about six snap points and a Recommended mark. Search 21st.dev and GitHub for open-source replicas and reply with the best hits ranked.', createdAt: minutesAgo(29), meta: { kind: 'blob_message', fromAgentId: 'agent-codex', fromName: 'Codex' } },
+    { id: 'side-t1', role: 'thinking', content: 'The user (Codex, a blob) wants a UI hunt. Search first, answer concisely.', createdAt: minutesAgo(12.5) },
     { id: 'side-a1', role: 'assistant', content: 'UI research done.\n\n**Bottom line:** nothing pixel-exact as a drop-in. Closest fork is PostHog; closest install is an AI Model Select on 21st.dev.', createdAt: minutesAgo(12) },
+  ],
+})
+sessions.push({
+  id: 'session-team-side-2', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Which model are you on', projectPath: 'C:/work/korus', state: 'completed', updatedAt: minutesAgo(95),
+  link: { kind: 'side', peerAgentId: 'agent-pololo', peerName: 'Pololo', originSessionId: 'session-pololo', topic: 'Which model are you on' },
+  messages: [
+    { id: 'side2-m1', sequence: 1, role: 'user', content: 'Quick one from Pololo: which model and effort are you running?', createdAt: minutesAgo(96), meta: { kind: 'blob_message', fromAgentId: 'agent-pololo', fromName: 'Pololo' } },
+    { id: 'side2-a1', sequence: 2, role: 'assistant', content: 'GPT-5.5 at High effort.', createdAt: minutesAgo(95) },
   ],
 })
 const teamQuestion: PermissionRequest = { id: 'perm-question', sessionId: teamMainId, runtimeId: 'runtime-codex', status: 'pending', kind: 'question', title: 'Codex has a question', choices: ['answer', 'dismiss'], questions: [{ id: 'q-direction', header: 'Direction', question: 'Which direction should the effort picker follow?', options: [{ label: 'PostHog fork', description: 'Closest behaviour, MIT licensed' }, { label: '21st.dev model select', description: 'One popover for effort, context and fast' }, { label: 'Build our own' }], multiSelect: false, allowOther: true }] }
@@ -214,15 +223,15 @@ type FixtureModel = { id:string; displayName:string; supportedThinking:string[];
 function fixtureCatalog(runtimeId: string) {
   const runtime = baseRuntimes.find((item) => item.id === runtimeId)
   const models: FixtureModel[] = runtimeId === 'runtime-opencode' ? [
-    { id: 'opencode-go/preview', displayName: 'Preview model', supportedThinking: [], serviceTiers: [] },
+    { id: 'opencode-go/preview', displayName: 'Preview model', supportedThinking: ['low', 'high', 'max'], serviceTiers: [] },
     { id: 'opencode-go/alternate-preview', displayName: 'Alternate preview', supportedThinking: [], serviceTiers: [] },
   ] : runtime?.provider === 'claude' ? [
-    { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max'], defaultThinking: 'high', serviceTiers: [{ id: 'fast', name: 'Fast' }], isDefault: true },
+    { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'], defaultThinking: 'medium', serviceTiers: [{ id: 'fast', name: 'Fast' }], isDefault: true },
     { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', supportedThinking: ['low', 'medium', 'high'], defaultThinking: 'medium', serviceTiers: [], isDefault: false },
     { id: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5', supportedThinking: ['low', 'medium'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
   ] : [
-    { id: 'gpt-5.5', displayName: 'GPT-5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh'], defaultThinking: 'medium', serviceTiers: [{ id: 'priority', name: 'Fast' }], isDefault: true },
-    { id: 'gpt-5.4', displayName: 'GPT-5.4', supportedThinking: ['low', 'medium', 'high', 'xhigh'], defaultThinking: 'high', serviceTiers: [{ id: 'priority', name: 'Fast' }], isDefault: false },
+    { id: 'gpt-5.5', displayName: 'GPT-5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultThinking: 'medium', serviceTiers: [{ id: 'priority', name: 'Fast' }], isDefault: true },
+    { id: 'gpt-5.4', displayName: 'GPT-5.4', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max'], defaultThinking: 'high', serviceTiers: [{ id: 'priority', name: 'Fast' }], isDefault: false },
     { id: 'gpt-5.3-codex', displayName: 'GPT-5.3 Codex', supportedThinking: ['low', 'medium', 'high'], defaultThinking: 'medium', serviceTiers: [], isDefault: false },
   ]
   return { runtimeId, provider: runtime?.provider ?? '', models, validated: true, source: 'fixture', fetchedAt: '2026-10-04T00:00:00Z' }
@@ -238,6 +247,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     // Preview flags: ?activity turns on Agent activity, ?usage-bar the usage bar, ?chat=small|medium|large sizes the companion chat.
     if (flags().has('activity')) fixtureSettings['experimental.activityDetails'] = true
     if (flags().has('usage-bar')) fixtureSettings['experimental.usageBar'] = true
+    if (flags().has('logos')) fixtureSettings['experimental.runtimeLogos'] = true
     if (flags().get('chat')) fixtureSettings['companion.chatSize'] = flags().get('chat')
     return { settings: { ...fixtureSettings } } as T
   }
@@ -313,9 +323,28 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     notifyFixtureDaemon('session.changed', { session: { ...session } })
     return { session: { ...session }, modelChanged } as T
   }
+  if (method === 'session.prompt') {
+    // A minimal echo so the preview shows sent messages, # references and a reply.
+    const session = sessions.find((item) => item.id === params.sessionId)
+    if (!session) throw rpcError('not_found', 'session not found')
+    const refs = Array.isArray(params.conversationRefs) ? params.conversationRefs.map(String) : []
+    const references = refs.map((id) => sessions.find((item) => item.id === id)).filter((item): item is Session => !!item).map((item) => ({ id: item.id, title: String(item.link?.topic ?? item.title ?? 'Conversation') }))
+    const next = (session.messages ?? []).reduce((top, message) => Math.max(top, Number(message.sequence) || 0), 0) + 1
+    const now = new Date().toISOString()
+    session.messages = [...(session.messages ?? []), { id: `preview-user-${next}`, sequence: next, role: 'user', content: String(params.text ?? ''), createdAt: now, ...(references.length ? { references } : {}) }]
+    session.updatedAt = now
+    notifyFixtureDaemon('session.changed', { session: { ...session } })
+    window.setTimeout(() => {
+      session.messages = [...(session.messages ?? []), { id: `preview-reply-${next}`, sequence: next + 1, role: 'assistant', content: references.length ? `Picking up "${references[0].title}" where it left off.` : 'Got it.', createdAt: new Date().toISOString() }]
+      notifyFixtureDaemon('session.changed', { session: { ...session } })
+    }, 700)
+    return { turnId: `preview-turn-${next}` } as T
+  }
   if (method === 'runtime.capabilities') {
     const supported = { supported: true, enabled: true, scope: 'agent', evidence: 'preview' }
-    return { runtimeId: params.runtimeId, settings: { model: supported, thinking: supported, serviceTier: supported, instructions: supported, customEnv: supported } } as T
+    // Like the real daemon, OpenCode keeps effort behind its execution check.
+    const thinking = params.runtimeId === 'runtime-opencode' ? { ...supported, enabled: false, reason: 'execution entry gate is disabled' } : supported
+    return { runtimeId: params.runtimeId, settings: { model: supported, thinking, serviceTier: supported, instructions: supported, customEnv: supported } } as T
   }
   if (method === 'runtime.models') {
     const runtimeId = String(params.runtimeId ?? '')

@@ -9,6 +9,7 @@ export type GroupedConversationItem = ConversationItem | ActivityGroup
 
 /** Provider steps that are not user-facing activity (reasoning carries no visible content). */
 const HIDDEN_TOOL_KINDS = new Set(['reasoning'])
+const HIDDEN_MESSAGE_ROLES = new Set(['thinking', 'reasoning'])
 const COMMAND_KINDS = new Set(['commandexecution', 'exec', 'execute', 'shell', 'bash', 'command', 'terminal'])
 const SEARCH_KINDS = new Set(['websearch', 'search', 'web_search', 'fetch', 'webfetch'])
 
@@ -46,7 +47,9 @@ function legacySort(items: Ordered[]) {
  * records without a turn keep their position from the mixed ordering.
  */
 export function buildConversationItems(session: Session): ConversationItem[] {
-  const messages = session.messages ?? session.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages as JsonRecord[] : []) ?? session.events ?? []
+  const all = session.messages ?? session.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages as JsonRecord[] : []) ?? session.events ?? []
+  // A model's private reasoning (OpenCode stores it as a 'thinking' message) is not part of the conversation.
+  const messages = all.filter((message) => !HIDDEN_MESSAGE_ROLES.has(String(message.role ?? '').toLowerCase()))
   const messageItems: Ordered[] = messages.map((message, index) => ({ kind: 'message', id: `message:${String(message.id ?? `${message.turnId ?? ''}:${message.role ?? ''}:${index}`)}`, value: message, ...orderOf(message), tie: index, turnId: turnOf(message) }))
   const activities: Ordered[] = [
     ...(session.tools ?? []).filter((tool) => !HIDDEN_TOOL_KINDS.has(String(tool.kind ?? '').toLowerCase())).map((activity, index): Ordered => ({ kind: 'activity', id: `tool:${String(activity.id ?? `${activity.turnId ?? ''}:${index}`)}`, activity, activityKind: 'tool', ...orderOf(activity), tie: 10_000 + index, turnId: turnOf(activity) })),

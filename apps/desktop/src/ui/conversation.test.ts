@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { activitySummary, buildConversationItems, groupConversationActivity, type ActivityGroup } from './conversation'
 
 describe('conversation timeline', () => {
+  it('leaves a model\'s private reasoning out of the conversation', () => {
+    const result = buildConversationItems({
+      id: 'side', runtimeId: 'runtime-opencode',
+      messages: [{ id: 'ask', role: 'user', sequence: 1 }, { id: 'reasoning', role: 'thinking', sequence: 2, content: 'The user is asking…' }, { id: 'answer', role: 'assistant', sequence: 3 }],
+    })
+    expect(result.map((item) => item.id)).toEqual(['message:ask', 'message:answer'])
+  })
+
   it('keeps daemon messages, tools, and file changes in sequence order with stable IDs', () => {
     const result = buildConversationItems({
       id: 'session-a', runtimeId: 'runtime-a',

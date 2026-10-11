@@ -6,7 +6,6 @@ use std::{
     env,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{Mutex, OnceLock},
 };
 use tokio::{
     process::Command,
@@ -28,23 +27,16 @@ pub struct DiscoveredRuntime {
     pub gateway_auth_states: BTreeMap<String, AuthState>,
     pub status: String,
     pub capabilities: BTreeMap<String, bool>,
+    #[serde(default)]
+    pub probe_error: Option<String>,
+    #[serde(default)]
+    pub probe_step: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResolvedCommand {
     pub executable: PathBuf,
     pub args: Vec<String>,
-}
-
-static NEGATIVE_CAPABILITY_CACHE: OnceLock<Mutex<std::collections::HashSet<String>>> =
-    OnceLock::new();
-
-fn negative_probe_key(provider: &str, executable: &Path, version: Option<&str>) -> String {
-    format!(
-        "{provider}|{}|{}",
-        executable.to_string_lossy().to_ascii_lowercase(),
-        version.unwrap_or("unknown")
-    )
 }
 
 fn executable_extensions() -> Vec<&'static str> {
@@ -164,171 +156,130 @@ fn quoted_tokens(input: &str) -> Vec<String> {
     result
 }
 
-async fn bounded_output(exe: &Path, args: &[&str]) -> Option<String> {
+// All diagnostics are fixed text; provider stdout/stderr never becomes an error.
+async fn bounded_output(exe: &Path, args: &[&str]) -> Result<String, &'static str> {
     let mut cmd = Command::new(exe);
     prepare_command(&mut cmd);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = cmd.spawn().ok()?;
-    let process_tree = ProcessTree::attach(&mut child).ok()?;
-    let output = timeout(Duration::from_secs(6), child.wait_with_output())
-        .await
-        .ok()?
-        .ok()?;
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|_| "Could not start the coding agent.")?;
+    let process_tree = ProcessTree::attach(&mut child).map_err(|_| "Could not supervise the coding agent.")?;
+    let result = timeout(Duration::from_secs(6), child.wait_with_output()).await;
     let _ = process_tree.terminate();
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    if text.len() < 32 * 1024 {
-        text.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
-    text.truncate(32 * 1024);
-    Some(text)
+    let output = result.map_err(|_| "Probe timed out.")?.map_err(|_| "Could not read the probe result.")?;
+    if !output.status.success() { return Err("Probe exited unsuccessfully."); }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(text.chars().take(32 * 1024).collect())
 }
 
 pub async fn discover() -> Vec<DiscoveredRuntime> {
-    let specs = [
-        ("claude", "claude", "claude_stream"),
-        ("codex", "codex", "codex_app_server"),
-        ("opencode", "opencode", "acp"),
-    ];
-    let mut out = Vec::new();
-    for (id, cmd_name, proto) in specs {
-        let Some(resolved) = resolve_command(cmd_name) else {
-            continue;
-        };
-        let mut version_args = resolved.args.iter().map(String::as_str).collect::<Vec<_>>();
-        version_args.push("--version");
-        let ver = bounded_output(&resolved.executable, &version_args)
-            .await
-            .unwrap_or_default();
-        let version = ver
-            .lines()
-            .next()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned);
-        let cache_key = negative_probe_key(
-            id,
-            &resolved.executable,
-            version.as_deref(),
-        );
-        let unsupported_cache = NEGATIVE_CAPABILITY_CACHE.get_or_init(|| Mutex::new(Default::default()));
-        if unsupported_cache.lock().is_ok_and(|cache| cache.contains(&cache_key)) {
-            continue;
-        }
-        let family = match proto {
-            "acp" => ProtocolFamily::Acp,
-            "codex_app_server" => ProtocolFamily::CodexAppServer,
-            _ => ProtocolFamily::ClaudeStream,
-        };
-        let mut probe_args = resolved.args.iter().map(String::as_str).collect::<Vec<_>>();
-        match id {
-            "opencode" => probe_args.extend(["acp", "--help"]),
-            "codex" => probe_args.extend(["app-server", "--help"]),
-            _ => probe_args.push("--help"),
-        };
-        let help = bounded_output(&resolved.executable, &probe_args)
-            .await
-            .unwrap_or_default();
-        let supported = match id {
-            "opencode" => help.contains("ACP") || help.contains("acp"),
-            "codex" => help.contains("app-server"),
-            _ => help.contains("--input-format") && help.contains("stream-json"),
-        };
-        if !supported {
-            if let Ok(mut cache) = unsupported_cache.lock() {
-                cache.insert(cache_key);
-            }
-            continue;
-        }
-        let (auth_state, gateway_auth_states) = auth_status(id, &resolved.executable, &resolved.args).await;
-        let mut caps = BTreeMap::new();
-        for k in [
-            "newSession",
-            "resume",
-            "cancel",
-            "permissions",
-            "usage",
-            "files",
-        ] {
-            caps.insert(
-                k.into(),
-                match (id, k) {
-                    (_, "newSession" | "cancel") => true,
-                    ("claude", "resume") => true,
-                    ("codex", "resume") => true,
-                    ("codex", "permissions") => true,
-                    ("codex", "usage") => true,
-                    ("claude", "usage") => true,
-                    ("opencode", "permissions") => true,
-                    _ => false,
-                },
-            );
-        }
-        out.push(DiscoveredRuntime {
-            id: format!(
-                "rt_{id}_{}",
-                short_hash(&resolved.executable.to_string_lossy())
-            ),
-            host_id: "host_windows_local".into(),
-            provider: id.into(),
-            display_name: provider_display_name(id).into(),
-            protocol_family: family,
-            executable_path: resolved.executable.to_string_lossy().into_owned(),
-            launch_args: resolved.args,
-            version,
-            auth_state,
-            gateway_auth_states,
-            status: "online".into(),
-            capabilities: caps,
+    // Resolve away from the async executor; PATH may include slow network drives.
+    let specs = tokio::task::spawn_blocking(|| ["claude", "codex", "opencode"].map(|id| (id, resolve_command(id)))).await;
+    let Ok([claude, codex, opencode]) = specs else { return Vec::new(); };
+    collect_discovery(discover_one(claude.0, claude.1), discover_one(codex.0, codex.1), discover_one(opencode.0, opencode.1)).await
+}
+
+async fn collect_discovery(a: impl std::future::Future<Output = Option<DiscoveredRuntime>>, b: impl std::future::Future<Output = Option<DiscoveredRuntime>>, c: impl std::future::Future<Output = Option<DiscoveredRuntime>>) -> Vec<DiscoveredRuntime> {
+    let (a, b, c) = tokio::join!(a, b, c);
+    [a, b, c].into_iter().flatten().collect()
+}
+
+fn safe_version(output: &str) -> Option<String> {
+    // CLI version labels only; an unexpected response is never forwarded.
+    let line = output.lines().next()?.trim();
+    if line.len() > 100 || !line.chars().all(|c| c.is_ascii_alphanumeric() || " .()-_+".contains(c)) { return None; }
+    let version = line.split_whitespace().find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()) && part.contains('.'))?;
+    if !version.chars().all(|c| c.is_ascii_digit() || c == '.') { return None; }
+    Some(version.to_owned())
+}
+
+async fn discover_one(id: &str, resolved: Option<ResolvedCommand>) -> Option<DiscoveredRuntime> {
+    let resolved = resolved?;
+    let mut runtime = DiscoveredRuntime {
+        id: format!("rt_{id}_{}", short_hash(&resolved.executable.to_string_lossy())),
+        host_id: "host_windows_local".into(), provider: id.into(), display_name: provider_display_name(id).into(),
+        protocol_family: match id { "opencode" => ProtocolFamily::Acp, "codex" => ProtocolFamily::CodexAppServer, _ => ProtocolFamily::ClaudeStream },
+        executable_path: resolved.executable.to_string_lossy().into_owned(), launch_args: resolved.args.clone(),
+        version: None, auth_state: AuthState::Unknown, gateway_auth_states: BTreeMap::new(),
+        status: "error".into(), capabilities: BTreeMap::new(), probe_error: None, probe_step: None,
+    };
+    let mut version_args = resolved.args.iter().map(String::as_str).collect::<Vec<_>>();
+    version_args.push("--version");
+    match bounded_output(&resolved.executable, &version_args).await {
+        Ok(output) => runtime.version = safe_version(&output),
+        Err(error) => { runtime.probe_step = Some("Version check".into()); runtime.probe_error = Some(error.into()); }
+    }
+    let mut probe_args = resolved.args.iter().map(String::as_str).collect::<Vec<_>>();
+    match id { "opencode" => probe_args.extend(["acp", "--help"]), "codex" => probe_args.extend(["app-server", "--help"]), _ => probe_args.push("--help") }
+    let help = bounded_output(&resolved.executable, &probe_args).await;
+    let supported = help.as_ref().is_ok_and(|help| match id {
+        "opencode" => help.contains("ACP") || help.contains("acp"),
+        "codex" => help.contains("app-server"),
+        _ => help.contains("--input-format") && help.contains("stream-json"),
+    });
+    if !supported {
+        runtime.probe_step = Some("Protocol check".into());
+        runtime.probe_error = Some(help.err().unwrap_or("The CLI does not advertise the required protocol.").into());
+        // Failed probes are retained and retried, never negatively cached.
+        return Some(runtime);
+    }
+    runtime.status = "online".into();
+    let (auth_state, gateway_auth_states, auth_error) = auth_status(id, &resolved.executable, &resolved.args).await;
+    runtime.auth_state = auth_state;
+    runtime.gateway_auth_states = gateway_auth_states;
+    if let Some(error) = auth_error {
+        runtime.probe_step = Some("Sign-in check".into());
+        runtime.probe_error = Some(error.into());
+    }
+    for key in ["newSession", "resume", "cancel", "permissions", "usage", "files"] {
+        runtime.capabilities.insert(key.into(), match (id, key) {
+            (_, "newSession" | "cancel") | ("claude" | "codex", "resume" | "usage") | ("codex" | "opencode", "permissions") => true,
+            _ => false,
         });
     }
-    out
+    Some(runtime)
 }
 fn provider_display_name(provider: &str) -> &'static str { match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" } }
-async fn auth_status(provider: &str, exe: &Path, args: &[String]) -> (AuthState, BTreeMap<String, AuthState>) {
+async fn auth_status(provider: &str, exe: &Path, args: &[String]) -> (AuthState, BTreeMap<String, AuthState>, Option<&'static str>) {
     let mut av = args.iter().map(String::as_str).collect::<Vec<_>>();
     match provider {
         "claude" => av.extend(["auth", "status"]),
         "codex" => av.extend(["login", "status"]),
         "opencode" => av.extend(["auth", "list"]),
-        _ => return (AuthState::Unknown, BTreeMap::new()),
+        _ => return (AuthState::Unknown, BTreeMap::new(), None),
     };
     if provider == "opencode" {
-        if let Some((true, output)) = safe_status_output(exe, &av).await {
+        if let Ok((true, output)) = safe_status_output(exe, &av).await {
             if let Some(states) = parse_opencode_auth_list(&output) {
-                return (aggregate_auth_states(&states), states);
+                return (aggregate_auth_states(&states), states, None);
             }
         }
         let mut model_args = args.iter().map(String::as_str).collect::<Vec<_>>();
         model_args.extend(["models", "--verbose"]);
-        if let Some((true, output)) = safe_status_output(exe, &model_args).await {
+        if let Ok((true, output)) = safe_status_output(exe, &model_args).await {
             let states = opencode_model_gateways(&output);
             if !states.is_empty() {
-                return (aggregate_auth_states(&states), states);
+                return (aggregate_auth_states(&states), states, None);
             }
         }
-        return (AuthState::Unknown, BTreeMap::new());
+        return (AuthState::Unknown, BTreeMap::new(), Some("Sign-in status could not be checked."));
     }
-    let out = safe_status_output(exe, &av).await.map(|(_, text)| text).unwrap_or_default();
+    let out = match safe_status_output(exe, &av).await { Ok((_, text)) => text, Err(error) => return (AuthState::Unknown, BTreeMap::new(), Some(error)) };
     if provider == "claude" {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) {
             return (match v["loggedIn"].as_bool() {
                 Some(true) => AuthState::Authenticated,
                 Some(false) => AuthState::Unauthenticated,
                 None => AuthState::Unknown,
-            }, BTreeMap::new());
+            }, BTreeMap::new(), None);
         }
     }
     let l = out.to_ascii_lowercase();
     if l.contains("not logged in") || l.contains("not authenticated") {
-        (AuthState::Unauthenticated, BTreeMap::new())
+        (AuthState::Unauthenticated, BTreeMap::new(), None)
     } else if l.contains("logged in using") || l.contains("logged in") {
-        (AuthState::Authenticated, BTreeMap::new())
+        (AuthState::Authenticated, BTreeMap::new(), None)
     } else {
-        (AuthState::Unknown, BTreeMap::new())
+        (AuthState::Unknown, BTreeMap::new(), None)
     }
 }
 fn safe_gateway_name(input: &str) -> Option<String> {
@@ -432,7 +383,7 @@ fn opencode_model_gateways(output: &str) -> BTreeMap<String, AuthState> {
     }
     states
 }
-async fn safe_status_output(exe: &Path, args: &[&str]) -> Option<(bool, String)> {
+async fn safe_status_output(exe: &Path, args: &[&str]) -> Result<(bool, String), &'static str> {
     let mut cmd = Command::new(exe);
     prepare_command(&mut cmd);
     cmd.args(args)
@@ -440,19 +391,17 @@ async fn safe_status_output(exe: &Path, args: &[&str]) -> Option<(bool, String)>
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = cmd.spawn().ok()?;
-    let process_tree = ProcessTree::attach(&mut child).ok()?;
-    let out = timeout(Duration::from_secs(5), child.wait_with_output())
-        .await
-        .ok()?
-        .ok()?;
+    let mut child = cmd.spawn().map_err(|_| "Could not start the sign-in check.")?;
+    let process_tree = ProcessTree::attach(&mut child).map_err(|_| "Could not supervise the sign-in check.")?;
+    let result = timeout(Duration::from_secs(5), child.wait_with_output()).await;
     let _ = process_tree.terminate();
+    let out = result.map_err(|_| "Sign-in check timed out.")?.map_err(|_| "Could not read the sign-in result.")?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     if text.len() < 32 * 1024 && (args.ends_with(&["auth", "status"]) || args.ends_with(&["login", "status"])) {
         text.push_str(&String::from_utf8_lossy(&out.stderr));
     }
-    text.truncate(32 * 1024);
-    Some((out.status.success(), text))
+    text = text.chars().take(32 * 1024).collect();
+    Ok((out.status.success(), text))
 }
 fn short_hash(s: &str) -> String {
     let mut h = 2166136261u32;
@@ -465,6 +414,46 @@ fn short_hash(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn version_output_is_reduced_to_a_numeric_version() {
+        assert_eq!(safe_version("codex-cli 0.161.0"), Some("0.161.0".into()));
+        assert_eq!(safe_version("2.1.296 (Claude Code)"), Some("2.1.296".into()));
+        assert_eq!(safe_version("unexpected private diagnostic"), None);
+        assert_eq!(safe_version("0.161.0\nprivate diagnostic"), Some("0.161.0".into()));
+    }
+    #[tokio::test]
+    async fn discovery_polls_all_providers_concurrently() {
+        let barrier = tokio::sync::Barrier::new(3);
+        let probe = || async { barrier.wait().await; None };
+        let result = tokio::time::timeout(Duration::from_secs(1), collect_discovery(probe(), probe(), probe())).await;
+        assert!(result.is_ok(), "sequential probes cannot pass the three-provider barrier");
+    }
+    fn fixture_command(success: bool) -> ResolvedCommand {
+        #[cfg(windows)]
+        { ResolvedCommand { executable: PathBuf::from("cmd.exe"), args: vec!["/d".into(), "/c".into(), if success { "echo 1.2.3 & echo app-server --input-format stream-json & echo logged in using fixture" } else { "echo PRIVATE_DIAGNOSTIC & exit /b 1" }.into()] } }
+        #[cfg(not(windows))]
+        { ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec!["-c".into(), if success { "printf '1.2.3\napp-server --input-format stream-json\nlogged in using fixture\n'" } else { "printf 'PRIVATE_DIAGNOSTIC\n'; exit 1" }.into()] } }
+    }
+    #[tokio::test]
+    async fn failed_probe_is_safe_visible_and_can_heal_on_the_same_executable() {
+        let failed = discover_one("codex", Some(fixture_command(false))).await.unwrap();
+        assert_eq!(failed.status, "error");
+        assert_eq!(failed.probe_step.as_deref(), Some("Protocol check"));
+        assert_eq!(failed.probe_error.as_deref(), Some("Probe exited unsuccessfully."));
+        assert!(!failed.probe_error.as_deref().unwrap().contains("PRIVATE_DIAGNOSTIC"));
+        assert!(failed.capabilities.is_empty());
+        let healed = discover_one("codex", Some(fixture_command(true))).await.unwrap();
+        assert_eq!(healed.id, failed.id);
+        assert_eq!(healed.status, "online");
+        assert!(healed.probe_error.is_none());
+        assert_eq!(healed.version.as_deref(), Some("1.2.3"));
+    }
+    #[tokio::test]
+    async fn missing_executable_reports_a_fixed_error() {
+        let runtime = discover_one("codex", Some(ResolvedCommand { executable: PathBuf::from("bloblex-missing-probe-executable"), args: vec![] })).await.unwrap();
+        assert_eq!(runtime.probe_error.as_deref(), Some("Could not start the coding agent."));
+        assert!(matches!(runtime.auth_state, AuthState::Unknown));
+    }
     #[test]
     fn npm_path_expansion_is_rooted_at_shim() {
         let base = PathBuf::from("C:/Users/me/AppData/Roaming/npm");
@@ -482,14 +471,6 @@ mod tests {
     #[test]
     fn hash_is_stable() {
         assert_eq!(short_hash("abc"), short_hash("abc"));
-    }
-    #[test]
-    fn negative_probe_cache_key_changes_with_cli_version() {
-        let executable = Path::new("C:/tools/cli.exe");
-        assert_ne!(
-            negative_probe_key("codex", executable, Some("0.1.0")),
-            negative_probe_key("codex", executable, Some("0.2.0"))
-        );
     }
     #[test]
     fn npm_wrapper_fixtures_resolve_native_exes_and_node_scripts() {

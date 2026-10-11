@@ -36,6 +36,7 @@ use uuid::Uuid;
 mod mcp_bridge;
 mod model_presentation;
 mod team;
+mod experiments;
 mod quota;
 mod quota_sources;
 
@@ -50,6 +51,7 @@ struct AppState {
     db: Arc<Storage>,
     events: broadcast::Sender<EventEnvelope>,
     runtimes: Arc<RwLock<Vec<Value>>>,
+    discovery: Arc<Mutex<Option<(Instant, Vec<Value>)>>>,
     adapters: Arc<Adapters>,
     sessions: Arc<Mutex<HashMap<String, ActiveSession>>>,
     active_turns: Arc<Mutex<HashMap<String, String>>>,
@@ -407,6 +409,18 @@ async fn publish_runtime_discovery(
     Ok(values)
 }
 
+// A launch refresh joins startup discovery instead of spawning duplicate CLI probes.
+async fn refresh_runtime_discovery(st: &AppState, work: impl std::future::Future<Output = Vec<bloblex_runtime::DiscoveredRuntime>>) -> Result<Vec<Value>, bloblex_storage::StorageError> {
+    let requested = Instant::now();
+    let mut discovery = st.discovery.lock().await;
+    if let Some((completed, values)) = discovery.as_ref() {
+        if *completed >= requested { return Ok(values.clone()); }
+    }
+    let values = publish_runtime_discovery(st, work.await).await?;
+    *discovery = Some((Instant::now(), values.clone()));
+    Ok(values)
+}
+
 fn quota_failure_code(failure: PollFailure) -> &'static str {
     match failure {
         PollFailure::Timeout => "timeout",
@@ -635,13 +649,13 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             json!({"state":"ready","version":env!("CARGO_PKG_VERSION"),"uptimeSeconds":st.started.elapsed().as_secs(),"heartbeatAt":Utc::now().to_rfc3339()}),
         ),
         "daemon.shutdown" => {
+            experiments::finish_pending_deletes(st).await;
             st.stopping.notify_waiters();
             Ok(json!({"stopping":true}))
         }
         "runtime.list" => Ok(json!({"runtimes":*st.runtimes.read().await})),
         "runtime.refresh" => {
-            let found = bloblex_runtime::discover().await;
-            let values = publish_runtime_discovery(st, found).await.map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            let values = refresh_runtime_discovery(st, bloblex_runtime::discover()).await.map_err(|_| derr("internal", "Could not save the coding agent scan.", StatusCode::INTERNAL_SERVER_ERROR))?;
             Ok(json!({"runtimes":values}))
         }
         "quota.list" => st.db.quota_snapshots().map(|quotas| json!({"quotas":quotas})).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)),
@@ -649,6 +663,54 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let state = st.clone();
             tokio::spawn(async move { poll_provider_quotas(&state).await; });
             Ok(json!({"accepted":true}))
+        }
+        "search.messages" => {
+            let query = p["query"].as_str().filter(|q| q.chars().count() <= 200).ok_or_else(|| derr("invalid_argument", "query must be at most 200 characters", StatusCode::BAD_REQUEST))?;
+            st.db.search_messages(query).map(|results| json!({"results":results})).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))
+        }
+        "agent.restore" => {
+            let id = p["agentId"].as_str().ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
+            let (agent, events) = st.db.agent_restore(id).map_err(agent_error)?;
+            st.broadcast_persisted(events);
+            Ok(json!({"agent":agent}))
+        }
+        "file.revert" => {
+            let id = p["sessionId"].as_str().unwrap_or("");
+            let change_id = p["fileChangeId"].as_str().unwrap_or("");
+            let gate = gate_for_session(st, id).await;
+            let _guard = gate.lock().await;
+            let row = st.db.session_detail(id).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
+            if matches!(row["state"].as_str(), Some("starting" | "working" | "cancelling" | "waiting_permission")) { return Err(derr("conflict", "Wait for the turn to finish before reverting changes.", StatusCode::CONFLICT)); }
+            let file = row["files"].as_array().and_then(|files| files.iter().find(|f| f["id"] == change_id)).ok_or_else(|| derr("not_found", "File change not found in this conversation.", StatusCode::NOT_FOUND))?;
+            if file["detail"]["reverted"] == true { return Err(derr("conflict", "This turn's change was already reverted.", StatusCode::CONFLICT)); }
+            let project = PathBuf::from(row["projectPath"].as_str().unwrap_or(""));
+            let path = file["path"].as_str().unwrap_or("").to_owned();
+            let detail = file["detail"].clone();
+            tokio::task::spawn_blocking(move || experiments::reverse_file(&project, &path, &detail)).await.map_err(|_| derr("internal", "Could not check this change.", StatusCode::INTERNAL_SERVER_ERROR))?.map_err(|message| derr("conflict", &message, StatusCode::CONFLICT))?;
+            st.db.mark_file_reverted(id, change_id).map_err(|_| derr("internal", "The file was reverted, but its review status could not be saved. Inspect the file before trying again.", StatusCode::INTERNAL_SERVER_ERROR))?;
+            Ok(json!({"reverted":true}))
+        }
+        "session.delete.schedule" | "session.delete.cancel" => {
+            let id = p["sessionId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
+            let gate = gate_for_session(st, id).await;
+            let _guard = gate.lock().await;
+            let row = st.db.session_detail(id).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
+            if method == "session.delete.cancel" {
+                let pending = st.db.pending_session_delete(id).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?.ok_or_else(|| derr("conflict", "The Undo period has ended.", StatusCode::CONFLICT))?;
+                if pending["deadline"].as_i64().unwrap_or(0) <= Utc::now().timestamp_millis() { return Err(derr("conflict", "The Undo period has ended.", StatusCode::CONFLICT)); }
+                st.db.clear_session_delete(id).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+                let session = st.db.session_archive(id, pending["archived"] == true).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+                st.emit("session.changed", session.clone()).await;
+                return Ok(json!({"session":session,"cancelled":true}));
+            }
+            if st.db.settings().unwrap_or(Value::Null)["experimental.undo"] != true { return Err(derr("conflict", "Undo is not enabled.", StatusCode::CONFLICT)); }
+            if matches!(row["state"].as_str(), Some("starting" | "working" | "cancelling" | "waiting_permission")) { return Err(derr("conflict", "Cannot delete an active conversation.", StatusCode::CONFLICT)); }
+            if let Some(pending) = st.db.pending_session_delete(id).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))? { return Ok(pending); }
+            let deadline = Utc::now().timestamp_millis() + 8000;
+            st.db.set_setting(&format!("internal.delete.{id}"), &json!({"deadline":deadline,"archived":row["archived"]})).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            let session = st.db.session_archive(id, true).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            st.emit("session.changed", session).await;
+            Ok(json!({"deadline":deadline}))
         }
         "session.list" => {
             let include = match p.get("includeArchived") { None => false, Some(value) => value.as_bool().ok_or_else(|| derr("invalid_argument", "includeArchived must be a boolean", StatusCode::BAD_REQUEST))? };
@@ -693,11 +755,15 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 if matches!(state.as_str(), "starting" | "working" | "cancelling" | "waiting_permission") {
                     return Err(derr("conflict", "cannot delete a session while it is starting, working, cancelling, or waiting for approval", StatusCode::CONFLICT));
                 }
+                if let Some(deadline) = p["deleteDeadline"].as_i64() {
+                    if !st.db.pending_session_delete(id).ok().flatten().is_some_and(|v| v["deadline"] == deadline) { return Ok(json!({"cancelled":true})); }
+                }
                 st.db.session_delete(id).map_err(|error| match error {
                     bloblex_storage::StorageError::AgentNotFound => derr("not_found", "session not found", StatusCode::NOT_FOUND),
                     bloblex_storage::StorageError::SessionActive => derr("conflict", "cannot delete a session while it is starting, working, cancelling, or waiting for approval", StatusCode::CONFLICT),
                     other => derr("internal", &other.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
                 })?;
+                let _ = st.db.clear_session_delete(id);
                 st.deleted_sessions.lock().await.insert(id.to_owned());
                 let active = st.sessions.lock().await.remove(id);
                 let active_turn = st.active_turns.lock().await.remove(id);
@@ -1821,6 +1887,13 @@ async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError>
                     StatusCode::INTERNAL_SERVER_ERROR,
                 )
             })?;
+        if st.db.settings().unwrap_or(Value::Null)["experimental.autoTitles"] == true {
+            if let Some(name) = session["agentId"].as_str().and_then(|id| st.db.agent_get(id).ok()).and_then(|a| a["name"].as_str().map(str::to_owned)) {
+                if let Some(title) = experiments::automatic_title(&session, &name, &text) {
+                    if let Ok(summary) = st.db.session_rename(&sid, &title) { st.emit("session.changed", summary).await; }
+                }
+            }
+        }
         if !user_message.is_null() { st.emit("message.completed", json!({"sessionId":sid,"turnId":turn,"messageId":user_message["id"],"role":"user","message":user_message})).await; }
         let snapshot_id = Uuid::new_v4().to_string();
         let requested = safe_requested_options(&exec_options);
@@ -2509,6 +2582,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         db,
         events,
         runtimes: Arc::new(RwLock::new(Vec::new())),
+        discovery: Arc::new(Mutex::new(None)),
         adapters,
         sessions: Arc::new(Mutex::new(HashMap::new())),
         active_turns: Arc::new(Mutex::new(HashMap::new())),
@@ -2534,11 +2608,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     *st.team.data_dir.lock().unwrap() = data_dir;
     let quota_state = st.clone();
     tokio::spawn(quota_poll_loop(quota_state, st.events.subscribe()));
+    let deletion_state = st.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
+        loop { interval.tick().await; experiments::delete_due(&deletion_state).await; }
+    });
     let discovery_state = st.clone();
     tokio::spawn(async move {
-        let found = bloblex_runtime::discover().await;
-        if let Err(error) = publish_runtime_discovery(&discovery_state, found).await {
-            tracing::warn!("runtime discovery could not be persisted: {error}");
+        if refresh_runtime_discovery(&discovery_state, bloblex_runtime::discover()).await.is_err() {
+            tracing::warn!("runtime discovery could not be persisted");
         }
     });
     println!(
@@ -3009,9 +3087,119 @@ mod phase2a_tests {
         assert!(refused["content"][0]["text"].as_str().unwrap().contains("too many blobs"));
         let _ = std::fs::remove_dir_all(data_dir);
     }
+    #[tokio::test]
+    async fn experimental_delete_can_be_undone_and_due_deletion_uses_the_existing_gate() {
+        let (st, _) = state();
+        st.db.create_session("undo-session", "rt-test", "codex", ".", "Saved").unwrap();
+        st.db.update_session_state("undo-session", "idle").unwrap();
+        assert_eq!(dispatch(&st, "session.delete.schedule", json!({"sessionId":"undo-session"})).await.unwrap_err().1.code, "conflict");
+        st.db.set_setting("experimental.undo", &json!(true)).unwrap();
+        let scheduled = dispatch(&st, "session.delete.schedule", json!({"sessionId":"undo-session"})).await.unwrap();
+        assert!(scheduled["deadline"].as_i64().unwrap() > Utc::now().timestamp_millis());
+        assert_eq!(st.db.session_detail("undo-session").unwrap()["archived"], true);
+        dispatch(&st, "session.delete.cancel", json!({"sessionId":"undo-session"})).await.unwrap();
+        dispatch(&st, "session.delete", json!({"sessionId":"undo-session","deleteDeadline":scheduled["deadline"]})).await.unwrap();
+        assert!(st.db.session_exists("undo-session").unwrap(), "a stale timer must not delete after Undo");
+        assert_eq!(st.db.session_detail("undo-session").unwrap()["archived"], false);
+        dispatch(&st, "session.delete.schedule", json!({"sessionId":"undo-session"})).await.unwrap();
+        st.db.set_setting("internal.delete.undo-session", &json!({"deadline":0,"archived":false})).unwrap();
+        experiments::delete_due(&st).await;
+        assert!(!st.db.session_exists("undo-session").unwrap());
+        assert!(st.db.pending_session_delete("undo-session").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn experimental_archive_restore_emits_and_preserves_conversations() {
+        let (st, mut events) = state();
+        let agent = st.db.agent_create(&json!({"name":"Undo Blob","runtimeId":"rt-test"})).unwrap().0;
+        let id = agent["id"].as_str().unwrap();
+        st.db.create_session_for_agent("saved", "rt-test", "codex", ".", "Saved", Some(id)).unwrap();
+        dispatch(&st, "agent.delete", json!({"agentId":id})).await.unwrap();
+        dispatch(&st, "agent.restore", json!({"agentId":id})).await.unwrap();
+        assert_eq!(st.db.agent_get(id).unwrap()["archived"], false);
+        assert!(st.db.session_exists("saved").unwrap());
+        let mut restored = false;
+        while let Ok(event) = events.try_recv() { if event.event_type == "agent.changed" && event.payload["action"] == "restored" { restored = true; } }
+        assert!(restored);
+        st.db.agent_archive(id).unwrap();
+        st.db.agent_create(&json!({"name":"Undo Blob","runtimeId":"rt-test"})).unwrap();
+        assert_eq!(dispatch(&st, "agent.restore", json!({"agentId":id})).await.unwrap_err().1.code, "conflict");
+    }
+
+    #[tokio::test]
+    async fn experimental_titles_are_opt_in_and_emit_on_the_first_main_prompt() {
+        let (mut st, mut events) = state();
+        let runtime = json!({"id":"rt-test","provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await = vec![runtime];
+        let adapter = Arc::new(TeamAdapter::default());
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter, claude:Arc::new(ClaudeAdapter::default()) });
+        st.db.set_setting("exec_gate.codex.instructions", &json!(true)).unwrap();
+        let data_dir = std::env::temp_dir().join(format!("bloblex-titles-{}", Uuid::new_v4()));
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        for enabled in [false, true] {
+            st.db.set_setting("experimental.autoTitles", &json!(enabled)).unwrap();
+            let name = if enabled { "Enabled" } else { "Disabled" };
+            let agent = st.db.agent_create(&json!({"name":name,"runtimeId":"rt-test"})).unwrap().0;
+            let opened = dispatch(&st, "agent.conversation", json!({"agentId":agent["id"]})).await.unwrap();
+            let sid = opened["session"]["id"].as_str().unwrap();
+            dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"Fix the build and check tests please!"})).await.unwrap();
+            wait_for_messages(&st, sid, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+            assert_eq!(st.db.session_detail(sid).unwrap()["title"], if enabled { "Fix the build and check tests" } else { name });
+            if enabled {
+                let mut titled = false;
+                while let Ok(event) = events.try_recv() { if event.event_type == "session.changed" && event.payload["title"] == "Fix the build and check tests" { titled = true; } }
+                assert!(titled);
+                dispatch(&st, "session.rename", json!({"sessionId":sid,"title":"Custom title"})).await.unwrap();
+                dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"Something else"})).await.unwrap();
+                wait_for_messages(&st, sid, |m| m.iter().filter(|m| m["role"] == "assistant").count() >= 2).await;
+                assert_eq!(st.db.session_detail(sid).unwrap()["title"], "Custom title");
+            }
+        }
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn experimental_quit_finishes_deletion_instead_of_losing_the_window_timer() {
+        let (st, _) = state();
+        st.db.create_session("quit-delete", "rt-test", "codex", ".", "Saved").unwrap();
+        st.db.update_session_state("quit-delete", "idle").unwrap();
+        st.db.set_setting("experimental.undo", &json!(true)).unwrap();
+        dispatch(&st, "session.delete.schedule", json!({"sessionId":"quit-delete"})).await.unwrap();
+        assert!(st.db.session_exists("quit-delete").unwrap());
+        dispatch(&st, "daemon.shutdown", json!({})).await.unwrap();
+        assert!(!st.db.session_exists("quit-delete").unwrap());
+    }
+
+    #[tokio::test]
+    async fn experimental_revert_rpc_scopes_saved_changes_and_records_success() {
+        let (st, _) = state();
+        let path = std::env::temp_dir().join(format!("bloblex-revert-rpc-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        for args in [vec!["init", "-q"], vec!["config", "core.autocrlf", "false"]] {
+            assert!(std::process::Command::new("git").current_dir(&path).args(args).status().unwrap().success());
+        }
+        std::fs::write(path.join("a.txt"), "new\n").unwrap();
+        std::fs::write(path.join("other.txt"), "keep\n").unwrap();
+        st.db.create_session("revert-rpc", "rt-test", "codex", &path.to_string_lossy(), "Saved").unwrap();
+        st.db.update_session_state("revert-rpc", "idle").unwrap();
+        st.db.insert_file_in_turn("revert-rpc", Some("turn"), "a.txt", &json!({"diff":"--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n"})).unwrap();
+        let row = st.db.session_detail("revert-rpc").unwrap();
+        let id = row["files"][0]["id"].as_str().unwrap();
+        assert_eq!(dispatch(&st, "file.revert", json!({"sessionId":"other-session","fileChangeId":id})).await.unwrap_err().1.code, "not_found");
+        dispatch(&st, "file.revert", json!({"sessionId":"revert-rpc","fileChangeId":id})).await.unwrap();
+        assert_eq!(std::fs::read_to_string(path.join("a.txt")).unwrap(), "old\n");
+        assert_eq!(std::fs::read_to_string(path.join("other.txt")).unwrap(), "keep\n");
+        assert_eq!(st.db.session_detail("revert-rpc").unwrap()["files"][0]["detail"]["reverted"], true);
+        std::fs::write(path.join("a.txt"), "new\n").unwrap();
+        assert!(dispatch(&st, "file.revert", json!({"sessionId":"revert-rpc","fileChangeId":id})).await.unwrap_err().1.message.contains("already reverted"));
+        assert_eq!(std::fs::read_to_string(path.join("a.txt")).unwrap(), "new\n");
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default())};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default())};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -3648,6 +3836,21 @@ mod phase2a_tests {
         let claude=json!({"id":"rt-claude","provider":"claude"});*st.runtimes.write().await=vec![claude];let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-claude"})).await.unwrap();assert_eq!(caps["settings"]["serviceTier"]["supported"],true);assert_eq!(caps["settings"]["serviceTier"]["enabled"],true,"Claude fast mode is catalog-validated and open unless its gate is disabled");assert_eq!(caps["settings"]["thinking"]["evidence"],"usage_effect");
         *st.runtimes.write().await=vec![json!({"id":"rt-opencode","provider":"opencode"})];st.db.upsert_runtime(&json!({"id":"rt-opencode","provider":"opencode"})).unwrap();let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(caps["settings"]["thinking"]["supported"],true);assert_eq!(caps["settings"]["thinking"]["enabled"],false);assert_eq!(caps["settings"]["serviceTier"]["supported"],false);st.db.set_setting("exec_gate.opencode.thinking",&json!(true)).unwrap();let enabled=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(enabled["settings"]["thinking"]["supported"],true);assert_eq!(enabled["settings"]["thinking"]["enabled"],true);
         let agent=st.db.agent_create(&json!({"name":"Capped","runtimeId":"rt-opencode","maxConcurrency":8})).unwrap().0;let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode","agentId":agent["id"]})).await.unwrap();assert_eq!(caps["agentConcurrency"]["configuredMaxConcurrency"],8);assert_eq!(caps["agentConcurrency"]["effectiveMaxConcurrency"],4);
+    }
+    #[tokio::test]
+    async fn simultaneous_refreshes_share_one_discovery_and_a_later_scan_runs_again() {
+        let (st, _) = state();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let work = || async {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            Vec::new()
+        };
+        let (first, second) = tokio::join!(refresh_runtime_discovery(&st, work()), refresh_runtime_discovery(&st, work()));
+        assert_eq!(first.unwrap(), second.unwrap());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        refresh_runtime_discovery(&st, work()).await.unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
     #[test]
     fn runtime_refresh_persists_fake_discovery_without_creating_or_changing_blobs() {

@@ -1,3 +1,4 @@
+import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { emit, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -14,6 +15,7 @@ import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
 import { applyAppearance } from './appearance'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
+import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTime, type DiscoveryStatus } from './runtimeDiscovery'
 import { ConfirmDialog } from './BlobPage'
 
 export type SettingsPageId = 'General' | 'Agents' | 'Speech' | 'Updates'
@@ -36,11 +38,12 @@ export function providerDisplayName(provider: string | undefined) {
   return providerBrand(provider ?? '').name || labelize(provider, 'Coding agent')
 }
 
-export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
+export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, experiments = DEFAULT_EXPERIMENTS, onExperimentChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
   snapshot: Snapshot | null
+  scanStatus?: DiscoveryStatus
   initialPage: SettingsPageId
   onClose: () => void
-  onRefresh: () => void
+  onRefresh: () => void | Promise<void>
   onError: (error: string | null) => void
   onOpenAgent: (agentId: string) => void
   onRunSetup?: () => void
@@ -52,6 +55,8 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
   activityDetails?: boolean
   onActivityDetailsChange?: (enabled: boolean) => void
   /** Experimental: each blob's coding-agent logo beside its name. */
+  experiments?: Experiments
+  onExperimentChange?: (name: ExperimentName, enabled: boolean) => void
   runtimeLogos?: boolean
   onRuntimeLogosChange?: (enabled: boolean) => void
   /** Speech: whether dictation is on at all, and the downloaded model it uses. */
@@ -62,6 +67,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
 }) {
   const { ref: dialogRef, close } = useDialogAccessibility(onClose)
   const [page, setPage] = useState<SettingsPageId>(focusUpdates ? 'Updates' : initialPage)
+  useEffect(() => { setPage(focusUpdates ? 'Updates' : initialPage) }, [initialPage, focusUpdates])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [profiles, setProfiles] = useState<Record<string, unknown>[]>([])
@@ -409,6 +415,7 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
               </form>
             </SettingsGroup>
             <SettingsGroup title="Experimental">
+
               <SettingsRow label={<span className="experimental-label">Usage bar<span className="experimental-tag">Experimental</span><HelpTip text="Shows each coding agent's plan limits (for example 5-hour and weekly usage) along the bottom of the main window, read from the sign-in each CLI already has. Turn it off if the numbers are not useful to you; the Usage page still has them." /></span>} hint="Plan limits for each coding agent, along the bottom of the window.">
                 <button type="button" className={`toggle ${usageBarEnabled ? 'on' : ''}`} role="switch" aria-label="Usage bar" aria-checked={usageBarEnabled} disabled={saving} onClick={() => { const next = !usageBarEnabled; void saveSetting('experimental.usageBar', next).then((failure) => { if (!failure) onUsageBarChange?.(next) }) }}><i /></button>
               </SettingsRow>
@@ -418,6 +425,9 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
               <SettingsRow label={<span className="experimental-label">Agent activity<span className="experimental-tag">Experimental</span><HelpTip text="Shows what each coding agent did during a reply as one line under it, for example “Ran 3 commands · edited 1 file”. Open it to see every step, then open a step for the command and its output, the tool and its result, or the file and its diff. In the companion, the Activity tab shows the same steps. When it is off you only see that a blob is working." /></span>} hint="Commands, tools and file edits under each reply, in the app and the companion.">
                 <button type="button" className={`toggle ${activityDetails ? 'on' : ''}`} role="switch" aria-label="Agent activity" aria-checked={activityDetails} disabled={saving} onClick={() => { const next = !activityDetails; void saveSetting('experimental.activityDetails', next).then((failure) => { if (!failure) onActivityDetailsChange?.(next) }) }}><i /></button>
               </SettingsRow>
+              {EXPERIMENTS.map(({ name, label, hint, help }) => <SettingsRow key={name} label={<span className="experimental-label">{label}<span className="experimental-tag">Experimental</span><HelpTip text={help} /></span>} hint={hint}>
+                <button type="button" className={`toggle ${experiments[name] ? 'on' : ''}`} role="switch" aria-label={label} aria-checked={experiments[name]} disabled={saving} onClick={() => { const next = !experiments[name]; void saveSetting(`experimental.${name}`, next).then((failure) => { if (!failure) onExperimentChange?.(name, next) }) }}><i /></button>
+              </SettingsRow>)}
             </SettingsGroup>
             <SettingsGroup title="Notifications">
               <SettingsRow label="Notify when a blob finishes or needs approval">
@@ -435,15 +445,20 @@ export function SettingsSheet({ snapshot, initialPage, onClose, onRefresh, onErr
                   : <Select ariaLabel="Default approval mode" variant="muted" value={defaultMode} disabled={saving} onChange={(value) => void saveDefaultMode(value)} options={[{ value: 'ask', label: 'Ask' }, { value: 'auto', label: 'Auto-approve' }]} />}
               </SettingsRow>
             </SettingsGroup>
-            <SettingsGroup title="Coding agents" action={<button type="button" className="ghost-button small" onClick={onRefresh} disabled={saving}><RefreshCw size={13} />Scan again</button>}>
-              {runtimes.length === 0 && <p className="settings-empty">No coding agents found on this device.</p>}
+            <SettingsGroup title="Coding agents" action={<button type="button" className="ghost-button small" onClick={() => void onRefresh()} disabled={saving || scanStatus.scanning} aria-busy={scanStatus.scanning}><RefreshCw size={13} className={scanStatus.scanning ? 'spinning' : ''} />{scanStatus.scanning ? 'Scanning…' : 'Scan again'}</button>}>
+              {(scanStatus.scanning || scanStatus.completedAt !== null) && <p className="settings-scan-status" role="status" data-failed={!!scanStatus.failure}>
+                {scanStatus.scanning && <span>Scanning…{scanStatus.failure ? ' ' : ''}</span>}
+                {scanStatus.failure ? <span>{scanStatus.failure.step}: {scanStatus.failure.message} <time dateTime={new Date(scanStatus.failure.at).toISOString()} title={new Date(scanStatus.failure.at).toLocaleString()}>{scanTime(scanStatus.failure.at)}</time>{scanStatus.retrying ? ' · Retrying automatically' : ''}</span> : !scanStatus.scanning && <span>{discoveryResultText(scanStatus)} · <time dateTime={new Date(scanStatus.completedAt!).toISOString()} title={new Date(scanStatus.completedAt!).toLocaleString()}>{scanTime(scanStatus.completedAt!)}</time></span>}
+              </p>}
+              {runtimes.length === 0 && !scanStatus.scanning && !scanStatus.failure && <p className="settings-empty">No coding agents found on this device.</p>}
               {runtimes.map((runtime) => {
                 const open = openRuntimes[runtime.id] === true
+                const probe = runtimeProbeDetail(runtime)
                 const owned = agents.filter((agent) => agent.runtimeId === runtime.id)
                 return <div className={`runtime-entry ${open ? 'open' : ''}`} key={runtime.id}>
                   <button type="button" className="settings-row runtime-entry-head" aria-expanded={open} onClick={() => setOpenRuntimes((current) => ({ ...current, [runtime.id]: !open }))}>
                     <ProviderLogo provider={runtime.provider} />
-                    <span className="settings-row-copy"><strong>{providerDisplayName(runtime.provider)}</strong><small>{[runtime.version, runtimeAuthSummary(runtime).label].filter(Boolean).join(' · ') || 'Details unavailable'}</small></span>
+                    <span className="settings-row-copy"><strong>{providerDisplayName(runtime.provider)}</strong><small>{[runtime.version, runtimeAuthSummary(runtime).label].filter(Boolean).join(' · ') || 'Details unavailable'}</small>{probe && <small className="runtime-probe-error">{probe.step}: {probe.message}</small>}</span>
                     <span className="settings-value">{owned.length === 1 ? '1 blob' : `${owned.length} blobs`}</span>
                     {open ? <ChevronDown size={15} className="row-chevron" aria-hidden="true" /> : <ChevronRight size={15} className="row-chevron" aria-hidden="true" />}
                   </button>

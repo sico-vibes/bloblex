@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
-  rpc: vi.fn(), fetchSnapshot: vi.fn(), ensureDaemon: vi.fn(), startDaemonEventStream: vi.fn(),
+  approvalBadge: vi.fn(), rpc: vi.fn(), fetchSnapshot: vi.fn(), ensureDaemon: vi.fn(), startDaemonEventStream: vi.fn(),
   getActiveSession: vi.fn(), getActiveRuntime: vi.fn(), setActiveSession: vi.fn(), setActiveRuntime: vi.fn(),
   setCompanionMode: vi.fn(), setCompanionVisibility: vi.fn(), showMainWindow: vi.fn(), showMainSettings: vi.fn(),
   companionMonitorOptions: vi.fn(), currentCompanionMonitor: vi.fn(), setCompanionMonitor: vi.fn(), refreshTrayMenu: vi.fn(),
@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  setApprovalBadge: async (count: number) => { h.approvalBadge(count) },
   previewMode: false,
   rpc: h.rpc,
   permissionsPolicyGet: async () => ({ defaultMode: 'ask', perAgent: [] }),
@@ -890,4 +891,115 @@ describe('blob roster and editor', () => {
     expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
   })
 
+})
+
+describe('opt-in conversation experiments', () => {
+  const experimentalSession = session({
+    id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Review the saved changes',
+    messages: [
+      { id: 'u1', role: 'user', content: 'Original prompt', sequence: 1, turnId: 't1' },
+      { id: 'a1', role: 'assistant', content: 'First reply', sequence: 2, turnId: 't1' },
+      { id: 'u2', role: 'user', content: 'Latest prompt', sequence: 3, turnId: 't2' },
+      { id: 'a2', role: 'assistant', content: 'Latest reply', sequence: 4, turnId: 't2' },
+    ],
+    turns: [{ id: 't1', state: 'completed' }, { id: 't2', state: 'completed' }],
+    files: [{ id: 'f1', turnId: 't1', path: 'a.ts', detail: { diff: '--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n' } }],
+  })
+  function prepare(enabled: boolean, extraSessions: Session[] = []) {
+    configure(snapshot({ sessions: [experimentalSession, ...extraSessions] }))
+    const original = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'settings.get') return { settings: Object.fromEntries(['changeReview', 'messageActions', 'search', 'autoTitles', 'undo', 'shortcuts', 'approvalBadge'].map((name) => [`experimental.${name}`, enabled])) }
+      if (method === 'session.get') return [experimentalSession, ...extraSessions].find((s) => s.id === params.sessionId)
+      return original(method, params)
+    })
+  }
+  it('has unchanged message UI, header and shortcut behavior while switches are off', async () => {
+    prepare(false)
+    const view = startApp(); await view.settle()
+    expect(view.host.querySelector('.message-actions')).toBeNull()
+    expect(view.host.querySelector('.change-review')).toBeNull()
+    expect(view.host.querySelector('.conversation-auto-title')).toBeNull()
+    await press(document.body, '/', { ctrlKey: true })
+    expect(view.host.querySelector('[aria-label="Keyboard shortcuts"]')).toBeNull()
+    await click(view.host.querySelector('[aria-label="Open quick switcher"]'))
+    expect(view.host.textContent).not.toContain('Search messages')
+  })
+  it('edits drafts, retries only the latest user text, and keeps history intact', async () => {
+    prepare(true)
+    const view = startApp(); await view.settle()
+    expect(view.host.querySelectorAll('[aria-label="Retry message"]')).toHaveLength(1)
+    await click(view.host.querySelector('[aria-label="Edit message"]')); await view.settle()
+    expect(view.host.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('Original prompt')
+    await click(view.host.querySelector('[aria-label="Retry message"]')); await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId: 'session-claude', text: 'Latest prompt' })
+    expect(experimentalSession.messages?.map((m) => m.content)).toEqual(['Original prompt', 'First reply', 'Latest prompt', 'Latest reply'])
+    expect(view.host.querySelector('.conversation-auto-title')?.textContent).toBe('Review the saved changes')
+  })
+
+  it('shows the daemon’s safe refusal after a failed Revert and leaves the file in review', async () => {
+    prepare(true)
+    const original = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'file.revert') throw new Error('The saved diff was clipped or incomplete; this change cannot be reverted safely.')
+      return original(method, params)
+    })
+    const view = startApp(); await view.settle()
+    await click(buttonNamed(view.host, 'Revert')); await view.settle()
+    await click(buttonNamed(view.host, 'Revert change')); await view.settle()
+    expect(view.host.textContent).toContain('The saved diff was clipped or incomplete')
+    expect(view.host.querySelector('.change-review')).not.toBeNull()
+    expect(view.host.querySelector('[role="dialog"]')).toBeNull()
+  })
+  it('requires confirmation for Revert and remembers Keep within a session', async () => {
+    prepare(true)
+    const view = startApp(); await view.settle()
+    await click(buttonNamed(view.host, 'Revert')); await view.settle()
+    expect(h.rpc.mock.calls.some(([method]) => method === 'file.revert')).toBe(false)
+    expect(view.host.querySelector('[role="dialog"]')?.textContent).toContain('Revert a.ts?')
+    await click(buttonNamed(view.host, 'Keep it')); await view.settle()
+    await click(buttonNamed(view.host, 'Keep')); await view.settle()
+    expect(view.host.querySelector('.change-review')).toBeNull()
+    await click(view.host.querySelector('[aria-label="Open quick switcher"]'))
+    await press(document.body, 'Escape')
+    expect(view.host.querySelector('.change-review')).toBeNull()
+  })
+
+  it('clears the native badge by default and follows live approvalBadge setting changes', async () => {
+    prepare(false)
+    h.fetchSnapshot.mockResolvedValue(snapshot({
+      sessions: [experimentalSession],
+      permissions: [{ id: 'question', sessionId: 'session-claude', status: 'pending', kind: 'question', title: 'Which option?', questions: [] }],
+    }))
+    const view = startApp(); await view.settle()
+    expect(h.approvalBadge).toHaveBeenLastCalledWith(0)
+    act(() => emit({ type: 'settings.changed', sequence: 21, payload: { key: 'experimental.approvalBadge', value: true } }))
+    await view.settle()
+    expect(h.approvalBadge).toHaveBeenLastCalledWith(1)
+    act(() => emit({ type: 'settings.changed', sequence: 22, payload: { key: 'experimental.approvalBadge', value: false } }))
+    await view.settle()
+    expect(h.approvalBadge).toHaveBeenLastCalledWith(0)
+  })
+  it('opens the shortcut sheet through Ctrl+/ and closes it through Esc', async () => {
+    prepare(true)
+    const view = startApp(); await view.settle()
+    await press(document.body, '/', { ctrlKey: true }); await view.settle()
+    expect(view.host.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('Keyboard shortcuts')
+    await press(document.body, 'Escape')
+    expect(view.host.querySelector('[role="dialog"]')).toBeNull()
+  })
+  it('opens a search result as a read-only side conversation and focuses its message', async () => {
+    const side = session({ id: 'side', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Side topic', link: { kind: 'side', peerAgentId: 'agent-codex', peerName: 'Codex', topic: 'Side topic' }, messages: [{ id: 'side-u', role: 'user', content: 'Side needle', sequence: 1 }] })
+    prepare(true, [side])
+    const original = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => method === 'search.messages' ? { results: [{ sessionId: 'side', blobId: 'agent-claude', title: 'Side topic', role: 'user', messageId: 'side-u', createdAt: '2026-10-10T12:00:00Z', snippet: 'Side needle' }] } : original(method, params))
+    const view = startApp(); await view.settle()
+    await click(view.host.querySelector('[aria-label="Open quick switcher"]')); await click(view.host.querySelector('[data-result-id="search-messages"]')); await view.settle()
+    await typeInto(view.host.querySelector<HTMLInputElement>('[aria-label="Search message text"]'), 'needle')
+    await act(async () => { await vi.advanceTimersByTimeAsync(200) })
+    await click(view.host.querySelector('[role="option"]')); await view.settle()
+    expect(view.host.querySelector('.side-close')).not.toBeNull()
+    expect(view.host.querySelector('.message-actions')).toBeNull()
+    expect(document.activeElement?.id).toBe('conversation-message-message%3Aside-u')
+  })
 })

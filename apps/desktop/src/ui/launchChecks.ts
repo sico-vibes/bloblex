@@ -26,7 +26,7 @@ export function runtimeAuthSummary(runtime: { provider: string; authState?: stri
   return { state: fallback, label: fallback === 'authenticated' ? 'Signed in' : fallback === 'unauthenticated' ? 'Not signed in' : 'Sign-in status unknown' }
 }
 
-export const LAUNCH_TIMEOUTS = { service: 12_000, discovery: 12_000, agent: 1_000, models: 10_000, usage: 8_000, overall: 90_000 } as const
+export const LAUNCH_TIMEOUTS = { service: 12_000, discovery: 31_000, agent: 1_000, models: 10_000, usage: 8_000, overall: 90_000 } as const
 export const LAUNCH_OVERALL_TIMEOUT_REASON = 'launch-overall-timeout'
 
 export function throwIfLaunchAborted(signal: AbortSignal) {

@@ -382,6 +382,68 @@ async fn rpc_call(
     Ok(body.result.unwrap_or(Value::Null))
 }
 
+#[cfg(target_os = "windows")]
+fn approval_overlay(count: u32) -> tauri::image::Image<'static> {
+    let mut rgba = vec![0u8; 32 * 32 * 4];
+    for y in 0..32i32 {
+        for x in 0..32i32 {
+            if (x - 16).pow(2) + (y - 16).pow(2) <= 225 {
+                let at = ((y * 32 + x) * 4) as usize;
+                rgba[at..at + 4].copy_from_slice(&[232, 176, 75, 255]);
+            }
+        }
+    }
+    let digits = [
+        [7u8, 5, 5, 5, 7], [2, 6, 2, 2, 7], [7, 1, 7, 4, 7], [7, 1, 7, 1, 7],
+        [5, 5, 7, 1, 1], [7, 4, 7, 1, 7], [7, 4, 7, 5, 7], [7, 1, 1, 1, 1],
+        [7, 5, 7, 5, 7], [7, 5, 7, 1, 7],
+    ];
+    let digit = digits[count.min(9) as usize];
+    for (row, bits) in digit.iter().enumerate() {
+        for col in 0..3 {
+            if bits & (1 << (2 - col)) == 0 { continue; }
+            for dy in 0..3 { for dx in 0..3 {
+                let x = 10 + col * 3 + dx;
+                let y = 8 + row * 3 + dy;
+                let at = (y * 32 + x) * 4;
+                rgba[at..at + 4].copy_from_slice(&[14, 14, 14, 255]);
+            }}
+        }
+    }
+    if count > 9 {
+        for (x, y) in [(24, 14), (24, 15), (24, 16), (23, 15), (25, 15)] {
+            let at = (y * 32 + x) * 4;
+            rgba[at..at + 4].copy_from_slice(&[14, 14, 14, 255]);
+        }
+    }
+    tauri::image::Image::new_owned(rgba, 32, 32)
+}
+
+#[tauri::command]
+fn set_approval_badge(app: AppHandle, window: tauri::WebviewWindow, count: u32) -> Result<(), String> {
+    if window.label() != "main" { return Err("Only the main window can update the approval badge.".into()); }
+    #[cfg(target_os = "windows")]
+    window.set_overlay_icon(if count == 0 { None } else { Some(approval_overlay(count)) }).map_err(|_| "Could not update the taskbar badge.".to_string())?;
+    if let Some(tray) = app.tray_by_id("bloblex-tray") {
+        let tooltip = if count == 0 { "Bloblex".to_owned() } else { format!("Bloblex: {count} waiting") };
+        tray.set_tooltip(Some(tooltip)).map_err(|_| "Could not update the tray tooltip.".to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod approval_overlay_tests {
+    use super::*;
+    #[test]
+    fn overlay_is_rgba_with_transparent_corners_and_visible_count() {
+        let icon = approval_overlay(3);
+        assert_eq!((icon.width(), icon.height()), (32, 32));
+        assert_eq!(&icon.rgba()[0..4], &[0, 0, 0, 0]);
+        assert!(icon.rgba().chunks_exact(4).any(|p| p == [14, 14, 14, 255]));
+        assert_ne!(approval_overlay(1).rgba(), approval_overlay(9).rgba());
+    }
+}
+
 #[tauri::command]
 async fn daemon_rpc(
     state: State<'_, AppState>,
@@ -2135,6 +2197,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             daemon_rpc,
+            set_approval_badge,
             daemon_events_start,
             ensure_daemon,
             select_project_folder,

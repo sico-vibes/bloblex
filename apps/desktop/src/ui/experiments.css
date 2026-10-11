@@ -1,0 +1,24 @@
+.message-action-shell { position: relative; }
+.message-actions { display: flex; justify-content: flex-end; gap: 4px; opacity: 0; padding: 2px 0; }
+.message-action-shell:hover .message-actions, .message-action-shell:focus-within .message-actions { opacity: 1; }
+.message-actions button:focus-visible { outline: 2px solid var(--text-2); }
+.change-review { margin: 12px 0 20px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; color: var(--text-2); font-size: 13px; }
+.change-review > strong { color: var(--text-1); }
+.change-review ul { padding: 0; margin: 8px 0 0; list-style: none; }
+.change-review li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 0; }
+.change-review .review-path { flex: 1; min-width: 120px; justify-content: flex-start; color: var(--text-1); text-align: left; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; overflow-wrap: anywhere; }
+.review-counts { font-variant-numeric: tabular-nums; }
+.review-counts > span { color: var(--status-success); }
+.conversation-auto-title { color: var(--text-3); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+.message-search-result { align-items: flex-start; }
+.message-search-result time { color: var(--text-3); font-size: 12px; }
+.message-search-result mark { background: var(--surface-selected-strong); color: var(--text-1); }
+.shortcut-sheet { padding: 20px; }
+.shortcut-sheet header { display: flex; align-items: center; justify-content: space-between; }
+.shortcut-sheet h2 { font-size: 18px; margin: 0; }
+.shortcut-sheet dl > div { display: flex; gap: 16px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.shortcut-sheet dt { flex: 0 0 150px; color: var(--text-1); }
+.shortcut-sheet dd { margin: 0; color: var(--text-2); }
+.undo-toasts { position: fixed; bottom: 24px; right: 24px; z-index: 120; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 48px)); }
+.undo-toast { display: flex; align-items: center; gap: 20px; justify-content: space-between; background: var(--surface-overlay); color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 16px; }
+@media (hover: none) { .message-actions { opacity: 1; } }

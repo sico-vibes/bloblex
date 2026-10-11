@@ -1,6 +1,7 @@
 // Development-only stand-in for src/tauri.ts, wired by vite.preview.config.ts
 // so the real App can be inspected in a browser without the daemon. Every
 // value below is a visual fixture, not product data.
+import { EXPERIMENTS } from '../ui/experiments'
 import type { Agent, DaemonEvent, PermissionRequest, Project, Runtime, Session, Snapshot } from '../types'
 import { answerUsageAnalytics } from '../ui/analyticsFixtures'
 import { normalizeAnalytics } from '../ui/analyticsFormat'
@@ -10,6 +11,8 @@ import { parseUpdateChannel, type UpdateChannel, type UpdateInfo, type UpdatePro
 
 type Unlisten = () => void
 const noop: Unlisten = () => undefined
+let discoveryAttempts = 0
+const pendingDeletes = new Map<string, { deadline: number; timer: number; archived: boolean }>()
 const fixtureSettings: Record<string, unknown> = { 'notifications.enabled': true }
 const daemonListeners = new Set<(event: DaemonEvent) => void>()
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
@@ -240,11 +243,21 @@ function fixtureCatalog(runtimeId: string) {
 export const inDesktop = true
 export const previewMode = true
 export async function rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  if (method === 'runtime.refresh') {
+    discoveryAttempts += 1
+    // ?discovery-timeout-once exercises timeout, background recovery and confirmation.
+    if (flags().has('discovery-timeout-once') && discoveryAttempts === 1) await new Promise((resolve) => window.setTimeout(resolve, 31_000))
+    else await new Promise((resolve) => window.setTimeout(resolve, 900))
+    const runtimes = baseRuntimes.map((runtime) => flags().has('discovery-probe-error') && runtime.provider === 'codex' ? { ...runtime, probeStep: 'Protocol check', probeError: 'Probe timed out.', status: 'error' } : { ...runtime })
+    notifyFixtureDaemon('runtime.changed', { runtimes })
+    return { runtimes } as T
+  }
   if (method === 'events.replay') return { replayAvailable: true, events: [] } as T
   if (method === 'quota.list') return { quotas: fixtureQuotas() } as T
   if (method === 'quota.refresh') { window.setTimeout(() => notifyFixtureDaemon('quota.updated', {}), 600); return { started: true } as T }
   if (method === 'settings.get') {
     // Preview flags: ?activity turns on Agent activity, ?usage-bar the usage bar, ?chat=small|medium|large sizes the companion chat.
+    if (flags().has('experiments')) for (const { name } of EXPERIMENTS) fixtureSettings[`experimental.${name}`] = true
     if (flags().has('activity')) fixtureSettings['experimental.activityDetails'] = true
     if (flags().has('usage-bar')) fixtureSettings['experimental.usageBar'] = true
     if (flags().has('logos')) fixtureSettings['experimental.runtimeLogos'] = true
@@ -270,6 +283,56 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     session.updatedAt = new Date().toISOString()
     notifyFixtureDaemon('session.changed', { session: { ...session } })
     return { session } as T
+  }
+  if (method === 'search.messages') {
+    const query = String(params.query ?? '').trim().toLowerCase()
+    const results = query ? sessions.filter((session) => !session.archived).flatMap((session) => (session.messages ?? []).filter((message) => ['user', 'assistant'].includes(String(message.role)) && String(message.content ?? message.text ?? '').toLowerCase().includes(query)).map((message) => {
+      const text = String(message.content ?? message.text ?? '')
+      const at = text.toLowerCase().indexOf(query)
+      const start = Math.max(0, at - 45)
+      const agent = agents.find((a) => a.id === session.agentId)
+      return { sessionId: session.id, blobId: session.agentId, blob: agent ? { id: agent.id, name: agent.name, color: agent.color, look: agent.look, archived: agent.archived } : null, title: session.title, role: message.role, messageId: message.id, createdAt: message.createdAt ?? session.updatedAt, snippet: text.slice(start, Math.max(start + 180, at + query.length + 45)) }
+    })).slice(0, 50) : []
+    return { results } as T
+  }
+  if (method === 'file.revert') {
+    const session = sessions.find((s) => s.id === params.sessionId)
+    const file = session?.files?.find((f) => f.id === params.fileChangeId)
+    if (!file) throw rpcError('not_found', 'File change not found.')
+    return { reverted: true } as T
+  }
+  if (method === 'agent.restore') {
+    const agent = agents.find((a) => a.id === params.agentId)
+    if (!agent) throw rpcError('not_found', 'Blob not found.')
+    if (agents.some((a) => !a.archived && a.id !== agent.id && a.name.toLowerCase() === agent.name.toLowerCase())) throw rpcError('conflict', 'Another blob uses this name.')
+    agent.archived = false
+    notifyFixtureDaemon('agent.changed', { agent })
+    return { agent: { ...agent } } as T
+  }
+  if (method === 'session.delete.schedule') {
+    const session = sessions.find((s) => s.id === params.sessionId)
+    if (!session) throw rpcError('not_found', 'Conversation not found.')
+    if (['starting', 'working', 'cancelling', 'waiting_permission'].includes(String(session.state))) throw rpcError('conflict', 'Cannot delete an active conversation.')
+    const existing = pendingDeletes.get(session.id)
+    if (existing) return { deadline: existing.deadline } as T
+    const deadline = Date.now() + 8000
+    const archived = session.archived === true
+    session.archived = true
+    const timer = window.setTimeout(() => { pendingDeletes.delete(session.id); void rpc('session.delete', { sessionId: session.id }) }, 8000)
+    pendingDeletes.set(session.id, { deadline, timer, archived })
+    notifyFixtureDaemon('session.changed', { session: { ...session } })
+    return { deadline } as T
+  }
+  if (method === 'session.delete.cancel') {
+    const id = String(params.sessionId)
+    const pending = pendingDeletes.get(id)
+    const session = sessions.find((s) => s.id === id)
+    if (!pending || !session || Date.now() >= pending.deadline) throw rpcError('conflict', 'The Undo period has ended.')
+    window.clearTimeout(pending.timer)
+    pendingDeletes.delete(id)
+    session.archived = pending.archived
+    notifyFixtureDaemon('session.changed', { session: { ...session } })
+    return { cancelled: true, session: { ...session } } as T
   }
   if (method === 'session.delete') {
     const index = sessions.findIndex((item) => item.id === params.sessionId)
@@ -331,11 +394,15 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const references = refs.map((id) => sessions.find((item) => item.id === id)).filter((item): item is Session => !!item).map((item) => ({ id: item.id, title: String(item.link?.topic ?? item.title ?? 'Conversation') }))
     const next = (session.messages ?? []).reduce((top, message) => Math.max(top, Number(message.sequence) || 0), 0) + 1
     const now = new Date().toISOString()
-    session.messages = [...(session.messages ?? []), { id: `preview-user-${next}`, sequence: next, role: 'user', content: String(params.text ?? ''), createdAt: now, ...(references.length ? { references } : {}) }]
+    if ((fixtureSettings['experimental.autoTitles'] === true || flags().has('experiments')) && session.link?.kind !== 'side' && !(session.messages ?? []).some((m) => m.role === 'user')) {
+      const owner = agents.find((a) => a.id === session.agentId)
+      if (owner && session.title === owner.name) session.title = String(params.text ?? '').split(/\s+/).slice(0, 6).join(' ').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').slice(0, 48)
+    }
+    session.messages = [...(session.messages ?? []), { id: `preview-user-${next}`, turnId: `preview-turn-${next}`, sequence: next, role: 'user', content: String(params.text ?? ''), createdAt: now, ...(references.length ? { references } : {}) }]
     session.updatedAt = now
     notifyFixtureDaemon('session.changed', { session: { ...session } })
     window.setTimeout(() => {
-      session.messages = [...(session.messages ?? []), { id: `preview-reply-${next}`, sequence: next + 1, role: 'assistant', content: references.length ? `Picking up "${references[0].title}" where it left off.` : 'Got it.', createdAt: new Date().toISOString() }]
+      session.messages = [...(session.messages ?? []), { id: `preview-reply-${next}`, turnId: `preview-turn-${next}`, sequence: next + 1, role: 'assistant', content: references.length ? `Picking up "${references[0].title}" where it left off.` : 'Got it.', createdAt: new Date().toISOString() }]
       notifyFixtureDaemon('session.changed', { session: { ...session } })
     }, 700)
     return { turnId: `preview-turn-${next}` } as T
@@ -493,7 +560,26 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   if (method === 'usage.analytics') return answerUsageAnalytics(params, flags().get('analytics')) as T
   return {} as T
 }
-export async function fetchSnapshot() { return currentSnapshot() }
+let experimentalFixtureSeeded = false
+function seedExperimentalFixtures() {
+  if (!flags().has('experiments') || experimentalFixtureSeeded) return
+  experimentalFixtureSeeded = true
+  for (const session of sessions) {
+    if (session.archived || session.link?.kind === 'side') continue
+    let turnId: string | null = null
+    for (const message of session.messages ?? []) {
+      if (message.role === 'user') turnId = String(message.turnId ?? `fixture-turn-${session.id}-${message.id}`)
+      if (message.role === 'user' || message.role === 'assistant') message.turnId ??= turnId ?? undefined
+    }
+    const reply = (session.messages ?? []).filter((m) => m.role === 'assistant' && m.turnId).at(-1)
+    if (reply && !(session.files?.length)) session.files = [{
+      id: `fixture-review-${session.id}`, turnId: reply.turnId, path: 'docs/example.md',
+      detail: { path: 'docs/example.md', change: 'update', diff: '--- a/docs/example.md\n+++ b/docs/example.md\n@@ -1 +1 @@\n-Old note\n+Updated note\n' },
+    }]
+  }
+}
+
+export async function fetchSnapshot() { seedExperimentalFixtures(); return currentSnapshot() }
 export async function ensureDaemon() {}
 export async function startDaemonEventStream() {}
 export async function openProjectFolder() { return null }
@@ -673,3 +759,5 @@ export async function fetchUsageAnalytics(request: UsageAnalyticsRequest) {
   if (!parsed) throw new Error('internal: Usage analytics could not be loaded.')
   return parsed
 }
+
+export async function setApprovalBadge(_count: number): Promise<void> { /* No native taskbar in the browser preview. */ }

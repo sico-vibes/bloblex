@@ -6,6 +6,8 @@ use std::{fs, path::{Path, PathBuf}, sync::Mutex};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod experiments;
+
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("sqlite: {0}")]
@@ -2531,7 +2533,9 @@ pub fn file_detail(path: &str, raw: &Value) -> Value {
     let change = raw["changes"].as_array().and_then(|changes| changes.iter().find(|change| change["path"].as_str() == Some(path)).or(changes.first())).cloned().unwrap_or(Value::Null);
     let mut detail = json!({"path": path});
     if let Some(kind) = change["kind"].as_str().or(change["kind"]["type"].as_str()).or(raw["kind"].as_str()) { detail["change"] = json!(kind); }
-    if let Some(diff) = change["diff"].as_str().or(change["unified_diff"].as_str()).or(raw["diff"].as_str()) { detail["diff"] = json!(clip_text(diff, DETAIL_TEXT_LIMIT)); }
+    if let Some(diff) = change["diff"].as_str().or(change["unified_diff"].as_str()).or(raw["diff"].as_str()) { let clipped = diff.chars().count() > DETAIL_TEXT_LIMIT;
+        detail["diff"] = json!(if clipped { clip_text(diff, DETAIL_TEXT_LIMIT) } else { diff.to_owned() });
+        if clipped || ["clipped", "truncated", "incomplete", "diffClipped"].iter().any(|key| change[*key] == true || raw[*key] == true) || change["complete"] == false || raw["complete"] == false { detail["diffClipped"] = json!(true); } }
     detail
 }
 

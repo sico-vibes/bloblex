@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  setApprovalBadge: async () => undefined,
   previewMode: false,
   rpc: h.rpc,
   permissionsPolicyGet: async () => ({ defaultMode: 'ask', perAgent: [] }),
@@ -417,5 +418,49 @@ describe('companion drag and usage labels', () => {
     const tokenCounts = [...(grid?.querySelectorAll('strong') ?? [])].map((node) => node.textContent)
     expect(tokenCounts).toEqual(['100', '50'])
     expect(grid?.textContent).not.toMatch(/\$0|£0|€0/)
+  })
+})
+
+describe('side conversations across windows', () => {
+  it('closes a side conversation for good while the companion is open', async () => {
+    const main = session({
+      id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude',
+      messages: [
+        { id: 'u1', sequence: 1, role: 'user', content: 'Ask Codex which model it runs.' },
+        { id: 'n1', sequence: 2, role: 'notice', content: 'Which model are you on?', meta: { kind: 'delegation', direction: 'sent', peerAgentId: 'agent-codex', peerName: 'Codex', sideSessionId: 'session-side' } },
+      ],
+    })
+    const side = session({ id: 'session-side', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Model check', link: { kind: 'side', peerAgentId: 'agent-claude', peerName: 'Claude', originSessionId: 'session-claude', topic: 'Model check' }, messages: [{ id: 's1', sequence: 1, role: 'assistant', content: 'GPT-5.5.' }] })
+    configure(snapshot({ sessions: [main, side] }))
+    // The native active session notifies every window; capture this window's listener.
+    const handlers: Array<(sessionId: string | null) => void> = []
+    const announced: Array<string | null> = []
+    h.listenForActiveSession.mockImplementation(async (handler: (sessionId: string | null) => void) => { handlers.push(handler); return vi.fn() })
+    h.setActiveSession.mockImplementation(async (sessionId: string | null) => { announced.push(sessionId) })
+    const deliver = async (view: ReturnType<typeof startApp>, sessionId: string | null) => { await act(async () => { for (const handler of handlers) handler(sessionId) }); await view.settle() }
+
+    // The companion follows the main window opening and closing a side conversation,
+    // and must never announce the side conversation back (that reopened it at once).
+    const companionWindow = startApp('?companion=1')
+    await companionWindow.settle()
+    announced.length = 0
+    await deliver(companionWindow, 'session-side')
+    await deliver(companionWindow, 'session-claude')
+    await companionWindow.settle()
+    expect(announced).not.toContain('session-side')
+    companionWindow.unmount()
+
+    // In the main window, another conversation becoming active closes the side view.
+    handlers.length = 0
+    configure(snapshot({ sessions: [main, side] }))
+    h.listenForActiveSession.mockImplementation(async (handler: (sessionId: string | null) => void) => { handlers.push(handler); return vi.fn() })
+    const mainWindow = startApp()
+    await mainWindow.settle()
+    await act(async () => { mainWindow.host.querySelector<HTMLButtonElement>('.team-chip')!.click() })
+    await mainWindow.settle()
+    expect(mainWindow.host.querySelector('.side-header')).not.toBeNull()
+    await deliver(mainWindow, 'session-claude')
+    expect(mainWindow.host.querySelector('.side-header')).toBeNull()
+    expect(mainWindow.host.querySelector('.composer-box textarea')?.getAttribute('aria-label')).toBe('Message Claude')
   })
 })

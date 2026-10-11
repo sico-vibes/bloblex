@@ -317,3 +317,8 @@ export async function listenForSpeechDownload(handler: (progress: { modelId: str
   if (!inDesktop) return () => undefined
   return listen<{ modelId: string; completed: number; total: number }>('bloblex-speech-download', (event) => handler(event.payload))
 }
+
+/** Main-window owned waiting badge; non-Windows platforms keep the tray tooltip. */
+export async function setApprovalBadge(count: number): Promise<void> {
+  if (inDesktop) await invoke('set_approval_badge', { count: Math.max(0, Math.floor(count)) })
+}

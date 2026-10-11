@@ -1,6 +1,6 @@
 import { rpc } from '../tauri'
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
-import { ChevronsUpDown, Gauge, LogOut, Pencil, RefreshCw, Settings2 } from 'lucide-react'
+import { ChevronsUpDown, Gauge, LogOut, Pencil, Settings2, Keyboard } from 'lucide-react'
 import type { ConnectionState } from '../types'
 
 const NAME_KEY = 'bloblex.profile.name'
@@ -33,16 +33,15 @@ export function profileInitials(name: string) {
 
 /**
  * Bottom-left account button. Everything that used to sit in the sidebar foot
- * (usage, agent scan, settings, quit) lives in its menu, like a chat app's
+ * (usage, settings, quit) lives in its menu, like a chat app's
  * profile menu. The name is local to this device.
  */
-export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, onUsage, onFindAgents, onSettings, onQuit }: {
+export function ProfileMenu({ connection, usageActive, triggerRef, onUsage, onSettings, onQuit, onShortcuts }: {
   connection: ConnectionState
   usageActive: boolean
-  refreshing: boolean
   triggerRef?: RefObject<HTMLButtonElement | null>
   onUsage: () => void
-  onFindAgents: () => void
+  onShortcuts?: () => void
   onSettings: () => void
   onQuit: () => void
 }) {
@@ -124,8 +123,8 @@ export function ProfileMenu({ connection, usageActive, refreshing, triggerRef, o
     </button>
     {open && <div ref={menuRef} className="menu-surface profile-menu" role="menu" aria-label="Account" onKeyDown={onMenuKeyDown}>
       <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onUsage)}><Gauge size={15} />Usage</button>
-      <button type="button" role="menuitem" className="menu-item" disabled={!connected || refreshing} onClick={() => run(onFindAgents)}><RefreshCw size={15} className={refreshing ? 'spinning' : ''} />Find coding agents</button>
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(onSettings)}><Settings2 size={15} />Settings</button>
+      {onShortcuts && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onShortcuts)}><Keyboard size={15} />Keyboard shortcuts</button>}
       <span className="menu-separator" role="separator" />
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(() => { setDraft(name); setEditing(true) })}><Pencil size={15} />{name ? 'Edit name' : 'Add your name'}</button>
       <button type="button" role="menuitem" className="menu-item danger" onClick={() => run(onQuit)}><LogOut size={15} />Quit Bloblex</button>

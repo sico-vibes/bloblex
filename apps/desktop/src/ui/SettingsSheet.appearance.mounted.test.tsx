@@ -1,8 +1,11 @@
 // @vitest-environment happy-dom
-import { act } from 'react'
+import { act, useState } from 'react'
+import type { Runtime } from '../types'
+import { EMPTY_DISCOVERY_STATUS, useRuntimeDiscovery } from './runtimeDiscovery'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chooseOption, selectOptions, selectTrigger } from './testSelect'
+import { EXPERIMENTS } from './experiments'
 import { SettingsSheet } from './SettingsSheet'
 
 const mocks = vi.hoisted(() => ({ rpc: vi.fn(), invoke: vi.fn(), setCompanionMonitor: vi.fn(), setCompanionVisibility: vi.fn(), setCloseToTray: vi.fn() }))
@@ -41,6 +44,24 @@ beforeEach(() => {
 afterEach(() => { if (root) act(() => root.unmount()); host?.remove(); vi.unstubAllGlobals() })
 
 describe('General settings mounted controls', () => {
+
+  it.each(EXPERIMENTS)('keeps $label off by default and saves its exact setting key', async ({ name, label }) => {
+    mocks.invoke.mockResolvedValue(true)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
+    const onExperimentChange = vi.fn()
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onExperimentChange={onExperimentChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const toggle = host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    const row = toggle.closest('.settings-row')
+    expect(row?.querySelector('.experimental-tag')?.textContent).toBe('Experimental')
+    expect(row?.querySelector('[role="tooltip"]')?.textContent?.length).toBeGreaterThan(20)
+    await act(async () => { toggle.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: `experimental.${name}`, value: true })
+    expect(onExperimentChange).toHaveBeenCalledWith(name, true)
+  })
+
   it('offers the usage bar as an explained, experimental switch that saves and reports the change', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
@@ -100,5 +121,50 @@ describe('General settings mounted controls', () => {
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'companion.openAtStartup', value: true })
     expect(launchSwitch?.getAttribute('aria-checked')).toBe('true')
     expect(host.querySelector('[aria-label="Show companion"]')?.getAttribute('aria-checked')).toBe('false')
+  })
+})
+
+
+describe('Agents scan feedback', () => {
+  it('disables Scan again, spins during discovery and updates rows and result on completion', async () => {
+    let finish!: (value: { runtimes: Runtime[] }) => void
+    const pending = new Promise<{ runtimes: Runtime[] }>((resolve) => { finish = resolve })
+    mocks.invoke.mockResolvedValue(false)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'runtime.refresh' ? pending : method === 'settings.get' ? { settings: {} } : {})
+    function Harness() {
+      const [runtimes, setRuntimes] = useState<Runtime[]>([])
+      const { status, scan } = useRuntimeDiscovery(setRuntimes)
+      return <SettingsSheet snapshot={{ runtimes }} scanStatus={status} initialPage="Agents" onClose={vi.fn()} onRefresh={async () => { await scan() }} onError={vi.fn()} onOpenAgent={vi.fn()} />
+    }
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<Harness />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const button = [...host.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === 'Scan again')!
+    await act(async () => button.click())
+    expect(button.textContent).toBe('Scanning…')
+    expect(button.disabled).toBe(true)
+    expect(button.querySelector('.spinning')).not.toBeNull()
+    act(() => button.click())
+    expect(mocks.rpc.mock.calls.filter(([method]) => method === 'runtime.refresh')).toHaveLength(1)
+    await act(async () => { finish({ runtimes: [{ id: 'codex', provider: 'codex', version: '1.2.3' }, { id: 'claude', provider: 'claude' }, { id: 'opencode', provider: 'opencode' }] }); await Promise.resolve() })
+    expect(button.textContent).toBe('Scan again')
+    expect(button.disabled).toBe(false)
+    expect(host.querySelector('.settings-scan-status')?.textContent).toContain('Found 3 coding agents · just now')
+    expect(host.querySelectorAll('.runtime-entry-head')).toHaveLength(3)
+  })
+
+  it('shows the last failed step, safe message and timestamp above the runtime rows', async () => {
+    mocks.invoke.mockResolvedValue(false)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
+    const at = Date.now() - 120_000
+    const status = { ...EMPTY_DISCOVERY_STATUS, completedAt: at, failure: { step: 'Finding coding agents', message: 'Finding coding agents timed out.', at } }
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={{ runtimes: [{ id: 'codex', provider: 'codex', probeStep: 'Protocol check', probeError: 'Probe timed out.' }] }} scanStatus={status} initialPage="Agents" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const line = host.querySelector('.settings-scan-status')!
+    expect(line.textContent).toContain('Finding coding agents: Finding coding agents timed out.')
+    expect(line.querySelector('time')?.getAttribute('datetime')).toBe(new Date(at).toISOString())
+    expect(line.querySelector('time')?.textContent).toBe(new Date(at).toLocaleString())
+    expect(host.querySelector('.runtime-entry-head .runtime-probe-error')?.textContent).toBe('Codex · Protocol check: Probe timed out.')
   })
 })

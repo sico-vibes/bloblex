@@ -502,3 +502,5 @@
 @media (prefers-reduced-motion: reduce) { .activity-steps { animation: none; } }
 
 /* While the knob is held it follows the pointer exactly; transitions only run for the release snap. */
+
+.launch-scan-confirmation { padding: 10px 14px; color: var(--text-2); font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }

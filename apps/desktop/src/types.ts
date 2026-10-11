@@ -38,6 +38,8 @@ export interface Runtime extends JsonRecord {
   status?: string
   authState?: string
   gatewayAuthStates?: Record<string, string>
+  probeError?: string | null
+  probeStep?: string | null
   capabilities?: JsonRecord | string[]
 }
 

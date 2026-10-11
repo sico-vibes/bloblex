@@ -155,7 +155,7 @@ function LaunchGreeting({ color, onDone }: { color: string; onDone: () => void }
   }} />
 }
 
-export function LaunchWarnings({ warnings, onSettings, onDismiss }: { warnings: string[]; onSettings: () => void; onDismiss: () => void }) {
-  if (!warnings.length) return null
-  return <aside className="launch-warning-notice" role="status"><span>Startup checks need attention: {warnings.join('; ')}.</span><button className="secondary-button small" onClick={onSettings}>Agents settings</button><button className="icon-button small" aria-label="Dismiss agent notice" onClick={onDismiss}>×</button></aside>
+export function LaunchWarnings({ warnings, retrying = false, onSettings, onDismiss }: { warnings: string[]; retrying?: boolean; onSettings: () => void; onDismiss: () => void }) {
+  if (!warnings.length && !retrying) return null
+  return <aside className="launch-warning-notice" role="status"><span>{retrying ? 'Finding coding agents again…' : 'Startup checks need attention: ' + warnings.map((warning) => warning.replace(/[.\s]+$/, '')).join('; ') + '.'}</span><button className="secondary-button small" onClick={onSettings}>Agents settings</button><button className="icon-button small" aria-label="Dismiss agent notice" onClick={onDismiss}>×</button></aside>
 }

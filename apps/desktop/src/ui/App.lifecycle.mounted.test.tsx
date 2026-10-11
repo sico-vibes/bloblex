@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  setApprovalBadge: async () => undefined,
   previewMode: false,
   rpc: h.rpc,
   permissionsPolicyGet: async () => ({ defaultMode: 'ask', perAgent: [] }),
@@ -178,6 +179,52 @@ afterEach(() => {
 })
 
 describe('App mounted lifecycle', () => {
+  it('keeps scanning out of the profile menu and starts it from quick-switcher Agents settings', async () => {
+    const originalRpc = h.rpc.getMockImplementation()!
+    const pending = deferred<{ runtimes: typeof runtimeA[] }>()
+    h.rpc.mockImplementation((method: string, params?: Record<string, unknown>) => method === 'runtime.refresh' ? pending.promise : originalRpc(method, params))
+    const view = startApp()
+    await view.settle()
+    act(() => view.host.querySelector<HTMLButtonElement>('[aria-label="Account and settings"]')?.click())
+    expect(view.host.querySelector('[role="menu"]')?.textContent).not.toContain('Find coding agents')
+    act(() => view.host.querySelector('[role="menu"]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })))
+    await view.settle()
+    const action = view.host.querySelector<HTMLButtonElement>('[data-result-id="find-agents"]')
+    expect(action).not.toBeNull()
+    await act(async () => { action!.click(); await settleMicrotasks(); await vi.advanceTimersByTimeAsync(40) })
+    expect(view.host.querySelector('.settings-sheet h2')?.textContent).toBe('Agents')
+    const scan = [...view.host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Scanning…')
+    expect(scan?.disabled).toBe(true)
+    expect(h.rpc.mock.calls.filter(([method]) => method === 'runtime.refresh')).toHaveLength(1)
+    await act(async () => { pending.resolve({ runtimes: [runtimeA] }); await settleMicrotasks() })
+    expect(view.host.querySelector('.settings-scan-status')?.textContent).toContain('Found 1 coding agent · just now')
+  })
+
+  it('announces automatic recovery, removes the discovery banner and briefly confirms success', async () => {
+    const originalRpc = h.rpc.getMockImplementation()!
+    let scans = 0
+    h.rpc.mockImplementation((method: string, params?: Record<string, unknown>) => {
+      if (method !== 'runtime.refresh') return originalRpc(method, params)
+      scans += 1
+      return scans === 1 ? Promise.reject(new Error('PRIVATE_PROVIDER_OUTPUT')) : Promise.resolve({ runtimes: [runtimeA] })
+    })
+    const view = startApp()
+    await view.settle()
+    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })))
+    await view.settle()
+    await act(async () => { view.host.querySelector<HTMLButtonElement>('[data-result-id="find-agents"]')!.click(); await settleMicrotasks() })
+    expect(view.host.querySelector('.launch-warning-notice')?.textContent).toContain('Finding coding agents again…')
+    expect(view.host.textContent).not.toContain('PRIVATE_PROVIDER_OUTPUT')
+    expect(view.host.querySelector('.settings-scan-status')?.textContent).toContain('Retrying automatically')
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); await settleMicrotasks() })
+    expect(scans).toBe(2)
+    expect(view.host.querySelector('.launch-warning-notice')).toBeNull()
+    expect(view.host.querySelector('.launch-scan-confirmation')?.textContent).toBe('Found 1 coding agent')
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(view.host.querySelector('.launch-scan-confirmation')).toBeNull()
+  })
+
   it('keeps the short app fade class and duration under reduced motion', async () => {
     const view = startApp()
     await view.settle()

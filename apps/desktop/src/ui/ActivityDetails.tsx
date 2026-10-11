@@ -36,7 +36,8 @@ export function activityTitle(item: ConversationItem): string {
 
 function stateOf(item: ConversationItem) {
   const state = String(item.activity?.state ?? item.activity?.status ?? '').toLowerCase()
-  if (['error', 'failed', 'rejected'].includes(state)) return 'failed'
+  const resultStatus = String(detailOf(item).resultStatus ?? '').toLowerCase()
+  if (['error', 'failed', 'rejected', 'declined'].includes(state) || ['failed', 'declined'].includes(resultStatus)) return 'failed'
   if (['running', 'working', 'started', 'in_progress'].includes(state)) return 'running'
   return 'done'
 }
@@ -59,9 +60,11 @@ function StepDetail({ item, onDiff }: { item: ConversationItem; onDiff?: (path: 
   add('Input', detail.input)
   add('Query', detail.query, false)
   add('Path', detail.path)
+  add('Progress', detail.progress, false)
   add('Output', detail.output)
   add('Result', detail.result)
   add('Error', detail.error)
+  add('Status', detail.resultStatus, false)
   const diff = text(detail.diff)
   if (!blocks.length && !diff) return <p className="activity-step-empty">The agent did not report details for this step.</p>
   return <div className="activity-step-detail">

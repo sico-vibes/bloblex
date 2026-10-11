@@ -22,7 +22,8 @@ export function deriveCompanionStatus(input: { connected: boolean; runtime?: Run
   const { connected, runtime, session } = input
   const idleMs = sessionIdleMs(session, input.now ?? Date.now())
   if (!connected) return { mood: 'offline', label: 'Daemon disconnected' }
-  if (!runtime || ['offline', 'error', 'disconnected'].includes((runtime.status ?? '').toLowerCase())) return { mood: 'offline', label: runtime ? 'Runtime offline' : 'No runtime selected' }
+  if (!runtime || ['offline', 'disconnected'].includes((runtime.status ?? '').toLowerCase())) return { mood: 'offline', label: runtime ? 'Runtime offline' : 'No runtime selected' }
+  if ((runtime.status ?? '').toLowerCase() === 'error') return { mood: 'error', label: 'Coding agent check failed' }
   if (input.permissionPending || session?.state === 'waiting_permission') return { mood: 'permission', label: 'Approval needed' }
   if (session?.state === 'rate_limited') return { mood: 'rate_limited', label: 'Rate limited' }
   if (session?.state === 'sleeping') return { mood: 'sleeping', label: 'Sleeping' }

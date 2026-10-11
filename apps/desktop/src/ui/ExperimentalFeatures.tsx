@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Copy, RotateCcw, SquarePen, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
 import type { Agent, JsonRecord } from '../types'
@@ -9,14 +9,6 @@ import { parseUnifiedDiff } from './diffParser'
 import { useDialogAccessibility } from './dialogFocus'
 import { shortcutRows } from './experiments'
 import './experiments.css'
-
-export function MessageActions({ text, user, latest, disabled, onRetry, onEdit, onError }: { text: string; user: boolean; latest: boolean; disabled: boolean; onRetry: () => void; onEdit: () => void; onError: (error: string) => void }) {
-  return <div className="message-actions" aria-label="Message actions">
-    <button type="button" className="icon-button small" aria-label="Copy message" title="Copy" onClick={() => { void navigator.clipboard.writeText(text).catch(() => onError('Could not copy this message.')) }}><Copy size={14} /></button>
-    {user && latest && <button type="button" className="icon-button small" aria-label="Retry message" title="Retry as a new prompt" disabled={disabled} onClick={onRetry}><RotateCcw size={14} /></button>}
-    {user && <button type="button" className="icon-button small" aria-label="Edit message" title="Edit as a new prompt" onClick={onEdit}><SquarePen size={14} /></button>}
-  </div>
-}
 
 export function ChangeReview({ files, dismissed, onKeep, onRevert, onDiff }: { files: JsonRecord[]; dismissed: string[]; onKeep: (id: string) => void; onRevert: (file: JsonRecord) => void; onDiff: (path: string, content: string) => void }) {
   const visible = files.filter((file) => !dismissed.includes(String(file.id)) && (file.detail as JsonRecord | undefined)?.reverted !== true)

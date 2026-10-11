@@ -8,6 +8,7 @@ use std::{
     process::Stdio,
 };
 use tokio::{
+    io::AsyncReadExt,
     process::Command,
     time::{timeout, Duration},
 };
@@ -160,15 +161,39 @@ fn quoted_tokens(input: &str) -> Vec<String> {
 async fn bounded_output(exe: &Path, args: &[&str]) -> Result<String, &'static str> {
     let mut cmd = Command::new(exe);
     prepare_command(&mut cmd);
-    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let mut child = cmd.spawn().map_err(|_| "Could not start the coding agent.")?;
     let process_tree = ProcessTree::attach(&mut child).map_err(|_| "Could not supervise the coding agent.")?;
-    let result = timeout(Duration::from_secs(6), child.wait_with_output()).await;
+    let stdout = child.stdout.take().ok_or("Could not read the probe result.")?;
+    let stderr = child.stderr.take().ok_or("Could not read the probe result.")?;
+    let result = timeout(Duration::from_secs(6), async {
+        tokio::try_join!(child.wait(), read_probe_stream(stdout), read_probe_stream(stderr))
+    }).await;
     let _ = process_tree.terminate();
-    let output = result.map_err(|_| "Probe timed out.")?.map_err(|_| "Could not read the probe result.")?;
-    if !output.status.success() { return Err("Probe exited unsuccessfully."); }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let (status, stdout, stderr) = result.map_err(|_| "Probe timed out.")?.map_err(|_| "Could not read the probe result.")?;
+    if !status.success() { return Err("Probe exited unsuccessfully."); }
+    // Successful help may be printed to stderr by a Windows npm shim. Inspect
+    // both bounded streams, but only after validating the exit status. Callers
+    // use fixed protocol tokens or a sanitized version and never persist this.
+    let mut text = String::from_utf8_lossy(&stdout).into_owned();
+    if text.len() < 32 * 1024 {
+        text.push_str(&String::from_utf8_lossy(&stderr));
+    }
     Ok(text.chars().take(32 * 1024).collect())
+}
+
+/// Retain only the first 32 KiB while draining the rest to keep child pipes
+/// flowing without allowing arbitrary CLI output to grow memory without bound.
+async fn read_probe_stream(mut stream: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
+    let mut retained = Vec::with_capacity(4 * 1024);
+    let mut chunk = [0u8; 4 * 1024];
+    loop {
+        let read = stream.read(&mut chunk).await?;
+        if read == 0 { break; }
+        let keep = (32 * 1024usize).saturating_sub(retained.len()).min(read);
+        retained.extend_from_slice(&chunk[..keep]);
+    }
+    Ok(retained)
 }
 
 pub async fn discover() -> Vec<DiscoveredRuntime> {
@@ -414,6 +439,7 @@ fn short_hash(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
     #[test]
     fn version_output_is_reduced_to_a_numeric_version() {
         assert_eq!(safe_version("codex-cli 0.161.0"), Some("0.161.0".into()));
@@ -427,6 +453,14 @@ mod tests {
         let probe = || async { barrier.wait().await; None };
         let result = tokio::time::timeout(Duration::from_secs(1), collect_discovery(probe(), probe(), probe())).await;
         assert!(result.is_ok(), "sequential probes cannot pass the three-provider barrier");
+    }
+    #[tokio::test]
+    async fn probe_stream_retains_a_bounded_prefix_while_draining_the_child_pipe() {
+        let (mut writer, reader) = tokio::io::duplex(64 * 1024);
+        let writer_task = tokio::spawn(async move { writer.write_all(&vec![b'x'; 48 * 1024]).await.unwrap(); });
+        let retained = read_probe_stream(reader).await.unwrap();
+        writer_task.await.unwrap();
+        assert_eq!(retained.len(), 32 * 1024);
     }
     fn fixture_command(success: bool) -> ResolvedCommand {
         #[cfg(windows)]
@@ -447,6 +481,53 @@ mod tests {
         assert_eq!(healed.status, "online");
         assert!(healed.probe_error.is_none());
         assert_eq!(healed.version.as_deref(), Some("1.2.3"));
+    }
+    #[tokio::test]
+    async fn opencode_successful_stderr_only_acp_help_passes_protocol_check() {
+        #[cfg(windows)]
+        let command = ResolvedCommand { executable: PathBuf::from("cmd.exe"), args: vec![
+            "/d".into(), "/c".into(), "echo ACP stdio protocol 1>&2".into(),
+        ] };
+        #[cfg(not(windows))]
+        let command = ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec![
+            "-c".into(), "printf 'Usage: opencode acp --help\\nACP stdio protocol\\n' >&2".into(),
+        ] };
+        let runtime = discover_one("opencode", Some(command)).await.unwrap();
+        assert_eq!(runtime.status, "online");
+        assert!(runtime.probe_step.as_deref() != Some("Protocol check"), "stderr-only successful ACP help must pass protocol validation");
+        assert_eq!(runtime.probe_step.as_deref(), Some("Sign-in check"));
+        assert_eq!(runtime.probe_error.as_deref(), Some("Sign-in status could not be checked."));
+    }
+    #[tokio::test]
+    async fn failed_protocol_probe_remains_sanitized() {
+        #[cfg(windows)]
+        let command = ResolvedCommand { executable: PathBuf::from("cmd.exe"), args: vec![
+            "/d".into(), "/c".into(), "echo PRIVATE ACP diagnostic 1>&2 & exit /b 1".into(),
+        ] };
+        #[cfg(not(windows))]
+        let command = ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec![
+            "-c".into(), "printf 'PRIVATE ACP diagnostic\\n' >&2; exit 1".into(),
+        ] };
+        let failed = discover_one("opencode", Some(command)).await.unwrap();
+        assert_eq!(failed.status, "error");
+        assert_eq!(failed.probe_step.as_deref(), Some("Protocol check"));
+        assert_eq!(failed.probe_error.as_deref(), Some("Probe exited unsuccessfully."));
+        assert!(!failed.probe_error.as_deref().unwrap().contains("PRIVATE"));
+    }
+    #[tokio::test]
+    async fn successful_but_unrelated_opencode_help_remains_unsupported() {
+        #[cfg(windows)]
+        let command = ResolvedCommand { executable: PathBuf::from("cmd.exe"), args: vec![
+            "/d".into(), "/c".into(), "ver".into(),
+        ] };
+        #[cfg(not(windows))]
+        let command = ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec![
+            "-c".into(), "printf 'generic command help\\n'".into(),
+        ] };
+        let unsupported = discover_one("opencode", Some(command)).await.unwrap();
+        assert_eq!(unsupported.status, "error");
+        assert_eq!(unsupported.probe_step.as_deref(), Some("Protocol check"));
+        assert_eq!(unsupported.probe_error.as_deref(), Some("The CLI does not advertise the required protocol."));
     }
     #[tokio::test]
     async fn missing_executable_reports_a_fixed_error() {

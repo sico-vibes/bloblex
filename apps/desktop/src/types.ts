@@ -92,7 +92,8 @@ export interface SessionLink extends JsonRecord {
 
 /** Team metadata on a stored message. */
 export interface MessageMeta extends JsonRecord {
-  kind: 'delegation' | 'blob_message' | 'blob_reply' | 'plan' | string
+  kind?: 'delegation' | 'blob_message' | 'blob_reply' | 'plan' | string
+  replyTo?: { sourceSessionId: string; messageId: string; role?: 'user' | 'assistant'; author?: string; excerpt?: string; truncated?: boolean; createdAt?: string | null }
   direction?: 'sent' | 'failed'
   peerAgentId?: string
   peerName?: string
@@ -125,6 +126,8 @@ export interface ChatMessage extends JsonRecord {
   meta?: MessageMeta | null
   /** Side conversations the user tagged with # in this message. */
   references?: Array<{ id: string; title: string }> | null
+  /** Local user's curated reactions; no peer reaction counts are represented. */
+  reactions?: string[]
 }
 
 export interface MessageAttachment extends JsonRecord {
@@ -318,7 +321,7 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
   }
   if (event.type === 'daemon.health') return { ...snapshot, sequence, daemon: { ...(snapshot.daemon ?? {}), ...payload } }
 
-  if (!['message.delta', 'message.completed', 'tool.changed', 'command.changed', 'file.changed', 'permission.requested', 'usage.updated', 'turn.completed', 'turn.error'].includes(event.type)) {
+  if (!['message.delta', 'message.completed', 'message.reactions.changed', 'tool.changed', 'command.changed', 'file.changed', 'permission.requested', 'usage.updated', 'turn.completed', 'turn.error'].includes(event.type)) {
     return { ...snapshot, sequence }
   }
 
@@ -345,6 +348,17 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
         } else {
           messages.push(event.type === 'message.delta' && typeof payload.delta === 'string' ? { ...message, id: messageId, content: payload.delta } : { ...message, id: messageId })
         }
+        return { ...session, messages }
+      }
+      if (event.type === 'message.reactions.changed') {
+        const messageId = typeof payload.messageId === 'string' ? payload.messageId : ''
+        if (!messageId) return session
+        const allowed = new Set(['👍', '👎', '❤️', '😂', '🎉', '😮'])
+        const reactions = Array.isArray(payload.reactions) ? payload.reactions.filter((reaction): reaction is string => typeof reaction === 'string' && allowed.has(reaction)) : []
+        const messages = [...(session.messages ?? session.events ?? [])]
+        const index = messages.findIndex((item) => item.id === messageId)
+        if (index < 0) return session
+        messages[index] = { ...messages[index], reactions }
         return { ...session, messages }
       }
       if (event.type === 'tool.changed' || event.type === 'command.changed') {

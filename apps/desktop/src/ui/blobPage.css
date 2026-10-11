@@ -13,7 +13,7 @@
 
 /* Hero */
 .blob-hero { padding: 28px 0 8px; display: grid; justify-items: center; gap: 6px; text-align: center; }
-.blob-hero .blob-canvas { margin-bottom: 6px; }
+.blob-hero .blob-canvas-frame { margin-bottom: 6px; }
 .blob-hero-name { max-width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .blob-hero-name h2 { min-width: 0; margin: 0; overflow: hidden; font-size: var(--fs-2xl); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .blob-hero-description { max-width: 460px; margin: 0; color: var(--text-2); font-size: var(--fs-sm); line-height: 1.5; }
@@ -121,7 +121,7 @@
   radial-gradient(120% 70% at 50% 34%, color-mix(in srgb, var(--look-accent) 18%, transparent), transparent 62%),
   linear-gradient(180deg, var(--surface-subtle), transparent 70%); }
 .look-stage-hero { position: relative; flex: 1; width: 100%; min-height: 176px; display: grid; place-items: center; }
-.look-stage-hero .blob-canvas { position: relative; z-index: 1; }
+.look-stage-hero .blob-canvas-frame { position: relative; z-index: 1; }
 .look-stage-floor { position: absolute; top: calc(50% + 52px); left: 50%; width: 112px; height: 18px; border-radius: 50%; background: radial-gradient(closest-side, #00000059, transparent); transform: translateX(-50%); }
 :root[data-theme="light"] .look-stage-floor { background: radial-gradient(closest-side, #0000001f, transparent); }
 .look-moods { position: relative; z-index: 1; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }

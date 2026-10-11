@@ -10,6 +10,11 @@ describe('companion status from live app state', () => {
     expect(deriveCompanionStatus({ connected: true, runtime: { ...runtime, status: 'offline' }, session: { id: 's-1', runtimeId: runtime.id, state: 'working' } }).mood).toBe('offline')
   })
 
+  it('gives only a failed runtime probe the unable-to-work error mood', () => {
+    expect(deriveCompanionStatus({ connected: true, runtime: { ...runtime, status: 'error', probeStep: 'Protocol check' }, session: { id: 's-1', runtimeId: runtime.id, state: 'completed' } })).toEqual({ mood: 'error', label: 'Coding agent check failed' })
+    expect(deriveCompanionStatus({ connected: true, runtime: { ...runtime, status: 'online', probeStep: 'Sign-in check', probeError: 'Sign-in status could not be checked.' }, session: null }).mood).not.toBe('error')
+  })
+
   it('prioritizes a pending approval and active tool activity', () => {
     const session = { id: 's-1', runtimeId: runtime.id, state: 'working', tools: [{ id: 'tool-1', state: 'running', title: 'Run tests' }] }
     expect(deriveCompanionStatus({ connected: true, runtime, session, permissionPending: true }).mood).toBe('permission')

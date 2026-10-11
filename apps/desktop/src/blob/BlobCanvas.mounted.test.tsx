@@ -129,7 +129,7 @@ describe('BlobCanvas mounted lifecycle', () => {
     const complete = vi.fn()
     const cue = vi.spyOn(soundCues, 'playCompanionCue')
     const view = mount(<StrictMode><BlobCanvas color="#e67f72" greeting soundCues onGreetingComplete={complete} /></StrictMode>)
-    const canvas = view.host.querySelector('canvas')!
+    const canvas = view.host.querySelector('.blob-canvas-frame')!
     act(() => canvas.dispatchEvent(new Event('pointerdown', { bubbles: true })))
     act(() => canvas.dispatchEvent(new Event('pointerdown', { bubbles: true })))
     expect(complete).toHaveBeenCalledTimes(1)
@@ -183,11 +183,11 @@ describe('BlobCanvas mounted lifecycle', () => {
     const dizzy = vi.fn()
     const recovered = vi.fn()
     const view = mount(<BlobCanvas color="#e67f72" onDizzy={dizzy} onDizzyRecovery={recovered} />)
-    const canvas = view.host.querySelector('canvas')!
+    const canvas = view.host.querySelector('.blob-canvas-frame')!
     act(() => {
-      canvas.dispatchEvent(new Event('pointerdown'))
-      canvas.dispatchEvent(new Event('pointerdown'))
-      canvas.dispatchEvent(new Event('pointerdown'))
+      canvas.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+      canvas.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+      canvas.dispatchEvent(new Event('pointerdown', { bubbles: true }))
     })
     expect(dizzy).toHaveBeenCalledTimes(1)
     view.unmount()
@@ -224,6 +224,21 @@ describe('BlobCanvas mounted lifecycle', () => {
     act(() => document.dispatchEvent(new Event('visibilitychange')))
     expect(frameQueueSize()).toBe(0)
     expect(canvas.isConnected).toBe(false)
+  })
+
+  it('renders empty-state effect overscan above the logical hit and layout box', () => {
+    const view = mount(<BlobCanvas color="#e67f72" size={112} mood="sleeping" effectOverscanTop={118} />)
+    const frame = view.host.querySelector<HTMLElement>('.blob-canvas-frame')!
+    const canvas = view.host.querySelector<HTMLCanvasElement>('canvas.blob-canvas')!
+    expect(frame.style.width).toBe('112px')
+    expect(frame.style.height).toBe('112px')
+    expect(canvas.width).toBe(112)
+    expect(canvas.height).toBe(230)
+    expect(TestIntersectionObserver.instances.at(-1)?.observed).toBe(frame)
+    flushFrame(clock)
+    expect(context.clearRect).toHaveBeenCalledWith(0, 0, 112, 230)
+    expect(context.translate).toHaveBeenCalledWith(0, 118)
+    view.unmount()
   })
 
   it('traces the look silhouette and defaults to the round mascot', () => {

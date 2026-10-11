@@ -151,7 +151,12 @@ fn merge_stream_event(previous: &mut AgentEvent, incoming: AgentEvent) -> Result
             AgentEvent::ToolUpdated { tool_call_id: left_id, raw: left },
             AgentEvent::ToolUpdated { tool_call_id: right_id, raw: right },
         ) if *left_id == right_id => {
-            *left = right;
+            if let (Some(previous), Some(next)) = (left["outputDelta"].as_str(), right["outputDelta"].as_str()) {
+                let combined = format!("{previous}{next}").chars().take(4_000).collect::<String>();
+                left["outputDelta"] = json!(combined);
+            } else {
+                *left = right;
+            }
             Ok(())
         }
         (
@@ -807,6 +812,11 @@ fn codex_item_title(item: &Value) -> String {
             (_, Some(tool)) => tool,
             _ => "Used a tool".into(),
         },
+        "dynamicToolCall" => match (text(&item["namespace"]), text(&item["tool"])) {
+            (Some(namespace), Some(tool)) => format!("{namespace} · {tool}"),
+            (_, Some(tool)) => tool,
+            _ => "Used a tool".into(),
+        },
         "webSearch" => text(&item["query"]).map(|query| format!("Searched: {query}")).unwrap_or_else(|| "Searched the web".into()),
         "fileChange" => "Edited files".into(),
         "imageView" => text(&item["path"]).map(|path| format!("Viewed {path}")).unwrap_or_else(|| "Viewed an image".into()),
@@ -825,6 +835,14 @@ fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
         "item/agentMessage/delta" | "item/agentMessageDelta" => p["delta"]
             .as_str()
             .map(|text| AgentEvent::AssistantDelta { text: text.into() }),
+        "item/commandExecution/outputDelta" => Some(AgentEvent::ToolUpdated {
+            tool_call_id: p["itemId"].as_str()?.to_owned(),
+            raw: json!({"type":"commandExecution","outputDelta":p["delta"].as_str()?}),
+        }),
+        "item/mcpToolCall/progress" => Some(AgentEvent::ToolUpdated {
+            tool_call_id: p["itemId"].as_str()?.to_owned(),
+            raw: json!({"type":"mcpToolCall","progress":p["message"].as_str()?}),
+        }),
         "item/started" => {
             let i = &p["item"];
             match i["type"].as_str().unwrap_or("") {
@@ -1634,8 +1652,32 @@ mod tests {
         let title = |item: Value| match map_notification("item/started", &json!({"item":item})) { Some(AgentEvent::ToolStarted { title, .. }) => title, other => panic!("{other:?}") };
         assert_eq!(title(json!({"type":"commandExecution","id":"c","command":"npm test"})), "npm test");
         assert_eq!(title(json!({"type":"mcpToolCall","id":"m","server":"bloblex","tool":"message_blob"})), "bloblex · message_blob");
+        assert_eq!(title(json!({"type":"dynamicToolCall","id":"d","namespace":"search","tool":"find_page"})), "search · find_page");
         assert_eq!(title(json!({"type":"webSearch","id":"w","query":"tauri drag"})), "Searched: tauri drag");
         assert_eq!(title(json!({"type":"somethingNew","id":"x"})), "Something new");
+    }
+
+    #[test]
+    fn modern_codex_command_mcp_and_output_delta_items_map_to_activity() {
+        let command = json!({"threadId":"thread","turnId":"turn","item":{"type":"commandExecution","id":"cmd-1","command":"cargo test -p bloblex-storage","commandActions":[],"cwd":"D:/project","status":"inProgress"}});
+        assert!(matches!(map_notification("item/started", &command), Some(AgentEvent::ToolStarted { tool_call_id, title, raw, .. }) if tool_call_id == "cmd-1" && title == "cargo test -p bloblex-storage" && raw["cwd"] == "D:/project"));
+        let mcp = json!({"threadId":"thread","turnId":"turn","item":{"type":"mcpToolCall","id":"mcp-1","server":"bloblex","tool":"message_blob","arguments":{"blob":"Gogo"},"status":"completed","result":{"content":[{"type":"text","text":"Sent to Gogo."}]},"error":null}});
+        assert!(matches!(map_notification("item/completed", &mcp), Some(AgentEvent::ToolCompleted { tool_call_id, raw }) if tool_call_id == "mcp-1" && raw["arguments"]["blob"] == "Gogo" && raw["result"]["content"][0]["text"] == "Sent to Gogo."));
+        let delta = json!({"threadId":"thread","turnId":"turn","itemId":"cmd-1","delta":"first chunk"});
+        assert!(matches!(map_notification("item/commandExecution/outputDelta", &delta), Some(AgentEvent::ToolUpdated { tool_call_id, raw }) if tool_call_id == "cmd-1" && raw["outputDelta"] == "first chunk"));
+        let progress = json!({"threadId":"thread","turnId":"turn","itemId":"mcp-1","message":"Fetched 4 pages"});
+        assert!(matches!(map_notification("item/mcpToolCall/progress", &progress), Some(AgentEvent::ToolUpdated { tool_call_id, raw }) if tool_call_id == "mcp-1" && raw["progress"] == "Fetched 4 pages"));
+        assert!(map_notification("item/commandExecution/outputDelta", &json!({"itemId":"cmd-1"})).is_none());
+    }
+
+    #[test]
+    fn coalesced_command_output_deltas_append_with_a_hard_cap() {
+        let mut queued = AgentEvent::ToolUpdated { tool_call_id: "cmd".into(), raw: json!({"outputDelta":"first "}) };
+        assert!(merge_stream_event(&mut queued, AgentEvent::ToolUpdated { tool_call_id: "cmd".into(), raw: json!({"outputDelta":"second"}) }).is_ok());
+        assert!(matches!(queued, AgentEvent::ToolUpdated { raw, .. } if raw["outputDelta"] == "first second"));
+        let mut cap = AgentEvent::ToolUpdated { tool_call_id: "cmd".into(), raw: json!({"outputDelta":"x".repeat(4_000)}) };
+        assert!(merge_stream_event(&mut cap, AgentEvent::ToolUpdated { tool_call_id: "cmd".into(), raw: json!({"outputDelta":"y".repeat(1_000)}) }).is_ok());
+        assert!(matches!(cap, AgentEvent::ToolUpdated { raw, .. } if raw["outputDelta"].as_str().unwrap().chars().count() == 4_000));
     }
 
     #[test]
@@ -1805,6 +1847,22 @@ mod tests {
         assert_eq!(m.supported_thinking, vec!["low"]);
         assert_eq!(m.service_tiers[0].id, "priority");
         assert!(m.host_dependent);
+    }
+    #[test]
+    fn codex_0161_catalog_efforts_remain_model_specific_raw_values() {
+        let full = ["low", "medium", "high", "xhigh", "max", "ultra"];
+        let luna = ["low", "medium", "high", "xhigh", "max"];
+        for (id, expected) in [
+            ("gpt-6.1-sol", full.as_slice()), ("gpt-6-astra", full.as_slice()),
+            ("gpt-6-sol", full.as_slice()), ("gpt-5.6-sol", full.as_slice()),
+            ("gpt-5.6-terra", full.as_slice()), ("gpt-6-luna", luna.as_slice()),
+            ("gpt-5.6-luna", luna.as_slice()),
+        ] {
+            let supported = expected.iter().map(|effort| json!({"reasoningEffort":effort,"description":"catalog description"})).collect::<Vec<_>>();
+            let model = parse_catalog_model(&json!({"id":id,"supportedReasoningEfforts":supported})).unwrap();
+            let expected = expected.iter().map(|effort| effort.to_string()).collect::<Vec<_>>();
+            assert_eq!(model.supported_thinking, expected, "wire effort values must stay attached to {id}");
+        }
     }
     #[test]
     fn standard_speed_never_becomes_a_tier_id() {

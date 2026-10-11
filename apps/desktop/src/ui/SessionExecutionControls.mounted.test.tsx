@@ -8,7 +8,14 @@ const rpc = vi.hoisted(() => vi.fn())
 vi.mock('../tauri', () => ({ rpc }))
 vi.mock('./BlobPage', () => ({ ConfirmDialog: ({ title, body, confirmLabel, onConfirm, onCancel }: { title: string; body: string; confirmLabel: string; onConfirm: () => void; onCancel: () => void }) => <div role="dialog"><h2>{title}</h2><p>{body}</p><button onClick={onCancel}>Cancel</button><button onClick={onConfirm}>{confirmLabel}</button></div> }))
 
-import { SessionExecutionControls } from './SessionExecutionControls'
+import { labelizeEffort, SessionExecutionControls } from './SessionExecutionControls'
+
+describe('Codex catalog effort labels', () => {
+  it('maps display names by Codex provider while preserving the raw effort vocabulary for other providers', () => {
+    expect(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((value) => labelizeEffort(value, 'codex'))).toEqual(['Light', 'Medium', 'High', 'Extra High', 'Max', 'Ultra'])
+    expect(['low', 'medium', 'high', 'xhigh', 'max'].map((value) => labelizeEffort(value, 'claude'))).toEqual(['Low', 'Medium', 'High', 'Extra high', 'Max'])
+  })
+})
 
 const catalog = { runtimeId:'runtime', provider:'claude', validated:true, fallback:false, models:[
   { id:'alpha', displayName:'Alpha', supportedThinking:['low','high'], defaultThinking:'high', serviceTiers:[], defaultServiceTier:null, variants:[], hostDependent:false, isDefault:true, group:null, availability:'offered' },
@@ -217,7 +224,7 @@ describe('session execution controls', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(host.querySelector('.session-effort-trigger')?.textContent).toContain('High')
     await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
-    const option = [...host.querySelectorAll<HTMLButtonElement>('.session-effort-labels button')].find((button) => button.textContent === 'Extra high')!
+    const option = [...host.querySelectorAll<HTMLButtonElement>('.session-effort-labels button')].find((button) => button.textContent === 'Extra High')!
     await act(async () => { option.click(); await Promise.resolve(); await Promise.resolve() })
     expect(rpc).toHaveBeenCalledWith('session.model.update', expect.objectContaining({ sessionId:'session', model:'alpha', thinking:'xhigh', confirmModelChange:false }))
   })

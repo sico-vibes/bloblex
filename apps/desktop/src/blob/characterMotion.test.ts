@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { blobCanvasSize, engineStateFor } from './BlobCanvas'
+import { blobCanvasGeometry, blobCanvasSize, engineStateFor } from './BlobCanvas'
 import { BADGE_OFFSET, BODY_RADIUS, BlobEngine, ENGINE_STATES } from './blobEngine'
 import { GREETING_END_MS, greetPose } from './greetingScene'
 import type { BlobMood } from './characterState'
@@ -118,6 +118,12 @@ describe('Bloblex character engine', () => {
   it('sizes the greeting stage to the 640×150 reference', () => {
     expect(blobCanvasSize(100, true)).toEqual({ width: 640, height: 150 })
     expect(blobCanvasSize(40, false)).toEqual({ width: 40, height: 40 })
+  })
+
+  it('adds opt-in effect overscan without changing the logical character footprint or greeting geometry', () => {
+    expect(blobCanvasGeometry(112, false, 118)).toEqual({ width:112, height:112, logicalWidth:112, logicalHeight:112, overscanTop:118, canvasHeight:230 })
+    expect(blobCanvasGeometry(52, false)).toEqual({ width:52, height:52, logicalWidth:52, logicalHeight:52, overscanTop:0, canvasHeight:52 })
+    expect(blobCanvasGeometry(100, true, 200)).toEqual({ width:640, height:150, logicalWidth:640, logicalHeight:150, overscanTop:0, canvasHeight:150 })
   })
 
   it('follows the source greeting timeline: grow, squint, dip/pop, two-hand wave, tuck, badge, tint', () => {

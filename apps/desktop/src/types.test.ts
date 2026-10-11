@@ -85,6 +85,13 @@ describe('daemon event reconciliation', () => {
     expect(late.deletedSessionIds).toContain('s-a')
   })
 
+  it('merges only allowlisted local message reactions into the matching session message', () => {
+    const reacted = applyEvent(base(), event('message.reactions.changed', 5, { sessionId:'s-a', messageId:'m-a', reactions:['❤️', '🔥', '👍'] }))
+    expect(reacted.sessions?.[0].messages?.[0].reactions).toEqual(['❤️', '👍'])
+    const other = applyEvent(reacted, event('message.reactions.changed', 6, { sessionId:'other', messageId:'m-a', reactions:[] }))
+    expect(other.sessions?.[0].messages?.[0].reactions).toEqual(['❤️', '👍'])
+  })
+
   it('upserts tool and file activity and records token usage only', () => {
     let next = applyEvent(base(), event('tool.changed', 5, { sessionId: 's-a', tool: { id: 'tool-a', state: 'completed' } }))
     next = applyEvent(next, event('file.changed', 6, { sessionId: 's-a', file: { id: 'f-b', path: 'src/b.ts', addedLines: 4 } }))

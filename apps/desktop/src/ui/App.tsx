@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { invoke, isTauri } from '@tauri-apps/api/core'
@@ -22,9 +22,10 @@ import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermissio
 import { ApprovalCard } from './ApprovalCard'
 import bloblexLogo from '../assets/bloblex-128.png'
 import { sessionsForPauseRequest } from './trayActions'
-import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, type Agent, type ConnectionState, type DaemonEvent, type PermissionRequest, type Project, type Runtime, type Session, type Snapshot } from '../types'
+import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, type Agent, type ChatMessage, type ConnectionState, type DaemonEvent, type PermissionRequest, type Project, type Runtime, type Session, type Snapshot } from '../types'
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
+import { RuntimeProblemMarker } from './RuntimeProblemMarker'
 import { ConversationPicker, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
@@ -54,7 +55,10 @@ import { notificationForTransition } from './notificationTransitions'
 import { flashMainWindow, sendDesktopNotification } from '../desktopIntegrations'
 import { stampCompanionDragRegions } from './companionDrag'
 import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, waitingBlobCount, type ExperimentName } from './experiments'
-import { ChangeReview, MessageActions, MessageSearch, ShortcutSheet, UndoToasts, type MessageSearchResult, type UndoToast } from './ExperimentalFeatures'
+import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, type MessageSearchResult, type UndoToast } from './ExperimentalFeatures'
+import { messageExcerpt, MessageActions, MessageContextMenu, MessageReactionBadges, originalMessageText, ReplyContextStrip, type ReplyTarget } from './MessageActions'
+import { UsageTip } from './UsageTip'
+import { appendUsageTipDismissal, parseUsageTipDismissals, selectUsageTip, type UsageTip as UsageTipModel, type UsageTipDismissal } from './usageTips'
 import { setApprovalBadge } from '../tauri'
 import { QuickSwitcher } from './QuickSwitcher'
 import { useQuickSwitcherShortcut } from './useQuickSwitcherShortcut'
@@ -77,6 +81,7 @@ import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesk
 
 type ContextTab = 'Details' | 'Runtime' | 'Files'
 type AppliedModelState = { sessionId: string; model: string | null; hasSnapshot: boolean; loading: boolean }
+type MessageMenuTarget = { x: number; y: number; sessionId: string; messageId: string; text: string; latest: boolean; references: NonNullable<ChatMessage['references']>; attachments: Array<{ name: string; path: string }>; replyTo: ReplyTarget | null }
 async function openSafeLink(url: string) {
   try {
     const parsed = new URL(url)
@@ -94,6 +99,11 @@ export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   /** Experimental, off by default: the plan-usage bar along the bottom. */
   const [usageBarEnabled, setUsageBarEnabled] = useState(false)
+  /** Experimental and separate from the bottom usage bar. */
+  const [usageTipsEnabled, setUsageTipsEnabled] = useState(false)
+  const [usageTipDismissals, setUsageTipDismissals] = useState<UsageTipDismissal[]>([])
+  const usageTipDismissalsRef = useRef(usageTipDismissals)
+  usageTipDismissalsRef.current = usageTipDismissals
   /** Experimental, off by default: each turn's commands, tools and edits as one expandable line. */
   const [activityDetails, setActivityDetails] = useState(false)
   /** Companion preferences: chat height and the teammates kept on the island. */
@@ -108,6 +118,8 @@ export function App() {
   const [experiments, setExperiments] = useState(DEFAULT_EXPERIMENTS)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [messageSearchOpen, setMessageSearchOpen] = useState(false)
+  const [messageMenu, setMessageMenu] = useState<MessageMenuTarget | null>(null)
+  const messageMenuAnchor = useRef<HTMLElement | null>(null)
   const [searchTarget, setSearchTarget] = useState<MessageSearchResult | null>(null)
   const [reviewDismissals, setReviewDismissals] = useState<Record<string, string[]>>({})
   const [revertTarget, setRevertTarget] = useState<{ sessionId: string; file: Record<string, unknown> } | null>(null)
@@ -126,6 +138,12 @@ export function App() {
     const experiment = EXPERIMENTS.find(({ name }) => key === `experimental.${name}`)
     if (experiment) { changeExperiment(experiment.name, value === true); return }
     if (key === 'experimental.usageBar') setUsageBarEnabled(value === true)
+    else if (key === 'experimental.usageTips') setUsageTipsEnabled(value === true)
+    else if (key === 'experimental.usageTipDismissals') {
+      const parsed = parseUsageTipDismissals(value)
+      usageTipDismissalsRef.current = parsed
+      setUsageTipDismissals(parsed)
+    }
     else if (key === 'experimental.activityDetails') setActivityDetails(value === true)
     else if (key === 'companion.chatSize') setCompanionChatSize(isCompanionChatSize(value) ? value : 'medium')
     else if (key === 'companion.pinnedBlobs') setCompanionPinned(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string').slice(0, MAX_COMPANION_PEERS) : [])
@@ -168,6 +186,7 @@ export function App() {
   const sideReturn = useRef<{ agentId: string | null; sessionId: string | null } | null>(null)
   const ensuringConversation = useRef(new Set<string>())
   const [mainAttention, setMainAttention] = useState(() => !companion && document.visibilityState === 'visible' && document.hasFocus())
+  const [surfaceFocused, setSurfaceFocused] = useState(() => document.visibilityState === 'visible' && document.hasFocus())
   const [seenSessions, setSeenSessions] = useState<SeenSessions>({})
   const seenLoaded = useRef(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
@@ -186,6 +205,9 @@ export function App() {
   const [archiveNotice, setArchiveNotice] = useState<string | null>(null)
   const [tab, setTab] = useState<ContextTab>('Details')
   const [composer, setComposer] = useState('')
+  const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null)
+  const replyTargetRef = useRef<ReplyTarget | null>(null)
+  replyTargetRef.current = replyTarget
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const attachmentsRef = useRef<ComposerAttachment[]>([])
   attachmentsRef.current = attachments
@@ -214,6 +236,13 @@ export function App() {
   const { status: discoveryStatus, scan: scanRuntimes } = useRuntimeDiscovery((runtimes) => setSnapshot((current) => current ? { ...current, runtimes } : current))
   const [discoveryConfirmation, setDiscoveryConfirmation] = useState<string | null>(null)
   const discoveryHadFailure = useRef(false)
+  useEffect(() => {
+    const sync = () => setSurfaceFocused(document.visibilityState === 'visible' && document.hasFocus())
+    window.addEventListener('focus', sync)
+    window.addEventListener('blur', sync)
+    document.addEventListener('visibilitychange', sync)
+    return () => { window.removeEventListener('focus', sync); window.removeEventListener('blur', sync); document.removeEventListener('visibilitychange', sync) }
+  }, [])
   useEffect(() => {
     if (discoveryStatus.failure) { discoveryHadFailure.current = true; return }
     if (!discoveryStatus.completedAt || !discoveryHadFailure.current) return
@@ -371,7 +400,7 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['experimental.usageBar', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
+      for (const key of ['experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
       setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }
@@ -1376,23 +1405,74 @@ export function App() {
     return null
   }
 
+  const stageMessageReply = (message: Record<string, unknown>) => {
+    if (!selectedSession || sideSession) return
+    const messageId = typeof message.id === 'string' ? message.id : ''
+    const text = originalMessageText(message.content ?? message.text)
+    if (!messageId || !text.trim()) { setError('This message has no text to quote.'); return }
+    const author = message.role === 'user' ? 'You' : agentName
+    const target: ReplyTarget = { sourceSessionId: selectedSession.id, messageId, author, excerpt: messageExcerpt(text) }
+    replyTargetRef.current = target
+    setReplyTarget(target)
+    requestAnimationFrame(() => composerRef.current?.focus())
+  }
+
+  const openUserMessageMenu = (event: ReactMouseEvent<HTMLElement>, message: Record<string, unknown>) => {
+    if (!experiments.messageActions || sideSession || message.role !== 'user' || !selectedSession || typeof message.id !== 'string') return
+    const text = originalMessageText(message.content ?? message.text)
+    if (!text) return
+    event.preventDefault()
+    const meta = message.meta && typeof message.meta === 'object' ? message.meta as Record<string, unknown> : {}
+    const rawReply = meta.replyTo && typeof meta.replyTo === 'object' ? meta.replyTo as Record<string, unknown> : null
+    const replyTo = rawReply && typeof rawReply.sourceSessionId === 'string' && typeof rawReply.messageId === 'string' && typeof rawReply.author === 'string' && typeof rawReply.excerpt === 'string'
+      ? { sourceSessionId: rawReply.sourceSessionId, messageId: rawReply.messageId, author: rawReply.author, excerpt: rawReply.excerpt }
+      : null
+    const references = Array.isArray(message.references) ? message.references.filter((item): item is { id: string; title: string } => !!item && typeof item === 'object' && typeof item.id === 'string' && typeof item.title === 'string') : []
+    const attachments = Array.isArray(message.attachments) ? message.attachments.filter((item): item is { name: string; path: string } => !!item && typeof item === 'object' && typeof item.name === 'string' && typeof item.path === 'string') : []
+    messageMenuAnchor.current = event.currentTarget
+    setMessageMenu({
+      x: event.clientX,
+      y: event.clientY,
+      sessionId: selectedSession.id,
+      messageId: message.id,
+      text,
+      latest: sessionMessages.filter((item) => item.role === 'user').at(-1)?.id === message.id,
+      references,
+      attachments,
+      replyTo,
+    })
+  }
+
+  const closeMessageMenu = (restoreFocus = false) => {
+    const anchor = messageMenuAnchor.current
+    messageMenuAnchor.current = null
+    setMessageMenu(null)
+    if (restoreFocus) requestAnimationFrame(() => anchor?.isConnected && anchor.focus({ preventScroll: true }))
+  }
+
   const sendPrompt = async () => {
     const text = composer.trim()
     const ready = attachments.filter((item) => item.status === 'ready' && item.path)
     if ((!text && ready.length === 0) || attachments.some((item) => item.status === 'staging') || !selectedSession || busy || selectedSession.state === 'waiting_permission' || !runtimeUsable(selectedRuntime)) return
+    const sentReplyTarget = replyTarget
+    const sentAttachmentIds = new Set(ready.map((item) => item.id))
     try {
       const refs = conversationRefs.filter((ref) => text.includes(`#${ref.title}`)).map((ref) => ref.id)
-      await doRpc('session.prompt', { sessionId: selectedSession.id, text, ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}) })
-      setComposer('')
-      setConversationRefs([])
-      clearAttachments()
+      await doRpc('session.prompt', { sessionId: selectedSession.id, text, ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}) })
+      if (composerRef.current?.value.trim() === text && replyTargetRef.current === sentReplyTarget) {
+        setComposer('')
+        setConversationRefs([])
+        setReplyTarget(null)
+        clearAttachments(sentAttachmentIds)
+      }
       await refresh()
     } catch { /* The actionable error is shown inline. */ }
   }
 
-  const clearAttachments = () => {
-    for (const item of attachmentsRef.current) URL.revokeObjectURL(item.previewUrl)
-    setAttachments([])
+  const clearAttachments = (only?: ReadonlySet<string>) => {
+    const removed = only ? attachmentsRef.current.filter((item) => only.has(item.id)) : attachmentsRef.current
+    for (const item of removed) URL.revokeObjectURL(item.previewUrl)
+    setAttachments((current) => only ? current.filter((item) => !only.has(item.id)) : [])
   }
   const removeAttachment = (id: string) => setAttachments((current) => current.filter((item) => {
     if (item.id === id) URL.revokeObjectURL(item.previewUrl)
@@ -1412,7 +1492,7 @@ export function App() {
       })
     }
   }
-  useEffect(() => { clearAttachments() }, [selectedSession?.id])
+  useEffect(() => { clearAttachments(); replyTargetRef.current = null; setReplyTarget(null); messageMenuAnchor.current = null; setMessageMenu(null) }, [selectedSession?.id])
 
   const cancelTurn = async (session: Session | null = selectedSession) => {
     if (!session) return
@@ -1457,6 +1537,34 @@ export function App() {
       setError(messageOf(reason))
     })
     window.setTimeout(() => setQuotaRefreshing(false), 15_000)
+  }
+
+  const usageTip = windowSettingsLoaded && usageTipsEnabled && surfaceFocused
+    ? selectUsageTip(companion ? companionRuntime?.provider : selectedRuntime?.provider, snapshot?.quotas ?? [], usageTipDismissals, now)
+    : null
+
+  const dismissUsageTip = (tip: UsageTipModel) => {
+    const previous = usageTipDismissalsRef.current
+    const next = appendUsageTipDismissal(previous, tip.dismissal)
+    usageTipDismissalsRef.current = next
+    setUsageTipDismissals(next)
+    void rpc('settings.set', { key: 'experimental.usageTipDismissals', value: next }).catch((reason) => {
+      usageTipDismissalsRef.current = previous
+      setUsageTipDismissals(previous)
+      setError(messageOf(reason))
+    })
+  }
+
+  const toggleMessageReaction = async (sessionId: string, messageId: string, emoji: string) => {
+    await rpc('message.reaction.toggle', { sessionId, messageId, emoji })
+  }
+
+  const jumpToMessage = (sourceSessionId: string, messageId: string) => {
+    if (sourceSessionId !== selectedSession?.id) { setError('This reply points to a message in another conversation.'); return }
+    const target = document.getElementById(`conversation-message-${encodeURIComponent(`message:${messageId}`)}`)
+    if (!target) { setError('The original message is not visible in this conversation.'); return }
+    target.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' })
+    target.focus({ preventScroll: true })
   }
 
   const selectAgent = (agent: Agent) => {
@@ -1567,7 +1675,7 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
+      <Companion agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
     </>
   }
 
@@ -1715,6 +1823,7 @@ export function App() {
           onChangeProjectFolder: (project) => void openProjectFolder().then((path) => { if (path) void projectAction('project.update', { projectId: project.id, path }) }),
           onDeleteProject: setProjectDelete,
           onToggleProjectCollapsed: (project) => void projectAction('project.update', { projectId: project.id, collapsed: !project.collapsed }),
+          onOpenRuntimeSettings: () => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) },
         }} />
         <button type="button" role="switch" aria-label="Companion, keep your blob on screen while you work" aria-checked={companionVisible} className="companion-sidebar-card" onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={30} mini mood="idle" label="Companion" /><span><strong>Companion</strong><small>Keep your blob on screen while you work</small></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>
         <ProfileMenu
@@ -1739,7 +1848,7 @@ export function App() {
             {sideSession
               ? <SideConversationHeader peer={sidePeer} peerName={sidePeer?.name ?? sideSession.link?.peerName ?? 'Teammate'} target={sideAgent} targetName={sideAgent?.name ?? 'Teammate'} topic={sideTopic(sideSession)} />
               : activeSelectedAgent
-                ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title="Blob settings" onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button>{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}{experiments.autoTitles && selectedSession?.title && selectedSession.title !== activeSelectedAgent.name && <span className="conversation-auto-title" title={selectedSession.title}>{selectedSession.title}</span>}</>
+                ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title="Blob settings" onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button><RuntimeProblemMarker runtime={selectedRuntime} onOpenSettings={() => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) }} />{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}{experiments.autoTitles && selectedSession?.title && selectedSession.title !== activeSelectedAgent.name && <span className="conversation-auto-title" title={selectedSession.title}>{selectedSession.title}</span>}</>
                 : <strong className="chat-title-text">{agentName}</strong>}
             {!sideSession && activeSelectedAgent && <SideConversationMenu sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent.id} onOpen={openSideConversation} />}
           </div>
@@ -1757,25 +1866,36 @@ export function App() {
         {error && <div className="inline-error" role="alert"><ShieldAlert size={16} /><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError(null)}><X size={15} /></button></div>}
         {archiveNotice && <div className="inline-error" role="status"><span>{archiveNotice}</span><button aria-label="Dismiss notice" onClick={() => setArchiveNotice(null)}><X size={15} /></button></div>}
 
-        {!selectedSession ? <>{activePermission && <ApprovalCard permission={activePermission} onReply={(choice) => answerPermission(activePermission, choice)} /> }<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} accent={accent} mood={selectedMood} agentName={agentName} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={() => openCreate()} onRefresh={() => void refreshRuntimes()} /></> : <>
+        {!selectedSession ? <>{activePermission && <ApprovalCard permission={activePermission} onReply={(choice) => answerPermission(activePermission, choice)} /> }<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} runtimeReady={runtimeReady} runtimeStatus={selectedRuntime?.status} accent={accent} mood={selectedMood} agentName={agentName} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={() => openCreate()} onRefresh={() => void refreshRuntimes()} /></> : <>
           <div className="conversation-frame">
             {conversationScrollable && <ConversationOutline key={selectedSession.id} sessionId={selectedSession.id} items={outlineItems} />}
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
             <div className="conversation-layout">
               <div className="chat-column">
-              {groupedConversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} label={activeSelectedAgent?.name ?? agentName} /><h2>Ready when you are.</h2><p>Ask {agentName} to explore <code>{currentProjectName ?? 'the project'}</code> or make a change.</p></div> : groupedConversationItems.map((item, index) => {
+              {groupedConversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} effectOverscanTop={118} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} label={activeSelectedAgent?.name ?? agentName} /><h2>{runtimeReady ? 'Ready when you are.' : 'This bot needs attention.'}</h2><p>{runtimeReady ? <>Ask {agentName} to explore <code>{currentProjectName ?? 'the project'}</code> or make a change.</> : selectedRuntime?.status === 'error' ? 'Open Settings → Coding agents. Update or repair this CLI, then choose Scan again.' : 'Open Settings → Coding agents and scan again before starting a conversation.'}</p></div> : groupedConversationItems.map((item, index) => {
                 const team = item.kind === 'message' ? teamItem(item.value!, item.id) : null
                 const content = item.kind === 'activity-group'
                   ? <ActivitySummaryLine group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
                   : item.kind === 'message'
-                    ? (team && experiments.search && !team.props.id ? <div id={`conversation-message-${encodeURIComponent(item.id)}`}>{team}</div> : team) ?? <MessageItem id={`conversation-message-${encodeURIComponent(item.id)}`} message={item.value!} accent={accent} agentName={agentName} showAvatar={!isUserMessage(item.value) && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))} mood={index === lastAgentIndex ? selectedMood : 'idle'} agents={agents} onOpenReference={openSideConversation} />
+                    ? (team && experiments.search && !team.props.id ? <div id={`conversation-message-${encodeURIComponent(item.id)}`}>{team}</div> : team) ?? <MessageItem id={`conversation-message-${encodeURIComponent(item.id)}`} message={item.value!} accent={accent} agentName={agentName} showAvatar={!isUserMessage(item.value) && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))} mood={index === lastAgentIndex ? selectedMood : 'idle'} agents={agents} onOpenReference={openSideConversation} sourceSessionId={selectedSession?.id ?? ''} sourceMessages={sessionMessages} onJumpToMessage={jumpToMessage} onContextMenu={item.value?.role === 'user' && !sideSession ? (event) => openUserMessageMenu(event, item.value!) : undefined} />
                     : <ActivityItem item={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
                 const message = item.kind === 'message' ? item.value : undefined
-                const text = String(message?.content ?? message?.text ?? '')
-                const actions = experiments.messageActions && !sideSession && (message?.role === 'user' || message?.role === 'assistant')
+                const text = originalMessageText(message?.content ?? message?.text)
+                const messageMeta = message?.meta && typeof message.meta === 'object' ? message.meta as Record<string, unknown> : {}
+                const hasUserOrAssistantMessage = (message?.role === 'user' || message?.role === 'assistant') && !['blob_reply', 'blob_message', 'delegation'].includes(String(messageMeta.kind ?? ''))
+                const actions = experiments.messageActions && !sideSession && hasUserOrAssistantMessage
+                const userMessage = message?.role === 'user'
+                const groupStart = !!message && !userMessage && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))
                 const files = experiments.changeReview && !sideSession && message ? filesUnderReply(selectedSession, message) : []
                 return <Fragment key={item.id}>
-                  {actions ? <div className="message-action-shell">{content}<MessageActions text={text} user={message?.role === 'user'} latest={sessionMessages.filter((m) => m.role === 'user').at(-1)?.id === message?.id} disabled={busy || sessionBusy || connection !== 'connected' || !runtimeReady || !text.trim()} onRetry={() => { void doRpc('session.prompt', { sessionId: selectedSession.id, text }).then(refresh).catch(() => undefined) }} onEdit={() => { setComposer(text); setConversationRefs([]); clearAttachments(); requestAnimationFrame(() => composerRef.current?.focus()) }} onError={setError} /></div> : content}
+                  {actions && message ? <div className={`message-action-shell${userMessage ? ' user' : ''}${groupStart ? ' group-start' : ''}`} onKeyDown={(event) => {
+                    if (!userMessage || !(event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey))) return
+                    event.preventDefault()
+                    const row = event.currentTarget.querySelector<HTMLElement>('.message-row')
+                    if (!row) return
+                    const rect = row.getBoundingClientRect()
+                    row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + Math.min(rect.width, 120), clientY: rect.top + Math.min(rect.height, 48) }))
+                  }}>{content}<MessageActions text={text} reactions={Array.isArray(message.reactions) ? message.reactions as string[] : []} canReply={!!text.trim() && !!message.id} onReply={() => stageMessageReply(message)} onToggleReaction={(emoji) => toggleMessageReaction(selectedSession.id, String(message.id), emoji)} onError={setError} /></div> : content}
                   {files.length > 0 && <ChangeReview files={files} dismissed={reviewDismissals[selectedSession.id] ?? []} onKeep={(id) => dismissReviewFile(selectedSession.id, id)} onRevert={(file) => setRevertTarget({ sessionId: selectedSession.id, file })} onDiff={(path, content) => setDiffViewer({ path, content })} />}
                 </Fragment>
               })}
@@ -1789,8 +1909,10 @@ export function App() {
           </section>
           </div>
           {sideSession ? <div className="side-close"><button type="button" className="secondary-button" onClick={closeSideConversation}>Close chat</button></div> : <div className="composer-wrap">
+            {usageTip && <UsageTip tip={usageTip} onDismiss={() => dismissUsageTip(usageTip)} onViewUsage={() => void showUsage()} />}
             {dictationPartial && <div className="dictation-partial" role="status" aria-label={`Listening: ${dictationPartial}`}><span className="dictation-partial-dot" aria-hidden="true" />{dictationPartial}</div>}
             <div className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
+              {replyTarget && <ReplyContextStrip target={replyTarget} onCancel={() => { replyTargetRef.current = null; setReplyTarget(null) }} />}
               <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
               {hashRef && !mention && <ConversationPicker sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent?.id} query={hashRef.query} activeIndex={hashRef.index} onPick={pickConversation} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
               {mention && <MentionPicker agents={agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden)} query={mention.query} activeIndex={mention.index} onPick={pickMention} onHover={(index) => setMention((current) => current ? { ...current, index } : current)} />}
@@ -1844,7 +1966,23 @@ export function App() {
       {!companion && usageBarEnabled && <QuotaBar quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={() => void showUsage()} />}
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} quotas={snapshot?.quotas ?? []} loading={busy && usageSummary === null} quotaRefreshing={quotaRefreshing} onRefreshQuota={refreshQuota} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onOpenHistory={() => { setUsageSheet(false); setAnalyticsOpen(true) }} onClose={() => setUsageSheet(false)} />}
       {quickSwitcherOpen && <QuickSwitcher items={quickSwitcherItems} onChoose={chooseQuickSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />}
-      {settingsSheet && <SettingsSheet experiments={experiments} onExperimentChange={changeExperiment} scanStatus={discoveryStatus} snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} runtimeLogos={runtimeLogos} onRuntimeLogosChange={setRuntimeLogos} speechEnabled={speechEnabled} onSpeechEnabledChange={setSpeechEnabled} speechModel={speechModel} onSpeechModelChange={setSpeechModel} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
+      {settingsSheet && <SettingsSheet experiments={experiments} onExperimentChange={changeExperiment} scanStatus={discoveryStatus} snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} usageTipsEnabled={usageTipsEnabled} onUsageTipsChange={setUsageTipsEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} runtimeLogos={runtimeLogos} onRuntimeLogosChange={setRuntimeLogos} speechEnabled={speechEnabled} onSpeechEnabledChange={setSpeechEnabled} speechModel={speechModel} onSpeechModelChange={setSpeechModel} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
+      {messageMenu && selectedSession?.id === messageMenu.sessionId && <MessageContextMenu position={messageMenu} canRetry={messageMenu.latest && connection === 'connected' && runtimeReady && !busy && !sessionBusy} onClose={closeMessageMenu} onRetry={() => {
+        void doRpc('session.prompt', {
+          sessionId: messageMenu.sessionId,
+          text: messageMenu.text,
+          ...(messageMenu.references.length ? { conversationRefs: messageMenu.references.map((reference) => reference.id) } : {}),
+          ...(messageMenu.replyTo ? { replyTo: { sourceSessionId: messageMenu.replyTo.sourceSessionId, messageId: messageMenu.replyTo.messageId } } : {}),
+          ...(messageMenu.attachments.length ? { attachments: messageMenu.attachments.map((attachment) => ({ path: attachment.path, name: attachment.name })) } : {}),
+        }).then(refresh).catch(() => undefined)
+      }} onEdit={() => {
+        setComposer(messageMenu.text)
+        setConversationRefs(messageMenu.references)
+        clearAttachments()
+        replyTargetRef.current = messageMenu.replyTo
+        setReplyTarget(messageMenu.replyTo)
+        requestAnimationFrame(() => composerRef.current?.focus())
+      }} />}
       {messageSearchOpen && experiments.search && <MessageSearch agents={agents} onClose={() => setMessageSearchOpen(false)} onChoose={(result) => {
         const session = sessions.find((s) => s.id === result.sessionId)
         if (!session) { setError('This conversation is no longer available.'); return }
@@ -1937,12 +2075,13 @@ function ImportBlobDialog({ blob, runtimes, onCancel, onCreate }: { blob: Shared
   </section></div>
 }
 
-function EmptyConversation({ connected, hasRuntime, hasAgent, accent, mood, agentName, look, onNewSession, onCreate, onRefresh }: { connected: boolean; hasRuntime: boolean; hasAgent: boolean; accent: string; mood: BlobMood; agentName: string; look: BlobLook | null; onNewSession: (anchor?: HTMLElement | null) => void; onCreate: () => void; onRefresh: () => void }) {
-  const canvas = hasAgent ? <BlobCanvas color={accent} size={128} mood={connected ? mood : 'offline'} look={look} label={agentName} /> : <BlobCanvas color="#e6e9ee" size={128} mood={connected ? 'idle' : 'offline'} label="Bloblex" />
-  const heading = !connected ? 'Connect to your local runtime' : hasAgent ? `Start a conversation with ${agentName}` : hasRuntime ? 'No blobs yet.' : 'Find your coding agent'
-  const description = !connected ? 'Bloblex keeps its daemon and agent sessions on this device. Reconnect to load the latest state.' : hasAgent ? 'Choose a project folder. Your selected CLI starts a real session there.' : hasRuntime ? 'Create a blob for one of the coding CLIs on this device.' : 'We only show agents installed on this device. Refresh to scan for Claude Code, Codex, or OpenCode.'
-  const label = !connected ? 'Try again' : hasAgent ? 'Choose a project' : hasRuntime ? 'Create blob' : 'Scan for agents'
-  return <div className="empty-conversation"><div className="empty-art">{canvas}</div><h1>{heading}</h1><p className="empty-description">{description}</p><button className="primary-button" onClick={(event) => { if (!connected || !hasAgent && !hasRuntime) onRefresh(); else if (hasAgent) onNewSession(event.currentTarget); else onCreate() }} disabled={!connected && !hasRuntime}><FolderOpen size={15} />{label}</button></div>
+function EmptyConversation({ connected, hasRuntime, hasAgent, runtimeReady, runtimeStatus, accent, mood, agentName, look, onNewSession, onCreate, onRefresh }: { connected: boolean; hasRuntime: boolean; hasAgent: boolean; runtimeReady: boolean; runtimeStatus?: string; accent: string; mood: BlobMood; agentName: string; look: BlobLook | null; onNewSession: (anchor?: HTMLElement | null) => void; onCreate: () => void; onRefresh: () => void }) {
+  const canvas = hasAgent ? <BlobCanvas color={accent} size={128} mood={connected ? mood : 'offline'} effectOverscanTop={135} look={look} label={agentName} /> : <BlobCanvas color="#e6e9ee" size={128} mood={connected ? 'idle' : 'offline'} effectOverscanTop={135} label="Bloblex" />
+  const needsRuntimeRecovery = hasAgent && !runtimeReady
+  const heading = !connected ? 'Connect to your local runtime' : needsRuntimeRecovery ? 'Coding agent needs attention' : hasAgent ? `Start a conversation with ${agentName}` : hasRuntime ? 'No blobs yet.' : 'Find your coding agent'
+  const description = !connected ? 'Bloblex keeps its daemon and agent sessions on this device. Reconnect to load the latest state.' : needsRuntimeRecovery ? runtimeStatus === 'error' ? 'Update or repair this CLI in Settings → Coding agents, then scan again.' : 'This coding agent is offline. Open Settings → Coding agents and scan again before starting a conversation.' : hasAgent ? 'Choose a project folder. Your selected CLI starts a real session there.' : hasRuntime ? 'Create a blob for one of the coding CLIs on this device.' : 'We only show agents installed on this device. Refresh to scan for Claude Code, Codex, or OpenCode.'
+  const label = !connected ? 'Try again' : needsRuntimeRecovery ? 'Scan again' : hasAgent ? 'Choose a project' : hasRuntime ? 'Create blob' : 'Scan for agents'
+  return <div className="empty-conversation"><div className="empty-art">{canvas}</div><h1>{heading}</h1><p className="empty-description">{description}</p><button className="primary-button" onClick={(event) => { if (!connected || needsRuntimeRecovery || !hasAgent && !hasRuntime) onRefresh(); else if (hasAgent) onNewSession(event.currentTarget); else onCreate() }} disabled={!connected && !hasRuntime}><FolderOpen size={15} />{label}</button></div>
 }
 
 /** Your own message, with @mentions of team blobs shown as their avatar and name in their colour. */
@@ -1959,7 +2098,7 @@ function UserMessageText({ text, agents, references, onOpenReference }: { text: 
     : <span key={index}>{segment.text}</span>)}</p>
 }
 
-function MessageItem({ id, message, accent, agentName, showAvatar, mood, agents = [], onOpenReference }: { id: string; message: Record<string, unknown>; accent: string; agentName: string; showAvatar: boolean; mood: BlobMood; agents?: readonly Agent[]; onOpenReference?: (sessionId: string) => void }) {
+function MessageItem({ id, message, accent, agentName, showAvatar, mood, agents = [], onOpenReference, sourceSessionId, sourceMessages = [], onJumpToMessage, onContextMenu }: { id: string; message: Record<string, unknown>; accent: string; agentName: string; showAvatar: boolean; mood: BlobMood; agents?: readonly Agent[]; onOpenReference?: (sessionId: string) => void; sourceSessionId: string; sourceMessages?: Array<Record<string, unknown>>; onJumpToMessage: (sessionId: string, messageId: string) => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void }) {
   const isUser = isUserMessage(message)
   const role = String(message.role ?? message.kind ?? 'assistant').toLowerCase()
   const text = typeof message.text === 'string' ? message.text : typeof message.content === 'string' ? message.content : typeof message.delta === 'string' ? message.delta : ''
@@ -1967,12 +2106,20 @@ function MessageItem({ id, message, accent, agentName, showAvatar, mood, agents 
   const eventType = typeof message.eventType === 'string' ? message.eventType : ''
   const isTool = Boolean(toolName) || eventType.startsWith('tool.') || eventType.startsWith('command.')
   const isError = message.status === 'error' || role === 'error' || eventType === 'turn.error'
+  const meta = message.meta && typeof message.meta === 'object' ? message.meta as Record<string, unknown> : {}
+  const rawReply = meta.replyTo && typeof meta.replyTo === 'object' ? meta.replyTo as Record<string, unknown> : null
+  const replyTarget = rawReply && typeof rawReply.messageId === 'string' && typeof rawReply.sourceSessionId === 'string' && typeof rawReply.author === 'string' && typeof rawReply.excerpt === 'string'
+    ? { messageId: rawReply.messageId, sourceSessionId: rawReply.sourceSessionId, author: rawReply.author, excerpt: rawReply.excerpt }
+    : null
+  const replyAvailable = !!replyTarget && replyTarget.sourceSessionId === sourceSessionId && sourceMessages.some((candidate) => candidate.id === replyTarget.messageId)
   const time = typeof message.createdAt === 'string' ? new Date(message.createdAt) : null
   const stamp = time && !Number.isNaN(time.valueOf()) ? <time>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time> : null
-  return <article id={id} tabIndex={-1} className={`message-row ${isUser ? 'user' : 'agent'} ${showAvatar ? 'group-start' : ''}`} aria-label={isUser ? 'You' : agentName} data-mood={isError ? 'error' : mood} data-accent={accent || undefined}>
+  return <article id={id} tabIndex={-1} className={`message-row ${isUser ? 'user' : 'agent'} ${showAvatar ? 'group-start' : ''}`} aria-label={isUser ? 'You' : agentName} data-mood={isError ? 'error' : mood} data-accent={accent || undefined} onContextMenu={onContextMenu}>
     <div className="message-content">
+      {replyTarget && <ReplyContextStrip target={replyTarget} compact available={replyAvailable} onJump={onJumpToMessage} />}
       {isUser && <MessageAttachments attachments={message.attachments} />}
       {isTool ? <div className={`activity-card ${isError ? 'error' : ''}`}><div className="activity-heading"><Terminal size={14} /><strong>{labelize(toolName ?? eventType.replace('.', ' '))}</strong><span>{isError ? 'Failed' : formatUnknownSafe(String(message.status ?? ''), 'Activity')}</span></div><p>{text || (typeof message.command === 'string' ? message.command : typeof message.summary === 'string' ? message.summary : 'Details are unavailable for this event.')}</p>{typeof message.path === 'string' && <code>{message.path}</code>}</div> : text || !(isUser && Array.isArray(message.attachments) && message.attachments.length) ? <div className={`message-bubble ${isError ? 'message-error' : ''}`}>{isUser && text ? <UserMessageText text={text} agents={agents} references={Array.isArray(message.references) ? message.references as Array<{ id: string; title: string }> : null} onOpenReference={onOpenReference} /> : <SafeMessageText text={text || 'Message content unavailable.'} />}</div> : null}
+      <MessageReactionBadges reactions={message.reactions} />
       {stamp && <div className="message-time">{stamp}</div>}
     </div>
   </article>
@@ -2233,7 +2380,7 @@ function shortDate(value: unknown) {
 
 function recordFrom(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
 
-function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
+function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
   // The browser preview can open a view directly: /?companion&mode=home&view=chat.
   const previewParams = previewMode ? new URLSearchParams(location.search) : null
   const [view, setView] = useState<'overview' | 'chat' | 'activity' | 'settings'>(() => {
@@ -2454,7 +2601,7 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
   }
   const sendCompanionPrompt = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!session || sending || !connected || session.state === 'waiting_permission') return
+    if (!session || sending || !connected || !runtimeUsable(runtime) || session.state === 'waiting_permission') return
     const requested = draft.trim() || (droppedFile ? 'Please inspect this local file.' : '')
     if (!requested) return
     const prompt = droppedFile && fileInfo ? `${requested}\n\nLocal file reference selected by the user: ${fileInfo.fileName} (${fileInfo.path}, ${formatBytes(fileInfo.sizeBytes)}). File contents were not read by Bloblex. The provider may only access this path if its own process permissions and working directory allow it.` : requested
@@ -2545,6 +2692,7 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
   const outputTokens = typeof usage?.outputTokens === 'number' ? usage.outputTokens : null
   const tokenGlance = inputTokens !== null && outputTokens !== null ? formatCount(inputTokens + outputTokens) : inputTokens !== null ? `${formatCount(inputTokens)} in · out ?` : outputTokens !== null ? `in ? · ${formatCount(outputTokens)} out` : 'Unknown'
   const recentMessages = (session?.messages ?? []).filter((message) => message.role !== 'thinking').slice(-8)
+  const sessionMessageIds = new Set(recentMessages.map((message) => message.id).filter((id): id is string => typeof id === 'string'))
   const recentSteps = session ? buildConversationItems(session).filter((item) => item.kind === 'activity' && item.activityKind !== 'turn').slice(-12) : []
   const color = agent ? agentColorHex(agent.color) : ''
   const name = agent?.name ?? (runtime ? labelize(runtime.provider) : 'Bloblex')
@@ -2606,7 +2754,7 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
               <span className="card-bot"><span className="focus-glow" aria-hidden="true" />{focusBlob(58)}</span>
               <button className="icon-btn jump" aria-label="Open in Bloblex" title="Open in Bloblex" onClick={onOpenMain}><ArrowUpRight size={9} /></button>
               <div className="card-stack">
-                <div className="who"><span className="name">{name}</span>{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}{agent?.leader && <span className="companion-leader" title="Team leader" aria-label="Team leader">★</span>}<span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
+                <div className="who"><span className="name">{name}</span><RuntimeProblemMarker runtime={runtime} onOpenSettings={onOpenSettings} />{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}{agent?.leader && <span className="companion-leader" title="Team leader" aria-label="Team leader">★</span>}<span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
                 <FocusTicker steps={focusSteps} current={statusLine} shimmering={shimmering} />
                 {focusTeam ? <button type="button" className="glance team-glance" onClick={() => onOpenSession?.(focusTeam.sessionId)} title="Open the side conversation in Bloblex">{focusTeam.peer && <BlobCanvas decorative color={agentColorHex(focusTeam.peer.color)} size={14} mini look={agentLook(focusTeam.peer)} label={focusTeam.peer.name} />}<span>{focusTeam.text}</span></button>
                   : <div className="glance" title={`Reported tokens across all blobs. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}><span>All blobs: Tokens <b>{tokenGlance}</b></span></div>}
@@ -2618,7 +2766,7 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
             <div className="chat-body">
               <div className="chat-log" ref={chatLogRef} data-companion-no-drag="">
                 {!session && <p className="companion-empty companion-no-session">Open or create a session to chat here. <button type="button" disabled={!canStart} onClick={(event) => onNewSession(event.currentTarget)}>New session</button></p>}
-                {recentMessages.map((message, index) => <CompanionChatItem key={String(message.id ?? index)} message={message} agents={agents} onOpenSide={(sessionId) => { if (sessionId) onOpenSession?.(sessionId) }} />)}
+                {recentMessages.map((message, index) => <CompanionChatItem key={String(message.id ?? index)} message={message} agents={agents} currentSessionId={session?.id} availableMessageIds={sessionMessageIds} onOpenSide={(sessionId) => { if (sessionId) onOpenSession?.(sessionId) }} />)}
                 {session && recentMessages.length === 0 && <p className="companion-empty">No messages in this conversation yet.</p>}
                 {sessionBusy && session?.state !== 'waiting_permission' && <div className="typing" aria-label={`${name} is working`}><i /><i /><i /></div>}
               </div>
@@ -2626,11 +2774,12 @@ function Companion({ agent, agents, projects = [], sessions = [], chatSize = 'me
               {preparingFile && <p className="companion-file-note" role="status">Checking the selected path is a readable file… <button type="button" onClick={() => { fileRequest.current++; setPreparingFile(false); setFileInfo(null); setDroppedFile(null) }}>Cancel</button></p>}
               {(fileError ?? dropError ?? appError) && <p className="companion-drop-error" role="alert">{fileError ?? dropError ?? appError}</p>}
               {dictating && dictationIsland}
+              {usageTip && onDismissUsageTip && <UsageTip tip={usageTip} onDismiss={() => onDismissUsageTip(usageTip)} />}
               <form className="chat-bar companion-chat-composer" data-companion-no-drag="" onSubmit={(event) => void sendCompanionPrompt(event)}>
-                <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !session || preparingFile}><Paperclip size={13} /></button>
-                <textarea className="chat-input" aria-label="Message agent" placeholder={connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !session || sending || session.state === 'waiting_permission'} rows={1} />
-                {speechEnabled && <DictationButton owner="companion" modelId={speechModel} autoStart={dictateOnOpen} onAutoStarted={() => setDictateOnOpen(false)} onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={!connected || !session || sending || session.state === 'waiting_permission'} />}
-                <button className="send-btn" type={sessionBusy ? 'button' : 'submit'} disabled={!session || sending || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={sessionBusy ? cancelCompanionTurn : undefined} aria-label={sessionBusy ? 'Cancel turn' : 'Send message'}>{sending ? <LoaderCircle size={13} className="spinning" /> : sessionBusy ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
+                <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !runtimeUsable(runtime) || !session || preparingFile}><Paperclip size={13} /></button>
+                <textarea className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} rows={1} />
+                {speechEnabled && <DictationButton owner="companion" modelId={speechModel} autoStart={dictateOnOpen} onAutoStarted={() => setDictateOnOpen(false)} onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} />}
+                <button className="send-btn" type={sessionBusy ? 'button' : 'submit'} disabled={!session || sending || !runtimeUsable(runtime) || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={sessionBusy ? cancelCompanionTurn : undefined} aria-label={sessionBusy ? 'Cancel turn' : 'Send message'}>{sending ? <LoaderCircle size={13} className="spinning" /> : sessionBusy ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
               </form>
             </div>
           </div> : view === 'activity' ? <div className="island-card list-card companion-activity-view">

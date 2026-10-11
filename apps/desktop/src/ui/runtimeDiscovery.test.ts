@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LAUNCH_TIMEOUTS, runLaunchChecks } from './launchChecks'
 import { DISCOVERY_BACKOFF, DISCOVERY_TIMEOUT, RuntimeDiscovery, runtimeProbeDetail } from './runtimeDiscovery'
+import { runtimeProblem } from './RuntimeProblemMarker'
 
 const runtimes = [{ id: 'codex', provider: 'codex' }]
 const scans: RuntimeDiscovery[] = []
@@ -82,6 +83,9 @@ describe('coding agent discovery recovery', () => {
     await vi.advanceTimersByTimeAsync(3000)
     expect(scan.status.failure).toBeNull()
     expect(runtimeProbeDetail({ ...failed, probeError: 'PRIVATE_PROVIDER_OUTPUT' })?.message).toBe('The coding agent check failed.')
+    expect(runtimeProblem({ ...failed, status: 'error' })).toMatchObject({ label: 'Codex · Protocol check', reason: 'Probe timed out.' })
+    expect(runtimeProblem({ ...failed, status: 'online', probeStep: 'Sign-in check', probeError: 'Sign-in status could not be checked.' })).toBeNull()
+    expect(runtimeProblem({ id: 'claude', provider: 'claude', status: 'online' })).toBeNull()
   })
 
   it('cancels recovery timers and in-flight callbacks on unmount', async () => {

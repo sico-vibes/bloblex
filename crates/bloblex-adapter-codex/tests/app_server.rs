@@ -178,6 +178,36 @@ fn method_count(record: &PathBuf, method: &str) -> usize {
 }
 
 #[tokio::test]
+async fn fake_peer_forwards_modern_command_output_deltas_and_mcp_details() {
+    let (runtime, _record) = setup(Some("activity"));
+    let adapter = CodexAdapter::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "activity-turn".into(), text: "activity".into(), exec_options: opts() }).await.unwrap();
+    let mut events = Vec::new();
+    loop {
+        let event = tokio::time::timeout(TURN_EVENT_TIMEOUT, rx.recv()).await.unwrap().unwrap();
+        let done = matches!(event, AgentEvent::TurnCompleted);
+        events.push(event);
+        if done { break; }
+    }
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolStarted { tool_call_id, title, raw, .. } if tool_call_id == "cmd-modern" && title == "cargo test -p bloblex-storage" && raw["cwd"] == "D:/project")));
+    let chunks = events.iter().filter_map(|event| match event {
+        AgentEvent::ToolUpdated { tool_call_id, raw } if tool_call_id == "cmd-modern" => raw["outputDelta"].as_str(),
+        _ => None,
+    }).collect::<Vec<_>>().concat();
+    assert_eq!(chunks, "first chunk");
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCompleted { tool_call_id, raw } if tool_call_id == "cmd-modern" && raw["aggregatedOutput"] == "first chunk" && raw["exitCode"] == 0)));
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolStarted { tool_call_id, title, raw, .. } if tool_call_id == "mcp-modern" && title == "bloblex · message_blob" && raw["arguments"]["blob"] == "Gogo")));
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolUpdated { tool_call_id, raw } if tool_call_id == "mcp-modern" && raw["progress"] == "Waiting for teammate")));
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCompleted { tool_call_id, raw } if tool_call_id == "mcp-modern" && raw["result"]["content"][0]["text"] == "Sent to Gogo.")));
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolStarted { tool_call_id, title, raw, .. } if tool_call_id == "dynamic-modern" && title == "search · find_page" && raw["arguments"]["query"] == "quota docs")));
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCompleted { tool_call_id, raw } if tool_call_id == "dynamic-modern" && raw["contentItems"][0]["text"] == "Found usage documentation." && raw["success"] == true)));
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+#[tokio::test]
 async fn exact_start_turn_resume_fields_and_replayed_usage_are_scoped() {
     let (r, record) = setup(None);
     let adapter = CodexAdapter::default();

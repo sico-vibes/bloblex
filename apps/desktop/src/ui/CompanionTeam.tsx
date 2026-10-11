@@ -11,6 +11,7 @@ import { MAX_COMPANION_PEERS } from '../blob/companionLayout'
 import { agentColorHex } from './agentColor'
 import { activityTitle } from './ActivityDetails'
 import { buildConversationItems } from './conversation'
+import { MessageReactionBadges, ReplyContextStrip } from './MessageActions'
 import { conversationPreview, groupAgentsByProject, mainSessionFor, sessionIsBusy, sideSessionsFor, sideTitle, splitMentions } from './teamSelectors'
 
 export type BlobState = 'waiting' | 'working' | 'offline' | 'idle'
@@ -191,10 +192,20 @@ function plain(text: string) {
 }
 
 /** A conversation item in the companion chat, with the same team semantics as the main window. */
-export function CompanionChatItem({ message, agents, onOpenSide }: { message: ChatMessage; agents: readonly Agent[]; onOpenSide: (sessionId: string | undefined) => void }): ReactNode {
+export function CompanionChatItem({ message, agents, onOpenSide, currentSessionId, availableMessageIds = new Set() }: { message: ChatMessage; agents: readonly Agent[]; onOpenSide: (sessionId: string | undefined) => void; currentSessionId?: string; availableMessageIds?: ReadonlySet<string> }): ReactNode {
   const role = String(message.role ?? '')
   const text = String(message.content ?? message.text ?? '')
   const meta = message.meta
+  const rawReply = meta?.replyTo && typeof meta.replyTo === 'object' ? meta.replyTo as Record<string, unknown> : null
+  const reply = rawReply && typeof rawReply.messageId === 'string' && typeof rawReply.sourceSessionId === 'string' && typeof rawReply.author === 'string' && typeof rawReply.excerpt === 'string'
+    ? { messageId: rawReply.messageId, sourceSessionId: rawReply.sourceSessionId, author: rawReply.author, excerpt: rawReply.excerpt }
+    : null
+  const messageId = String(message.id ?? '')
+  const jump = (sourceSessionId: string, sourceMessageId: string) => {
+    if (sourceSessionId !== currentSessionId) return
+    const original = document.getElementById(`companion-message-${encodeURIComponent(sourceMessageId)}`)
+    original?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' })
+  }
   if (role === 'thinking') return null
   if (meta?.kind === 'delegation' || meta?.kind === 'blob_reply') {
     const id = meta.kind === 'delegation' ? meta.peerAgentId : meta.fromAgentId
@@ -210,9 +221,10 @@ export function CompanionChatItem({ message, agents, onOpenSide }: { message: Ch
   if (role === 'plan' || meta?.kind === 'plan') {
     return <div className="companion-plan"><ClipboardList size={12} aria-hidden="true" /><span><b>Proposed plan</b> {plain(text)}</span></div>
   }
-  if (role === 'user') return <div className="chat-row user"><div className="bubble"><CompanionMentionText text={text} agents={agents} /></div></div>
-  const reply = plain(text)
-  return reply ? <div className="chat-row"><div className="reply">{reply}</div></div> : null
+  const quotedContext = reply && <ReplyContextStrip target={reply} compact available={reply.sourceSessionId === currentSessionId && availableMessageIds.has(reply.messageId)} onJump={jump} />
+  if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}<div className="bubble"><CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div></div>
+  const replyText = plain(text)
+  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply">{replyText}<MessageReactionBadges reactions={message.reactions} /></div></div> : null
 }
 
 /** Side conversations the focused blob took part in, newest first. */

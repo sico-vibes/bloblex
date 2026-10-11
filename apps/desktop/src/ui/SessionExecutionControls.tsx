@@ -8,6 +8,8 @@ import { moveMenuFocus, usePopoverDismiss } from './ComposerControls'
 import { providerBrand } from './providerBrand'
 import { knobInset, positionFromPointer, SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
 import { Tip } from './Tip'
+import { labelizeEffort } from './effortLabels'
+export { labelizeEffort } from './effortLabels'
 
 type Lock = SessionModelLock
 type PendingModel = { sessionId: string; model: string | null }
@@ -133,6 +135,7 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
       }} onFast={(enabled) => void setFast(enabled)} />
       : <button type="button" className="composer-pill model-pill unavailable" aria-label={`Conversation model, ${modelLabel}; model catalog unavailable`} title="Model choices are unavailable until the runtime reports a validated catalog." disabled><span>{shortModelName(modelLabel)}</span></button>}
     <EffortControl
+      provider={catalog?.provider ?? ''}
       key={`${session.id}:${model ?? 'provider-default'}:${pendingForSession?.model ?? 'no-pending-model'}`}
       providerStyle={providerStyle}
       modelName={selectedModel?.displayName ?? modelLabel}
@@ -151,7 +154,8 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   </div>
 }
 
-function EffortControl({ providerStyle, modelName, efforts, defaultThinking, unavailableReason, lockedReason, value, draftValue, disabled, onPreview, onCancel, onCommit }: {
+function EffortControl({ provider, providerStyle, modelName, efforts, defaultThinking, unavailableReason, lockedReason, value, draftValue, disabled, onPreview, onCancel, onCommit }: {
+  provider: string
   providerStyle: EffortMeterStyle
   modelName: string
   efforts: string[]
@@ -185,7 +189,7 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
   const displayedPosition = mode === 'rest' ? (visibleIndex < 0 ? restIndex : visibleIndex) : position
   const stop = Math.max(0, Math.min(efforts.length - 1, Math.round(displayedPosition)))
   const unlistedValue = value && !efforts.includes(value) ? value : null
-  const visibleLabel = visibleIndex >= 0 && efforts[visibleIndex] ? labelizeEffort(efforts[visibleIndex]) : unlistedValue ? `Saved: ${labelizeEffort(unlistedValue)}` : defaultThinking ? `${labelizeEffort(defaultThinking)} · default` : 'Provider default'
+  const visibleLabel = visibleIndex >= 0 && efforts[visibleIndex] ? labelizeEffort(efforts[visibleIndex], provider) : unlistedValue ? `Saved: ${labelizeEffort(unlistedValue, provider)}` : defaultThinking ? `${labelizeEffort(defaultThinking, provider)} · default` : 'Provider default'
   const lastIsUltra = isUltraEffort(efforts[efforts.length - 1])
   const atTop = efforts.length > 1 && stop === efforts.length - 1 && (visibleIndex >= 0 || mode !== 'rest')
 
@@ -299,7 +303,7 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
     else { clearSettle(); setMode('rest'); setPosition(restIndex); positionRef.current = restIndex; setOpen(true) }
   }
 
-  const triggerLabel = value && efforts.includes(value) ? labelizeEffort(value) : unlistedValue ? labelizeEffort(unlistedValue) : defaultThinking ? labelizeEffort(defaultThinking) : 'Default'
+  const triggerLabel = value && efforts.includes(value) ? labelizeEffort(value, provider) : unlistedValue ? labelizeEffort(unlistedValue, provider) : defaultThinking ? labelizeEffort(defaultThinking, provider) : 'Default'
   const savedTop = efforts.length > 1 && value === efforts[efforts.length - 1]
   const recommendedRatio = efforts.length < 2 || defaultIndex < 0 ? 0 : defaultIndex / (efforts.length - 1)
   const inset = knobInset(providerStyle)
@@ -312,18 +316,18 @@ function EffortControl({ providerStyle, modelName, efforts, defaultThinking, una
       <div className="session-effort-popover-heading">
         <span className="session-effort-title">Effort</span>
         <span className={`session-effort-value ${atTop && lastIsUltra ? 'ultra' : ''}`} aria-live="polite"><span key={visibleLabel} className="session-effort-value-in">{visibleLabel}</span></span>
-        {efforts.length > 0 && <button type="button" className={`session-effort-default ${visibleIndex < 0 ? 'selected' : ''}`} aria-pressed={visibleIndex < 0} disabled={disabled} title={defaultThinking ? `Let the provider choose (currently ${labelizeEffort(defaultThinking)})` : 'Let the provider choose'} onClick={() => choose(null)}>Provider default</button>}
+        {efforts.length > 0 && <button type="button" className={`session-effort-default ${visibleIndex < 0 ? 'selected' : ''}`} aria-pressed={visibleIndex < 0} disabled={disabled} title={defaultThinking ? `Let the provider choose (currently ${labelizeEffort(defaultThinking, provider)})` : 'Let the provider choose'} onClick={() => choose(null)}>Provider default</button>}
       </div>
       {efforts.length > 0 ? <>
         <div className="session-effort-meter-frame">
           <div className="session-effort-caption"><span>Faster</span><span>Smarter</span></div>
-          <SessionEffortMeter trackRef={trackRef} style={providerStyle} count={efforts.length} position={displayedPosition} recommendedIndex={defaultIndex} top={atTop} dragging={mode === 'drag'} settling={mode === 'settle'} valueText={mode === 'rest' && visibleIndex < 0 ? visibleLabel : labelizeEffort(efforts[stop] ?? '')} disabled={disabled} onPointerDown={beginPointer} onPointerMove={movePointer} onPointerUp={finishPointer} onPointerCancel={abandonPointer} onLostPointerCapture={abandonPointer} onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} />
+          <SessionEffortMeter trackRef={trackRef} style={providerStyle} count={efforts.length} position={displayedPosition} recommendedIndex={defaultIndex} top={atTop} dragging={mode === 'drag'} settling={mode === 'settle'} valueText={mode === 'rest' && visibleIndex < 0 ? visibleLabel : labelizeEffort(efforts[stop] ?? '', provider)} disabled={disabled} onPointerDown={beginPointer} onPointerMove={movePointer} onPointerUp={finishPointer} onPointerCancel={abandonPointer} onLostPointerCapture={abandonPointer} onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} />
           {providerStyle === 'claude'
             ? defaultIndex >= 0 && <div className="session-effort-recommended" aria-hidden="true"><span style={{ left: `calc(${inset}px + (100% - ${inset * 2}px) * ${recommendedRatio})` }} className={recommendedRatio < .15 ? 'start' : recommendedRatio > .85 ? 'end' : ''}>Recommended</span></div>
-            : <div className="session-effort-labels" role="group" aria-label="Effort levels">{efforts.map((effort, index) => <button type="button" key={`${effort}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${index === defaultIndex ? 'default' : ''} ${isUltraEffort(effort) ? 'ultra' : ''}`} aria-pressed={visibleIndex === index} title={index === defaultIndex ? 'Recommended' : undefined} disabled={disabled} onClick={() => choose(effort)}>{labelizeEffort(effort)}</button>)}</div>}
+            : <div className="session-effort-labels" role="group" aria-label="Effort levels">{efforts.map((effort, index) => <button type="button" key={`${effort}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${index === defaultIndex ? 'default' : ''} ${isUltraEffort(effort) ? 'ultra' : ''}`} aria-pressed={visibleIndex === index} title={index === defaultIndex ? 'Recommended' : undefined} disabled={disabled} onClick={() => choose(effort)}>{labelizeEffort(effort, provider)}</button>)}</div>}
         </div>
         {lastIsUltra && atTop && <p className="session-effort-note">{providerStyle === 'claude' ? 'Ultracode runs at Max and lets Claude plan and fan out the work with dynamic workflows.' : 'Ultra reasons at the maximum and may hand parts of the task to extra agents.'}</p>}
-      </> : <div className="session-effort-unavailable"><strong>{unlistedValue ? `Saved selection: ${labelizeEffort(unlistedValue)}` : 'Provider default'}</strong><p>{unavailableReason ?? 'This model does not report selectable effort levels. Bloblex cannot change effort for it.'}</p>{defaultThinking && <p>Catalog default: {labelizeEffort(defaultThinking)}.</p>}</div>}
+      </> : <div className="session-effort-unavailable"><strong>{unlistedValue ? `Saved selection: ${labelizeEffort(unlistedValue, provider)}` : 'Provider default'}</strong><p>{unavailableReason ?? 'This model does not report selectable effort levels. Bloblex cannot change effort for it.'}</p>{defaultThinking && <p>Catalog default: {labelizeEffort(defaultThinking, provider)}.</p>}</div>}
     </div>}
   </div>
 }
@@ -399,11 +403,4 @@ function resolveProviderStyle(runtimeProvider: string, modelProvider: string | n
   if (/claude|anthropic/.test(modelFamily) || runtimeProvider.toLowerCase() === 'claude') return 'claude'
   if (/codex|openai|\bgpt\b/.test(modelFamily) || runtimeProvider.toLowerCase() === 'codex') return 'magnetic'
   return 'neutral'
-}
-
-export function labelizeEffort(value: string) {
-  const key = value.trim().toLowerCase()
-  if (key === 'xhigh') return 'Extra high'
-  if (key === 'ultracode') return 'Ultracode'
-  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }

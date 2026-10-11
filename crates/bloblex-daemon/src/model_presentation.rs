@@ -1,5 +1,5 @@
 use bloblex_agent_core::ModelInfo;
-use std::collections::HashMap;
+use std::{cmp::Ordering, collections::HashMap};
 
 /// Local-only display aliases. This table classifies rows already returned by
 /// the provider and never contributes a model to discovery.
@@ -38,13 +38,10 @@ pub(crate) fn apply(models: &mut [ModelInfo], validated: bool, fallback: bool) {
         *family_counts.entry(family.key.clone()).or_insert(0usize) += 1;
     }
     let has_group = family_counts.values().any(|count| *count > 1);
-    let default_family = models
-        .iter()
-        .zip(&families)
-        .find(|(model, _)| model.is_default == Some(true))
+    let default_non_gpt_family = models.iter().zip(&families)
+        .find(|(model, family)| model.is_default == Some(true) && family.as_ref().is_some_and(|family| !family.key.starts_with("gpt-")))
         .and_then(|(_, family)| family.as_ref())
         .map(|family| family.key.clone());
-
     for model in models.iter_mut() {
         if model.display_name == model.id {
             if let Some((_, name)) = FRIENDLY_NAMES.iter().find(|(id, _)| *id == model.id) {
@@ -55,7 +52,8 @@ pub(crate) fn apply(models: &mut [ModelInfo], validated: bool, fallback: bool) {
         let family_is_grouped = model_family
             .as_ref()
             .is_some_and(|family| family_counts.get(&family.key).copied().unwrap_or_default() > 1);
-        model.group = if family_is_grouped {
+        let is_gpt_family = model_family.as_ref().is_some_and(|family| family.key.starts_with("gpt-"));
+        model.group = if is_gpt_family || family_is_grouped {
             model_family.map(|family| family.label)
         } else if has_group && model.is_default != Some(true) {
             Some("Other models".into())
@@ -68,31 +66,49 @@ pub(crate) fn apply(models: &mut [ModelInfo], validated: bool, fallback: bool) {
         }
     }
 
-    // An ungrouped default stays first without a header; other singleton rows trail in Other models.
+    // GPT versions are one numeric sequence even when a version has only one
+    // offered model. Other providers keep the default family priority that
+    // was present before GPT-specific ordering was introduced.
     models.sort_by(|a, b| {
         let a_family = family(&a.id);
         let b_family = family(&b.id);
         let a_grouped = a_family.as_ref().is_some_and(|f| family_counts.get(&f.key).copied().unwrap_or_default() > 1);
         let b_grouped = b_family.as_ref().is_some_and(|f| family_counts.get(&f.key).copied().unwrap_or_default() > 1);
-        let a_default_singleton = a.is_default == Some(true) && !a_grouped;
-        let b_default_singleton = b.is_default == Some(true) && !b_grouped;
-        let a_default_family = a_family.as_ref().map(|f| &f.key) == default_family.as_ref();
-        let b_default_family = b_family.as_ref().map(|f| &f.key) == default_family.as_ref();
-        if !has_group {
-            return b.is_default.unwrap_or(false)
-                .cmp(&a.is_default.unwrap_or(false))
+        let a_gpt = a_family.as_ref().is_some_and(|family| family.key.starts_with("gpt-"));
+        let b_gpt = b_family.as_ref().is_some_and(|family| family.key.starts_with("gpt-"));
+        let a_default_singleton = a.is_default == Some(true) && !a_grouped && !a_gpt;
+        let b_default_singleton = b.is_default == Some(true) && !b_grouped && !b_gpt;
+        if a_gpt && b_gpt {
+            return compare_families(&a_family.as_ref().unwrap().key, &b_family.as_ref().unwrap().key)
+                .then_with(|| b.is_default.unwrap_or(false).cmp(&a.is_default.unwrap_or(false)))
                 .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
                 .then_with(|| a.id.cmp(&b.id));
         }
-        b_default_singleton
-            .cmp(&a_default_singleton)
+        let a_default_family = a_family.as_ref().map(|family| &family.key) == default_non_gpt_family.as_ref();
+        let b_default_family = b_family.as_ref().map(|family| &family.key) == default_non_gpt_family.as_ref();
+        b_default_singleton.cmp(&a_default_singleton)
+            .then_with(|| b_gpt.cmp(&a_gpt))
             .then_with(|| b_grouped.cmp(&a_grouped))
             .then_with(|| b_default_family.cmp(&a_default_family))
-            .then_with(|| a_family.as_ref().map(|f| &f.key).cmp(&b_family.as_ref().map(|f| &f.key)))
+            .then_with(|| match (a_family.as_ref(), b_family.as_ref()) {
+                (Some(left), Some(right)) => left.key.cmp(&right.key),
+                (left, right) => left.map(|family| &family.key).cmp(&right.map(|family| &family.key)),
+            })
             .then_with(|| b.is_default.unwrap_or(false).cmp(&a.is_default.unwrap_or(false)))
             .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
             .then_with(|| a.id.cmp(&b.id))
     });
+}
+
+fn compare_families(left: &str, right: &str) -> Ordering {
+    fn gpt_version(key: &str) -> Option<Vec<u32>> {
+        let parts = key.strip_prefix("gpt-")?.split('.').map(str::parse::<u32>).collect::<Result<Vec<_>, _>>().ok()?;
+        (!parts.is_empty()).then_some(parts)
+    }
+    match (gpt_version(left), gpt_version(right)) {
+        (Some(left), Some(right)) => right.cmp(&left),
+        _ => left.cmp(right),
+    }
 }
 
 fn family(id: &str) -> Option<Family> {
@@ -158,21 +174,66 @@ mod tests {
         assert_eq!(models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(), ["gpt-6-luna", "gpt-6-sol", "gpt-5.5"]);
         assert_eq!(models[0].group.as_deref(), Some("GPT-6"));
         assert_eq!(models[1].group.as_deref(), Some("GPT-6"));
-        assert_eq!(models[2].group.as_deref(), Some("Other models"));
+        assert_eq!(models[2].group.as_deref(), Some("GPT-5.5"));
     }
 
     #[test]
-    fn ungrouped_default_precedes_group_headers_without_getting_a_header() {
+    fn gpt_version_groups_sort_numerically_newest_first_and_keep_default_marker() {
         let mut models = vec![
-            model("gpt-6-sol", "GPT 6 Sol", Some(false)),
-            model("gpt-5.5", "GPT 5.5", Some(true)),
-            model("gpt-6-luna", "GPT 6 Luna", Some(false)),
+            model("gpt-5.6-sol", "GPT-5.6 Sol", Some(false)),
+            model("gpt-6-sol", "GPT-6 Sol", Some(true)),
+            model("gpt-6.1-sol", "GPT-6.1 Sol", Some(false)),
+            model("gpt-5.6-terra", "GPT-5.6 Terra", Some(false)),
+            model("gpt-6-astra", "GPT-6 Astra", Some(false)),
+            model("gpt-6.1-astra", "GPT-6.1 Astra", Some(false)),
         ];
         apply(&mut models, true, false);
-        assert_eq!(models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(), ["gpt-5.5", "gpt-6-luna", "gpt-6-sol"]);
-        assert_eq!(models[0].group, None);
-        assert_eq!(models[1].group.as_deref(), Some("GPT-6"));
-        assert_eq!(models[2].group.as_deref(), Some("GPT-6"));
+        assert_eq!(models.iter().map(|model| model.group.as_deref().unwrap_or_default()).collect::<Vec<_>>(), ["GPT-6.1", "GPT-6.1", "GPT-6", "GPT-6", "GPT-5.6", "GPT-5.6"]);
+        assert_eq!(models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(), ["gpt-6.1-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"]);
+        assert_eq!(models[2].is_default, Some(true));
+    }
+
+    #[test]
+    fn reduced_gpt_singletons_sort_by_version_even_when_an_older_model_is_default() {
+        let mut models = vec![
+            model("gpt-5.6-sol", "GPT-5.6 Sol", Some(true)),
+            model("gpt-6-sol", "GPT-6 Sol", Some(false)),
+            model("gpt-6.1-sol", "GPT-6.1 Sol", Some(false)),
+        ];
+        apply(&mut models, true, false);
+        assert_eq!(models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(), ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"]);
+        assert_eq!(models.iter().map(|model| model.group.as_deref()).collect::<Vec<_>>(), [Some("GPT-6.1"), Some("GPT-6"), Some("GPT-5.6")]);
+        assert_eq!(models[2].is_default, Some(true));
+    }
+
+    #[test]
+    fn newer_gpt_singleton_precedes_older_grouped_families_and_keeps_its_heading() {
+        let mut models = vec![
+            model("gpt-5.6-luna", "GPT-5.6 Luna", Some(true)),
+            model("gpt-6-sol", "GPT-6 Sol", Some(false)),
+            model("gpt-5.6-sol", "GPT-5.6 Sol", Some(false)),
+            model("gpt-6.1-sol", "GPT-6.1 Sol", Some(false)),
+            model("gpt-6-luna", "GPT-6 Luna", Some(true)),
+        ];
+        apply(&mut models, true, false);
+        assert_eq!(models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(), ["gpt-6.1-sol", "gpt-6-luna", "gpt-6-sol", "gpt-5.6-luna", "gpt-5.6-sol"]);
+        assert_eq!(models.iter().map(|model| model.group.as_deref().unwrap_or_default()).collect::<Vec<_>>(), ["GPT-6.1", "GPT-6", "GPT-6", "GPT-5.6", "GPT-5.6"]);
+        assert_eq!(models[1].is_default, Some(true));
+        assert_eq!(models[3].is_default, Some(true));
+    }
+
+    #[test]
+    fn non_gpt_default_family_keeps_priority_over_older_lexical_family() {
+        let mut models = vec![
+            model("claude-opus-4-5", "Opus 4.5", Some(false)),
+            model("claude-sonnet-5-5", "Sonnet 5.5", Some(true)),
+            model("claude-opus-5-5", "Opus 5.5", Some(false)),
+            model("claude-sonnet-4-5", "Sonnet 4.5", Some(false)),
+        ];
+        apply(&mut models, true, false);
+        assert_eq!(models.iter().map(|model| model.group.as_deref().unwrap_or_default()).collect::<Vec<_>>(), ["Sonnet", "Sonnet", "Opus", "Opus"]);
+        assert_eq!(models[0].id, "claude-sonnet-5-5");
+        assert_eq!(models[0].is_default, Some(true));
     }
 
     #[test]

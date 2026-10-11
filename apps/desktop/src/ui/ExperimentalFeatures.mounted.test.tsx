@@ -2,7 +2,7 @@
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeReview, MessageActions, MessageSearch, ShortcutSheet, UndoToasts, highlightMatch, type UndoToast } from './ExperimentalFeatures'
+import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, highlightMatch, type UndoToast } from './ExperimentalFeatures'
 
 const h = vi.hoisted(() => ({ rpc: vi.fn() }))
 vi.mock('../tauri', () => ({ rpc: h.rpc }))
@@ -33,24 +33,6 @@ describe('experimental surfaces', () => {
     click(view.host, 'Revert'); expect(onRevert).toHaveBeenCalledWith(file)
     view.render(<ChangeReview files={[file]} dismissed={['f']} onKeep={onKeep} onRevert={onRevert} onDiff={onDiff} />)
     expect(view.host.querySelector('section')).toBeNull()
-  })
-  it('copies exact text and gives older user messages Edit but no Retry', async () => {
-    const copy = vi.fn().mockResolvedValue(undefined), edit = vi.fn(), retry = vi.fn()
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } })
-    const view = mount(<MessageActions text="Exact **text**" user latest={false} disabled={false} onEdit={edit} onRetry={retry} onError={vi.fn()} />)
-    click(view.host, 'Copy message'); await tick()
-    expect(copy).toHaveBeenCalledWith('Exact **text**')
-    expect(view.host.querySelector('[aria-label="Retry message"]')).toBeNull()
-    click(view.host, 'Edit message'); expect(edit).toHaveBeenCalledOnce()
-    view.render(<MessageActions text="Exact **text**" user latest disabled={false} onEdit={edit} onRetry={retry} onError={vi.fn()} />)
-    click(view.host, 'Retry message'); expect(retry).toHaveBeenCalledOnce()
-  })
-  it('assistant actions only offer Copy and busy Retry stays disabled', () => {
-    const props = { text: 'Reply', disabled: false, onEdit: vi.fn(), onRetry: vi.fn(), onError: vi.fn() }
-    const view = mount(<MessageActions {...props} user={false} latest />)
-    expect(view.host.querySelectorAll('button')).toHaveLength(1)
-    view.render(<MessageActions {...props} user latest disabled />)
-    expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Retry message"]')?.disabled).toBe(true)
   })
   it('highlights literal matches without interpreting markup', () => {
     const view = mount(<div>{highlightMatch('<script> 50%_ match', '50%_')}</div>)

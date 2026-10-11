@@ -6,7 +6,7 @@
 //! teammate's turn ends, its reply is relayed back into the sender's
 //! conversation, which wakes the sender to report to the user.
 
-use crate::{agent_error, derr, new_session, session_prompt, AppState, DispatchError};
+use crate::{agent_error, derr, new_session, AppState, DispatchError};
 use axum::http::StatusCode;
 use bloblex_agent_core::{ExecOptions, McpServerSpec};
 use serde_json::{json, Value};
@@ -339,7 +339,7 @@ async fn deliver(st: &AppState, session_id: &str, text: String, meta: Value, dep
         return;
     }
     st.team.depth.lock().unwrap().insert(session_id.to_owned(), depth);
-    if let Err(error) = session_prompt(st, json!({"sessionId":session_id,"text":text.clone(),"meta":meta.clone()})).await {
+    if let Err(error) = crate::session_prompt_for_team(st, json!({"sessionId":session_id,"text":text.clone(),"meta":meta.clone()})).await {
         if error.1.code == "conflict" {
             st.team.queued.lock().await.entry(session_id.to_owned()).or_default().push_front(Queued { text, meta, depth });
         } else {

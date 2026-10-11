@@ -20,6 +20,8 @@ interface Props {
   greeting?: boolean
   /** Small peer avatars: flatter shading, larger eyes and a wandering gaze. */
   mini?: boolean
+  /** Extra transparent canvas above the logical body, without enlarging its hit or layout box. */
+  effectOverscanTop?: number
   decorative?: boolean
   /** The blob's silhouette and face. Omitted, it is the round Bloblex mascot. */
   look?: BlobLook | null
@@ -60,6 +62,12 @@ export function blobCanvasSize(size: number, greeting: boolean) {
     : { width: size, height: size }
 }
 
+export function blobCanvasGeometry(size: number, greeting: boolean, effectOverscanTop = 0) {
+  const logical = blobCanvasSize(size, greeting)
+  const overscanTop = greeting ? 0 : Math.max(0, Math.min(size * 1.5, Math.ceil(effectOverscanTop)))
+  return { ...logical, logicalWidth: logical.width, logicalHeight: logical.height, overscanTop, canvasHeight: logical.height + overscanTop }
+}
+
 const DIZZY_MS = 3300
 const SLAP_WINDOW_MS = 1700
 const LOVE_HOVER_MS = 1900
@@ -70,9 +78,10 @@ const LOVE_COOLDOWN_MS = 6000
  * avatar, so a blob keeps one face language everywhere. With `greeting`, the
  * canvas plays the companion welcome scene instead.
  */
-export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, decorative = false, look = null, soundCues = false, onGreetingComplete, onDizzy, onDizzyRecovery }: Props) {
+export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, effectOverscanTop = 0, decorative = false, look = null, soundCues = false, onGreetingComplete, onDizzy, onDizzyRecovery }: Props) {
   const effectiveMood = moodWithFileReference(mood, fileStage)
   const canvas = useRef<HTMLCanvasElement>(null)
+  const frame = useRef<HTMLSpanElement>(null)
   const engineRef = useRef<BlobEngine | null>(null)
   if (!engineRef.current) {
     const engine = new BlobEngine()
@@ -131,18 +140,19 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
   useEffect(() => { dizzyRef.current = { start: onDizzy, recovery: onDizzyRecovery } }, [onDizzy, onDizzyRecovery])
 
   useEffect(() => {
-    const element = canvas.current
-    const ctx = element?.getContext('2d')
-    if (!element || !ctx) return
+    const element = frame.current
+    const canvasElement = canvas.current
+    const ctx = canvasElement?.getContext('2d')
+    if (!element || !canvasElement || !ctx) return
     const engine = engineRef.current!
     const life = greetingLife.current!
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const { width, height } = blobCanvasSize(size, greeting)
+    const { width, height, canvasHeight, overscanTop } = blobCanvasGeometry(size, greeting, effectOverscanTop)
     const ratio = Math.min(window.devicePixelRatio || 1, 2)
-    element.width = Math.round(width * ratio)
-    element.height = Math.round(height * ratio)
+    canvasElement.width = Math.round(width * ratio)
+    canvasElement.height = Math.round(canvasHeight * ratio)
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
-    let frame = 0
+    let animationFrame = 0
     let timer = 0
     let loveTimer = 0
     let lastLove = -Infinity
@@ -160,29 +170,32 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
       engine.reducedMotion = !motionAllowed
       if (life.finishIfDue(now, !motionAllowed)) completionRef.current?.()
 
-      ctx.clearRect(0, 0, width, height)
+      ctx.clearRect(0, 0, width, canvasHeight)
       if (greeting) {
         drawGreetingScene(ctx, width, height, life.active && motionAllowed ? life.age(now) : GREETING_END_MS, engine.bodyColor)
-        if (life.active && motionAllowed) frame = requestAnimationFrame(draw)
+        if (life.active && motionAllowed) animationFrame = requestAnimationFrame(draw)
         return
       }
       engine.update(dt)
+      ctx.save()
+      ctx.translate(0, overscanTop)
       engine.draw(ctx, width, height)
+      ctx.restore()
 
       if (!motionAllowed) {
         if (dizzyActive.current || engine.eyeOverride) timer = window.setTimeout(() => draw(performance.now()), 110)
         return
       }
-      if (engine.busy || hovered) frame = requestAnimationFrame(draw)
+      if (engine.busy || hovered) animationFrame = requestAnimationFrame(draw)
       else timer = window.setTimeout(() => draw(performance.now()), Math.max(16, Math.min(1000, engine.msUntilWake)))
     }
 
     const schedule = () => {
       if (disposed || !visible || !intersecting) return
-      cancelAnimationFrame(frame)
+      cancelAnimationFrame(animationFrame)
       window.clearTimeout(timer)
       if (reduced.matches) { draw(performance.now()); return }
-      frame = requestAnimationFrame(draw)
+      animationFrame = requestAnimationFrame(draw)
     }
     scheduleRef.current = schedule
 
@@ -266,13 +279,13 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
     const observer = new IntersectionObserver(([entry]) => {
       intersecting = entry.isIntersecting
       if (intersecting) schedule()
-      else { cancelAnimationFrame(frame); window.clearTimeout(timer) }
+      else { cancelAnimationFrame(animationFrame); window.clearTimeout(timer) }
     })
     observer.observe(element)
     const visibility = () => {
       visible = !document.hidden
       if (visible) schedule()
-      else { cancelAnimationFrame(frame); window.clearTimeout(timer) }
+      else { cancelAnimationFrame(animationFrame); window.clearTimeout(timer) }
     }
     const motionChange = () => schedule()
     document.addEventListener('visibilitychange', visibility)
@@ -285,7 +298,7 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
       // replay and on size changes. Only animation completion or a real
       // pointer interruption may notify the shell state machine.
       scheduleRef.current = null
-      cancelAnimationFrame(frame)
+      cancelAnimationFrame(animationFrame)
       window.clearTimeout(timer)
       window.clearTimeout(loveTimer)
       window.removeEventListener('pointermove', onWindowPointerMove)
@@ -297,8 +310,10 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
       reduced.removeEventListener('change', motionChange)
       observer.disconnect()
     }
-  }, [size, greeting, soundCues])
+  }, [size, greeting, soundCues, effectOverscanTop])
 
-  const { width, height } = blobCanvasSize(size, greeting)
-  return <canvas ref={canvas} className={`blob-canvas ${className}`} width={width} height={height} style={{ width, height }} role={decorative ? undefined : 'img'} aria-hidden={decorative || undefined} aria-label={decorative ? undefined : `${label} ${effectiveMood}`} data-tauri-drag-region={dragRegion ? '' : undefined} />
+  const { width, height, canvasHeight, overscanTop } = blobCanvasGeometry(size, greeting, effectOverscanTop)
+  return <span ref={frame} className={`blob-canvas-frame ${className}`} style={{ width, height, position: 'relative', display: 'inline-block', flex: '0 0 auto', verticalAlign: 'top', overflow: 'visible' }} data-tauri-drag-region={dragRegion ? '' : undefined}>
+    <canvas ref={canvas} className="blob-canvas" width={width} height={canvasHeight} style={{ width, height: canvasHeight, position: 'absolute', left: 0, bottom: 0, pointerEvents: 'none' }} role={decorative ? undefined : 'img'} aria-hidden={decorative || undefined} aria-label={decorative ? undefined : `${label} ${effectiveMood}`} data-effect-overscan-top={overscanTop || undefined} />
+  </span>
 }

@@ -115,14 +115,30 @@ function UsagePopover({ rows, refreshing, onRefresh, onOpenDetails }: { rows: Qu
 function ProviderFlyout({ row, top, onEnter, onLeave }: { row: QuotaProviderRow; top: number; onEnter: () => void; onLeave: () => void }) {
   const updated = updatedAgo(row.fetchedAt)
   const ref = useRef<HTMLDivElement>(null)
-  const [offset, setOffset] = useState(top)
-  // Align with the hovered row, but keep the flyout inside the popover's height.
+  const [position, setPosition] = useState({ top, left: 0, width: 260 })
+  // Align with the hovered row and choose the free side of the popover. On a
+  // narrow window, overlay the popover instead of clipping the detail flyout.
   useLayoutEffect(() => {
-    const parent = ref.current?.offsetParent as HTMLElement | null
-    const height = ref.current?.offsetHeight ?? 0
-    setOffset(parent ? Math.max(0, Math.min(top, parent.clientHeight - height)) : top)
+    const update = () => {
+      const parent = ref.current?.offsetParent as HTMLElement | null
+      const parentRect = parent?.getBoundingClientRect()
+      const width = Math.max(180, Math.min(260, window.innerWidth - 24))
+      const height = ref.current?.offsetHeight ?? 0
+      if (!parent || !parentRect) { setPosition({ top, left: 0, width }); return }
+      const right = parentRect.right + 8
+      const left = parentRect.left - width - 8
+      const viewportLeft = right + width <= window.innerWidth - 8
+        ? parent.clientWidth + 8
+        : left >= 8
+          ? -width - 8
+          : Math.max(8 - parentRect.left, Math.min(parent.clientWidth - width - 8, window.innerWidth - width - 8 - parentRect.left))
+      setPosition({ top: Math.max(0, Math.min(top, parent.clientHeight - height)), left: viewportLeft, width })
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
   }, [top, row])
-  return <div ref={ref} id="usage-flyout" className="usage-flyout" role="tooltip" style={{ top: offset }} onMouseEnter={onEnter} onMouseLeave={onLeave}>
+  return <div ref={ref} id="usage-flyout" className="usage-flyout" role="tooltip" style={position} onMouseEnter={onEnter} onMouseLeave={onLeave}>
     <div className="usage-flyout-head"><ProviderLogo provider={row.provider} size={18} /><span><strong>{row.name}</strong>{updated && <small>{updated}</small>}</span></div>
     {row.windows.length ? row.windows.map((window) => {
       const reset = resetIn(window.resetsAt)

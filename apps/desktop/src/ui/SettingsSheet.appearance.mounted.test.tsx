@@ -71,12 +71,30 @@ describe('General settings mounted controls', () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const group = [...host.querySelectorAll('.settings-group')].find((section) => section.querySelector('h3')?.textContent === 'Experimental')
     expect(group?.querySelector('.experimental-tag')?.textContent).toBe('Experimental')
-    expect(group?.querySelector('[role="tooltip"]')?.textContent).toContain('plan limits')
-    const toggle = group?.querySelector<HTMLButtonElement>('[aria-label="Usage bar"]')
+    const usageBarRow = [...(group?.querySelectorAll('.settings-row') ?? [])].find((row) => row.querySelector('[aria-label="Usage bar"]'))
+    expect(usageBarRow?.querySelector('[role="tooltip"]')?.textContent).toContain('plan limits')
+    const toggle = usageBarRow?.querySelector<HTMLButtonElement>('[aria-label="Usage bar"]')
     expect(toggle?.getAttribute('aria-checked')).toBe('false')
     await act(async () => { toggle!.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'experimental.usageBar', value: true })
     expect(onUsageBarChange).toHaveBeenCalledWith(true)
+  })
+
+  it('offers Usage tips as an independent experimental switch', async () => {
+    mocks.invoke.mockResolvedValue(true)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
+    const onUsageTipsChange = vi.fn()
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" usageBarEnabled={false} usageTipsEnabled={false} onUsageTipsChange={onUsageTipsChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const toggle = host.querySelector<HTMLButtonElement>('[aria-label="Usage tips"]')!
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    const row = toggle.closest('.settings-row')!
+    expect(row.querySelector('[role="tooltip"]')?.textContent).toContain('75%')
+    await act(async () => { toggle.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'experimental.usageTips', value: true })
+    expect(onUsageTipsChange).toHaveBeenCalledWith(true)
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Usage bar"]')?.getAttribute('aria-checked')).toBe('false')
   })
 
   it('offers theme, text size, companion placement and hotkey controls, and persists appearance changes', async () => {
@@ -166,5 +184,7 @@ describe('Agents scan feedback', () => {
     expect(line.querySelector('time')?.getAttribute('datetime')).toBe(new Date(at).toISOString())
     expect(line.querySelector('time')?.textContent).toBe(new Date(at).toLocaleString())
     expect(host.querySelector('.runtime-entry-head .runtime-probe-error')?.textContent).toBe('Codex · Protocol check: Probe timed out.')
+    await act(async () => { (host.querySelector('.runtime-entry-head') as HTMLButtonElement).click() })
+    expect(host.querySelector('.runtime-recovery-guidance')?.textContent).toContain('Update or repair this CLI, then choose Scan again above.')
   })
 })

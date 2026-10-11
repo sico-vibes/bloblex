@@ -8,6 +8,7 @@ import { RuntimeMark } from './providerBrand'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
+import { RuntimeProblemMarker, runtimeProblem } from './RuntimeProblemMarker'
 import { shortTime } from './rosterSelectors'
 import { conversationPreview, groupAgentsByProject, mainSessionFor, sessionIsBusy } from './teamSelectors'
 
@@ -88,6 +89,7 @@ export type TeamSidebarActions = {
   onChangeProjectFolder: (project: Project) => void
   onDeleteProject: (project: Project) => void
   onToggleProjectCollapsed: (project: Project) => void
+  onOpenRuntimeSettings: () => void
 }
 
 export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, query, onQueryChange, actions }: {
@@ -110,6 +112,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   const [showHidden, setShowHidden] = useState(false)
   const [menu, setMenu] = useState<{ kind: 'blob'; agent: Agent; x: number; y: number } | { kind: 'project'; project: Project; x: number; y: number } | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [runtimeTooltipAgentId, setRuntimeTooltipAgentId] = useState<string | null>(null)
   const menuTrigger = useRef<HTMLElement | null>(null)
   const groups = useMemo(() => groupAgentsByProject(agents, projects, query, showHidden), [agents, projects, query, showHidden])
   const pinned = pinnedIds.map((id) => agents.find((agent) => agent.id === id && !agent.archived && (showHidden || !agent.hidden))).filter((agent): agent is Agent => !!agent)
@@ -161,11 +164,16 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     const approval = !!session && approvalSessionIds.has(session.id)
     const waiting = String(session?.state ?? '') === 'waiting_permission'
     const working = sessionIsBusy(session) && !waiting
-    const preview = !connected ? 'Offline' : status.mood === 'offline' ? status.label : waiting ? 'Waiting for you' : working ? status.label : conversationPreview(session) ?? (agent.description?.trim() || 'Say hi to get started')
-    return <button key={agent.id} type="button" role="treeitem" draggable data-agent-id={agent.id} aria-current={selected ? 'true' : undefined} aria-selected={selected}
+    const preview = !connected ? 'Offline' : (status.mood === 'offline' || status.mood === 'error') ? status.label : waiting ? 'Waiting for you' : working ? status.label : conversationPreview(session) ?? (agent.description?.trim() || 'Say hi to get started')
+    const runtimeIssue = runtimeProblem(runtime)
+    return <button key={agent.id} type="button" role="treeitem" draggable data-agent-id={agent.id} aria-current={selected ? 'true' : undefined} aria-selected={selected} aria-describedby={runtimeIssue ? `runtime-problem-${runtime!.id}-${agent.id}` : undefined}
       aria-label={`${agent.name}${agent.role ? `, ${agent.role}` : ''}${agent.leader ? ', team leader' : ''}${approval ? ', needs approval' : unread ? ', unread' : ''}`}
       tabIndex={selected || (!selectedAgentId && rowOrder[0]?.id === agent.id) ? 0 : -1}
       className={`bot-row team-row ${selected ? 'selected' : ''} ${agent.hidden ? 'hidden-blob' : ''}`}
+      onMouseEnter={() => { if (runtimeIssue) setRuntimeTooltipAgentId(agent.id) }}
+      onMouseLeave={() => setRuntimeTooltipAgentId((current) => current === agent.id ? null : current)}
+      onFocus={() => { if (runtimeIssue) setRuntimeTooltipAgentId(agent.id) }}
+      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setRuntimeTooltipAgentId((current) => current === agent.id ? null : current) }}
       onClick={() => actions.onSelect(agent)}
       onContextMenu={(event) => { event.preventDefault(); openBlobMenu(agent, event.clientX, event.clientY, event.currentTarget) }}
       onKeyDown={(event) => {
@@ -185,7 +193,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       </span>
       <span className="bot-row-copy">
         <span className="bot-row-line">
-          <span className="team-row-name">{runtimeLogos && <RuntimeMark provider={runtime?.provider} />}<strong>{agent.name}</strong>{agent.role?.trim() && <span className="role-chip">{agent.role.trim()}</span>}</span>
+          <span className="team-row-name">{runtimeLogos && <RuntimeMark provider={runtime?.provider} />}<strong>{agent.name}</strong><RuntimeProblemMarker runtime={runtime} inline idSuffix={agent.id} showTooltip={runtimeTooltipAgentId === agent.id} />{agent.role?.trim() && <span className="role-chip">{agent.role.trim()}</span>}</span>
           {(unread || approval) && <i className={`unread-dot ${approval ? 'approval' : ''}`} aria-hidden="true" />}
           {session?.updatedAt && <time>{shortTime(session.updatedAt)}</time>}
         </span>

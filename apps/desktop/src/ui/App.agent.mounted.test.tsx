@@ -574,6 +574,20 @@ describe('blob roster and editor', () => {
     await click(codexRow!)
     expect(buttonNamed(view.host, 'New conversation')?.hasAttribute('disabled')).toBe(true)
   })
+  it('shows recovery guidance instead of Ready in an empty chat when its runtime failed the protocol check', async () => {
+    const failedRuntime = { ...opencodeRuntime, status:'error', probeStep:'Protocol check', probeError:'The CLI does not advertise the required protocol.' }
+    const empty = session({ id:'session-opencode-empty', runtimeId:failedRuntime.id, agentId:opencode.id, title:'OpenCode', messages:[] })
+    configure(snapshot({ runtimes:[claudeRuntime, codexRuntime, failedRuntime], sessions:[empty] }))
+    h.getActiveSession.mockResolvedValue(empty.id)
+    h.getActiveRuntime.mockResolvedValue(failedRuntime.id)
+    vi.mocked(localStorage.getItem).mockImplementation((key) => key === 'bloblex.selectedAgentId' ? opencode.id : null)
+    const view = startApp(); await view.settle()
+    expect(view.host.querySelector('.session-first-state h2')?.textContent).toContain('needs attention')
+    expect(view.host.querySelector('.session-first-state')?.textContent).toContain('Update or repair this CLI')
+    expect(view.host.querySelector('.session-first-state')?.textContent).not.toContain('Ready when you are')
+    expect(view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')?.disabled).toBe(true)
+    expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.disabled).toBe(true)
+  })
 
   it('keeps a dirty edit when Escape is pressed on the discard dialog', async () => {
     const view = startApp()
@@ -928,13 +942,67 @@ describe('opt-in conversation experiments', () => {
   it('edits drafts, retries only the latest user text, and keeps history intact', async () => {
     prepare(true)
     const view = startApp(); await view.settle()
-    expect(view.host.querySelectorAll('[aria-label="Retry message"]')).toHaveLength(1)
-    await click(view.host.querySelector('[aria-label="Edit message"]')); await view.settle()
-    expect(view.host.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('Original prompt')
-    await click(view.host.querySelector('[aria-label="Retry message"]')); await view.settle()
+    const latestUser = [...view.host.querySelectorAll<HTMLElement>('.message-row.user')].at(-1)!
+    await act(async () => latestUser.dispatchEvent(new MouseEvent('contextmenu', { bubbles:true, cancelable:true, clientX:240, clientY:160 })))
+    expect(view.host.querySelector('[role="menu"]')?.textContent).toContain('Edit as a new draft')
+    await press(document.activeElement!, 'ArrowDown')
+    expect(document.activeElement?.textContent).toContain('Edit as a new draft')
+    await press(document.activeElement!, 'ArrowUp')
+    expect(document.activeElement?.textContent).toContain('Retry as a new prompt')
+    await click(buttonNamed(view.host, 'Edit as a new draft')); await view.settle()
+    expect(view.host.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('Latest prompt')
+    await press(latestUser.closest('.message-action-shell')?.querySelector('[aria-label="Copy message text"]')!, 'F10', { shiftKey:true })
+    await click(buttonNamed(view.host, 'Retry as a new prompt')); await view.settle()
     expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId: 'session-claude', text: 'Latest prompt' })
     expect(experimentalSession.messages?.map((m) => m.content)).toEqual(['Original prompt', 'First reply', 'Latest prompt', 'Latest reply'])
     expect(view.host.querySelector('.conversation-auto-title')?.textContent).toBe('Review the saved changes')
+  })
+  it('stages a quoted user message and sends its scoped reference with the new prompt', async () => {
+    const previousMessages = experimentalSession.messages
+    experimentalSession.messages = [...(previousMessages ?? [])]
+    prepare(true)
+    const originalRpc = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'session.prompt' && params.replyTo) {
+        const replyTo = params.replyTo as { sourceSessionId: string; messageId: string }
+        experimentalSession.messages!.push({ id:'u3', role:'user', content:String(params.text), sequence:5, turnId:'t3', meta:{ replyTo:{ sourceSessionId:replyTo.sourceSessionId, messageId:replyTo.messageId, role:'user', author:'You', excerpt:'Original prompt', truncated:false, createdAt:stamp } } })
+        return { accepted:true }
+      }
+      return originalRpc(method, params)
+    })
+    try {
+      const view = startApp(); await view.settle()
+      const firstUser = view.host.querySelector<HTMLElement>('.message-action-shell.user')!
+      await click(firstUser.querySelector('[aria-label="Reply to message"]'))
+      expect(view.host.querySelector('.composer-box .reply-context-strip')?.textContent).toContain('Original prompt')
+      await typeInto(view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea'), 'Explain that earlier request')
+      await click(view.host.querySelector('[aria-label="Send message"]'))
+      await view.settle()
+      expect(h.rpc).toHaveBeenCalledWith('session.prompt', {
+        sessionId: 'session-claude',
+        text: 'Explain that earlier request',
+        replyTo: { sourceSessionId: 'session-claude', messageId: 'u1' },
+      })
+      expect([...view.host.querySelectorAll('.message-row.user .reply-context-strip.compact')].some((strip) => strip.textContent?.includes('Original prompt'))).toBe(true)
+    } finally { experimentalSession.messages = previousMessages }
+  })
+  it('applies the daemon reaction event to the correct message badge', async () => {
+    prepare(true)
+    const originalRpc = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'message.reaction.toggle') {
+        emit({ type:'message.reactions.changed', sequence:21, payload:{ sessionId:'session-claude', messageId:String(params.messageId), emoji:'👍', selected:true, reactions:['👍'] } })
+        return { reactions:['👍'], selected:true }
+      }
+      return originalRpc(method, params)
+    })
+    const view = startApp(); await view.settle()
+    const firstUser = view.host.querySelector<HTMLElement>('.message-action-shell.user')!
+    await click(firstUser.querySelector('[aria-label="React to message"]'))
+    await click(document.querySelector('[aria-label="Add your thumbs up reaction"]'))
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('message.reaction.toggle', { sessionId:'session-claude', messageId:'u1', emoji:'👍' })
+    expect(firstUser.querySelector('.message-reaction-badges')?.textContent).toContain('👍')
   })
 
   it('shows the daemon’s safe refusal after a failed Revert and leaves the file in review', async () => {

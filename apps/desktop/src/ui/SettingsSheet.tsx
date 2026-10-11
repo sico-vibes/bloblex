@@ -38,7 +38,7 @@ export function providerDisplayName(provider: string | undefined) {
   return providerBrand(provider ?? '').name || labelize(provider, 'Coding agent')
 }
 
-export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, experiments = DEFAULT_EXPERIMENTS, onExperimentChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
+export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, usageTipsEnabled = false, onUsageTipsChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, experiments = DEFAULT_EXPERIMENTS, onExperimentChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
   snapshot: Snapshot | null
   scanStatus?: DiscoveryStatus
   initialPage: SettingsPageId
@@ -51,6 +51,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   /** Experimental: the plan-usage bar along the bottom of the main window. */
   usageBarEnabled?: boolean
   onUsageBarChange?: (enabled: boolean) => void
+  /** Experimental: surface accurate provider-reported high quota above the active composer. */
+  usageTipsEnabled?: boolean
+  onUsageTipsChange?: (enabled: boolean) => void
   /** Experimental: each turn's commands, tools and edits, expandable under the reply. */
   activityDetails?: boolean
   onActivityDetailsChange?: (enabled: boolean) => void
@@ -415,7 +418,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </form>
             </SettingsGroup>
             <SettingsGroup title="Experimental">
-
+              <SettingsRow label={<span className="experimental-label">Usage tips<span className="experimental-tag">Experimental</span><HelpTip text="Shows a notice above the active composer when the selected CLI reports 75%, 90% or 100% use in a current quota window. It uses the reported window reset when available, can be dismissed per period, and includes no estimates or upgrade link." /></span>} hint="Accurate high-usage notices from the selected coding agent.">
+                <button type="button" className={`toggle ${usageTipsEnabled ? 'on' : ''}`} role="switch" aria-label="Usage tips" aria-checked={usageTipsEnabled} disabled={saving} onClick={() => { const next = !usageTipsEnabled; void saveSetting('experimental.usageTips', next).then((failure) => { if (!failure) onUsageTipsChange?.(next) }) }}><i /></button>
+              </SettingsRow>
               <SettingsRow label={<span className="experimental-label">Usage bar<span className="experimental-tag">Experimental</span><HelpTip text="Shows each coding agent's plan limits (for example 5-hour and weekly usage) along the bottom of the main window, read from the sign-in each CLI already has. Turn it off if the numbers are not useful to you; the Usage page still has them." /></span>} hint="Plan limits for each coding agent, along the bottom of the window.">
                 <button type="button" className={`toggle ${usageBarEnabled ? 'on' : ''}`} role="switch" aria-label="Usage bar" aria-checked={usageBarEnabled} disabled={saving} onClick={() => { const next = !usageBarEnabled; void saveSetting('experimental.usageBar', next).then((failure) => { if (!failure) onUsageBarChange?.(next) }) }}><i /></button>
               </SettingsRow>
@@ -469,6 +474,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                       <div><dt>Protocol</dt><dd>{labelize(runtime.protocolFamily, 'Unknown')}</dd></div>
                       <div><dt>Executable</dt><dd className="mono">{runtime.executablePath ?? 'Unknown'}</dd></div>
                     </dl>
+                    {probe && <p className="runtime-recovery-guidance" role="note">{runtime.probeStep === 'Sign-in check' ? <>Check this provider&apos;s CLI sign-in, then choose <strong>Scan again</strong> above. The protocol check passed.</> : <>Update or repair this CLI, then choose <strong>Scan again</strong> above.</>}</p>}
                     {owned.length === 0 ? <p className="settings-empty">No blobs use this agent yet.</p> : owned.map((agent) => <BlobLink key={agent.id} agent={agent} mode={modeFor(agent)} onOpen={() => onOpenAgent(agent.id)} />)}
                   </div>}
                 </div>

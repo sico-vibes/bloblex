@@ -2,7 +2,7 @@
 // so the real App can be inspected in a browser without the daemon. Every
 // value below is a visual fixture, not product data.
 import { EXPERIMENTS } from '../ui/experiments'
-import type { Agent, DaemonEvent, PermissionRequest, Project, Runtime, Session, Snapshot } from '../types'
+import type { Agent, DaemonEvent, MessageMeta, PermissionRequest, Project, Runtime, Session, Snapshot } from '../types'
 import { answerUsageAnalytics } from '../ui/analyticsFixtures'
 import { normalizeAnalytics } from '../ui/analyticsFormat'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from '../executionContract'
@@ -17,6 +17,10 @@ const fixtureSettings: Record<string, unknown> = { 'notifications.enabled': true
 const daemonListeners = new Set<(event: DaemonEvent) => void>()
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 const flags = () => new URLSearchParams(location.search)
+const fixturePreset = () => flags().get('preset')
+const setPreviewSelection = (agentId: string) => {
+  try { localStorage.setItem('bloblex.selectedAgentId', agentId) } catch { /* Preview selection is optional. */ }
+}
 
 const baseRuntimes: Runtime[] = [
   { id: 'runtime-codex', provider: 'codex', status: 'online', protocolFamily: 'codex_app_server', version: 'codex-cli 0.159.3', authState: 'signed_in' },
@@ -39,7 +43,7 @@ let agents: Agent[] = [
 
 let sessions: Session[] = [
   {
-    id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Invoice parser tests', projectPath: 'C:/work/korus', state: flags().has('idle') ? 'idle' : 'working', model: 'gpt-5.5', updatedAt: minutesAgo(2),
+    id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Invoice parser tests', projectPath: 'C:/work/korus', state: flags().has('idle') ? 'idle' : 'working', model: 'gpt-6.1-sol', updatedAt: minutesAgo(2),
     messages: [
       { id: 'm1', role: 'user', content: 'Can you make the invoice parser tests pass?', createdAt: minutesAgo(9) },
       { id: 'm2', role: 'assistant', content: 'Sure. I found two failing cases in **tests/invoice.test.ts**: the currency field is parsed before the locale is known, and totals use floats.\n\nI will switch totals to integer minor units and parse the locale first.', createdAt: minutesAgo(8) },
@@ -50,7 +54,7 @@ let sessions: Session[] = [
   {
     id: composerPreviewSessionId, runtimeId: 'runtime-codex', agentId: 'agent-codex',
     title: 'Preview: composer controls', projectPath: 'C:/work/korus', state: 'idle',
-    modelLock: { model: 'gpt-5.5', thinking: flags().has('composer-low') ? 'low' : 'high' }, contextUsed: 14_000, contextSize: 1_000_000,
+    modelLock: { model: 'gpt-6.1-sol', thinking: flags().has('composer-low') ? 'low' : 'high' }, contextUsed: 14_000, contextSize: 1_000_000,
     updatedAt: minutesAgo(4), previewOnly: true,
     messages: [
       { id: 'composer-preview-user-1', role: 'user', content: 'Check the checkout flow and keep the controls in the composer.', createdAt: minutesAgo(9) },
@@ -107,7 +111,7 @@ const teamMainId = 'session-team-leader'
 const teamSideId = 'session-team-side'
 sessions.push({
   id: teamMainId, runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Codex', projectPath: 'C:/work/korus', state: flags().has('idle') ? 'idle' : 'waiting_permission', updatedAt: minutesAgo(0.5),
-  modelLock: { model: 'gpt-5.5', thinking: 'high', planMode: flags().has('plan') }, contextUsed: 52_000, contextSize: 400_000,
+  modelLock: { model: 'gpt-6.1-sol', thinking: 'high', planMode: flags().has('plan') }, contextUsed: 52_000, contextSize: 400_000,
   messages: [
     { id: 'team-u1', sequence: 1, turnId: 'team-tA', role: 'user', content: 'Can you research an effort picker like the one on 21st.dev? @Pololo is great at UI, ask him to find it.', createdAt: minutesAgo(30) },
     { id: 'team-a1', sequence: 2, turnId: 'team-tA', role: 'assistant', content: 'On it — sending Pololo the brief and asking him to hunt down that effort / reasoning-level picker.', createdAt: minutesAgo(29) },
@@ -180,7 +184,10 @@ function sortAgents(list: Agent[]) {
 
 function currentSnapshot(): Snapshot {
   const search = flags()
-  const runtimes = baseRuntimes.map((runtime) => search.has('offline') && runtime.id === 'runtime-codex' ? { ...runtime, status: 'offline' } : { ...runtime })
+  const runtimes = baseRuntimes.map((runtime) => {
+    if (fixturePreset() === 'opencode-runtime-error' && runtime.id === 'runtime-opencode') return { ...runtime, status: 'error', probeStep: 'Protocol check', probeError: 'The CLI does not advertise the required protocol.' }
+    return search.has('offline') && runtime.id === 'runtime-codex' ? { ...runtime, status: 'offline' } : { ...runtime }
+  })
   return {
     sequence,
     runtimes,
@@ -199,6 +206,7 @@ const hoursFromNow = (hours: number) => new Date(Date.now() + hours * 3_600_000)
 function fixtureQuotas() {
   if (flags().has('no-quota')) return []
   const window = (usedPercent: number, hours: number, windowDurationMins: number | null) => ({ usedPercent, remainingPercent: 100 - usedPercent, resetsAt: hoursFromNow(hours), windowDurationMins })
+  const presetUsage = fixturePreset() === 'usage-tip-90'
   const fetchedAt = minutesAgo(1)
   return [
     { provider: 'claude', runtimeId: 'runtime-claude', fetchedAt, lastAttemptAt: fetchedAt, failureCount: 0, lastError: null, snapshot: { provider: 'claude', limits: [
@@ -206,7 +214,7 @@ function fixtureQuotas() {
       { label: 'Claude Opus', primary: window(12, 52, 10_080), secondary: null },
     ] } },
     { provider: 'codex', runtimeId: 'runtime-codex', fetchedAt, lastAttemptAt: fetchedAt, failureCount: 0, lastError: null, snapshot: { provider: 'codex', limits: [
-      { label: 'Codex', primary: window(0, 4.98, 300), secondary: window(44, 107, 10_080) },
+      { label: 'Codex', primary: window(0, 4.98, 300), secondary: window(presetUsage ? 90 : 44, presetUsage ? 18 : 107, 10_080) },
     ] } },
     { provider: 'opencode', runtimeId: 'runtime-opencode', fetchedAt, lastAttemptAt: fetchedAt, failureCount: 0, lastError: flags().has('quota-error') ? 'unauthorized' : null, snapshot: { provider: 'opencode', limits: [
       { label: '5-hour', primary: window(0, 2.78, 300), secondary: null },
@@ -233,9 +241,14 @@ function fixtureCatalog(runtimeId: string) {
     { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', supportedThinking: ['low', 'medium', 'high'], defaultThinking: 'medium', serviceTiers: [], isDefault: false },
     { id: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5', supportedThinking: ['low', 'medium'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
   ] : [
-    { id: 'gpt-5.5', displayName: 'GPT-5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultThinking: 'medium', serviceTiers: [{ id: 'priority', name: 'Fast' }], isDefault: true },
-    { id: 'gpt-5.4', displayName: 'GPT-5.4', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max'], defaultThinking: 'high', serviceTiers: [{ id: 'priority', name: 'Fast' }], isDefault: false },
-    { id: 'gpt-5.3-codex', displayName: 'GPT-5.3 Codex', supportedThinking: ['low', 'medium', 'high'], defaultThinking: 'medium', serviceTiers: [], isDefault: false },
+    // Raw effort values and offered order mirror the prompt-free Codex 0.161.0 catalog fixture.
+    { id: 'gpt-6.1-sol', displayName: 'GPT-6.1-Sol', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultThinking: 'low', serviceTiers: [], isDefault: true },
+    { id: 'gpt-6-astra', displayName: 'GPT-6-Astra', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
+    { id: 'gpt-6-sol', displayName: 'GPT-6-Sol', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
+    { id: 'gpt-6-luna', displayName: 'GPT-6-Luna', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
+    { id: 'gpt-5.6-sol', displayName: 'GPT-5.6-Sol', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
+    { id: 'gpt-5.6-terra', displayName: 'GPT-5.6-Terra', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
+    { id: 'gpt-5.6-luna', displayName: 'GPT-5.6-Luna', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
   ]
   return { runtimeId, provider: runtime?.provider ?? '', models, validated: true, source: 'fixture', fetchedAt: '2026-10-04T00:00:00Z' }
 }
@@ -248,7 +261,9 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     // ?discovery-timeout-once exercises timeout, background recovery and confirmation.
     if (flags().has('discovery-timeout-once') && discoveryAttempts === 1) await new Promise((resolve) => window.setTimeout(resolve, 31_000))
     else await new Promise((resolve) => window.setTimeout(resolve, 900))
-    const runtimes = baseRuntimes.map((runtime) => flags().has('discovery-probe-error') && runtime.provider === 'codex' ? { ...runtime, probeStep: 'Protocol check', probeError: 'Probe timed out.', status: 'error' } : { ...runtime })
+    const runtimes = baseRuntimes.map((runtime) => fixturePreset() === 'opencode-runtime-error' && runtime.id === 'runtime-opencode'
+      ? { ...runtime, probeStep: 'Protocol check', probeError: 'The CLI does not advertise the required protocol.', status: 'error' }
+      : flags().has('discovery-probe-error') && runtime.provider === 'codex' ? { ...runtime, probeStep: 'Protocol check', probeError: 'Probe timed out.', status: 'error' } : { ...runtime })
     notifyFixtureDaemon('runtime.changed', { runtimes })
     return { runtimes } as T
   }
@@ -262,7 +277,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().has('usage-bar')) fixtureSettings['experimental.usageBar'] = true
     if (flags().has('logos')) fixtureSettings['experimental.runtimeLogos'] = true
     if (flags().get('chat')) fixtureSettings['companion.chatSize'] = flags().get('chat')
-    return { settings: { ...fixtureSettings } } as T
+    return { settings: { ...fixtureSettings, ...(fixturePreset() === 'usage-tip-90' ? { 'experimental.usageTips': true } : {}) } } as T
   }
   if (method === 'settings.set') { fixtureSettings[String(params.key)] = params.value; return { saved: true } as T }
   if (method === 'session.list') return { sessions: sessions.filter((session) => params.includeArchived === true || !session.archived).map((session) => ({ ...session })) } as T
@@ -386,10 +401,37 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     notifyFixtureDaemon('session.changed', { session: { ...session } })
     return { session: { ...session }, modelChanged } as T
   }
+  if (method === 'message.reaction.toggle') {
+    const session = sessions.find((item) => item.id === params.sessionId)
+    if (!session || session.archived || session.link?.kind === 'side') throw rpcError('not_found', 'Message conversation is unavailable.')
+    const message = (session.messages ?? []).find((item) => item.id === params.messageId)
+    const emoji = String(params.emoji ?? '')
+    const allowed = ['👍', '👎', '❤️', '😂', '🎉', '😮']
+    if (!message || !['user', 'assistant'].includes(String(message.role)) || !allowed.includes(emoji)) throw rpcError('invalid_argument', 'Reaction or message is unsupported.')
+    const prior = Array.isArray(message.reactions) ? message.reactions.filter((item): item is string => typeof item === 'string' && allowed.includes(item)) : []
+    const selected = !prior.includes(emoji)
+    const order = new Map(allowed.map((item, index) => [item, index]))
+    message.reactions = (selected ? [...prior, emoji] : prior.filter((item) => item !== emoji)).sort((left, right) => order.get(left)! - order.get(right)!)
+    const payload = { sessionId: session.id, messageId: message.id, emoji, selected, reactions: message.reactions }
+    notifyFixtureDaemon('message.reactions.changed', payload)
+    return { reactions: message.reactions, selected } as T
+  }
   if (method === 'session.prompt') {
     // A minimal echo so the preview shows sent messages, # references and a reply.
     const session = sessions.find((item) => item.id === params.sessionId)
     if (!session) throw rpcError('not_found', 'session not found')
+    let replySnapshot: NonNullable<MessageMeta['replyTo']> | null = null
+    if (params.replyTo !== undefined && params.replyTo !== null) {
+      const replyTo = params.replyTo as Record<string, unknown>
+      if (replyTo.sourceSessionId !== session.id || typeof replyTo.messageId !== 'string') throw rpcError('invalid_argument', 'Replies must target a message in this writable conversation.')
+      const source = (session.messages ?? []).find((message) => message.id === replyTo.messageId && ['user', 'assistant'].includes(String(message.role)))
+      if (!source) throw rpcError('not_found', 'The quoted message is no longer available in this conversation.')
+      const content = String(source.content ?? source.text ?? '')
+      const excerptChars = Array.from(content)
+      const truncated = excerptChars.length > 6000
+      const author = source.role === 'user' ? 'You' : agents.find((agent) => agent.id === session.agentId)?.name ?? 'Coding agent'
+      replySnapshot = { sourceSessionId: session.id, messageId: replyTo.messageId, role: source.role as 'user' | 'assistant', author, excerpt: `${excerptChars.slice(0, 6000).join('')}${truncated ? '…' : ''}`, truncated, createdAt: source.createdAt ?? null }
+    }
     const refs = Array.isArray(params.conversationRefs) ? params.conversationRefs.map(String) : []
     const references = refs.map((id) => sessions.find((item) => item.id === id)).filter((item): item is Session => !!item).map((item) => ({ id: item.id, title: String(item.link?.topic ?? item.title ?? 'Conversation') }))
     const next = (session.messages ?? []).reduce((top, message) => Math.max(top, Number(message.sequence) || 0), 0) + 1
@@ -398,7 +440,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
       const owner = agents.find((a) => a.id === session.agentId)
       if (owner && session.title === owner.name) session.title = String(params.text ?? '').split(/\s+/).slice(0, 6).join(' ').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').slice(0, 48)
     }
-    session.messages = [...(session.messages ?? []), { id: `preview-user-${next}`, turnId: `preview-turn-${next}`, sequence: next, role: 'user', content: String(params.text ?? ''), createdAt: now, ...(references.length ? { references } : {}) }]
+    session.messages = [...(session.messages ?? []), { id: `preview-user-${next}`, turnId: `preview-turn-${next}`, sequence: next, role: 'user', content: String(params.text ?? ''), createdAt: now, ...(references.length ? { references } : {}), ...(replySnapshot ? { meta: { replyTo: replySnapshot } } : {}) }]
     session.updatedAt = now
     notifyFixtureDaemon('session.changed', { session: { ...session } })
     window.setTimeout(() => {
@@ -579,7 +621,15 @@ function seedExperimentalFixtures() {
   }
 }
 
-export async function fetchSnapshot() { seedExperimentalFixtures(); return currentSnapshot() }
+export async function fetchSnapshot() {
+  seedExperimentalFixtures()
+  if (fixturePreset() === 'opencode-runtime-error') setPreviewSelection('agent-opencode')
+  else if (fixturePreset() === 'usage-tip-90') {
+    setPreviewSelection('agent-invoice')
+    for (const session of sessions.filter((item) => item.agentId === 'agent-invoice')) session.state = 'idle'
+  }
+  return currentSnapshot()
+}
 export async function ensureDaemon() {}
 export async function startDaemonEventStream() {}
 export async function openProjectFolder() { return null }
@@ -598,7 +648,7 @@ export async function readBlobImport(_selectionToken: string) {
   return JSON.stringify({
     format: 'bloblex.blob.v1', name: 'Mochi', description: 'Reviews pull requests and keeps the test suite green.', colour: '#f6a04d',
     instructions: 'Read the diff first. Run the tests before you say something works. Keep reviews short and kind.',
-    model: 'gpt-5.5', thinking: 'high', speed: null, look: { shape: 'cat', seed: 'mochi' }, defaultApprovalMode: 'ask', providerId: 'codex',
+    model: 'gpt-6.1-sol', thinking: 'low', speed: null, look: { shape: 'cat', seed: 'mochi' }, defaultApprovalMode: 'ask', providerId: 'codex',
   }, null, 2)
 }
 export async function writeBlobExport(_selectionToken: string, _text: string) {}

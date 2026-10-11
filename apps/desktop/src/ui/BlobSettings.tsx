@@ -19,6 +19,7 @@ import { RefreshCw } from 'lucide-react'
 import { LookEditor } from './LookEditor'
 import { draftLook } from '../blob/look'
 import { agentColorHex, previewHex } from './agentColor'
+import { labelizeEffort } from './effortLabels'
 
 export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, sessionId, autoApprovals, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
@@ -233,7 +234,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       {thinkingVisible && <div className="settings-row">
         <span className="settings-row-copy"><strong>Thinking</strong></span>
         <span className="settings-row-control">
-          <Select ariaLabel="Thinking" variant="muted" value={draft.thinking ?? ''} onChange={(value) => onDraftChange({ ...draft, thinking: value || null })} options={[{ value: '', label: 'Default' }, ...(selected?.supportedThinking ?? []).map((level) => ({ value: level, label: labelize(level) }))]} />
+          <Select ariaLabel="Thinking" variant="muted" value={draft.thinking ?? ''} onChange={(value) => onDraftChange({ ...draft, thinking: value || null })} options={[{ value: '', label: 'Default' }, ...(selected?.supportedThinking ?? []).map((level) => ({ value: level, label: labelizeEffort(level, provider) }))]} />
         </span>
       </div>}
       {tierVisible && <CapabilityField label="Speed" state={tierState} setting={capabilities?.settings.serviceTier ?? null}>

@@ -140,6 +140,20 @@ fn main() {
                         json!({"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":thread_id,"turnId":tid,"delta":"new answer"}}),
                         json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":thread_id,"turn":{"id":tid,"status":"completed"}}}),
                     ]
+                } else if mode == "activity" {
+                    vec![
+                        json!({"jsonrpc":"2.0","method":"turn/started","params":{"threadId":thread_id,"turn":{"id":tid}}}),
+                        json!({"jsonrpc":"2.0","method":"item/started","params":{"threadId":thread_id,"turnId":tid,"item":{"type":"commandExecution","id":"cmd-modern","command":"cargo test -p bloblex-storage","commandActions":[],"cwd":"D:/project","status":"inProgress"}}}),
+                        json!({"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"threadId":thread_id,"turnId":tid,"itemId":"cmd-modern","delta":"first "}}),
+                        json!({"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"threadId":thread_id,"turnId":tid,"itemId":"cmd-modern","delta":"chunk"}}),
+                        json!({"jsonrpc":"2.0","method":"item/completed","params":{"threadId":thread_id,"turnId":tid,"item":{"type":"commandExecution","id":"cmd-modern","command":"cargo test -p bloblex-storage","commandActions":[],"cwd":"D:/project","aggregatedOutput":"first chunk","exitCode":0,"status":"completed"}}}),
+                        json!({"jsonrpc":"2.0","method":"item/started","params":{"threadId":thread_id,"turnId":tid,"item":{"type":"mcpToolCall","id":"mcp-modern","server":"bloblex","tool":"message_blob","arguments":{"blob":"Gogo"},"status":"inProgress"}}}),
+                        json!({"jsonrpc":"2.0","method":"item/mcpToolCall/progress","params":{"threadId":thread_id,"turnId":tid,"itemId":"mcp-modern","message":"Waiting for teammate"}}),
+                        json!({"jsonrpc":"2.0","method":"item/completed","params":{"threadId":thread_id,"turnId":tid,"item":{"type":"mcpToolCall","id":"mcp-modern","server":"bloblex","tool":"message_blob","arguments":{"blob":"Gogo"},"result":{"content":[{"type":"text","text":"Sent to Gogo."}]},"error":null,"status":"completed"}}}),
+                        json!({"jsonrpc":"2.0","method":"item/started","params":{"threadId":thread_id,"turnId":tid,"item":{"type":"dynamicToolCall","id":"dynamic-modern","namespace":"search","tool":"find_page","arguments":{"query":"quota docs"},"status":"inProgress","contentItems":null}}}),
+                        json!({"jsonrpc":"2.0","method":"item/completed","params":{"threadId":thread_id,"turnId":tid,"item":{"type":"dynamicToolCall","id":"dynamic-modern","namespace":"search","tool":"find_page","arguments":{"query":"quota docs"},"contentItems":[{"type":"inputText","text":"Found usage documentation."}],"success":true,"status":"completed"}}}),
+                        json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":thread_id,"turn":{"id":tid,"status":"completed"}}}),
+                    ]
                 } else {
                     vec![
                         json!({"jsonrpc":"2.0","method":"turn/started","params":{"threadId":thread_id,"turn":{"id":tid}}}),

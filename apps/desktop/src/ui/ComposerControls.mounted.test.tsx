@@ -115,7 +115,7 @@ describe('fast mode', () => {
     await flush()
     expect(host.querySelector('.model-pill')?.textContent).toContain('Alpha')
     expect(host.querySelector('.model-pill')?.getAttribute('aria-label')).toContain('Provider default (Alpha)')
-    expect(host.querySelector('.session-effort-trigger')?.textContent).toBe('Low')
+    expect(host.querySelector('.session-effort-trigger')?.textContent).toBe('Light')
   })
 })
 

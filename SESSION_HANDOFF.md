@@ -2,7 +2,11 @@
 
 Current as of 7 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
-## Uncommitted 1.0 polish (11 October 2026, after beta.14)
+## Published (11 October 2026, beta.15)
+
+The section below shipped as manual-only [v0.1.0-beta.15](docs/releases/0.1.0-beta.15.md). Release commit `0f1a7df` is pushed to `main` and tagged `v0.1.0-beta.15`. The unsigned NSIS installer was built in `D:15`: 12,943,042 bytes, SHA-256 `ea042d9495a7c702f9507a0657ddc52e114558ac6f65adc78cdb8f70aa2e584f`, `NotSigned`. The signed updater feed remains at beta.6.
+
+## 1.0 polish (11 October 2026, after beta.14)
 
 - **Effort.**
   - Levels come from each CLI's catalog. Codex lists Low…Max plus **Ultra** on Sol, Astra and Terra models; Luna does not offer Ultra.

@@ -2,6 +2,19 @@
 
 Current as of 11 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
+## Published (11 October 2026, beta.17)
+
+The combined runtime/chat follow-up shipped as manual-only [v0.1.0-beta.17](docs/releases/0.1.0-beta.17.md), source commit `6bf66d5`, with the commit and annotated tag pushed to GitHub.
+
+- OpenCode 1.18.35's successful stderr-only ACP help now passes discovery. Failed-runtime bots alone show error mood, a red problem indicator and recovery guidance; main and companion messaging follow normalized runtime health.
+- Message actions are Reaction, Reply and Copy beside each user/assistant bubble. Local reactions persist via additive schema v12. Quoted replies are validated by the daemon, staged inside the composer and retained in history. Read-only side conversations stay read-only; team delivery uses a separate internal path.
+- New off-by-default Usage tips are independent of the Usage bar, dismissible by period/threshold and sourced only from fresh reported quota. Expired reset windows are omitted and model qualifiers retained. OpenCode's three Detailed metrics fit one stats line at desktop width.
+- Codex tool activity gains bounded command chunks and MCP/dynamic-tool details/progress/status. Effort labels are Light through Ultra when offered; Luna stops at Max. GPT families sort numerically newest first, including singleton catalogs; non-GPT order is preserved. Empty-chat effects gain raster overscan without changing body/hit geometry.
+- Independent gates: typecheck, 426 desktop tests, web build, 306 Rust workspace tests excluding desktop, native desktop library check and NSIS bundle. OpenCode QA plus root review found and routed five corrections, with regression coverage. Browser fixtures checked copy, reactions, quoted replies/history, notice dismissal, usage metrics, error isolation, dark/light and the 1000px minimum width.
+- The built release daemon passed an isolated-database health/discovery check with the real Claude, Codex and OpenCode CLIs; no coding prompt was sent, and the private database was removed. OpenCode was `online` at 1.18.35. No installed inspection app or user Bloblex database was touched.
+- Installer built in `D:\b17`: 13,173,484 bytes, SHA-256 `ca9caab8d47b4449e69c3d2358b1db6ffd42807a26e303e8ae84016cc46919fd`, `NotSigned`. The installer and `SHA256SUMS.txt` are published; GitHub's digest matches. The rolling signed updater stays at beta.6.
+- Unverified: live coding turns through the installed app, real taskbar/tray behavior and clean-machine installation. The task-owned preview tab/server were closed; pre-existing `output/` and `.playwright-cli/` artifacts were preserved.
+
 ## Published (11 October 2026, beta.16)
 
 Claude's combined follow-up shipped as manual-only [v0.1.0-beta.16](docs/releases/0.1.0-beta.16.md), including the additional Close chat fix, parallel agent discovery with background retries and Settings feedback, the Codex cloud logo, and seven individually opt-in experimental features (change review, message actions, search, automatic titles, Undo, shortcut sheet and approval badge). The companion no longer announces side conversations back to the main window after closing them.

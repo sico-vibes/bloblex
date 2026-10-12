@@ -8,10 +8,15 @@ export function isSideSession(session: Session | null | undefined) {
   return session?.link?.kind === 'side'
 }
 
-/** A blob's main conversation: its newest open session that is not a side conversation. */
+/** Conversations a schedule started. They belong to the blob but are never its main conversation. */
+export function isAutomationSession(session: Session | null | undefined) {
+  return session?.link?.kind === 'automation'
+}
+
+/** A blob's main conversation: its newest open session that is neither a side conversation nor a scheduled run. */
 export function mainSessionFor(sessions: readonly Session[], agentId: string): Session | null {
   return sessions
-    .filter((session) => session.agentId === agentId && !session.archived && !isSideSession(session))
+    .filter((session) => session.agentId === agentId && !session.archived && !isSideSession(session) && !isAutomationSession(session))
     .sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))[0] ?? null
 }
 

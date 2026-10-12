@@ -37,11 +37,30 @@ describe('daemon event reconciliation', () => {
   it('updates session context only with provider-reported fields and keeps missing fields unknown', () => {
     const unknown = applyEvent(base(), event('session.context.updated', 5, { sessionId: 's-a', contextUsed: 413000, contextSize: null }))
     expect(unknown.sessions?.[0]).toMatchObject({ contextUsed: 413000 })
-    expect(unknown.sessions?.[0].contextSize).toBeUndefined()
+    expect(unknown.sessions?.[0].contextSize).toBeNull()
     const known = applyEvent(unknown, event('session.context.updated', 6, { sessionId: 's-a', contextUsed: 413000, contextSize: 828000 }))
     expect(known.sessions?.[0]).toMatchObject({ contextUsed: 413000, contextSize: 828000 })
     const reset = applyEvent(known, event('session.context.reset', 7, { sessionId:'s-a' }))
     expect(reset.sessions?.[0]).toMatchObject({ contextUsed:null, contextSize:null })
+  })
+
+  it('clears explicit null context fields while omitted fields preserve current values', () => {
+    const measured = applyEvent(base(), event('session.context.updated', 5, { sessionId:'s-a', contextUsed:420, contextSize:1000, contextModel:'claude-sonnet-5-5' }))
+    const partial = applyEvent(measured, event('session.context.updated', 6, { sessionId:'s-a', contextUsed:null, contextModel:'claude-opus-5-5' }))
+    expect(partial.sessions?.[0]).toMatchObject({ contextUsed:null, contextSize:1000, contextModel:'claude-opus-5-5' })
+  })
+
+  it('applies a model-only context update by clearing prior counts and attribution', () => {
+    const measured = applyEvent(base(), event('session.context.updated', 5, { sessionId:'s-a', contextUsed:420, contextSize:1000, contextModel:'claude-sonnet-5-5', contextEstimated:true }))
+    const unknown = applyEvent(measured, event('session.context.updated', 6, { sessionId:'s-a', contextUsed:null, contextSize:null, contextModel:null, contextEstimated:false }))
+    expect(unknown.sessions?.[0]).toMatchObject({ contextUsed:null, contextSize:null, contextModel:null, contextEstimated:false })
+  })
+
+  it('replaces estimated provenance when a fresh measured context count arrives', () => {
+    const estimated = applyEvent(base(), event('session.context.updated', 5, { sessionId:'s-a', contextUsed:500, contextSize:1000, contextModel:'claude-sonnet-5-5', contextEstimated:true }))
+    expect(estimated.sessions?.[0].contextEstimated).toBe(true)
+    const measured = applyEvent(estimated, event('session.context.updated', 6, { sessionId:'s-a', contextUsed:600, contextSize:1000, contextModel:'claude-sonnet-5-5', contextEstimated:false }))
+    expect(measured.sessions?.[0]).toMatchObject({ contextUsed:600, contextEstimated:false })
   })
 
   it('appends message deltas by stable message ID and ignores duplicate sequences', () => {

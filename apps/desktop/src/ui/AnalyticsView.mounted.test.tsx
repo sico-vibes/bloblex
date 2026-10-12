@@ -78,7 +78,7 @@ function figure(host: ParentNode, card: string) {
 }
 
 function buttonNamed(host: ParentNode, name: string) {
-  return [...host.querySelectorAll('button')].find((button) => (button.textContent ?? '').replace(/\s+/g, ' ').trim() === name)
+  return [...host.querySelectorAll('button')].find((button) => (button.textContent ?? '').replace(/\s+/g, ' ').trim() === name || button.getAttribute('aria-label') === name)
 }
 
 async function click(element: Element | null | undefined) {
@@ -114,6 +114,53 @@ afterEach(() => {
 })
 
 describe('analytics view', () => {
+  it('renders three provider weekly orbs with real zero, full, and unknown states', async () => {
+    const quotas = [
+      { provider:'claude', fetchedAt:stamp, snapshot:{ limits:[{ label:'Claude Code', primary:{ usedPercent:0, windowDurationMins:10080, resetsAt:null } }] } },
+      { provider:'codex', fetchedAt:stamp, snapshot:{ limits:[{ label:'Codex', secondary:{ usedPercent:100, windowDurationMins:10080, resetsAt:null } }] } },
+    ]
+    const view = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} quotas={quotas} connected now={now} />)
+    await view.flush()
+    const orbs = [...view.host.querySelectorAll<HTMLElement>('.analytics-orb-item')]
+    expect(orbs).toHaveLength(3)
+    expect(orbs[0]?.textContent).toContain('0% used')
+    expect(orbs[0]?.querySelector('.analytics-orb')?.classList.contains('empty')).toBe(true)
+    expect(orbs[1]?.textContent).toContain('100% used')
+    expect(orbs[1]?.querySelector<HTMLElement>('.analytics-orb')?.style.getPropertyValue('--orb-fill')).toBe('100%')
+    expect(orbs[2]?.textContent).toContain('Unknown')
+    expect(orbs[2]?.querySelector('.analytics-orb')?.classList.contains('unknown')).toBe(true)
+    expect(orbs[2]?.getAttribute('aria-label')).toContain('unknown')
+    const partialQuotas = [
+      { provider:'claude', fetchedAt:stamp, snapshot:{ limits:[{ label:'Claude Code', primary:{ usedPercent:25, windowDurationMins:10080, resetsAt:'not-a-date' } }] } },
+      { provider:'codex', fetchedAt:stamp, snapshot:{ limits:[{ label:'Codex', secondary:{ usedPercent:50, windowDurationMins:10080, resetsAt:null } }] } },
+      { provider:'opencode', fetchedAt:stamp, snapshot:{ limits:[{ label:'Weekly', primary:{ usedPercent:75, windowDurationMins:10080, resetsAt:null } }] } },
+    ]
+    const partial = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} quotas={partialQuotas} connected now={now} />)
+    await partial.flush()
+    const fills = [...partial.host.querySelectorAll<HTMLElement>('.analytics-orb')].map((orb) => orb.style.getPropertyValue('--orb-fill'))
+    expect(fills).toEqual(['25%', '50%', '75%'])
+    expect(partial.host.textContent).not.toContain('Invalid Date')
+    expect(partial.host.textContent).toContain('Weekly reset unavailable')
+  })
+
+  it('pauses weekly orb motion while offscreen and resumes it when visible', async () => {
+    let notify: ((entries: Array<{ isIntersecting: boolean }>) => void) | undefined
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) { notify = callback }
+      observe() { notify?.([{ isIntersecting:false }]) }
+      disconnect() {}
+    })
+    const quotas = [{ provider:'claude', snapshot:{ limits:[{ label:'Claude Code', secondary:{ usedPercent:50, windowDurationMins:10080, resetsAt:null } }] } }]
+    const view = mount(<AnalyticsView sessions={sessions} agents={[claude]} quotas={quotas} connected now={now} />)
+    await view.flush()
+    const section = view.host.querySelector('.analytics-provider-usage')!
+    expect(section.getAttribute('data-orb-visible')).toBe('false')
+    await act(async () => { notify?.([{ isIntersecting:true }]) })
+    expect(section.getAttribute('data-orb-visible')).toBe('true')
+    await act(async () => { notify?.([{ isIntersecting:false }]) })
+    expect(section.getAttribute('data-orb-visible')).toBe('false')
+  })
+
   it('keeps monetary valuation and budget controls out of analytics', async () => {
     fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.partial)
     const view = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} connected now={now} />)
@@ -365,7 +412,7 @@ describe('analytics view', () => {
     expect(view.host.textContent).toContain('Time zone Europe/London')
     expect(view.host.textContent).toContain('Updated 13:00')
     const calls = fetchUsageAnalytics.mock.calls.length
-    await click(buttonNamed(view.host, 'Refresh'))
+    await click(buttonNamed(view.host, 'Refresh usage and provider quotas'))
     await view.flush()
     expect(fetchUsageAnalytics.mock.calls.length).toBe(calls + 1)
     expect(view.host.textContent).toContain('Updated 13:00')

@@ -1978,8 +1978,13 @@ impl Storage {
     }
     pub fn session_context(&self, id: &str) -> Result<(Option<u64>, Option<u64>), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let (used, size) = session_context_locked(&c, id)?;
+        let (used, size, _, _) = session_context_locked(&c, id)?;
         Ok((used.and_then(|value| u64::try_from(value).ok()), size.and_then(|value| u64::try_from(value).ok())))
+    }
+    pub fn session_context_state(&self, id: &str) -> Result<(Option<u64>, Option<u64>, Option<String>, bool), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let (used, size, model, estimated) = session_context_locked(&c, id)?;
+        Ok((used.and_then(|value| u64::try_from(value).ok()), size.and_then(|value| u64::try_from(value).ok()), model, estimated))
     }
     #[cfg(test)]
     pub fn budget_list(&self) -> Result<Value, StorageError> {
@@ -2233,9 +2238,11 @@ impl Storage {
         let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
         let mut v: Value =
             serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
-        let (context_used, context_size) = session_context_locked(c, id)?;
+        let (context_used, context_size, context_model, context_estimated) = session_context_locked(c, id)?;
         v["contextUsed"] = json!(context_used);
         v["contextSize"] = json!(context_size);
+        v["contextModel"] = json!(context_model);
+        v["contextEstimated"] = json!(context_estimated);
         let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
         let msgs=query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at,'attachments',json_extract(data,'$.attachments'),'meta',json_extract(data,'$.meta'),'references',json_extract(data,'$.references'),'reactions',json(COALESCE((SELECT json_group_array(emoji) FROM (SELECT emoji FROM message_reactions mr WHERE mr.session_id=messages.session_id AND mr.message_id=messages.id ORDER BY CASE emoji WHEN '👍' THEN 0 WHEN '👎' THEN 1 WHEN '❤️' THEN 2 WHEN '😂' THEN 3 WHEN '🎉' THEN 4 ELSE 5 END)), '[]'))) FROM messages WHERE session_id=?1 ORDER BY sequence",id)?;
         v["turns"] = json!(turns);
@@ -2297,29 +2304,35 @@ fn session_event_summary_locked(c: &Connection, id: &str) -> Result<Value, Stora
         |r| r.get(0),
     ).optional()?;
     let mut summary: Value = serde_json::from_str(&json.ok_or(StorageError::AgentNotFound)?)?;
-    let (context_used, context_size) = session_context_locked(c, id)?;
+    let (context_used, context_size, context_model, context_estimated) = session_context_locked(c, id)?;
     summary["contextUsed"] = json!(context_used);
     summary["contextSize"] = json!(context_size);
+    summary["contextModel"] = json!(context_model);
+    summary["contextEstimated"] = json!(context_estimated);
     Ok(summary)
 }
 
-fn session_context_locked(c: &Connection, id: &str) -> Result<(Option<i64>, Option<i64>), StorageError> {
+fn session_context_locked(c: &Connection, id: &str) -> Result<(Option<i64>, Option<i64>, Option<String>, bool), StorageError> {
     let event: Option<(String, String)> = c.query_row(
         "SELECT event_type,payload FROM app_events WHERE event_type IN ('session.context.updated','session.context.reset') AND json_valid(payload) AND json_extract(payload,'$.sessionId')=?1 ORDER BY sequence DESC LIMIT 1",
         [id],
         |row| Ok((row.get(0)?, row.get(1)?)),
     ).optional()?;
     if let Some((event_type, payload)) = event {
-        if event_type == "session.context.reset" { return Ok((None, None)); }
+        if event_type == "session.context.reset" { return Ok((None, None, None, false)); }
         let payload: Value = serde_json::from_str(&payload)?;
-        return Ok((payload["contextUsed"].as_i64(), payload["contextSize"].as_i64()));
+        let context_model_present = payload.as_object().is_some_and(|object| object.contains_key("contextModel"));
+        let usage_model: Option<String> = if !context_model_present {
+            c.query_row("SELECT model FROM usage_events WHERE session_id=?1 AND (context_used IS NOT NULL OR context_size IS NOT NULL) ORDER BY rowid DESC LIMIT 1", [id], |row| row.get(0)).optional()?.flatten()
+        } else { None };
+        return Ok((payload["contextUsed"].as_i64(), payload["contextSize"].as_i64(), payload["contextModel"].as_str().map(str::to_owned).or(usage_model), payload["contextEstimated"].as_bool().unwrap_or(false)));
     }
-    let context: Option<(Option<i64>, Option<i64>)> = c.query_row(
-        "SELECT context_used,context_size FROM usage_events WHERE session_id=?1 AND (context_used IS NOT NULL OR context_size IS NOT NULL) ORDER BY rowid DESC LIMIT 1",
+    let context: Option<(Option<i64>, Option<i64>, Option<String>)> = c.query_row(
+        "SELECT context_used,context_size,model FROM usage_events WHERE session_id=?1 AND (context_used IS NOT NULL OR context_size IS NOT NULL) ORDER BY rowid DESC LIMIT 1",
         [id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     ).optional()?;
-    Ok(context.unwrap_or((None, None)))
+    Ok(context.map(|(used,size,model)|(used,size,model,false)).unwrap_or((None, None, None, false)))
 }
 
 #[derive(Clone, Default)]
@@ -2927,6 +2940,32 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
     #[test]
+    fn context_model_null_is_persisted_and_legacy_missing_key_may_fallback() {
+        let root = std::env::temp_dir().join(format!("bloblex-context-model-null-{}", Uuid::new_v4()));
+        let path = root.join("usage.db");
+        fs::create_dir_all(&root).unwrap();
+        {
+            let db = Storage::open(&path).unwrap();
+            db.upsert_runtime(&json!({"id":"rt-context-null","provider":"claude"})).unwrap();
+            db.create_session("s-context-null", "rt-context-null", "claude", ".", "Context").unwrap();
+            db.insert_usage(&json!({"id":"u-context-null","runtimeId":"rt-context-null","sessionId":"s-context-null","provider":"claude","timestamp":"2026-10-12T00:00:00Z","usageStatus":"reported","contextUsed":420,"contextSize":1000,"model":"claude-sonnet-5-5"})).unwrap();
+            db.push_event("session.context.updated", &json!({"sessionId":"s-context-null","contextUsed":null,"contextSize":null,"contextModel":null,"contextEstimated":false})).unwrap();
+            let cleared = db.session_detail("s-context-null").unwrap();
+            assert!(cleared["contextUsed"].is_null());
+            assert!(cleared["contextSize"].is_null());
+            assert!(cleared["contextModel"].is_null(), "an explicit null must not be replaced by an older usage model");
+            drop(db);
+        }
+        {
+            let db = Storage::open(&path).unwrap();
+            assert!(db.session_detail("s-context-null").unwrap()["contextModel"].is_null(), "explicit unknown attribution must survive reconnect hydration");
+            db.push_event("session.context.updated", &json!({"sessionId":"s-context-null","contextUsed":420,"contextSize":1000})).unwrap();
+            assert_eq!(db.session_detail("s-context-null").unwrap()["contextModel"], "claude-sonnet-5-5", "only a legacy event with a missing key may use the historical usage model");
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn session_metadata_migration_rename_archive_and_delete_are_durable_and_scoped() {
         let path = std::env::temp_dir().join(format!("bloblex-session-controls-{}.db", Uuid::new_v4()));
         {
@@ -2957,8 +2996,14 @@ mod tests {
             assert_eq!(db.session_event_summary("s-controls").unwrap()["contextSize"], 1000);
             db.push_event("session.context.updated", &json!({"sessionId":"s-controls","contextUsed":520,"contextSize":1200})).unwrap();
             assert_eq!(db.session_detail("s-controls").unwrap()["contextUsed"], 520);
+            db.push_event("session.context.updated", &json!({"sessionId":"s-controls","contextUsed":17340,"contextSize":1000000,"contextModel":"claude-sonnet-5-5","contextEstimated":true})).unwrap();
+            assert_eq!(db.session_detail("s-controls").unwrap()["contextEstimated"], true);
+            assert_eq!(db.session_event_summary("s-controls").unwrap()["contextModel"], "claude-sonnet-5-5");
+            db.push_event("session.context.updated", &json!({"sessionId":"s-controls","contextUsed":500,"contextSize":1000000,"contextModel":"claude-sonnet-5-5","contextEstimated":false})).unwrap();
+            assert_eq!(db.session_detail("s-controls").unwrap()["contextEstimated"], false);
             db.push_event("session.context.reset", &json!({"sessionId":"s-controls"})).unwrap();
             assert!(db.session_detail("s-controls").unwrap()["contextUsed"].is_null());
+            assert_eq!(db.session_detail("s-controls").unwrap()["contextEstimated"], false);
             assert!(db.session_event_summary("s-controls").unwrap()["contextSize"].is_null());
             db.upsert_tool("s-controls", "tool-controls", "command", "test", "completed", &json!({})).unwrap();
             db.insert_file("s-controls", "local-file", &json!({"operation":"edited"})).unwrap();

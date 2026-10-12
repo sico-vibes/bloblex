@@ -141,6 +141,7 @@ export interface SessionModelLock {
   model?: string | null
   thinking?: string | null
   serviceTier?: string | null
+  enableWorkflows?: boolean
   approvalMode?: ApprovalMode | null
   planMode?: boolean
 }
@@ -167,6 +168,9 @@ export interface Session extends JsonRecord {
   link?: SessionLink | null
   contextUsed?: number | null
   contextSize?: number | null
+  /** Model identity associated with the last provider-reported context measurement. */
+  contextModel?: string | null
+  contextEstimated?: boolean
   files?: JsonRecord[]
   usage?: JsonRecord[]
 }
@@ -255,18 +259,20 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
     const sessions = snapshot.sessions ?? []
     const existing = sessions.find((session) => session.id === sessionId)
     if (!existing) return { ...snapshot, sequence }
-    const contextUsed = typeof payload.contextUsed === 'number' ? payload.contextUsed : existing.contextUsed
-    const contextSize = typeof payload.contextSize === 'number' ? payload.contextSize : existing.contextSize
+    const contextUsed = typeof payload.contextUsed === 'number' ? payload.contextUsed : payload.contextUsed === null ? null : existing.contextUsed
+    const contextSize = typeof payload.contextSize === 'number' ? payload.contextSize : payload.contextSize === null ? null : existing.contextSize
+    const contextModel = typeof payload.contextModel === 'string' ? payload.contextModel : payload.contextModel === null ? null : existing.contextModel
+    const contextEstimated = typeof payload.contextEstimated === 'boolean' ? payload.contextEstimated : payload.contextUsed === null && payload.contextSize === null ? false : existing.contextEstimated
     return {
       ...snapshot,
       sequence,
-      sessions: sessions.map((session) => session.id === sessionId ? { ...session, contextUsed, contextSize } : session),
+      sessions: sessions.map((session) => session.id === sessionId ? { ...session, contextUsed, contextSize, contextModel, contextEstimated } : session),
     }
   }
 
   if (event.type === 'session.context.reset') {
     if (!sessionId) return { ...snapshot, sequence }
-    return { ...snapshot, sequence, sessions: (snapshot.sessions ?? []).map((session) => session.id === sessionId ? { ...session, contextUsed:null, contextSize:null } : session) }
+    return { ...snapshot, sequence, sessions: (snapshot.sessions ?? []).map((session) => session.id === sessionId ? { ...session, contextUsed:null, contextSize:null, contextModel:null, contextEstimated:false } : session) }
   }
 
   if (event.type === 'session.deleted') {

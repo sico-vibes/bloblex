@@ -13,7 +13,7 @@ type Unlisten = () => void
 const noop: Unlisten = () => undefined
 let discoveryAttempts = 0
 const pendingDeletes = new Map<string, { deadline: number; timer: number; archived: boolean }>()
-const fixtureSettings: Record<string, unknown> = { 'notifications.enabled': true }
+const fixtureSettings: Record<string, unknown> = { 'notifications.enabled': true, 'claude.enableWorkflows': false }
 const daemonListeners = new Set<(event: DaemonEvent) => void>()
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 const flags = () => new URLSearchParams(location.search)
@@ -67,7 +67,7 @@ let sessions: Session[] = [
   { id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', projectPath: 'C:/work/site', state: 'completed', model: 'claude-opus', updatedAt: minutesAgo(41), messages: [{ id: 'c1', role: 'assistant', content: 'Updated the hero copy and the pricing table.', createdAt: minutesAgo(41) }] },
   { id: 'session-opencode', runtimeId: 'runtime-opencode', agentId: 'agent-opencode', title: 'Refactor auth', projectPath: 'C:/work/api', state: 'idle', updatedAt: minutesAgo(60 * 26), messages: [] },
   { id: 'session-legacy', runtimeId: 'runtime-codex', agentId: null, title: 'Untied notes', projectPath: 'C:/work/notes', state: 'idle', updatedAt: minutesAgo(90), messages: [] },
-  { id: 'session-claude-2', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Hero follow-up', projectPath: 'c:\\work\\site\\', state: 'idle', updatedAt: minutesAgo(20), messages: [] },
+  { id: 'session-claude-2', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Hero follow-up', projectPath: 'c:\\work\\site\\', state: 'idle', updatedAt: minutesAgo(20), modelLock: flags().get('preset') === 'claude-context' ? { model:'claude-sonnet-5-5', thinking:'high' } : undefined, contextUsed: flags().get('preset') === 'claude-context' ? 17_340 : null, contextSize: flags().get('preset') === 'claude-context' ? 1_000_000 : null, contextModel: flags().get('preset') === 'claude-context' ? 'claude-sonnet-5-5' : null, contextEstimated: flags().get('preset') === 'claude-context', messages: [] },
   { id: 'session-claude-web', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Pricing page', projectPath: 'C:\\work\\web', state: 'completed', updatedAt: minutesAgo(80), messages: [] },
   { id: 'session-claude-dotdot', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Dotdot path', projectPath: 'C:\\work\\site\\..\\site', state: 'idle', updatedAt: minutesAgo(120), messages: [] },
   { id: 'session-claude-dot', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Dot path', projectPath: 'C:\\work\\site\\.', state: 'idle', updatedAt: minutesAgo(130), messages: [] },
@@ -207,18 +207,19 @@ function fixtureQuotas() {
   if (flags().has('no-quota')) return []
   const window = (usedPercent: number, hours: number, windowDurationMins: number | null) => ({ usedPercent, remainingPercent: 100 - usedPercent, resetsAt: hoursFromNow(hours), windowDurationMins })
   const presetUsage = fixturePreset() === 'usage-tip-90'
+  const orb = flags().get('orb')
   const fetchedAt = minutesAgo(1)
   return [
     { provider: 'claude', runtimeId: 'runtime-claude', fetchedAt, lastAttemptAt: fetchedAt, failureCount: 0, lastError: null, snapshot: { provider: 'claude', limits: [
-      { label: 'Claude Code', primary: window(1, 3.9, 300), secondary: window(27, 52, 10_080) },
+      { label: 'Claude Code', primary: window(1, 3.9, 300), secondary: orb === 'unknown' ? null : window(orb === 'zero' ? 0 : orb === 'full' ? 100 : 27, 52, 10_080) },
       { label: 'Claude Opus', primary: window(12, 52, 10_080), secondary: null },
     ] } },
     { provider: 'codex', runtimeId: 'runtime-codex', fetchedAt, lastAttemptAt: fetchedAt, failureCount: 0, lastError: null, snapshot: { provider: 'codex', limits: [
-      { label: 'Codex', primary: window(0, 4.98, 300), secondary: window(presetUsage ? 90 : 44, presetUsage ? 18 : 107, 10_080) },
+      { label: 'Codex', primary: window(0, 4.98, 300), secondary: orb === 'unknown' ? null : window(orb === 'zero' ? 0 : orb === 'full' ? 100 : presetUsage ? 90 : 44, presetUsage ? 18 : 107, 10_080) },
     ] } },
     { provider: 'opencode', runtimeId: 'runtime-opencode', fetchedAt, lastAttemptAt: fetchedAt, failureCount: 0, lastError: flags().has('quota-error') ? 'unauthorized' : null, snapshot: { provider: 'opencode', limits: [
       { label: '5-hour', primary: window(0, 2.78, 300), secondary: null },
-      { label: 'Weekly', primary: window(4, 48, 10_080), secondary: null },
+      { label: 'Weekly', primary: orb === 'unknown' ? null : window(orb === 'zero' ? 0 : orb === 'full' ? 100 : 4, 48, 10_080), secondary: null },
       { label: 'Monthly', primary: window(16, 493, null), secondary: null },
     ] } },
   ]
@@ -237,8 +238,8 @@ function fixtureCatalog(runtimeId: string) {
     { id: 'opencode-go/preview', displayName: 'Preview model', supportedThinking: ['low', 'high', 'max'], serviceTiers: [] },
     { id: 'opencode-go/alternate-preview', displayName: 'Alternate preview', supportedThinking: [], serviceTiers: [] },
   ] : runtime?.provider === 'claude' ? [
-    { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'], defaultThinking: 'medium', serviceTiers: [{ id: 'fast', name: 'Fast' }], isDefault: true },
-    { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', supportedThinking: ['low', 'medium', 'high'], defaultThinking: 'medium', serviceTiers: [], isDefault: false },
+    { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', ...(fixtureSettings['claude.enableWorkflows'] === true ? ['ultracode'] : [])], defaultThinking: 'medium', serviceTiers: [{ id: 'fast', name: 'Fast' }], isDefault: true },
+    { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max', ...(fixtureSettings['claude.enableWorkflows'] === true ? ['ultracode'] : [])], defaultThinking: 'medium', serviceTiers: [], isDefault: false },
     { id: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5', supportedThinking: ['low', 'medium'], defaultThinking: 'low', serviceTiers: [], isDefault: false },
   ] : [
     // Raw effort values and offered order mirror the prompt-free Codex 0.161.0 catalog fixture.
@@ -624,6 +625,7 @@ function seedExperimentalFixtures() {
 export async function fetchSnapshot() {
   seedExperimentalFixtures()
   if (fixturePreset() === 'opencode-runtime-error') setPreviewSelection('agent-opencode')
+  else if (fixturePreset() === 'claude-context') setPreviewSelection('agent-claude')
   else if (fixturePreset() === 'usage-tip-90') {
     setPreviewSelection('agent-invoice')
     for (const session of sessions.filter((item) => item.agentId === 'agent-invoice')) session.state = 'idle'

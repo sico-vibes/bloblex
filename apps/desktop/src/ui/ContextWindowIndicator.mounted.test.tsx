@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ContextWindowIndicator } from './ContextWindowIndicator'
 
 const mounted: Array<{ root: Root; host: HTMLDivElement }> = []
-function mount(used?: number | null, size?: number | null) {
+function mount(used?: number | null, size?: number | null, contextEstimated = false) {
   const host = document.createElement('div'); document.body.append(host)
   const root = createRoot(host)
-  const render = (nextUsed?: number | null, nextSize?: number | null) => root.render(<ContextWindowIndicator used={nextUsed} size={nextSize} />)
+  const render = (nextUsed?: number | null, nextSize?: number | null) => root.render(<ContextWindowIndicator used={nextUsed} size={nextSize} contextEstimated={contextEstimated} />)
   act(() => render(used, size))
   mounted.push({ root, host })
   return { host, render }
@@ -18,6 +18,22 @@ beforeEach(() => { vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true) })
 afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } vi.unstubAllGlobals() })
 
 describe('reported context indicator', () => {
+  it('labels Claude context reports as estimates', async () => {
+    const { host } = mount(17_340, 1_000_000, true)
+    expect(host.querySelector('.context-window-indicator')?.getAttribute('aria-label')).toContain('Estimated context')
+    await act(async () => { host.querySelector<HTMLButtonElement>('button')!.click() })
+    expect(host.querySelector('.context-popover-row strong')?.textContent).toBe('Estimated context')
+  })
+  it('withholds the percent for a model mismatch without rendering a null percentage', async () => {
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<ContextWindowIndicator used={500} size={1000} contextModel="claude-opus-5-5" model="claude-sonnet-5-5" />))
+    mounted.push({ root, host })
+    await act(async () => { host.querySelector<HTMLButtonElement>('button')!.click() })
+    expect(host.textContent).toContain('Percentage withheld')
+    expect(host.textContent).not.toContain('null%')
+    expect(host.querySelector('[role="progressbar"]')).toBeNull()
+  })
   it('shows zero and a percentage only when both reported fields are valid', () => {
     const { host } = mount(0, 100_000)
     expect(host.querySelector('[role="progressbar"]')?.getAttribute('aria-valuetext')).toBe('0% full')

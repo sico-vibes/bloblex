@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import type { Agent, Session } from '../types'
 import type { AnalyticsBucket, AnalyticsErrorRow, AnalyticsMetric, AnalyticsRangeDays, UsageAnalytics } from '../analyticsTypes'
 import { agentColorHex } from './agentColor'
-import { fetchUsageAnalytics } from '../tauri'
+import { fetchUsageAnalytics, previewMode } from '../tauri'
 import {
   type AnalyticsViewPrefs,
   type LeaderboardViewRow,
@@ -34,6 +34,11 @@ import {
 import { analyticsProjectChoices } from './rosterSelectors'
 import './analytics.css'
 import { Select } from './Select'
+import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { BlobCanvas } from '../blob/BlobCanvas'
+import { agentLook } from '../blob/look'
+import { quotaRows, resetIn, updatedAgo } from './quotaModel'
+import { ProviderLogo } from './providerBrand'
 
 const RANGES: AnalyticsRangeDays[] = [7, 30, 90]
 const PANELS = ['overview', 'errors'] as const
@@ -43,17 +48,22 @@ const METRICS: Array<{ id: AnalyticsMetric; label: string }> = [
   { id: 'runs', label: 'Runs' },
 ]
 
-export function AnalyticsView({ agentId = null, sessions, agents, connected, embedded = false, onBack, now, timeZone }: {
+export function AnalyticsView({ agentId = null, sessions, agents, quotas = [], connected, embedded = false, onBack, onRefreshQuota, now, timeZone }: {
   agentId?: string | null
   sessions: readonly Session[]
   agents: readonly Agent[]
+  quotas?: Record<string, unknown>[]
   connected: boolean
   embedded?: boolean
   onBack?: () => void
+  onRefreshQuota?: () => void
   now?: Date
   timeZone?: string
 }) {
-  const [initial] = useState(() => readAnalyticsPrefs())
+  const [initial] = useState(() => {
+    const prefs = readAnalyticsPrefs()
+    return previewMode && new URLSearchParams(location.search).has('preview-usage') ? { ...prefs, panel:'overview' as const } : prefs
+  })
   const [days, setDays] = useState<AnalyticsRangeDays>(initial.days)
   const [bucket, setBucket] = useState<AnalyticsBucket>(initial.bucket)
   const [projectChoice, setProjectChoice] = useState(initial.projectKey)
@@ -125,7 +135,7 @@ export function AnalyticsView({ agentId = null, sessions, agents, connected, emb
           <button type="button" className="secondary-button" onClick={() => setRetry((value) => value + 1)}>Try again</button>
         </div>
       </AnalyticsTabs>}
-      {data && phase === 'ready' && <AnalyticsBody data={data} agents={agents} metric={metric} panel={panel} updatedAt={updatedAt} onMetric={setMetric} onPanel={setPanel} onRefresh={() => setRetry((value) => value + 1)} />}
+      {data && phase === 'ready' && <AnalyticsBody data={data} agents={agents} quotas={quotas} metric={metric} panel={panel} updatedAt={updatedAt} onMetric={setMetric} onPanel={setPanel} onRefresh={() => { setRetry((value) => value + 1); onRefreshQuota?.() }} />}
     </>}
   </Frame>
 }
@@ -144,13 +154,58 @@ function AnalyticsSkeleton() {
   </div>
 }
 
+function ProviderWeeklyUsage({ quotas }: { quotas: Record<string, unknown>[] }) {
+  const parsed = quotaRows(quotas)
+  const sectionRef = useRef<HTMLElement>(null)
+  const [orbVisible, setOrbVisible] = useState(false)
+  useEffect(() => {
+    const section = sectionRef.current
+    if (!section) return
+    let intersects = false
+    const sync = () => setOrbVisible(intersects && !document.hidden)
+    const observer = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver((entries) => {
+      intersects = entries.some((entry) => entry.isIntersecting)
+      sync()
+    }, { threshold: 0.1 })
+    if (observer) observer.observe(section)
+    else { intersects = true; sync() }
+    const onVisibility = () => sync()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => { observer?.disconnect(); document.removeEventListener('visibilitychange', onVisibility) }
+  }, [])
+  const rows = [
+    { id: 'claude', label: 'Claude', logo: 'claude' },
+    { id: 'codex', label: 'Codex', logo: 'codex' },
+    { id: 'opencode', label: 'OpenCode', logo: 'opencode' },
+  ]
+  return <section ref={sectionRef} className="analytics-provider-usage" data-orb-visible={orbVisible} aria-labelledby="provider-weekly-heading">
+    <h3 id="provider-weekly-heading">Provider weekly usage</h3>
+    <p className="blob-muted">Account plan limits across all conversations. These readings are not filtered by date range, project or blob.</p>
+    <div className="analytics-orbs">{rows.map((item) => {
+      const provider = parsed.find((row) => row.provider === item.id)
+      const weekly = provider?.windows.find((window) => window.label === 'Weekly')
+      const used = weekly?.usedPercent ?? null
+      const freshness = provider?.stale ? 'Last reading · refresh failed' : provider?.status ?? null
+      const updated = updatedAgo(provider?.fetchedAt ?? null)
+      const reset = provider?.stale ? null : resetIn(weekly?.resetsAt ?? null)
+      const resetCopy = provider?.stale ? 'Reset withheld for a stale reading' : reset ? `Resets in ${reset}` : 'Weekly reset unavailable'
+      return <div className="analytics-orb-item" key={item.id} data-provider={item.id} role="group" aria-label={`${item.label}: ${used === null ? freshness ?? 'weekly usage unknown' : `${used}% used${provider?.stale ? ', stale reading' : ''}`}${reset ? `, resets in ${reset}` : ''}`}>
+        <div className={`analytics-orb ${used === null ? 'unknown' : used === 0 ? 'empty' : ''}`} style={{ '--orb-fill': `${used ?? 0}%` } as CSSProperties} role="img" aria-hidden="true"><span className="analytics-orb-wave" /><span className="analytics-orb-wave second" /></div>
+        <div className="analytics-orb-label"><ProviderLogo provider={item.logo} size={16} /><strong>{item.label}</strong></div>
+        <span className="analytics-orb-value">{used === null ? 'Unknown' : `${used}% used`}</span>
+        <small>{freshness ?? resetCopy}{provider?.stale && used !== null ? ' · stale' : !provider?.stale && updated ? ` · ${updated.toLowerCase()}` : ''}</small>
+      </div>
+    })}</div>
+  </section>
+}
+
 function Frame({ embedded, onBack, children }: { embedded: boolean; onBack?: () => void; children: ReactNode }) {
   const backRef = useRef<HTMLButtonElement>(null)
   useEffect(() => { if (!embedded) backRef.current?.focus() }, [embedded])
   if (embedded) return <div className="analytics-embedded" data-analytics-root="embedded">{children}</div>
   return <div className="analytics-page" data-analytics-root="page">
     <header className="blob-page-header">
-      <button ref={backRef} type="button" className="secondary-button" onClick={onBack}>Back</button>
+      <button ref={backRef} type="button" className="analytics-icon-button" aria-label="Back" title="Back" onClick={onBack}><ArrowLeft size={16} /></button>
       <strong className="blob-page-heading">Usage</strong>
     </header>
     <div className="analytics-scroll"><div className="analytics-column">{children}</div></div>
@@ -179,9 +234,10 @@ function AnalyticsTabs({ panel, onPanel, children }: { panel: AnalyticsViewPrefs
   </>
 }
 
-function AnalyticsBody({ data, agents, metric, panel, updatedAt, onMetric, onPanel, onRefresh }: {
+function AnalyticsBody({ data, agents, quotas, metric, panel, updatedAt, onMetric, onPanel, onRefresh }: {
   data: UsageAnalytics
   agents: readonly Agent[]
+  quotas: Record<string, unknown>[]
   metric: AnalyticsMetric
   panel: AnalyticsViewPrefs['panel']
   updatedAt: Date | null
@@ -204,14 +260,14 @@ function AnalyticsBody({ data, agents, metric, panel, updatedAt, onMetric, onPan
   const metricEmpty = bars.length > 0 && bars.every((bar) => bar.gap)
   const clock = updatedAt ? formatUpdatedClock(updatedAt, data.range.tz) : null
   return <>
-    <p className="analytics-freshness" role="status"><span>Time zone {data.range.tz}</span>{clock && <span>Updated {clock}</span>}<button type="button" className="secondary-button" aria-label="Refresh analytics" onClick={onRefresh}>Refresh</button></p>
+    <p className="analytics-freshness" role="status"><span>Time zone {data.range.tz}</span>{clock && <span>Updated {clock}</span>}<button type="button" className="analytics-icon-button" aria-label="Refresh usage and provider quotas" title="Refresh usage and provider quotas" onClick={onRefresh}><RefreshCw size={15} /></button></p>
     <div className="analytics-cards">
       <article className="analytics-card" data-analytics-card="tokens"><h3>Tokens</h3><strong data-figure>{tokenTotal}</strong><small>Input {formatExactNumber(data.totals.tokens.input)} · Output {formatExactNumber(data.totals.tokens.output)} · Cache read {formatExactNumber(data.totals.tokens.cacheRead)} · Cache write {formatExactNumber(data.totals.tokens.cacheWrite)} · Reasoning {formatExactNumber(data.totals.tokens.reasoning)}</small></article>
       <article className="analytics-card" data-analytics-card="runtime"><h3>Run time</h3><strong data-figure>{formatRunTime(data.totals.runTimeMs)}</strong><small>Completed and failed turns</small></article>
       <article className="analytics-card" data-analytics-card="runs" aria-label={`Runs ${formatExactNumber(data.totals.runs)}, ${runsDetail}`}><h3>Runs</h3><strong data-figure>{formatExactNumber(data.totals.runs)}</strong><small>{runsDetail}</small></article>
     </div>
     <AnalyticsTabs panel={panel} onPanel={onPanel}>
-      {panel === 'overview' ? <div className="analytics-chart-block">
+      {panel === 'overview' ? <><div className="analytics-chart-block">
         <div className="analytics-switch" role="group" aria-label="Chart metric">{METRICS.map((item) => <button key={item.id} type="button" aria-pressed={metric === item.id} onClick={() => onMetric(item.id)}>{item.label}</button>)}</div>
         <p role="img" className="sr-only">{summary}</p>
         {metricEmpty && <p className="blob-muted" role="status" data-analytics-empty="metric">No {metricNoun} data in this range.</p>}
@@ -223,9 +279,9 @@ function AnalyticsBody({ data, agents, metric, panel, updatedAt, onMetric, onPan
           const tokenText = formatBoundNumber(row.tokens.total, row.tokensLowerBound)
           const detail = `${tokenText} tokens · ${formatExactNumber(row.runs)} runs · ${formatExactNumber(row.failedRuns)} failed`
           const missing = unreportedRunsNote(row.unreportedRuns)
-          return <div className="analytics-leader-row" key={row.key} data-agent-id={row.agentId ?? (row.kind === 'other' ? 'other' : 'null')} data-leader-kind={row.kind} role="group" aria-label={`${row.name}. ${detail}${missing ? `. ${missing}` : ''}`}><div className="analytics-leader-top"><strong>{row.name}</strong><span>{detail}</span></div><div className="analytics-leader-track" role="img" aria-label={`${row.name} bar, ${tokenText} tokens`} data-fraction={fraction === null ? 'null' : String(fraction)}>{fraction !== null && <div className={color ? 'analytics-leader-fill' : 'analytics-leader-fill is-unassigned'} style={{ width: `${fraction * 100}%`, background: color || undefined }} />}</div>{missing && <p className="analytics-leader-note" role="note">{missing}</p>}</div>
+          return <div className="analytics-leader-row" key={row.key} data-agent-id={row.agentId ?? (row.kind === 'other' ? 'other' : 'null')} data-leader-kind={row.kind} role="group" aria-label={`${row.name}. ${detail}${missing ? `. ${missing}` : ''}`}><div className="analytics-leader-top"><span className="analytics-leader-identity">{agent && <BlobCanvas color={color} size={24} mood="idle" mini decorative label={agent.name} look={agentLook(agent)} />}<strong>{row.name}</strong></span><span>{detail}</span></div><div className="analytics-leader-track" role="img" aria-label={`${row.name} bar, ${tokenText} tokens`} data-fraction={fraction === null ? 'null' : String(fraction)}>{fraction !== null && <div className={color ? 'analytics-leader-fill' : 'analytics-leader-fill is-unassigned'} style={{ width: `${fraction * 100}%`, background: color || undefined }} />}</div>{missing && <p className="analytics-leader-note" role="note">{missing}</p>}</div>
         })}</div>
-      </div> : <ErrorsPanel data={data} agents={agents} leaderboard={leaderboard} />}
+      </div><ProviderWeeklyUsage quotas={quotas} /></> : <ErrorsPanel data={data} agents={agents} leaderboard={leaderboard} />}
     </AnalyticsTabs>
   </>
 }

@@ -20,6 +20,7 @@ import { LookEditor } from './LookEditor'
 import { draftLook } from '../blob/look'
 import { agentColorHex, previewHex } from './agentColor'
 import { labelizeEffort } from './effortLabels'
+import { preferredConcreteModel } from './modelPreferences'
 
 export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, sessionId, autoApprovals, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
@@ -61,7 +62,8 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     setLoading(true)
     setCatalogError(null)
     setCatalogUnavailable(false)
-    const params = agentId ? { runtimeId: draft.runtimeId, agentId } : { runtimeId: draft.runtimeId }
+    const probeModel = draft.model ?? (provider === 'claude' ? 'sonnet' : undefined)
+    const params = { runtimeId: draft.runtimeId, ...(agentId ? { agentId } : {}), ...(probeModel ? { model: probeModel } : {}) }
     Promise.all([
       rpc('runtime.capabilities', params),
       rpc('runtime.models', { runtimeId: draft.runtimeId }),
@@ -86,7 +88,13 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       setLoading(false)
     })
     return () => { cancelled = true }
-  }, [draft.runtimeId, agentId])
+  }, [draft.runtimeId, draft.model, agentId, provider])
+
+  useEffect(() => {
+    if (agentId || custom || draft.model || !catalog?.validated) return
+    const initial = preferredConcreteModel(provider, catalog.models)
+    if (initial) onDraftChange({ ...draft, model: initial.id, thinking: null, serviceTier: null })
+  }, [agentId, catalog, custom, draft, draft.model, onDraftChange, provider])
 
   useEffect(() => {
     if (!sessionId) {
@@ -119,7 +127,8 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     setCatalogError(null)
     setCatalogUnavailable(false)
     try {
-      const modelsRaw = await rpc('runtime.models', { runtimeId: draft.runtimeId, refresh: true })
+      const probeModel = draft.model ?? (provider === 'claude' ? 'sonnet' : undefined)
+      const modelsRaw = await rpc('runtime.models', { runtimeId: draft.runtimeId, refresh: true, ...(probeModel ? { model: probeModel } : {}) })
       const nextCatalog = parseModelCatalog(modelsRaw)
       setCatalog(nextCatalog)
       if (!nextCatalog) setCatalogError('The model catalog was not reported.')
@@ -212,8 +221,8 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
           if (value === '__custom__') applyModel(draft.model, true)
           else applyModel(value || null, false)
         }} options={[
-          { value: '', label: 'Default model' },
-          ...(catalog?.models ?? []).map((model, index, models) => ({ value: model.id, label: `${model.displayName}${model.isDefault ? ' · Default' : ''}`, group: model.group && model.group !== models[index - 1]?.group ? model.group : undefined, ...(index === 0 ? { groupBefore: [{ label: `${providerBrand(provider).name} models`, provider }] } : {}) })),
+          { value: '', label: !catalog ? (loading ? 'Loading models…' : 'Model unavailable') : 'Choose a model', disabled: true },
+          ...(catalog?.models ?? []).map((model, index, models) => ({ value: model.id, label: model.displayName, group: model.group && model.group !== models[index - 1]?.group ? model.group : undefined, ...(index === 0 ? { groupBefore: [{ label: `${providerBrand(provider).name} models`, provider }] } : {}) })),
           ...(draft.model && !custom && !(catalog?.models ?? []).some((model) => model.id === draft.model)
             ? [{
                 value: draft.model,

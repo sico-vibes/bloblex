@@ -38,7 +38,7 @@ export function providerDisplayName(provider: string | undefined) {
   return providerBrand(provider ?? '').name || labelize(provider, 'Coding agent')
 }
 
-export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, usageTipsEnabled = false, onUsageTipsChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, experiments = DEFAULT_EXPERIMENTS, onExperimentChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
+export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, claudeWorkflowsEnabled = false, onClaudeWorkflowsChange, usageTipsEnabled = false, onUsageTipsChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, experiments = DEFAULT_EXPERIMENTS, onExperimentChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
   snapshot: Snapshot | null
   scanStatus?: DiscoveryStatus
   initialPage: SettingsPageId
@@ -51,6 +51,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   /** Experimental: the plan-usage bar along the bottom of the main window. */
   usageBarEnabled?: boolean
   onUsageBarChange?: (enabled: boolean) => void
+  claudeWorkflowsEnabled?: boolean
+  onClaudeWorkflowsChange?: (enabled: boolean) => void
   /** Experimental: surface accurate provider-reported high quota above the active composer. */
   usageTipsEnabled?: boolean
   onUsageTipsChange?: (enabled: boolean) => void
@@ -418,6 +420,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </form>
             </SettingsGroup>
             <SettingsGroup title="Experimental">
+              <SettingsRow label={<span className="experimental-label">Claude dynamic workflows<span className="experimental-tag">Experimental</span><HelpTip text="When enabled, new Claude Code sessions receive enableWorkflows:true as a session-local setting. Bloblex does not edit Claude's config. Claude Code can still reject this when a managed policy forbids it. Off preserves Claude's own default." /></span>} hint="Allow dynamic workflows in Claude conversations. Off by default; existing conversations keep their launch settings.">
+                <button type="button" className={`toggle ${claudeWorkflowsEnabled ? 'on' : ''}`} role="switch" aria-label="Claude dynamic workflows" aria-checked={claudeWorkflowsEnabled} disabled={saving} onClick={() => { const next = !claudeWorkflowsEnabled; void saveSetting('claude.enableWorkflows', next).then((failure) => { if (!failure) onClaudeWorkflowsChange?.(next) }) }}><i /></button>
+              </SettingsRow>
               <SettingsRow label={<span className="experimental-label">Usage tips<span className="experimental-tag">Experimental</span><HelpTip text="Shows a notice above the active composer when the selected CLI reports 75%, 90% or 100% use in a current quota window. It uses the reported window reset when available, can be dismissed per period, and includes no estimates or upgrade link." /></span>} hint="Accurate high-usage notices from the selected coding agent.">
                 <button type="button" className={`toggle ${usageTipsEnabled ? 'on' : ''}`} role="switch" aria-label="Usage tips" aria-checked={usageTipsEnabled} disabled={saving} onClick={() => { const next = !usageTipsEnabled; void saveSetting('experimental.usageTips', next).then((failure) => { if (!failure) onUsageTipsChange?.(next) }) }}><i /></button>
               </SettingsRow>

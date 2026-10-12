@@ -6,15 +6,22 @@ import { Select } from './Select'
 import { PROVIDER_GUIDES } from './providerGuides'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
+import { rpc } from '../tauri'
+import { parseModelCatalog, type CatalogModel } from '../executionContract'
+import { preferredConcreteModel } from './modelPreferences'
 
 const COLORS = ['#b7a7f4', '#e89191', '#82c9a5', '#e8b04b', '#77b9dc']
 export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate, onFinish, onSaveName, initialStep = 0 }: {
-  runtimes: Runtime[]; scanning: boolean; error: string | null; onScan: () => void; onCreate: (runtime: Runtime, name: string, color: string) => Promise<Agent | null>; onFinish: () => void; onSaveName: (name: string) => void; initialStep?: 0 | 1 | 2
+  runtimes: Runtime[]; scanning: boolean; error: string | null; onScan: () => void; onCreate: (runtime: Runtime, name: string, color: string, modelId: string) => Promise<Agent | null>; onFinish: () => void; onSaveName: (name: string) => void; initialStep?: 0 | 1 | 2
 }) {
   const [step, setStep] = useState<number>(initialStep)
   const [name, setName] = useState('')
   const [agentName, setAgentName] = useState('')
   const [runtimeId, setRuntimeId] = useState('')
+  const [models, setModels] = useState<CatalogModel[]>([])
+  const [modelId, setModelId] = useState('')
+  const [modelLoading, setModelLoading] = useState(false)
+  const [modelError, setModelError] = useState<string | null>(null)
   const [color, setColor] = useState(COLORS[0])
   const [creating, setCreating] = useState(false)
   const [celebrated, setCelebrated] = useState(false)
@@ -31,10 +38,31 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
   const finish = () => { onFinish(); }
   const continueName = (skip = false) => { onSaveName(skip ? '' : name.trim().slice(0, 40)); setStep(1) }
   const selectedRuntime = runtimes.find((runtime) => runtime.id === runtimeId)
+  useEffect(() => {
+    if (step !== 2 || !selectedRuntime) { setModels([]); setModelId(''); setModelLoading(false); setModelError(null); return }
+    let cancelled = false
+    setModelLoading(true)
+    setModels([])
+    setModelId('')
+    setModelError(null)
+    rpc('runtime.models', { runtimeId: selectedRuntime.id }).then((raw) => {
+      if (cancelled) return
+      const catalog = parseModelCatalog(raw)
+      if (!catalog || !catalog.validated || catalog.fallback) {
+        setModelError('A verified model list is unavailable. Scan again or choose another coding agent.')
+        return
+      }
+      setModels(catalog.models)
+      setModelId(preferredConcreteModel(selectedRuntime.provider, catalog.models)?.id ?? '')
+    }).catch(() => {
+      if (!cancelled) setModelError('Could not verify available models. Scan again or choose another coding agent.')
+    }).finally(() => { if (!cancelled) setModelLoading(false) })
+    return () => { cancelled = true }
+  }, [runtimeId, selectedRuntime?.id, selectedRuntime?.provider, step])
   const create = async () => {
-    if (!selectedRuntime || creating || !agentName.trim()) return
+    if (!selectedRuntime || creating || !agentName.trim() || !modelId || modelLoading || !!modelError) return
     setCreating(true)
-    const result = await onCreate(selectedRuntime, agentName.trim(), color)
+    const result = await onCreate(selectedRuntime, agentName.trim(), color, modelId)
     setCreating(false)
     if (result) {
       setCelebrated(true)
@@ -67,6 +95,6 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
               : <div className="onboarding-version-fallback"><small className="onboarding-version-note" role="note">Version check command not confirmed; see <a className="onboarding-doc-link" href={guide.docsUrl}>the official docs</a>.</small></div>}
           </article>
     })}</div>{copyNotice && <p role="status">{copyNotice}</p>}{error && <p role="alert">{error}</p>}<div className="onboarding-actions"><button className="ghost-button" onClick={() => setStep(0)}>Back</button><button className="secondary-button" onClick={onScan} disabled={scanning}><Search size={14} />{scanning ? 'Scanning…' : 'Scan again'}</button>{runtimes.length ? <button className="primary-button" onClick={() => setStep(2)}>Continue</button> : <button className="primary-button" onClick={finish}>Continue without an agent</button>}</div></section>}
-    {step === 2 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>Meet your first blob</h1><p>Give it a name and colour. You can change these later.</p><label className="onboarding-field">Coding agent<Select ariaLabel="Coding agent" variant="field" value={runtimeId} onChange={(value) => setRuntimeId(value)} options={runtimes.map((runtime) => ({ value: runtime.id, label: providerBrand(runtime.provider).name, provider: runtime.provider }))} /></label><label className="onboarding-field">Blob name<input className="text-input" value={agentName} maxLength={40} onChange={(event) => setAgentName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && agentName.trim() && selectedRuntime) { event.preventDefault(); void create() } }} /></label>{colors}{error && <p role="alert">{error}</p>}<div className="onboarding-actions"><button className="ghost-button" disabled={creating} onClick={() => setStep(1)}>Back</button><button className="primary-button" onClick={() => void create()} disabled={creating || !agentName.trim() || !selectedRuntime}>{creating ? 'Creating…' : celebrated ? 'Ready' : 'Create blob'}</button></div></section>}
+    {step === 2 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>Meet your first blob</h1><p>Give it a name and choose the model it will use.</p><label className="onboarding-field">Coding agent<Select ariaLabel="Coding agent" variant="field" value={runtimeId} onChange={(value) => setRuntimeId(value)} options={runtimes.map((runtime) => ({ value: runtime.id, label: providerBrand(runtime.provider).name, provider: runtime.provider }))} /></label><label className="onboarding-field">Model<Select ariaLabel="Model" variant="field" value={modelId} disabled={modelLoading || !!modelError || models.length === 0} onChange={setModelId} options={[{ value:'', label: modelLoading ? 'Loading models…' : 'Choose a model', disabled:true }, ...models.map((model) => ({ value:model.id, label:model.displayName, ...(model.group ? { group:model.group } : {}) }))]} /></label>{modelLoading && <p role="status">Loading verified models…</p>}{modelError && <p role="alert">{modelError}</p>}<label className="onboarding-field">Blob name<input className="text-input" value={agentName} maxLength={40} onChange={(event) => setAgentName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && agentName.trim() && selectedRuntime && modelId) { event.preventDefault(); void create() } }} /></label>{colors}{error && <p role="alert">{error}</p>}<div className="onboarding-actions"><button className="ghost-button" disabled={creating} onClick={() => setStep(1)}>Back</button><button className="primary-button" onClick={() => void create()} disabled={creating || !agentName.trim() || !selectedRuntime || !modelId || modelLoading || !!modelError}>{creating ? 'Creating…' : celebrated ? 'Ready' : 'Create blob'}</button></div></section>}
   </section></main>
 }

@@ -6,6 +6,8 @@ import type { Agent, Runtime } from '../types'
 import { PROVIDER_GUIDES } from './providerGuides'
 
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => <div aria-label="Bloblex onboarding companion" /> }))
+const mocks = vi.hoisted(() => ({ rpc: vi.fn() }))
+vi.mock('../tauri', () => ({ rpc: mocks.rpc }))
 import { FirstRunOnboarding } from './FirstRunOnboarding'
 
 const runtime = { id: 'runtime-codex', provider: 'codex', version: '1.2', authState: 'authenticated' } as Runtime
@@ -26,7 +28,7 @@ function input(value: string, label: string) {
     target.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
-afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null })
+afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null; mocks.rpc.mockReset() })
 
 describe('FirstRunOnboarding', () => {
   it('saves a name and provides the no-agent path', () => {
@@ -61,18 +63,22 @@ describe('FirstRunOnboarding', () => {
   })
 
   it('shows found agent details and sends the selected runtime, name and colour to create', async () => {
+    mocks.rpc.mockResolvedValue({ runtimeId:'runtime-codex', provider:'codex', validated:true, fallback:false, models:[
+      { id:'gpt-6-sol', displayName:'GPT-6 Sol', supportedThinking:['low','medium','high','xhigh','max','ultra'], serviceTiers:[], isDefault:true },
+      { id:'gpt-6-luna', displayName:'GPT-6 Luna', supportedThinking:['low','medium','high','xhigh','max'], serviceTiers:[], isDefault:false },
+    ] })
     const create = vi.fn(async () => ({ id: 'agent-1' } as Agent))
     const saveName = vi.fn()
     const { host: mounted } = mount({ runtimes: [runtime], onCreate: create, onSaveName: saveName })
     input('Sam', 'name')
-    act(() => button('Continue').click())
+    await act(async () => { button('Continue').click(); await Promise.resolve(); await Promise.resolve() })
     expect(mounted.textContent).toContain('1.2')
     expect(mounted.textContent).toContain('Signed in')
-    act(() => button('Continue').click())
+    await act(async () => { button('Continue').click(); await Promise.resolve(); await Promise.resolve() })
     input('Helper', 'blob name')
     await act(async () => { button('Create blob').click(); await Promise.resolve() })
     expect(saveName).toHaveBeenCalledWith('Sam')
-    expect(create).toHaveBeenCalledWith(runtime, 'Helper', '#b7a7f4')
+    expect(create).toHaveBeenCalledWith(runtime, 'Helper', '#b7a7f4', 'gpt-6-luna')
   })
 
   it('omits an unconfirmed version command and links to the official docs', () => {

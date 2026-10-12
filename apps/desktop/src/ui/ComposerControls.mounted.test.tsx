@@ -109,13 +109,15 @@ describe('fast mode', () => {
     expect(plain.querySelector('[role="menuitemcheckbox"]')).toBeNull()
   })
 
-  it('resolves provider default to the catalog default model for effort and display', async () => {
+  it('requires an explicit model instead of resolving a provider default from the catalog', async () => {
     rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? catalog : {})
     const host = mount(<SessionExecutionControls session={{ ...session, modelLock:{ model:null, thinking:null } }} agent={agent} onSessionUpdated={() => undefined} onError={() => undefined} />)
     await flush()
-    expect(host.querySelector('.model-pill')?.textContent).toContain('Alpha')
-    expect(host.querySelector('.model-pill')?.getAttribute('aria-label')).toContain('Provider default (Alpha)')
-    expect(host.querySelector('.session-effort-trigger')?.textContent).toBe('Light')
+    expect(host.querySelector('.model-pill')?.textContent).toContain('Choose a model')
+    expect(host.querySelector('.session-effort-trigger')?.textContent).toContain('Model default')
+    await act(async () => { host.querySelector<HTMLButtonElement>('.model-pill')!.click() })
+    expect(host.querySelector('[role="menuitemradio"][data-value=""]')).toBeNull()
+    expect(host.querySelector('[role="menuitemradio"][data-value="alpha"]')?.textContent).toContain('Alpha')
   })
 })
 

@@ -160,11 +160,13 @@ fn merge_stream_event(previous: &mut AgentEvent, incoming: AgentEvent) -> Result
             Ok(())
         }
         (
-            AgentEvent::ContextUpdated { used: left_used, size: left_size },
-            AgentEvent::ContextUpdated { used: right_used, size: right_size },
+            AgentEvent::ContextUpdated { used: left_used, size: left_size, model: left_model, estimated: left_estimated },
+            AgentEvent::ContextUpdated { used: right_used, size: right_size, model: right_model, estimated: right_estimated },
         ) => {
             if right_used.is_some() { *left_used = right_used; }
             if right_size.is_some() { *left_size = right_size; }
+            if right_model.is_some() { *left_model = right_model; }
+            *left_estimated = right_estimated;
             Ok(())
         }
         (_, incoming) => Err(incoming),
@@ -421,8 +423,9 @@ impl CodexAdapter {
                             let token_usage = p["tokenUsage"].clone();
                             let (used, size) = context_window_from_token_usage(&token_usage);
                             r.turn.lock().await.usage = Some(token_usage);
+                            let model = r.meta.lock().await.model.clone();
                             if used.is_some() || size.is_some() {
-                                let _ = r.events.enqueue(AgentEvent::ContextUpdated { used, size });
+                                let _ = r.events.enqueue(AgentEvent::ContextUpdated { used, size, model, estimated: false });
                             }
                         }
                         "turn/completed" if expected.as_deref() == p["turn"]["id"].as_str() => {
@@ -1070,7 +1073,8 @@ fn parse_catalog_model(m: &Value) -> Result<ModelInfo, AdapterError> {
         is_default: m["isDefault"].as_bool(),
         group: None,
         availability: None,
-
+        release_date: m["releaseDate"].as_str().map(str::to_owned),
+        context_window: m["contextWindow"].as_u64(),
     })
 }
 async fn read_reply(

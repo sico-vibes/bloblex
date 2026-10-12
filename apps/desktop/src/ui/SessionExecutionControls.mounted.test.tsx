@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, Session } from '../types'
 
@@ -39,10 +41,34 @@ function mount() {
   return host
 }
 
-afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } vi.restoreAllMocks() })
-beforeEach(() => { vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true) })
+afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } document.querySelector('#composer-css-test')?.remove(); vi.restoreAllMocks() })
+beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const style = document.createElement('style')
+  style.id = 'composer-css-test'
+  style.textContent = readFileSync(resolve(process.cwd(), 'src/ui/composer.css'), 'utf8')
+  document.head.append(style)
+})
 
 describe('session execution controls', () => {
+  it('surfaces and repairs an invalid saved effort without changing the model or marking the runtime broken', async () => {
+    const onError = vi.fn()
+    const onSessionUpdated = vi.fn()
+    rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => method === 'runtime.models' ? catalog : method === 'session.model.update' ? { session: { ...session, modelLock:{ model:params.model, thinking:params.thinking } } } : {})
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={{ ...session, modelLock:{ model:'alpha', thinking:'ultra' } }} agent={agent} onSessionUpdated={onSessionUpdated} onError={onError} />)); mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Saved Ultra is not supported by Alpha')
+    expect(host.querySelector<HTMLButtonElement>('.session-effort-recovery button')?.textContent).toContain('Use model default · High')
+    expect(onError).not.toHaveBeenCalled()
+    await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-recovery button')!.click(); await Promise.resolve(); await Promise.resolve() })
+    expect(rpc).toHaveBeenCalledWith('session.model.update', expect.objectContaining({ sessionId:'session', model:'alpha', thinking:'high' }))
+    expect(onSessionUpdated).toHaveBeenCalledWith(expect.objectContaining({ modelLock:{ model:'alpha', thinking:'high' } }))
+    expect(onError).not.toHaveBeenCalled()
+  })
+
   it('keeps model and effort separate and requires confirmation before locking a different model', async () => {
     rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
       if (method === 'runtime.models') return catalog
@@ -51,6 +77,7 @@ describe('session execution controls', () => {
     })
     const host = mount()
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(rpc).toHaveBeenCalledWith('runtime.models', { runtimeId:'runtime', sessionId:'session' })
     const model = host.querySelector<HTMLButtonElement>('.model-pill')!
     expect(model.textContent).toContain('Alpha')
     expect(model.getAttribute('aria-label')).toBe('Conversation model: Alpha')
@@ -59,13 +86,13 @@ describe('session execution controls', () => {
     const effort = slider(host)
     expect(effort.getAttribute('role')).toBe('slider')
     expect(effort.getAttribute('aria-valuemin')).toBe('0')
-    expect(host.querySelector('.session-effort-default')?.textContent).toBe('Provider default')
-    expect(host.querySelector('.session-effort-recommended')?.textContent).toBe('Recommended')
+    expect(host.querySelector('.session-effort-default')).toBeNull()
+    expect(host.querySelector('.session-effort-recommended')).toBeNull()
     const chooseBeta = async () => {
       await act(async () => { model.click() })
       expect(host.querySelector('[role="menu"]')?.getAttribute('aria-label')).toBe('Conversation model')
-      expect(host.querySelector('[role="menuitemradio"][data-value=""]')?.textContent).toContain('Provider default')
-      expect(host.querySelector('[role="menuitemradio"][data-value="alpha"]')?.textContent).toContain('Recommended')
+      expect(host.querySelector('[role="menuitemradio"][data-value=""]')).toBeNull()
+      expect(host.querySelector('[role="menuitemradio"][data-value="alpha"]')?.textContent).not.toContain('Recommended')
       expect(host.querySelector('[role="menuitemradio"][data-value="alpha"]')?.getAttribute('aria-checked')).toBe('true')
       const option = host.querySelector<HTMLElement>('[role="menuitemradio"][data-value="beta"]')!
       expect(option.textContent).toContain('Beta')
@@ -192,7 +219,7 @@ describe('session execution controls', () => {
     mounted.push({ root, host })
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     const trigger = host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
-    expect(trigger.textContent).toBe('Default')
+    expect(trigger.textContent).toBe('Model default')
     expect(trigger.textContent).not.toContain('Ultra')
     await act(async () => { trigger.click() })
     expect(host.textContent).toContain('This model does not report selectable effort levels')
@@ -200,7 +227,7 @@ describe('session execution controls', () => {
     expect(rpc.mock.calls.filter(([method]) => method === 'session.model.update')).toHaveLength(0)
   })
 
-  it('keeps a one-tier catalog at one stop and offers provider default as a separate reset', async () => {
+  it('keeps a one-tier catalog at one stop without exposing an unset model or effort option', async () => {
     const single={...catalog,models:[{...catalog.models[0],supportedThinking:['low'],defaultThinking:'low'}]}
     rpc.mockImplementation(async(method:string,params:Record<string,unknown>)=>method==='runtime.models'?single:{session:{...session,modelLock:{model:params.model,thinking:params.thinking}}})
     const host=document.createElement('div');document.body.append(host);const root=createRoot(host)
@@ -209,9 +236,8 @@ describe('session execution controls', () => {
     await act(async()=>{host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click()})
     expect(slider(host).getAttribute('aria-valuemax')).toBe('0')
     expect(host.querySelectorAll('.session-effort-tick')).toHaveLength(1)
-    expect(host.querySelector('.session-effort-default')?.textContent).toBe('Provider default')
-    await act(async()=>{host.querySelector<HTMLButtonElement>('.session-effort-default')!.click();await Promise.resolve();await Promise.resolve()})
-    expect(rpc).toHaveBeenCalledWith('session.model.update',expect.objectContaining({model:'alpha',thinking:null}))
+    expect(host.querySelector('.session-effort-default')).toBeNull()
+    expect(host.querySelector('[role="menuitemradio"][data-value=""]')).toBeNull()
   })
 
   it('labels the catalog value xhigh as Extra high while preserving its raw value for updates', async () => {
@@ -275,13 +301,28 @@ describe('session execution controls', () => {
     const nextSession: Session = { ...session, id:'session-2', modelLock:{ model:'alpha', thinking:'high' } }
     await act(async () => { render(nextSession); await Promise.resolve(); await Promise.resolve() })
     await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
-    await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-default')!.click(); await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.session-effort-labels button')].find((button) => button.textContent === 'Low')!.click(); await Promise.resolve(); await Promise.resolve() })
     expect(onSessionUpdated).toHaveBeenCalledWith(expect.objectContaining({ id:'session-2' }))
     expect(rpc.mock.calls.filter(([method]) => method === 'session.model.update').at(-1)?.[1]).toMatchObject({ sessionId:'session-2' })
   })
 })
 
 describe('effort availability', () => {
+  it('keeps one downward chevron and rotates it only while the effort menu is open', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? catalog : {})
+    const host = mount()
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const trigger = host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
+    const closedIcon = trigger.querySelector<SVGSVGElement>('.composer-pill-chevron')!
+    const closedPath = closedIcon.querySelector('path')?.getAttribute('d')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => { trigger.click() })
+    const openIcon = trigger.querySelector<SVGSVGElement>('.composer-pill-chevron')!
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(openIcon.querySelector('path')?.getAttribute('d')).toBe(closedPath)
+    expect(getComputedStyle(openIcon).transform).toBe('rotate(180deg)')
+  })
+
   it('greys out effort with a tooltip while the runtime keeps it behind an execution check', async () => {
     rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? { ...catalog, provider:'opencode' } : method === 'runtime.capabilities' ? { settings:{ thinking:{ supported:true, enabled:false } } } : {})
     const host = mount()
@@ -303,8 +344,19 @@ describe('effort availability', () => {
     expect(host.querySelector('.session-effort-trigger')?.textContent).toBe('Ultracode')
     await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
     expect(host.querySelector('.session-effort-value')?.textContent).toBe('Ultracode')
-    expect(host.querySelector('.session-effort-note')?.textContent).toContain('dynamic workflows')
+    expect(host.querySelector('.session-effort-note')?.textContent).toContain('Extra high with dynamic workflows enabled for this session')
     expect(host.querySelectorAll('.session-effort-tick')).toHaveLength(6)
-    expect(host.querySelectorAll('.session-effort-tick')[1].classList.contains('recommended')).toBe(true)
+    expect(host.querySelector('.session-effort-recommended')).toBeNull()
+  })
+
+  it('explains that the workflow preference does not change an existing session captured with workflows off', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? { ...catalog, models:[{ ...catalog.models[0], supportedThinking:['low','medium','high','xhigh','max'] }] } : {})
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={{ ...session, modelLock:{ model:'alpha', thinking:'max', enableWorkflows:false } }} agent={agent} onSessionUpdated={() => undefined} onError={() => undefined} />)); mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
+    expect(host.querySelector('.session-effort-note')?.textContent).toContain('Bloblex did not enable workflows for this conversation')
+    expect(host.querySelector('.session-effort-note')?.textContent).toContain('new conversations')
   })
 })

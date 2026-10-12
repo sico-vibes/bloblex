@@ -2,9 +2,13 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowUpRight } from 'lucide-react'
 import { quotaRows, quotaTone, resetIn } from './quotaModel'
 
-export function ContextWindowIndicator({ used, size, quota, onOpenUsage }: {
+export function ContextWindowIndicator({ used, size, contextModel, contextEstimated = false, model, isNewConversation = false, quota, onOpenUsage }: {
   used?: number | null
   size?: number | null
+  contextModel?: string | null
+  contextEstimated?: boolean
+  model?: string | null
+  isNewConversation?: boolean
   /** This conversation's provider quota snapshot, when the daemon has one. */
   quota?: Record<string, unknown> | null
   onOpenUsage?: () => void
@@ -20,17 +24,27 @@ export function ContextWindowIndicator({ used, size, quota, onOpenUsage }: {
   const open = pinned || hovered || (focused && !dismissed)
   const hasUsed = typeof used === 'number' && Number.isFinite(used) && used >= 0
   const hasSize = typeof size === 'number' && Number.isFinite(size) && size > 0
-  const percentage = hasUsed && hasSize ? Math.round((used / size) * 100) : null
-  const detail = hasUsed && hasSize
+  const modelMismatch = !!contextModel && !!model && contextModel.toLowerCase() !== model.toLowerCase()
+  const modelAttributionUnknown = !!model && (hasUsed || hasSize) && !contextModel
+  const percentage = hasUsed && hasSize && !modelMismatch && !modelAttributionUnknown ? Math.round((used / size) * 100) : null
+  const detail = modelMismatch
+    ? `${hasUsed ? `${contextTokenCount(used)} tokens reported` : 'Context usage unavailable'} for ${contextModel}; current model is ${model}. Percentage withheld.`
+    : modelAttributionUnknown
+      ? `${hasUsed ? `${contextTokenCount(used)} tokens used` : 'Context usage unavailable'} · measurement model unknown; percentage withheld`
+      : hasUsed && hasSize
     ? `${contextTokenCount(used)} of ${contextTokenCount(size)} tokens used, ${percentage}% full`
     : hasUsed
       ? `${contextTokenCount(used)} tokens used · window capacity unavailable`
       : hasSize
-        ? `${contextTokenCount(size)} token capacity · used tokens unavailable`
+        ? `${isNewConversation ? 'New conversation · ' : ''}${contextTokenCount(size)} token capacity · used tokens unavailable`
         : 'Context usage unavailable'
-  const label = `Context window: ${detail}`
-  const percentDetail = percentage === null ? 'Percentage unavailable' : `${percentage}% full`
-  const compactDetail = hasUsed && hasSize
+  const label = `Context window: ${contextEstimated ? 'Estimated context. ' : ''}${detail}`
+  const percentDetail = modelMismatch ? 'Context measurement is for another model' : modelAttributionUnknown ? 'Context measurement model is unknown' : percentage === null ? 'Percentage unavailable' : `${percentage}% full`
+  const compactDetail = modelMismatch
+    ? `Measured for ${contextModel}; selected ${model}`
+    : modelAttributionUnknown
+      ? `${hasUsed ? `${contextCompactCount(used)} used` : 'Usage unknown'} · model not reported`
+      : hasUsed && hasSize
     ? `${contextCompactCount(used)} / ${contextCompactCount(size)} tokens used`
     : hasUsed
       ? `${contextCompactCount(used)} tokens used · capacity unavailable`
@@ -78,7 +92,7 @@ export function ContextWindowIndicator({ used, size, quota, onOpenUsage }: {
       {percentage !== null && <span className="sr-only" role="progressbar" aria-label="Context window used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={clampedPercent!} aria-valuetext={percentDetail}>{percentDetail}</span>}
     </button>
     {open && <div id={detailsId} className="context-window-popover" role="status" aria-live="polite">
-      <div className="context-popover-row"><strong>Context window</strong><span className="context-popover-value">{hasUsed && hasSize ? `${contextCompactCount(used)} / ${contextCompactCount(size)} (${percentage}%)` : compactDetail}</span></div>
+      <div className="context-popover-row"><strong>{contextEstimated ? 'Estimated context' : 'Context window'}</strong><span className="context-popover-value">{percentage !== null ? `${contextCompactCount(used!)} / ${contextCompactCount(size!)} (${percentage}%)` : compactDetail}</span></div>
       <span className="sr-only">{compactDetail}</span>
       <i className={`context-popover-bar tone-${tone}`} aria-hidden="true"><b style={{ width: `${clampedPercent ?? 0}%` }} /></i>
       {percentage === null ? <span className="context-popover-note">{percentDetail}</span> : <span className="sr-only">{percentDetail}</span>}

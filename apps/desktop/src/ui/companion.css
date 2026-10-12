@@ -132,6 +132,9 @@
 .reply { padding-right: 8px; color: var(--companion-text-muted); font: 400 var(--fs-sm)/1.45 var(--c-font); white-space: pre-wrap; user-select: text; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .chat-log .typing { padding: 4px 2px; }
 .chat-bar { padding: 5px 5px 5px 8px; display: flex; align-items: center; gap: 8px; border-radius: 12px; background: var(--companion-alpha-07); }
+.companion-chat-composer .session-execution-controls { min-width: 0; flex: 0 1 auto; gap: 3px; }
+.companion-chat-composer .model-pill, .companion-chat-composer .session-effort-trigger { max-width: 120px; min-width: 0; padding-inline: 7px; }
+.companion-chat-composer .model-pill > span, .companion-chat-composer .session-effort-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-input { min-width: 0; flex: 1 1 auto; max-height: 54px; padding: 4px 0; resize: none; color: var(--c-ink); border: 0; outline: none; background: transparent; font: 400 var(--fs-sm) var(--c-font); cursor: text; user-select: text; }
 .chat-input::placeholder { color: var(--c-dim-3); }
 .companion-attach { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; color: var(--c-dim-2); border: 0; border-radius: 50%; background: transparent; }

@@ -80,6 +80,21 @@ describe('General settings mounted controls', () => {
     expect(onUsageBarChange).toHaveBeenCalledWith(true)
   })
 
+  it('keeps Claude dynamic workflows off by default and stores the opt-in setting', async () => {
+    mocks.invoke.mockResolvedValue(true)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
+    const changed = vi.fn()
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" claudeWorkflowsEnabled={false} onClaudeWorkflowsChange={changed} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const toggle = host.querySelector<HTMLButtonElement>('[aria-label="Claude dynamic workflows"]')!
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(toggle.closest('.settings-row')?.querySelector('[role="tooltip"]')?.textContent).toContain('session-local')
+    await act(async () => { toggle.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key:'claude.enableWorkflows', value:true })
+    expect(changed).toHaveBeenCalledWith(true)
+  })
+
   it('offers Usage tips as an independent experimental switch', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})

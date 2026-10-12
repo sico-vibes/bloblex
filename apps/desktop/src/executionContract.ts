@@ -49,6 +49,8 @@ export interface CatalogModel {
   isDefault: boolean
   group: string | null
   availability: string | null
+  releaseDate?: string | null
+  contextWindow?: number | null
 }
 
 export interface ModelCatalog {
@@ -207,6 +209,8 @@ function parseModel(value: unknown): CatalogModel | null {
     isDefault: value.isDefault === true,
     group: optionalString(value.group),
     availability: optionalString(value.availability),
+    releaseDate: optionalString(value.releaseDate),
+    contextWindow: typeof value.contextWindow === 'number' && Number.isFinite(value.contextWindow) && value.contextWindow > 0 ? Math.floor(value.contextWindow) : null,
   }
 }
 

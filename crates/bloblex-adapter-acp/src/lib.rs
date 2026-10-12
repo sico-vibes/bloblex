@@ -393,6 +393,7 @@ impl AcpAdapter {
                     let params = msg.get("params").cloned().unwrap_or(Value::Null);
                     let provider_id = params["sessionId"].as_str().unwrap_or("");
                     if let Some(session) = reader.routes.lock().await.get(provider_id).and_then(Weak::upgrade) {
+                        if is_child_usage_update(&params) { continue; }
                         if params["update"]["sessionUpdate"].as_str() == Some("usage_update") {
                             let mut snap = session.usage.lock().await;
                             exec::record_usage_update(&mut snap, &params["update"], &line);
@@ -400,7 +401,8 @@ impl AcpAdapter {
                         if params["update"]["sessionUpdate"].as_str() == Some("agent_turn_complete") {
                             session.turn_completed.store(true, Ordering::SeqCst);
                         }
-                        emit_update(&session.events, &params).await;
+                        let context_model = session.applied.lock().await.model.clone();
+                        emit_update(&session.events, &params, context_model).await;
                     }
                 }
             }
@@ -807,7 +809,7 @@ impl AcpAdapter {
     }
 }
 
-async fn emit_update(tx: &SessionEventSink, p: &Value) {
+async fn emit_update(tx: &SessionEventSink, p: &Value, context_model: Option<String>) {
     let u = &p["update"];
     let kind = u["sessionUpdate"].as_str().unwrap_or("");
     let content = &u["content"];
@@ -835,7 +837,7 @@ async fn emit_update(tx: &SessionEventSink, p: &Value) {
         "usage_update" => {
             let used = u["used"].as_u64();
             let size = u["size"].as_u64();
-            (used.is_some() || size.is_some()).then_some(AgentEvent::ContextUpdated { used, size })
+            (used.is_some() || size.is_some()).then_some(AgentEvent::ContextUpdated { used, size, model: context_model, estimated: false })
         }
         "agent_turn_complete" | "current_mode_update" => None,
         _ => None,
@@ -843,6 +845,11 @@ async fn emit_update(tx: &SessionEventSink, p: &Value) {
     if let Some(event) = event {
         let _ = tx.enqueue(event);
     }
+}
+
+fn is_child_usage_update(params: &Value) -> bool {
+    params["update"]["sessionUpdate"].as_str() == Some("usage_update")
+        && params["update"]["_meta"]["opencode/child-session"].is_string()
 }
 
 fn id_key(id: &Value) -> String {
@@ -1379,15 +1386,23 @@ mod tests {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let (bounded, mut rx) = tokio::sync::mpsc::channel(1);
             let tx = SessionEventSink::new(bounded);
-            emit_update(&tx, &params).await;
+            emit_update(&tx, &params, None).await;
             assert!(matches!(rx.recv().await, Some(AgentEvent::AssistantDelta { text }) if text == "hello"));
-            emit_update(&tx, &usage).await;
-            assert!(matches!(rx.recv().await, Some(AgentEvent::ContextUpdated { used: Some(1), size: Some(2) })));
-            emit_update(&tx, &json!({"sessionId":"s","update":{"sessionUpdate":"session_info_update","title":"ACP generated title"}})).await;
+            emit_update(&tx, &usage, Some("opencode-go/deepseek-v4.1-flash".into())).await;
+            assert!(matches!(rx.recv().await, Some(AgentEvent::ContextUpdated { used: Some(1), size: Some(2), model: Some(ref model), estimated:false }) if model == "opencode-go/deepseek-v4.1-flash"));
+            emit_update(&tx, &json!({"sessionId":"s","update":{"sessionUpdate":"session_info_update","title":"ACP generated title"}}), None).await;
             assert!(matches!(rx.recv().await, Some(AgentEvent::SessionTitle { title }) if title == "ACP generated title"));
             assert!(rx.try_recv().is_err());
         });
         assert_eq!(id_key(&json!("1")), "1");
         assert_eq!(id_key(&json!(1)), "1");
+    }
+
+    #[test]
+    fn child_session_usage_is_not_attributed_to_parent_context() {
+        let update = json!({"update":{"sessionUpdate":"usage_update","used":300,"size":1000,"_meta":{"opencode/child-session":"child-id"}}});
+        assert!(is_child_usage_update(&update));
+        let parent = json!({"update":{"sessionUpdate":"usage_update","used":300,"size":1000}});
+        assert!(!is_child_usage_update(&parent));
     }
 }

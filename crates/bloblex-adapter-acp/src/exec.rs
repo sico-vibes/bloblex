@@ -239,7 +239,8 @@ pub(crate) fn config_option_catalog(options: &[Value]) -> Option<Vec<ModelInfo>>
             is_default: Some(selected_model.as_deref() == Some(id)),
             group: None,
             availability: None,
-
+            release_date: None,
+            context_window: None,
         });
     }
     (!catalog.is_empty()).then_some(catalog)
@@ -559,7 +560,8 @@ mod tests {
             is_default: None,
             group: None,
             availability: None,
-
+            release_date: None,
+            context_window: None,
         }];
         apply_model_efforts(&mut models, &verbose_models);
         assert!(models.iter().find(|model| model.id == "opencode/big-pickle").unwrap().supported_thinking.is_empty());

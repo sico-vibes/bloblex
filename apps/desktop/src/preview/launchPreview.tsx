@@ -40,7 +40,7 @@ function Preview() {
       {launchFixtureModes.map((item) => <button key={item} className="secondary-button small" aria-pressed={item === mode} onClick={() => { setMode(item); history.replaceState(null, '', `?fixture=${item}`) }}>{item}</button>)}
     </nav>
     {onboarding
-      ? <FirstRunOnboarding key={mode} initialStep={initialStep} runtimes={fixture.runtimes} scanning={false} error={null} onScan={() => undefined} onCreate={async (runtime, agentName, color) => ({ id: 'fixture-agent', name: agentName, color, runtimeId: runtime.id } as unknown as Agent)} onFinish={() => setMode('done')} onSaveName={setName} />
+      ? <FirstRunOnboarding key={mode} initialStep={initialStep} runtimes={fixture.runtimes} scanning={false} error={null} onScan={() => undefined} onCreate={async (runtime, agentName, color, modelId) => ({ id: 'fixture-agent', name: agentName, color, runtimeId: runtime.id, model: modelId } as unknown as Agent)} onFinish={() => setMode('done')} onSaveName={setName} />
       : <LaunchIntro autoComplete={false} checks={fixture.checks as LaunchCheck[]} runtimes={fixture.runtimes} serviceDown={fixture.serviceDown} onRetry={() => setMode('in-progress')} onContinueOffline={() => setMode('done')} onComplete={() => setMode('onboarding-step-1')} />}
     <span className="sr-only">Profile fixture name: {name || 'neutral default'}</span>
   </>

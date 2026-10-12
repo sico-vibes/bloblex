@@ -288,7 +288,17 @@ fn model_from(header: &str, value: &Value) -> Result<ModelInfo, String> {
         is_default: None,
         group: None,
         availability: None,
+        release_date: value.get("release_date").and_then(Value::as_str).filter(|date| is_iso_date(date)).map(str::to_owned),
+        context_window: value.pointer("/limit/context").and_then(Value::as_u64),
     })
+}
+
+fn is_iso_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes.iter().enumerate().all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
 }
 
 struct CatalogWorkingDirectory(PathBuf);

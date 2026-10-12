@@ -1,6 +1,19 @@
 # Bloblex session handoff
 
-Current as of 11 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+Current as of 12 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+
+## Verified, unreleased follow-up (12 October 2026)
+
+The user's model, context and Usage follow-up is complete in the working tree on `main`, based on `8bc170f`. No version bump, commit, push, installer or release was performed for this batch. The user requested these fixes and a report before deciding the next step.
+
+- Claude's `thinking is not supported` error originates in Bloblex's model/effort validation before execution, separately from quota exhaustion. Main and companion offer model-preserving effort recovery. The exact saved pair in the installed app was not inspected.
+- Provider-default and recommendation model rows are removed. First-use choices are latest available Sonnet, latest Luna and `opencode/big-pickle`, using validated catalogs; explicit saved models remain pinned. Claude is chronological across families, OpenCode uses reported dates within gateway groups, and Codex generations remain newest first.
+- The attached bb notes were checked against source snapshot `4b12265e5fb82c01ea67e67cfe8d935533406937` and vendor SDK declarations. Native, prompt-free Claude 2.1.296 probes confirmed `enableWorkflows:true` enables reported Ultracode availability and `get_context_usage` works before a prompt. Settings → General → Experimental → Claude dynamic workflows is off by default and applies session-local settings to new conversations, retained through model/effort/speed changes. Ultracode uses `xhigh` plus `ultracode:true`; Max remains distinct. Luna's catalog does not support Ultra; eligible Sol models do.
+- Claude context is queried at connection startup, completion and compaction with bounded, stale-response-safe control requests and estimated provenance. OpenCode consumes structured usage updates and reported capacity, excluding child-session updates. Unknown, zero capacity, explicit null attribution and model changes cannot produce a stale percentage. Both windows share normalized state.
+- Runtime-logo tooltips open below the icon in a viewport-constrained body portal. Effort uses one rotating chevron. Usage Back/Refresh are accessible borderless icons; Blobs have actual portraits and a separate provider section with three weekly liquid orbs. Missing readings are unknown; stale readings remain labelled; reduced-motion/offscreen behavior is covered.
+- Independent final gates: typecheck, 441 desktop tests across 73 files, production web build, 326 Rust workspace tests excluding desktop, and native desktop library compile check in private `D:\u18`. The existing bundle-size warning remains. OpenCode's final source audit passed all six corrections and estimate-provenance handling.
+- Browser fixtures covered dark partial/zero/full/unknown orbs at desktop and native 1000×680 minimum, workflow/model controls, and the below-header keyboard tooltip in light theme. Chronology and the final chevron correction have deterministic/source evidence. Details: ignored `target/usage-model-followup/ROOT-VERIFICATION.md`; full screenshot with sample data: `usage-partial.jpg`. The earlier `weekly-usage-preview.jpg` was cropped incorrectly and should not be used as the orb preview.
+- Limits: no current-batch installed-app coding turn, native-window interaction, real OpenCode context turn, installer or clean-machine install. The installed inspection app, user databases, CLI configuration and pre-existing `output/`/`.playwright-cli/` artifacts were preserved. Task preview processes and tabs ended during the interrupted session; none remain to clean up.
 
 ## Published (11 October 2026, beta.17)
 

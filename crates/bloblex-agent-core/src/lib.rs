@@ -715,6 +715,9 @@ pub struct ExecOptions {
     pub model: Option<String>,
     pub thinking: Option<String>,
     pub service_tier: Option<String>,
+    /// Claude Code dynamic workflows, enabled for this provider session only.
+    #[serde(default)]
+    pub enable_workflows: bool,
     pub instructions: Option<String>,
     pub extra_args: Vec<String>,
     pub env: BTreeMap<String, String>,
@@ -728,7 +731,7 @@ pub struct ExecOptions {
 }
 impl Default for ExecOptions {
     fn default() -> Self {
-        Self { approval_mode: ApprovalMode::Ask, model: None, thinking: None, service_tier: None, instructions: None, extra_args: vec![], env: BTreeMap::new(), max_concurrency: 1, plan_mode: false, mcp_servers: vec![] }
+        Self { approval_mode: ApprovalMode::Ask, model: None, thinking: None, service_tier: None, enable_workflows: false, instructions: None, extra_args: vec![], env: BTreeMap::new(), max_concurrency: 1, plan_mode: false, mcp_servers: vec![] }
     }
 }
 
@@ -811,6 +814,12 @@ pub struct ModelInfo {
     /// Whether the provider currently reports this model as offered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub availability: Option<String>,
+    /// Provider-structured or documentation-normalized official release date, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    /// Provider-reported model context limit, not a usage measurement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -941,7 +950,13 @@ pub enum AgentEvent {
     ContextUpdated {
         used: Option<u64>,
         size: Option<u64>,
+        /// Model identity associated with the measurement, when reported.
+        model: Option<String>,
+        #[serde(default)]
+        estimated: bool,
     },
+    /// The provider compacted or replaced its current context. Forget prior usage/capacity.
+    ContextReset,
     AssistantDelta {
         text: String,
     },

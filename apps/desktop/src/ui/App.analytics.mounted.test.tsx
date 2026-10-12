@@ -236,9 +236,9 @@ describe('sidebar usage analytics', () => {
     expect(view.host.querySelector('.quota-card[data-provider="opencode"]')?.textContent).toContain('Unavailable')
     expect(view.host.querySelector('.quota-details')?.textContent).not.toContain('Generic provider')
     expect(view.host.textContent).toContain('Token usage')
-    await click(buttonNamed(view.host, 'Refresh quota'))
+    await click(buttonNamed(view.host, 'Refresh plan usage'))
     expect(h.rpc).toHaveBeenCalledWith('quota.refresh')
-    expect(buttonNamed(view.host, 'Checking…')?.hasAttribute('disabled')).toBe(true)
+    expect(buttonNamed(view.host, 'Refresh plan usage')?.hasAttribute('disabled')).toBe(true)
   })
 
   it('opens analytics from Usage, requests the local timezone, and returns focus on Back', async () => {
@@ -252,7 +252,7 @@ describe('sidebar usage analytics', () => {
     await view.settle()
     expect(view.host.querySelector('.analytics-page')).not.toBeNull()
     expect(view.host.querySelector('.chat-header')).toBeNull()
-    expect(document.activeElement?.textContent).toBe('Back')
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Back')
     const tz = resolvedTimeZone()
     const expected = buildAnalyticsRequest({ days: 7, bucket: 'day', now: new Date('2026-10-02T12:00:00.000Z'), timeZone: tz })
     const sent = h.fetchUsageAnalytics.mock.calls.map((call) => call[0] as { from: string; to: string; bucket: string; tz: string; agentId?: string })

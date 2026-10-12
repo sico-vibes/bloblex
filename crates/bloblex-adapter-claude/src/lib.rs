@@ -10,7 +10,7 @@ use std::{
     process::Stdio,
     time::{Duration as StdDuration, SystemTime},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -121,10 +121,58 @@ fn parse_model_catalog(value: &Value) -> Result<Vec<ModelInfo>, AdapterError> {
                 })
             }),
             group: None, availability: None,
+            release_date: model["releaseDate"].as_str().filter(|date| claude_iso_date(date)).map(str::to_owned),
+            context_window: model["contextWindow"].as_u64(),
         });
     }
-    if normalized.is_empty() { return Err(AdapterError::Protocol("Claude catalog is empty".into())); }
-    Ok(normalized)
+    let mut unique = Vec::<ModelInfo>::new();
+    for candidate in normalized {
+        if let Some(index) = unique.iter().position(|model| model.id == candidate.id) {
+            let previous_default = unique[index].is_default == Some(true);
+            let candidate_default = candidate.is_default == Some(true);
+            let previous_score = model_entry_score(&unique[index]);
+            let candidate_score = model_entry_score(&candidate);
+            if candidate_score > previous_score {
+                let mut selected = candidate;
+                merge_model_metadata(&mut selected, &unique[index]);
+                unique[index] = selected;
+            } else { merge_model_metadata(&mut unique[index], &candidate); }
+            if previous_default || candidate_default { unique[index].is_default = Some(true); }
+        } else {
+            unique.push(candidate);
+        }
+    }
+    if unique.is_empty() { return Err(AdapterError::Protocol("Claude catalog is empty".into())); }
+    Ok(unique)
+}
+
+fn merge_model_metadata(target: &mut ModelInfo, source: &ModelInfo) {
+    for effort in &source.supported_thinking { if !target.supported_thinking.contains(effort) { target.supported_thinking.push(effort.clone()); } }
+    for tier in &source.service_tiers { if !target.service_tiers.iter().any(|known| known.id == tier.id) { target.service_tiers.push(tier.clone()); } }
+    if target.default_thinking.is_none() { target.default_thinking = source.default_thinking.clone(); }
+    if target.default_service_tier.is_none() { target.default_service_tier = source.default_service_tier.clone(); }
+    if target.context_window.is_none() { target.context_window = source.context_window; }
+    if target.release_date.is_none() { target.release_date = source.release_date.clone(); }
+    if target.provider_id.is_none() { target.provider_id = source.provider_id.clone(); }
+    if let Some(variants) = &source.variants {
+        let target_variants = target.variants.get_or_insert_with(Vec::new);
+        for variant in variants { if !target_variants.contains(variant) { target_variants.push(variant.clone()); } }
+    }
+    target.supported_thinking.sort_by_key(|level| match level.as_str() {
+        "low" => 0, "medium" => 1, "high" => 2, "xhigh" => 3, "max" => 4, "ultracode" => 5, _ => 6,
+    });
+}
+
+fn model_entry_score(model: &ModelInfo) -> (bool, usize, usize, bool) {
+    let name = model.display_name.to_ascii_lowercase();
+    let concrete = !name.contains("default") && !name.contains("recommended");
+    (concrete, model.supported_thinking.len(), model.service_tiers.len(), model.context_window.is_some())
+}
+
+fn claude_iso_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10 && bytes[4] == b'-' && bytes[7] == b'-'
+        && bytes.iter().enumerate().all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
 }
 
 fn fallback_catalog() -> Vec<ModelInfo> {
@@ -132,18 +180,21 @@ fn fallback_catalog() -> Vec<ModelInfo> {
         id: id.into(), display_name: id.into(), provider_id: None, supported_thinking: vec![],
         default_thinking: None, service_tiers: vec![], default_service_tier: None, variants: None, host_dependent: true,
         is_default: None, group: None, availability: None,
+        release_date: None, context_window: None,
     }).collect()
 }
 const FAST_MODE_TIER: &str = "fast";
 /// Synthetic effort id for Claude's Ultracode session setting.
 const ULTRACODE: &str = "ultracode";
 
-/// Adds Ultracode after the effort levels of the models that can run it. Claude
-/// allows Ultracode when dynamic workflows are on and the model supports Extra
-/// high; `get_settings` reports that for the session's current model.
-fn offer_ultracode(models: &mut [ModelInfo], available: bool) {
-    if !available { return; }
-    for model in models.iter_mut() {
+/// A successful `ultracodeAvailable` probe with workflows enabled confirms the
+/// session setting is permitted. Per-model eligibility still comes from each
+/// catalog row's actual `xhigh` capability; never infer it from `max`.
+fn offer_ultracode(models: &mut [ModelInfo], available_model: Option<&str>) {
+    let Some(model_id) = available_model else { return; };
+    let probe_confirmed_workflows = models.iter().any(|model| model.id == model_id && model.supported_thinking.iter().any(|level| level == "xhigh"));
+    if !probe_confirmed_workflows { return; }
+    for model in models {
         if model.supported_thinking.iter().any(|level| level == "xhigh") && !model.supported_thinking.iter().any(|level| level == ULTRACODE) {
             model.supported_thinking.push(ULTRACODE.into());
         }
@@ -152,16 +203,19 @@ fn offer_ultracode(models: &mut [ModelInfo], available: bool) {
 fn typed_args(options: &ExecOptions, instruction_file: Option<&std::path::Path>, instruction_changed: bool) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(model) = options.model.as_deref() { args.extend(["--model".into(), model.into()]); }
-    // Ultracode is Claude's standing dynamic-workflow switch, on top of an effort
-    // level. Bloblex offers it as the last stop after Max and runs it at Max.
+    // Ultracode is the independent workflow setting, on top of xhigh effort.
     let ultracode = options.thinking.as_deref() == Some(ULTRACODE);
-    if let Some(effort) = options.thinking.as_deref() { args.extend(["--effort".into(), if ultracode { "max".into() } else { effort.into() }]); }
+    if let Some(effort) = options.thinking.as_deref() { args.extend(["--effort".into(), if ultracode { "xhigh".into() } else { effort.into() }]); }
     let fast = options.service_tier.as_deref() == Some(FAST_MODE_TIER);
-    match (fast, ultracode) {
-        (true, true) => args.extend(["--settings".into(), r#"{"fastMode":true,"ultracode":true}"#.into()]),
-        (true, false) => args.extend(["--settings".into(), r#"{"fastMode":true}"#.into()]),
-        (false, true) => args.extend(["--settings".into(), r#"{"ultracode":true}"#.into()]),
-        (false, false) => {}
+    match (fast, ultracode, options.enable_workflows) {
+        (true, true, true) => args.extend(["--settings".into(), r#"{"fastMode":true,"ultracode":true,"enableWorkflows":true}"#.into()]),
+        (true, true, false) => args.extend(["--settings".into(), r#"{"fastMode":true,"ultracode":true}"#.into()]),
+        (true, false, true) => args.extend(["--settings".into(), r#"{"fastMode":true,"enableWorkflows":true}"#.into()]),
+        (true, false, false) => args.extend(["--settings".into(), r#"{"fastMode":true}"#.into()]),
+        (false, true, true) => args.extend(["--settings".into(), r#"{"ultracode":true,"enableWorkflows":true}"#.into()]),
+        (false, true, false) => args.extend(["--settings".into(), r#"{"ultracode":true}"#.into()]),
+        (false, false, true) => args.extend(["--settings".into(), r#"{"enableWorkflows":true}"#.into()]),
+        (false, false, false) => {}
     }
     if let Some(path) = instruction_file { args.extend(["--append-system-prompt-file".into(), path.to_string_lossy().into_owned()]); }
     if instruction_changed { args.extend(["--system-prompt-snapshot".into(), "off".into()]); }
@@ -209,9 +263,12 @@ struct Conn {
     events: EventSender,
     provider_id: Mutex<Option<String>>,
     active_turn: AtomicBool,
+    closed: AtomicBool,
+    context_revision: AtomicU64,
     has_delivered_prompt: AtomicBool,
     cancellation_requested: AtomicBool,
     permission_requests: Mutex<HashMap<String, (Value, Value)>>,
+    context_requests: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Value>>>,
     local_session_id: String,
     instruction_file: Option<PrivateInstructionFile>,
     mcp_config_file: Option<PrivateInstructionFile>,
@@ -292,6 +349,70 @@ async fn write_control(c: &Conn, wire: Value) -> Result<(), AdapterError> {
     let mut bytes = serde_json::to_vec(&wire).map_err(|e| AdapterError::Protocol(e.to_string()))?;
     bytes.push(b'\n');
     c.stdin.lock().await.write(&bytes).await.map_err(|e| AdapterError::Process(format!("writing Claude control reply: {e}")))
+}
+
+fn is_subagent_message(value: &Value) -> bool {
+    value["parent_tool_use_id"].as_str().is_some()
+        || value["message"]["parent_tool_use_id"].as_str().is_some()
+}
+
+fn unique_model_usage(model_usage: &Value) -> Option<String> {
+    let models = model_usage.as_object()?;
+    (models.len() == 1).then(|| models.keys().next().cloned()).flatten()
+}
+
+async fn schedule_context_usage(conn: Arc<Conn>) {
+    if conn.closed.load(Ordering::Acquire) { return; }
+    let turn = conn.active_turn_id.lock().await.clone();
+    let revision = conn.context_revision.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+    let request_id = format!("bloblex-context-{}", Uuid::new_v4());
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    conn.context_requests.lock().await.insert(request_id.clone(), tx);
+    if conn.closed.load(Ordering::Acquire) || conn.context_revision.load(Ordering::Acquire) != revision {
+        conn.context_requests.lock().await.remove(&request_id);
+        return;
+    }
+    let request_conn = conn.clone();
+    if send_context_usage_request(&request_id, move |request| async move { write_control(&request_conn, request).await }).await.is_err() {
+        conn.context_requests.lock().await.remove(&request_id);
+        return;
+    }
+    tokio::spawn(async move {
+        let Ok(Ok(response)) = tokio::time::timeout(StdDuration::from_secs(5), rx).await else {
+            conn.context_requests.lock().await.remove(&request_id);
+            return;
+        };
+        let current_turn = conn.active_turn_id.lock().await.clone();
+        // The connection's launch model is immutable; revision, turn, and close
+        // checks reject reports from replaced or stale connections. The
+        // provider-reported model below remains authoritative for attribution.
+        if !context_response_is_current(revision, conn.context_revision.load(Ordering::Acquire), turn.as_deref(), current_turn.as_deref(), conn.closed.load(Ordering::Acquire)) { return; }
+        let (used, size, model) = normalize_context_usage(&response);
+        if used.is_some() || size.is_some() {
+            let _ = conn.events.send(AgentEvent::ContextUpdated { used, size, model, estimated: true }).await;
+        }
+    });
+}
+
+async fn send_context_usage_request<F, Fut>(request_id: &str, write: F) -> Result<(), AdapterError>
+where F: FnOnce(Value) -> Fut, Fut: std::future::Future<Output = Result<(), AdapterError>> {
+    write(json!({"type":"control_request","request_id":request_id,"request":{"subtype":"get_context_usage"}})).await
+}
+
+fn context_response_is_current(expected_revision: u64, current_revision: u64, expected_turn: Option<&str>, current_turn: Option<&str>, closed: bool) -> bool {
+    !closed && expected_revision == current_revision && expected_turn == current_turn
+}
+
+async fn cancel_context_usage(conn: &Conn) {
+    conn.context_revision.fetch_add(1, Ordering::AcqRel);
+    let pending = std::mem::take(&mut *conn.context_requests.lock().await);
+    drop(pending);
+}
+
+fn normalize_context_usage(response: &Value) -> (Option<u64>, Option<u64>, Option<String>) {
+    if response["response"]["subtype"].as_str().is_some_and(|subtype| subtype != "success") { return (None, None, None); }
+    let report = response["response"]["response"].as_object().map(|_| &response["response"]["response"]).unwrap_or(&response["response"]);
+    (report["totalTokens"].as_u64(), report["rawMaxTokens"].as_u64().filter(|capacity| *capacity > 0), report["model"].as_str().map(str::to_owned))
 }
 
 /// Handles control requests Bloblex answers itself: app-owned tools run
@@ -415,20 +536,18 @@ async fn parse_line(
             }
         }
         "assistant" => {
-            let model = v["message"]["model"].as_str().map(str::to_owned);
-            let used = claude_context_used(&v["message"]["usage"]);
+            let model = (!is_subagent_message(v)).then(|| v["message"]["model"].as_str().map(str::to_owned)).flatten();
+            let used = (!is_subagent_message(v)).then(|| claude_context_used(&v["message"]["usage"])).flatten();
             if model.is_some() || used.is_some() {
-                let size = {
+                let (used, size, context_model) = {
                     let mut context = context_window.lock().await;
-                    if model.is_some() && context.model != model {
-                        context.size = None;
-                    }
-                    if model.is_some() { context.model = model; }
+                    let changed_model = model.as_ref().is_some_and(|value| context.model.as_ref().is_some_and(|previous| previous != value));
+                    if changed_model { context.size = None; context.used = None; }
+                    if let Some(model) = model { context.model = Some(model); }
                     if let Some(used) = used { context.used = Some(used); }
-                    context.size
+                    (context.used, context.size, context.model.clone())
                 };
-                let used = context_window.lock().await.used;
-                let _ = tx.send(AgentEvent::ContextUpdated { used, size }).await;
+                let _ = tx.send(AgentEvent::ContextUpdated { used, size, model: context_model, estimated: false }).await;
             }
             if let Some(content) = v["message"]["content"].as_array() {
                 for c in content {
@@ -506,17 +625,17 @@ async fn parse_line(
         "result" => {
             let u = &v["usage"];
             if !v["is_error"].as_bool().unwrap_or(false) {
-                let model = v["modelUsage"].as_object().and_then(|o| o.keys().next().cloned());
                 let context = {
                     let mut context = context_window.lock().await;
-                    let model_key = context.model.as_deref().or(model.as_deref());
+                    if context.model.is_none() { context.model = unique_model_usage(&v["modelUsage"]); }
+                    let model_key = context.model.as_deref();
                     if context.size.is_none() { context.size = claude_context_size(&v["modelUsage"], model_key); }
-                    if context.model.is_none() { context.model = model.clone(); }
-                    (context.used, context.size)
+                    (context.used, context.size, context.model.clone())
                 };
-                if context.0.is_some() || context.1.is_some() {
-                    let _ = tx.send(AgentEvent::ContextUpdated { used: context.0, size: context.1 }).await;
+                if context.0.is_some() || context.1.is_some() || context.2.is_some() {
+                    let _ = tx.send(AgentEvent::ContextUpdated { used: context.0, size: context.1, model: context.2.clone(), estimated: false }).await;
                 }
+                let usage_model = unique_model_usage(&v["modelUsage"]).filter(|usage_model| context.2.as_ref().is_none_or(|context_model| context_model == usage_model));
                 let total_cost = v["total_cost_usd"].as_number().map(ToString::to_string);
                 let cost_minor = total_cost.as_deref().and_then(exact_usd_minor);
             let turn_id = active_turn_id.lock().await.clone().unwrap_or_default();
@@ -525,7 +644,7 @@ async fn parse_line(
                     cache_read_tokens: u["cache_read_input_tokens"].as_u64(), cache_write_tokens: u["cache_creation_input_tokens"].as_u64(),
                     reasoning_tokens: u["output_tokens_details"]["thinking_tokens"].as_u64(), usage_status: if u.is_object() { "reported" } else { "unreported" }.into(), evidence_note: None,
                     provider_update_id: None, context_used: context.0, context_size: context.1,
-                    model, cost_minor, cost_currency: cost_minor.map(|_| "USD".into()),
+                    model: usage_model, cost_minor, cost_currency: cost_minor.map(|_| "USD".into()),
                     reported_cost_decimal: total_cost, cost_is_cumulative: false,
                 }}).await;
             } else {
@@ -676,9 +795,12 @@ impl ClaudeAdapter {
             events: events.clone(),
             provider_id: Mutex::new(Some(assigned_id)),
             active_turn: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+            context_revision: AtomicU64::new(0),
             has_delivered_prompt: AtomicBool::new(provider_session_id.is_some()),
             cancellation_requested: AtomicBool::new(false),
             permission_requests: Mutex::new(HashMap::new()),
+            context_requests: Mutex::new(HashMap::new()),
             local_session_id: local_session_id.into(),
             instruction_file: instruction_file.clone(),
             mcp_config_file: mcp_config_file.clone(),
@@ -700,6 +822,12 @@ impl ClaudeAdapter {
             let mut resume_ready_tx = Some(resume_ready_tx);
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                    if v["type"].as_str() == Some("control_response") {
+                        if let Some(request_id) = v["response"]["request_id"].as_str().filter(|id| id.starts_with("bloblex-context-")) {
+                            if let Some(tx) = reader.context_requests.lock().await.remove(request_id) { let _ = tx.send(v.clone()); }
+                            continue;
+                        }
+                    }
                     if v["type"].as_str() == Some("system") && v["subtype"].as_str() == Some("api_retry") {
                         record_api_retry(&reader, &v);
                     }
@@ -750,9 +878,15 @@ impl ClaudeAdapter {
                         &reader.context_window,
                     )
                     .await;
+                    if v["type"].as_str() == Some("system") && v["subtype"].as_str() == Some("compact_boundary") {
+                        let _ = reader.events.send(AgentEvent::ContextReset).await;
+                        schedule_context_usage(reader.clone()).await;
+                    } else if v["type"].as_str() == Some("result") { schedule_context_usage(reader.clone()).await; }
                 }
             }
             let _ = stderr_capture.await;
+            reader.closed.store(true, Ordering::Release);
+            cancel_context_usage(&reader).await;
             if let Some(pair) = reader.instruction_file.as_ref() { remove_private_pair(pair); }
             if let Some(pair) = reader.mcp_config_file.as_ref() { remove_private_pair(pair); }
             if reader.active_turn.swap(false, Ordering::SeqCst) {
@@ -782,6 +916,10 @@ impl ClaudeAdapter {
                 }
             }
         }
+        // Claude does not always emit `system/init`. Query the initialized
+        // connection directly so a new or resumed chat has context before its
+        // first human prompt.
+        schedule_context_usage(conn.clone()).await;
         Ok(conn)
     }
 }
@@ -808,7 +946,7 @@ impl AgentAdapter for ClaudeAdapter {
             stdin.write(&settings_bytes).await.map_err(|e| AdapterError::Process(e.to_string()))?;
             let mut lines = BufReader::new(stdout).lines();
             let mut found = None;
-            let mut ultracode = None;
+            let mut ultracode_model = None;
             let mut deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
             loop {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -824,7 +962,14 @@ impl AgentAdapter for ClaudeAdapter {
                 let parsed: Value = serde_json::from_str(&line).map_err(|_| AdapterError::Protocol("Claude catalog response was malformed".into()))?;
                 if parsed["type"] != "control_response" { continue; }
                 match parsed["response"]["request_id"].as_str() {
-                    Some("bloblex-get-settings") => { ultracode = Some(parsed["response"]["response"]["applied"]["ultracodeAvailable"].as_bool() == Some(true)); }
+                    Some("bloblex-get-settings") => {
+                        let applied = &parsed["response"]["response"]["applied"];
+                        if applied["ultracodeAvailable"] == true {
+                            ultracode_model = applied["model"].as_str().or_else(|| applied["modelId"].as_str()).map(str::to_owned);
+                        } else {
+                            ultracode_model = Some(String::new());
+                        }
+                    }
                     _ if parsed["response"]["subtype"] == "success" && found.is_none() => {
                         found = Some(parsed["response"].clone());
                         // Older CLIs may not answer get_settings; do not hold the catalog for it.
@@ -832,13 +977,13 @@ impl AgentAdapter for ClaudeAdapter {
                     }
                     _ => {}
                 }
-                if found.is_some() && ultracode.is_some() { break; }
+                if found.is_some() && ultracode_model.is_some() { break; }
             }
             let _ = process_tree.terminate();
             let _ = child.kill().await;
             let body = found.ok_or_else(|| AdapterError::Protocol("Claude catalog response was missing".into()))?;
             let mut models = parse_model_catalog(&body["response"])?;
-            offer_ultracode(&mut models, ultracode.unwrap_or(false));
+            offer_ultracode(&mut models, ultracode_model.as_deref().filter(|model| !model.is_empty()));
             Ok(models)
         }.await;
         let (models, fallback, source, validated) = match result {
@@ -975,6 +1120,8 @@ impl AgentAdapter for ClaudeAdapter {
             } else {
                 None
             };
+            c.closed.store(true, Ordering::Release);
+            cancel_context_usage(&c).await;
             let _ = c.process_tree.terminate();
             let _ = c.child.lock().await.kill().await;
             let snapshot_changed = has_delivered_prompt && instruction_changed;
@@ -992,6 +1139,7 @@ impl AgentAdapter for ClaudeAdapter {
         c.cancellation_requested.store(false, Ordering::SeqCst);
         c.context_window.lock().await.used = None;
         *c.active_turn_id.lock().await = Some(q.turn_id.clone());
+        c.context_revision.fetch_add(1, Ordering::AcqRel);
         c.active_turn.store(true, Ordering::SeqCst);
         if let Err(error) = c.stdin.lock().await.write(&bytes).await {
             c.active_turn.store(false, Ordering::SeqCst);
@@ -1089,6 +1237,8 @@ impl AgentAdapter for ClaudeAdapter {
     }
     async fn close_session(&self, h: &SessionHandle) -> Result<(), AdapterError> {
         if let Some(c) = self.sessions.lock().await.remove(&h.session_id) {
+            c.closed.store(true, Ordering::Release);
+            cancel_context_usage(&c).await;
             c.stdin.lock().await.close(&mut *c.child.lock().await, &c.process_tree).await;
         }
         Ok(())
@@ -1139,18 +1289,53 @@ mod tests {
     }
 
     #[test]
-    fn ultracode_is_offered_after_extra_high_and_runs_at_max_with_the_session_setting() {
-        let mut rows=parse_model_catalog(&json!({"models":[{"value":"opus","displayName":"Opus","supportedEffortLevels":["low","medium","high","xhigh","max"]},{"value":"sonnet-old","displayName":"Old","supportedEffortLevels":["low","high"]}]})).unwrap();
-        offer_ultracode(&mut rows,false);
+    fn ultracode_uses_workflow_probe_plus_each_models_reported_xhigh_capability() {
+        let mut rows=parse_model_catalog(&json!({"models":[{"value":"opus","displayName":"Opus","supportedEffortLevels":["low","medium","high","xhigh","max"]},{"value":"sonnet","displayName":"Sonnet","supportedEffortLevels":["low","medium","high","xhigh","max"]},{"value":"haiku","displayName":"Haiku","supportedEffortLevels":["low","high","max"]}]})).unwrap();
+        offer_ultracode(&mut rows,None);
         assert!(!rows[0].supported_thinking.iter().any(|l|l=="ultracode"));
-        offer_ultracode(&mut rows,true);
-        offer_ultracode(&mut rows,true);
+        offer_ultracode(&mut rows,Some("sonnet"));
+        offer_ultracode(&mut rows,Some("opus"));
         assert_eq!(rows[0].supported_thinking,vec!["low","medium","high","xhigh","max","ultracode"]);
-        assert_eq!(rows[1].supported_thinking,vec!["low","high"]);
-        let ultra=ExecOptions{model:Some("opus".into()),thinking:Some("ultracode".into()),..ExecOptions::default()};
-        assert_eq!(typed_args(&ultra,None,false),vec!["--model","opus","--effort","max","--settings",r#"{"ultracode":true}"#]);
-        let both=ExecOptions{thinking:Some("ultracode".into()),service_tier:Some("fast".into()),..ExecOptions::default()};
-        assert_eq!(typed_args(&both,None,false),vec!["--effort","max","--settings",r#"{"fastMode":true,"ultracode":true}"#]);
+        assert_eq!(rows[1].supported_thinking,vec!["low","medium","high","xhigh","max","ultracode"]);
+        assert_eq!(rows[2].supported_thinking,vec!["low","high","max"]);
+        let ultra=ExecOptions{model:Some("opus".into()),thinking:Some("ultracode".into()),enable_workflows:true,..ExecOptions::default()};
+        assert_eq!(typed_args(&ultra,None,false),vec!["--model","opus","--effort","xhigh","--settings",r#"{"ultracode":true,"enableWorkflows":true}"#]);
+        let both=ExecOptions{thinking:Some("ultracode".into()),service_tier:Some("fast".into()),enable_workflows:true,..ExecOptions::default()};
+        assert_eq!(typed_args(&both,None,false),vec!["--effort","xhigh","--settings",r#"{"fastMode":true,"ultracode":true,"enableWorkflows":true}"#]);
+        let standard_max=ExecOptions{thinking:Some("max".into()),..ExecOptions::default()};
+        assert_eq!(typed_args(&standard_max,None,false),vec!["--effort","max"]);
+        let sonnet_ultra=ExecOptions{model:Some("claude-sonnet-5-5".into()),thinking:Some("ultracode".into()),enable_workflows:true,..ExecOptions::default()};
+        assert_eq!(typed_args(&sonnet_ultra,None,false),vec!["--model","claude-sonnet-5-5","--effort","xhigh","--settings",r#"{"ultracode":true,"enableWorkflows":true}"#]);
+    }
+
+    #[test]
+    fn dynamic_workflows_is_explicit_and_session_local() {
+        let off=typed_args(&ExecOptions::default(),None,false);
+        assert!(off.is_empty());
+        let on=ExecOptions{enable_workflows:true,..ExecOptions::default()};
+        assert_eq!(typed_args(&on,None,false),vec!["--settings",r#"{"enableWorkflows":true}"#]);
+    }
+
+    #[test]
+    fn claude_default_alias_deduplicates_to_concrete_full_capability_entry() {
+        let rows = parse_model_catalog(&json!({"default":"claude-opus-5-5","models":[
+            {"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)","isDefault":true,"supportedEffortLevels":["low","high","xhigh"]},
+            {"value":"claude-opus-5-5","resolvedModel":"claude-opus-5-5","displayName":"Opus 5.5","supportedEffortLevels":["low","medium","high","max"],"contextWindow":1000000},
+            {"value":"claude-sonnet-5-5","resolvedModel":"claude-sonnet-5-5","displayName":"Sonnet 5.5","supportedEffortLevels":["low","medium","high","xhigh","max"]}
+        ]})).unwrap();
+        assert_eq!(rows.len(), 2);
+        let opus = rows.iter().find(|model| model.id == "claude-opus-5-5").unwrap();
+        assert_eq!(opus.display_name, "Opus 5.5");
+        assert_eq!(opus.supported_thinking, ["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(opus.is_default, Some(true));
+        assert_eq!(opus.context_window, Some(1_000_000));
+        let reversed = parse_model_catalog(&json!({"models":[
+            {"value":"claude-opus-5-5","resolvedModel":"claude-opus-5-5","displayName":"Opus 5.5","supportedEffortLevels":["low","medium","high","max"],"contextWindow":1000000},
+            {"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)","isDefault":true,"supportedEffortLevels":["low","high","xhigh"]}
+        ]})).unwrap();
+        let reversed_opus = reversed.iter().find(|model| model.id == "claude-opus-5-5").unwrap();
+        assert_eq!(reversed_opus.supported_thinking, opus.supported_thinking);
+        assert_eq!(reversed_opus.display_name, "Opus 5.5");
     }
 
     #[test]
@@ -1237,9 +1422,9 @@ mod tests {
         let context_window=Mutex::new(ClaudeContextWindow::default());
         let rt=tokio::runtime::Runtime::new().unwrap();rt.block_on(async {
             parse_line(&tx,&json!({"type":"assistant","session_id":"provider-update","message":{"model":"claude-sonnet-5-5","usage":{"input_tokens":8,"cache_read_input_tokens":2,"cache_creation_input_tokens":1},"content":[]}}),&id,&permissions,"s",&active,&context_window).await;
-            assert!(matches!(rx.recv().await,Some(AgentEvent::ContextUpdated{used:Some(11),size:None})));
+            assert!(matches!(rx.recv().await,Some(AgentEvent::ContextUpdated{used:Some(11),size:None,..})));
             parse_line(&tx,&json!({"type":"result","is_error":false,"session_id":"provider-update","usage":{"input_tokens":8,"output_tokens":3,"cache_read_input_tokens":2,"cache_creation_input_tokens":1,"output_tokens_details":{"thinking_tokens":0}},"modelUsage":{"claude-sonnet-5-5":{"inputTokens":8,"contextWindow":200000}},"total_cost_usd":0.01}),&id,&permissions,"s",&active,&context_window).await;
-            assert!(matches!(rx.recv().await,Some(AgentEvent::ContextUpdated{used:Some(11),size:Some(200000)})));
+            assert!(matches!(rx.recv().await,Some(AgentEvent::ContextUpdated{used:Some(11),size:Some(200000),..})));
             match rx.recv().await.unwrap(){AgentEvent::UsageReport{turn_id,report}=>{assert_eq!(turn_id,"turn-1");assert_eq!(report.input_tokens,Some(8));assert_eq!(report.reasoning_tokens,Some(0));assert_eq!(report.model.as_deref(),Some("claude-sonnet-5-5"));assert_eq!(report.context_used,Some(11));assert_eq!(report.context_size,Some(200000));assert_eq!(report.cost_minor,Some(1));assert_eq!(report.reported_cost_decimal.as_deref(),Some("0.01"));},_=>panic!("normalized usage expected")}
             assert!(matches!(rx.recv().await,Some(AgentEvent::TurnCompleted)));
             parse_line(&tx,&json!({"type":"result","is_error":true,"usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{}}),&id,&permissions,"s",&active,&context_window).await;
@@ -1249,5 +1434,53 @@ mod tests {
             match rx.recv().await.unwrap(){AgentEvent::UsageReport{report,..}=>assert_eq!(report.usage_status,"unreported"),_=>panic!("unreported usage expected")}
             match rx.recv().await.unwrap(){AgentEvent::Error{message}=>assert_eq!(message,"429 rate limit exceeded"),_=>panic!("provider error detail expected")}
         });
+    }
+
+    #[test]
+    fn context_report_normalizes_only_estimated_totals_capacity_and_model() {
+        let response = json!({"type":"control_response","response":{"subtype":"success","request_id":"ctx","response":{"totalTokens":17340,"rawMaxTokens":1000000,"model":"claude-opus-5-5","categories":{"file":99},"files":["private/path"]}}});
+        let normalized = normalize_context_usage(&response);
+        assert_eq!(normalized, (Some(17340), Some(1_000_000), Some("claude-opus-5-5".into())));
+        assert_eq!(serde_json::to_string(&normalized).unwrap(), r#"[17340,1000000,"claude-opus-5-5"]"#);
+        assert_eq!(normalize_context_usage(&json!({"response":{"totalTokens":"unknown","rawMaxTokens":0}})), (None, None, None));
+        assert_eq!(normalize_context_usage(&json!({"response":{"totalTokens":0,"rawMaxTokens":0}})), (Some(0), None, None));
+    }
+
+    #[tokio::test]
+    async fn fake_stream_protocol_queries_context_before_prompt_and_rejects_late_revisions() {
+        let (to_provider, mut from_client) = tokio::sync::mpsc::channel(1);
+        let (to_client, from_provider) = tokio::sync::oneshot::channel();
+        let prompt_sent = Arc::new(AtomicBool::new(false));
+        send_context_usage_request("context-before-prompt", move |request| async move {
+            to_provider.send(request).await.map_err(|_| AdapterError::Process("fake provider closed".into()))
+        }).await.unwrap();
+        let request = from_client.recv().await.unwrap();
+        assert_eq!(request["type"], "control_request");
+        assert_eq!(request["request"]["subtype"], "get_context_usage");
+        assert!(!prompt_sent.load(Ordering::Acquire), "capture is requested before any user prompt");
+        to_client.send(json!({"response":{"subtype":"success","response":{"totalTokens":0,"rawMaxTokens":1000000,"model":"claude-sonnet-5-5"}}})).unwrap();
+        let response = from_provider.await.unwrap();
+        assert_eq!(normalize_context_usage(&response), (Some(0), Some(1_000_000), Some("claude-sonnet-5-5".into())));
+
+        assert!(context_response_is_current(3, 3, Some("same-turn"), Some("same-turn"), false));
+        assert!(!context_response_is_current(3, 4, Some("same-turn"), Some("same-turn"), false), "compaction revision discards a delayed reply within the same turn");
+        assert!(!context_response_is_current(4, 5, Some("old-turn"), Some("new-turn"), false), "new turn replaces the previous capture");
+        assert!(!context_response_is_current(5, 6, Some("turn"), Some("turn"), true), "closed or model-replaced connections cannot publish a late reply");
+    }
+
+    #[tokio::test]
+    async fn multi_model_turn_keeps_parent_context_model_and_leaves_aggregate_usage_unattributed() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let provider_id = Mutex::new(None);
+        let requests = Mutex::new(HashMap::new());
+        let active_turn = Mutex::new(Some("turn-multi-model".to_owned()));
+        let context = Mutex::new(ClaudeContextWindow::default());
+        parse_line(&tx, &json!({"type":"assistant","message":{"model":"claude-sonnet-5-5","usage":{"input_tokens":200,"cache_read_input_tokens":20,"cache_creation_input_tokens":10},"content":[]}}), &provider_id, &requests, "session", &active_turn, &context).await;
+        assert!(matches!(rx.recv().await, Some(AgentEvent::ContextUpdated { used:Some(230), model:Some(ref model), estimated:false, .. }) if model == "claude-sonnet-5-5"));
+        parse_line(&tx, &json!({"type":"assistant","parent_tool_use_id":"subagent","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":9000},"content":[]}}), &provider_id, &requests, "session", &active_turn, &context).await;
+        assert!(rx.try_recv().is_err(), "subagent context must not overwrite the parent context");
+        parse_line(&tx, &json!({"type":"result","is_error":false,"usage":{"input_tokens":9200,"output_tokens":40},"modelUsage":{"claude-sonnet-5-5":{"contextWindow":200000},"claude-haiku-5-5":{"contextWindow":100000}}}), &provider_id, &requests, "session", &active_turn, &context).await;
+        assert!(matches!(rx.recv().await, Some(AgentEvent::ContextUpdated { size:Some(200000), model:Some(ref model), estimated:false, .. }) if model == "claude-sonnet-5-5"));
+        assert!(matches!(rx.recv().await, Some(AgentEvent::UsageReport { report, .. }) if report.model.is_none() && report.context_used == Some(230)));
     }
 }

@@ -198,6 +198,12 @@ function configure(snapshotValue = snapshot()) {
       if (h.updateError) throw new Error(h.updateError)
       return { agent: { ...claude, name: String(params.name ?? claude.name) } }
     }
+    if (method === 'runtime.models') {
+      const runtimeId = String(params.runtimeId ?? '')
+      const provider = runtimeId === 'runtime-codex' ? 'codex' : runtimeId === 'runtime-opencode' ? 'opencode' : 'claude'
+      const id = provider === 'claude' ? 'claude-sonnet-5-5' : provider === 'codex' ? 'gpt-6-luna' : 'opencode/big-pickle'
+      return { runtimeId, provider, validated:true, fallback:false, models:[{ id, displayName:id, supportedThinking:['low','medium','high'], defaultThinking:'medium', serviceTiers:[], defaultServiceTier:null }] }
+    }
     if (method === 'agent.delete') return { agent: { ...claude, archived: true } }
     if (method === 'session.new') {
       if (h.sessionError) throw new Error(h.sessionError)

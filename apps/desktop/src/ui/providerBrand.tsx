@@ -1,5 +1,5 @@
-import type { CSSProperties } from 'react'
-import { Tip } from './Tip'
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import './providerBrand.css'
 
 const providerAssets = import.meta.glob('../assets/providers/*.{svg,png,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>
@@ -32,5 +32,30 @@ export function ProviderLogo({ provider, size = 18 }: { provider: string; size?:
 export function RuntimeMark({ provider, size = 14 }: { provider: string | null | undefined; size?: number }) {
   if (!provider) return null
   const name = providerBrand(provider).name
-  return <Tip text={`Runs on ${name}`} className="runtime-mark-tip"><span className="runtime-mark" role="img" aria-label={`Runs on ${name}`} tabIndex={-1}><ProviderLogo provider={provider} size={size} /></span></Tip>
+  return <RuntimeMarkTip provider={provider} name={name} size={size} />
+}
+
+function RuntimeMarkTip({ provider, name, size }: { provider: string; name: string; size: number }) {
+  const id = useId()
+  const root = useRef<HTMLSpanElement>(null)
+  const tooltip = useRef<HTMLSpanElement>(null)
+  const [open, setOpen] = useState(false)
+  const [point, setPoint] = useState({ left: 0, top: 0 })
+  useEffect(() => {
+    if (!open) return
+    const place = () => {
+      const rect = root.current?.getBoundingClientRect()
+      if (!rect) return
+      const halfWidth = Math.min((tooltip.current?.getBoundingClientRect().width ?? 160) / 2, Math.max(0, (window.innerWidth - 16) / 2))
+      setPoint({ left: Math.max(halfWidth + 8, Math.min(window.innerWidth - halfWidth - 8, rect.left + rect.width / 2)), top: Math.min(window.innerHeight - 28, rect.bottom + 7) })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true) }
+  }, [open])
+  return <span ref={root} className="runtime-mark-tip" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)} onFocus={() => setOpen(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false) }}>
+    <span className="runtime-mark" role="img" aria-label={`Runs on ${name}`} aria-describedby={open ? id : undefined} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Escape') { setOpen(false); event.currentTarget.blur() } }}><ProviderLogo provider={provider} size={size} /></span>
+    {open && createPortal(<span ref={tooltip} id={id} className="runtime-mark-tooltip-portal" role="tooltip" style={{ left: point.left, top: point.top }}>Runs on {name}</span>, document.body)}
+  </span>
 }

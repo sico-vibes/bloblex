@@ -610,8 +610,43 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         }
         "agent.get" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?; st.db.agent_get(id).map(|agent|json!({"agent":agent})).map_err(agent_error) }
         "permissions.policy.get" => { let default=st.db.default_approval_mode().map_err(agent_error)?;let agents=st.db.agent_list(false,None).map_err(agent_error)?;let per_agent=agents.iter().map(|a|json!({"agentId":a["id"],"mode":a["approvalMode"],"effectiveMode":a["effectiveApprovalMode"]})).collect::<Vec<_>>();Ok(json!({"defaultMode":default,"perAgent":per_agent})) }
-        "agent.create" => { let runtime_id=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;validate_agent_catalog(st,runtime_id,&p).await?;let (agent,events)=st.db.agent_create(&p).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
-        "agent.update" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let existing=st.db.agent_get(id).map_err(agent_error)?;let mut fields=p.clone();fields.as_object_mut().unwrap().remove("agentId");let runtime_id=fields["runtimeId"].as_str().unwrap_or(existing["runtimeId"].as_str().unwrap_or(""));let mut effective=existing.clone();if let (Some(dst),Some(src))=(effective.as_object_mut(),fields.as_object()){for(k,v)in src{dst.insert(k.clone(),v.clone());}}validate_agent_catalog(st,runtime_id,&effective).await?;let (agent,events)=st.db.agent_update(id,&fields).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
+        "agent.create" => {
+            let runtime_id = p["runtimeId"].as_str().ok_or_else(|| derr("invalid_argument", "runtimeId is required", StatusCode::BAD_REQUEST))?;
+            let mut fields = p.clone();
+            if let Ok(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id).cloned().ok_or(()) {
+                if let Ok(catalog) = fetch_model_catalog(st, &runtime, false).await {
+                    if let Some(normalized) = normalize_model_fields(catalog["provider"].as_str().unwrap_or(""), &fields, &catalog) {
+                        if let Some(target) = fields.as_object_mut() { for (key, value) in normalized.as_object().unwrap() { target.insert(key.clone(), value.clone()); } }
+                    }
+                }
+            }
+            validate_agent_catalog(st, runtime_id, &fields).await?;
+            let (agent, events) = st.db.agent_create(&fields).map_err(agent_error)?;
+            st.broadcast_persisted(events);
+            Ok(json!({"agent":agent}))
+        }
+        "agent.update" => {
+            let id = p["agentId"].as_str().ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
+            let existing = st.db.agent_get(id).map_err(agent_error)?;
+            let mut fields = p.clone();
+            fields.as_object_mut().unwrap().remove("agentId");
+            let runtime_id = fields["runtimeId"].as_str().unwrap_or(existing["runtimeId"].as_str().unwrap_or("")).to_owned();
+            let mut effective = existing.clone();
+            if let (Some(dst), Some(src)) = (effective.as_object_mut(), fields.as_object()) { for (key, value) in src { dst.insert(key.clone(), value.clone()); } }
+            if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id).cloned() {
+                if let Ok(catalog) = fetch_model_catalog(st, &runtime, false).await {
+                    if let Some(normalized) = normalize_model_fields(catalog["provider"].as_str().unwrap_or(""), &effective, &catalog) {
+                        if let Some(target) = fields.as_object_mut() { for (key, value) in normalized.as_object().unwrap() { target.insert(key.clone(), value.clone()); } }
+                        if let (Some(destination), Some(source)) = (effective.as_object_mut(), normalized.as_object()) { for (key, value) in source { destination.insert(key.clone(), value.clone()); } }
+                    }
+                }
+            }
+            let options_changed = ["runtimeId", "model", "thinking", "serviceTier"].iter().any(|key| fields.get(*key).is_some());
+            if options_changed { validate_agent_catalog(st, &runtime_id, &effective).await?; }
+            let (agent, events) = st.db.agent_update(id, &fields).map_err(agent_error)?;
+            st.broadcast_persisted(events);
+            Ok(json!({"agent":agent}))
+        }
         "agent.delete" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
         "agent.reorder" => { let rt=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;let ids=p["agentIds"].as_array().filter(|a|a.iter().all(Value::is_string)).ok_or_else(||derr("invalid_argument","agentIds must be an array of strings",StatusCode::BAD_REQUEST))?.iter().map(|v|v.as_str().unwrap().to_owned()).collect::<Vec<_>>();let (agents,events)=st.db.agent_reorder(rt,&ids).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agents":agents})) }
         "app.snapshot" => st.db.snapshot().map_err(|e| {
@@ -960,6 +995,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if k.is_empty(){return Err(derr("invalid_argument","key is required",StatusCode::BAD_REQUEST));}
             if k.starts_with("exec_gate.")&&!p["value"].is_boolean(){return Err(derr("invalid_argument","execution gates require a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="notifications.enabled"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","notifications.enabled requires a JSON boolean",StatusCode::BAD_REQUEST));}
+            if k=="claude.enableWorkflows"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","claude.enableWorkflows requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="permissions.default_mode"&&!p["value"].as_str().is_some_and(|v|["ask","auto"].contains(&v)){return Err(derr("invalid_argument","permissions.default_mode must be ask or auto",StatusCode::BAD_REQUEST));}
             if k.to_ascii_lowercase().contains("token")
                 || k.to_ascii_lowercase().contains("secret")
@@ -1044,7 +1080,7 @@ fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,Dis
         let a=st.db.agent_get(agent_id).map_err(agent_error)?;
         let env=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
         let mode=a["approvalMode"].as_str().unwrap_or(&default);
-        ExecOptions{plan_mode:false,mcp_servers:Vec::new(),approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32}
+        ExecOptions{plan_mode:false,mcp_servers:Vec::new(),approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),enable_workflows:session["provider"]=="claude"&&st.db.settings().ok().is_some_and(|settings|settings["claude.enableWorkflows"]==true),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32}
     } else { ExecOptions{approval_mode:parse_mode(&default),max_concurrency:4,..ExecOptions::default()} };
     if let Some(lock) = session["modelLock"].as_object() {
         // Presence of the lock object is significant: explicit null means the
@@ -1057,6 +1093,7 @@ fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,Dis
         if let Some(tier) = lock.get("serviceTier") { options.service_tier = tier.as_str().map(str::to_owned); }
         if let Some(mode) = lock.get("approvalMode").and_then(Value::as_str) { options.approval_mode = parse_mode(mode); }
         options.plan_mode = lock.get("planMode").and_then(Value::as_bool).unwrap_or(false);
+        options.enable_workflows = lock.get("enableWorkflows").and_then(Value::as_bool).unwrap_or(false);
     }
     if let Some(session_id) = session["id"].as_str() {
         team::attach(st, session_id, session["agentId"].as_str(), &session["link"], &mut options);
@@ -1075,7 +1112,7 @@ async fn resolve_session_model_lock(
     if let Some(catalog) = catalog {
         let models = catalog["models"].as_array().cloned().unwrap_or_default();
         if options.model.is_none() {
-            options.model = models.iter().find(|model| model["isDefault"] == true).and_then(|model| model["id"].as_str()).map(str::to_owned);
+            options.model = preferred_catalog_model(runtime["provider"].as_str().unwrap_or(""), &models).and_then(|model| model["id"].as_str()).map(str::to_owned);
         }
         if options.thinking.is_none() {
             options.thinking = models.iter()
@@ -1084,7 +1121,7 @@ async fn resolve_session_model_lock(
                 .map(str::to_owned);
         }
     }
-    let lock = json!({"model":options.model.clone(),"thinking":options.thinking.clone()});
+    let lock = json!({"model":options.model.clone(),"thinking":options.thinking.clone(),"enableWorkflows":options.enable_workflows});
     // Clone the normalized lock into the saved execution options so launch,
     // resume and later turns all use precisely the same session choice.
     options.model = lock["model"].as_str().map(str::to_owned);
@@ -1119,10 +1156,37 @@ async fn active_for_agent(st:&AppState,agent_id:&str)->u32{
 fn catalog_key(runtime: &Value) -> String {
     format!("{}|{}|{}|{}|{}", runtime["id"].as_str().unwrap_or(""), runtime["executablePath"].as_str().unwrap_or(""), runtime["version"].as_str().unwrap_or(""), serde_json::to_string(&runtime["launchArgs"]).unwrap_or_default(), runtime["profileId"].as_str().unwrap_or(""))
 }
+fn catalog_probe_args(provider: &str, workflows: bool, model_hint: Option<&str>) -> Vec<String> {
+    let mut args = Vec::new();
+    if provider == "claude" {
+        let model = model_hint.or_else(|| workflows.then_some("sonnet"));
+        if let Some(model) = model { args.extend(["--model".into(), model.into()]); }
+        if workflows { args.extend(["--settings".into(), r#"{"enableWorkflows":true}"#.into()]); }
+    }
+    args
+}
+fn session_catalog_probe(session: &Value) -> (bool, Option<String>) {
+    let enabled = session["provider"] == "claude" && session["modelLock"]["enableWorkflows"] == true;
+    let model = session["modelLock"]["model"].as_str().map(str::to_owned);
+    (enabled, model)
+}
+fn normalized_catalog_model_hint(provider: &str, hint: Option<String>) -> Option<String> {
+    let value = hint?;
+    if provider == "claude" && ["default", "recommended", "default (recommended)", "provider default"].contains(&value.trim().to_ascii_lowercase().as_str()) {
+        Some("sonnet".into())
+    } else { Some(value) }
+}
 fn provider_display_name(provider: &str) -> &'static str { match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" } }
 async fn fetch_model_catalog(st: &AppState, runtime: &Value, refresh: bool) -> Result<Value, DispatchError> {
-    let spec = runtime_from(runtime);
-    let key = catalog_key(runtime);
+    fetch_model_catalog_for(st, runtime, refresh, None, None).await
+}
+
+async fn fetch_model_catalog_for(st: &AppState, runtime: &Value, refresh: bool, workflow_override: Option<bool>, model_hint: Option<&str>) -> Result<Value, DispatchError> {
+    let workflows = runtime["provider"] == "claude" && workflow_override.unwrap_or_else(|| st.db.settings().ok().is_some_and(|settings| settings["claude.enableWorkflows"] == true));
+    let mut spec = runtime_from(runtime);
+    let effective_model_hint = model_hint.or_else(|| (runtime["provider"] == "claude" && workflows).then_some("sonnet"));
+    spec.args.extend(catalog_probe_args(runtime["provider"].as_str().unwrap_or(""), workflows, effective_model_hint));
+    let key = format!("{}|claude-workflows={workflows}|model={}", catalog_key(runtime), effective_model_hint.unwrap_or(""));
     let cache = MODEL_CATALOG_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
     if !refresh { if let Ok(cache) = cache.lock() { if let Some((at, value)) = cache.get(&key) { if at.elapsed() < std::time::Duration::from_secs(60) { return Ok(value.clone()); } } } }
     let provider = runtime["provider"].as_str().unwrap_or("");
@@ -1137,11 +1201,105 @@ async fn fetch_model_catalog(st: &AppState, runtime: &Value, refresh: bool) -> R
     if let Ok(mut cache) = cache.lock() { cache.insert(key, (Instant::now(), value.clone())); }
     Ok(value)
 }
+
+fn preferred_catalog_model<'a>(provider: &str, models: &'a [Value]) -> Option<&'a Value> {
+    let normalized = models.iter().filter_map(|model| serde_json::from_value::<bloblex_agent_core::ModelInfo>(model.clone()).ok()).collect::<Vec<_>>();
+    let id = model_presentation::preferred_initial_model(provider, &normalized)?.id.as_str();
+    models.iter().find(|model| model["id"].as_str() == Some(id))
+}
+
+fn legacy_model_alias_target<'a>(provider: &str, value: &str, models: &'a [Value]) -> Option<&'a Value> {
+    let key = value.trim().to_ascii_lowercase();
+    if ["default", "recommended", "default (recommended)", "provider default"].contains(&key.as_str()) {
+        return preferred_catalog_model(provider, models);
+    }
+    match provider {
+        "claude" if ["sonnet", "opus", "haiku", "fable"].contains(&key.as_str()) => {
+            let prefix = format!("claude-{key}-");
+            models.iter().find(|model| model["id"].as_str().is_some_and(|id| id.to_ascii_lowercase().starts_with(&prefix)))
+        }
+        "codex" if key.strip_prefix("gpt-").is_some_and(|version| !version.is_empty() && version.chars().all(|ch| ch.is_ascii_digit() || ch == '.')) => models.iter().find(|model| model["id"].as_str().is_some_and(|id| id.starts_with(&format!("{key}-")))),
+        "opencode" if !key.contains('/') => { let target = format!("opencode/{key}"); models.iter().find(|model| model["id"].as_str() == Some(target.as_str())) },
+        _ => None,
+    }
+}
+
+fn normalize_model_fields(provider: &str, current: &Value, catalog: &Value) -> Option<Value> {
+    if catalog["validated"] != true || catalog["fallback"] == true { return None; }
+    let models = catalog["models"].as_array()?;
+    let current_id = current["model"].as_str();
+    let target = if let Some(id) = current_id {
+        models.iter().find(|model| model["id"].as_str() == Some(id))
+            .or_else(|| legacy_model_alias_target(provider, id, models))?
+    } else {
+        preferred_catalog_model(provider, models)?
+    };
+    let model = target["id"].as_str()?;
+    let supported = target["supportedThinking"].as_array().map(|levels| levels.iter().filter_map(Value::as_str).collect::<Vec<_>>()).unwrap_or_default();
+    let current_effort = current["thinking"].as_str();
+    let effort = if supported.is_empty() { None }
+        else if current_effort.is_some_and(|effort| supported.contains(&effort)) { current_effort }
+        else { target["defaultThinking"].as_str().filter(|effort| supported.contains(effort)) };
+    let tier_supported = |tier: &str| target["serviceTiers"].as_array().is_some_and(|tiers| tiers.iter().any(|candidate| candidate["id"] == tier));
+    let current_tier = current["serviceTier"].as_str().filter(|tier| tier_supported(tier));
+    if current_id == Some(model) && current["thinking"].as_str() == effort && current["serviceTier"].as_str() == current_tier { return None; }
+    Some(json!({"model":model,"thinking":effort,"serviceTier":current_tier}))
+}
+
+fn normalize_legacy_session_model_lock(provider: &str, lock: &Value, catalog: &Value) -> Option<Value> {
+    if !lock.is_object() || catalog["validated"] != true || catalog["fallback"] == true { return None; }
+    let models = catalog["models"].as_array()?;
+    if lock["model"].as_str().is_some_and(|id| models.iter().any(|model| model["id"] == id)) { return None; }
+    let normalized = normalize_model_fields(provider, lock, catalog)?;
+    let mut migrated = lock.clone();
+    migrated["model"] = normalized["model"].clone();
+    migrated["thinking"] = normalized["thinking"].clone();
+    if lock.get("serviceTier").is_some() {
+        match normalized["serviceTier"].as_str() {
+            Some(tier) => migrated["serviceTier"] = json!(tier),
+            None => { migrated.as_object_mut()?.remove("serviceTier"); }
+        }
+    }
+    Some(migrated)
+}
+
+async fn migrate_legacy_agent_models(st: &AppState, runtime_id: &str, catalog: &Value) -> Result<(), DispatchError> {
+    if catalog["validated"] != true || catalog["fallback"] == true { return Ok(()); }
+    let provider = catalog["provider"].as_str().unwrap_or("");
+    let agents = st.db.agent_list(true, Some(runtime_id)).map_err(agent_error)?;
+    for agent in agents {
+        let Some(fields) = normalize_model_fields(provider, &agent, catalog) else { continue; };
+        if let Ok((_updated, events)) = st.db.agent_update(agent["id"].as_str().unwrap_or(""), &fields) {
+            st.broadcast_persisted(events);
+        }
+    }
+    Ok(())
+}
+
 async fn runtime_models(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     let id = p["runtimeId"].as_str().filter(|s| !s.is_empty()).ok_or_else(|| derr("invalid_argument", "runtimeId is required", StatusCode::BAD_REQUEST))?;
     let refresh = p.get("refresh").map(|v| v.as_bool().ok_or_else(|| derr("invalid_argument", "refresh must be a boolean", StatusCode::BAD_REQUEST))).transpose()?.unwrap_or(false);
     let runtime = st.runtimes.read().await.iter().find(|r| r["id"] == id).cloned().ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
-    fetch_model_catalog(st, &runtime, refresh).await
+    let mut workflow_override = None;
+    let mut model_hint = p.get("model").and_then(Value::as_str).map(str::to_owned);
+    if let Some(session_id) = p.get("sessionId").and_then(Value::as_str) {
+        let session = st.db.session_detail(session_id).map_err(agent_error)?;
+        if session["runtimeId"] != id { return Err(derr("invalid_argument", "sessionId does not belong to runtimeId", StatusCode::BAD_REQUEST)); }
+        let (session_workflows, session_model) = session_catalog_probe(&session);
+        workflow_override = Some(session_workflows);
+        if model_hint.is_none() {
+            model_hint = session_model.or_else(|| {
+                session["agentId"].as_str().and_then(|agent_id| st.db.agent_get(agent_id).ok()).and_then(|agent| agent["model"].as_str().map(str::to_owned))
+            });
+        }
+    }
+    model_hint = normalized_catalog_model_hint(runtime["provider"].as_str().unwrap_or(""), model_hint);
+    if model_hint.as_deref().is_some_and(|model| model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_control)) {
+        return Err(derr("invalid_argument", "model must be a valid model identifier", StatusCode::BAD_REQUEST));
+    }
+    let catalog = fetch_model_catalog_for(st, &runtime, refresh, workflow_override, model_hint.as_deref()).await?;
+    if p.get("sessionId").is_none() { migrate_legacy_agent_models(st, id, &catalog).await?; }
+    Ok(catalog)
 }
 async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) -> Result<(), DispatchError> {
     for key in ["model", "thinking", "serviceTier"] {
@@ -1157,13 +1315,15 @@ async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) 
         }
     }
     let runtime = st.runtimes.read().await.iter().find(|r| r["id"] == runtime_id).cloned().ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
-    let catalog = match fetch_model_catalog(st, &runtime, false).await { Ok(c) => c, Err(_) => return Ok(()) };
+    let workflows = runtime["provider"] == "claude" && st.db.settings().ok().is_some_and(|settings| settings["claude.enableWorkflows"] == true);
+    let catalog = match fetch_model_catalog_for(st, &runtime, false, Some(workflows), value["model"].as_str()).await { Ok(c) => c, Err(_) => return Ok(()) };
     validate_option_values_against_catalog(value["model"].as_str(),value["thinking"].as_str(),value["serviceTier"].as_str(),Some(&catalog),runtime["provider"]=="codex")
 }
 fn validate_option_values_against_catalog(model_id:Option<&str>,thinking:Option<&str>,service_tier:Option<&str>,catalog:Option<&Value>,allow_standard_turn_tier:bool)->Result<(),DispatchError>{
     if service_tier==Some("fast")||(service_tier==Some("standard")&&!allow_standard_turn_tier){return Err(derr("invalid_argument","serviceTier must be a catalog tier id; standard speed is a per-turn default request",StatusCode::BAD_REQUEST));}
     let Some(catalog)=catalog.filter(|c|c["validated"]==true && c["fallback"]!=true)else{return Ok(())};
     let models=catalog["models"].as_array().ok_or_else(||derr("provider_error","runtime returned an invalid model catalog",StatusCode::BAD_GATEWAY))?;
+    if model_id.is_none() { return Err(derr("invalid_argument", "Choose a concrete model from this coding agent's catalog.", StatusCode::BAD_REQUEST)); }
     let selected=if let Some(id)=model_id{Some(models.iter().find(|m|m["id"]==id).ok_or_else(||derr("invalid_argument","model is not available in this runtime catalog",StatusCode::BAD_REQUEST))?)}else{None};
     if let Some(effort) = thinking {
         let selected_efforts = selected
@@ -1173,7 +1333,7 @@ fn validate_option_values_against_catalog(model_id:Option<&str>,thinking:Option<
             if !values.iter().any(|value| value.as_str() == Some(effort)) {
                 return Err(derr(
                     "invalid_argument",
-                    "thinking is not supported by the selected model",
+                    "The selected model does not support this effort. Choose a listed effort or reset it to the model's default.",
                     StatusCode::BAD_REQUEST,
                 ));
             }
@@ -1201,8 +1361,12 @@ fn validate_option_values_against_catalog(model_id:Option<&str>,thinking:Option<
 }
 async fn validate_exec_catalog(st:&AppState,runtime:&Value,options:&ExecOptions)->Result<(),DispatchError>{
     for (name,value) in [("model",options.model.as_deref()),("thinking",options.thinking.as_deref()),("serviceTier",options.service_tier.as_deref())]{if value.is_some_and(str::is_empty){return Err(derr("invalid_argument",&format!("{name} must be a non-empty identifier"),StatusCode::BAD_REQUEST));}}
+    let workflow_scope = (runtime["provider"] == "claude").then_some(options.enable_workflows);
+    let catalog=fetch_model_catalog_for(st,runtime,false,workflow_scope,options.model.as_deref()).await.ok();
+    if options.model.is_none() && catalog.as_ref().is_some_and(|catalog| catalog["validated"] == true && catalog["fallback"] != true) {
+        return Err(derr("invalid_argument", "Choose a concrete model before sending a prompt.", StatusCode::BAD_REQUEST));
+    }
     if options.model.is_none()&&options.thinking.is_none()&&options.service_tier.is_none(){return Ok(())}
-    let catalog=fetch_model_catalog(st,runtime,false).await.ok();
     validate_option_values_against_catalog(options.model.as_deref(),options.thinking.as_deref(),options.service_tier.as_deref(),catalog.as_ref(),runtime["provider"]=="codex")
 }
 async fn preflight_exec_options(st:&AppState,runtime:&Value,provider:&str,options:&ExecOptions)->Option<(String,DispatchError)>{
@@ -1324,7 +1488,7 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     // exec_options_for_session intentionally accepts a session shaped value.
     // Keep the agent id in that contract rather than passing agent_get's
     // differently shaped `{ id, ... }` response.
-    let options_session=if let Some(agent_id)=agent_id.as_deref(){json!({"agentId":agent_id})}else{json!({"agentId":null})};
+    let options_session=json!({"agentId":agent_id,"provider":provider});
     let base_options=exec_options_for_session(st,&options_session)?;
     let (mut exec_options,model_lock)=resolve_session_model_lock(st,&runtime,base_options).await;
     let id = Uuid::new_v4().to_string();
@@ -1507,12 +1671,24 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         )
     })?;
     let base_options = exec_options_for_session(st, &row)?;
-    let (exec_options, model_lock) = if row["modelLock"].is_object() {
-        (base_options, row["modelLock"].clone())
+    let (exec_options, model_lock, migrate_lock) = if row["modelLock"].is_object() {
+        let current_lock = row["modelLock"].clone();
+        let catalog = fetch_model_catalog(st, &rt, false).await.ok();
+        let migrated = catalog.as_ref().and_then(|catalog| normalize_legacy_session_model_lock(&provider, &current_lock, catalog));
+        if let Some(model_lock) = migrated {
+            let mut options = base_options;
+            options.model = model_lock["model"].as_str().map(str::to_owned);
+            options.thinking = model_lock["thinking"].as_str().map(str::to_owned);
+            if current_lock.get("serviceTier").is_some() { options.service_tier = model_lock.get("serviceTier").and_then(Value::as_str).map(str::to_owned); }
+            (options, model_lock, true)
+        } else {
+            (base_options, current_lock, false)
+        }
     } else {
-        resolve_session_model_lock(st, &rt, base_options).await
+        let (options, lock) = resolve_session_model_lock(st, &rt, base_options).await;
+        (options, lock, false)
     };
-    if !row["modelLock"].is_object() {
+    if !row["modelLock"].is_object() || migrate_lock {
         let session = st.db.set_session_model_lock(&sid, &model_lock).map_err(agent_error)?;
         st.emit("session.changed", session).await;
     }
@@ -1646,7 +1822,7 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     let current = exec_options_for_session(st, &row)?;
     let model = match p.get("model") {
         None => current.model.clone(),
-        Some(Value::Null) => None,
+        Some(Value::Null) => return Err(derr("invalid_argument", "Choose a concrete model. Conversation model selections cannot be unset.", StatusCode::BAD_REQUEST)),
         Some(Value::String(value)) if !value.trim().is_empty() => Some(value.clone()),
         _ => return Err(derr("invalid_argument", "model must be a non-empty identifier or null", StatusCode::BAD_REQUEST)),
     };
@@ -1692,6 +1868,15 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     options.model = model.clone();
     options.thinking = thinking.clone();
     let mut lock = json!({"model":options.model,"thinking":options.thinking});
+    // Workflow eligibility is captured per conversation at creation time.
+    // Model, effort, and speed edits must not inherit a later global setting.
+    if row["provider"] == "claude" {
+        // A legacy lock has no opt-in record, so keep Claude's native default
+        // for that existing conversation instead of inheriting today's global.
+        let workflows = previous.get("enableWorkflows").and_then(Value::as_bool).unwrap_or(false);
+        options.enable_workflows = workflows;
+        lock["enableWorkflows"] = json!(workflows);
+    }
     for key in ["serviceTier", "approvalMode", "planMode"] {
         if let Some(value) = previous.get(key) { lock[key] = value.clone(); }
     }
@@ -2133,6 +2318,26 @@ fn completed_tool_state(raw: &Value) -> &'static str {
     }
 }
 
+fn merge_context_measurement(
+    previous_used: Option<u64>,
+    previous_size: Option<u64>,
+    previous_model: Option<String>,
+    previous_estimated: bool,
+    used: Option<u64>,
+    size: Option<u64>,
+    model: Option<String>,
+    estimated: bool,
+) -> (Option<u64>, Option<u64>, Option<String>, bool) {
+    let changed_model = model.as_ref().is_some_and(|current| previous_model.as_ref().is_some_and(|previous| previous != current));
+    let context_used = if changed_model { used } else { used.or(previous_used) };
+    let context_size = if changed_model { size } else { size.or(previous_size) };
+    let context_estimated = if changed_model || used.is_some() { estimated }
+        else if previous_used.is_some() { previous_estimated }
+        else if size.is_some() { estimated }
+        else { previous_estimated };
+    (context_used, context_size, model.or(previous_model), context_estimated)
+}
+
 async fn forward_events_with_timeouts(
     st: AppState,
     sid: String,
@@ -2278,13 +2483,14 @@ async fn forward_events_with_timeouts(
                     Ok(None) | Err(_) => continue,
                 }
             }
-            AgentEvent::ContextUpdated { used, size } => {
-                let (previous_used, previous_size) = st.db.session_context(&sid).unwrap_or((None, None));
-                let context_used = used.or(previous_used);
-                let context_size = size.or(previous_size);
-                if context_used.is_none() && context_size.is_none() { continue; }
-                ("session.context.updated", json!({"sessionId":sid,"contextUsed":context_used,"contextSize":context_size}))
+            AgentEvent::ContextUpdated { used, size, model, estimated } => {
+                let (previous_used, previous_size, previous_model, previous_estimated) = st.db.session_context_state(&sid).unwrap_or((None, None, None, false));
+                let model_changed = model.as_ref().is_some_and(|current| previous_model.as_ref() != Some(current));
+                let (context_used, context_size, context_model, context_estimated) = merge_context_measurement(previous_used, previous_size, previous_model, previous_estimated, used, size, model, estimated);
+                if context_used.is_none() && context_size.is_none() && !model_changed { continue; }
+                ("session.context.updated", json!({"sessionId":sid,"contextUsed":context_used,"contextSize":context_size,"contextModel":context_model,"contextEstimated":context_estimated}))
             }
+            AgentEvent::ContextReset => ("session.context.reset", json!({"sessionId":sid})),
             AgentEvent::AssistantDelta { text } => {
                 let m = st
                     .db
@@ -2438,12 +2644,15 @@ async fn forward_events_with_timeouts(
             AgentEvent::UsageReport { turn_id, report } => {
                 let timestamp = Utc::now().to_rfc3339();
                 let model = report.model.clone();
-                if report.context_used.is_some() || report.context_size.is_some() {
-                    let (previous_used, previous_size) = st.db.session_context(&sid).unwrap_or((None, None));
+                if report.context_used.is_some() || report.context_size.is_some() || report.model.is_some() {
+                    let (previous_used, previous_size, previous_model, previous_estimated) = st.db.session_context_state(&sid).unwrap_or((None, None, None, false));
+                    let (context_used, context_size, context_model, context_estimated) = merge_context_measurement(previous_used, previous_size, previous_model, previous_estimated, report.context_used, report.context_size, report.model.clone(), false);
                     st.emit("session.context.updated", json!({
                         "sessionId": sid,
-                        "contextUsed": report.context_used.or(previous_used),
-                        "contextSize": report.context_size.or(previous_size),
+                        "contextUsed": context_used,
+                        "contextSize": context_size,
+                        "contextModel": context_model,
+                        "contextEstimated": context_estimated,
                     })).await;
                 }
                 let provider_update_id = report
@@ -3270,6 +3479,30 @@ mod phase2a_tests {
         }
         let _ = std::fs::remove_dir_all(data_dir);
     }
+    struct WorkflowCatalogAdapter { seen_args: Arc<StdMutex<Vec<Vec<String>>>> }
+    #[async_trait::async_trait]
+    impl AgentAdapter for WorkflowCatalogAdapter {
+        async fn model_catalog(&self, runtime: &RuntimeSpec) -> Result<bloblex_agent_core::ModelCatalog, bloblex_agent_core::AdapterError> {
+            self.seen_args.lock().unwrap().push(runtime.args.clone());
+            let workflows = runtime.args.windows(2).any(|args| args[0] == "--settings" && args[1].contains("enableWorkflows"));
+            let mut effort = vec!["low".into(), "high".into(), "xhigh".into(), "max".into()];
+            if workflows { effort.push("ultracode".into()); }
+            let tiers = vec![bloblex_agent_core::ServiceTier { id:"priority".into(), name:"Fast".into() }];
+            let row = |id: &str, name: &str| bloblex_agent_core::ModelInfo {
+                id:id.into(), display_name:name.into(), provider_id:None, supported_thinking:effort.clone(),
+                default_thinking:Some("high".into()), service_tiers:tiers.clone(), default_service_tier:None,
+                variants:None, host_dependent:true, is_default:None, group:None, availability:None, release_date:None, context_window:None,
+            };
+            Ok(bloblex_agent_core::ModelCatalog { models:vec![row("claude-sonnet-5-5", "Sonnet 5.5"), row("claude-opus-5-5", "Opus 5.5")], fetched_at:"2026-10-12T00:00:00Z".into(), expires_at:"2026-10-12T00:01:00Z".into(), fallback:false, source:"fake_claude_catalog".into(), validated:true })
+        }
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, _: NewSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn resume_session(&self, _: &RuntimeSpec, _: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn prompt(&self, _: &SessionHandle, _: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+    }
 
     #[tokio::test]
     async fn reply_prompt_is_session_scoped_data_and_persists_a_bounded_snapshot() {
@@ -3651,6 +3884,35 @@ mod phase2a_tests {
         assert_eq!(st.db.session_detail("resume-generic").unwrap()["providerSessionId"],"saved-provider-session");
     }
     #[tokio::test]
+    async fn context_model_only_update_is_forwarded_and_clears_hydrated_counts() {
+        let (st, mut events) = state();
+        let sid = "context-model-only";
+        st.db.create_session(sid, "rt-test", "claude", ".", "Context").unwrap();
+        st.db.push_event("session.context.updated", &json!({"sessionId":sid,"contextUsed":420,"contextSize":1000,"contextModel":"claude-sonnet-5-5","contextEstimated":true})).unwrap();
+        let adapter = Arc::new(LifecycleAdapter { reject_resume:false, allow_resume:true, resume_calls:Default::default(), new_calls:Default::default(), close_calls:Default::default() });
+        let handle = SessionHandle { session_id:sid.into(), provider_session_id:"native".into(), capabilities:bloblex_agent_core::AgentCapabilities::default() };
+        let runtime = RuntimeSpec { runtime_id:"rt-test".into(), provider:"claude".into(), executable:PathBuf::from("fake"), args:vec![], cwd:None };
+        st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime, adapter, launch_approval_mode:ApprovalMode::Ask });
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let task = tokio::spawn(forward_events_with_timeouts(st.clone(), sid.into(), "claude".into(), "rt-test".into(), rx, std::time::Duration::from_secs(1), std::time::Duration::from_secs(1)));
+        // A provider model change with no counts has to clear both values and
+        // keep the reported model (or null) in storage and the event stream.
+        tx.send(AgentEvent::ContextUpdated { used:None, size:None, model:Some("claude-opus-5-5".into()), estimated:true }).await.unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop { let event = events.recv().await.unwrap(); if event.event_type == "session.context.updated" { break event; } }
+        }).await.unwrap();
+        assert_eq!(event.payload["contextUsed"], Value::Null, "unexpected event payload: {}", event.payload);
+        assert_eq!(event.payload["contextSize"], Value::Null);
+        assert_eq!(event.payload["contextModel"], "claude-opus-5-5");
+        let hydrated = st.db.session_detail(sid).unwrap();
+        assert!(hydrated["contextUsed"].is_null());
+        assert!(hydrated["contextSize"].is_null());
+        assert_eq!(hydrated["contextModel"], "claude-opus-5-5");
+        drop(tx);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn watchdogs_expire_both_progress_windows_close_sessions_and_release_turns(){
         for semantic_progress in [false,true]{
             let(st,mut events)=state();
@@ -3914,8 +4176,8 @@ mod phase2a_tests {
         *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
         let catalog = bloblex_agent_core::ModelCatalog {
             models: vec![
-                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None },
-                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["high".into()], default_thinking:Some("high".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None },
+                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None, release_date:None, context_window:None },
+                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["high".into()], default_thinking:Some("high".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None, release_date:None, context_window:None },
             ],
             fetched_at:"2026-10-07T00:00:00Z".into(), expires_at:"2026-10-07T00:01:00Z".into(), fallback:false, source:"fake_test_catalog".into(), validated:true,
         };
@@ -3943,7 +4205,7 @@ mod phase2a_tests {
         assert!(launch.extra_args.is_empty());
         assert_eq!(launch.env.get("LANG").map(String::as_str), Some("en_GB.UTF-8"));
         assert_eq!(launch.max_concurrency, 2);
-        assert_eq!(st.db.session_detail(&sid).unwrap()["modelLock"], json!({"model":"beta","thinking":"high"}));
+        assert_eq!(st.db.session_detail(&sid).unwrap()["modelLock"], json!({"model":"beta","thinking":"high","enableWorkflows":false}));
 
         st.db.agent_update(agent["id"].as_str().unwrap(), &json!({"model":"alpha","thinking":"low","instructions":"Changed blob defaults."})).unwrap();
         let session = st.db.session_detail(&sid).unwrap();
@@ -4082,7 +4344,7 @@ mod phase2a_tests {
             id: id.into(), display_name: display_name.into(), provider_id: None,
             supported_thinking: Vec::new(), default_thinking: None, service_tiers: Vec::new(),
             default_service_tier: None, variants: None, host_dependent: true,
-            is_default, group: None, availability: None,
+            is_default, group: None, availability: None, release_date: None, context_window: None,
         };
         let catalog = bloblex_agent_core::ModelCatalog {
             models: vec![
@@ -4139,8 +4401,8 @@ mod phase2a_tests {
         *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
         let catalog = bloblex_agent_core::ModelCatalog {
             models: vec![
-                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None },
-                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["low".into(),"high".into()], default_thinking:Some("high".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None },
+                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None, release_date:None, context_window:None },
+                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["low".into(),"high".into()], default_thinking:Some("high".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None, release_date:None, context_window:None },
             ],
             fetched_at:"2026-10-06T00:00:00Z".into(), expires_at:"2026-10-06T00:01:00Z".into(), fallback:false, source:"fake_test_catalog".into(), validated:true,
         };
@@ -4190,8 +4452,8 @@ mod phase2a_tests {
         let tier = bloblex_agent_core::ServiceTier { id:"priority".into(), name:"Fast".into() };
         let catalog = bloblex_agent_core::ModelCatalog {
             models: vec![
-                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:vec![tier], default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None },
-                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None },
+                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:vec![tier], default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None, release_date:None, context_window:None },
+                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None, release_date:None, context_window:None },
             ],
             fetched_at:"2026-10-10T00:00:00Z".into(), expires_at:"2026-10-10T00:01:00Z".into(), fallback:false, source:"fake_test_catalog".into(), validated:true,
         };
@@ -4258,8 +4520,8 @@ mod phase2a_tests {
         *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
         let catalog = bloblex_agent_core::ModelCatalog {
             models: vec![
-                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None },
-                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["high".into()], default_thinking:Some("high".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None },
+                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None, release_date:None, context_window:None },
+                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["high".into()], default_thinking:Some("high".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None, release_date:None, context_window:None },
             ],
             fetched_at:"2026-10-07T00:00:00Z".into(), expires_at:"2026-10-07T00:01:00Z".into(), fallback:false, source:"fake_test_catalog".into(), validated:true,
         };
@@ -4284,7 +4546,7 @@ mod phase2a_tests {
             dispatch(&prompt_state,"session.prompt",json!({"sessionId":sid,"text":"must not be stored"})).await
         });
         started.await;
-        assert_eq!(st.db.session_detail(sid).unwrap()["modelLock"],json!({"model":"alpha","thinking":"low"}));
+        assert_eq!(st.db.session_detail(sid).unwrap()["modelLock"],json!({"model":"alpha","thinking":"low","enableWorkflows":false}));
 
         dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"beta","thinking":"high","confirmModelChange":true})).await.unwrap();
         adapter.release.notify_one();
@@ -4315,6 +4577,8 @@ mod phase2a_tests {
                 is_default: None,
                 group: None,
                 availability: None,
+                release_date: None,
+                context_window: None,
 
             }],
             fetched_at: "2026-10-03T00:00:00Z".into(),
@@ -4353,13 +4617,137 @@ mod phase2a_tests {
         let model_only_catalog=json!({"fallback":false,"validated":true,"models":[{"id":"opencode-go/deepseek-v4.1-flash","supportedThinking":[]}]});
         assert!(validate_option_values_against_catalog(Some("opencode-go/deepseek-v4.1-flash"),Some("high"),None,Some(&model_only_catalog),false).is_ok());
         assert_eq!(validate_option_values_against_catalog(Some("missing"),None,None,Some(&authoritative),false).unwrap_err().1.code,"invalid_argument");
-        assert_eq!(validate_option_values_against_catalog(Some("claude-sonnet-test"),Some("xhigh"),None,Some(&authoritative),false).unwrap_err().1.message,"thinking is not supported by the selected model");
+        assert_eq!(validate_option_values_against_catalog(Some("claude-sonnet-test"),Some("xhigh"),None,Some(&authoritative),false).unwrap_err().1.message,"The selected model does not support this effort. Choose a listed effort or reset it to the model's default.");
         assert_eq!(validate_option_values_against_catalog(Some("claude-sonnet-test"),None,Some("slow"),Some(&authoritative),false).unwrap_err().1.message,"serviceTier is not supported by the selected model");
         assert_eq!(validate_option_values_against_catalog(Some("claude-sonnet-test"),Some("high"),Some("fast"),Some(&authoritative),false).unwrap_err().1.code,"invalid_argument");
         assert!(validate_option_values_against_catalog(Some("claude-sonnet-test"),None,Some("standard"),Some(&authoritative),true).is_ok());
         assert_eq!(validate_option_values_against_catalog(Some("claude-sonnet-test"),None,Some("standard"),Some(&authoritative),false).unwrap_err().1.code,"invalid_argument");
         let(st,_)=state();let empty=ExecOptions{model:Some(String::new()),..ExecOptions::default()};assert_eq!(validate_exec_catalog(&st,&json!({"id":"rt-test","provider":"codex"}),&empty).await.unwrap_err().1.code,"invalid_argument");
     }
+
+    #[test]
+    fn legacy_session_model_locks_migrate_only_unset_or_alias_models() {
+        let catalog = json!({"provider":"claude","validated":true,"fallback":false,"models":[
+            {"id":"claude-sonnet-test","displayName":"Sonnet Test","supportedThinking":["low","high"],"defaultThinking":"high","serviceTiers":[],"hostDependent":true}
+        ]});
+        let old_alias = json!({"model":"default","thinking":"low","planMode":true});
+        let migrated = normalize_legacy_session_model_lock("claude", &old_alias, &catalog).unwrap();
+        assert_eq!(migrated["model"], "claude-sonnet-test");
+        assert_eq!(migrated["thinking"], "low");
+        assert_eq!(migrated["planMode"], true);
+        let pinned = json!({"model":"claude-sonnet-test","thinking":"legacy-invalid"});
+        assert!(normalize_legacy_session_model_lock("claude", &pinned, &catalog).is_none(), "a concrete saved model remains pinned even when another lock value needs repair");
+        let unavailable = json!({"model":"provider-removed/model","thinking":null});
+        assert!(normalize_legacy_session_model_lock("claude", &unavailable, &catalog).is_none());
+    }
+
+    #[test]
+    fn fresh_measured_context_replaces_estimated_provenance_but_sparse_update_preserves_it() {
+        let sparse = merge_context_measurement(Some(500), Some(1000), Some("claude-sonnet-5-5".into()), true, None, Some(200000), Some("claude-sonnet-5-5".into()), false);
+        assert_eq!(sparse, (Some(500), Some(200000), Some("claude-sonnet-5-5".into()), true));
+        let invalid_capacity = merge_context_measurement(Some(500), Some(1000), Some("claude-sonnet-5-5".into()), true, Some(600), None, Some("claude-sonnet-5-5".into()), false);
+        assert_eq!(invalid_capacity, (Some(600), Some(1000), Some("claude-sonnet-5-5".into()), false), "a malformed or zero capacity normalizes to None and cannot erase the last valid capacity");
+        let measured = merge_context_measurement(Some(500), Some(1000), Some("claude-sonnet-5-5".into()), true, Some(600), Some(200000), Some("claude-sonnet-5-5".into()), false);
+        assert_eq!(measured, (Some(600), Some(200000), Some("claude-sonnet-5-5".into()), false));
+    }
+
+    #[test]
+    fn claude_catalog_probe_targets_bloblex_sonnet_default_and_keys_workflows_to_that_probe() {
+        assert_eq!(catalog_probe_args("claude", true, None), vec!["--model", "sonnet", "--settings", r#"{"enableWorkflows":true}"#]);
+        assert_eq!(catalog_probe_args("claude", true, Some("claude-opus-5-5")), vec!["--model", "claude-opus-5-5", "--settings", r#"{"enableWorkflows":true}"#]);
+        assert_eq!(catalog_probe_args("claude", false, Some("claude-sonnet-5-5")), vec!["--model", "claude-sonnet-5-5"]);
+        assert!(catalog_probe_args("codex", true, Some("gpt-6-luna")).is_empty());
+    }
+
+    #[test]
+    fn session_catalog_uses_the_sessions_captured_workflow_setting_not_the_new_global_preference() {
+        let old = json!({"provider":"claude","modelLock":{"model":"claude-opus-5-5","enableWorkflows":false}});
+        assert_eq!(session_catalog_probe(&old), (false, Some("claude-opus-5-5".into())));
+        let opted_in = json!({"provider":"claude","modelLock":{"model":"claude-sonnet-5-5","enableWorkflows":true}});
+        assert_eq!(session_catalog_probe(&opted_in), (true, Some("claude-sonnet-5-5".into())));
+        let codex = json!({"provider":"codex","modelLock":{"model":"gpt-6-luna","enableWorkflows":true}});
+        assert_eq!(session_catalog_probe(&codex), (false, Some("gpt-6-luna".into())));
+    }
+
+    #[tokio::test]
+    async fn existing_session_catalog_and_workflow_effort_follow_its_captured_setting() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-workflow-catalog";
+        let runtime = json!({"id":runtime_id,"provider":"claude","executablePath":"unused-test-runtime","launchArgs":[],"status":"online"});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await = vec![runtime];
+        st.db.set_setting("claude.enableWorkflows", &json!(true)).unwrap();
+        let args = Arc::new(StdMutex::new(Vec::new()));
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:Arc::new(CodexAdapter::default()), claude:Arc::new(WorkflowCatalogAdapter { seen_args:args.clone() }) });
+        for (sid, enabled) in [("workflow-off-session", false), ("workflow-on-session", true)] {
+            st.db.create_session_for_agent_with_model_lock(sid, runtime_id, "claude", ".", "Chat", None, Some(&json!({"model":"claude-sonnet-5-5","thinking":"high","enableWorkflows":enabled}))).unwrap();
+            let catalog = dispatch(&st, "runtime.models", json!({"runtimeId":runtime_id,"sessionId":sid,"refresh":true})).await.unwrap();
+            let efforts = catalog["models"][0]["supportedThinking"].as_array().unwrap();
+            assert_eq!(efforts.iter().any(|effort| effort == "ultracode"), enabled);
+        }
+        let calls = args.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], ["--model", "claude-sonnet-5-5"]);
+        assert_eq!(calls[1], ["--model", "claude-sonnet-5-5", "--settings", r#"{"enableWorkflows":true}"#]);
+    }
+
+    #[tokio::test]
+    async fn model_effort_speed_updates_preserve_captured_claude_workflow_setting() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-workflow-model-update";
+        let runtime = json!({"id":runtime_id,"provider":"claude","executablePath":"unused-test-runtime","launchArgs":[],"status":"online"});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await = vec![runtime];
+        // Deliberately disagree with the old session's lock in both directions.
+        st.db.set_setting("claude.enableWorkflows", &json!(false)).unwrap();
+        let args = Arc::new(StdMutex::new(Vec::new()));
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:Arc::new(CodexAdapter::default()), claude:Arc::new(WorkflowCatalogAdapter { seen_args:args.clone() }) });
+        for (sid, enabled) in [("workflow-update-on", true), ("workflow-update-off", false)] {
+            st.db.create_session_for_agent_with_model_lock(sid, runtime_id, "claude", ".", "Chat", None, Some(&json!({"model":"claude-sonnet-5-5","thinking":"high","enableWorkflows":enabled}))).unwrap();
+            st.db.update_session_state(sid, "idle").unwrap();
+        }
+
+        let effort = dispatch(&st, "session.model.update", json!({"sessionId":"workflow-update-on","thinking":"ultracode"})).await.unwrap();
+        assert_eq!(effort["session"]["modelLock"]["enableWorkflows"], true);
+        assert_eq!(exec_options_for_session(&st, &st.db.session_detail("workflow-update-on").unwrap()).unwrap().enable_workflows, true);
+        let speed = dispatch(&st, "session.model.update", json!({"sessionId":"workflow-update-on","serviceTier":"priority"})).await.unwrap();
+        assert_eq!(speed["session"]["modelLock"]["enableWorkflows"], true);
+        assert_eq!(speed["session"]["modelLock"]["thinking"], "ultracode");
+        let changed = dispatch(&st, "session.model.update", json!({"sessionId":"workflow-update-on","model":"claude-opus-5-5","serviceTier":"priority","confirmModelChange":true})).await.unwrap();
+        assert_eq!(changed["session"]["modelLock"]["enableWorkflows"], true);
+        assert_eq!(changed["session"]["modelLock"]["thinking"], "ultracode");
+
+        let catalog = dispatch(&st, "runtime.models", json!({"runtimeId":runtime_id,"sessionId":"workflow-update-on","refresh":true})).await.unwrap();
+        let opus = catalog["models"].as_array().unwrap().iter().find(|model| model["id"] == "claude-opus-5-5").unwrap();
+        assert!(opus["supportedThinking"].as_array().unwrap().iter().any(|value| value == "ultracode"));
+        let launch = exec_options_for_session(&st, &st.db.session_detail("workflow-update-on").unwrap()).unwrap();
+        assert_eq!(launch.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(launch.thinking.as_deref(), Some("ultracode"));
+        assert_eq!(launch.service_tier.as_deref(), Some("priority"));
+        assert!(launch.enable_workflows);
+        // Prompt preflight still validates the selected Ultracode against this
+        // same session-scoped catalog after the persisted lock is hydrated.
+        validate_exec_catalog(&st, &json!({"id":runtime_id,"provider":"claude","executablePath":"unused-test-runtime","launchArgs":[]}), &launch).await.unwrap();
+
+        st.db.set_setting("claude.enableWorkflows", &json!(true)).unwrap();
+        let off = dispatch(&st, "session.model.update", json!({"sessionId":"workflow-update-off","model":"claude-opus-5-5","thinking":"high","confirmModelChange":true})).await.unwrap();
+        assert_eq!(off["session"]["modelLock"]["enableWorkflows"], false);
+        assert!(!exec_options_for_session(&st, &st.db.session_detail("workflow-update-off").unwrap()).unwrap().enable_workflows);
+        let off_catalog = dispatch(&st, "runtime.models", json!({"runtimeId":runtime_id,"sessionId":"workflow-update-off","refresh":true})).await.unwrap();
+        let opus = off_catalog["models"].as_array().unwrap().iter().find(|model| model["id"] == "claude-opus-5-5").unwrap();
+        assert!(!opus["supportedThinking"].as_array().unwrap().iter().any(|value| value == "ultracode"));
+        let calls = args.lock().unwrap();
+        assert!(calls.iter().any(|args| args == &["--model", "claude-opus-5-5", "--settings", r#"{"enableWorkflows":true}"#]));
+        assert!(calls.iter().any(|args| args == &["--model", "claude-opus-5-5"]));
+    }
+
+    #[test]
+    fn catalog_probe_replaces_only_claude_provider_default_aliases() {
+        assert_eq!(normalized_catalog_model_hint("claude", Some("Default (recommended)".into())), Some("sonnet".into()));
+        assert_eq!(normalized_catalog_model_hint("claude", Some("claude-opus-5-5".into()),), Some("claude-opus-5-5".into()));
+        assert_eq!(normalized_catalog_model_hint("codex", Some("provider default".into())), Some("provider default".into()));
+    }
+
     #[tokio::test]
     async fn agent_list_without_capability_is_rejected_before_dispatch(){
         let(st,_)=state();let request=RpcRequest{v:PROTOCOL_VERSION,id:"auth-test".into(),method:"agent.list".into(),params:json!({})};

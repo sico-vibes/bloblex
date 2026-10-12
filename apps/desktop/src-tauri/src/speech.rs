@@ -57,6 +57,7 @@ enum WorkerCommand {
 }
 
 /// One dictation session's resolved engine decision, handed to the worker.
+#[derive(Clone, Copy)]
 struct SessionPlan {
     owner: DictationOwner,
     engine: ResolvedEngine,

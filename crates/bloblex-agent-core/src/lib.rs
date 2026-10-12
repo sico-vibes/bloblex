@@ -935,6 +935,29 @@ pub struct SessionHandle {
     pub capabilities: AgentCapabilities,
 }
 
+/// A provider-structured recovery signal for a failed turn. Internal to the
+/// daemon; it is never a wire event. Emitted only when a provider supplies
+/// structured evidence, immediately before the terminal error. A missing hint
+/// is preferred to a wrong one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecoveryHintKind { AuthRequired, RateLimited, Overloaded }
+impl RecoveryHintKind {
+    pub fn as_str(self) -> &'static str {
+        match self { Self::AuthRequired => "authRequired", Self::RateLimited => "rateLimited", Self::Overloaded => "overloaded" }
+    }
+}
+
+/// Why the provider's conversation context changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextChangeReason { Compaction, FreshSession }
+impl ContextChangeReason {
+    pub fn as_str(self) -> &'static str {
+        match self { Self::Compaction => "compaction", Self::FreshSession => "fresh_session" }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "payload")]
 pub enum AgentEvent {
@@ -1014,6 +1037,19 @@ pub enum AgentEvent {
     PromptAccepted,
     /// Positive provider evidence that the current context cannot accept more input.
     ContextExhausted,
+    /// Provider-structured evidence about a failed turn, emitted immediately
+    /// before the terminal `Error`. `retry_after_secs` is set only when the
+    /// provider states a wait or reset explicitly. Internal to the daemon.
+    RecoveryHint {
+        kind: RecoveryHintKind,
+        retry_after_secs: Option<u64>,
+    },
+    /// The provider's conversation context changed. `context_lost` is true only
+    /// when earlier context is genuinely gone (a fresh session), not a summary.
+    ContextChanged {
+        reason: ContextChangeReason,
+        context_lost: bool,
+    },
     Error {
         message: String,
     },
@@ -1099,6 +1135,19 @@ mod exec_option_tests {
     }
     #[test]
     fn instruction_sha256_is_standard_and_empty_is_absent(){assert_eq!(instruction_sha256("abc").as_deref(),Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));assert_eq!(instruction_sha256(""),None);}
+
+    #[test]
+    fn recovery_hint_and_context_changed_serialize_with_expected_names() {
+        let hint = AgentEvent::RecoveryHint { kind: RecoveryHintKind::AuthRequired, retry_after_secs: None };
+        assert_eq!(serde_json::to_value(&hint).unwrap(), serde_json::json!({"type":"recovery_hint","payload":{"kind":"authRequired","retry_after_secs":null}}));
+        let hint = AgentEvent::RecoveryHint { kind: RecoveryHintKind::RateLimited, retry_after_secs: Some(30) };
+        assert_eq!(serde_json::to_value(&hint).unwrap(), serde_json::json!({"type":"recovery_hint","payload":{"kind":"rateLimited","retry_after_secs":30}}));
+        let changed = AgentEvent::ContextChanged { reason: ContextChangeReason::FreshSession, context_lost: true };
+        assert_eq!(serde_json::to_value(&changed).unwrap(), serde_json::json!({"type":"context_changed","payload":{"reason":"fresh_session","context_lost":true}}));
+        assert_eq!(serde_json::to_value(AgentEvent::ContextChanged { reason: ContextChangeReason::Compaction, context_lost: false }).unwrap()["payload"]["reason"], "compaction");
+        assert_eq!(RecoveryHintKind::Overloaded.as_str(), "overloaded");
+        assert_eq!(ContextChangeReason::FreshSession.as_str(), "fresh_session");
+    }
 
 
     #[test]

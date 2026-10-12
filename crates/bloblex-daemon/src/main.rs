@@ -12,7 +12,7 @@ use bloblex_adapter_acp::AcpAdapter;
 use bloblex_adapter_claude::ClaudeAdapter;
 use bloblex_adapter_codex::CodexAdapter;
 use bloblex_agent_core::{
-    AgentAdapter, AgentEvent, ApprovalMode, ExecOptions, NewSessionRequest, PromptAttachment, PromptRequest, ResumeSessionRequest, RuntimeSpec,
+    AgentAdapter, AgentEvent, ApprovalMode, ContextChangeReason, ExecOptions, NewSessionRequest, PromptAttachment, PromptRequest, ResumeSessionRequest, RuntimeSpec,
     SessionHandle,
 };
 use bloblex_protocol::{
@@ -131,6 +131,15 @@ fn failure_public_message(failure_class: &str) -> &'static str {
         "provider_error" => "The provider reported a turn error.",
         "permission_denied" => "A required permission was denied.",
         _ => "The turn could not be completed.",
+    }
+}
+
+/// The transcript notice shown when the provider's conversation context
+/// changes. Kept here so the event path and the resume fallback cannot drift.
+fn context_change_notice(reason: ContextChangeReason) -> &'static str {
+    match reason {
+        ContextChangeReason::Compaction => "Conversation compacted. Earlier details may now be summarised.",
+        ContextChangeReason::FreshSession => "Started a fresh session. The agent no longer has earlier context.",
     }
 }
 
@@ -1789,6 +1798,14 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         ));
     }
     if startup_options.approval_mode==ApprovalMode::Bypass&&matches!(provider.as_str(),"claude"|"codex"){st.emit("permission.bypass_active",json!({"sessionId":sid,"agentId":row["agentId"],"providerMode":provider_mode(&provider)})).await;}
+    // A resume that fell back to a brand-new provider session lost the earlier
+    // context. The adapter cannot announce this itself on this path, so the
+    // daemon appends the same transcript notice the `ContextChanged` event path
+    // uses. This cannot also fire for the Codex adapter's own crash fallback:
+    // that path runs on `prompt`, not on `session.resume`.
+    if resume_fallback {
+        team::note(st, &sid, context_change_notice(ContextChangeReason::FreshSession), json!({"kind":"context_reset","reason":"fresh_session","contextLost":true})).await;
+    }
     let state = st.clone();
     let sid_for_events = sid.clone();
     let provider_for_events = provider.clone();
@@ -2769,6 +2786,22 @@ async fn forward_events_with_timeouts(
                 if let Some(t) = turn.as_deref() {
                     let _ = st.db.merge_turn_data(t, &json!({"delivery":"acknowledged"}));
                     st.accepted_turns.lock().await.insert(t.to_owned());
+                }
+                continue;
+            }
+            AgentEvent::RecoveryHint { kind, retry_after_secs } => {
+                if let Some(t) = turn.as_deref() {
+                    let _ = st.db.merge_turn_data(t, &json!({"hint":{"kind":kind.as_str(),"retryAfterSecs":retry_after_secs}}));
+                }
+                continue;
+            }
+            AgentEvent::ContextChanged { reason, context_lost } => {
+                let notice = context_change_notice(reason);
+                let meta = json!({"kind":"context_reset","reason":reason.as_str(),"contextLost":context_lost});
+                team::note(&st, &sid, notice, meta).await;
+                st.emit("session.replaced", json!({"sessionId":sid,"reason":reason.as_str(),"contextLost":context_lost})).await;
+                if context_lost {
+                    st.emit("session.context.reset", json!({"sessionId":sid})).await;
                 }
                 continue;
             }
@@ -4275,6 +4308,70 @@ mod phase2a_tests {
         drop(tx);
         task.await.unwrap();
         assert_eq!(st.db.turn_data("t-delivery-unknown").unwrap()["delivery"], "unknown");
+    }
+    #[tokio::test]
+    async fn recovery_hint_merges_into_turn_data_before_the_error() {
+        let (st, _events) = state();
+        let runtime = || RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
+        let sid = "s-recovery-hint";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Hint").unwrap();
+        st.db.create_turn("t-recovery-hint", sid).unwrap();
+        st.db.merge_turn_data("t-recovery-hint", &json!({"existing":"kept"})).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.into(), "t-recovery-hint".into());
+        let handle = SessionHandle { session_id: sid.into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime: runtime(), adapter: Arc::new(PolicyAdapter::default()), launch_approval_mode: ApprovalMode::Ask });
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let task = tokio::spawn(forward_events(st.clone(), sid.into(), "codex".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::PromptAccepted).await.unwrap();
+        tx.send(AgentEvent::RecoveryHint { kind: bloblex_agent_core::RecoveryHintKind::AuthRequired, retry_after_secs: None }).await.unwrap();
+        tx.send(AgentEvent::Error { message: "private provider detail".into() }).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        let data = st.db.turn_data("t-recovery-hint").unwrap();
+        assert_eq!(data["delivery"], "acknowledged", "the 1A delivery fact survives");
+        assert_eq!(data["existing"], "kept", "existing turn data keys survive the hint merge");
+        // `merge_turn_data` is a JSON Merge Patch (RFC 7386), which drops a null
+        // member, so an absent wait is stored as `hint` without `retryAfterSecs`.
+        assert_eq!(data["hint"]["kind"], "authRequired");
+        assert!(data["hint"].get("retryAfterSecs").is_none());
+    }
+    #[tokio::test]
+    async fn context_changed_persists_one_notice_and_only_resets_when_context_is_lost() {
+        async fn drive(st: &AppState, sid: &str, event: AgentEvent, events: &mut broadcast::Receiver<EventEnvelope>) -> Vec<String> {
+            st.db.create_session(sid, "rt-test", "codex", ".", "Context").unwrap();
+            st.db.update_session_state(sid, "idle").unwrap();
+            let handle = SessionHandle { session_id: sid.into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+            st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime: RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None }, adapter: Arc::new(PolicyAdapter::default()), launch_approval_mode: ApprovalMode::Ask });
+            let (tx, rx) = tokio::sync::mpsc::channel(4);
+            let task = tokio::spawn(forward_events(st.clone(), sid.into(), "codex".into(), "rt-test".into(), rx));
+            tx.send(event).await.unwrap();
+            drop(tx);
+            task.await.unwrap();
+            let mut types = Vec::new();
+            while let Ok(event) = events.try_recv() { if event.payload["sessionId"] == sid { types.push(event.event_type.clone()); } }
+            types
+        }
+        let (st, mut events) = state();
+        let compaction = drive(&st, "s-context-compact", AgentEvent::ContextChanged { reason: ContextChangeReason::Compaction, context_lost: false }, &mut events).await;
+        assert_eq!(compaction.iter().filter(|kind| *kind == "message.completed").count(), 1);
+        assert_eq!(compaction.iter().filter(|kind| *kind == "session.replaced").count(), 1);
+        assert!(!compaction.contains(&"session.context.reset".to_owned()), "compaction already emits its reset through ContextReset");
+        let messages = st.db.session_detail("s-context-compact").unwrap()["messages"].clone();
+        let notices = messages.as_array().unwrap().iter().filter(|message| message["role"] == "notice").collect::<Vec<_>>();
+        assert_eq!(notices.len(), 1, "exactly one persisted notice");
+        assert_eq!(notices[0]["content"], "Conversation compacted. Earlier details may now be summarised.");
+        assert_eq!(notices[0]["meta"], json!({"kind":"context_reset","reason":"compaction","contextLost":false}));
+
+        let fresh = drive(&st, "s-context-fresh", AgentEvent::ContextChanged { reason: ContextChangeReason::FreshSession, context_lost: true }, &mut events).await;
+        assert_eq!(fresh.iter().filter(|kind| *kind == "message.completed").count(), 1);
+        assert_eq!(fresh.iter().filter(|kind| *kind == "session.replaced").count(), 1);
+        assert_eq!(fresh.iter().filter(|kind| *kind == "session.context.reset").count(), 1, "a lost context must reset the meter exactly once");
+        let messages = st.db.session_detail("s-context-fresh").unwrap()["messages"].clone();
+        let notices = messages.as_array().unwrap().iter().filter(|message| message["role"] == "notice").collect::<Vec<_>>();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0]["content"], "Started a fresh session. The agent no longer has earlier context.");
+        assert_eq!(notices[0]["meta"], json!({"kind":"context_reset","reason":"fresh_session","contextLost":true}));
     }
     #[tokio::test]
     async fn session_started_refreshes_saved_and_active_provider_session_ids() {

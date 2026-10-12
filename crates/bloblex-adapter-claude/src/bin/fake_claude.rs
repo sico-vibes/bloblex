@@ -60,6 +60,9 @@ fn main() {
         } else if input["type"] == "control_request" && input["request"]["subtype"] == "get_settings" {
             emit(json!({"type":"control_response","response":{"subtype":"success","request_id":input["request_id"],"response":{"effective":{},"sources":[],"applied":{"model":"claude-sonnet-test","effort":"low","ultracodeAvailable":false}}}}));
         } else if input["type"] == "user" {
+            if args.iter().any(|arg| arg == "--fake-compact-boundary") {
+                emit(json!({"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":120000}}));
+            }
             if let Some(count) = args.iter().find_map(|arg| arg.strip_prefix("--fake-api-retry-count=")).and_then(|count| count.parse::<u32>().ok()) {
                 for attempt in 1..=count {
                     emit(json!({"type":"system","subtype":"api_retry","attempt":attempt,"max_attempts":count,

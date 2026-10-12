@@ -155,11 +155,19 @@ fn main() {
                         json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":thread_id,"turn":{"id":tid,"status":"completed"}}}),
                     ]
                 } else {
+                    let (status, error) = match mode.as_str() {
+                        "context" => ("failed", json!({"message":"maximum context length exceeded"})),
+                        "fail" => ("failed", json!({"message":"fake failure"})),
+                        "fail-auth" => ("failed", json!({"message":"unauthorized","codexErrorInfo":"unauthorized"})),
+                        "fail-rate" => ("failed", json!({"message":"rate limit exceeded","codexErrorInfo":"rateLimitExceeded"})),
+                        "fail-overload" => ("failed", json!({"message":"server overloaded","codexErrorInfo":"serverOverloaded"})),
+                        _ => ("completed", Value::Null),
+                    };
                     vec![
                         json!({"jsonrpc":"2.0","method":"turn/started","params":{"threadId":thread_id,"turn":{"id":tid}}}),
                         json!({"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":thread_id,"turnId":tid,"delta":format!("answer:{thread_id}")}}),
                         json!({"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"threadId":thread_id,"turnId":tid,"tokenUsage":{"last":{"inputTokens":10,"cachedInputTokens":2,"cacheWriteInputTokens":1,"outputTokens":4,"reasoningOutputTokens":3,"totalTokens":17}}}}),
-                        json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":thread_id,"turn":{"id":tid,"status":if mode=="fail"||mode=="context"{"failed"}else{"completed"},"error":if mode=="context"{json!({"message":"maximum context length exceeded"})}else if mode=="fail"{json!({"message":"fake failure"})}else{Value::Null}}}}),
+                        json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":thread_id,"turn":{"id":tid,"status":status,"error":error}}}),
                     ]
                 };
                 (result, notes)

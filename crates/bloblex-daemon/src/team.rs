@@ -332,7 +332,7 @@ pub fn reference_context(st: &AppState, session_id: &str, refs: &Value) -> Optio
 }
 
 /// A visible note in a conversation that is not a prompt (e.g. "Messaged Codex").
-async fn note(st: &AppState, session_id: &str, content: &str, meta: Value) {
+pub(crate) async fn note(st: &AppState, session_id: &str, content: &str, meta: Value) {
     if let Ok(message) = st.db.append_message_with_data(session_id, "", "notice", content, &json!({"meta":meta})) {
         if !message.is_null() {
             st.emit("message.completed", json!({"sessionId":session_id,"messageId":message["id"],"role":"notice","message":message})).await;

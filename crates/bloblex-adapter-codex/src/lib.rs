@@ -461,6 +461,9 @@ impl CodexAdapter {
                             ) {
                                 let _ = r.events.enqueue(AgentEvent::ContextExhausted);
                             } else {
+                                if let Some(kind) = recovery_hint_for_codex_error(&p["turn"]["error"]) {
+                                    let _ = r.events.enqueue(AgentEvent::RecoveryHint { kind, retry_after_secs: None });
+                                }
                                 let _ = r.events.enqueue(AgentEvent::Error { message: p["turn"]["error"].to_string() });
                             }
                         }
@@ -595,6 +598,7 @@ impl CodexAdapter {
         new.process.routes.lock().await.insert(id.clone(), Arc::downgrade(&new));
         if fresh {
             let _ = new.events.enqueue(AgentEvent::SessionStarted { provider_session_id: id.clone() });
+            let _ = new.events.enqueue(AgentEvent::ContextChanged { reason: ContextChangeReason::FreshSession, context_lost: true });
         }
         self.sessions.lock().await.insert(session_id.to_owned(), new.clone());
         Ok(new)
@@ -729,6 +733,18 @@ fn resume_rejected_evidence(message: &str) -> bool {
         && ["not found", "expired", "does not exist", "unknown id"]
             .iter()
             .any(|evidence| message.contains(evidence))
+}
+
+/// Maps the structured `CodexErrorInfo` on a failed turn to a recovery hint.
+/// Only the string variants named by the generated app-server schema are used;
+/// free-text `message` values and object variants produce no hint.
+fn recovery_hint_for_codex_error(error: &Value) -> Option<RecoveryHintKind> {
+    match error["codexErrorInfo"].as_str() {
+        Some("unauthorized") => Some(RecoveryHintKind::AuthRequired),
+        Some("rateLimitExceeded") => Some(RecoveryHintKind::RateLimited),
+        Some("serverOverloaded") => Some(RecoveryHintKind::Overloaded),
+        _ => None,
+    }
 }
 
 fn context_exhausted_evidence(message: &str) -> bool {
@@ -1660,6 +1676,16 @@ mod tests {
         assert_eq!(title(json!({"type":"dynamicToolCall","id":"d","namespace":"search","tool":"find_page"})), "search · find_page");
         assert_eq!(title(json!({"type":"webSearch","id":"w","query":"tauri drag"})), "Searched: tauri drag");
         assert_eq!(title(json!({"type":"somethingNew","id":"x"})), "Something new");
+    }
+
+    #[test]
+    fn codex_error_info_maps_to_recovery_hints_and_free_text_does_not() {
+        assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":"unauthorized"})), Some(RecoveryHintKind::AuthRequired));
+        assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":"rateLimitExceeded"})), Some(RecoveryHintKind::RateLimited));
+        assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":"serverOverloaded"})), Some(RecoveryHintKind::Overloaded));
+        assert_eq!(recovery_hint_for_codex_error(&json!({"message":"fake failure"})), None);
+        assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":"usageLimitExceeded"})), None);
+        assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":{"httpConnectionFailed":{"httpStatusCode":500}}})), None);
     }
 
     #[test]

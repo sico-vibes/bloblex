@@ -1,5 +1,5 @@
 use bloblex_adapter_claude::ClaudeAdapter;
-use bloblex_agent_core::{AgentAdapter, AgentEvent, ExecOptions, ModelCatalog, NewSessionRequest, PromptRequest, RuntimeSpec};
+use bloblex_agent_core::{AgentAdapter, AgentEvent, ContextChangeReason, ExecOptions, ModelCatalog, NewSessionRequest, PromptRequest, RuntimeSpec};
 use serde_json::Value;
 use std::{path::PathBuf, time::Duration};
 use tokio::sync::mpsc;
@@ -46,6 +46,35 @@ fn audit(path: &std::path::Path) -> Vec<Value> {
 }
 
 fn index(args: &[String], flag: &str) -> usize { args.iter().position(|arg| arg == flag).unwrap() }
+
+#[tokio::test]
+async fn compact_boundary_emits_context_reset_then_a_compaction_context_change() {
+    let (root, private, audit_path) = paths();
+    let system_root = setup_test_acl(&root);
+    let adapter = ClaudeAdapter::with_test_acl_executable(private, system_root);
+    let rt = runtime(&audit_path, &["--fake-compact-boundary"]);
+    let (tx, mut rx) = mpsc::channel(32);
+    let handle = adapter
+        .new_session(
+            &rt,
+            NewSessionRequest { session_id: "s-compact".into(), project_path: root.clone(), exec_options: ExecOptions::default() },
+            tx,
+        )
+        .await
+        .unwrap();
+    wait_session_start(&mut rx).await;
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-compact".into(), text: "hello".into(), exec_options: ExecOptions::default() })
+        .await
+        .unwrap();
+    let seen = events_through_turn(&mut rx).await;
+    let reset = seen.iter().position(|event| matches!(event, AgentEvent::ContextReset)).expect("context reset");
+    let changed = seen.iter().position(|event| matches!(event, AgentEvent::ContextChanged { reason: ContextChangeReason::Compaction, context_lost: false })).expect("compaction context change");
+    assert!(reset < changed, "the reset is sent before the context-change notice");
+    adapter.close_session(&handle).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    std::fs::remove_dir_all(root).unwrap();
+}
 
 #[tokio::test]
 async fn fake_process_launches_bypass_flags_only_for_bypass_mode(){

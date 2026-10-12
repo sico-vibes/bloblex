@@ -612,6 +612,9 @@ async fn parse_line(
                 model: None, cost_minor: None, cost_currency: None, reported_cost_decimal: None,
                 cost_is_cumulative: false,
             }}).await;
+            if let Some(kind) = recovery_hint_for_claude_result(v) {
+                let _ = tx.send(AgentEvent::RecoveryHint { kind, retry_after_secs: None }).await;
+            }
             let _ = tx
                 .send(AgentEvent::Error {
                     message: v["result"]
@@ -701,6 +704,17 @@ async fn parse_line(
                 .remove(&format!("{local_session_id}:{provider_request_id}"));
         }
         _ => {}
+    }
+}
+
+/// Maps structured provider evidence to a recovery hint. Only an explicit HTTP
+/// status the CLI reports for the failed turn is used; free-text `errors[]`,
+/// `result` and stderr never produce a hint (see the Phase 1B evidence table).
+fn recovery_hint_for_claude_result(value: &Value) -> Option<RecoveryHintKind> {
+    match value["api_error_status"].as_u64() {
+        Some(401) => Some(RecoveryHintKind::AuthRequired),
+        Some(429) => Some(RecoveryHintKind::RateLimited),
+        _ => None,
     }
 }
 
@@ -890,6 +904,7 @@ impl ClaudeAdapter {
                     .await;
                     if v["type"].as_str() == Some("system") && v["subtype"].as_str() == Some("compact_boundary") {
                         let _ = reader.events.send(AgentEvent::ContextReset).await;
+                        let _ = reader.events.send(AgentEvent::ContextChanged { reason: ContextChangeReason::Compaction, context_lost: false }).await;
                         schedule_context_usage(reader.clone()).await;
                     } else if v["type"].as_str() == Some("result") { schedule_context_usage(reader.clone()).await; }
                 }
@@ -1399,6 +1414,53 @@ mod tests {
             parse_line(&tx, &message, &provider_id, &requests, "session", &active_turn, &context_window).await;
             assert!(matches!(rx.recv().await, Some(AgentEvent::ContextExhausted)));
             assert!(rx.try_recv().is_err());
+        });
+    }
+
+    #[test]
+    fn claude_result_http_status_maps_to_a_recovery_hint_and_free_text_does_not() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            for (status, expected) in [
+                (401u64, Some(RecoveryHintKind::AuthRequired)),
+                (403, None),
+                (429, Some(RecoveryHintKind::RateLimited)),
+                (500, None),
+            ] {
+                let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+                let provider_id = Mutex::new(None);
+                let requests = Mutex::new(HashMap::new());
+                let active = Mutex::new(Some("turn-hint".to_owned()));
+                let context_window = Mutex::new(ClaudeContextWindow::default());
+                parse_line(&tx, &json!({"type":"result","is_error":true,"api_error_status":status,"result":"provider error"}), &provider_id, &requests, "s", &active, &context_window).await;
+                let mut saw = None;
+                loop {
+                    match rx.recv().await {
+                        Some(AgentEvent::RecoveryHint { kind, retry_after_secs }) => { assert_eq!(retry_after_secs, None); saw = Some(kind); }
+                        Some(AgentEvent::Error { .. }) => break,
+                        Some(_) => {}
+                        None => panic!("event channel closed before the terminal error"),
+                    }
+                }
+                assert_eq!(saw, expected, "api_error_status {status}");
+            }
+            // Free text alone carries no structured status, so no hint is emitted.
+            let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+            let provider_id = Mutex::new(None);
+            let requests = Mutex::new(HashMap::new());
+            let active = Mutex::new(Some("turn-hint".to_owned()));
+            let context_window = Mutex::new(ClaudeContextWindow::default());
+            parse_line(&tx, &json!({"type":"result","is_error":true,"errors":["429 rate limit exceeded"]}), &provider_id, &requests, "s", &active, &context_window).await;
+            let mut saw = None;
+            loop {
+                match rx.recv().await {
+                    Some(AgentEvent::RecoveryHint { kind, .. }) => saw = Some(kind),
+                    Some(AgentEvent::Error { .. }) => break,
+                    Some(_) => {}
+                    None => panic!("event channel closed before the terminal error"),
+                }
+            }
+            assert_eq!(saw, None);
         });
     }
 

@@ -597,6 +597,43 @@ async fn failed_turn_emits_only_nullable_unreported_usage() {
 }
 
 #[tokio::test]
+async fn failed_turn_with_structured_error_info_emits_a_recovery_hint() {
+    for (mode, expected) in [
+        ("fail-auth", Some(RecoveryHintKind::AuthRequired)),
+        ("fail-rate", Some(RecoveryHintKind::RateLimited)),
+        ("fail-overload", Some(RecoveryHintKind::Overloaded)),
+        ("fail", None),
+    ] {
+        let (r, _record) = setup(Some(mode));
+        let adapter = CodexAdapter::default();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+        let h = adapter.new_session(&r, qnew(), tx).await.unwrap();
+        adapter
+            .prompt(
+                &h,
+                PromptRequest { attachments: Vec::new(),
+                    turn_id: "hint-turn".into(),
+                    text: "hello".into(),
+                    exec_options: opts(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut saw = None;
+        loop {
+            match tokio::time::timeout(Duration::from_secs(2), rx.recv()).await.unwrap().unwrap() {
+                AgentEvent::RecoveryHint { kind, retry_after_secs } => { assert_eq!(retry_after_secs, None); saw = Some(kind); }
+                AgentEvent::Error { .. } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(saw, expected, "mode {mode}");
+        adapter.close_session(&h).await.unwrap();
+        let _ = std::fs::remove_dir_all(r.cwd.unwrap());
+    }
+}
+
+#[tokio::test]
 async fn turn_start_rpc_rejection_is_reported_without_retry() {
     let (r, record) = setup(Some("reject"));
     let adapter = CodexAdapter::default();
@@ -988,22 +1025,53 @@ async fn rejected_crash_resume_starts_fresh_and_updates_daemon_provider_pointer(
 
     let restart = start_prompt(adapter.clone(), b.clone(), "fresh-after-crash", "new-thread");
     let mut fresh_provider_id = None;
+    let mut context_changed = false;
     let mut completed = false;
     while !completed {
         match tokio::time::timeout(Duration::from_secs(3), rx_b.recv()).await.unwrap().unwrap() {
             AgentEvent::SessionStarted { provider_session_id } => fresh_provider_id = Some(provider_session_id),
+            AgentEvent::ContextChanged { reason: ContextChangeReason::FreshSession, context_lost: true } => context_changed = true,
             AgentEvent::TurnCompleted => completed = true,
             _ => {}
         }
     }
     restart.await.unwrap().unwrap();
     assert_eq!(fresh_provider_id.as_deref(), Some("thread-1"));
+    assert!(context_changed, "a rejected resume announces the fresh-session context change");
     assert_eq!(method_count(&record, "thread/start"), 3);
     adapter.close_session(&a).await.unwrap();
     adapter.close_session(&b).await.unwrap();
     adapter.shutdown().await;
     let _ = std::fs::remove_dir_all(cwd);
     let _ = std::fs::remove_dir_all(record.parent().unwrap());
+}
+
+#[tokio::test]
+async fn successful_resume_after_crash_announces_no_context_change() {
+    let (runtime, _record) = setup(Some("crash"));
+    let adapter = std::sync::Arc::new(CodexAdapter::with_idle_shutdown(Duration::from_secs(2)));
+    let cwd = runtime.cwd.clone().unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    let h = adapter.new_session(&runtime, new_request("resume-ok", cwd.clone(), opts()), tx).await.unwrap();
+    start_prompt(adapter.clone(), h.clone(), "resume-ok-crash", "crash").await.unwrap().unwrap();
+    loop {
+        if matches!(tokio::time::timeout(Duration::from_secs(3), rx.recv()).await.unwrap(), Some(AgentEvent::Error { .. })) { break; }
+    }
+    adapter
+        .prompt(&h, PromptRequest { attachments: Vec::new(), turn_id: "resume-ok-next".into(), text: "after".into(), exec_options: opts() })
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(3), rx.recv()).await.unwrap().unwrap();
+        let done = matches!(event, AgentEvent::TurnCompleted);
+        events.push(event);
+        if done { break; }
+    }
+    assert!(!events.iter().any(|event| matches!(event, AgentEvent::ContextChanged { .. })), "a successful resume keeps the conversation context");
+    adapter.close_session(&h).await.unwrap();
+    adapter.shutdown().await;
+    let _ = std::fs::remove_dir_all(cwd);
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 # Bloblex improvement plan v2: a BB-informed, companion-style roadmap
 
-Status: approved by the owner, 12 October 2026. No phase has started; each phase needs its own go-ahead. Baseline `17591b9` (beta.18). Supersedes the QA draft, kept as [IMPROVEMENT_PLAN_v1_qa-draft.md](IMPROVEMENT_PLAN_v1_qa-draft.md).
+Status: approved by the owner, 12 October 2026. **Phase 1 is implemented on branch `phase1-lifecycle` and fake-peer verified only** (specs: `IMPROVEMENT_PHASE_1A_SPEC.md`, `IMPROVEMENT_PHASE_1B_SPEC.md`; evidence: `evidence/recovery-hints-2026-10-12.md`). It has no live-CLI or native-window verification yet. Later phases still need their own go-ahead. Baseline `17591b9` (beta.18). Supersedes the QA draft, kept as [IMPROVEMENT_PLAN_v1_qa-draft.md](IMPROVEMENT_PLAN_v1_qa-draft.md).
 
 ## Context
 

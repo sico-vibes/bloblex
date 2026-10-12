@@ -17,7 +17,7 @@ describe('team selectors', () => {
     expect(splitReferences('plain', null)).toEqual([{ text: 'plain' }])
   })
 
-  it('never treats a scheduled run as the blob's main conversation', () => {
+  it('never treats a scheduled run as the main conversation of a blob', () => {
     const sessions = [
       session('main', { agentId: 'a', updatedAt: '2026-10-01T00:00:00Z' }),
       session('run', { agentId: 'a', updatedAt: '2026-10-05T00:00:00Z', link: { kind: 'automation', automationId: 'x', runId: 'r' } }),

@@ -1586,7 +1586,13 @@ export function App() {
   }
   const previewAutomation = async (schedule: DaemonSchedule): Promise<string[]> => {
     const result = await rpc<{ occurrences?: Array<string | { local?: string; at?: string }> }>('automation.preview', { schedule, count: 3 })
-    return (result.occurrences ?? []).map((entry) => typeof entry === 'string' ? entry : entry.local ?? entry.at ?? '').filter(Boolean)
+    const zone = schedule.kind === 'cron' ? schedule.timezone : undefined
+    const show = (iso: string) => {
+      const at = new Date(iso)
+      if (Number.isNaN(at.getTime())) return iso
+      try { return at.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', ...(zone ? { timeZone: zone } : {}) }) } catch { return at.toLocaleString() }
+    }
+    return (result.occurrences ?? []).map((entry) => typeof entry === 'string' ? entry : entry.at ?? entry.local ?? '').filter(Boolean).map(show)
   }
   const setAutomationsPaused = async (paused: boolean) => {
     await rpc('settings.set', { key: 'automations.paused', value: paused })

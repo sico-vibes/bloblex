@@ -37,6 +37,7 @@ mod mcp_bridge;
 mod model_presentation;
 mod team;
 mod queue;
+mod retry;
 mod experiments;
 mod quota;
 mod quota_sources;
@@ -470,7 +471,7 @@ fn quota_failure_code(failure: PollFailure) -> &'static str {
     }
 }
 
-async fn poll_codex_quota(st: &AppState, runtime_value: Value) {
+async fn poll_codex_quota(st: &AppState, runtime_value: Value, timeout: std::time::Duration) {
     let Some(runtime_id) = runtime_value["id"].as_str().map(str::to_owned) else { return; };
     let runtime = runtime_from(&runtime_value);
     let normalize_runtime_id = runtime_id.clone();
@@ -478,7 +479,7 @@ async fn poll_codex_quota(st: &AppState, runtime_value: Value) {
     let outcome = quota::poll_with_timeout(
         &st.quota_poll_gate,
         "codex",
-        QUOTA_REQUEST_TIMEOUT,
+        timeout,
         || async move {
             let raw = adapter.read_account_quota(&runtime).await.map_err(|error| match error {
                 bloblex_agent_core::AdapterError::Timeout => PollFailure::Timeout,
@@ -529,18 +530,42 @@ async fn emit_quota_snapshot(st: &AppState) {
 async fn poll_provider_quotas(st: &AppState) {
     let runtimes = st.runtimes.read().await.clone();
     if let Some(runtime) = runtimes.into_iter().find(|runtime| runtime["provider"] == "codex" && runtime["status"] == "online") {
-        poll_codex_quota(st, runtime).await;
+        poll_codex_quota(st, runtime, QUOTA_REQUEST_TIMEOUT).await;
     }
     let runtimes = st.runtimes.read().await.clone();
     if let Some(runtime) = runtimes.iter().find(|runtime| runtime["provider"] == "claude") {
         if let Some(runtime_id) = runtime["id"].as_str() {
-            poll_local_quota(st, "claude", runtime_id, quota_sources::fetch_claude_quota).await;
+            poll_local_quota(st, "claude", runtime_id, quota_sources::fetch_claude_quota, QUOTA_REQUEST_TIMEOUT).await;
         }
     }
     if let Some(runtime) = runtimes.iter().find(|runtime| runtime["provider"] == "opencode") {
         if let Some(runtime_id) = runtime["id"].as_str() {
-            poll_local_quota(st, "opencode", runtime_id, quota_sources::fetch_opencode_go_quota).await;
+            poll_local_quota(st, "opencode", runtime_id, quota_sources::fetch_opencode_go_quota, QUOTA_REQUEST_TIMEOUT).await;
         }
+    }
+}
+
+/// One bounded refresh of a provider's quota snapshot, used by the retry
+/// policy when its cached reset time is missing or stale.
+pub(crate) async fn refresh_provider_quota(st: &AppState, provider: &str, timeout: std::time::Duration) {
+    let runtimes = st.runtimes.read().await.clone();
+    match provider {
+        "codex" => {
+            if let Some(runtime) = runtimes.into_iter().find(|runtime| runtime["provider"] == "codex" && runtime["status"] == "online") {
+                poll_codex_quota(st, runtime, timeout).await;
+            }
+        }
+        "claude" => {
+            if let Some(runtime_id) = runtimes.iter().find(|runtime| runtime["provider"] == "claude").and_then(|runtime| runtime["id"].as_str()) {
+                poll_local_quota(st, "claude", runtime_id, quota_sources::fetch_claude_quota, timeout).await;
+            }
+        }
+        "opencode" => {
+            if let Some(runtime_id) = runtimes.iter().find(|runtime| runtime["provider"] == "opencode").and_then(|runtime| runtime["id"].as_str()) {
+                poll_local_quota(st, "opencode", runtime_id, quota_sources::fetch_opencode_go_quota, timeout).await;
+            }
+        }
+        _ => {}
     }
 }
 
@@ -549,6 +574,7 @@ async fn poll_local_quota<F, Fut>(
     provider: &str,
     runtime_id: &str,
     fetch: F,
+    timeout: std::time::Duration,
 )
 where
     F: FnOnce(String, String) -> Fut,
@@ -557,7 +583,7 @@ where
     let runtime_id = runtime_id.to_owned();
     let normalize_runtime_id = runtime_id.clone();
     let provider_name = provider.to_owned();
-    let outcome = quota::poll_with_timeout(&st.quota_poll_gate, provider, QUOTA_REQUEST_TIMEOUT, || async move {
+    let outcome = quota::poll_with_timeout(&st.quota_poll_gate, provider, timeout, || async move {
         let fetched_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let snapshot = fetch(normalize_runtime_id, fetched_at.clone()).await.map_err(|failure| match failure {
             quota_sources::SourceFailure::NoCredentials => PollFailure::NoCredentials,
@@ -829,6 +855,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 bloblex_storage::StorageError::AgentNotFound => derr("not_found", "session not found", StatusCode::NOT_FOUND),
                 other => derr("internal", &other.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
             })?;
+            // Archiving a conversation cancels any automatic retry waiting on it.
+            if archived {
+                retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
+            }
             st.emit("session.changed", session.clone()).await;
             Ok(json!({"session":session}))
         }
@@ -875,11 +905,22 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "session.new" => new_session(st, p).await,
         "session.resume" => resume_session(st, p).await,
         "session.model.update" => update_session_model(st, p).await,
-        "session.prompt" => session_prompt(st, p).await,
+        "session.prompt" => {
+            // A user-sent prompt supersedes any pending automatic retry.
+            if let Some(sid) = p["sessionId"].as_str().filter(|id| !id.is_empty()) {
+                retry::cancel_pending(st, sid, retry::DeclineReason::Superseded, false).await;
+            }
+            session_prompt(st, p).await
+        }
         "session.steer" => session_steer(st, p).await,
+        "turn.retry.cancel" => retry::cancel_rpc(st, &p).await,
         "session.queue.add" | "session.queue.list" | "session.queue.update" | "session.queue.reorder" | "session.queue.delete" | "session.queue.send_now" | "session.queue.resume" => queue::queue_rpc(st, method, &p).await,
         "session.cancel" => {
             let id = p["sessionId"].as_str().unwrap_or("");
+            // Stopping never schedules a retry, and it cancels one already waiting.
+            if !id.is_empty() {
+                retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
+            }
             let gate = gate_for_session(st, id).await;
             let active = {
                 let _guard = gate.lock().await;
@@ -1036,6 +1077,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if k.is_empty(){return Err(derr("invalid_argument","key is required",StatusCode::BAD_REQUEST));}
             if k.starts_with("exec_gate.")&&!p["value"].is_boolean(){return Err(derr("invalid_argument","execution gates require a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="notifications.enabled"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","notifications.enabled requires a JSON boolean",StatusCode::BAD_REQUEST));}
+            if k=="experimental.autoRetry"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","experimental.autoRetry requires a JSON boolean",StatusCode::BAD_REQUEST));}
+            if k=="retry.maxWaitSecs"&&!p["value"].as_u64().is_some_and(|secs|secs<=86_400){return Err(derr("invalid_argument","retry.maxWaitSecs requires an integer between 0 and 86400",StatusCode::BAD_REQUEST));}
             if k=="claude.enableWorkflows"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","claude.enableWorkflows requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="permissions.default_mode"&&!p["value"].as_str().is_some_and(|v|["ask","auto"].contains(&v)){return Err(derr("invalid_argument","permissions.default_mode must be ask or auto",StatusCode::BAD_REQUEST));}
             if k.to_ascii_lowercase().contains("token")
@@ -1048,11 +1091,12 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::BAD_REQUEST,
                 ));
             }
+            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="retry.maxWaitSecs";
             let events=st.db.set_setting(k, &p["value"]).map_err(|e| {
                 derr(
-                    if k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"{"invalid_argument"}else{"internal"},
+                    if validation_key{"invalid_argument"}else{"internal"},
                     &e.to_string(),
-                    if k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"{StatusCode::BAD_REQUEST}else{StatusCode::INTERNAL_SERVER_ERROR},
+                    if validation_key{StatusCode::BAD_REQUEST}else{StatusCode::INTERNAL_SERVER_ERROR},
                 )
             })?;
             st.broadcast_persisted(events);
@@ -1969,6 +2013,8 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     let updated = st.db.session_event_summary(sid).map_err(agent_error)?;
     if let Some(active) = active_to_close { let _ = active.adapter.close_session(&active.handle).await; }
     st.emit("session.changed", updated.clone()).await;
+    // A model or effort change invalidates a pending automatic retry.
+    retry::cancel_pending(st, sid, retry::DeclineReason::Superseded, false).await;
     Ok(json!({"session":updated,"modelChanged":model_changed}))
 }
 
@@ -2009,15 +2055,52 @@ fn prepare_reply_snapshot(st: &AppState, session_id: &str, session: &Value, valu
     Ok(Some(json!({"sourceSessionId":source_session,"messageId":message_id,"role":role,"author":author,"excerpt":excerpt,"truncated":truncated,"createdAt":source["createdAt"]})))
 }
 
+/// Who is asking for a turn. Controls whether a side conversation is writable
+/// and which daemon-generated `meta` kinds the prompt path will accept.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PromptOrigin {
+    User,
+    Team,
+    Queue,
+}
+
+/// The prompt path accepts `meta` only from daemon-internal callers, and only
+/// for allowlisted kinds. A user-supplied RPC can never set message meta.
+fn sanitize_prompt_meta(value: &Value, origin: PromptOrigin) -> Option<Value> {
+    let object = value.as_object()?;
+    let kind = object.get("kind")?.as_str()?;
+    match origin {
+        PromptOrigin::User => None,
+        PromptOrigin::Team => matches!(kind, "blob_message" | "blob_reply").then(|| Value::Object(object.clone())),
+        PromptOrigin::Queue => {
+            if kind != "auto_retry" {
+                return None;
+            }
+            let retry_of = object.get("retryOf")?.as_str()?.to_owned();
+            if retry_of.is_empty() {
+                return None;
+            }
+            let attempt = object.get("attempt")?.as_u64().filter(|attempt| *attempt >= 1)?;
+            Some(json!({"kind":"auto_retry","retryOf":retry_of,"attempt":attempt}))
+        }
+    }
+}
+
 async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError> {
-    session_prompt_impl(st, p, false).await
+    session_prompt_impl(st, p, PromptOrigin::User).await
 }
 
 pub(crate) async fn session_prompt_for_team(st: &AppState, p: Value) -> Result<Value, DispatchError> {
-    session_prompt_impl(st, p, true).await
+    session_prompt_impl(st, p, PromptOrigin::Team).await
 }
 
-async fn session_prompt_impl(st: &AppState, p: Value, internal_team_delivery: bool) -> Result<Value, DispatchError> {
+/// Entry point for a durable-queue item, including automatic retries. Only
+/// allowlisted `auto_retry` meta survives sanitization here.
+pub(crate) async fn session_prompt_queued(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    session_prompt_impl(st, p, PromptOrigin::Queue).await
+}
+
+async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
     let text = p["text"].as_str().unwrap_or("").to_owned();
     let attachments = prompt_attachments(&p["attachments"])?;
@@ -2030,7 +2113,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, internal_team_delivery: bo
     }
     let session_before = st.db.session_detail(&sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     if session_before["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
-    if session_before["link"]["kind"] == "side" && !internal_team_delivery { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
+    if session_before["link"]["kind"] == "side" && origin != PromptOrigin::Team { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
     let reply_snapshot = prepare_reply_snapshot(st, &sid, &session_before, &p["replyTo"])?;
     // Provider processes are intentionally ephemeral across daemon restarts.
     // Lazily restore the saved provider session before creating the turn or
@@ -2170,11 +2253,20 @@ async fn session_prompt_impl(st: &AppState, p: Value, internal_team_delivery: bo
         if !admitted {
             return Err(derr("conflict", "daemon or agent concurrency limit reached", StatusCode::CONFLICT));
         }
+        // Only daemon-internal callers may attach allowlisted meta; a retry turn
+        // records its chain in the turn's audit data.
+        let allowed_meta = sanitize_prompt_meta(&p["meta"], origin);
+        let retry_chain = allowed_meta.as_ref().filter(|meta| meta["kind"] == "auto_retry").and_then(|meta| {
+            Some((meta["retryOf"].as_str()?.to_owned(), meta["attempt"].as_u64()?))
+        });
         let mut message_data = if attachments.is_empty() { json!({}) } else {
             json!({"attachments": attachments.iter().map(|a| json!({"name":a.name,"mediaType":a.media_type,"path":a.path})).collect::<Vec<_>>()})
         };
-        if p["meta"].is_object() || reply_snapshot.is_some() {
-            let mut meta = p["meta"].as_object().cloned().map(Value::Object).unwrap_or_else(|| json!({}));
+        if let Some((retry_of, attempt)) = &retry_chain {
+            let _ = st.db.merge_turn_data(&turn, &json!({"retryOf":retry_of,"attempt":attempt}));
+        }
+        if allowed_meta.is_some() || reply_snapshot.is_some() {
+            let mut meta = allowed_meta.unwrap_or_else(|| json!({}));
             if let Some(snapshot) = &reply_snapshot { meta["replyTo"] = snapshot.clone(); }
             message_data["meta"] = meta;
         }
@@ -2260,6 +2352,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, internal_team_delivery: bo
             // concurrency slot is released because this execution ended.
             finish_turn_failed(&state, &sid2, &turn2, failure_class, public_message, detail, "error").await;
             team::after_turn(&state, &sid2, Some(turn2.clone()), "turn.error", after_detail);
+            retry::after_failed_turn(&state, &sid2, Some(&turn2)).await;
         }
     });
     Ok(json!({"turnId":turn,"accepted":true}))
@@ -2565,6 +2658,7 @@ async fn forward_events_with_timeouts(
                     let after_detail = detail.clone().or(Some(public_message.to_owned()));
                     finish_turn_failed(&st, &sid, turn_id, "timeout", public_message, detail, if resumed_session { "idle" } else { "error" }).await;
                     team::after_turn(&st, &sid, Some(turn_id.clone()), "turn.error", after_detail);
+                    retry::after_failed_turn(&st, &sid, Some(turn_id)).await;
                     watched_turn = None;
                     continue;
                 }
@@ -2933,6 +3027,9 @@ async fn forward_events_with_timeouts(
         let finished = matches!(ty, "turn.completed" | "turn.error" | "turn.cancelled").then(|| payload["detail"].as_str().or_else(|| payload["message"].as_str()).map(str::to_owned));
         st.emit(ty, payload).await;
         if let Some(detail) = finished { team::after_turn(&st, &sid, turn.clone(), ty, detail); }
+        // Automatic retry is decided on the same terminal path, after the
+        // team/queue bookkeeping above has already touched the queue.
+        if ty == "turn.error" { retry::after_failed_turn(&st, &sid, turn.as_deref()).await; }
     }
 }
 
@@ -3041,6 +3138,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         queue: Arc::new(queue::Queue::default()),
     };
     if let Ok(paused) = st.db.queue_paused_sessions() { st.queue.mark_startup_paused(paused); }
+    // Drop automatic retries that missed their window while the daemon was down.
+    retry::reconcile_restart(&st).await;
     for id in recovered_sessions {
         if let Ok(session) = st.db.session_event_summary(&id) {
             st.emit("session.changed", session).await;
@@ -5492,5 +5591,223 @@ mod phase2a_tests {
         crate::queue::after_turn(&st, sid, "turn.completed").await;
         assert!(wait_for(|| adapter.texts() == vec!["later"]).await);
         assert!(st.db.queue_list(sid).unwrap().is_empty());
+    }
+
+    // ── Phase 3A: automatic retry ──────────────────────────────────────────
+    async fn drain_for(
+        events: &mut broadcast::Receiver<EventEnvelope>,
+        done: impl Fn(&EventEnvelope) -> bool,
+    ) -> bool {
+        for _ in 0..40 {
+            match tokio::time::timeout(std::time::Duration::from_millis(25), events.recv()).await {
+                Ok(Ok(event)) => {
+                    if done(&event) {
+                        return true;
+                    }
+                }
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(_)) => return false,
+                Err(_) => {}
+            }
+        }
+        false
+    }
+
+    /// A failed turn with an acknowledged overloaded delivery already recorded.
+    fn seed_failed_turn(
+        st: &AppState,
+        sid: &str,
+        turn: &str,
+        retry_of: Option<&str>,
+        attempt: Option<u64>,
+    ) {
+        st.db.create_turn(turn, sid).unwrap();
+        let mut data = json!({"delivery":"acknowledged","hint":{"kind":"overloaded"}});
+        if let Some(retry_of) = retry_of {
+            data["retryOf"] = json!(retry_of);
+        }
+        if let Some(attempt) = attempt {
+            data["attempt"] = json!(attempt);
+        }
+        st.db.merge_turn_data(turn, &data).unwrap();
+    }
+
+    #[tokio::test]
+    async fn disabled_automatic_retry_stays_silent() {
+        let (mut st, mut events) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "retry-disabled";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        tx.send(AgentEvent::PromptAccepted).await.unwrap();
+        tx.send(AgentEvent::RecoveryHint { kind: bloblex_agent_core::RecoveryHintKind::Overloaded, retry_after_secs: None }).await.unwrap();
+        tx.send(AgentEvent::Error { message: "overloaded".into() }).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        assert!(st.db.queue_list(sid).unwrap().is_empty(), "the feature is off by default");
+        assert!(!drain_for(&mut events, |event| event.event_type == "turn.retry_scheduled").await);
+        assert!(st.db.session_detail(sid).unwrap()["messages"].as_array().unwrap().iter().all(|message| message["meta"]["kind"] != "auto_retry"));
+    }
+
+    #[tokio::test]
+    async fn automatic_retry_schedules_then_sends_one_continuation() {
+        let (mut st, mut events) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        st.db.set_setting("experimental.autoRetry", &json!(true)).unwrap();
+        let sid = "retry-schedule";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        tx.send(AgentEvent::PromptAccepted).await.unwrap();
+        tx.send(AgentEvent::RecoveryHint { kind: bloblex_agent_core::RecoveryHintKind::Overloaded, retry_after_secs: None }).await.unwrap();
+        tx.send(AgentEvent::Error { message: "overloaded".into() }).await.unwrap();
+        assert!(wait_for(|| st.db.queue_list(sid).unwrap().iter().any(|item| item["kind"] == "retry")).await, "a retry item is queued");
+        assert!(drain_for(&mut events, |event| event.event_type == "turn.retry_scheduled" && event.payload["turnId"] == "turn-0" && event.payload["retryKind"] == "overloaded" && event.payload["attempt"] == 1).await, "the schedule is announced");
+        let item = st.db.queue_list(sid).unwrap().into_iter().find(|item| item["kind"] == "retry").unwrap();
+        assert_eq!(item["meta"]["kind"], "auto_retry");
+        assert_eq!(item["meta"]["retryOf"], "turn-0");
+        assert_eq!(item["meta"]["attempt"], 1);
+        let due = chrono::DateTime::parse_from_rfc3339(item["dueAt"].as_str().unwrap()).unwrap().with_timezone(&Utc);
+        assert!((due - Utc::now()).num_seconds() >= 1, "the retry is scheduled after the backoff: {}", item["dueAt"]);
+        assert_eq!(st.db.turn_data("turn-0").unwrap()["retryDecision"]["decision"], "retry");
+        assert!(wait_for(|| st.db.session_detail(sid).unwrap()["messages"].as_array().unwrap().iter().any(|message| message["meta"]["kind"] == "auto_retry" && message["meta"]["status"] == "scheduled")).await, "a schedule notice is appended");
+        // Fire the due item.
+        st.db.queue_set_retry_due(item["id"].as_str().unwrap(), &past_due_at(5)).unwrap();
+        crate::queue::due_tick(&st).await;
+        assert!(wait_for(|| adapter.texts() == vec!["Please continue."]).await, "the retry sends the continuation exactly once");
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert_eq!(adapter.texts(), vec!["Please continue."]);
+        assert!(st.db.queue_list(sid).unwrap().is_empty());
+        let retry_message = st.db.session_detail(sid).unwrap()["messages"].as_array().unwrap().iter().find(|message| message["meta"]["kind"] == "auto_retry" && message["content"] == "Please continue.").cloned().expect("the auto_retry user message");
+        assert_eq!(retry_message["role"], "user");
+    }
+
+    #[tokio::test]
+    async fn retry_attempt_chain_advances_and_caps() {
+        let (st, _) = state();
+        st.db.set_setting("experimental.autoRetry", &json!(true)).unwrap();
+        let sid = "retry-attempt";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Retry").unwrap();
+        st.db.update_session_state(sid, "idle").unwrap();
+        seed_failed_turn(&st, sid, "t-1", Some("t-0"), Some(1));
+        retry::after_failed_turn(&st, sid, Some("t-1")).await;
+        let item = st.db.queue_list(sid).unwrap().into_iter().find(|item| item["kind"] == "retry").unwrap();
+        assert_eq!(item["meta"]["attempt"], 2);
+        assert_eq!(st.db.turn_data("t-1").unwrap()["retryDecision"]["decision"], "retry");
+        // The fifth retry's failure has no sixth attempt.
+        let sid2 = "retry-cap";
+        st.db.create_session(sid2, "rt-test", "codex", ".", "Retry").unwrap();
+        st.db.update_session_state(sid2, "idle").unwrap();
+        seed_failed_turn(&st, sid2, "t-5", Some("t-0"), Some(5));
+        retry::after_failed_turn(&st, sid2, Some("t-5")).await;
+        assert!(st.db.queue_list(sid2).unwrap().iter().all(|item| item["kind"] != "retry"));
+        assert_eq!(st.db.turn_data("t-5").unwrap()["retryDecision"]["reason"], "max_attempts");
+        assert!(st.db.session_detail(sid2).unwrap()["messages"].as_array().unwrap().iter().any(|message| message["meta"]["status"] == "declined" && message["meta"]["reason"] == "max_attempts"));
+    }
+
+    #[tokio::test]
+    async fn retry_cancel_rpc_and_user_prompt_supersede_a_pending_retry() {
+        let (mut st, _) = state();
+        st.db.set_setting("experimental.autoRetry", &json!(true)).unwrap();
+        let sid = "retry-cancel";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Retry").unwrap();
+        st.db.update_session_state(sid, "idle").unwrap();
+        seed_failed_turn(&st, sid, "t-1", None, None);
+        retry::after_failed_turn(&st, sid, Some("t-1")).await;
+        assert_eq!(st.db.queue_list(sid).unwrap().len(), 1);
+        assert_eq!(dispatch(&st, "turn.retry.cancel", json!({"sessionId":sid})).await.unwrap(), json!({"cancelled":true}));
+        assert!(st.db.queue_list(sid).unwrap().is_empty());
+        assert_eq!(dispatch(&st, "turn.retry.cancel", json!({"sessionId":sid})).await.unwrap_err().1.code, "not_found");
+        assert_eq!(st.db.turn_data("t-1").unwrap()["retryDecision"]["reason"], "cancelled");
+        assert!(st.db.session_detail(sid).unwrap()["messages"].as_array().unwrap().iter().any(|message| message["meta"]["status"] == "cancelled"));
+
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid2 = "retry-supersede";
+        queue_session(&st, &adapter, sid2).await;
+        seed_failed_turn(&st, sid2, "t-1b", None, None);
+        retry::after_failed_turn(&st, sid2, Some("t-1b")).await;
+        assert_eq!(st.db.queue_list(sid2).unwrap().len(), 1);
+        dispatch(&st, "session.prompt", json!({"sessionId":sid2,"text":"new message"})).await.unwrap();
+        assert!(st.db.queue_list(sid2).unwrap().is_empty(), "a user prompt supersedes the pending retry");
+        assert_eq!(st.db.turn_data("t-1b").unwrap()["retryDecision"]["reason"], "superseded");
+    }
+
+    #[tokio::test]
+    async fn cancelled_turns_never_schedule_a_retry() {
+        let (mut st, mut events) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        st.db.set_setting("experimental.autoRetry", &json!(true)).unwrap();
+        let sid = "retry-cancelled";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        tx.send(AgentEvent::RecoveryHint { kind: bloblex_agent_core::RecoveryHintKind::Overloaded, retry_after_secs: None }).await.unwrap();
+        tx.send(AgentEvent::TurnCancelled).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        assert!(st.db.queue_list(sid).unwrap().is_empty());
+        assert!(!drain_for(&mut events, |event| event.event_type == "turn.retry_scheduled").await);
+    }
+
+    #[tokio::test]
+    async fn retry_items_bypass_pause_and_leave_plain_items_waiting() {
+        let (mut st, _) = state();
+        st.db.set_setting("experimental.autoRetry", &json!(true)).unwrap();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "retry-pause";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"plain"})).await.unwrap();
+        tx.send(AgentEvent::TurnCancelled).await.unwrap();
+        assert!(wait_for(|| st.queue.is_paused(sid)).await, "the cancellation pauses the queue");
+        seed_failed_turn(&st, sid, "t-fail", None, None);
+        retry::after_failed_turn(&st, sid, Some("t-fail")).await;
+        let item = st.db.queue_list(sid).unwrap().into_iter().find(|item| item["kind"] == "retry").unwrap();
+        st.db.queue_set_retry_due(item["id"].as_str().unwrap(), &past_due_at(5)).unwrap();
+        crate::queue::due_tick(&st).await;
+        assert!(wait_for(|| adapter.texts() == vec!["Please continue."]).await, "a due retry fires while the queue is paused");
+        assert!(st.db.queue_list(sid).unwrap().iter().any(|item| item["kind"] == "user"), "the plain item still waits");
+    }
+
+    #[tokio::test]
+    async fn restart_drops_only_overdue_retries() {
+        let (st, _) = state();
+        st.db.set_setting("experimental.autoRetry", &json!(true)).unwrap();
+        let sid = "retry-restart";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Retry").unwrap();
+        st.db.update_session_state(sid, "idle").unwrap();
+        let overdue = st.db.queue_add(sid, &json!({"text":"Please continue.","attachments":[],"meta":{"kind":"auto_retry","retryOf":"t-0","attempt":1}}), "retry", Some(&past_due_at(1200))).unwrap();
+        let pending = st.db.queue_add(sid, &json!({"text":"Please continue.","attachments":[],"meta":{"kind":"auto_retry","retryOf":"t-1","attempt":1}}), "retry", Some(&past_due_at(-1200))).unwrap();
+        retry::reconcile_restart(&st).await;
+        let items = st.db.queue_list(sid).unwrap();
+        assert!(items.iter().all(|item| item["id"] != overdue["id"]), "the overdue retry is dropped");
+        assert!(items.iter().any(|item| item["id"] == pending["id"]), "a not-yet-due retry stays queued");
+        assert!(st.db.session_detail(sid).unwrap()["messages"].as_array().unwrap().iter().any(|message| message["content"].as_str().unwrap_or("").contains("Automatic retry skipped")));
+    }
+
+    #[tokio::test]
+    async fn restart_with_the_feature_off_drops_pending_retries_silently() {
+        let (st, _) = state();
+        let sid = "retry-restart-off";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Retry").unwrap();
+        st.db.update_session_state(sid, "idle").unwrap();
+        st.db.queue_add(sid, &json!({"text":"Please continue.","attachments":[],"meta":{"kind":"auto_retry","retryOf":"t-0","attempt":1}}), "retry", Some(&past_due_at(-1200))).unwrap();
+        retry::reconcile_restart(&st).await;
+        assert!(st.db.queue_list(sid).unwrap().is_empty(), "a retry cannot fire while the feature is off");
+        assert!(st.db.session_detail(sid).unwrap()["messages"].as_array().unwrap().is_empty(), "the off state stays silent");
+    }
+
+    #[tokio::test]
+    async fn retry_settings_validate_types_and_bounds() {
+        let (st, _) = state();
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"experimental.autoRetry","value":"true"})).await.unwrap_err().1.code, "invalid_argument");
+        dispatch(&st, "settings.set", json!({"key":"experimental.autoRetry","value":true})).await.unwrap();
+        assert_eq!(st.db.settings().unwrap()["experimental.autoRetry"], true);
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"retry.maxWaitSecs","value":-1})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"retry.maxWaitSecs","value":86401})).await.unwrap_err().1.code, "invalid_argument");
+        dispatch(&st, "settings.set", json!({"key":"retry.maxWaitSecs","value":86400})).await.unwrap();
+        dispatch(&st, "settings.set", json!({"key":"retry.maxWaitSecs","value":0})).await.unwrap();
+        assert_eq!(st.db.settings().unwrap()["retry.maxWaitSecs"], 0);
     }
 }

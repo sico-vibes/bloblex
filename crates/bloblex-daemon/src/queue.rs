@@ -112,10 +112,13 @@ fn prompt_params(session_id: &str, item: &Value) -> Value {
     if item["attachments"].as_array().is_some_and(|items| !items.is_empty()) { params["attachments"] = item["attachments"].clone(); }
     if item["conversationRefs"].as_array().is_some_and(|items| !items.is_empty()) { params["conversationRefs"] = item["conversationRefs"].clone(); }
     if item["replyTo"].is_object() { params["replyTo"] = item["replyTo"].clone(); }
+    // Internal auto-retry items carry the daemon-generated meta the prompt path
+    // validates against its allowlist. Plain/scheduled items have none.
+    if item["meta"].is_object() { params["meta"] = item["meta"].clone(); }
     params
 }
 
-async fn emit_changed(st: &AppState, session_id: &str) {
+pub(crate) async fn emit_changed(st: &AppState, session_id: &str) {
     let items = st.db.queue_list(session_id).unwrap_or_default();
     let paused = st.queue.is_paused(session_id);
     st.emit("queue.changed", json!({"sessionId":session_id,"items":items,"paused":paused})).await;
@@ -265,7 +268,13 @@ pub(crate) async fn drain_next(st: &AppState, session_id: &str, allow_plain: boo
 
 async fn send_claimed(st: &AppState, session_id: &str, item: &Value) {
     let id = item["id"].as_str().unwrap_or("").to_owned();
-    match session_prompt(st, prompt_params(session_id, item)).await {
+    let request = prompt_params(session_id, item);
+    let result = if item["kind"] == "retry" {
+        crate::session_prompt_queued(st, request).await
+    } else {
+        session_prompt(st, request).await
+    };
+    match result {
         Ok(_) => {
             let _ = st.db.queue_mark_sent(&id);
             if item["kind"] == "send_later" {

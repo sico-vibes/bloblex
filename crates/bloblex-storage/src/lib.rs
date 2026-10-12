@@ -567,6 +567,9 @@ fn queued_prompt_dto(id:&str,session_id:&str,position:i64,params_json:&str,kind:
         "createdAt": created_at,
     });
     if let Some(reply) = params.get("replyTo").filter(|value| !value.is_null()) { item["replyTo"] = reply.clone(); }
+    // Internal auto-retry items carry daemon-generated meta so the send path can
+    // rebuild the allowlisted prompt without re-reading the storage row.
+    if let Some(meta) = params.get("meta").filter(|value| value.is_object()) { item["meta"] = meta.clone(); }
     if kind == "send_later" {
         if let Some(due) = due_at.and_then(|value| DateTime::parse_from_rfc3339(value).ok()) {
             let late = now.signed_duration_since(due.with_timezone(&Utc)).num_seconds();
@@ -1385,6 +1388,7 @@ impl Storage {
     /// Append one validated prompt to a session's durable queue. The caller
     /// owns all user-facing validation; this only checks the session exists.
     pub fn queue_add(&self, session_id: &str, params: &Value, kind: &str, due_at: Option<&str>) -> Result<Value, StorageError> {
+        if !["user", "send_later", "retry"].contains(&kind) { return Err(StorageError::InvalidAgent); }
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session_id], |r| r.get(0))?;
@@ -1418,7 +1422,7 @@ impl Storage {
     pub fn queue_list(&self, session_id: &str) -> Result<Vec<Value>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let now = Utc::now();
-        let mut q = c.prepare("SELECT id,position,params_json,kind,due_at,status,error,created_at FROM queued_prompts WHERE session_id=?1 ORDER BY CASE WHEN kind='send_later' THEN 0 ELSE 1 END,due_at,position,created_at,id")?;
+        let mut q = c.prepare("SELECT id,position,params_json,kind,due_at,status,error,created_at FROM queued_prompts WHERE session_id=?1 ORDER BY CASE WHEN kind IN ('send_later','retry') THEN 0 ELSE 1 END,due_at,position,created_at,id")?;
         let rows = q.query_map([session_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?)))?.collect::<Result<Vec<_>,_>>()?;
         Ok(rows.into_iter().map(|(id,position,params,kind,due,status,error,created)| queued_prompt_dto(&id,session_id,position,&params,&kind,due.as_deref(),&status,error.as_deref(),&created,now)).collect())
     }
@@ -1522,7 +1526,7 @@ impl Storage {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let row: Option<(String,i64,String,String,Option<String>)> = tx.query_row(
-            "SELECT id,position,params_json,kind,due_at FROM queued_prompts WHERE session_id=?1 AND status='queued' AND ((kind='send_later' AND due_at IS NOT NULL AND due_at<=?2) OR (?3 AND kind='user')) ORDER BY CASE WHEN kind='send_later' THEN 0 ELSE 1 END,due_at,position,created_at,id LIMIT 1",
+            "SELECT id,position,params_json,kind,due_at FROM queued_prompts WHERE session_id=?1 AND status='queued' AND ((kind IN ('send_later','retry') AND due_at IS NOT NULL AND due_at<=?2) OR (?3 AND kind='user')) ORDER BY CASE WHEN kind IN ('send_later','retry') THEN 0 ELSE 1 END,due_at,position,created_at,id LIMIT 1",
             params![session_id,now,allow_plain],
             |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))
         ).optional()?;
@@ -1566,7 +1570,7 @@ impl Storage {
     }
     pub fn queue_due_sessions(&self, now: &str) -> Result<Vec<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let mut q = c.prepare("SELECT DISTINCT session_id FROM queued_prompts WHERE status='queued' AND kind='send_later' AND due_at IS NOT NULL AND due_at<=?1")?;
+        let mut q = c.prepare("SELECT DISTINCT session_id FROM queued_prompts WHERE status='queued' AND kind IN ('send_later','retry') AND due_at IS NOT NULL AND due_at<=?1")?;
         let rows = q.query_map([now], |r| r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
         Ok(rows)
     }
@@ -1575,6 +1579,70 @@ impl Storage {
         let mut q = c.prepare("SELECT DISTINCT session_id FROM queued_prompts WHERE status='queued' AND kind='user'")?;
         let rows = q.query_map([], |r| r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
         Ok(rows)
+    }
+    /// The session's pending automatic-retry item, if one is queued or being sent.
+    /// Returns `{id,retryOf,attempt}` or `None`.
+    pub fn queue_pending_retry(&self, session_id: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let row: Option<(String, String)> = c.query_row(
+            "SELECT id,params_json FROM queued_prompts WHERE session_id=?1 AND kind='retry' AND status IN ('queued','sending') ORDER BY created_at,id LIMIT 1",
+            [session_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?;
+        Ok(row.map(|(id, params)| {
+            let params: Value = serde_json::from_str(&params).unwrap_or(Value::Null);
+            json!({"id":id,"retryOf":params["meta"]["retryOf"],"attempt":params["meta"]["attempt"]})
+        }))
+    }
+    /// Remove every pending retry item for a session, returning what was removed
+    /// so the caller can record the cancel in the original turn's audit data.
+    pub fn queue_delete_retries(&self, session_id: &str) -> Result<Vec<Value>, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let rows = {
+            let mut q = tx.prepare("SELECT id,params_json FROM queued_prompts WHERE session_id=?1 AND kind='retry' AND status IN ('queued','sending')")?;
+            let collected = q.query_map([session_id], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()?;
+            collected
+        };
+        tx.execute("DELETE FROM queued_prompts WHERE session_id=?1 AND kind='retry' AND status IN ('queued','sending')", [session_id])?;
+        tx.commit()?;
+        Ok(rows.into_iter().map(|(id, params)| {
+            let params: Value = serde_json::from_str(&params).unwrap_or(Value::Null);
+            json!({"id":id,"retryOf":params["meta"]["retryOf"],"attempt":params["meta"]["attempt"]})
+        }).collect())
+    }
+    /// Sessions with a pending retry item (queued or being sent).
+    pub fn queue_retry_sessions(&self) -> Result<Vec<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT DISTINCT session_id FROM queued_prompts WHERE kind='retry' AND status IN ('queued','sending')")?;
+        let rows = q.query_map([], |r| r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+        Ok(rows)
+    }
+    /// Queued retry items whose due time is at or before `cutoff`. Used after a
+    /// restart to drop retries that are too overdue to fire safely.
+    pub fn queue_stale_retries(&self, cutoff: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT id,session_id,params_json,due_at FROM queued_prompts WHERE kind='retry' AND status='queued' AND due_at IS NOT NULL AND due_at<=?1")?;
+        let rows = q.query_map([cutoff], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,String>(2)?, r.get::<_,String>(3)?)))?.collect::<Result<Vec<_>,_>>()?;
+        Ok(rows.into_iter().map(|(id, session, params, due)| {
+            let params: Value = serde_json::from_str(&params).unwrap_or(Value::Null);
+            json!({"id":id,"sessionId":session,"retryOf":params["meta"]["retryOf"],"attempt":params["meta"]["attempt"],"dueAt":due})
+        }).collect())
+    }
+    /// Rewrite a retry item's due time without changing its kind. Deterministic
+    /// tests use this to fire a scheduled retry immediately.
+    #[doc(hidden)]
+    pub fn queue_set_retry_due(&self, id: &str, due_at: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        c.execute("UPDATE queued_prompts SET due_at=?2,updated_at=?3 WHERE id=?1 AND kind='retry'", params![id, due_at, now])?;
+        Ok(())
+    }
+    /// Remove one queued or failed row by id (used to drop an overdue retry).
+    pub fn queue_delete_by_id(&self, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("DELETE FROM queued_prompts WHERE id=?1 AND status IN ('queued','failed')", [id])?;
+        Ok(())
     }
     pub fn insert_usage(&self, u: &Value) -> Result<(), StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -2321,6 +2389,8 @@ impl Storage {
     pub fn set_setting(&self, k: &str, v: &Value) -> Result<Vec<Value>, StorageError> {
         if k=="permissions.default_mode" && !v.as_str().is_some_and(|s|["ask","auto"].contains(&s)){return Err(StorageError::InvalidAgent)}
         if k=="notifications.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+        if k=="experimental.autoRetry" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+        if k=="retry.maxWaitSecs" && !v.as_u64().is_some_and(|secs| secs<=86_400){return Err(StorageError::InvalidAgent)}
         if k=="experimental.usageTips" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         if k=="experimental.usageTipDismissals" && !valid_usage_tip_dismissals(v){return Err(StorageError::InvalidAgent)}
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;

@@ -36,6 +36,7 @@ use uuid::Uuid;
 mod mcp_bridge;
 mod model_presentation;
 mod team;
+mod queue;
 mod experiments;
 mod quota;
 mod quota_sources;
@@ -62,6 +63,7 @@ struct AppState {
     quota_poll_gate: Arc<Mutex<QuotaPollGate>>,
     stopping: Arc<tokio::sync::Notify>,
     team: Arc<team::Team>,
+    queue: Arc<queue::Queue>,
 }
 #[derive(Clone)]
 struct Adapters {
@@ -855,6 +857,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 let active_turn = st.active_turns.lock().await.remove(id);
                 if let Some(turn) = active_turn.as_deref() { st.denied_turns.lock().await.remove(turn); }
                 st.team.forget(id);
+                st.queue.forget(id);
                 st.emit("session.deleted", json!({"sessionId":id})).await;
                 remove_session_gate(st, id, &gate).await;
                 (active, active_turn)
@@ -873,6 +876,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "session.resume" => resume_session(st, p).await,
         "session.model.update" => update_session_model(st, p).await,
         "session.prompt" => session_prompt(st, p).await,
+        "session.queue.add" | "session.queue.list" | "session.queue.update" | "session.queue.reorder" | "session.queue.delete" | "session.queue.send_now" | "session.queue.resume" => queue::queue_rpc(st, method, &p).await,
         "session.cancel" => {
             let id = p["sessionId"].as_str().unwrap_or("");
             let gate = gate_for_session(st, id).await;
@@ -2969,7 +2973,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         quota_poll_gate: Arc::new(Mutex::new(QuotaPollGate::default())),
         stopping: Arc::new(tokio::sync::Notify::new()),
         team: Arc::new(team::Team::default()),
+        queue: Arc::new(queue::Queue::default()),
     };
+    if let Ok(paused) = st.db.queue_paused_sessions() { st.queue.mark_startup_paused(paused); }
     for id in recovered_sessions {
         if let Ok(session) = st.db.session_event_summary(&id) {
             st.emit("session.changed", session).await;
@@ -2985,6 +2991,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     *st.team.data_dir.lock().unwrap() = data_dir;
     let quota_state = st.clone();
     tokio::spawn(quota_poll_loop(quota_state, st.events.subscribe()));
+    let queue_state = st.clone();
+    tokio::spawn(queue::due_loop(queue_state));
     let deletion_state = st.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
@@ -3673,7 +3681,7 @@ mod phase2a_tests {
 
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default())};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default())};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -5016,5 +5024,255 @@ mod phase2a_tests {
         let(st,_)=state();let request=RpcRequest{v:PROTOCOL_VERSION,id:"auth-test".into(),method:"agent.list".into(),params:json!({})};
         let response=main_rpc(State(st),ConnectInfo("127.0.0.1:12345".parse().unwrap()),HeaderMap::new(),Json(request)).await.into_response();
         assert_eq!(response.status(),StatusCode::UNAUTHORIZED);
+    }
+
+    /// Records every prompt it is asked to run and never completes on its own,
+    /// so a test controls when a turn ends by sending an event.
+    #[derive(Default)]
+    struct QueueAdapter {
+        prompts: StdMutex<Vec<(String,String)>>,
+    }
+    #[async_trait::async_trait]
+    impl AgentAdapter for QueueAdapter {
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, request: NewSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            Ok(SessionHandle { session_id: request.session_id, provider_session_id: "queue-native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() })
+        }
+        async fn resume_session(&self, _: &RuntimeSpec, request: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            Ok(SessionHandle { session_id: request.session_id, provider_session_id: request.provider_session_id, capabilities: bloblex_agent_core::AgentCapabilities::default() })
+        }
+        async fn prompt(&self, handle: &SessionHandle, request: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> {
+            self.prompts.lock().unwrap().push((handle.session_id.clone(), request.text));
+            Ok(())
+        }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+    }
+    impl QueueAdapter {
+        fn texts(&self) -> Vec<String> { self.prompts.lock().unwrap().iter().map(|(_, text)| text.clone()).collect() }
+    }
+    fn install_queue_adapter(st: &mut AppState, adapter: &Arc<QueueAdapter>) {
+        st.adapters = Arc::new(Adapters { acp: Arc::new(AcpAdapter::default()), codex: adapter.clone(), claude: Arc::new(ClaudeAdapter::default()) });
+    }
+    async fn queue_session(st: &AppState, adapter: &Arc<QueueAdapter>, sid: &str) -> tokio::sync::mpsc::Sender<AgentEvent> {
+        st.db.create_session(sid, "rt-test", "codex", ".", "Queue").unwrap();
+        st.db.update_session_state(sid, "idle").unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
+        let handle = SessionHandle { session_id: sid.into(), provider_session_id: "queue-native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime, adapter: adapter.clone(), launch_approval_mode: ApprovalMode::Ask });
+        tokio::spawn(forward_events(st.clone(), sid.into(), "codex".into(), "rt-test".into(), rx));
+        tx
+    }
+    async fn mark_busy(st: &AppState, sid: &str, turn: &str) {
+        st.db.create_turn(turn, sid).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.into(), turn.into());
+    }
+    async fn wait_for(done: impl Fn() -> bool) -> bool {
+        for _ in 0..300 { if done() { return true; } tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
+        false
+    }
+    fn past_due_at(secs: i64) -> String {
+        (Utc::now() - chrono::Duration::seconds(secs)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    }
+
+    #[tokio::test]
+    async fn queue_add_while_busy_drains_one_item_per_completed_turn_exactly_once() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-drain";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"first"})).await.unwrap();
+        let second = dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"second"})).await.unwrap();
+        assert_eq!(st.db.queue_list(sid).unwrap().len(), 2);
+        assert!(adapter.texts().is_empty(), "nothing sends while the turn is live");
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        assert!(wait_for(|| adapter.texts() == vec!["first"]).await, "the first item sends exactly once");
+        assert!(wait_for(|| st.db.queue_list(sid).unwrap().len() == 1).await, "the sent item is removed from the queue");
+        assert_eq!(st.db.queue_list(sid).unwrap()[0]["id"], second["item"]["id"]);
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        assert!(wait_for(|| st.db.queue_list(sid).unwrap().is_empty()).await);
+        assert_eq!(adapter.texts(), vec!["first", "second"]);
+    }
+
+    #[tokio::test]
+    async fn cancelled_turns_pause_the_queue_until_resume_sends_one_item() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-pause";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"one"})).await.unwrap();
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"two"})).await.unwrap();
+        tx.send(AgentEvent::TurnCancelled).await.unwrap();
+        assert!(wait_for(|| st.queue.is_paused(sid)).await, "a cancelled turn pauses the queue");
+        assert!(adapter.texts().is_empty(), "nothing auto-sends after a cancellation");
+        dispatch(&st, "session.queue.resume", json!({"sessionId":sid})).await.unwrap();
+        assert!(wait_for(|| adapter.texts() == vec!["one"]).await, "resume sends exactly the next item");
+        assert_eq!(st.db.queue_list(sid).unwrap().len(), 1);
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        assert!(wait_for(|| st.db.queue_list(sid).unwrap().is_empty()).await);
+        assert_eq!(adapter.texts(), vec!["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn due_scheduled_items_bypass_pause_and_report_lateness() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-due";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"plain"})).await.unwrap();
+        tx.send(AgentEvent::TurnCancelled).await.unwrap();
+        assert!(wait_for(|| st.queue.is_paused(sid)).await);
+        st.db.queue_add(sid, &json!({"text":"scheduled","attachments":[]}), "send_later", Some(&past_due_at(120))).unwrap();
+        crate::queue::due_tick(&st).await;
+        assert!(wait_for(|| adapter.texts() == vec!["scheduled"]).await, "a due item fires while paused");
+        assert!(wait_for(|| st.db.session_detail(sid).unwrap()["messages"].as_array().unwrap().iter().filter(|message| message["meta"]["kind"] == "queue_late").count() == 1).await, "a late send appends exactly one notice");
+        let items = st.db.queue_list(sid).unwrap();
+        assert!(items.iter().all(|item| item["kind"] != "send_later"), "the due item is removed");
+        assert!(items.iter().any(|item| item["kind"] == "user"), "the plain item still waits");
+    }
+
+    #[tokio::test]
+    async fn errored_turns_pause_the_queue_and_send_nothing() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-error";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"one"})).await.unwrap();
+        tx.send(AgentEvent::Error { message: "provider failed".into() }).await.unwrap();
+        assert!(wait_for(|| st.queue.is_paused(sid)).await, "an errored turn pauses the queue");
+        assert!(adapter.texts().is_empty(), "nothing auto-sends after an error");
+        assert_eq!(st.db.queue_list(sid).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_due_item_precedes_plain_items_at_the_next_completed_turn() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-due-busy";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        st.db.queue_add(sid, &json!({"text":"plain","attachments":[]}), "user", None).unwrap();
+        st.db.queue_add(sid, &json!({"text":"scheduled","attachments":[]}), "send_later", Some(&past_due_at(5))).unwrap();
+        assert!(adapter.texts().is_empty(), "a busy session does not drain");
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        assert!(wait_for(|| adapter.texts() == vec!["scheduled"]).await, "the due item is sent first");
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        assert!(wait_for(|| adapter.texts() == vec!["scheduled", "plain"]).await);
+    }
+
+    #[tokio::test]
+    async fn send_now_moves_to_front_when_busy_and_sends_when_idle() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-now";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"one"})).await.unwrap();
+        let two = dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"two"})).await.unwrap();
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"three"})).await.unwrap();
+        let moved = dispatch(&st, "session.queue.send_now", json!({"sessionId":sid,"id":two["item"]["id"]})).await.unwrap();
+        assert_eq!(moved["queued"], true);
+        assert!(adapter.texts().is_empty(), "send_now never steers a live turn");
+        assert_eq!(st.db.queue_list(sid).unwrap().iter().map(|item| item["text"].as_str().unwrap()).collect::<Vec<_>>(), vec!["two","one","three"]);
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        assert!(wait_for(|| adapter.texts() == vec!["two"]).await);
+
+        let idle = "queue-now-idle";
+        queue_session(&st, &adapter, idle).await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":idle,"text":"alpha"})).await.unwrap();
+        let beta = dispatch(&st, "session.queue.add", json!({"sessionId":idle,"text":"beta"})).await.unwrap();
+        let sent = dispatch(&st, "session.queue.send_now", json!({"sessionId":idle,"id":beta["item"]["id"]})).await.unwrap();
+        assert_eq!(sent["sent"], true);
+        assert!(wait_for(|| adapter.texts().contains(&"beta".to_owned())).await);
+    }
+
+    #[tokio::test]
+    async fn a_failed_send_marks_failed_pauses_and_keeps_the_row() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-fail";
+        queue_session(&st, &adapter, sid).await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"doomed"})).await.unwrap();
+        st.db.session_archive(sid, true).unwrap();
+        crate::queue::after_turn(&st, sid, "turn.completed").await;
+        assert!(wait_for(|| st.db.queue_list(sid).unwrap().iter().any(|item| item["status"] == "failed")).await);
+        let items = st.db.queue_list(sid).unwrap();
+        assert_eq!(items[0]["status"], "failed");
+        assert!(items[0]["error"].as_str().unwrap().contains("archived"));
+        assert!(st.queue.is_paused(sid));
+        assert!(adapter.texts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn simultaneous_drain_triggers_send_one_item_once() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-race";
+        queue_session(&st, &adapter, sid).await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"only"})).await.unwrap();
+        let first = crate::queue::after_turn(&st, sid, "turn.completed");
+        let second = crate::queue::after_turn(&st, sid, "turn.completed");
+        tokio::join!(first, second);
+        assert!(wait_for(|| !adapter.texts().is_empty()).await);
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        assert_eq!(adapter.texts(), vec!["only"]);
+        assert!(st.db.queue_list(sid).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn queue_validation_covers_bounds_full_readonly_and_empty_text() {
+        let (st, _) = state();
+        st.db.create_session("queue-validation", "rt-test", "codex", ".", "Queue").unwrap();
+        let soon = (Utc::now() + chrono::Duration::seconds(1)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        assert_eq!(dispatch(&st, "session.queue.add", json!({"sessionId":"queue-validation","text":"x","dueAt":soon})).await.unwrap_err().1.code, "invalid_argument");
+        let far = (Utc::now() + chrono::Duration::days(400)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        assert_eq!(dispatch(&st, "session.queue.add", json!({"sessionId":"queue-validation","text":"x","dueAt":far})).await.unwrap_err().1.code, "invalid_argument");
+        let valid = (Utc::now() + chrono::Duration::seconds(30)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let scheduled = dispatch(&st, "session.queue.add", json!({"sessionId":"queue-validation","text":"x","dueAt":valid})).await.unwrap();
+        assert_eq!(scheduled["item"]["kind"], "send_later");
+        dispatch(&st, "session.queue.delete", json!({"sessionId":"queue-validation","id":scheduled["item"]["id"]})).await.unwrap();
+        assert_eq!(dispatch(&st, "session.queue.add", json!({"sessionId":"queue-validation","text":""})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "session.queue.add", json!({"sessionId":"missing","text":"x"})).await.unwrap_err().1.code, "not_found");
+        assert_eq!(dispatch(&st, "session.queue.list", json!({"sessionId":"missing"})).await.unwrap_err().1.code, "not_found");
+        st.db.session_archive("queue-validation", true).unwrap();
+        assert_eq!(dispatch(&st, "session.queue.add", json!({"sessionId":"queue-validation","text":"x"})).await.unwrap_err().1.code, "not_found");
+        st.db.session_archive("queue-validation", false).unwrap();
+        st.db.create_session("queue-side", "rt-test", "codex", ".", "Side").unwrap();
+        st.db.set_session_link("queue-side", &json!({"kind":"side","peerAgentId":"p","originSessionId":"q"})).unwrap();
+        assert_eq!(dispatch(&st, "session.queue.add", json!({"sessionId":"queue-side","text":"x"})).await.unwrap_err().1.code, "read_only");
+        for index in 0..20 { dispatch(&st, "session.queue.add", json!({"sessionId":"queue-validation","text":format!("message {index}")})).await.unwrap(); }
+        let full = dispatch(&st, "session.queue.add", json!({"sessionId":"queue-validation","text":"overflow"})).await.unwrap_err();
+        assert_eq!((full.1.code.as_str(), full.1.message.as_str()), ("conflict", "The queue is full."));
+    }
+
+    #[tokio::test]
+    async fn team_deliveries_drain_after_the_user_queue() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-team";
+        let tx = queue_session(&st, &adapter, sid).await;
+        mark_busy(&st, sid, "turn-0").await;
+        st.team.enqueue_for_test(sid, "team delivery").await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"user item"})).await.unwrap();
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        assert!(wait_for(|| adapter.texts() == vec!["user item"]).await, "the user queue drains before the team delivery");
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        assert!(wait_for(|| adapter.texts() == vec!["user item", "team delivery"]).await);
     }
 }

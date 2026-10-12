@@ -416,6 +416,26 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// Durable prompt queue schema. Additive and idempotent like the team schema,
+/// so it runs on every open after the versioned migrations.
+fn ensure_queue_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch("CREATE TABLE IF NOT EXISTS queued_prompts(
+        id TEXT PRIMARY KEY NOT NULL,
+        session_id TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        params_json TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        due_at TEXT,
+        status TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_queued_prompts_session ON queued_prompts(session_id,status,position);
+    CREATE INDEX IF NOT EXISTS idx_queued_prompts_due ON queued_prompts(status,due_at);")?;
+    Ok(())
+}
+
 fn migrate_session_controls(c: &mut Connection, path: Option<&Path>, backup_done: bool) -> Result<(), StorageError> {
     let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
     let pragma: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -525,6 +545,35 @@ fn push_settings_event(tx:&Transaction<'_>,key:&str,enabled:bool)->Result<Value,
 
 pub struct Storage {
     conn: Mutex<Connection>,
+}
+
+/// Shapes one durable queue row into the wire DTO. `params_json` holds only
+/// the allowlisted prompt keys the daemon stored. `lateBySecs` is derived here
+/// and never persisted.
+#[allow(clippy::too_many_arguments)]
+fn queued_prompt_dto(id:&str,session_id:&str,position:i64,params_json:&str,kind:&str,due_at:Option<&str>,status:&str,error:Option<&str>,created_at:&str,now:DateTime<Utc>)->Value{
+    let params: Value = serde_json::from_str(params_json).unwrap_or(Value::Null);
+    let mut item = json!({
+        "id": id,
+        "sessionId": session_id,
+        "text": params.get("text").cloned().unwrap_or_else(|| json!("")),
+        "attachments": params.get("attachments").cloned().unwrap_or_else(|| json!([])),
+        "conversationRefs": params.get("conversationRefs").cloned().unwrap_or_else(|| json!([])),
+        "kind": kind,
+        "dueAt": due_at,
+        "status": status,
+        "error": error,
+        "position": position,
+        "createdAt": created_at,
+    });
+    if let Some(reply) = params.get("replyTo").filter(|value| !value.is_null()) { item["replyTo"] = reply.clone(); }
+    if kind == "send_later" {
+        if let Some(due) = due_at.and_then(|value| DateTime::parse_from_rfc3339(value).ok()) {
+            let late = now.signed_duration_since(due.with_timezone(&Utc)).num_seconds();
+            if late > 0 { item["lateBySecs"] = json!(late); }
+        }
+    }
+    item
 }
 
 fn table_counts(c: &Connection) -> Result<std::collections::BTreeMap<String, i64>, StorageError> {
@@ -665,12 +714,14 @@ impl Storage {
             if ledger==12 {
                 if !schema_v12_valid(&conn)? { return Err(StorageError::InvalidAgent); }
                 ensure_team_schema(&conn)?;
+                ensure_queue_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==11 {
                 if !schema_v11_valid(&conn)? { return Err(StorageError::InvalidAgent); }
                 migrate_message_reactions(&mut conn, path, false)?;
                 ensure_team_schema(&conn)?;
+                ensure_queue_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==10 {
@@ -678,6 +729,7 @@ impl Storage {
                 let backup_done = if let Some(path) = path { verified_backup(&conn, path, 10)?; true } else { false };
                 migrate_session_model_lock(&mut conn, path, backup_done)?;
                 ensure_team_schema(&conn)?;
+                ensure_queue_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -688,6 +740,7 @@ impl Storage {
                 let model_lock_backup = if let Some(path) = path { verified_backup(&conn, path, 10)?; true } else { false };
                 migrate_session_model_lock(&mut conn, path, model_lock_backup)?;
                 ensure_team_schema(&conn)?;
+                ensure_queue_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -793,6 +846,7 @@ impl Storage {
         } else { false };
         migrate_session_model_lock(&mut conn, path, backup_v10_done)?;
         ensure_team_schema(&conn)?;
+        ensure_queue_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -1321,10 +1375,179 @@ impl Storage {
         for table in ["messages", "tool_calls", "file_changes", "permission_requests", "usage_events", "turns"] {
             tx.execute(&format!("DELETE FROM {table} WHERE session_id=?1"), [id])?;
         }
+        tx.execute("DELETE FROM queued_prompts WHERE session_id=?1", [id])?;
         tx.execute("DELETE FROM app_events WHERE json_valid(payload) AND (json_extract(payload,'$.sessionId')=?1 OR json_extract(payload,'$.session.id')=?1 OR (event_type='session.changed' AND json_extract(payload,'$.id')=?1))", [id])?;
         tx.execute("DELETE FROM sessions WHERE id=?1", [id])?;
         tx.commit()?;
         Ok(())
+    }
+    // ── Durable prompt queue ───────────────────────────────────────────────
+    /// Append one validated prompt to a session's durable queue. The caller
+    /// owns all user-facing validation; this only checks the session exists.
+    pub fn queue_add(&self, session_id: &str, params: &Value, kind: &str, due_at: Option<&str>) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session_id], |r| r.get(0))?;
+        if !exists { return Err(StorageError::AgentNotFound); }
+        let position: i64 = tx.query_row("SELECT COALESCE(MAX(position)+1,0) FROM queued_prompts WHERE session_id=?1", [session_id], |r| r.get(0))?;
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let params_json = params.to_string();
+        tx.execute("INSERT INTO queued_prompts(id,session_id,position,params_json,kind,due_at,status,error,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,'queued',NULL,?7,?7)", params![id,session_id,position,params_json,kind,due_at,now])?;
+        tx.commit()?;
+        Ok(queued_prompt_dto(&id,session_id,position,&params_json,kind,due_at,"queued",None,&now,Utc::now()))
+    }
+    /// Full list for a session: scheduled items by due time first, then plain
+    /// items by position. `lateBySecs` is derived here, never stored.
+    pub fn queue_list(&self, session_id: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now();
+        let mut q = c.prepare("SELECT id,position,params_json,kind,due_at,status,error,created_at FROM queued_prompts WHERE session_id=?1 ORDER BY CASE WHEN kind='send_later' THEN 0 ELSE 1 END,due_at,position,created_at,id")?;
+        let rows = q.query_map([session_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?)))?.collect::<Result<Vec<_>,_>>()?;
+        Ok(rows.into_iter().map(|(id,position,params,kind,due,status,error,created)| queued_prompt_dto(&id,session_id,position,&params,&kind,due.as_deref(),&status,error.as_deref(),&created,now)).collect())
+    }
+    pub fn queue_get(&self, session_id: &str, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now();
+        let row = c.query_row("SELECT position,params_json,kind,due_at,status,error,created_at FROM queued_prompts WHERE session_id=?1 AND id=?2", params![session_id,id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,String>(6)?))).optional()?;
+        let (position,params,kind,due,status,error,created) = row.ok_or(StorageError::AgentNotFound)?;
+        Ok(queued_prompt_dto(id,session_id,position,&params,&kind,due.as_deref(),&status,error.as_deref(),&created,now))
+    }
+    pub fn queue_count_queued(&self, session_id: &str) -> Result<i64, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT COUNT(*) FROM queued_prompts WHERE session_id=?1 AND status='queued'", [session_id], |r| r.get(0))?)
+    }
+    pub fn queue_has_queued(&self, session_id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM queued_prompts WHERE session_id=?1 AND status='queued')", [session_id], |r| r.get(0))?)
+    }
+    /// Edit a still-queued item. `text` replaces the text; `due_at` is
+    /// `None` to leave scheduling alone, `Some(None)` to convert to a plain
+    /// item, and `Some(Some(at))` to schedule it.
+    pub fn queue_update(&self, session_id: &str, id: &str, text: Option<&str>, due_at: Option<Option<&str>>) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(i64,String,String,String,Option<String>)> = tx.query_row("SELECT position,params_json,status,kind,due_at FROM queued_prompts WHERE session_id=?1 AND id=?2", params![session_id,id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+        let (position,mut params_json,status,mut kind,mut due) = row.ok_or(StorageError::AgentNotFound)?;
+        if status != "queued" { return Err(StorageError::AgentConflict); }
+        if let Some(text) = text {
+            let mut params: Value = serde_json::from_str(&params_json)?;
+            params["text"] = json!(text);
+            params_json = params.to_string();
+        }
+        if let Some(next) = due_at {
+            match next {
+                None => { kind = "user".to_owned(); due = None; }
+                Some(value) => { kind = "send_later".to_owned(); due = Some(value.to_owned()); }
+            }
+        }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        tx.execute("UPDATE queued_prompts SET params_json=?2,kind=?3,due_at=?4,updated_at=?5 WHERE id=?1", params![id,&params_json,&kind,&due,&now])?;
+        tx.commit()?;
+        Ok(queued_prompt_dto(id,session_id,position,&params_json,&kind,due.as_deref(),"queued",None,&now,Utc::now()))
+    }
+    /// Replace the order of a session's queued plain items. `ids` must be
+    /// exactly that set, otherwise the request is invalid.
+    pub fn queue_reorder(&self, session_id: &str, ids: &[String]) -> Result<(), StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Vec<String> = {
+            let mut q = tx.prepare("SELECT id FROM queued_prompts WHERE session_id=?1 AND status='queued' AND kind='user'")?;
+            let rows = q.query_map([session_id], |r| r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+            rows
+        };
+        let mut requested = ids.to_vec(); requested.sort();
+        let mut current = existing; current.sort();
+        if requested != current { return Err(StorageError::InvalidAgent); }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        for (index, id) in ids.iter().enumerate() {
+            tx.execute("UPDATE queued_prompts SET position=?2,updated_at=?3 WHERE session_id=?4 AND id=?1 AND status='queued'", params![id,index as i64,now,session_id])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn queue_delete(&self, session_id: &str, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute("DELETE FROM queued_prompts WHERE session_id=?1 AND id=?2 AND status IN ('queued','failed')", params![session_id,id])?;
+        if changed == 0 {
+            let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM queued_prompts WHERE session_id=?1 AND id=?2)", params![session_id,id], |r| r.get(0))?;
+            return if exists { Err(StorageError::AgentConflict) } else { Err(StorageError::AgentNotFound) };
+        }
+        Ok(())
+    }
+    /// Move one queued plain item to the head of the plain queue.
+    pub fn queue_move_to_front(&self, session_id: &str, id: &str) -> Result<(), StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let status: Option<String> = tx.query_row("SELECT status FROM queued_prompts WHERE session_id=?1 AND id=?2", params![session_id,id], |r| r.get(0)).optional()?;
+        match status.as_deref() {
+            Some("queued") => {}
+            Some(_) => return Err(StorageError::AgentConflict),
+            None => return Err(StorageError::AgentNotFound),
+        }
+        let mut ordered: Vec<String> = {
+            let mut q = tx.prepare("SELECT id FROM queued_prompts WHERE session_id=?1 AND status='queued' AND kind='user' ORDER BY position,created_at,id")?;
+            let rows = q.query_map([session_id], |r| r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+            rows
+        };
+        if let Some(index) = ordered.iter().position(|candidate| candidate == id) { ordered.remove(index); }
+        ordered.insert(0, id.to_owned());
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        for (index, item) in ordered.iter().enumerate() {
+            tx.execute("UPDATE queued_prompts SET position=?2,updated_at=?3 WHERE session_id=?4 AND id=?1 AND status='queued'", params![item,index as i64,now,session_id])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    /// Atomically claim the next eligible item. When `allow_plain` is false
+    /// only due scheduled items are candidates, so a paused session never
+    /// auto-sends a plain prompt.
+    pub fn queue_claim_next(&self, session_id: &str, now: &str, allow_plain: bool) -> Result<Option<Value>, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(String,i64,String,String,Option<String>)> = tx.query_row(
+            "SELECT id,position,params_json,kind,due_at FROM queued_prompts WHERE session_id=?1 AND status='queued' AND ((kind='send_later' AND due_at IS NOT NULL AND due_at<=?2) OR (?3 AND kind='user')) ORDER BY CASE WHEN kind='send_later' THEN 0 ELSE 1 END,due_at,position,created_at,id LIMIT 1",
+            params![session_id,now,allow_plain],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))
+        ).optional()?;
+        let Some((id,position,params,kind,due)) = row else { tx.commit()?; return Ok(None); };
+        let changed = tx.execute("UPDATE queued_prompts SET status='sending',updated_at=?2 WHERE id=?1 AND status='queued'", params![id,now])?;
+        tx.commit()?;
+        if changed == 0 { return Ok(None); }
+        Ok(Some(queued_prompt_dto(&id,session_id,position,&params,&kind,due.as_deref(),"sending",None,now,Utc::now())))
+    }
+    /// Claim one specific queued item (used by `send_now` on an idle session).
+    pub fn queue_claim(&self, session_id: &str, id: &str, now: &str) -> Result<Option<Value>, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute("UPDATE queued_prompts SET status='sending',updated_at=?3 WHERE session_id=?1 AND id=?2 AND status='queued'", params![session_id,id,now])?;
+        if changed == 0 { tx.commit()?; return Ok(None); }
+        let (position,params,kind,due): (i64,String,String,Option<String>) = tx.query_row("SELECT position,params_json,kind,due_at FROM queued_prompts WHERE id=?1", [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+        tx.commit()?;
+        Ok(Some(queued_prompt_dto(id,session_id,position,&params,&kind,due.as_deref(),"sending",None,now,Utc::now())))
+    }
+    pub fn queue_mark_sent(&self, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("DELETE FROM queued_prompts WHERE id=?1 AND status='sending'", [id])?;
+        Ok(())
+    }
+    pub fn queue_mark_failed(&self, id: &str, error: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        c.execute("UPDATE queued_prompts SET status='failed',error=?2,updated_at=?3 WHERE id=?1 AND status='sending'", params![id,error,now])?;
+        Ok(())
+    }
+    pub fn queue_due_sessions(&self, now: &str) -> Result<Vec<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT DISTINCT session_id FROM queued_prompts WHERE status='queued' AND kind='send_later' AND due_at IS NOT NULL AND due_at<=?1")?;
+        let rows = q.query_map([now], |r| r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+        Ok(rows)
+    }
+    pub fn queue_paused_sessions(&self) -> Result<Vec<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT DISTINCT session_id FROM queued_prompts WHERE status='queued' AND kind='user'")?;
+        let rows = q.query_map([], |r| r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+        Ok(rows)
     }
     pub fn insert_usage(&self, u: &Value) -> Result<(), StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -1645,6 +1868,7 @@ impl Storage {
         tx.execute("DELETE FROM active_turn_reservations WHERE turn_id IN (SELECT id FROM turns WHERE state IN ('error','cancelled','completed'))", [])?;
         tx.execute("UPDATE sessions SET state='offline',updated_at=?1 WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
         tx.execute("UPDATE permission_requests SET status='expired',data=json_set(data,'$.status','expired','$.resolution','daemon_restarted') WHERE status IN ('pending','resolving')", [])?;
+        tx.execute("UPDATE queued_prompts SET status='failed',error='Interrupted by a restart. Check the conversation before sending again.',updated_at=?1 WHERE status='sending'", [&now])?;
         tx.commit()?;
         Ok(ids)
     }
@@ -3950,5 +4174,68 @@ mod tests {
         assert!(db.set_setting("experimental.usageTipDismissals", &json!((0..25).map(|index| json!({"provider":"codex","windowKey":format!("weekly-{index}"),"resetAt":null,"threshold":75})).collect::<Vec<_>>())).is_err());
         assert!(db.set_setting("experimental.usageTipDismissals", &json!([{"provider":"codex","windowKey":"bad key","resetAt":null,"threshold":75}])).is_err());
         assert!(db.set_setting("profile.name", &json!("Sam")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn queued_prompts_order_reorder_update_and_delete_follow_state_rules() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-queue","provider":"codex"})).unwrap();
+        db.create_session("s-queue", "rt-queue", "codex", ".", "Queue").unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            ensure_queue_schema(&c).unwrap();
+            ensure_queue_schema(&c).unwrap();
+        }
+        assert!(matches!(db.queue_add("missing", &json!({"text":"x"}), "user", None), Err(StorageError::AgentNotFound)));
+        let first = db.queue_add("s-queue", &json!({"text":"first","attachments":[]}), "user", None).unwrap();
+        let second = db.queue_add("s-queue", &json!({"text":"second","attachments":[]}), "user", None).unwrap();
+        let due = "2026-01-01T00:00:05.000Z";
+        let scheduled = db.queue_add("s-queue", &json!({"text":"later","attachments":[],"conversationRefs":["ref"],"replyTo":{"sourceSessionId":"s-queue","messageId":"m"}}), "send_later", Some(due)).unwrap();
+        let items = db.queue_list("s-queue").unwrap();
+        assert_eq!(items.iter().map(|item| item["text"].as_str().unwrap()).collect::<Vec<_>>(), vec!["later","first","second"]);
+        assert_eq!(items[0]["kind"], "send_later");
+        assert_eq!(items[0]["dueAt"], due);
+        assert_eq!(items[0]["conversationRefs"], json!(["ref"]));
+        assert_eq!(items[0]["replyTo"]["messageId"], "m");
+        let first_id = first["id"].as_str().unwrap().to_owned();
+        let second_id = second["id"].as_str().unwrap().to_owned();
+        let scheduled_id = scheduled["id"].as_str().unwrap().to_owned();
+        assert!(matches!(db.queue_reorder("s-queue", &[second_id.clone()]), Err(StorageError::InvalidAgent)), "a partial set is invalid");
+        assert!(matches!(db.queue_reorder("s-queue", &[second_id.clone(), second_id.clone()]), Err(StorageError::InvalidAgent)), "duplicates are invalid");
+        db.queue_reorder("s-queue", &[second_id.clone(), first_id.clone()]).unwrap();
+        let items = db.queue_list("s-queue").unwrap();
+        assert_eq!(items.iter().map(|item| item["text"].as_str().unwrap()).collect::<Vec<_>>(), vec!["later","second","first"]);
+        let converted = db.queue_update("s-queue", &scheduled_id, Some("scheduled"), Some(None)).unwrap();
+        assert_eq!((converted["kind"].as_str(), converted["text"].as_str()), (Some("user"), Some("scheduled")));
+        assert!(converted["dueAt"].is_null());
+        let claimed = db.queue_claim_next("s-queue", "9999-01-01T00:00:00.000Z", true).unwrap().unwrap();
+        let claimed_id = claimed["id"].as_str().unwrap().to_owned();
+        assert_eq!(claimed["status"], "sending");
+        assert!(matches!(db.queue_update("s-queue", &claimed_id, Some("x"), None), Err(StorageError::AgentConflict)), "only queued items can be edited");
+        assert!(matches!(db.queue_delete("s-queue", &claimed_id), Err(StorageError::AgentConflict)), "a sending item cannot be deleted");
+        db.queue_mark_failed(&claimed_id, "no longer available").unwrap();
+        let failed = db.queue_get("s-queue", &claimed_id).unwrap();
+        assert_eq!((failed["status"].as_str(), failed["error"].as_str()), (Some("failed"), Some("no longer available")));
+        db.queue_delete("s-queue", &claimed_id).unwrap();
+        assert!(matches!(db.queue_delete("s-queue", "missing"), Err(StorageError::AgentNotFound)));
+        assert_eq!(db.queue_count_queued("s-queue").unwrap(), 2);
+    }
+
+    #[test]
+    fn session_delete_cascades_the_prompt_queue_and_restart_fails_interrupted_sends() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-queue2","provider":"codex"})).unwrap();
+        db.create_session("s-queue2", "rt-queue2", "codex", ".", "Queue").unwrap();
+        let item = db.queue_add("s-queue2", &json!({"text":"x","attachments":[]}), "user", None).unwrap();
+        let id = item["id"].as_str().unwrap().to_owned();
+        let claimed = db.queue_claim("s-queue2", &id, "2026-01-01T00:00:00.000Z").unwrap().unwrap();
+        assert_eq!(claimed["status"], "sending");
+        db.recover_after_restart().unwrap();
+        let settled = db.queue_get("s-queue2", &id).unwrap();
+        assert_eq!(settled["status"], "failed");
+        assert_eq!(settled["error"], "Interrupted by a restart. Check the conversation before sending again.");
+        db.update_session_state("s-queue2", "idle").unwrap();
+        db.session_delete("s-queue2").unwrap();
+        assert!(matches!(db.queue_get("s-queue2", &id), Err(StorageError::AgentNotFound)));
     }
 }

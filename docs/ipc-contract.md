@@ -85,6 +85,14 @@ Events:
 | `agent.reorder` | `{ "runtimeId": string, "agentIds": string[] }` | `{ "agents": Agent[] }`; replaces the full active order for the runtime. |
 | `session.resume` | `{ "sessionId": string }` | Resumes only when the adapter advertises support; otherwise returns `unsupported`. |
 | `session.prompt` | `{ "sessionId": string, "text": string }` | Starts a turn after atomic budget admission. Prompt body is sent over authenticated IPC/protocol, never argv. |
+| `session.queue.add` | `{ "sessionId": string, "text": string, "attachments"?: [{ "path": string, "name"?: string }], "conversationRefs"?: string[], "replyTo"?: object, "dueAt"?: string }` | Stores a prompt for later; `dueAt` (RFC3339, 5 seconds to 366 days out) makes it a scheduled item. Validates the body like `session.prompt`; capped at 20 queued items per session (`conflict`, "The queue is full."). Returns `{item}` and emits `queue.changed`. |
+| `session.queue.list` | `{ "sessionId": string }` | `{items:[Item], paused:boolean}`; scheduled items order first by `dueAt`, then plain items by `position`. |
+| `session.queue.update` | `{ "sessionId": string, "id": string, "text"?: string, "dueAt"?: string\|null }` | Edits a still-queued item; `dueAt:null` converts a scheduled item to a plain one. Non-queued items return `conflict`. |
+| `session.queue.reorder` | `{ "sessionId": string, "ids": string[] }` | `ids` must be exactly the session's queued plain items, otherwise `invalid_argument`. |
+| `session.queue.delete` | `{ "sessionId": string, "id": string }` | Removes a `queued` or `failed` item; otherwise `conflict`. |
+| `session.queue.send_now` | `{ "sessionId": string, "id": string }` | On an idle session sends the item now; on a busy session moves it to the front and returns `{queued:true}` without steering or interrupting. |
+| `session.queue.resume` | `{ "sessionId": string }` | Clears `paused` and, if idle, drains the next item. |
+
 | `session.cancel` | `{ "sessionId": string, "turnId"?: string }` | Requests provider cancellation and reports whether the provider supports it. |
 | `session.close` | `{ "sessionId": string }` | Closes managed adapter process; persisted session remains. |
 | `permission.reply` | `{ "permissionId": string, "choice": string }` | Choice is an opaque provider-supported option ID from that request; the provider adapter must receive and acknowledge it before Bloblex marks it resolved. |
@@ -99,6 +107,13 @@ Events:
 | `budget.delete` | `{ "policyId": string }` | Removes that policy and its reservations atomically. Blob-scoped policies are also removed atomically when their blob is archived/deleted with `agent.delete`. |
 
 Appearance and companion preferences use `appearance.theme` (`system`, `dark`, or `light`), `appearance.textSize` (`small`, `default`, `large`, or `larger`), `companion.startPosition` (`launch` or `last`), `companion.hotkey` (boolean), and `companion.openAtStartup` (boolean).
+
+### Durable prompt queue
+
+`session.queue.*` stores prompts in Bloblex (never in the provider) and deletes each item once its prompt is accepted, so a sent item appears as an ordinary message. A queue item DTO is `{id,sessionId,text,attachments:[{name,path}],conversationRefs:[string],replyTo?:object,kind,dueAt:string|null,status,error:string|null,position:number,createdAt,lateBySecs?}`; `kind` is `user` or `send_later` and `status` is `queued`, `sending`, or `failed`. It holds only allowlisted prompt keys: `text`, `attachments`, `conversationRefs`, `replyTo`. Image attachments are re-validated at send time. Queue mutation RPCs return `not_found` for a missing or archived session and `read_only` for a side conversation.
+
+After every finished turn the queue is drained once: a `turn.completed` on an idle session sends the next item (due scheduled items first, then plain items by position, then any pending team deliveries); a `turn.error` or `turn.cancelled` pauses the queue when items remain, so no prompt fires unexpectedly. Pause is in-memory and every session with queued plain items starts paused after a restart. Due `send_later` items are exempt from pause and fire from a one-second loop when their session is idle; a scheduled item that sends more than 60 seconds late appends an existing-style `notice` message, "Scheduled message sent N min late.", with meta `{"kind":"queue_late","lateBySecs":N*60}`. A send interrupted by a restart becomes `failed` with the message "Interrupted by a restart. Check the conversation before sending again." and is never auto-resent. Failed items stay until deleted or sent with `session.queue.send_now`.
+
 
 ## Desktop notifications
 
@@ -164,7 +179,7 @@ Runtime auth state is one of `authenticated`, `unauthenticated`, `needs_interact
 
 Session state is `idle`, `starting`, `working`, `waiting_permission`, `waiting_user`, `cancelling`, `completed`, `cancelled`, `closed`, `error`, or `offline`. An unclean daemon restart marks volatile active sessions `offline`, fails their incomplete turns, expires pending approvals, retains partial history and provider-native IDs, and never resends prompts automatically. A session persists both Bloblex and provider-native IDs, provider, runtime, project path, resumability, and timestamps.
 
-The normalized event vocabulary is `runtime.changed`, `agent.changed`, `session.changed`, `session.deleted`, `message.delta`, `message.completed`, `tool.changed`, `file.changed`, `command.changed`, `permission.requested`, `permission.resolved`, `usage.updated`, `budget.warning`, `budget.blocked`, `turn.completed`, `turn.cancelled`, `turn.error`, and `daemon.health`. Streamed and finalized messages carry the same stable `id`/`messageId`; `session.changed` carries compact session metadata (identity, ownership, title, archive/activity state, resumability, and timestamps), never transcript content. Existing clients retain hydrated message and activity arrays when applying it. `session.deleted` permanently removes that conversation and its persisted session-specific events. Unsupported semantics remain unsupported; never synthesize provider success, auth, usage or permission grants.
+The normalized event vocabulary is `runtime.changed`, `agent.changed`, `session.changed`, `session.deleted`, `message.delta`, `message.completed`, `tool.changed`, `file.changed`, `command.changed`, `permission.requested`, `permission.resolved`, `usage.updated`, `budget.warning`, `budget.blocked`, `turn.completed`, `turn.cancelled`, `turn.error`, `queue.changed`, and `daemon.health`. `queue.changed` carries `{sessionId,items,paused}` with the full list for that session and is emitted after any queue mutation. Streamed and finalized messages carry the same stable `id`/`messageId`; `session.changed` carries compact session metadata (identity, ownership, title, archive/activity state, resumability, and timestamps), never transcript content. Existing clients retain hydrated message and activity arrays when applying it. `session.deleted` permanently removes that conversation and its persisted session-specific events. Unsupported semantics remain unsupported; never synthesize provider success, auth, usage or permission grants.
 
 Usage token buckets are mutually exclusive: `inputTokens` excludes `cacheReadTokens` and `cacheWriteTokens`; output, reasoning and provider-reported cost are separately nullable. Valuation basis is `provider_reported_actual`, `api_rate_estimate`, `subscription_fixed`, `local_free`, or `unknown`. Unknown model price serializes as `null` with an explanatory status, never zero.
 

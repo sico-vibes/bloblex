@@ -165,7 +165,7 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
     }
 }
 
-async fn session_busy(st: &AppState, session_id: &str) -> bool {
+pub(crate) async fn session_busy(st: &AppState, session_id: &str) -> bool {
     if st.active_turns.lock().await.contains_key(session_id) { return true; }
     st.db.session_state(session_id).ok().flatten().is_some_and(|state| matches!(state.as_str(), "starting" | "working" | "waiting_permission" | "cancelling"))
 }
@@ -389,6 +389,9 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
                 }
             }
         }
+        // The durable user queue drains before Team deliveries, so a queued
+        // prompt is sent first and any pending team delivery follows it.
+        crate::queue::after_turn(&st, &session_id, &outcome).await;
         let next = st.team.queued.lock().await.get_mut(&session_id).and_then(VecDeque::pop_front);
         if let Some(next) = next { deliver(&st, &session_id, next.text, next.meta, next.depth).await; }
     });

@@ -512,3 +512,6 @@
 /* While the knob is held it follows the pointer exactly; transitions only run for the release snap. */
 
 .launch-scan-confirmation { padding: 10px 14px; color: var(--text-2); font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }
+/* Stop and send sit side by side; only the first one takes the auto margin. */
+.send-button + .send-button { margin-left: 0; }
+.send-button.cancel { color: var(--text-1); background: var(--surface-selected-strong, var(--surface-hover)); }

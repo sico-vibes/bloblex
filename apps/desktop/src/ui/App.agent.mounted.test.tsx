@@ -837,6 +837,58 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.team-notice')).toBeNull()
   })
 
+  it('queues a message while the agent works, keeps Stop separate and lists the queue', async () => {
+    const working = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', state: 'working', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'u1', role: 'user', content: 'Build the page.' }] })
+    configure(snapshot({ sessions: [working, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    const queued: Array<{ id: string; sessionId: string; text: string; kind: 'user' | 'send_later'; dueAt: string | null; status: 'queued'; error: null; position: number }> = []
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'session.queue.list') return { items: queued, paused: false }
+      if (method === 'session.queue.add') {
+        queued.push({ id: `q${queued.length + 1}`, sessionId: String(params.sessionId), text: String(params.text), kind: params.dueAt ? 'send_later' : 'user', dueAt: (params.dueAt as string | undefined) ?? null, status: 'queued', error: null, position: queued.length })
+        return { item: queued.at(-1) }
+      }
+      return base(method, params)
+    })
+    const view = startApp()
+    await view.settle()
+    // Stop is its own button while the turn is live; the arrow becomes "Queue message".
+    expect(view.host.querySelector('[aria-label="Cancel turn"]')).not.toBeNull()
+    expect(view.host.querySelector('[aria-label="Send message"]')).toBeNull()
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea')!
+    expect(textarea.disabled).toBe(false)
+    await typeInto(textarea, 'Then add a footer')
+    await click(view.host.querySelector('[aria-label="Queue message"]'))
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.queue.add', { sessionId: 'session-claude', text: 'Then add a footer' })
+    expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
+    expect(textarea.value).toBe('')
+    expect(view.host.querySelector('.queue-banner')?.getAttribute('aria-label')).toBe('Queued messages: 1')
+    expect(view.host.querySelector('.queue-text')?.textContent).toBe('Then add a footer')
+  })
+
+  it('applies queue.changed events and lets the user delete a queued message', async () => {
+    const working = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', state: 'working', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'u1', role: 'user', content: 'Build the page.' }] })
+    configure(snapshot({ sessions: [working, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'session.queue.list') return { items: [], paused: false }
+      if (method === 'session.queue.delete') return { ok: true }
+      return base(method, params)
+    })
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelector('.queue-banner')).toBeNull()
+    await act(async () => {
+      emit({ type: 'queue.changed', sequence: 90, payload: { sessionId: 'session-claude', paused: true, items: [{ id: 'q9', sessionId: 'session-claude', text: 'Run the tests', kind: 'user', dueAt: null, status: 'queued', error: null, position: 0 }] } } as DaemonEvent)
+    })
+    await view.settle()
+    expect(view.host.querySelector('.queue-text')?.textContent).toBe('Run the tests')
+    expect(view.host.querySelector('.queue-paused')?.textContent).toContain('Paused')
+    await click(view.host.querySelector('[aria-label="Remove from queue"]'))
+    expect(h.rpc).toHaveBeenCalledWith('session.queue.delete', { sessionId: 'session-claude', id: 'q9' })
+  })
+
   it('shows delegation chips and opens the side conversation read-only', async () => {
     const main = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T03:00:00.000Z', messages: [
       { id: 'u1', role: 'user', content: 'Ask @Codex to check the tests.' },

@@ -361,6 +361,37 @@ describe('companion drag and usage labels', () => {
     assertIsland(approval.host, 'approval')
   })
 
+  it('queues typed text while the blob works and stops the turn when the box is empty', async () => {
+    const working = session({ ...claudeSession, state: 'working' })
+    configure(snapshot({ sessions: [working] }))
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'session.queue.list') return { items: [{ id: 'q1', sessionId: 'session-claude', text: 'Then run lint', kind: 'user', dueAt: null, status: 'queued', error: null, position: 0 }], paused: false }
+      if (method === 'session.queue.add') return { item: { id: 'q1' } }
+      return base(method, params)
+    })
+    const view = startApp('?companion=1')
+    await view.settle()
+    await press(view.host, 'Open companion home')
+    await view.settle()
+    await press(view.host, 'Chat')
+    await view.settle()
+    // An empty box means the button stops the turn.
+    expect([...view.host.querySelectorAll('.companion-chat-composer button')].some((item) => item.getAttribute('aria-label') === 'Cancel turn')).toBe(true)
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.companion-chat-composer textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(textarea, 'Then run lint')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      await settleMicrotasks()
+    })
+    // Text turns the same button into "Queue message".
+    await press(view.host, 'Queue message')
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.queue.add', { sessionId: 'session-claude', text: 'Then run lint' })
+    expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
+    expect(view.host.querySelector('.companion-queue-note')?.textContent).toBe('1 queued · sends when this turn ends')
+  })
+
   it('denies an approval on Escape without collapsing the companion', async () => {
     configure(snapshot({
       sessions: [{ ...claudeSession, state: 'waiting_permission' }],

@@ -22,7 +22,7 @@ import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermissio
 import { ApprovalCard } from './ApprovalCard'
 import bloblexLogo from '../assets/bloblex-128.png'
 import { sessionsForPauseRequest } from './trayActions'
-import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, type Agent, type ChatMessage, type ConnectionState, type DaemonEvent, type PermissionRequest, type Project, type Runtime, type Session, type Snapshot } from '../types'
+import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, normalizeQueueState, type Agent, type ChatMessage, type ConnectionState, type DaemonEvent, type PermissionRequest, type Project, type Runtime, type Session, type Snapshot } from '../types'
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
@@ -72,6 +72,7 @@ import { SessionExecutionControls } from './SessionExecutionControls'
 import { ContextWindowIndicator } from './ContextWindowIndicator'
 import { QuotaBar } from './QuotaBar'
 import { quotaRows, quotaTone, resetIn, updatedAgo } from './quotaModel'
+import { QueueBanner, SendLaterControl } from './PromptQueue'
 import { AttachButton, AttachmentTray, MAX_COMPOSER_ATTACHMENTS, MessageAttachments, PermissionModeControl, prepareImageBytes, sessionApprovalMode, type ComposerAttachment } from './ComposerControls'
 import { ConversationOutline, outlineItemsFromMessages } from './ConversationOutline'
 import { SafeMarkdown } from './SafeMarkdown'
@@ -643,7 +644,7 @@ export function App() {
         .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
       queuedEvents.current = []
       hydrating.current = false
-      setSnapshot(queued.reduce((state, event) => applyEvent(state, event), next))
+      setSnapshot((current) => carryQueues(queued.reduce((state, event) => applyEvent(state, event), next), current))
       queued.forEach(hydrateSessionChange)
       queued.forEach(refreshAppliedModelFromEvent)
       hydrateAgentChanges(queued)
@@ -688,7 +689,7 @@ export function App() {
         throwIfLaunchAborted(stageSignal)
         const next = await fetchSnapshot()
         throwIfLaunchAborted(stageSignal)
-        setSnapshot(next)
+        setSnapshot((current) => carryQueues(next, current))
         setConnection('connected')
         return 'Connected and loaded the latest state'
       } }])
@@ -1459,21 +1460,24 @@ export function App() {
     if (restoreFocus) requestAnimationFrame(() => anchor?.isConnected && anchor.focus({ preventScroll: true }))
   }
 
-  const sendPrompt = async () => {
+  const sendPrompt = async (dueAt?: string) => {
     const text = composer.trim()
     const ready = attachments.filter((item) => item.status === 'ready' && item.path)
-    if ((!text && ready.length === 0) || attachments.some((item) => item.status === 'staging') || !selectedSession || busy || selectedSession.state === 'waiting_permission' || !runtimeUsable(selectedRuntime)) return
+    // A live turn (or a chosen time) puts the message in the daemon's durable queue instead of sending it now.
+    const queueIt = !!dueAt || ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
+    if ((!text && ready.length === 0) || attachments.some((item) => item.status === 'staging') || !selectedSession || busy || !runtimeUsable(selectedRuntime)) return
     const sentReplyTarget = replyTarget
     const sentAttachmentIds = new Set(ready.map((item) => item.id))
     try {
       const refs = conversationRefs.filter((ref) => text.includes(`#${ref.title}`)).map((ref) => ref.id)
-      await doRpc('session.prompt', { sessionId: selectedSession.id, text, ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}) })
+      await doRpc(queueIt ? 'session.queue.add' : 'session.prompt', { sessionId: selectedSession.id, text, ...(dueAt ? { dueAt } : {}), ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}) })
       if (composerRef.current?.value.trim() === text && replyTargetRef.current === sentReplyTarget) {
         setComposer('')
         setConversationRefs([])
         setReplyTarget(null)
         clearAttachments(sentAttachmentIds)
       }
+      if (queueIt) void loadQueue(selectedSession.id)
       await refresh()
     } catch { /* The actionable error is shown inline. */ }
   }
@@ -1507,6 +1511,26 @@ export function App() {
     if (!session) return
     try { await doRpc('session.cancel', { sessionId: session.id }); void refreshTrayMenu().catch(() => undefined); await refresh() } catch { /* inline */ }
   }
+
+  /** Queued prompts for the open conversation; the daemon pushes `queue.changed`, this loads the first view and heals gaps. */
+  const loadQueue = useCallback(async (sessionId: string) => {
+    try {
+      const result = await rpc<unknown>('session.queue.list', { sessionId })
+      const state = normalizeQueueState(result)
+      setSnapshot((current) => current ? { ...current, queues: { ...current.queues, [sessionId]: state } } : current)
+    } catch { /* The queue is optional chrome; the conversation keeps working without it. */ }
+  }, [])
+  useEffect(() => { if (selectedSession?.id && connection === 'connected') void loadQueue(selectedSession.id) }, [selectedSession?.id, connection, loadQueue])
+  const queueRpc = async (method: string, params: Record<string, unknown>) => {
+    if (!selectedSession) return
+    try { await doRpc(method, { sessionId: selectedSession.id, ...params }) } catch { /* inline */ }
+    void loadQueue(selectedSession.id)
+  }
+  const sendQueuedNow = (id: string) => void queueRpc('session.queue.send_now', { id })
+  const deleteQueued = (id: string) => void queueRpc('session.queue.delete', { id })
+  const updateQueued = (id: string, text: string) => void queueRpc('session.queue.update', { id, text })
+  const reorderQueued = (ids: string[]) => void queueRpc('session.queue.reorder', { ids })
+  const resumeQueue = () => void queueRpc('session.queue.resume', {})
 
 
   const answerPermission = async (permission: PermissionRequest, choice: string): Promise<boolean> => {
@@ -1684,13 +1708,26 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => doRpc('session.prompt', { sessionId, text }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
+      <Companion agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => {
+        // A live turn queues the message in the daemon instead of failing with a conflict.
+        const live = ['working', 'starting', 'waiting_permission'].includes(sessions.find((item) => item.id === sessionId)?.state ?? '')
+        return doRpc(live ? 'session.queue.add' : 'session.prompt', { sessionId, text }).then(() => { if (live) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
+      }} queuedCount={companionSession ? snapshot?.queues?.[companionSession.id]?.items.length ?? 0 : 0} onLoadQueue={(sessionId) => void loadQueue(sessionId)} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
     </>
   }
 
   const selectedMood = deriveCompanionStatus({ connected: connection === 'connected', runtime: selectedRuntime, session: selectedSession, composing: !!composer.trim(), now }).mood
   const sessionBusy = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
   const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
+  const promptQueue = selectedSession ? snapshot?.queues?.[selectedSession.id] : undefined
+  const hasScheduledPrompt = !!promptQueue?.items.some((item) => item.kind === 'send_later')
+  const [queueNowMs, setQueueNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    if (!hasScheduledPrompt) return
+    setQueueNowMs(Date.now())
+    const timer = window.setInterval(() => setQueueNowMs(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [hasScheduledPrompt])
   const imagesSupported = ['claude', 'codex'].includes(String(selectedRuntime?.provider ?? '').toLowerCase())
   const sessionQuota = (snapshot?.quotas ?? []).find((item) => String(item.provider) === String(selectedRuntime?.provider ?? '').toLowerCase()) ?? null
   const selectedModelLock = selectedSession?.modelLock
@@ -1924,6 +1961,7 @@ export function App() {
           {sideSession ? <div className="side-close"><button type="button" className="secondary-button" onClick={closeSideConversation}>Close chat</button></div> : <div className="composer-wrap">
             {usageTip && <UsageTip tip={usageTip} onDismiss={() => dismissUsageTip(usageTip)} onViewUsage={() => void showUsage()} />}
             {dictationPartial && <div className="dictation-partial" role="status" aria-label={`Listening: ${dictationPartial}`}><span className="dictation-partial-dot" aria-hidden="true" />{dictationPartial}</div>}
+            {promptQueue && promptQueue.items.length > 0 && <QueueBanner items={promptQueue.items} paused={promptQueue.paused} sessionBusy={sessionBusy} nowMs={queueNowMs} disabled={connection !== 'connected'} onSendNow={sendQueuedNow} onDelete={deleteQueued} onUpdate={updateQueued} onReorder={reorderQueued} onResume={resumeQueue} />}
             <div className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
               {replyTarget && <ReplyContextStrip target={replyTarget} onCancel={() => { replyTargetRef.current = null; setReplyTarget(null) }} />}
               <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
@@ -1952,7 +1990,9 @@ export function App() {
                   {selectedSession && activeSelectedAgent && <SessionExecutionControls session={selectedSession} agent={activeSelectedAgent} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} />}
                   <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} contextModel={selectedSession.contextModel} contextEstimated={selectedSession.contextEstimated} model={contextModel} isNewConversation={(selectedSession.messages ?? []).length === 0} quota={sessionQuota} onOpenUsage={() => void showUsage()} />
                   {speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
-                  <button className={`send-button ${turnLive ? 'cancel' : ''}`} onClick={turnLive ? () => void cancelTurn() : () => void sendPrompt()} disabled={busy || (!turnLive && ((!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady))} aria-label={turnLive ? 'Cancel turn' : 'Send message'}>{busy ? <LoaderCircle size={16} className="spinning" /> : turnLive ? <Square size={12} fill="currentColor" /> : <ArrowUp size={17} />}</button>
+                  {(!!composer.trim() || attachments.some((item) => item.status === 'ready')) && <SendLaterControl disabled={connection !== 'connected' || busy || attachments.some((item) => item.status === 'staging') || !runtimeReady} nowMs={queueNowMs} onSchedule={(dueAt) => void sendPrompt(dueAt)} />}
+                  {turnLive && <button className="send-button cancel" onClick={() => void cancelTurn()} disabled={busy} aria-label="Cancel turn" title="Stop"><Square size={12} fill="currentColor" /></button>}
+                  <button className="send-button" onClick={() => void sendPrompt()} disabled={busy || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? 'Queue message' : 'Send message'} title={sessionBusy ? 'Add to the queue. It sends when this turn ends.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : <ArrowUp size={17} />}</button>
                 </div>
               </div>
             </div>
@@ -2192,6 +2232,12 @@ function focusSidebarBlob() {
   window.setTimeout(() => document.querySelector<HTMLElement>('.bot-row[aria-current="true"]')?.focus(), 0)
 }
 
+/** A fresh snapshot has no queues; keep the ones the daemon already told us about. */
+function carryQueues(next: Snapshot, previous: Snapshot | null | undefined): Snapshot {
+  if (!previous?.queues) return next
+  return { ...next, queues: { ...previous.queues, ...next.queues } }
+}
+
 function preserveDeletedSessions(snapshot: Snapshot, deletedIds: string[]): Snapshot {
   const deletedSessionIds = [...new Set([...(snapshot.deletedSessionIds ?? []), ...deletedIds])]
   if (!deletedSessionIds.length) return snapshot
@@ -2395,7 +2441,7 @@ function shortDate(value: unknown) {
 
 function recordFrom(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
 
-function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; onSelectAgent: (agent: Agent) => void }) {
+function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, queuedCount = 0, onLoadQueue }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void }) {
   const sessionModelLock = session?.modelLock
   const contextModel = sessionModelLock && Object.prototype.hasOwnProperty.call(sessionModelLock, 'model')
     ? sessionModelLock.model ?? null
@@ -2632,6 +2678,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     catch (reason) { if (fileInfo) setFileError(messageOf(reason)); else setDropError(messageOf(reason)) }
     finally { setSending(false) }
   }
+  useEffect(() => { if (session?.id) onLoadQueue?.(session.id) }, [session?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const cancelCompanionTurn = () => {
     if (!session || sending) return
     setSending(true)
@@ -2721,6 +2768,9 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const statusLine = confused ? 'A little dizzy… back to normal shortly' : appError ?? fileError ?? dropError ?? (preparingFile ? 'Checking local file access…' : activity)
   const shimmering = ['working', 'thinking', 'tool_activity', 'file_activity'].includes(displayMood)
   const sessionBusy = !!session && ['working', 'starting', 'waiting_permission'].includes(session.state ?? '')
+  // While a turn is live the one button queues what is typed, or stops the turn when the box is empty.
+  const queuesPrompt = sessionBusy && (!!draft.trim() || !!droppedFile)
+  const stopsTurn = sessionBusy && !queuesPrompt
   const wash = displayMood === 'success' ? 'green' : displayMood === 'error' || displayMood === 'rate_limited' ? 'red' : null
   const focusBlob = (size: number) => <BlobCanvas color={color} size={size} mood={displayMood} fileStage={fileStage} look={agent ? agentLook(agent) : null} soundCues={soundsEnabled} label={name} onDizzy={beginConfused} onDizzyRecovery={recoverFromConfused} />
   const dictating = dictationSurface === 'companion' && dictationPhase !== 'idle'
@@ -2795,13 +2845,14 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
               {(fileError ?? dropError ?? appError) && <p className="companion-drop-error" role="alert">{fileError ?? dropError ?? appError}</p>}
               {dictating && dictationIsland}
               {usageTip && onDismissUsageTip && <UsageTip tip={usageTip} onDismiss={() => onDismissUsageTip(usageTip)} />}
+              {queuedCount > 0 && <p className="companion-queue-note" role="status">{queuedCount} queued · sends when this turn ends</p>}
               <form className="chat-bar companion-chat-composer" data-companion-no-drag="" onSubmit={(event) => void sendCompanionPrompt(event)}>
                 {agent && session && onSessionUpdated && onError && <SessionExecutionControls session={session} agent={agent} onSessionUpdated={onSessionUpdated} onError={onError} />}
                 {session && <ContextWindowIndicator used={session.contextUsed} size={session.contextSize} contextModel={session.contextModel} contextEstimated={session.contextEstimated} model={contextModel} isNewConversation={(session.messages ?? []).length === 0} quota={contextQuota} />}
                 <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !runtimeUsable(runtime) || !session || preparingFile}><Paperclip size={13} /></button>
                 <textarea className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} rows={1} />
                 {speechEnabled && <DictationButton owner="companion" modelId={speechModel} autoStart={dictateOnOpen} onAutoStarted={() => setDictateOnOpen(false)} onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} />}
-                <button className="send-btn" type={sessionBusy ? 'button' : 'submit'} disabled={!session || sending || !runtimeUsable(runtime) || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={sessionBusy ? cancelCompanionTurn : undefined} aria-label={sessionBusy ? 'Cancel turn' : 'Send message'}>{sending ? <LoaderCircle size={13} className="spinning" /> : sessionBusy ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
+                <button className="send-btn" type={stopsTurn ? 'button' : 'submit'} disabled={!session || sending || !runtimeUsable(runtime) || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={stopsTurn ? cancelCompanionTurn : undefined} aria-label={queuesPrompt ? 'Queue message' : sessionBusy ? 'Cancel turn' : 'Send message'} title={queuesPrompt ? 'Add to the queue. It sends when this turn ends.' : undefined}>{sending ? <LoaderCircle size={13} className="spinning" /> : stopsTurn ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
               </form>
             </div>
           </div> : view === 'activity' ? <div className="island-card list-card companion-activity-view">

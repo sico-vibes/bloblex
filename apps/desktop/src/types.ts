@@ -24,6 +24,40 @@ export interface Snapshot extends JsonRecord {
   bypassNotices?: BypassNotice[]
   /** Client-side tombstones prevent delayed events from reviving deleted sessions. */
   deletedSessionIds?: string[]
+  /** Queued prompts per session, kept current by `queue.changed` and `session.queue.list`. */
+  queues?: Record<string, PromptQueueState>
+}
+
+/** A prompt waiting in the daemon's durable queue (plain queued or scheduled "send later"). */
+export interface QueuedPrompt extends JsonRecord {
+  id: string
+  sessionId: string
+  text: string
+  attachments?: Array<{ name: string; path: string }>
+  kind: 'user' | 'send_later'
+  dueAt: string | null
+  status: 'queued' | 'sending' | 'failed'
+  error: string | null
+  position: number
+  lateBySecs?: number
+}
+
+export interface PromptQueueState {
+  items: QueuedPrompt[]
+  /** The daemon stopped auto-sending after a failed or cancelled turn, or a restart. */
+  paused: boolean
+}
+
+export function isQueuedPrompt(value: unknown): value is QueuedPrompt {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Partial<QueuedPrompt>
+  return typeof item.id === 'string' && typeof item.sessionId === 'string' && typeof item.text === 'string'
+    && (item.status === 'queued' || item.status === 'sending' || item.status === 'failed')
+}
+
+export function normalizeQueueState(value: unknown): PromptQueueState {
+  const source = (value && typeof value === 'object' ? value : {}) as { items?: unknown; paused?: unknown }
+  return { items: Array.isArray(source.items) ? source.items.filter(isQueuedPrompt) : [], paused: source.paused === true }
 }
 
 export interface Runtime extends JsonRecord {
@@ -223,6 +257,12 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
   const sessionId = eventSessionId(event)
   const sequence = typeof event.sequence === 'number' ? event.sequence : snapshot.sequence
   if (typeof sequence === 'number' && typeof snapshot.sequence === 'number' && sequence <= snapshot.sequence) return snapshot
+
+  if (event.type === 'queue.changed') {
+    const queueSession = typeof payload.sessionId === 'string' ? payload.sessionId : null
+    if (!queueSession || snapshot.deletedSessionIds?.includes(queueSession)) return { ...snapshot, sequence }
+    return { ...snapshot, sequence, queues: { ...snapshot.queues, [queueSession]: normalizeQueueState(payload) } }
+  }
 
   if (event.type === 'runtime.changed') {
     if (Array.isArray(payload.runtimes)) {

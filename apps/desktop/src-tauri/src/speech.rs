@@ -136,6 +136,39 @@ fn cloud_failure_message(error: &CloudError, has_local_fallback: bool) -> String
     }
 }
 
+/// The event decisions for the cloud-failure path, kept pure so points 2 and 3
+/// are testable without a Tauri `AppHandle`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CloudFailureEvents {
+    /// Announce that ChatGPT failed and the on-device engine took over.
+    announce_fallback: bool,
+    /// The machine reason that rides the fallback announcement, if any.
+    reason: Option<&'static str>,
+    /// Emit the calm error for an unrecovered failure.
+    emit_error: bool,
+    /// Emit `stopped` so the UI finishes normally.
+    emit_stopped: bool,
+}
+
+/// Decide the cloud-failure events. `has_local_fallback` is whether a local model
+/// could take over; `recovered` is whether it actually produced output. A
+/// fallback is announced only when it truly ran; an unrecovered failure emits
+/// the error and no `stopped`, so the UI never turns the error into "Nothing
+/// heard".
+fn cloud_failure_events(
+    error: &CloudError,
+    has_local_fallback: bool,
+    recovered: bool,
+) -> CloudFailureEvents {
+    let used_fallback = has_local_fallback && recovered;
+    CloudFailureEvents {
+        announce_fallback: used_fallback,
+        reason: used_fallback.then(|| error.code()),
+        emit_error: !used_fallback,
+        emit_stopped: used_fallback,
+    }
+}
+
 fn emit_engine_event(app: &AppHandle, owner: DictationOwner, event: EngineEvent) {
     match event {
         EngineEvent::Partial(text) => emit(app, owner, "partial", Some(&text)),
@@ -509,7 +542,7 @@ fn run_worker(
             show_dictation_bubble(&app);
         }
         emit(&app, owner, "ready", None);
-        emit_engine_choice(&app, owner, plan.engine, plan.has_local_fallback, None);
+        emit_engine_choice(&app, owner, plan.engine, false, None);
 
         match plan.engine {
             ResolvedEngine::OnDevice => {
@@ -596,6 +629,7 @@ fn run_worker(
                         }
                         Ok(WorkerCommand::Stop) | Err(_) => {
                             capture.stop();
+                            emit(&app, owner, "processing", None);
                             let samples = buffer.samples().to_vec();
                             match transcribe_cloud(&samples) {
                                 Ok(text) => {
@@ -604,28 +638,40 @@ fn run_worker(
                                     }
                                 }
                                 Err(error) => {
-                                    let recovered = if plan.has_local_fallback {
+                                    let recovered = plan.has_local_fallback
+                                        && fallback_to_local(
+                                            &app, owner, &mut engine, &manifest, &directory, &samples,
+                                        );
+                                    let events = cloud_failure_events(
+                                        &error,
+                                        plan.has_local_fallback,
+                                        recovered,
+                                    );
+                                    if events.announce_fallback {
                                         emit_engine_choice(
                                             &app,
                                             owner,
                                             ResolvedEngine::ChatGpt,
                                             true,
-                                            Some(error.code()),
+                                            events.reason,
                                         );
-                                        fallback_to_local(
-                                            &app, owner, &mut engine, &manifest, &directory, &samples,
-                                        )
-                                    } else {
-                                        false
-                                    };
-                                    if !recovered {
+                                    }
+                                    if events.emit_error {
                                         emit_error(
                                             &app,
                                             owner,
                                             &cloud_failure_message(&error, plan.has_local_fallback),
                                             Some(error.code()),
                                         );
+                                        if let Ok(mut lifecycle) = lifecycle.lock() {
+                                            let _ = lifecycle.begin_stop(owner);
+                                        }
                                     }
+                                    if events.emit_stopped {
+                                        emit(&app, owner, "stopped", None);
+                                    }
+                                    hide_dictation_bubble_after(&app, BUBBLE_LINGER);
+                                    break;
                                 }
                             }
                             emit(&app, owner, "stopped", None);
@@ -722,8 +768,33 @@ pub fn dictation_state(state: State<'_, SpeechState>) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::cloud_failure_message;
+    use super::{cloud_failure_events, cloud_failure_message};
     use bloblex_speech::cloud::CloudError;
+
+    #[test]
+    fn cloud_failure_events_announce_only_a_used_fallback() {
+        let error = CloudError::RateLimited;
+
+        // Fallback exists and ran: announce it, no error, finish normally.
+        let recovered = cloud_failure_events(&error, true, true);
+        assert!(recovered.announce_fallback);
+        assert_eq!(recovered.reason, Some("rate_limited"));
+        assert!(!recovered.emit_error);
+        assert!(recovered.emit_stopped);
+
+        // Fallback exists but failed: no announcement, error, no stopped.
+        let failed = cloud_failure_events(&error, true, false);
+        assert!(!failed.announce_fallback);
+        assert_eq!(failed.reason, None);
+        assert!(failed.emit_error);
+        assert!(!failed.emit_stopped);
+
+        // No fallback at all: error, no stopped.
+        let absent = cloud_failure_events(&error, false, false);
+        assert!(!absent.announce_fallback);
+        assert!(absent.emit_error);
+        assert!(!absent.emit_stopped);
+    }
 
     #[test]
     fn cloud_failure_copy_names_the_reason_not_the_body() {

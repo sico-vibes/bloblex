@@ -673,6 +673,7 @@ impl CloudTranscriber {
         let body = build_multipart(&boundary, wav, CLOUD_MODEL, prompt);
         let client = reqwest::Client::builder()
             .timeout(self.timeout)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| CloudError::Unavailable)?;
         let mut request = client
@@ -702,6 +703,9 @@ impl CloudTranscriber {
 
         let mut response = request.send().await.map_err(|_| CloudError::Unavailable)?;
         let status = response.status();
+        if status.is_redirection() {
+            return Err(CloudError::Unavailable);
+        }
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(CloudError::AuthRequired);
         }
@@ -858,6 +862,33 @@ mod tests {
             let _ = socket.write_all(&out).await;
             let _ = socket.shutdown().await;
             request
+        });
+        (address, handle)
+    }
+
+    /// Answer every accepted connection with a 302 to a discard port and count
+    /// the connections, so a followed redirect would be observable.
+    async fn serve_redirects() -> (SocketAddr, tokio::task::JoinHandle<usize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let mut count = 0;
+            loop {
+                let accepted =
+                    tokio::time::timeout(Duration::from_millis(250), listener.accept()).await;
+                let Ok(Ok((mut socket, _))) = accepted else {
+                    break;
+                };
+                count += 1;
+                let _ = read_http_request(&mut socket).await;
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await;
+                let _ = socket.shutdown().await;
+            }
+            count
         });
         (address, handle)
     }
@@ -1205,6 +1236,16 @@ mod tests {
         let (address2, _handle2) = serve_once("200 OK", "", b"not json".to_vec()).await;
         let result = transcriber(address2, path2).transcribe_samples(&sample(), None).await;
         assert_eq!(result.unwrap_err(), CloudError::BadResponse);
+    }
+
+    #[tokio::test]
+    async fn redirect_is_not_followed_and_maps_to_unavailable() {
+        let (_dir, path) = chatgpt_auth(serde_json::json!({ "exp": now_epoch_seconds() + 3600 }));
+        let (address, handle) = serve_redirects().await;
+        let result = transcriber(address, path).transcribe_samples(&sample(), None).await;
+        assert_eq!(result.unwrap_err(), CloudError::Unavailable);
+        let connections = handle.await.unwrap();
+        assert_eq!(connections, 1, "the redirect must not be followed");
     }
 
     #[tokio::test]

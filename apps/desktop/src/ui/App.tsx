@@ -26,7 +26,7 @@ import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, type
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
-import { ConversationPicker, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
+import { ContextResetDivider, ConversationPicker, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
 import { hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
@@ -1404,6 +1404,9 @@ export function App() {
     }
     if (role === 'plan') {
       return <PlanCard key={key} text={text} renderText={renderText} canApprove={!sideSession && planOn && !sessionBusy && message.id === latestPlanId} onApprove={() => void approvePlan()} onRevise={() => composerRef.current?.focus()} />
+    }
+    if (role === 'notice' && meta?.kind === 'context_reset') {
+      return <ContextResetDivider key={key} id={`conversation-message-${encodeURIComponent(key)}`} text={text} lost={(message.meta as { contextLost?: unknown }).contextLost === true} />
     }
     if (role === 'notice') {
       return <div key={key} className="team-chip-row"><span className="team-notice">{text}</span></div>

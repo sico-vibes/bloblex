@@ -818,6 +818,25 @@ describe('blob roster and editor', () => {
     expect(h.rpc).toHaveBeenCalledWith('agent.conversation', { agentId: 'agent-claude' })
   })
 
+  it('shows a context reset as a divider and flags lost context', async () => {
+    const main = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T03:00:00.000Z', messages: [
+      { id: 'u1', role: 'user', content: 'Remember the build flag.' },
+      { id: 'a1', role: 'assistant', content: 'Noted.' },
+      { id: 'c1', role: 'notice', content: 'Started a fresh session. The agent no longer has earlier context.', meta: { kind: 'context_reset', reason: 'fresh_session', contextLost: true } },
+      { id: 'c2', role: 'notice', content: 'Conversation compacted.', meta: { kind: 'context_reset', reason: 'compaction', contextLost: false } },
+    ] })
+    configure(snapshot({ sessions: [main, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    const view = startApp()
+    await view.settle()
+    const dividers = [...view.host.querySelectorAll('.message-list .context-divider')]
+    expect(dividers.map((node) => node.getAttribute('aria-label'))).toEqual([
+      'Started a fresh session. The agent no longer has earlier context.',
+      'Conversation compacted.',
+    ])
+    expect(dividers.map((node) => node.classList.contains('lost'))).toEqual([true, false])
+    expect(view.host.querySelector('.team-notice')).toBeNull()
+  })
+
   it('shows delegation chips and opens the side conversation read-only', async () => {
     const main = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T03:00:00.000Z', messages: [
       { id: 'u1', role: 'user', content: 'Ask @Codex to check the tests.' },

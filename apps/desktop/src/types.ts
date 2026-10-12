@@ -24,6 +24,82 @@ export interface Snapshot extends JsonRecord {
   bypassNotices?: BypassNotice[]
   /** Client-side tombstones prevent delayed events from reviving deleted sessions. */
   deletedSessionIds?: string[]
+  /** Queued prompts per session, kept current by `queue.changed` and `session.queue.list`. */
+  queues?: Record<string, PromptQueueState>
+  /** Scheduled automations, kept current by `automation.*` events. */
+  automations?: Automation[]
+}
+
+/** A prompt waiting in the daemon's durable queue (plain queued or scheduled "send later"). */
+export interface QueuedPrompt extends JsonRecord {
+  id: string
+  sessionId: string
+  text: string
+  attachments?: Array<{ name: string; path: string }>
+  kind: 'user' | 'send_later' | 'retry'
+  dueAt: string | null
+  status: 'queued' | 'sending' | 'failed'
+  error: string | null
+  position: number
+  lateBySecs?: number
+}
+
+export interface PromptQueueState {
+  items: QueuedPrompt[]
+  /** The daemon stopped auto-sending after a failed or cancelled turn, or a restart. */
+  paused: boolean
+}
+
+/** One recorded run of an automation. */
+export interface AutomationRun extends JsonRecord {
+  id: string
+  automationId: string
+  sessionId?: string | null
+  status: 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'timeout' | 'interrupted' | string
+  reason?: string | null
+  scheduledFor?: string | null
+  startedAt: string
+  finishedAt?: string | null
+}
+
+/** A schedule that prompts a blob by itself. Runs only while the daemon is up. */
+export interface Automation extends JsonRecord {
+  id: string
+  agentId: string
+  name: string
+  prompt: string
+  schedule: { kind: 'cron'; cron: string; timezone: string } | { kind: 'once'; at: string }
+  sessionMode?: 'new' | 'reuse'
+  approvalMode?: 'plan' | 'auto'
+  maxRuntimeSecs?: number
+  enabled: boolean
+  createdBy?: 'user' | 'agent'
+  nextRunAt?: string | null
+  lastRunAt?: string | null
+  consecutiveFailures?: number
+  pauseReason?: 'user' | 'auto_failures' | 'needs_approval' | null
+  running?: boolean
+  lastRun?: AutomationRun | null
+}
+
+export function isAutomation(value: unknown): value is Automation {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Partial<Automation>
+  const schedule = item.schedule as { kind?: unknown } | undefined
+  return typeof item.id === 'string' && typeof item.agentId === 'string' && typeof item.name === 'string'
+    && typeof item.enabled === 'boolean' && !!schedule && (schedule.kind === 'cron' || schedule.kind === 'once')
+}
+
+export function isQueuedPrompt(value: unknown): value is QueuedPrompt {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Partial<QueuedPrompt>
+  return typeof item.id === 'string' && typeof item.sessionId === 'string' && typeof item.text === 'string'
+    && (item.status === 'queued' || item.status === 'sending' || item.status === 'failed')
+}
+
+export function normalizeQueueState(value: unknown): PromptQueueState {
+  const source = (value && typeof value === 'object' ? value : {}) as { items?: unknown; paused?: unknown }
+  return { items: Array.isArray(source.items) ? source.items.filter(isQueuedPrompt) : [], paused: source.paused === true }
 }
 
 export interface Runtime extends JsonRecord {
@@ -223,6 +299,28 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
   const sessionId = eventSessionId(event)
   const sequence = typeof event.sequence === 'number' ? event.sequence : snapshot.sequence
   if (typeof sequence === 'number' && typeof snapshot.sequence === 'number' && sequence <= snapshot.sequence) return snapshot
+
+  if (event.type === 'automation.changed' || event.type === 'automation.deleted' || event.type === 'automation.run.changed') {
+    const current = snapshot.automations ?? []
+    if (event.type === 'automation.deleted') {
+      const removed = typeof payload.id === 'string' ? payload.id : null
+      return { ...snapshot, sequence, automations: removed ? current.filter((item) => item.id !== removed) : current }
+    }
+    if (event.type === 'automation.changed') {
+      const next = payload.automation
+      if (!isAutomation(next)) return { ...snapshot, sequence }
+      return { ...snapshot, sequence, automations: [...current.filter((item) => item.id !== next.id), next] }
+    }
+    const run = payload.run as AutomationRun | undefined
+    if (!run || typeof run.automationId !== 'string') return { ...snapshot, sequence }
+    return { ...snapshot, sequence, automations: current.map((item) => item.id === run.automationId ? { ...item, lastRun: run, running: run.status === 'running' } : item) }
+  }
+
+  if (event.type === 'queue.changed') {
+    const queueSession = typeof payload.sessionId === 'string' ? payload.sessionId : null
+    if (!queueSession || snapshot.deletedSessionIds?.includes(queueSession)) return { ...snapshot, sequence }
+    return { ...snapshot, sequence, queues: { ...snapshot.queues, [queueSession]: normalizeQueueState(payload) } }
+  }
 
   if (event.type === 'runtime.changed') {
     if (Array.isArray(payload.runtimes)) {

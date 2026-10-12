@@ -837,6 +837,118 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.team-notice')).toBeNull()
   })
 
+  it('queues a message while the agent works, keeps Stop separate and lists the queue', async () => {
+    const working = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', state: 'working', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'u1', role: 'user', content: 'Build the page.' }] })
+    configure(snapshot({ sessions: [working, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    const queued: Array<{ id: string; sessionId: string; text: string; kind: 'user' | 'send_later'; dueAt: string | null; status: 'queued'; error: null; position: number }> = []
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'session.queue.list') return { items: queued, paused: false }
+      if (method === 'session.queue.add') {
+        queued.push({ id: `q${queued.length + 1}`, sessionId: String(params.sessionId), text: String(params.text), kind: params.dueAt ? 'send_later' : 'user', dueAt: (params.dueAt as string | undefined) ?? null, status: 'queued', error: null, position: queued.length })
+        return { item: queued.at(-1) }
+      }
+      return base(method, params)
+    })
+    const view = startApp()
+    await view.settle()
+    // Stop is its own button while the turn is live; the arrow becomes "Queue message".
+    expect(view.host.querySelector('[aria-label="Cancel turn"]')).not.toBeNull()
+    expect(view.host.querySelector('[aria-label="Send message"]')).toBeNull()
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea')!
+    expect(textarea.disabled).toBe(false)
+    await typeInto(textarea, 'Then add a footer')
+    await click(view.host.querySelector('[aria-label="Queue message"]'))
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.queue.add', { sessionId: 'session-claude', text: 'Then add a footer' })
+    expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
+    expect(textarea.value).toBe('')
+    expect(view.host.querySelector('.queue-banner')?.getAttribute('aria-label')).toBe('Queued messages: 1')
+    expect(view.host.querySelector('.queue-text')?.textContent).toBe('Then add a footer')
+  })
+
+  it('applies queue.changed events and lets the user delete a queued message', async () => {
+    const working = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', state: 'working', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'u1', role: 'user', content: 'Build the page.' }] })
+    configure(snapshot({ sessions: [working, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'session.queue.list') return { items: [], paused: false }
+      if (method === 'session.queue.delete') return { ok: true }
+      return base(method, params)
+    })
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelector('.queue-banner')).toBeNull()
+    await act(async () => {
+      emit({ type: 'queue.changed', sequence: 90, payload: { sessionId: 'session-claude', paused: true, items: [{ id: 'q9', sessionId: 'session-claude', text: 'Run the tests', kind: 'user', dueAt: null, status: 'queued', error: null, position: 0 }] } } as DaemonEvent)
+    })
+    await view.settle()
+    expect(view.host.querySelector('.queue-text')?.textContent).toBe('Run the tests')
+    expect(view.host.querySelector('.queue-paused')?.textContent).toContain('Paused')
+    await click(view.host.querySelector('[aria-label="Remove from queue"]'))
+    expect(h.rpc).toHaveBeenCalledWith('session.queue.delete', { sessionId: 'session-claude', id: 'q9' })
+  })
+
+  it('renders automatic retry notices, offers Cancel only while pending, and cancels through the daemon', async () => {
+    const main = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T03:00:00.000Z', messages: [
+      { id: 'u1', role: 'user', content: 'Refactor the parser.' },
+      { id: 'n0', role: 'notice', content: 'Not retrying automatically: the reset time is unknown.', meta: { kind: 'auto_retry', status: 'declined', reason: 'unknown_reset' } },
+      { id: 'n1', role: 'notice', content: 'Provider is overloaded. Retrying automatically in about 2 min (attempt 1 of 5).', meta: { kind: 'auto_retry', status: 'scheduled', retryKind: 'overloaded', attempt: 1, maxAttempts: 5, itemId: 'retry-1' } },
+      { id: 'r1', role: 'user', content: 'Please continue.', meta: { kind: 'auto_retry', retryOf: 't1', attempt: 1 } },
+    ] })
+    configure(snapshot({ sessions: [main, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'session.queue.list') return { items: [{ id: 'retry-1', sessionId: 'session-claude', text: 'Please continue.', kind: 'retry', dueAt: new Date(Date.now() + 120_000).toISOString(), status: 'queued', error: null, position: 0 }], paused: false }
+      if (method === 'turn.retry.cancel') return { cancelled: true }
+      return base(method, params)
+    })
+    const view = startApp()
+    await view.settle()
+    const notices = [...view.host.querySelectorAll('.auto-retry')]
+    expect(notices.map((node) => node.textContent?.replace('Cancel', '').trim())).toEqual([
+      'Not retrying automatically: the reset time is unknown.',
+      'Provider is overloaded. Retrying automatically in about 2 min (attempt 1 of 5).',
+    ])
+    expect(view.host.querySelectorAll('.auto-retry-cancel')).toHaveLength(1)
+    expect(view.host.querySelector('.message-list')?.textContent ?? '').toContain('Continuing automatically')
+    expect(view.host.querySelector('.message-list')?.textContent ?? '').not.toContain('Please continue.')
+    await click(view.host.querySelector('.auto-retry-cancel'))
+    expect(h.rpc).toHaveBeenCalledWith('turn.retry.cancel', { sessionId: 'session-claude' })
+  })
+
+  it('offers Steer only for a working Codex blob whose daemon capability is enabled', async () => {
+    const working = session({ id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Invoice parser tests', state: 'working', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'u1', role: 'user', content: 'Run the tests.' }] })
+    const rest = sessions.filter((item) => item.id !== 'session-codex')
+    configure(snapshot({ sessions: [working, ...rest] }))
+    h.getActiveSession.mockResolvedValue('session-codex')
+    h.getActiveRuntime.mockResolvedValue('runtime-codex')
+    let enabled = false
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'runtime.capabilities' && params.runtimeId === 'runtime-codex' && !params.agentId) return { runtimeId: 'runtime-codex', settings: { steer: { supported: true, enabled } } }
+      if (method === 'session.queue.list') return { items: [], paused: false }
+      if (method === 'session.steer') return { steered: true, turnId: 't1' }
+      return base(method, params)
+    })
+    // Gate off: no Steer even though Codex is working and text is typed.
+    let view = startApp()
+    await view.settle()
+    await typeInto(view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea'), 'Also check the date format')
+    expect(view.host.querySelector('[aria-label="Steer now"]')).toBeNull()
+    expect(view.host.querySelector('[aria-label="Queue message"]')).not.toBeNull()
+    view.unmount()
+    // Gate on: Steer appears and calls session.steer, not session.prompt.
+    enabled = true
+    view = startApp()
+    await view.settle()
+    await typeInto(view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea'), 'Also check the date format')
+    await click(view.host.querySelector('[aria-label="Steer now"]'))
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.steer', { sessionId: 'session-codex', text: 'Also check the date format' })
+    expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
+  })
+
   it('shows delegation chips and opens the side conversation read-only', async () => {
     const main = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T03:00:00.000Z', messages: [
       { id: 'u1', role: 'user', content: 'Ask @Codex to check the tests.' },

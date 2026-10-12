@@ -286,3 +286,4 @@
 .companion-activity-view .activity-step-head { color: var(--c-dim); }
 .island-actions .approval-pill { margin-right: 4px; }
 @media (prefers-reduced-motion: reduce) { .island-card.focus, .peer, .focus-ticker-row, .team-picker, .island-card.focus.is-working .card-bot .focus-glow { animation: none; } }
+.companion-queue-note { margin: 0 4px 4px; color: var(--c-dim-3); font: 400 var(--fs-2xs)/1.3 var(--c-font); }

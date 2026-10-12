@@ -44,6 +44,17 @@ describe('daemon event reconciliation', () => {
     expect(reset.sessions?.[0]).toMatchObject({ contextUsed:null, contextSize:null })
   })
 
+  it('keeps the prompt queue per session from queue.changed and ignores malformed items', () => {
+    const item = { id: 'q1', sessionId: 's-a', text: 'next', kind: 'user', dueAt: null, status: 'queued', error: null, position: 0 }
+    const first = applyEvent(base(), event('queue.changed', 8, { sessionId: 's-a', paused: true, items: [item, { id: 'bad' }, null] }))
+    expect(first.queues?.['s-a']).toEqual({ paused: true, items: [item] })
+    const replaced = applyEvent(first, event('queue.changed', 9, { sessionId: 's-a', items: [] }))
+    expect(replaced.queues?.['s-a']).toEqual({ paused: false, items: [] })
+    expect(applyEvent(replaced, event('queue.changed', 10, { items: [item] })).queues?.['s-a']).toEqual({ paused: false, items: [] })
+    const deleted = applyEvent({ ...replaced, deletedSessionIds: ['s-z'] }, event('queue.changed', 11, { sessionId: 's-z', items: [{ ...item, sessionId: 's-z' }] }))
+    expect(deleted.queues?.['s-z']).toBeUndefined()
+  })
+
   it('clears explicit null context fields while omitted fields preserve current values', () => {
     const measured = applyEvent(base(), event('session.context.updated', 5, { sessionId:'s-a', contextUsed:420, contextSize:1000, contextModel:'claude-sonnet-5-5' }))
     const partial = applyEvent(measured, event('session.context.updated', 6, { sessionId:'s-a', contextUsed:null, contextModel:'claude-opus-5-5' }))

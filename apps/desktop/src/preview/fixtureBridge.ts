@@ -31,6 +31,11 @@ const baseRuntimes: Runtime[] = [
 // All catalog/session values below are preview-only visual fixtures. They do
 // not represent installed models, provider capabilities, or user conversations.
 const composerPreviewSessionId = 'session-codex-composer-preview'
+/** Preview-only prompt queues, keyed by session id. */
+const fixtureQueues: Record<string, { items: Array<Record<string, unknown>>; paused: boolean }> = {}
+/** Preview-only automations and their runs. */
+const fixtureAutomations: Array<Record<string, unknown>> = []
+const fixtureRuns: Record<string, Array<Record<string, unknown>>> = {}
 const composerPreviewStorageKey = 'bloblex.preview.composer-session.v1'
 
 let agents: Agent[] = [
@@ -417,6 +422,137 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     notifyFixtureDaemon('message.reactions.changed', payload)
     return { reactions: message.reactions, selected } as T
   }
+  if (typeof method === 'string' && method.startsWith('automation.')) {
+    const find = () => fixtureAutomations.find((item) => item.id === params.id)
+    const publish = (item: Record<string, unknown>) => notifyFixtureDaemon('automation.changed', { automation: { ...item } })
+    if (method === 'automation.list') return { automations: fixtureAutomations.filter((item) => !params.agentId || item.agentId === params.agentId).map((item) => ({ ...item })) } as T
+    if (method === 'automation.preview') {
+      const schedule = params.schedule as { kind?: string; cron?: string; at?: string } | undefined
+      if (!schedule || (schedule.kind === 'cron' && String(schedule.cron ?? '').trim().split(/\s+/).length !== 5)) throw rpcError('invalid_argument', 'That schedule is not valid.')
+      const base = Date.now()
+      return { occurrences: schedule.kind === 'once' ? [new Date(String(schedule.at)).toISOString()] : [1, 2, 3].map((n) => new Date(base + n * 86_400_000).toISOString()) } as T
+    }
+    if (method === 'automation.create' || method === 'automation.update') {
+      const schedule = params.schedule as Record<string, unknown> | undefined
+      const name = typeof params.name === 'string' ? params.name.trim() : ''
+      const prompt = typeof params.prompt === 'string' ? params.prompt.trim() : ''
+      if (!name || !prompt || !schedule) throw rpcError('invalid_argument', 'A name, a prompt and a schedule are required.')
+      if (params.approvalMode !== undefined && params.approvalMode !== 'plan' && params.approvalMode !== 'auto') throw rpcError('invalid_argument', 'approvalMode must be plan or auto')
+      const now = new Date().toISOString()
+      const existing = method === 'automation.update' ? find() : undefined
+      if (method === 'automation.update' && !existing) throw rpcError('not_found', 'That schedule is gone.')
+      const next = { ...(existing ?? { id: `automation-${Date.now()}`, createdBy: 'user', consecutiveFailures: 0, lastRunAt: null, lastRun: null, running: false, pauseReason: null }),
+        agentId: params.agentId ?? existing?.agentId, name, prompt, schedule, sessionMode: params.sessionMode ?? existing?.sessionMode ?? 'new',
+        approvalMode: params.approvalMode ?? existing?.approvalMode ?? 'auto', maxRuntimeSecs: params.maxRuntimeSecs ?? existing?.maxRuntimeSecs ?? 1800,
+        enabled: params.enabled === true || (existing?.enabled === true && params.enabled !== false),
+        nextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString(), updatedAt: now } as Record<string, unknown>
+      if (!existing) fixtureAutomations.push(next)
+      else Object.assign(existing, next)
+      publish(next)
+      return { automation: { ...next } } as T
+    }
+    const target = find()
+    if (!target) throw rpcError('not_found', 'That schedule is gone.')
+    if (method === 'automation.get') return { automation: { ...target } } as T
+    if (method === 'automation.pause' || method === 'automation.resume') {
+      const resume = method === 'automation.resume'
+      target.enabled = resume
+      target.pauseReason = resume ? null : 'user'
+      target.consecutiveFailures = 0
+      target.nextRunAt = resume ? new Date(Date.now() + 3 * 3_600_000).toISOString() : null
+      publish(target)
+      return { automation: { ...target } } as T
+    }
+    if (method === 'automation.delete') {
+      fixtureAutomations.splice(fixtureAutomations.indexOf(target), 1)
+      notifyFixtureDaemon('automation.deleted', { id: target.id })
+      return { deleted: true } as T
+    }
+    if (method === 'automation.run_now') {
+      const run = { id: `run-${Date.now()}`, automationId: target.id, sessionId: null, status: 'completed', reason: null, scheduledFor: new Date().toISOString(), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }
+      ;(fixtureRuns[String(target.id)] ??= []).unshift(run)
+      target.lastRun = run
+      target.lastRunAt = run.startedAt
+      publish(target)
+      return { run } as T
+    }
+    if (method === 'automation.runs') return { runs: fixtureRuns[String(target.id)] ?? [] } as T
+  }
+  if (method === 'session.steer') {
+    const session = sessions.find((item) => item.id === params.sessionId)
+    if (!session || session.archived) throw rpcError('not_found', 'Conversation not found.')
+    if (fixtureSettings['exec_gate.codex.steer'] !== true) throw rpcError('unsupported', 'Steering is turned off for this runtime.')
+    if (!['working', 'waiting_permission'].includes(String(session.state))) throw rpcError('conflict', 'Nothing is running to steer.')
+    const text = typeof params.text === 'string' ? params.text.trim() : ''
+    if (!text) throw rpcError('invalid_argument', 'text must contain 1 to 100000 UTF-8 bytes')
+    const turnId = String((session.turns ?? []).at(-1)?.id ?? 'turn-preview')
+    const id = `steer-${Date.now()}`
+    session.messages = [...(session.messages ?? []), { id, role: 'user', content: text, turnId, meta: { kind: 'steer' } }]
+    notifyFixtureDaemon('message.completed', { sessionId: session.id, turnId, id, messageId: id, role: 'user', content: text, meta: { kind: 'steer' } })
+    return { steered: true, turnId } as T
+  }
+  if (method === 'turn.retry.cancel') {
+    const session = sessions.find((item) => item.id === params.sessionId)
+    if (!session) throw rpcError('not_found', 'Conversation not found.')
+    const queue = (fixtureQueues[session.id] ??= { items: [], paused: false })
+    const at = queue.items.findIndex((entry) => entry.kind === 'retry')
+    if (at < 0) throw rpcError('not_found', 'No automatic retry is pending.')
+    queue.items.splice(at, 1)
+    notifyFixtureDaemon('queue.changed', { sessionId: session.id, items: queue.items.map((entry) => ({ ...entry })), paused: queue.paused })
+    return { cancelled: true } as T
+  }
+  if (typeof method === 'string' && method.startsWith('session.queue.')) {
+    // An in-memory stand-in for the daemon's durable queue so the preview can show every state.
+    const session = sessions.find((item) => item.id === params.sessionId)
+    if (!session || session.archived) throw rpcError('not_found', 'Conversation not found.')
+    const items = (fixtureQueues[session.id] ??= { items: [], paused: false })
+    const publish = () => {
+      items.items.forEach((entry, index) => { entry.position = index })
+      notifyFixtureDaemon('queue.changed', { sessionId: session.id, items: items.items.map((entry) => ({ ...entry })), paused: items.paused })
+    }
+    if (method === 'session.queue.list') return { items: items.items.map((entry) => ({ ...entry })), paused: items.paused } as T
+    if (method === 'session.queue.add') {
+      if (session.link?.kind === 'side') throw rpcError('read_only', 'Side conversations are read-only. Send a new message in the main conversation.')
+      const text = typeof params.text === 'string' ? params.text.trim() : ''
+      const attachments = Array.isArray(params.attachments) ? params.attachments as Array<{ name: string; path: string }> : []
+      if (!text && !attachments.length) throw rpcError('invalid_argument', 'text must contain 1 to 1000000 UTF-8 bytes')
+      if (items.items.length >= 20) throw rpcError('conflict', 'The queue is full.')
+      const dueAt = typeof params.dueAt === 'string' ? params.dueAt : null
+      if (dueAt) {
+        const delta = Date.parse(dueAt) - Date.now()
+        if (!(delta >= 5_000 && delta <= 366 * 24 * 3_600_000)) throw rpcError('invalid_argument', 'Pick a time between a few seconds and one year from now.')
+      }
+      const entry = { id: `queue-${Date.now()}-${items.items.length}`, sessionId: session.id, text, attachments, kind: dueAt ? 'send_later' : 'user', dueAt, status: 'queued', error: null, position: items.items.length } as Record<string, unknown>
+      items.items.push(entry)
+      publish()
+      return { item: { ...entry } } as T
+    }
+    const target = items.items.findIndex((entry) => entry.id === params.id)
+    if (method === 'session.queue.delete') { if (target >= 0) items.items.splice(target, 1); publish(); return { ok: true } as T }
+    if (method === 'session.queue.update') {
+      if (target < 0) throw rpcError('not_found', 'That queued message is gone.')
+      if (typeof params.text === 'string' && params.text.trim()) items.items[target].text = params.text.trim()
+      publish()
+      return { item: { ...items.items[target] } } as T
+    }
+    if (method === 'session.queue.reorder') {
+      const ids = Array.isArray(params.ids) ? params.ids.map(String) : []
+      const plain = items.items.filter((entry) => entry.kind === 'user')
+      if (ids.length !== plain.length || !ids.every((id) => plain.some((entry) => entry.id === id))) throw rpcError('invalid_argument', 'Reorder must list every queued message once.')
+      const rest = items.items.filter((entry) => entry.kind !== 'user')
+      items.items = [...ids.map((id) => plain.find((entry) => entry.id === id)!), ...rest]
+      publish()
+      return { ok: true } as T
+    }
+    if (method === 'session.queue.send_now') {
+      if (target < 0) throw rpcError('not_found', 'That queued message is gone.')
+      const [entry] = items.items.splice(target, 1)
+      items.items.unshift(entry)
+      publish()
+      return { queued: true } as T
+    }
+    if (method === 'session.queue.resume') { items.paused = false; publish(); return { ok: true } as T }
+  }
   if (method === 'session.prompt') {
     // A minimal echo so the preview shows sent messages, # references and a reply.
     const session = sessions.find((item) => item.id === params.sessionId)
@@ -454,7 +590,11 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const supported = { supported: true, enabled: true, scope: 'agent', evidence: 'preview' }
     // Like the real daemon, OpenCode keeps effort behind its execution check.
     const thinking = params.runtimeId === 'runtime-opencode' ? { ...supported, enabled: false, reason: 'execution entry gate is disabled' } : supported
-    return { runtimeId: params.runtimeId, settings: { model: supported, thinking, serviceTier: supported, instructions: supported, customEnv: supported } } as T
+    // Steering exists for Codex only, off until the user turns the gate on, and is never proven.
+    const steer = params.runtimeId === 'runtime-codex'
+      ? { supported: true, enabled: fixtureSettings['exec_gate.codex.steer'] === true, scope: 'turn', evidence: 'none', ...(fixtureSettings['exec_gate.codex.steer'] === true ? {} : { reason: 'execution entry gate is disabled' }) }
+      : { supported: false, enabled: false, scope: 'turn', evidence: 'none', reason: 'setting is unsupported by this runtime' }
+    return { runtimeId: params.runtimeId, settings: { model: supported, thinking, serviceTier: supported, instructions: supported, customEnv: supported, steer } } as T
   }
   if (method === 'runtime.models') {
     const runtimeId = String(params.runtimeId ?? '')

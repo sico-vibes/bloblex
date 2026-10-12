@@ -202,3 +202,38 @@
 .composer-control-strip .tip .tip-bubble { left: auto; right: 0; transform: translate(0, 4px); }
 .composer-control-strip .tip:hover .tip-bubble, .composer-control-strip .tip:focus-within .tip-bubble { transform: translate(0, 0); }
 @media (prefers-reduced-motion: reduce) { .tip-bubble { transition: none !important; } }
+
+/* Prompt queue: messages waiting for the current turn, and scheduled ("send later") ones. */
+.queue-banner { margin: 0 12px -6px; padding: 8px 10px 14px; display: grid; gap: 6px; color: var(--text-2); border: 1px solid var(--line); border-bottom: 0; border-radius: 14px 14px 0 0; background: var(--surface-raised); font-size: var(--fs-xs); }
+.queue-head { min-height: 20px; display: flex; align-items: center; gap: 10px; color: var(--text-3); }
+.queue-title b { color: var(--text-2); font-weight: 500; }
+.queue-paused { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--warning); }
+.queue-link { padding: 0; color: var(--text-2); border: 0; background: transparent; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.queue-link:hover:not(:disabled) { color: var(--text-1); }
+.queue-link:disabled { color: var(--text-3); cursor: default; }
+.queue-more { justify-self: start; color: var(--text-3); }
+.queue-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.queue-item { min-height: 28px; padding: 0 2px 0 4px; display: flex; align-items: center; gap: 8px; border-radius: 8px; }
+.queue-item:hover, .queue-item:focus-within { background: var(--surface-hover); }
+.queue-item.sending { opacity: .6; }
+.queue-kind { width: 14px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-3); }
+.queue-item.failed .queue-kind { color: var(--danger-ink); }
+.queue-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); }
+.queue-text { min-width: 0; flex: 1; overflow: hidden; color: var(--text-1); text-overflow: ellipsis; white-space: nowrap; }
+.queue-edit { min-width: 0; flex: 1; height: 24px; padding: 0 8px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-app, transparent); font: inherit; }
+.queue-edit:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.queue-meta { flex: 0 1 auto; max-width: 45%; overflow: hidden; color: var(--text-3); text-overflow: ellipsis; white-space: nowrap; }
+.queue-meta.danger { color: var(--danger-ink); }
+.queue-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0; opacity: 0; transition: opacity 120ms ease; }
+.queue-item:hover .queue-actions, .queue-item:focus-within .queue-actions, .queue-item.failed .queue-actions { opacity: 1; }
+.queue-icon { width: 24px; height: 24px; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+.queue-icon:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }
+.queue-icon:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.queue-icon:disabled { opacity: .45; cursor: default; }
+.send-later-menu { min-width: 248px; }
+.send-later-custom { margin-top: 4px; padding: 8px 10px 6px; display: grid; gap: 6px; border-top: 1px solid var(--line); }
+.send-later-custom label { color: var(--text-3); font-size: var(--fs-2xs); }
+.send-later-custom input { height: 30px; padding: 0 8px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 8px; background: transparent; color-scheme: dark light; font: inherit; }
+.send-later-custom input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.send-later-problem { margin: 0; color: var(--danger-ink); font-size: var(--fs-xs); }
+@media (prefers-reduced-motion: reduce) { .queue-actions { transition: none; } }

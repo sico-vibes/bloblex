@@ -57,6 +57,26 @@ describe('composer preview RPC behavior', () => {
     } finally { unlisten() }
   })
 
+  it('queues, edits, reorders and removes prompts and rejects bad send-later times', async () => {
+    const created = await rpc<{ session: Session }>('session.new', { agentId:'agent-codex', projectPath:'C:\fixture\queue' })
+    const events: DaemonEvent[] = []
+    const unlisten = await listenForDaemonEvents((event) => events.push(event))
+    try {
+      const first = await rpc<{ item: { id: string } }>('session.queue.add', { sessionId:created.session.id, text:'first' })
+      const second = await rpc<{ item: { id: string } }>('session.queue.add', { sessionId:created.session.id, text:'second' })
+      await rpc('session.queue.reorder', { sessionId:created.session.id, ids:[second.item.id, first.item.id] })
+      let listed = await rpc<{ items: Array<{ text: string }>; paused: boolean }>('session.queue.list', { sessionId:created.session.id })
+      expect(listed.items.map((item) => item.text)).toEqual(['second', 'first'])
+      await rpc('session.queue.update', { sessionId:created.session.id, id:first.item.id, text:'first, edited' })
+      await rpc('session.queue.delete', { sessionId:created.session.id, id:second.item.id })
+      listed = await rpc('session.queue.list', { sessionId:created.session.id })
+      expect(listed.items.map((item) => item.text)).toEqual(['first, edited'])
+      expect(events.filter((event) => event.type === 'queue.changed')).toHaveLength(5)
+      await expect(rpc('session.queue.add', { sessionId:created.session.id, text:'soon', dueAt:new Date(Date.now() + 1000).toISOString() })).rejects.toThrow('Pick a time')
+      await expect(rpc('session.queue.reorder', { sessionId:created.session.id, ids:['nope'] })).rejects.toThrow('Reorder')
+    } finally { unlisten() }
+  })
+
   it('has explicit preview-only runtime-error and fresh usage-tip presets', async () => {
     const original = location.href
     try {

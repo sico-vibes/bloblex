@@ -1,6 +1,6 @@
 import { rpc } from '../tauri'
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
-import { ChevronsUpDown, Gauge, LogOut, Pencil, Settings2, Keyboard } from 'lucide-react'
+import { CalendarClock, ChevronsUpDown, Gauge, LogOut, Pencil, Settings2, Keyboard } from 'lucide-react'
 import type { ConnectionState } from '../types'
 
 const NAME_KEY = 'bloblex.profile.name'
@@ -36,9 +36,11 @@ export function profileInitials(name: string) {
  * (usage, settings, quit) lives in its menu, like a chat app's
  * profile menu. The name is local to this device.
  */
-export function ProfileMenu({ connection, usageActive, triggerRef, onUsage, onSettings, onQuit, onShortcuts }: {
+export function ProfileMenu({ connection, usageActive, schedulesActive = false, triggerRef, onUsage, onSchedules, onSettings, onQuit, onShortcuts }: {
   connection: ConnectionState
   usageActive: boolean
+  schedulesActive?: boolean
+  onSchedules?: () => void
   triggerRef?: RefObject<HTMLButtonElement | null>
   onUsage: () => void
   onShortcuts?: () => void
@@ -123,6 +125,7 @@ export function ProfileMenu({ connection, usageActive, triggerRef, onUsage, onSe
     </button>
     {open && <div ref={menuRef} className="menu-surface profile-menu" role="menu" aria-label="Account" onKeyDown={onMenuKeyDown}>
       <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onUsage)}><Gauge size={15} />Usage</button>
+      {onSchedules && <button type="button" role="menuitem" className="menu-item" aria-current={schedulesActive ? "page" : undefined} disabled={!connected} onClick={() => run(onSchedules)}><CalendarClock size={15} />Schedules</button>}
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(onSettings)}><Settings2 size={15} />Settings</button>
       {onShortcuts && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onShortcuts)}><Keyboard size={15} />Keyboard shortcuts</button>}
       <span className="menu-separator" role="separator" />

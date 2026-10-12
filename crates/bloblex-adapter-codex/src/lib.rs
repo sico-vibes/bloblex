@@ -1516,6 +1516,7 @@ impl AgentAdapter for CodexAdapter {
                 return Err(error);
             }
         };
+        let _ = c.events.send(AgentEvent::PromptAccepted).await;
         let id = result["turn"]["id"]
             .as_str()
             .or(result["turnId"].as_str())

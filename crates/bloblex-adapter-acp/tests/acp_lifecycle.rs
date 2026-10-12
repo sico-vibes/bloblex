@@ -480,7 +480,13 @@ async fn timed_out_acp_cancel_detaches_only_session_a_while_session_b_completes(
     assert!(matches!(tokio::time::timeout(Duration::from_secs(2), events_a.recv()).await.unwrap(), Some(AgentEvent::AssistantDelta { .. })));
     assert!(matches!(tokio::time::timeout(Duration::from_secs(2), events_b.recv()).await.unwrap(), Some(AgentEvent::AssistantDelta { .. })));
     adapter.cancel(&a).await.unwrap();
-    assert!(matches!(events_a.recv().await, Some(AgentEvent::UsageReport { .. })));
+    let usage = loop {
+        match events_a.recv().await {
+            Some(AgentEvent::PromptAccepted) => continue,
+            other => break other,
+        }
+    };
+    assert!(matches!(usage, Some(AgentEvent::UsageReport { .. })));
     assert!(matches!(events_a.recv().await, Some(AgentEvent::TurnCancelled)));
     assert!(!std::fs::read_to_string(&pid_log).unwrap().lines().any(|line| line.starts_with("exit:")), "session B keeps the shared process alive");
     let mut completed = false;
@@ -598,7 +604,14 @@ async fn fake_child_cancel_uses_provider_stop_reason() {
     adapter.cancel(&handle).await.unwrap();
     prompt.await.unwrap().unwrap();
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(5), events.recv())
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match events.recv().await {
+                    Some(AgentEvent::PromptAccepted) => continue,
+                    other => break other,
+                }
+            }
+        })
             .await
             .unwrap(),
         Some(AgentEvent::TurnCancelled)

@@ -40,6 +40,7 @@ struct Conn {
     active_turn_id: Mutex<Option<String>>,
     cancelled_turn: AtomicBool,
     turn_lifecycle: Mutex<()>,
+    prompt_ack_pending: AtomicBool,
     local_session_id: String,
     events: SessionEventSink,
     spawned_instructions: Option<String>,
@@ -262,6 +263,7 @@ impl AcpAdapter {
             active_turn_id: Mutex::new(None),
             cancelled_turn: AtomicBool::new(false),
             turn_lifecycle: Mutex::new(()),
+            prompt_ack_pending: AtomicBool::new(false),
             local_session_id: local_session_id.to_owned(),
             events: SessionEventSink::new(events),
             spawned_instructions: secret,
@@ -393,7 +395,14 @@ impl AcpAdapter {
                     let params = msg.get("params").cloned().unwrap_or(Value::Null);
                     let provider_id = params["sessionId"].as_str().unwrap_or("");
                     if let Some(session) = reader.routes.lock().await.get(provider_id).and_then(Weak::upgrade) {
-                        if is_child_usage_update(&params) { continue; }
+                        // The first session/update after the prompt is written is
+                        // positive evidence the provider took it. Enqueued after
+                        // the update's own mapping so existing event order holds.
+                        let prompt_accepted = session.prompt_ack_pending.swap(false, Ordering::SeqCst);
+                        if is_child_usage_update(&params) {
+                            if prompt_accepted { let _ = session.events.enqueue(AgentEvent::PromptAccepted); }
+                            continue;
+                        }
                         if params["update"]["sessionUpdate"].as_str() == Some("usage_update") {
                             let mut snap = session.usage.lock().await;
                             exec::record_usage_update(&mut snap, &params["update"], &line);
@@ -403,6 +412,7 @@ impl AcpAdapter {
                         }
                         let context_model = session.applied.lock().await.model.clone();
                         emit_update(&session.events, &params, context_model).await;
+                        if prompt_accepted { let _ = session.events.enqueue(AgentEvent::PromptAccepted); }
                     }
                 }
             }
@@ -513,6 +523,7 @@ impl AcpAdapter {
             active_turn_id: Mutex::new(None),
             cancelled_turn: AtomicBool::new(false),
             turn_lifecycle: Mutex::new(()),
+            prompt_ack_pending: AtomicBool::new(false),
             local_session_id: old.local_session_id.clone(),
             events: old.events.clone(),
             spawned_instructions: old.spawned_instructions.clone(),
@@ -1089,6 +1100,7 @@ impl AgentAdapter for AcpAdapter {
             *c.active_turn_id.lock().await = Some(req.turn_id.clone());
         }
         c.process.active_turns.lock().await.insert(provider_id.clone());
+        c.prompt_ack_pending.store(true, Ordering::SeqCst);
         let result = match Self::request(
             &c,
             "session/prompt",

@@ -226,16 +226,15 @@ async fn exact_start_turn_resume_fields_and_replayed_usage_are_scoped() {
         .unwrap();
     let _ = first;
     let mut first_events = Vec::new();
-    for _ in 0..4 {
-        first_events.push(
-            tokio::time::timeout(Duration::from_secs(2), rx.recv())
-                .await
-                .unwrap()
-                .unwrap(),
-        );
-        if matches!(first_events.last(), Some(AgentEvent::TurnCompleted)) {
-            break;
-        }
+    while first_events.len() < 4 {
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if matches!(event, AgentEvent::PromptAccepted) { continue; }
+        let done = matches!(event, AgentEvent::TurnCompleted);
+        first_events.push(event);
+        if done { break; }
     }
     assert!(first_events.iter().any(|e|matches!(e,AgentEvent::UsageReport{report,..} if report.input_tokens==Some(7)&&report.reasoning_tokens==Some(3))));
     adapter.close_session(&h).await.unwrap();
@@ -274,17 +273,15 @@ async fn exact_start_turn_resume_fields_and_replayed_usage_are_scoped() {
         )
         .await
         .unwrap();
-    let mut events = Vec::new();
-    for _ in 0..4 {
-        events.push(
-            tokio::time::timeout(Duration::from_secs(2), rx2.recv())
-                .await
-                .unwrap()
-                .unwrap(),
-        );
-        if matches!(events.last(), Some(AgentEvent::TurnCompleted)) {
-            break;
-        }
+    let mut events: Vec<AgentEvent> = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(2), rx2.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let done = matches!(event, AgentEvent::TurnCompleted);
+        if !matches!(event, AgentEvent::PromptAccepted) { events.push(event); }
+        if done { break; }
     }
     assert!(first_events.iter().any(|e| matches!(e,AgentEvent::ExecApplied{turn_id,outcomes} if turn_id=="local-1"&&outcomes["instructions"].applied==Some(true)&&outcomes["instructions"].evidence_kind==EvidenceKind::SuccessfulTurn)));
     assert!(first_events.iter().any(|e|matches!(e,AgentEvent::ExecApplied{turn_id,outcomes} if turn_id=="local-1"&&outcomes["model"].applied==Some(true)&&outcomes["model"].evidence_value==Some(json!("m1"))&&outcomes["serviceTier"].evidence_value==Some(json!("priority")))));
@@ -902,7 +899,13 @@ async fn timed_out_cancel_detaches_only_session_a_while_session_b_finishes() {
     let pid: u32 = std::fs::read_to_string(record.with_extension("pid")).unwrap().parse().unwrap();
     let child = ProcessSignal::open(pid).expect("shared fake child process handle");
     adapter.cancel(&a).await.unwrap();
-    assert!(matches!(tokio::time::timeout(TURN_EVENT_TIMEOUT, rx_a.recv()).await.unwrap(), Some(AgentEvent::UsageReport { .. })));
+    let usage = loop {
+        match tokio::time::timeout(TURN_EVENT_TIMEOUT, rx_a.recv()).await.unwrap() {
+            Some(AgentEvent::PromptAccepted) => continue,
+            other => break other,
+        }
+    };
+    assert!(matches!(usage, Some(AgentEvent::UsageReport { .. })));
     assert!(matches!(tokio::time::timeout(TURN_EVENT_TIMEOUT, rx_a.recv()).await.unwrap(), Some(AgentEvent::TurnCancelled)));
     assert!(!child.wait_signaled(Duration::ZERO).await, "A's cancel timeout must not kill the child used by B");
     let mut b_completed = false;
@@ -1001,4 +1004,39 @@ async fn rejected_crash_resume_starts_fresh_and_updates_daemon_provider_pointer(
     adapter.shutdown().await;
     let _ = std::fs::remove_dir_all(cwd);
     let _ = std::fs::remove_dir_all(record.parent().unwrap());
+}
+
+#[tokio::test]
+async fn fake_peer_acknowledges_each_accepted_turn_start_and_never_a_rejected_one() {
+    let (runtime, _record) = setup(None);
+    let adapter = CodexAdapter::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    for turn in ["ack-1", "ack-2"] {
+        adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: turn.into(), text: "hello".into(), exec_options: opts() }).await.unwrap();
+        // `prompt` only returns once the acknowledgement is delivered, so wait
+        // for both it and the turn end even if the fast fake finishes first.
+        let mut accepted = 0;
+        let mut completed = false;
+        while !completed || accepted == 0 {
+            let event = tokio::time::timeout(TURN_EVENT_TIMEOUT, rx.recv()).await.unwrap().unwrap();
+            if matches!(event, AgentEvent::PromptAccepted) { accepted += 1; }
+            if matches!(event, AgentEvent::TurnCompleted) { completed = true; }
+        }
+        assert_eq!(accepted, 1, "one acceptance per prompt");
+    }
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+
+    let (runtime, _record) = setup(Some("reject"));
+    let adapter = CodexAdapter::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    let result = adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "rejected".into(), text: "hello".into(), exec_options: opts() }).await;
+    assert!(result.is_err());
+    while let Ok(event) = rx.try_recv() {
+        assert!(!matches!(event, AgentEvent::PromptAccepted), "a rejected turn/start is never acknowledged");
+    }
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
 }

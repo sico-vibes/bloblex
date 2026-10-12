@@ -1817,6 +1817,24 @@ impl Storage {
         c.query_row("SELECT COALESCE(failure_class_v2,failure_class) FROM turns WHERE id=?1", [id], |row| row.get(0))
             .map_err(StorageError::from)
     }
+    /// Merges top-level `fields` into the JSON object stored in `turns.data`,
+    /// preserving existing keys and creating the object when it is empty. A
+    /// single `json_patch` UPDATE keeps this atomic for the current row.
+    pub fn merge_turn_data(&self, id: &str, fields: &Value) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let patch = serde_json::to_string(fields)?;
+        c.execute(
+            "UPDATE turns SET data=json_patch(COALESCE(data,'{}'),?2) WHERE id=?1",
+            params![id, patch],
+        )?;
+        Ok(())
+    }
+    /// The parsed JSON object stored for a turn, or null when absent.
+    pub fn turn_data(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row("SELECT data FROM turns WHERE id=?1", [id], |row| row.get(0)).optional()?;
+        Ok(raw.and_then(|value| serde_json::from_str::<Value>(&value).ok()).unwrap_or(Value::Null))
+    }
     pub fn upsert_tool(
         &self,
         session: &str,

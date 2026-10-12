@@ -825,3 +825,42 @@ async fn catalog_timeout_kills_the_child_and_failure_is_provider_unavailable() {
     assert!(matches!(failed, AdapterError::Process(_)));
     assert!(failed.to_string().contains("unavailable"));
 }
+
+#[tokio::test]
+async fn fake_peer_acknowledges_the_first_update_per_prompt_and_never_a_rejected_prompt() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into(), "--usage".into(), "sequence".into()];
+    let (handle, mut events) = open_session(&adapter, args, ExecOptions::default()).await;
+    for turn in ["ack-1", "ack-2"] {
+        adapter
+            .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: turn.into(), text: "hello".into(), exec_options: ExecOptions::default() })
+            .await
+            .unwrap();
+        let accepted = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut accepted = 0;
+            loop {
+                match events.recv().await.unwrap() {
+                    AgentEvent::PromptAccepted => accepted += 1,
+                    AgentEvent::TurnCompleted => break accepted,
+                    _ => {}
+                }
+            }
+        }).await.unwrap();
+        assert_eq!(accepted, 1, "one acceptance per prompt");
+    }
+    adapter.close_session(&handle).await.unwrap();
+
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into(), "--usage".into(), "error".into()];
+    let (handle, mut events) = open_session(&adapter, args, ExecOptions::default()).await;
+    let result = adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "rejected".into(), text: "hello".into(), exec_options: ExecOptions::default() })
+        .await;
+    assert!(result.is_err());
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(event, AgentEvent::PromptAccepted), "a rejected prompt is never acknowledged");
+    }
+    adapter.close_session(&handle).await.unwrap();
+}

@@ -266,6 +266,7 @@ struct Conn {
     closed: AtomicBool,
     context_revision: AtomicU64,
     has_delivered_prompt: AtomicBool,
+    prompt_awaiting_ack: AtomicBool,
     cancellation_requested: AtomicBool,
     permission_requests: Mutex<HashMap<String, (Value, Value)>>,
     context_requests: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Value>>>,
@@ -798,6 +799,7 @@ impl ClaudeAdapter {
             closed: AtomicBool::new(false),
             context_revision: AtomicU64::new(0),
             has_delivered_prompt: AtomicBool::new(provider_session_id.is_some()),
+            prompt_awaiting_ack: AtomicBool::new(false),
             cancellation_requested: AtomicBool::new(false),
             permission_requests: Mutex::new(HashMap::new()),
             context_requests: Mutex::new(HashMap::new()),
@@ -822,6 +824,14 @@ impl ClaudeAdapter {
             let mut resume_ready_tx = Some(resume_ready_tx);
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                    // Positive evidence the provider took the prompt: the first
+                    // turn-bearing stream event after the stdin write, never the
+                    // long-lived process's `system/init`.
+                    if matches!(v["type"].as_str(), Some("assistant" | "stream_event" | "user" | "result"))
+                        && reader.prompt_awaiting_ack.swap(false, Ordering::SeqCst)
+                    {
+                        let _ = reader.events.send(AgentEvent::PromptAccepted).await;
+                    }
                     if v["type"].as_str() == Some("control_response") {
                         if let Some(request_id) = v["response"]["request_id"].as_str().filter(|id| id.starts_with("bloblex-context-")) {
                             if let Some(tx) = reader.context_requests.lock().await.remove(request_id) { let _ = tx.send(v.clone()); }
@@ -1151,6 +1161,7 @@ impl AgentAdapter for ClaudeAdapter {
             }));
         }
         c.has_delivered_prompt.store(true, Ordering::SeqCst);
+        c.prompt_awaiting_ack.store(true, Ordering::SeqCst);
         Ok(())
     }
     async fn set_instruction_hash_context(&self,session_id:&str,desired:Option<String>,baseline:Option<String>){self.instruction_hash_context.lock().await.insert(session_id.into(),(desired,baseline));}

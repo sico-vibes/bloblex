@@ -170,6 +170,8 @@ Usage token buckets are mutually exclusive: `inputTokens` excludes `cacheReadTok
 
 `usage.updated` may include `evidenceNote` when a provider reports incomplete or internally inconsistent token buckets. Codex usage is scoped to the current provider `turnId`; cached input and cache-write tokens are subtracted from `inputTokens` only when all buckets are present and the subtraction remains non-negative. Otherwise the reported input count is retained with an evidence note. Codex usage has no reported cost and its model comes from the thread start/resume echo. Failed Codex turns report `usageStatus: "unreported"` with nullable token and model fields.
 
+Provider prompt delivery is recorded internally on the turn (`turns.data.delivery`): `acknowledged` when the provider accepted the prompt, `unknown` when a turn ended without that evidence. It is never emitted as a wire event and adds no client-facing field.
+
 ## Errors and compatibility
 
 Stable error codes: `invalid_argument`, `not_found`, `unauthorized`, `unsupported`, `provider_unavailable`, `provider_error`, `budget_blocked`, `conflict`, `replay_gap`, and `internal`. Error messages are safe for display and contain no credential material or prompt text. A client must compare `v`; an unsupported major version is a startup error. Adapter capability omissions mean unsupported.

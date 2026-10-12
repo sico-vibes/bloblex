@@ -1009,6 +1009,9 @@ pub enum AgentEvent {
     UsageReport { turn_id: String, report: UsageReport },
     TurnCompleted,
     TurnCancelled,
+    /// Positive provider evidence that the provider took the prompt for the
+    /// active turn. Emitted at most once per prompt; internal to the daemon.
+    PromptAccepted,
     /// Positive provider evidence that the current context cannot accept more input.
     ContextExhausted,
     Error {

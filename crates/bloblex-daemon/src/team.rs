@@ -56,6 +56,14 @@ impl Team {
         if let Some(token) = self.tokens.lock().unwrap().remove(session_id) { self.grants.lock().unwrap().remove(&token); }
         self.depth.lock().unwrap().remove(session_id);
     }
+    #[cfg(test)]
+    pub(crate) async fn enqueue_for_test(&self, session_id: &str, text: &str) {
+        self.queued.lock().await.entry(session_id.to_owned()).or_default().push_back(Queued { text: text.to_owned(), meta: json!({}), depth: 0 });
+    }
+    #[cfg(test)]
+    pub(crate) async fn queued_len(&self, session_id: &str) -> usize {
+        self.queued.lock().await.get(session_id).map_or(0, VecDeque::len)
+    }
 }
 
 fn agent_name(agent: &Value) -> String { agent["name"].as_str().unwrap_or("A teammate").to_owned() }

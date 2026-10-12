@@ -521,3 +521,57 @@ async fn resume_rejection_requires_the_observed_zero_turn_session_error_shape() 
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[tokio::test]
+async fn fake_provider_emits_prompt_accepted_once_per_prompt_and_not_without_a_stream_event() {
+    let (root, private, audit_path) = paths();
+    let system_root = setup_test_acl(&root);
+    let adapter = ClaudeAdapter::with_test_acl_executable(private, system_root);
+    let rt = runtime(&audit_path, &[]);
+    let (tx, mut rx) = mpsc::channel(32);
+    let handle = adapter
+        .new_session(
+            &rt,
+            NewSessionRequest { session_id: "s-accept".into(), project_path: root.clone(), exec_options: ExecOptions::default() },
+            tx,
+        )
+        .await
+        .unwrap();
+    wait_session_start(&mut rx).await;
+    for turn in ["turn-accept-1", "turn-accept-2"] {
+        adapter
+            .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: turn.into(), text: "hello".into(), exec_options: ExecOptions::default() })
+            .await
+            .unwrap();
+        let seen = events_through_turn(&mut rx).await;
+        assert_eq!(seen.iter().filter(|event| matches!(event, AgentEvent::PromptAccepted)).count(), 1, "exactly one acceptance per prompt");
+        assert!(seen.iter().any(|event| matches!(event, AgentEvent::TurnCompleted)));
+    }
+    adapter.close_session(&handle).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    std::fs::remove_dir_all(root).unwrap();
+
+    let (root, private, audit_path) = paths();
+    let system_root = setup_test_acl(&root);
+    let adapter = ClaudeAdapter::with_test_acl_executable(private, system_root);
+    let rt = runtime(&audit_path, &["--fake-stderr-error"]);
+    let (tx, mut rx) = mpsc::channel(16);
+    let handle = adapter
+        .new_session(
+            &rt,
+            NewSessionRequest { session_id: "s-no-accept".into(), project_path: root.clone(), exec_options: ExecOptions::default() },
+            tx,
+        )
+        .await
+        .unwrap();
+    wait_session_start(&mut rx).await;
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-no-accept".into(), text: "hello".into(), exec_options: ExecOptions::default() })
+        .await
+        .unwrap();
+    let seen = events_through_turn(&mut rx).await;
+    assert!(!seen.iter().any(|event| matches!(event, AgentEvent::PromptAccepted)), "a process exit without a stream event is not acceptance");
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+

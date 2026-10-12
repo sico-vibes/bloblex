@@ -56,6 +56,7 @@ struct AppState {
     sessions: Arc<Mutex<HashMap<String, ActiveSession>>>,
     active_turns: Arc<Mutex<HashMap<String, String>>>,
     denied_turns: Arc<Mutex<HashSet<String>>>,
+    accepted_turns: Arc<Mutex<HashSet<String>>>,
     session_gates: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     deleted_sessions: Arc<Mutex<HashSet<String>>>,
     quota_poll_gate: Arc<Mutex<QuotaPollGate>>,
@@ -119,6 +120,32 @@ fn adapter_failure_class(error: &bloblex_agent_core::AdapterError, permission_de
         bloblex_agent_core::AdapterError::Process(_)
         | bloblex_agent_core::AdapterError::Other(_) => "other",
     }
+}
+
+/// The user-facing message for a terminal failure class. Shared by the
+/// prompt-error finaliser and the event-loop error arm so they cannot drift.
+fn failure_public_message(failure_class: &str) -> &'static str {
+    match failure_class {
+        "context" => "Context window is full. Start a new conversation.",
+        "config_unsupported" => "Requested execution settings were unsupported.",
+        "provider_error" => "The provider reported a turn error.",
+        "permission_denied" => "A required permission was denied.",
+        _ => "The turn could not be completed.",
+    }
+}
+
+/// Sanitizes provider error text and folds in a sign-in hint. The boolean is
+/// whether a sign-in hint replaced the ordinary message.
+fn failure_detail_and_sign_in(provider: &str, failure_class: &str, raw: &str) -> (Option<String>, bool) {
+    if failure_class == "permission_denied" {
+        return (None, false);
+    }
+    let mut detail = safe_provider_error_detail(raw);
+    let sign_in = detail.as_deref().and_then(|text| sign_in_hint(provider, text));
+    if let Some(hint) = sign_in {
+        detail = Some(format!("{hint} ({})", detail.unwrap_or_default()));
+    }
+    (detail, sign_in.is_some())
 }
 
 /// Provider CLIs keep their own login; when a turn fails because it expired,
@@ -2199,30 +2226,18 @@ async fn session_prompt_impl(st: &AppState, p: Value, internal_team_delivery: bo
         {
             let permission_denied = state.denied_turns.lock().await.remove(&turn2);
             let failure_class = adapter_failure_class(&e, permission_denied);
-            let public_message = match failure_class {
-                "context" => "Context window is full. Start a new conversation.",
-                "config_unsupported" => "Requested execution settings were unsupported.",
-                "provider_error" => "The provider reported a turn error.",
-                "permission_denied" => "A required permission was denied.",
-                _ => "The turn could not be completed.",
-            };
-            let mut detail = if failure_class == "permission_denied" { None } else { safe_provider_error_detail(&e.to_string()) };
-            let sign_in = detail.as_deref().and_then(|text| sign_in_hint(&provider_for_error, text));
-            if let Some(hint) = sign_in { detail = Some(format!("{hint} ({})", detail.unwrap_or_default())); }
-            let public_message = if sign_in.is_some() { "The coding agent's sign-in expired." } else { public_message };
+            let (detail, sign_in) = failure_detail_and_sign_in(&provider_for_error, failure_class, &e.to_string());
+            let public_message = if sign_in { "The coding agent's sign-in expired." } else { failure_public_message(failure_class) };
             let gate = gate_for_session(&state, &sid2).await;
             let _guard = gate.lock().await;
             if !session_gate_is_current(&state, &sid2, &gate).await || session_is_deleted(&state, &sid2).await
                 || !state.db.session_exists(&sid2).unwrap_or(false) || !state.sessions.lock().await.contains_key(&sid2)
             { return; }
-            let _ = state.db.update_turn_outcome(&turn2, "error", Some(failure_class));
-            let _ = state.db.update_session_state(&sid2, "error");
+            let after_detail = detail.clone().or(Some(public_message.to_owned()));
             // Budget admission remains charged when usage is unknown; the
             // concurrency slot is released because this execution ended.
-            state.active_turns.lock().await.remove(&sid2);
-            if let Ok(summary) = state.db.session_event_summary(&sid2) { state.emit("session.changed", summary).await; }
-            state.emit("turn.error", json!({"sessionId":sid2,"turnId":turn2,"message":public_message,"failureClass":failure_class,"detail":detail.clone()})).await;
-            team::after_turn(&state, &sid2, Some(turn2.clone()), "turn.error", detail.or(Some(public_message.to_owned())));
+            finish_turn_failed(&state, &sid2, &turn2, failure_class, public_message, detail, "error").await;
+            team::after_turn(&state, &sid2, Some(turn2.clone()), "turn.error", after_detail);
         }
     });
     Ok(json!({"turnId":turn,"accepted":true}))
@@ -2290,6 +2305,36 @@ async fn restore_cancel_state(st: &AppState, id: &str, gate: &Arc<Mutex<()>>) {
     if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
 }
 
+/// The single failure-finalisation path: turn outcome, session state, active
+/// turn release, the `session.changed` summary and the `turn.error` event.
+/// `team::after_turn` stays with the caller so it runs exactly once per turn.
+async fn finish_turn_failed(
+    st: &AppState,
+    sid: &str,
+    turn_id: &str,
+    failure_class: &str,
+    public_message: &str,
+    detail: Option<String>,
+    session_state: &str,
+) {
+    let _ = st.db.update_turn_outcome(turn_id, "error", Some(failure_class));
+    let _ = st.db.update_session_state(sid, session_state);
+    st.active_turns.lock().await.remove(sid);
+    if let Ok(summary) = st.db.session_event_summary(sid) { st.emit("session.changed", summary).await; }
+    st.emit("turn.error", json!({"sessionId":sid,"turnId":turn_id,"message":public_message,"failureClass":failure_class,"detail":detail})).await;
+    finish_turn_delivery(st, turn_id, true).await;
+}
+
+/// Records the provider-delivery fact for an ending turn. A turn that never
+/// saw `PromptAccepted` is recorded as `unknown` for error/completed endings;
+/// a cancelled turn just forgets its pending state.
+async fn finish_turn_delivery(st: &AppState, turn_id: &str, infer_unknown: bool) {
+    let accepted = st.accepted_turns.lock().await.remove(turn_id);
+    if infer_unknown && !accepted {
+        let _ = st.db.merge_turn_data(turn_id, &json!({"delivery":"unknown"}));
+    }
+}
+
 async fn forward_events(
     st: AppState,
     sid: String,
@@ -2351,7 +2396,13 @@ async fn forward_events_with_timeouts(
     let mut watched_turn: Option<String> = None;
     let mut last_semantic_progress = Instant::now();
     let mut saw_semantic_progress = false;
+    let mut was_waiting = false;
     loop {
+        // While the user is being asked, the provider is legitimately idle:
+        // neither window applies, and leaving that state restarts the window.
+        let session_waiting = st.db.session_state(&sid).ok().flatten().as_deref() == Some("waiting_permission");
+        if session_waiting || was_waiting { last_semantic_progress = Instant::now(); }
+        was_waiting = session_waiting;
         let active_turn = st.active_turns.lock().await.get(&sid).cloned();
         let received = if let Some(turn_id) = active_turn.as_ref() {
             if watched_turn.as_deref() != Some(turn_id.as_str()) {
@@ -2368,6 +2419,12 @@ async fn forward_events_with_timeouts(
             match tokio::time::timeout(remaining, rx.recv()).await {
                 Ok(event) => event,
                 Err(_) => {
+                    let session_waiting = st.db.session_state(&sid).ok().flatten().as_deref() == Some("waiting_permission");
+                    if session_waiting || was_waiting {
+                        last_semantic_progress = Instant::now();
+                        was_waiting = session_waiting;
+                        continue;
+                    }
                     let active = {
                         let _guard = gate.lock().await;
                         if !session_gate_is_current(&st, &sid, &gate).await
@@ -2414,22 +2471,14 @@ async fn forward_events_with_timeouts(
                     }
                     if let Some((active, fresh_rx)) = resumed {
                         st.sessions.lock().await.insert(sid.clone(), active);
-                        let _ = st.db.update_session_state(&sid, "idle");
                         rx = fresh_rx;
-                    } else {
-                        let _ = st.db.update_session_state(&sid, "error");
                     }
-                    let _ = st.db.update_turn_outcome(turn_id, "error", Some("timeout"));
-                    if let Ok(summary) = st.db.session_event_summary(&sid) { st.emit("session.changed", summary).await; }
-                    st.active_turns.lock().await.remove(&sid);
+                    let resumed_session = st.sessions.lock().await.contains_key(&sid);
                     let detail = safe_timeout_diagnostic(&provider, provider_diagnostic);
-                    st.emit("turn.error", json!({
-                        "sessionId": sid,
-                        "turnId": turn_id,
-                        "failureClass": "timeout",
-                        "message": "The provider stopped making progress before the turn completed.",
-                        "detail": detail
-                    })).await;
+                    let public_message = "The provider stopped making progress before the turn completed.";
+                    let after_detail = detail.clone().or(Some(public_message.to_owned()));
+                    finish_turn_failed(&st, &sid, turn_id, "timeout", public_message, detail, if resumed_session { "idle" } else { "error" }).await;
+                    team::after_turn(&st, &sid, Some(turn_id.clone()), "turn.error", after_detail);
                     watched_turn = None;
                     continue;
                 }
@@ -2667,6 +2716,7 @@ async fn forward_events_with_timeouts(
                 if let Some(t) = turn.as_deref() { st.denied_turns.lock().await.remove(t); }
                 if let Some(t) = turn.as_deref() {
                     let _ = st.db.update_turn_state(t, "completed");
+                    finish_turn_delivery(&st, t, true).await;
                 }
                 let _ = st.db.update_session_state(&sid, "completed");
                 st.active_turns.lock().await.remove(&sid);
@@ -2682,6 +2732,7 @@ async fn forward_events_with_timeouts(
                 if let Some(t) = turn.as_deref() { st.denied_turns.lock().await.remove(t); }
                 if let Some(t) = turn.as_deref() {
                     let _ = st.db.update_turn_outcome(t, "cancelled", Some("cancelled"));
+                    finish_turn_delivery(&st, t, false).await;
                 }
                 let _ = st.db.update_session_state(&sid, "cancelled");
                 st.active_turns.lock().await.remove(&sid);
@@ -2696,6 +2747,7 @@ async fn forward_events_with_timeouts(
             AgentEvent::ContextExhausted => {
                 if let Some(t) = turn.as_deref() {
                     let _ = st.db.update_turn_outcome(t, "error", Some("context"));
+                    finish_turn_delivery(&st, t, true).await;
                 }
                 let _ = st.db.update_session_state(&sid, "error");
                 st.active_turns.lock().await.remove(&sid);
@@ -2713,24 +2765,24 @@ async fn forward_events_with_timeouts(
                     }),
                 )
             }
+            AgentEvent::PromptAccepted => {
+                if let Some(t) = turn.as_deref() {
+                    let _ = st.db.merge_turn_data(t, &json!({"delivery":"acknowledged"}));
+                    st.accepted_turns.lock().await.insert(t.to_owned());
+                }
+                continue;
+            }
             AgentEvent::Error { message: provider_message } => {
                 let denied = if let Some(t) = turn.as_deref() {
                     let denied = st.denied_turns.lock().await.remove(t);
                     let class = if denied { "permission_denied" } else { "provider_error" };
                     let _ = st.db.update_turn_outcome(t, "error", Some(class));
+                    finish_turn_delivery(&st, t, true).await;
                     denied
                 } else { false };
-                let mut detail = if denied { None } else { safe_provider_error_detail(&provider_message) };
-                let sign_in = detail.as_deref().and_then(|text| sign_in_hint(&provider, text));
-                if let Some(hint) = sign_in { detail = Some(format!("{hint} ({})", detail.unwrap_or_default())); }
-                let message = if denied {
-                    "A required permission was denied."
-                } else if sign_in.is_some() {
-                    "The coding agent's sign-in expired."
-                } else {
-                    "The provider reported a turn error."
-                };
                 let failure_class = if denied { "permission_denied" } else { "provider_error" };
+                let (detail, sign_in) = failure_detail_and_sign_in(&provider, failure_class, &provider_message);
+                let message = if sign_in { "The coding agent's sign-in expired." } else { failure_public_message(failure_class) };
                 let _ = st.db.update_session_state(&sid, "error");
                 st.active_turns.lock().await.remove(&sid);
                 if let Ok(summary) = st.db.session_event_summary(&sid) {
@@ -2878,6 +2930,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         sessions: Arc::new(Mutex::new(HashMap::new())),
         active_turns: Arc::new(Mutex::new(HashMap::new())),
         denied_turns: Arc::new(Mutex::new(HashSet::new())),
+        accepted_turns: Arc::new(Mutex::new(HashSet::new())),
         session_gates: Arc::new(Mutex::new(HashMap::new())),
         deleted_sessions: Arc::new(Mutex::new(HashSet::new())),
         quota_poll_gate: Arc::new(Mutex::new(QuotaPollGate::default())),
@@ -3587,7 +3640,7 @@ mod phase2a_tests {
 
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default())};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default())};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -4109,6 +4162,119 @@ mod phase2a_tests {
         assert!(!detail.contains("sk-ant-timeout-secret"));
         drop(tx);
         task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn timeout_finalisation_drains_the_queued_team_delivery() {
+        let (st, mut events) = state();
+        let sid = "s-timeout-queue";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Timeout queue").unwrap();
+        st.db.create_turn("t-timeout-queue", sid).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.into(), "t-timeout-queue".into());
+        let adapter = Arc::new(LifecycleAdapter { reject_resume: false, allow_resume: true, resume_calls: Default::default(), new_calls: Default::default(), close_calls: Default::default() });
+        let handle = SessionHandle { session_id: sid.into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
+        st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime, adapter, launch_approval_mode: ApprovalMode::Ask });
+        st.team.enqueue_for_test(sid, "queued delivery").await;
+        assert_eq!(st.team.queued_len(sid).await, 1);
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let task = tokio::spawn(forward_events_with_timeouts(
+            st.clone(),
+            sid.into(),
+            "codex".into(),
+            "rt-test".into(),
+            rx,
+            std::time::Duration::from_millis(20),
+            std::time::Duration::from_millis(20),
+        ));
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop { let event = events.recv().await.unwrap(); if event.event_type == "turn.error" { break event; } }
+        }).await.unwrap();
+        assert_eq!(event.payload["failureClass"], "timeout");
+        drop(tx);
+        task.await.unwrap();
+        let drained = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if st.team.queued_len(sid).await == 0 { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }).await;
+        assert!(drained.is_ok(), "the queued delivery must be attempted after a timeout");
+    }
+    #[tokio::test]
+    async fn watchdog_holds_while_waiting_permission_and_restarts_the_window_after() {
+        let (st, mut events) = state();
+        let sid = "s-waiting-pause";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Waiting").unwrap();
+        st.db.create_turn("t-waiting", sid).unwrap();
+        st.db.update_session_state(sid, "waiting_permission").unwrap();
+        st.active_turns.lock().await.insert(sid.into(), "t-waiting".into());
+        let adapter = Arc::new(LifecycleAdapter { reject_resume: false, allow_resume: true, resume_calls: Default::default(), new_calls: Default::default(), close_calls: Default::default() });
+        let handle = SessionHandle { session_id: sid.into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
+        st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime, adapter: adapter.clone(), launch_approval_mode: ApprovalMode::Ask });
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let task = tokio::spawn(forward_events_with_timeouts(
+            st.clone(),
+            sid.into(),
+            "codex".into(),
+            "rt-test".into(),
+            rx,
+            std::time::Duration::from_millis(20),
+            std::time::Duration::from_millis(20),
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert_eq!(st.db.session_state(sid).unwrap().as_deref(), Some("waiting_permission"));
+        assert!(st.sessions.lock().await.contains_key(sid), "provider session is not torn down while waiting");
+        assert!(st.active_turns.lock().await.contains_key(sid));
+        assert_eq!(st.db.turn_failure_class("t-waiting").unwrap(), None);
+        assert_eq!(adapter.close_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        st.db.update_session_state(sid, "working").unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop { let event = events.recv().await.unwrap(); if event.event_type == "turn.error" { break event; } }
+        }).await.unwrap();
+        assert_eq!(event.payload["failureClass"], "timeout");
+        drop(tx);
+        task.await.unwrap();
+        assert_eq!(adapter.close_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+    #[tokio::test]
+    async fn prompt_accepted_records_delivery_and_missing_ack_records_unknown() {
+        let (st, _events) = state();
+        let runtime = || RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
+
+        let sid = "s-delivery-accepted";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Delivery").unwrap();
+        st.db.create_turn("t-delivery-accepted", sid).unwrap();
+        st.db.merge_turn_data("t-delivery-accepted", &json!({"existing":"kept"})).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.into(), "t-delivery-accepted".into());
+        let handle = SessionHandle { session_id: sid.into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime: runtime(), adapter: Arc::new(PolicyAdapter::default()), launch_approval_mode: ApprovalMode::Ask });
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let task = tokio::spawn(forward_events(st.clone(), sid.into(), "codex".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::PromptAccepted).await.unwrap();
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        let data = st.db.turn_data("t-delivery-accepted").unwrap();
+        assert_eq!(data["delivery"], "acknowledged");
+        assert_eq!(data["existing"], "kept", "existing keys survive the merge");
+
+        let sid = "s-delivery-unknown";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Delivery").unwrap();
+        st.db.create_turn("t-delivery-unknown", sid).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.into(), "t-delivery-unknown".into());
+        let handle = SessionHandle { session_id: sid.into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime: runtime(), adapter: Arc::new(PolicyAdapter::default()), launch_approval_mode: ApprovalMode::Ask });
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let task = tokio::spawn(forward_events(st.clone(), sid.into(), "codex".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::Error { message: "private provider detail".into() }).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        assert_eq!(st.db.turn_data("t-delivery-unknown").unwrap()["delivery"], "unknown");
     }
     #[tokio::test]
     async fn session_started_refreshes_saved_and_active_provider_session_ids() {

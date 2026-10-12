@@ -927,6 +927,26 @@ pub struct PromptAttachment {
     pub media_type: String,
 }
 
+/// A request to add text to the turn that is running right now. `turn_id` is
+/// the daemon's turn id; the adapter maps it to the provider's own active turn.
+/// Steering carries text only, never attachments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteerRequest {
+    pub turn_id: String,
+    pub text: String,
+}
+
+/// The provider's answer to a steer. `Accepted` means the text joined the
+/// active turn; `Stale` means the provider no longer has that turn active, so
+/// the caller must fall back to the durable queue rather than drop the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SteerOutcome {
+    Accepted,
+    Stale,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionHandle {
@@ -1104,6 +1124,12 @@ pub trait AgentAdapter: Send + Sync {
         events: EventSender,
     ) -> Result<SessionHandle, AdapterError>;
     async fn prompt(&self, handle: &SessionHandle, req: PromptRequest) -> Result<(), AdapterError>;
+    /// Adds text to the turn that is running right now. Only runtimes that can
+    /// steer a live turn for real implement this; every other adapter keeps
+    /// source compatibility and reports `Unsupported` by default.
+    async fn steer(&self, _handle: &SessionHandle, _req: SteerRequest) -> Result<SteerOutcome, AdapterError> {
+        Err(AdapterError::Unsupported("steering is unavailable for this runtime".into()))
+    }
     async fn cancel(&self, handle: &SessionHandle) -> Result<(), AdapterError>;
     async fn reply_permission(
         &self,

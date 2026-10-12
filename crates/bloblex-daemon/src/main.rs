@@ -13,7 +13,7 @@ use bloblex_adapter_claude::ClaudeAdapter;
 use bloblex_adapter_codex::CodexAdapter;
 use bloblex_agent_core::{
     AgentAdapter, AgentEvent, ApprovalMode, ContextChangeReason, ExecOptions, NewSessionRequest, PromptAttachment, PromptRequest, ResumeSessionRequest, RuntimeSpec,
-    SessionHandle,
+    SessionHandle, SteerOutcome, SteerRequest,
 };
 use bloblex_protocol::{
     DaemonReady, EventEnvelope, RpcError, RpcRequest, RpcResponse, PROTOCOL_VERSION,
@@ -876,6 +876,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "session.resume" => resume_session(st, p).await,
         "session.model.update" => update_session_model(st, p).await,
         "session.prompt" => session_prompt(st, p).await,
+        "session.steer" => session_steer(st, p).await,
         "session.queue.add" | "session.queue.list" | "session.queue.update" | "session.queue.reorder" | "session.queue.delete" | "session.queue.send_now" | "session.queue.resume" => queue::queue_rpc(st, method, &p).await,
         "session.cancel" => {
             let id = p["sessionId"].as_str().unwrap_or("");
@@ -1444,16 +1445,16 @@ async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError
     let runtime_id=p["runtimeId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;
     let runtime=st.runtimes.read().await.iter().find(|r|r["id"]==runtime_id).cloned().ok_or_else(||derr("not_found","runtime not found",StatusCode::NOT_FOUND))?;
     let provider=runtime["provider"].as_str().unwrap_or("");
-    let table:[(&str,bool,&str,&str);5]=match provider{
-        "claude"=>[("model",true,"spawn","provider_echo"),("thinking",true,"spawn","usage_effect"),("serviceTier",true,"spawn","request_shape"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape")],
-        "codex"=>[("model",true,"spawn","provider_echo"),("thinking",true,"turn","usage_effect"),("serviceTier",true,"turn","provider_echo"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape")],
-        "opencode"=>[("model",true,"session","provider_echo"),("thinking",true,"session","none"),("serviceTier",false,"session","none"),("instructions",true,"session","successful_turn"),("customEnv",true,"process","request_shape")],
-        _=>[("model",false,"turn","none"),("thinking",false,"turn","none"),("serviceTier",false,"turn","none"),("instructions",false,"turn","none"),("customEnv",false,"process","none")],
+    let table:[(&str,bool,&str,&str);6]=match provider{
+        "claude"=>[("model",true,"spawn","provider_echo"),("thinking",true,"spawn","usage_effect"),("serviceTier",true,"spawn","request_shape"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape"),("steer",false,"turn","none")],
+        "codex"=>[("model",true,"spawn","provider_echo"),("thinking",true,"turn","usage_effect"),("serviceTier",true,"turn","provider_echo"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape"),("steer",true,"turn","none")],
+        "opencode"=>[("model",true,"session","provider_echo"),("thinking",true,"session","none"),("serviceTier",false,"session","none"),("instructions",true,"session","successful_turn"),("customEnv",true,"process","request_shape"),("steer",false,"turn","none")],
+        _=>[("model",false,"turn","none"),("thinking",false,"turn","none"),("serviceTier",false,"turn","none"),("instructions",false,"turn","none"),("customEnv",false,"process","none"),("steer",false,"turn","none")],
     };
     let settings=st.db.settings().map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
     let mut reported=serde_json::Map::new();
     for (setting,supported,scope,evidence) in table {
-        let key=match setting{"model"=>format!("exec_gate.{provider}.model"),"thinking"=>format!("exec_gate.{provider}.thinking"),"serviceTier"=>format!("exec_gate.{provider}.serviceTier"),"instructions"=>format!("exec_gate.{provider}.instructions"),_=>String::new()};
+        let key=match setting{"model"=>format!("exec_gate.{provider}.model"),"thinking"=>format!("exec_gate.{provider}.thinking"),"serviceTier"=>format!("exec_gate.{provider}.serviceTier"),"instructions"=>format!("exec_gate.{provider}.instructions"),"steer"=>format!("exec_gate.{provider}.steer"),_=>String::new()};
         let gate=if key.is_empty(){true}else{settings[&key].as_bool().unwrap_or(gate_default(provider,setting))};
         let mut value=json!({"supported":supported,"enabled":supported&&gate,"scope":scope,"evidence":evidence});
         if setting=="customEnv"{value["allowedKeys"]=json!(["LANG","LC_ALL","TZ","NO_COLOR","TERM"]);}
@@ -2262,6 +2263,70 @@ async fn session_prompt_impl(st: &AppState, p: Value, internal_team_delivery: bo
         }
     });
     Ok(json!({"turnId":turn,"accepted":true}))
+}
+
+/// Adds text to the turn that is running right now on a runtime that can
+/// truly steer (Codex only). The text is recorded as an ordinary user message
+/// with `meta.kind == "steer"`; if the provider reports the turn is gone the
+/// text is queued instead of being dropped. Steering never changes the
+/// permission mode or cancels the turn.
+async fn session_steer(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    let sid = p["sessionId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
+    let text = p["text"].as_str().unwrap_or("");
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.len() > 100_000 {
+        return Err(derr("invalid_argument", "text must contain 1 to 100000 UTF-8 bytes", StatusCode::BAD_REQUEST));
+    }
+    let session = st.db.session_detail(sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
+    if session["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
+    if session["link"]["kind"] == "side" { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
+    let provider = session["provider"].as_str().unwrap_or("");
+    if provider != "codex" {
+        return Err(derr("unsupported", "Steering is unavailable for this runtime.", StatusCode::BAD_REQUEST));
+    }
+    let settings = st.db.settings().map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+    if !settings[format!("exec_gate.{provider}.steer")].as_bool().unwrap_or(gate_default(provider, "steer")) {
+        return Err(derr("unsupported", "Steering is turned off for this runtime.", StatusCode::BAD_REQUEST));
+    }
+    // Serialise with turn completion and cancellation through the per-session gate.
+    let gate = gate_for_session(st, sid).await;
+    let _guard = gate.lock().await;
+    if session_is_deleted(st, sid).await || !session_gate_is_current(st, sid, &gate).await {
+        return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND));
+    }
+    let Some(turn_id) = st.active_turns.lock().await.get(sid).cloned() else {
+        return Err(derr("conflict", "Nothing is running to steer.", StatusCode::CONFLICT));
+    };
+    let active = st.sessions.lock().await.get(sid).cloned().ok_or_else(|| derr("not_found", "active session not found", StatusCode::NOT_FOUND))?;
+    match active.adapter.steer(&active.handle, SteerRequest { turn_id: turn_id.clone(), text: text.to_owned() }).await {
+        Ok(SteerOutcome::Accepted) => {
+            let user_message = st.db
+                .append_message_with_data(sid, &turn_id, "user", text, &json!({"meta":{"kind":"steer"}}))
+                .map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            if !user_message.is_null() {
+                st.emit("message.completed", json!({"sessionId":sid,"turnId":turn_id,"messageId":user_message["id"],"role":"user","message":user_message})).await;
+            }
+            Ok(json!({"steered":true,"turnId":turn_id}))
+        }
+        Ok(SteerOutcome::Stale) => {
+            let item = queue::enqueue_steer(st, sid, text).await?;
+            Ok(json!({"steered":false,"queued":true,"item":item}))
+        }
+        Err(error) => Err(steer_dispatch_error(error)),
+    }
+}
+
+/// Maps a steering adapter failure to the wire error, leaving the running turn
+/// untouched. Unsupported keeps the adapter's own message; everything else is
+/// a provider failure.
+fn steer_dispatch_error(error: bloblex_agent_core::AdapterError) -> DispatchError {
+    match error {
+        bloblex_agent_core::AdapterError::Unsupported(message) => derr("unsupported", &message, StatusCode::BAD_REQUEST),
+        bloblex_agent_core::AdapterError::Timeout => derr("provider_unavailable", "The provider did not answer the steering request.", StatusCode::BAD_GATEWAY),
+        bloblex_agent_core::AdapterError::Process(_) => derr("provider_unavailable", "The provider process is unavailable.", StatusCode::BAD_GATEWAY),
+        bloblex_agent_core::AdapterError::Rejected(_) => derr("provider_error", "The provider rejected the steering request.", StatusCode::BAD_GATEWAY),
+        _ => derr("provider_error", "The provider could not accept the steering request.", StatusCode::BAD_GATEWAY),
+    }
 }
 
 const MAX_PROMPT_ATTACHMENTS: usize = 8;
@@ -5031,6 +5096,8 @@ mod phase2a_tests {
     #[derive(Default)]
     struct QueueAdapter {
         prompts: StdMutex<Vec<(String,String)>>,
+        steers: StdMutex<Vec<(String,String)>>,
+        steer_outcome: StdMutex<Option<SteerOutcome>>,
     }
     #[async_trait::async_trait]
     impl AgentAdapter for QueueAdapter {
@@ -5045,12 +5112,18 @@ mod phase2a_tests {
             self.prompts.lock().unwrap().push((handle.session_id.clone(), request.text));
             Ok(())
         }
+        async fn steer(&self, _: &SessionHandle, request: SteerRequest) -> Result<SteerOutcome, bloblex_agent_core::AdapterError> {
+            self.steers.lock().unwrap().push((request.turn_id, request.text));
+            Ok(self.steer_outcome.lock().unwrap().unwrap_or(SteerOutcome::Accepted))
+        }
         async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
         async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
         async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
     }
     impl QueueAdapter {
         fn texts(&self) -> Vec<String> { self.prompts.lock().unwrap().iter().map(|(_, text)| text.clone()).collect() }
+        fn steer_calls(&self) -> Vec<(String,String)> { self.steers.lock().unwrap().clone() }
+        fn set_steer_outcome(&self, outcome: SteerOutcome) { *self.steer_outcome.lock().unwrap() = Some(outcome); }
     }
     fn install_queue_adapter(st: &mut AppState, adapter: &Arc<QueueAdapter>) {
         st.adapters = Arc::new(Adapters { acp: Arc::new(AcpAdapter::default()), codex: adapter.clone(), claude: Arc::new(ClaudeAdapter::default()) });
@@ -5274,5 +5347,150 @@ mod phase2a_tests {
         assert!(wait_for(|| adapter.texts() == vec!["user item"]).await, "the user queue drains before the team delivery");
         tx.send(AgentEvent::TurnCompleted).await.unwrap();
         assert!(wait_for(|| adapter.texts() == vec!["user item", "team delivery"]).await);
+    }
+
+    #[tokio::test]
+    async fn steer_requires_the_gate_codex_and_an_active_turn() {
+        let (mut st, mut events) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "steer-gate";
+        queue_session(&st, &adapter, sid).await;
+        assert_eq!(
+            dispatch(&st, "session.steer", json!({"sessionId":sid,"text":"add this"})).await.unwrap_err().1.message,
+            "Steering is turned off for this runtime."
+        );
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"exec_gate.codex.steer","value":"true"})).await.unwrap_err().1.code, "invalid_argument", "the steer gate accepts only a JSON boolean");
+        dispatch(&st, "settings.set", json!({"key":"exec_gate.codex.steer","value":true})).await.unwrap();
+        let idle = dispatch(&st, "session.steer", json!({"sessionId":sid,"text":"add this"})).await.unwrap_err();
+        assert_eq!((idle.1.code.as_str(), idle.1.message.as_str()), ("conflict", "Nothing is running to steer."));
+        mark_busy(&st, sid, "turn-0").await;
+        let accepted = dispatch(&st, "session.steer", json!({"sessionId":sid,"text":"add this"})).await.unwrap();
+        assert_eq!(accepted, json!({"steered":true,"turnId":"turn-0"}));
+        assert_eq!(adapter.steer_calls(), vec![("turn-0".to_owned(), "add this".to_owned())]);
+        let messages = st.db.session_detail(sid).unwrap()["messages"].as_array().cloned().unwrap_or_default();
+        let steer_message = messages.iter().find(|message| message["meta"]["kind"] == "steer").expect("the steer text is persisted as a user message");
+        assert_eq!(steer_message["role"], "user");
+        assert_eq!(steer_message["content"], "add this");
+        assert_eq!(steer_message["turnId"], "turn-0");
+        let mut saw_completed = false;
+        while let Ok(event) = events.try_recv() {
+            if event.event_type == "message.completed" && event.payload["role"] == "user" && event.payload["message"]["meta"]["kind"] == "steer" {
+                saw_completed = true;
+            }
+        }
+        assert!(saw_completed, "the steer message is emitted like a normal user message");
+    }
+
+    #[tokio::test]
+    async fn stale_steer_falls_back_to_the_queue_at_position_zero() {
+        let (mut st, mut events) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        adapter.set_steer_outcome(SteerOutcome::Stale);
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "steer-stale";
+        queue_session(&st, &adapter, sid).await;
+        st.db.set_setting("exec_gate.codex.steer", &json!(true)).unwrap();
+        mark_busy(&st, sid, "turn-0").await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"already waiting"})).await.unwrap();
+        let result = dispatch(&st, "session.steer", json!({"sessionId":sid,"text":"steer now"})).await.unwrap();
+        assert_eq!(result["steered"], false);
+        assert_eq!(result["queued"], true);
+        assert_eq!(result["item"]["text"], "steer now");
+        assert_eq!(result["item"]["position"], 0);
+        let items = st.db.queue_list(sid).unwrap();
+        assert_eq!(items.iter().map(|item| item["text"].as_str().unwrap()).collect::<Vec<_>>(), vec!["steer now", "already waiting"]);
+        assert!(items.iter().all(|item| item["status"] != "failed"), "the stale text is never dropped");
+        assert_eq!(adapter.texts(), Vec::<String>::new(), "the stale text is queued, not sent");
+        let mut saw_change = false;
+        while let Ok(event) = events.try_recv() {
+            if event.event_type == "queue.changed" && event.payload["sessionId"] == sid { saw_change = true; }
+        }
+        assert!(saw_change, "the stale fallback announces the queue change");
+    }
+
+    #[tokio::test]
+    async fn steer_is_unsupported_for_other_runtimes_and_side_conversations() {
+        let (st, _) = state();
+        for provider in ["claude", "opencode"] {
+            let sid = format!("steer-{provider}");
+            st.db.create_session(&sid, "rt-test", provider, ".", "Chat").unwrap();
+            let error = dispatch(&st, "session.steer", json!({"sessionId":sid,"text":"hi"})).await.unwrap_err();
+            assert_eq!(error.1.code, "unsupported", "{provider} cannot steer");
+        }
+        st.db.create_session("steer-side", "rt-test", "codex", ".", "Side").unwrap();
+        st.db.set_session_link("steer-side", &json!({"kind":"side","peerAgentId":"p","originSessionId":"q"})).unwrap();
+        assert_eq!(dispatch(&st, "session.steer", json!({"sessionId":"steer-side","text":"hi"})).await.unwrap_err().1.code, "read_only");
+        st.db.create_session("steer-archived", "rt-test", "codex", ".", "Old").unwrap();
+        st.db.session_archive("steer-archived", true).unwrap();
+        assert_eq!(dispatch(&st, "session.steer", json!({"sessionId":"steer-archived","text":"hi"})).await.unwrap_err().1.code, "not_found");
+        // Adapters that cannot steer report Unsupported through the default trait method.
+        let handle = SessionHandle { session_id: "x".into(), provider_session_id: "x".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        let request = || SteerRequest { turn_id: "t".into(), text: "hi".into() };
+        assert!(matches!(ClaudeAdapter::default().steer(&handle, request()).await, Err(bloblex_agent_core::AdapterError::Unsupported(_))));
+        assert!(matches!(AcpAdapter::default().steer(&handle, request()).await, Err(bloblex_agent_core::AdapterError::Unsupported(_))));
+    }
+
+    #[tokio::test]
+    async fn runtime_capabilities_report_steer_evidence_none_and_follow_the_gate() {
+        let (st, _) = state();
+        let caps = dispatch(&st, "runtime.capabilities", json!({"runtimeId":"rt-test"})).await.unwrap();
+        assert_eq!(caps["settings"]["steer"]["supported"], true);
+        assert_eq!(caps["settings"]["steer"]["scope"], "turn");
+        assert_eq!(caps["settings"]["steer"]["evidence"], "none");
+        assert_eq!(caps["settings"]["steer"]["enabled"], false);
+        st.db.set_setting("exec_gate.codex.steer", &json!(true)).unwrap();
+        let enabled = dispatch(&st, "runtime.capabilities", json!({"runtimeId":"rt-test"})).await.unwrap();
+        assert_eq!(enabled["settings"]["steer"]["enabled"], true);
+        *st.runtimes.write().await = vec![json!({"id":"rt-open","provider":"opencode"})];
+        st.db.upsert_runtime(&json!({"id":"rt-open","provider":"opencode"})).unwrap();
+        let open = dispatch(&st, "runtime.capabilities", json!({"runtimeId":"rt-open"})).await.unwrap();
+        assert_eq!(open["settings"]["steer"]["supported"], false);
+        assert_eq!(open["settings"]["steer"]["evidence"], "none");
+        assert_eq!(open["settings"]["steer"]["enabled"], false);
+        assert_eq!(open["settings"]["steer"]["reason"], "setting is unsupported by this runtime");
+    }
+
+    #[tokio::test]
+    async fn a_failed_queue_item_can_be_retried_with_send_now() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-retry";
+        queue_session(&st, &adapter, sid).await;
+        let added = dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"retry me"})).await.unwrap();
+        let id = added["item"]["id"].as_str().unwrap().to_owned();
+        st.db.queue_claim(sid, &id, "2026-01-01T00:00:00.000Z").unwrap().expect("claim the queued item");
+        st.db.queue_mark_failed(&id, "provider unavailable").unwrap();
+        assert_eq!(st.db.queue_get(sid, &id).unwrap()["status"], "failed");
+        let sent = dispatch(&st, "session.queue.send_now", json!({"sessionId":sid,"id":id})).await.unwrap();
+        assert_eq!(sent["sent"], true);
+        assert_eq!(st.db.queue_list(sid).unwrap().len(), 0, "the retried item is removed once sent");
+        assert!(wait_for(|| adapter.texts() == vec!["retry me"]).await);
+    }
+
+    #[tokio::test]
+    async fn a_transient_turn_conflict_keeps_the_item_queued_and_unpaused() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-transient";
+        queue_session(&st, &adapter, sid).await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"later"})).await.unwrap();
+        // A turn starts between the idle check and the send.
+        st.active_turns.lock().await.insert(sid.into(), "turn-x".into());
+        crate::queue::drain_next(&st, sid, true).await;
+        let items = st.db.queue_list(sid).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["status"], "queued", "a transient conflict requeues instead of failing");
+        assert_eq!(items[0]["error"], Value::Null);
+        assert!(!st.queue.is_paused(sid), "a transient conflict does not pause the queue");
+        assert!(adapter.texts().is_empty());
+        // The next completed turn sends the preserved item.
+        st.active_turns.lock().await.remove(sid);
+        st.db.update_session_state(sid, "idle").unwrap();
+        crate::queue::after_turn(&st, sid, "turn.completed").await;
+        assert!(wait_for(|| adapter.texts() == vec!["later"]).await);
+        assert!(st.db.queue_list(sid).unwrap().is_empty());
     }
 }

@@ -1108,3 +1108,47 @@ async fn fake_peer_acknowledges_each_accepted_turn_start_and_never_a_rejected_on
     adapter.close_session(&handle).await.unwrap();
     let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
 }
+
+#[tokio::test]
+async fn steer_accepts_with_the_schema_exact_request_and_reports_stale_and_reject() {
+    // accept: the request is exactly the generated TurnSteerParams shape.
+    let (runtime, record) = setup(None);
+    let adapter = CodexAdapter::default();
+    let (tx, _rx) = tokio::sync::mpsc::channel(32);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "local-steer".into(), text: "hello".into(), exec_options: opts() }).await.unwrap();
+    let accepted = adapter.steer(&handle, SteerRequest { turn_id: "local-steer".into(), text: "add this".into() }).await.unwrap();
+    assert_eq!(accepted, SteerOutcome::Accepted);
+    let rows = log(&record);
+    let steer = rows.iter().find(|row| row["method"] == "turn/steer").expect("turn/steer request recorded");
+    assert_eq!(steer["params"]["threadId"], handle.provider_session_id);
+    assert_eq!(steer["params"]["expectedTurnId"], "turn-1");
+    assert_eq!(steer["params"]["input"][0]["type"], "text");
+    assert_eq!(steer["params"]["input"][0]["textPresent"], true);
+    assert_eq!(steer["params"]["input"][0]["textSha256"], instruction_sha256("add this").unwrap());
+    assert_eq!(rows.iter().filter(|row| row["method"] == "turn/steer").count(), 1);
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+
+    // stale: the provider says the expected turn is no longer active.
+    let (runtime, _record) = setup(Some("steer-stale"));
+    let adapter = CodexAdapter::default();
+    let (tx, _rx) = tokio::sync::mpsc::channel(32);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "stale-turn".into(), text: "hello".into(), exec_options: opts() }).await.unwrap();
+    let stale = adapter.steer(&handle, SteerRequest { turn_id: "stale-turn".into(), text: "too late".into() }).await.unwrap();
+    assert_eq!(stale, SteerOutcome::Stale);
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+
+    // reject: an unrelated JSON-RPC error stays an error.
+    let (runtime, _record) = setup(Some("steer-reject"));
+    let adapter = CodexAdapter::default();
+    let (tx, _rx) = tokio::sync::mpsc::channel(32);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "reject-turn".into(), text: "hello".into(), exec_options: opts() }).await.unwrap();
+    let error = adapter.steer(&handle, SteerRequest { turn_id: "reject-turn".into(), text: "nope".into() }).await.unwrap_err();
+    assert!(matches!(error, AdapterError::Rejected(_)));
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}

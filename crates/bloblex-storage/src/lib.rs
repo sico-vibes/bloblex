@@ -84,7 +84,7 @@ fn migrate_exec_snapshots(c:&mut Connection,path:Option<&Path>,backup_done:bool)
     }
     tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_usage_exec_snapshot ON usage_events(exec_snapshot_id);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_provider_update ON usage_events(runtime_id,provider_update_id) WHERE provider_update_id IS NOT NULL;")?;
-    let gates=[("exec_gate.claude.model",true),("exec_gate.claude.thinking",true),("exec_gate.claude.instructions",true),("exec_gate.codex.model",true),("exec_gate.codex.thinking",true),("exec_gate.codex.serviceTier",true),("exec_gate.codex.instructions",true),("exec_gate.opencode.model",true),("exec_gate.opencode.thinking",false),("exec_gate.opencode.instructions",true)];
+    let gates=[("exec_gate.claude.model",true),("exec_gate.claude.thinking",true),("exec_gate.claude.instructions",true),("exec_gate.codex.model",true),("exec_gate.codex.thinking",true),("exec_gate.codex.serviceTier",true),("exec_gate.codex.instructions",true),("exec_gate.codex.steer",false),("exec_gate.opencode.model",true),("exec_gate.opencode.thinking",false),("exec_gate.opencode.instructions",true)];
     for (key,enabled) in gates {
         let changed=tx.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,?2)",params![key,if enabled{"true"}else{"false"}])?;
         if changed>0 { push_settings_event(&tx,key,enabled)?; }
@@ -1397,6 +1397,22 @@ impl Storage {
         tx.commit()?;
         Ok(queued_prompt_dto(&id,session_id,position,&params_json,kind,due_at,"queued",None,&now,Utc::now()))
     }
+    /// Insert one plain prompt at the head of a session's queue, shifting the
+    /// other rows down. Used when a steer falls back to the 2A queue so the
+    /// user's text is tried again before anything already waiting.
+    pub fn queue_add_front(&self, session_id: &str, params: &Value) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session_id], |r| r.get(0))?;
+        if !exists { return Err(StorageError::AgentNotFound); }
+        tx.execute("UPDATE queued_prompts SET position=position+1 WHERE session_id=?1", [session_id])?;
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let params_json = params.to_string();
+        tx.execute("INSERT INTO queued_prompts(id,session_id,position,params_json,kind,due_at,status,error,created_at,updated_at) VALUES(?1,?2,0,?3,'user',NULL,'queued',NULL,?4,?4)", params![id,session_id,params_json,now])?;
+        tx.commit()?;
+        Ok(queued_prompt_dto(&id,session_id,0,&params_json,"user",None,"queued",None,&now,Utc::now()))
+    }
     /// Full list for a session: scheduled items by due time first, then plain
     /// items by position. `lateBySecs` is derived here, never stored.
     pub fn queue_list(&self, session_id: &str) -> Result<Vec<Value>, StorageError> {
@@ -1517,10 +1533,12 @@ impl Storage {
         Ok(Some(queued_prompt_dto(&id,session_id,position,&params,&kind,due.as_deref(),"sending",None,now,Utc::now())))
     }
     /// Claim one specific queued item (used by `send_now` on an idle session).
+    /// A previously `failed` item can be retried: claiming it clears `error`
+    /// and keeps its position.
     pub fn queue_claim(&self, session_id: &str, id: &str, now: &str) -> Result<Option<Value>, StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let changed = tx.execute("UPDATE queued_prompts SET status='sending',updated_at=?3 WHERE session_id=?1 AND id=?2 AND status='queued'", params![session_id,id,now])?;
+        let changed = tx.execute("UPDATE queued_prompts SET status='sending',error=NULL,updated_at=?3 WHERE session_id=?1 AND id=?2 AND status IN ('queued','failed')", params![session_id,id,now])?;
         if changed == 0 { tx.commit()?; return Ok(None); }
         let (position,params,kind,due): (i64,String,String,Option<String>) = tx.query_row("SELECT position,params_json,kind,due_at FROM queued_prompts WHERE id=?1", [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
         tx.commit()?;
@@ -1535,6 +1553,15 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         c.execute("UPDATE queued_prompts SET status='failed',error=?2,updated_at=?3 WHERE id=?1 AND status='sending'", params![id,error,now])?;
+        Ok(())
+    }
+    /// Return a claimed item to the queue without changing its position or
+    /// flagging a failure. Used when a provider reports a transient conflict
+    /// (for example a turn that started between the idle check and the send).
+    pub fn queue_requeue(&self, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        c.execute("UPDATE queued_prompts SET status='queued',error=NULL,updated_at=?2 WHERE id=?1 AND status='sending'", params![id,now])?;
         Ok(())
     }
     pub fn queue_due_sessions(&self, now: &str) -> Result<Vec<String>, StorageError> {
@@ -3853,7 +3880,7 @@ mod tests {
         let(dir,path)=v2_fixture();
         {let db=Storage::open(&path).unwrap();let settings=db.settings().unwrap();assert_eq!(settings["exec_gate.codex.model"],false);for key in ["exec_gate.claude.model","exec_gate.claude.thinking","exec_gate.claude.instructions","exec_gate.codex.thinking","exec_gate.codex.serviceTier","exec_gate.codex.instructions","exec_gate.opencode.model","exec_gate.opencode.instructions"]{assert_eq!(settings[key],true);}assert_eq!(settings["exec_gate.opencode.thinking"],false);}
         let backup_dir=dir.join("backups");let before=fs::read_dir(&backup_dir).unwrap().count();assert_eq!(before,20);
-        {let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),12);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),12);assert_eq!(c.query_row("SELECT COUNT(*) FROM usage_events WHERE usage_status='unreported' AND exec_snapshot_id IS NULL AND provider_update_id IS NULL AND context_used IS NULL AND context_size IS NULL AND reported_cost_decimal IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='settings.changed'",[],|r|r.get::<_,i64>(0)).unwrap(),9);for (table,column) in [("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","reported_cost_decimal")] {assert_eq!(c.query_row("SELECT type FROM pragma_table_info(?1) WHERE name=?2",params![table,column],|r|r.get::<_,String>(0)).unwrap(),"TEXT");}assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cumulative_cost_micros')",[],|r|r.get::<_,bool>(0)).unwrap());}
+        {let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),12);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),12);assert_eq!(c.query_row("SELECT COUNT(*) FROM usage_events WHERE usage_status='unreported' AND exec_snapshot_id IS NULL AND provider_update_id IS NULL AND context_used IS NULL AND context_size IS NULL AND reported_cost_decimal IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='settings.changed'",[],|r|r.get::<_,i64>(0)).unwrap(),10);for (table,column) in [("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","reported_cost_decimal")] {assert_eq!(c.query_row("SELECT type FROM pragma_table_info(?1) WHERE name=?2",params![table,column],|r|r.get::<_,String>(0)).unwrap(),"TEXT");}assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cumulative_cost_micros')",[],|r|r.get::<_,bool>(0)).unwrap());}
         drop(Storage::open(&path).unwrap());assert_eq!(fs::read_dir(&backup_dir).unwrap().count(),before);
         let c=Connection::open(&path).unwrap();c.pragma_update(None,"foreign_keys","OFF").unwrap();remove_session_controls_migration(&c);c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode'; DELETE FROM schema_migrations WHERE version=3; PRAGMA user_version=2;").unwrap();drop(c);drop(Storage::open(&path).unwrap());
         let entries=fs::read_dir(&dir).unwrap().map(|e|e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>();assert!(entries.iter().all(|n|!n.ends_with("-wal")&&!n.ends_with("-shm")));let backup_entries=fs::read_dir(&backup_dir).unwrap().map(|e|e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>();assert!(backup_entries.iter().all(|n|!n.ends_with("-wal")&&!n.ends_with("-shm")));let _=fs::remove_dir_all(dir);

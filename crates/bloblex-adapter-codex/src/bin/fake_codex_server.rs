@@ -92,6 +92,24 @@ fn main() {
             continue;
         }
         let params = &v["params"];
+        if method == "turn/steer" {
+            let thread_id = params["threadId"].as_str().unwrap_or("");
+            let expected = params["expectedTurnId"].as_str().unwrap_or("");
+            let active = active_turns.get(thread_id).cloned();
+            let error = if mode == "steer-reject" {
+                Some(json!({"code":-32000,"message":"steer rejected"}))
+            } else if mode == "steer-stale" || active.as_deref() != Some(expected) {
+                Some(json!({"code":-32000,"message":"expected turn is not active"}))
+            } else {
+                None
+            };
+            match error {
+                Some(error) => println!("{}", json!({"jsonrpc":"2.0","id":id,"error":error})),
+                None => println!("{}", json!({"jsonrpc":"2.0","id":id,"result":{"turnId":expected}})),
+            }
+            let _ = io::stdout().flush();
+            continue;
+        }
         let (result, notes) = match method {
             "initialize" => (json!({"serverInfo":{"name":"fake","version":"1"}}), vec![]),
             "thread/start" => {

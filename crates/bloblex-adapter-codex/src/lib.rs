@@ -727,6 +727,26 @@ impl SharedProcess {
     }
 }
 
+/// True when a `turn/steer` JSON-RPC error means the expected turn is no longer
+/// active. The generated schema documents `expectedTurnId` as a precondition
+/// that "fails when it does not match the currently active turn", so the
+/// provider's own mismatch text is the only reliable signal available.
+fn steer_stale_evidence(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "not active",
+        "no active turn",
+        "expectedturnid",
+        "expected turn",
+        "not the active turn",
+        "no longer active",
+        "turn mismatch",
+        "does not match",
+    ]
+        .iter()
+        .any(|evidence| message.contains(evidence))
+}
+
 fn resume_rejected_evidence(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     (message.contains("thread") || message.contains("session"))
@@ -1544,6 +1564,33 @@ impl AgentAdapter for CodexAdapter {
             turn.completed = false;
         }
         Ok(())
+    }
+    async fn steer(&self, h: &SessionHandle, q: SteerRequest) -> Result<SteerOutcome, AdapterError> {
+        let c = self
+            .sessions
+            .lock()
+            .await
+            .get(&h.session_id)
+            .cloned()
+            .ok_or_else(|| AdapterError::Process("Codex session is not active".into()))?;
+        let (thread_id, provider_turn) = {
+            let turn = c.turn.lock().await;
+            (turn.thread_id.clone(), turn.id.clone())
+        };
+        let thread_id = thread_id.ok_or_else(|| AdapterError::Process("Codex session has no provider thread".into()))?;
+        // `expectedTurnId` is the provider's own active turn id; the daemon's
+        // `q.turn_id` only names the turn in Bloblex and is not sent.
+        let expected_turn = provider_turn.ok_or_else(|| AdapterError::Unsupported("there is no active Codex turn".into()))?;
+        let params = json!({
+            "threadId": thread_id,
+            "expectedTurnId": expected_turn,
+            "input": [{"type":"text","text":q.text}],
+        });
+        match Self::call(&c, "turn/steer", params).await {
+            Ok(_) => Ok(SteerOutcome::Accepted),
+            Err(AdapterError::Rejected(message)) if steer_stale_evidence(&message) => Ok(SteerOutcome::Stale),
+            Err(error) => Err(error),
+        }
     }
     async fn cancel(&self, h: &SessionHandle) -> Result<(), AdapterError> {
         let c = self

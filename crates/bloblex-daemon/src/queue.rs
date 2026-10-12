@@ -251,7 +251,7 @@ async fn send_specific(st: &AppState, session_id: &str, id: &str) -> Result<(), 
 
 /// Claim and send the next eligible item. `allow_plain` is the caller's wish to
 /// send plain prompts; a paused session forces scheduled-only selection.
-async fn drain_next(st: &AppState, session_id: &str, allow_plain: bool) {
+pub(crate) async fn drain_next(st: &AppState, session_id: &str, allow_plain: bool) {
     let lock = st.queue.lock_for(session_id);
     let _guard = lock.lock().await;
     let allow_plain = allow_plain && !st.queue.is_paused(session_id);
@@ -277,11 +277,31 @@ async fn send_claimed(st: &AppState, session_id: &str, item: &Value) {
             emit_changed(st, session_id).await;
         }
         Err(error) => {
-            let _ = st.db.queue_mark_failed(&id, &error.1.message);
-            st.queue.mark_paused(session_id);
+            // A turn that started between the idle check and this send is a
+            // transient conflict: keep the item queued and let it fire after
+            // that turn instead of failing it or pausing the queue.
+            if error.1.code == "conflict" {
+                let _ = st.db.queue_requeue(&id);
+            } else {
+                let _ = st.db.queue_mark_failed(&id, &error.1.message);
+                st.queue.mark_paused(session_id);
+            }
             emit_changed(st, session_id).await;
         }
     }
+}
+
+/// Queue a message a provider reported stale at the head of the plain queue,
+/// so it is retried before anything already waiting. The caller has already
+/// validated the session and text.
+pub async fn enqueue_steer(st: &AppState, session_id: &str, text: &str) -> Result<Value, DispatchError> {
+    queue_session(st, session_id)?;
+    if st.db.queue_count_queued(session_id).map_err(queue_error)? >= QUEUE_MAX {
+        return Err(derr("conflict", "The queue is full.", StatusCode::CONFLICT));
+    }
+    let item = st.db.queue_add_front(session_id, &json!({"text":text,"attachments":[]})).map_err(queue_error)?;
+    emit_changed(st, session_id).await;
+    Ok(item)
 }
 
 /// Runs after every finished turn. A completed turn drains the next item; an

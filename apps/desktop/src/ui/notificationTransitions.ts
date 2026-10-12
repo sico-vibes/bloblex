@@ -9,3 +9,12 @@ export function notificationForTransition(previous: string | null | undefined, n
   if (state === 'waiting_permission' && prior !== 'waiting_permission') return { state: 'approval', body: (title) => `Needs your approval: ${title}` }
   return null
 }
+
+export type NotificationLevel = 'all' | 'input' | 'muted'
+
+/** A blob's level decides which transitions may notify: everything, only approvals/questions, or nothing. */
+export function notificationAllowed(level: NotificationLevel | null | undefined, state: ConversationNotification['state']): boolean {
+  if (level === 'muted') return false
+  if (level === 'input') return state === 'approval'
+  return true
+}

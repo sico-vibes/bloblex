@@ -53,7 +53,7 @@ import { ProviderLogo, RuntimeMark } from './providerBrand'
 import { useClock } from './useClock'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { initialiseSeen, isUnread, markSeen, unreadNeedsApproval, type SeenSessions } from './sessionSeen'
-import { notificationForTransition } from './notificationTransitions'
+import { notificationAllowed, notificationForTransition } from './notificationTransitions'
 import { flashMainWindow, sendDesktopNotification } from '../desktopIntegrations'
 import { stampCompanionDragRegions } from './companionDrag'
 import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, waitingBlobCount, type ExperimentName } from './experiments'
@@ -548,6 +548,7 @@ export function App() {
       const notification = notificationForTransition(previous, next)
       if (!notification || mainAttention) continue
       const agent = agents.find((item) => item.id === session.agentId)
+      if (!notificationAllowed(agent?.notificationLevel, notification.state)) continue
       const name = agent?.name ?? labelize(session.provider, 'Blob')
       const title = formatUnknownSafe(session.title, 'Conversation')
       if (notificationsEnabled) void sendDesktopNotification(name, notification.body(title)).catch(() => undefined)
@@ -854,9 +855,10 @@ export function App() {
     let unlistenNotice: (() => void) | undefined
     void listen<string>('bloblex-tray-notice', (event) => setError(event.payload)).then((stop) => { if (cancelled) stop(); else unlistenNotice = stop })
     void listen('bloblex-pause-all-requested', () => {
-      if (!window.confirm('Pause all agents? Bloblex will send a cancellation request for every active session. A cancelled turn may not be resumable.')) return
+      if (!window.confirm('Pause all agents? Bloblex will send a cancellation request for every active session. A cancelled turn may not be resumable. Scheduled runs are paused too until you turn them back on in Schedules.')) return
       void (async () => {
         try {
+          await rpc('settings.set', { key: 'automations.paused', value: true }).then(() => setSchedulesPaused(true)).catch(() => undefined)
           const response = await rpc<{ sessions?: Session[] }>('session.list')
           const targets = sessionsForPauseRequest(response.sessions ?? [])
           if (!targets.length) { setError('There are no active sessions to cancel.'); return }

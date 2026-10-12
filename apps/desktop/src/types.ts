@@ -166,6 +166,8 @@ export interface Agent extends JsonRecord {
   updatedAt: string
   approvalMode?: ApprovalMode | null
   effectiveApprovalMode?: ApprovalMode | null
+  /** What this blob may notify about: everything, only what needs the user, or nothing. */
+  notificationLevel?: 'all' | 'input' | 'muted' | null
   /** Team placement: owning project (null = casual), role label, leader, sidebar visibility. */
   projectId?: string | null
   role?: string

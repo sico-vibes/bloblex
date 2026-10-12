@@ -61,6 +61,17 @@ describe('companion team overview', () => {
     expect(teamLine(casual, [lead, mate, casual], sessions)).toBeNull()
   })
 
+  it('renders a context reset as a labelled divider and marks lost context', () => {
+    const host = mount(<>
+      <CompanionChatItem message={{ role: 'notice', content: 'Conversation compacted.', meta: { kind: 'context_reset', reason: 'compaction', contextLost: false } }} agents={[lead, mate]} onOpenSide={vi.fn()} />
+      <CompanionChatItem message={{ role: 'notice', content: 'Started a fresh session.', meta: { kind: 'context_reset', reason: 'fresh_session', contextLost: true } }} agents={[lead, mate]} onOpenSide={vi.fn()} />
+    </>)
+    const dividers = [...host.querySelectorAll('[role="separator"]')]
+    expect(dividers.map((node) => node.getAttribute('aria-label'))).toEqual(['Conversation compacted.', 'Started a fresh session.'])
+    expect(dividers.map((node) => node.classList.contains('lost'))).toEqual([false, true])
+    expect(host.querySelector('.companion-team-chip')).toBeNull()
+  })
+
   it('renders delegation chips, mentions and plans in the companion chat', () => {
     const open = vi.fn()
     const host = mount(<>

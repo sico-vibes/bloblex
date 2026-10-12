@@ -92,7 +92,10 @@ export interface SessionLink extends JsonRecord {
 
 /** Team metadata on a stored message. */
 export interface MessageMeta extends JsonRecord {
-  kind?: 'delegation' | 'blob_message' | 'blob_reply' | 'plan' | string
+  kind?: 'delegation' | 'blob_message' | 'blob_reply' | 'plan' | 'context_reset' | string
+  /** `context_reset` notices: why the provider's context changed, and whether earlier turns are gone for the agent. */
+  reason?: 'compaction' | 'fresh_session' | 'restart' | string
+  contextLost?: boolean
   replyTo?: { sourceSessionId: string; messageId: string; role?: 'user' | 'assistant'; author?: string; excerpt?: string; truncated?: boolean; createdAt?: string | null }
   direction?: 'sent' | 'failed'
   peerAgentId?: string

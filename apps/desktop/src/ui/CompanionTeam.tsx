@@ -218,6 +218,9 @@ export function CompanionChatItem({ message, agents, onOpenSide, currentSessionI
       </button>
     </div>
   }
+  if (role === 'notice' && meta?.kind === 'context_reset') {
+    return <div className={`companion-context-divider${meta.contextLost === true ? ' lost' : ''}`} role="separator" aria-label={text}><span>{plain(text)}</span></div>
+  }
   if (role === 'plan' || meta?.kind === 'plan') {
     return <div className="companion-plan"><ClipboardList size={12} aria-hidden="true" /><span><b>Proposed plan</b> {plain(text)}</span></div>
   }

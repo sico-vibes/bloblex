@@ -34,6 +34,11 @@ export function ReplyChip({ from, name, onOpen }: { from: Agent | null | undefin
   </div>
 }
 
+/** A hairline divider where the provider's context changed (compaction, fresh session or restart). `lost` means the agent can no longer see earlier turns. */
+export function ContextResetDivider({ id, text, lost }: { id?: string; text: string; lost?: boolean }) {
+  return <div id={id} className={`context-divider${lost ? ' lost' : ''}`} role="separator" aria-label={text}><span>{text}</span></div>
+}
+
 /** Header for a side conversation between two blobs: a centred pill with both blobs and its topic. */
 export function SideConversationHeader({ peer, peerName, target, targetName, topic }: { peer: Agent | null | undefined; peerName: string; target: Agent | null | undefined; targetName: string; topic?: string | null }) {
   return <div className="side-header" aria-label={`Side conversation between ${peerName} and ${targetName}${topic ? `: ${topic}` : ''}`}>

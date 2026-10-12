@@ -2,7 +2,7 @@ import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { emit, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { Bot, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
+import { Bot, Brain, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
@@ -10,6 +10,7 @@ import { companionMonitorOptions, currentCompanionMonitor, inDesktop, permission
 import { agentColorHex } from './agentColor'
 import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
+import { MemoryPage } from './MemoryPage'
 import { cloudDictationStatus, normalizeEngineChoice, setDictationEnginePrefs, type CloudAuthStatus, type DictationEngineChoice } from './dictation'
 import { UpdatesPanel } from './UpdatesPanel'
 import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
@@ -19,11 +20,12 @@ import { runtimeAuthSummary } from './launchChecks'
 import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTime, type DiscoveryStatus } from './runtimeDiscovery'
 import { ConfirmDialog } from './BlobPage'
 
-export type SettingsPageId = 'General' | 'Agents' | 'Speech' | 'Updates'
+export type SettingsPageId = 'General' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
   { id: 'Agents', label: 'Agents', icon: Bot },
+  { id: 'Memory', label: 'Memory', icon: Brain },
   { id: 'Speech', label: 'Speech', icon: Mic },
   { id: 'Updates', label: 'Updates', icon: Download },
 ]
@@ -92,6 +94,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [textSize, setTextSize] = useState<'small' | 'default' | 'large' | 'larger'>('default')
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
   const [retryMaxWaitSecs, setRetryMaxWaitSecs] = useState(21600)
+  const [profileAbout, setProfileAbout] = useState('')
   const [speechEngine, setSpeechEngine] = useState<DictationEngineChoice>('local')
   const [cloudConsent, setCloudConsent] = useState(false)
   const [cloudStatus, setCloudStatus] = useState<CloudAuthStatus | null>(null)
@@ -153,6 +156,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       if (['small', 'default', 'large', 'larger'].includes(String(settings['appearance.textSize']))) setTextSize(settings['appearance.textSize'] as typeof textSize)
       setNotificationsEnabled(settings['notifications.enabled'] !== false)
       if (typeof settings['retry.maxWaitSecs'] === 'number') setRetryMaxWaitSecs(settings['retry.maxWaitSecs'])
+      if (typeof settings['profile.about'] === 'string') setProfileAbout(settings['profile.about'])
       const loadedEngine = normalizeEngineChoice(settings['speech.engine'])
       setSpeechEngine(loadedEngine)
       setCloudConsent(settings['speech.cloud.consent'] === true)
@@ -553,6 +557,15 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </form>}
             </SettingsGroup>
           </>}
+
+          {!loading && page === 'Memory' && <MemoryPage
+            agents={snapshot?.agents ?? []}
+            projects={snapshot?.projects ?? []}
+            enabled={experiments.memory}
+            about={profileAbout}
+            connected={inDesktop}
+            onEnabledChange={async (next) => { await rpc('settings.set', { key: 'experimental.memory', value: next }); onExperimentChange?.('memory', next) }}
+            onAboutSave={async (text) => { await rpc('settings.set', { key: 'profile.about', value: text }); setProfileAbout(text) }} />}
 
           {!loading && page === 'Speech' && <>
             <p className="settings-intro">Dictation runs on this device with sherpa-onnx by default. Download a model once; your audio stays here unless you choose ChatGPT below.</p>

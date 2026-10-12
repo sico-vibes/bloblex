@@ -30,6 +30,31 @@ export interface Snapshot extends JsonRecord {
   automations?: Automation[]
 }
 
+/** A note blobs can recall. Agent-written notes for a project or everyone stay unused until approved. */
+export interface MemoryRecord extends JsonRecord {
+  id: string
+  scope: 'blob' | 'project' | 'shared'
+  scopeId?: string | null
+  kind: 'fact' | 'preference' | 'decision' | 'procedure' | 'reference'
+  title: string
+  body: string
+  tags?: string[]
+  importance?: number
+  pinned?: boolean
+  origin: 'user' | 'agent'
+  reviewed: boolean
+  version: number
+  updatedAt?: string
+  deletedAt?: string | null
+}
+
+export function isMemoryRecord(value: unknown): value is MemoryRecord {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Partial<MemoryRecord>
+  return typeof item.id === 'string' && typeof item.title === 'string' && typeof item.body === 'string'
+    && (item.scope === 'blob' || item.scope === 'project' || item.scope === 'shared') && typeof item.reviewed === 'boolean' && typeof item.version === 'number'
+}
+
 /** A prompt waiting in the daemon's durable queue (plain queued or scheduled "send later"). */
 export interface QueuedPrompt extends JsonRecord {
   id: string

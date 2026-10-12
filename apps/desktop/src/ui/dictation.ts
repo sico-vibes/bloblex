@@ -173,7 +173,8 @@ export function useDictation({
         await invoke('dictation_start', { modelId, owner, engine: enginePrefs.engine, cloudConsent: enginePrefs.consent })
       } catch (reason) {
         setPhase('idle')
-        setError(String(reason))
+        const raw = String(reason)
+        setError(engineReasonText(raw) ? `ChatGPT transcription is not available: ${engineReasonText(raw)}.` : raw)
       }
     } else if (phase !== 'downloading') {
       setPhase('idle')

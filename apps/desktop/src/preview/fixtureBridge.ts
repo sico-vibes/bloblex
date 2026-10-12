@@ -35,6 +35,8 @@ const composerPreviewSessionId = 'session-codex-composer-preview'
 const fixtureQueues: Record<string, { items: Array<Record<string, unknown>>; paused: boolean }> = {}
 /** Preview-only automations and their runs. */
 const fixtureAutomations: Array<Record<string, unknown>> = []
+/** Preview-only memory notes. */
+const fixtureMemory: Array<Record<string, unknown>> = []
 const fixtureRuns: Record<string, Array<Record<string, unknown>>> = {}
 const composerPreviewStorageKey = 'bloblex.preview.composer-session.v1'
 
@@ -477,6 +479,40 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
       return { run } as T
     }
     if (method === 'automation.runs') return { runs: fixtureRuns[String(target.id)] ?? [] } as T
+  }
+  if (typeof method === 'string' && method.startsWith('memory.')) {
+    const live = () => fixtureMemory.filter((item) => !item.deletedAt)
+    const find = () => fixtureMemory.find((item) => item.id === params.id)
+    const secret = /(sk-[A-Za-z0-9]{8,}|ghp_|AKIA|-----BEGIN|bearer\s)/i
+    if (method === 'memory.list') {
+      const needle = typeof params.query === 'string' ? params.query.toLowerCase() : ''
+      const rows = live().filter((item) => !needle || `${item.title} ${item.body}`.toLowerCase().includes(needle))
+      return { records: rows.map((item) => ({ ...item })) } as T
+    }
+    if (method === 'memory.create') {
+      const title = typeof params.title === 'string' ? params.title.trim() : ''
+      const body = typeof params.body === 'string' ? params.body.trim() : ''
+      if (!title || title.length > 120 || !body || body.length > 2000) throw rpcError('invalid_argument', 'A title up to 120 characters and a note up to 2000 characters are required.')
+      if (secret.test(`${title} ${body}`)) throw rpcError('invalid_argument', 'That looks like a secret. Notes must not contain passwords or keys.')
+      const record = { id: `memory-${Date.now()}-${fixtureMemory.length}`, scope: params.scope ?? 'shared', scopeId: params.scopeId ?? null, kind: params.kind ?? 'fact', title, body, tags: [], importance: 50, pinned: params.pinned === true, origin: 'user', reviewed: true, version: 1, updatedAt: new Date().toISOString(), deletedAt: null } as Record<string, unknown>
+      fixtureMemory.push(record)
+      notifyFixtureDaemon('memory.changed', { record: { ...record } })
+      return { record: { ...record } } as T
+    }
+    const target = find()
+    if (!target) throw rpcError('not_found', 'That note is gone.')
+    if (method === 'memory.get') return { record: { ...target } } as T
+    if (method === 'memory.update') {
+      if (params.expectedVersion !== target.version) throw rpcError('conflict', 'That note changed. Reload and try again.')
+      for (const key of ['title', 'body', 'kind', 'pinned']) if (key in params) target[key] = params[key]
+      target.version = Number(target.version) + 1
+      target.updatedAt = new Date().toISOString()
+      notifyFixtureDaemon('memory.changed', { record: { ...target } })
+      return { record: { ...target } } as T
+    }
+    if (method === 'memory.approve') { target.reviewed = true; notifyFixtureDaemon('memory.changed', { record: { ...target } }); return { record: { ...target } } as T }
+    if (method === 'memory.delete') { target.deletedAt = new Date().toISOString(); notifyFixtureDaemon('memory.deleted', { id: target.id }); return { deleted: true } as T }
+    if (method === 'memory.restore') { target.deletedAt = null; notifyFixtureDaemon('memory.changed', { record: { ...target } }); return { record: { ...target } } as T }
   }
   if (method === 'session.steer') {
     const session = sessions.find((item) => item.id === params.sessionId)

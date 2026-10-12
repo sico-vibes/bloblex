@@ -3,10 +3,10 @@ import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, shortcutRows, waitin
 import type { Session, Snapshot } from '../types'
 
 describe('experimental feature rules', () => {
-  it('keeps all seven off by default with unique setting keys', () => {
-    expect(EXPERIMENTS).toHaveLength(7)
-    expect(new Set(EXPERIMENTS.map((e) => e.name)).size).toBe(7)
-    expect(Object.values(DEFAULT_EXPERIMENTS)).toEqual(Array(7).fill(false))
+  it('keeps all eight off by default with unique setting keys', () => {
+    expect(EXPERIMENTS).toHaveLength(8)
+    expect(new Set(EXPERIMENTS.map((e) => e.name)).size).toBe(8)
+    expect(Object.values(DEFAULT_EXPERIMENTS)).toEqual(Array(8).fill(false))
   })
   it('attaches only a completed turn’s files under its last assistant reply', () => {
     const a = { id: 'a', role: 'assistant', turnId: 't' }

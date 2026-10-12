@@ -1,7 +1,7 @@
 // Team surfaces inside a conversation: delegation chips, relayed replies,
 // side-conversation header, proposed plans, inline questions and @mentions.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { ArrowLeftRight, Check, ChevronDown, ClipboardList, Hash, Send, X } from 'lucide-react'
+import { ArrowLeftRight, Check, ChevronDown, ClipboardList, Hash, RotateCw, Send, X } from 'lucide-react'
 import type { Agent, PermissionRequest, Session, UserQuestion } from '../types'
 import { agentLook } from '../blob/look'
 import { BlobCanvas } from '../blob/BlobCanvas'
@@ -37,6 +37,13 @@ export function ReplyChip({ from, name, onOpen }: { from: Agent | null | undefin
 /** A hairline divider where the provider's context changed (compaction, fresh session or restart). `lost` means the agent can no longer see earlier turns. */
 export function ContextResetDivider({ id, text, lost }: { id?: string; text: string; lost?: boolean }) {
   return <div id={id} className={`context-divider${lost ? ' lost' : ''}`} role="separator" aria-label={text}><span>{text}</span></div>
+}
+
+/** The daemon's automatic-retry decision: scheduled (cancellable), declined or cancelled. */
+export function AutoRetryNotice({ id, text, status, onCancel }: { id?: string; text: string; status: string; onCancel?: () => void }) {
+  return <div id={id} className={`team-chip-row auto-retry ${status}`} role="status">
+    <span className="team-notice"><RotateCw size={11} aria-hidden="true" />{text}{status === 'scheduled' && onCancel && <button type="button" className="queue-link auto-retry-cancel" onClick={onCancel}>Cancel</button>}</span>
+  </div>
 }
 
 /** Header for a side conversation between two blobs: a centred pill with both blobs and its topic. */

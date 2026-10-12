@@ -20,10 +20,12 @@ export interface QueueBannerProps {
   onUpdate: (id: string, text: string) => void
   onReorder: (ids: string[]) => void
   onResume: () => void
+  /** Cancels the pending automatic retry (a queue item of kind `retry`). */
+  onCancelRetry?: () => void
 }
 
-/** Messages waiting to be sent, newest rule first: due scheduled ones, then in order. */
-export function QueueBanner({ items, paused, sessionBusy, nowMs, disabled, onSendNow, onDelete, onUpdate, onReorder, onResume }: QueueBannerProps) {
+/** Messages waiting to be sent: scheduled and retry items first, then plain ones in order. */
+export function QueueBanner({ items, paused, sessionBusy, nowMs, disabled, onSendNow, onDelete, onUpdate, onReorder, onResume, onCancelRetry }: QueueBannerProps) {
   const [expanded, setExpanded] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
@@ -59,11 +61,12 @@ export function QueueBanner({ items, paused, sessionBusy, nowMs, disabled, onSen
     <ol className="queue-list">
       {visible.map((item) => {
         const scheduled = item.kind === 'send_later'
+        const retry = item.kind === 'retry'
         const failed = item.status === 'failed'
         const plainIndex = plainIds.indexOf(item.id)
-        const text = queueRowText(item.text, item.attachments?.length ?? 0)
+        const text = retry ? 'Continue automatically' : queueRowText(item.text, item.attachments?.length ?? 0)
         return <li key={item.id} className={`queue-item${failed ? ' failed' : ''}${item.status === 'sending' ? ' sending' : ''}`}>
-          <span className="queue-kind" aria-hidden="true">{failed ? <CircleAlert size={13} /> : scheduled ? <Clock size={13} /> : <span className="queue-dot" />}</span>
+          <span className="queue-kind" aria-hidden="true">{failed ? <CircleAlert size={13} /> : scheduled || retry ? <Clock size={13} /> : <span className="queue-dot" />}</span>
           {editing === item.id
             ? <input className="queue-edit" autoFocus value={draft} aria-label="Edit queued message" onChange={(event) => setDraft(event.target.value)} onBlur={() => commitEdit(item)} onKeyDown={(event) => {
                 if (event.key === 'Enter') { event.preventDefault(); commitEdit(item) }
@@ -72,13 +75,13 @@ export function QueueBanner({ items, paused, sessionBusy, nowMs, disabled, onSen
             : <span className="queue-text" title={item.text || text}>{text}</span>}
           {failed
             ? <span className="queue-meta danger" title={item.error ?? undefined}>{item.error ?? 'Could not be sent'}</span>
-            : scheduled && <span className="queue-meta">{item.lateBySecs && item.lateBySecs > 0 ? 'late' : describeDue(item.dueAt, nowMs)}</span>}
+            : (scheduled || retry) && <span className="queue-meta">{retry ? 'retrying ' : ''}{item.lateBySecs && item.lateBySecs > 0 ? 'late' : describeDue(item.dueAt, nowMs)}</span>}
           <span className="queue-actions">
-            {!failed && item.status === 'queued' && !editing && item.text && <button type="button" className="queue-icon" disabled={disabled} aria-label="Edit queued message" title="Edit" onClick={() => { setDraft(item.text); setEditing(item.id) }}><Pencil size={12} /></button>}
+            {!failed && !retry && item.status === 'queued' && !editing && item.text && <button type="button" className="queue-icon" disabled={disabled} aria-label="Edit queued message" title="Edit" onClick={() => { setDraft(item.text); setEditing(item.id) }}><Pencil size={12} /></button>}
             {plainIndex > 0 && <button type="button" className="queue-icon" disabled={disabled} aria-label="Move up" title="Move up" onClick={() => move(item.id, -1)}><ChevronUp size={13} /></button>}
             {plainIndex >= 0 && plainIndex < plainIds.length - 1 && <button type="button" className="queue-icon" disabled={disabled} aria-label="Move down" title="Move down" onClick={() => move(item.id, 1)}><ChevronDown size={13} /></button>}
             {item.status !== 'sending' && <button type="button" className="queue-icon" disabled={disabled} aria-label={sessionBusy ? 'Send next' : failed ? 'Try again' : 'Send now'} title={sessionBusy ? 'Send next, when the current turn ends' : failed ? 'Try again' : 'Send now'} onClick={() => onSendNow(item.id)}><SendHorizontal size={12} /></button>}
-            {item.status !== 'sending' && <button type="button" className="queue-icon" disabled={disabled} aria-label="Remove from queue" title="Remove" onClick={() => onDelete(item.id)}><X size={13} /></button>}
+            {item.status !== 'sending' && <button type="button" className="queue-icon" disabled={disabled} aria-label={retry ? 'Cancel automatic retry' : 'Remove from queue'} title={retry ? 'Cancel automatic retry' : 'Remove'} onClick={() => retry && onCancelRetry ? onCancelRetry() : onDelete(item.id)}><X size={13} /></button>}
           </span>
         </li>
       })}

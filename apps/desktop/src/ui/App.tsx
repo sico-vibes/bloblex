@@ -4,9 +4,9 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
 import {
-  Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, Copy, FileDown, FileText, FolderOpen, FolderPlus, Hash, Import,
+  Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, Copy, CornerDownRight, FileDown, FileText, FolderOpen, FolderPlus, Hash, Import,
   Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelRight, Paperclip, Plus,
-  RefreshCw, Search, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X,
+  RefreshCw, RotateCw, Search, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X,
 } from 'lucide-react'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
 import { COMPANION_CHAT_SIZE_LABELS, COMPANION_CHAT_SIZES, isCompanionChatSize, MAX_COMPANION_PEERS, type CompanionChatSize } from '../blob/companionLayout'
@@ -26,7 +26,7 @@ import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, norm
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
-import { ContextResetDivider, ConversationPicker, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
+import { AutoRetryNotice, ContextResetDivider, ConversationPicker, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
 import { hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
@@ -1406,6 +1406,14 @@ export function App() {
     if (role === 'plan') {
       return <PlanCard key={key} text={text} renderText={renderText} canApprove={!sideSession && planOn && !sessionBusy && message.id === latestPlanId} onApprove={() => void approvePlan()} onRevise={() => composerRef.current?.focus()} />
     }
+    if (role === 'notice' && meta?.kind === 'auto_retry') {
+      const retryMeta = message.meta as { status?: unknown; itemId?: unknown }
+      const pending = typeof retryMeta.itemId === 'string' && !!promptQueue?.items.some((entry) => entry.kind === 'retry' && entry.id === retryMeta.itemId)
+      return <AutoRetryNotice key={key} id={`conversation-message-${encodeURIComponent(key)}`} text={text} status={String(retryMeta.status ?? '')} onCancel={pending ? cancelAutoRetry : undefined} />
+    }
+    if (role === 'user' && meta?.kind === 'auto_retry') {
+      return <div key={key} className="team-chip-row"><span className="team-notice"><RotateCw size={11} aria-hidden="true" />Continuing automatically</span></div>
+    }
     if (role === 'notice' && meta?.kind === 'context_reset') {
       return <ContextResetDivider key={key} id={`conversation-message-${encodeURIComponent(key)}`} text={text} lost={(message.meta as { contextLost?: unknown }).contextLost === true} />
     }
@@ -1531,6 +1539,7 @@ export function App() {
   const updateQueued = (id: string, text: string) => void queueRpc('session.queue.update', { id, text })
   const reorderQueued = (ids: string[]) => void queueRpc('session.queue.reorder', { ids })
   const resumeQueue = () => void queueRpc('session.queue.resume', {})
+  const cancelAutoRetry = () => void queueRpc('turn.retry.cancel', {})
 
 
   const answerPermission = async (permission: PermissionRequest, choice: string): Promise<boolean> => {
@@ -1728,6 +1737,26 @@ export function App() {
     const timer = window.setInterval(() => setQueueNowMs(Date.now()), 30_000)
     return () => window.clearInterval(timer)
   }, [hasScheduledPrompt])
+  // Steering is offered only when the daemon reports it supported and switched on for this runtime.
+  const [steerAvailable, setSteerAvailable] = useState(false)
+  useEffect(() => {
+    if (!selectedSession || connection !== 'connected' || String(selectedRuntime?.provider ?? '').toLowerCase() !== 'codex') { setSteerAvailable(false); return }
+    let active = true
+    void rpc<{ settings?: { steer?: { supported?: boolean; enabled?: boolean } } }>('runtime.capabilities', { runtimeId: selectedSession.runtimeId }).then((caps) => {
+      if (active) setSteerAvailable(caps.settings?.steer?.supported === true && caps.settings.steer.enabled === true)
+    }).catch(() => { if (active) setSteerAvailable(false) })
+    return () => { active = false }
+  }, [selectedSession?.id, selectedSession?.runtimeId, selectedRuntime?.provider, turnLive, connection]) // eslint-disable-line react-hooks/exhaustive-deps
+  const steerPrompt = async () => {
+    const text = composer.trim()
+    if (!text || !selectedSession || busy || !steerAvailable || !turnLive) return
+    try {
+      await doRpc('session.steer', { sessionId: selectedSession.id, text })
+      if (composerRef.current?.value.trim() === text) setComposer('')
+      void loadQueue(selectedSession.id)
+      await refresh()
+    } catch { /* The actionable error is shown inline. */ }
+  }
   const imagesSupported = ['claude', 'codex'].includes(String(selectedRuntime?.provider ?? '').toLowerCase())
   const sessionQuota = (snapshot?.quotas ?? []).find((item) => String(item.provider) === String(selectedRuntime?.provider ?? '').toLowerCase()) ?? null
   const selectedModelLock = selectedSession?.modelLock
@@ -1932,7 +1961,7 @@ export function App() {
                 const message = item.kind === 'message' ? item.value : undefined
                 const text = originalMessageText(message?.content ?? message?.text)
                 const messageMeta = message?.meta && typeof message.meta === 'object' ? message.meta as Record<string, unknown> : {}
-                const hasUserOrAssistantMessage = (message?.role === 'user' || message?.role === 'assistant') && !['blob_reply', 'blob_message', 'delegation'].includes(String(messageMeta.kind ?? ''))
+                const hasUserOrAssistantMessage = (message?.role === 'user' || message?.role === 'assistant') && !['blob_reply', 'blob_message', 'delegation', 'auto_retry'].includes(String(messageMeta.kind ?? ''))
                 const actions = experiments.messageActions && !sideSession && hasUserOrAssistantMessage
                 const userMessage = message?.role === 'user'
                 const groupStart = !!message && !userMessage && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))
@@ -1961,7 +1990,7 @@ export function App() {
           {sideSession ? <div className="side-close"><button type="button" className="secondary-button" onClick={closeSideConversation}>Close chat</button></div> : <div className="composer-wrap">
             {usageTip && <UsageTip tip={usageTip} onDismiss={() => dismissUsageTip(usageTip)} onViewUsage={() => void showUsage()} />}
             {dictationPartial && <div className="dictation-partial" role="status" aria-label={`Listening: ${dictationPartial}`}><span className="dictation-partial-dot" aria-hidden="true" />{dictationPartial}</div>}
-            {promptQueue && promptQueue.items.length > 0 && <QueueBanner items={promptQueue.items} paused={promptQueue.paused} sessionBusy={sessionBusy} nowMs={queueNowMs} disabled={connection !== 'connected'} onSendNow={sendQueuedNow} onDelete={deleteQueued} onUpdate={updateQueued} onReorder={reorderQueued} onResume={resumeQueue} />}
+            {promptQueue && promptQueue.items.length > 0 && <QueueBanner items={promptQueue.items} paused={promptQueue.paused} sessionBusy={sessionBusy} nowMs={queueNowMs} disabled={connection !== 'connected'} onSendNow={sendQueuedNow} onDelete={deleteQueued} onUpdate={updateQueued} onReorder={reorderQueued} onResume={resumeQueue} onCancelRetry={cancelAutoRetry} />}
             <div className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
               {replyTarget && <ReplyContextStrip target={replyTarget} onCancel={() => { replyTargetRef.current = null; setReplyTarget(null) }} />}
               <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
@@ -1991,6 +2020,7 @@ export function App() {
                   <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} contextModel={selectedSession.contextModel} contextEstimated={selectedSession.contextEstimated} model={contextModel} isNewConversation={(selectedSession.messages ?? []).length === 0} quota={sessionQuota} onOpenUsage={() => void showUsage()} />
                   {speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
                   {(!!composer.trim() || attachments.some((item) => item.status === 'ready')) && <SendLaterControl disabled={connection !== 'connected' || busy || attachments.some((item) => item.status === 'staging') || !runtimeReady} nowMs={queueNowMs} onSchedule={(dueAt) => void sendPrompt(dueAt)} />}
+                  {turnLive && steerAvailable && !!composer.trim() && attachments.length === 0 && <button type="button" className="composer-icon-button steer-button" onClick={() => void steerPrompt()} disabled={busy || connection !== 'connected'} aria-label="Steer now" title="Steer: add this to the turn that is running now"><CornerDownRight size={16} aria-hidden="true" /></button>}
                   {turnLive && <button className="send-button cancel" onClick={() => void cancelTurn()} disabled={busy} aria-label="Cancel turn" title="Stop"><Square size={12} fill="currentColor" /></button>}
                   <button className="send-button" onClick={() => void sendPrompt()} disabled={busy || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? 'Queue message' : 'Send message'} title={sessionBusy ? 'Add to the queue. It sends when this turn ends.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : <ArrowUp size={17} />}</button>
                 </div>

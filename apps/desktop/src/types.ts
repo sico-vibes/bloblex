@@ -34,7 +34,7 @@ export interface QueuedPrompt extends JsonRecord {
   sessionId: string
   text: string
   attachments?: Array<{ name: string; path: string }>
-  kind: 'user' | 'send_later'
+  kind: 'user' | 'send_later' | 'retry'
   dueAt: string | null
   status: 'queued' | 'sending' | 'failed'
   error: string | null

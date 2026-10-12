@@ -419,6 +419,29 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     notifyFixtureDaemon('message.reactions.changed', payload)
     return { reactions: message.reactions, selected } as T
   }
+  if (method === 'session.steer') {
+    const session = sessions.find((item) => item.id === params.sessionId)
+    if (!session || session.archived) throw rpcError('not_found', 'Conversation not found.')
+    if (fixtureSettings['exec_gate.codex.steer'] !== true) throw rpcError('unsupported', 'Steering is turned off for this runtime.')
+    if (!['working', 'waiting_permission'].includes(String(session.state))) throw rpcError('conflict', 'Nothing is running to steer.')
+    const text = typeof params.text === 'string' ? params.text.trim() : ''
+    if (!text) throw rpcError('invalid_argument', 'text must contain 1 to 100000 UTF-8 bytes')
+    const turnId = String((session.turns ?? []).at(-1)?.id ?? 'turn-preview')
+    const id = `steer-${Date.now()}`
+    session.messages = [...(session.messages ?? []), { id, role: 'user', content: text, turnId, meta: { kind: 'steer' } }]
+    notifyFixtureDaemon('message.completed', { sessionId: session.id, turnId, id, messageId: id, role: 'user', content: text, meta: { kind: 'steer' } })
+    return { steered: true, turnId } as T
+  }
+  if (method === 'turn.retry.cancel') {
+    const session = sessions.find((item) => item.id === params.sessionId)
+    if (!session) throw rpcError('not_found', 'Conversation not found.')
+    const queue = (fixtureQueues[session.id] ??= { items: [], paused: false })
+    const at = queue.items.findIndex((entry) => entry.kind === 'retry')
+    if (at < 0) throw rpcError('not_found', 'No automatic retry is pending.')
+    queue.items.splice(at, 1)
+    notifyFixtureDaemon('queue.changed', { sessionId: session.id, items: queue.items.map((entry) => ({ ...entry })), paused: queue.paused })
+    return { cancelled: true } as T
+  }
   if (typeof method === 'string' && method.startsWith('session.queue.')) {
     // An in-memory stand-in for the daemon's durable queue so the preview can show every state.
     const session = sessions.find((item) => item.id === params.sessionId)
@@ -508,7 +531,11 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const supported = { supported: true, enabled: true, scope: 'agent', evidence: 'preview' }
     // Like the real daemon, OpenCode keeps effort behind its execution check.
     const thinking = params.runtimeId === 'runtime-opencode' ? { ...supported, enabled: false, reason: 'execution entry gate is disabled' } : supported
-    return { runtimeId: params.runtimeId, settings: { model: supported, thinking, serviceTier: supported, instructions: supported, customEnv: supported } } as T
+    // Steering exists for Codex only, off until the user turns the gate on, and is never proven.
+    const steer = params.runtimeId === 'runtime-codex'
+      ? { supported: true, enabled: fixtureSettings['exec_gate.codex.steer'] === true, scope: 'turn', evidence: 'none', ...(fixtureSettings['exec_gate.codex.steer'] === true ? {} : { reason: 'execution entry gate is disabled' }) }
+      : { supported: false, enabled: false, scope: 'turn', evidence: 'none', reason: 'setting is unsupported by this runtime' }
+    return { runtimeId: params.runtimeId, settings: { model: supported, thinking, serviceTier: supported, instructions: supported, customEnv: supported, steer } } as T
   }
   if (method === 'runtime.models') {
     const runtimeId = String(params.runtimeId ?? '')

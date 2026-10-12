@@ -88,6 +88,19 @@ describe('QueueBanner', () => {
     expect(handlers.onUpdate).toHaveBeenCalledTimes(1)
   })
 
+  it('shows an automatic retry as a timed row that cancels through its own action', () => {
+    const onCancelRetry = vi.fn()
+    const onDelete = vi.fn()
+    banner([item({ id: 'r1', text: 'Please continue.', kind: 'retry', dueAt: new Date(NOW + 5 * 60_000).toISOString() })], { onCancelRetry, onDelete })
+    expect(q('.queue-text')?.textContent).toBe('Continue automatically')
+    expect(q('.queue-meta')?.textContent).toBe('retrying in 5 min')
+    expect(q('[aria-label="Edit queued message"]')).toBeNull()
+    expect(q('[aria-label="Move up"]')).toBeNull()
+    click(q('[aria-label="Cancel automatic retry"]'))
+    expect(onCancelRetry).toHaveBeenCalledOnce()
+    expect(onDelete).not.toHaveBeenCalled()
+  })
+
   it('shows three rows and expands the rest', () => {
     banner(Array.from({ length: 5 }, (_, index) => item({ id: `m${index}`, text: `msg ${index}`, position: index })))
     expect(host.querySelectorAll('.queue-item')).toHaveLength(3)

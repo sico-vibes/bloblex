@@ -90,6 +90,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [appearanceTheme, setAppearanceTheme] = useState<'system' | 'dark' | 'light'>('system')
   const [textSize, setTextSize] = useState<'small' | 'default' | 'large' | 'larger'>('default')
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
+  const [retryMaxWaitSecs, setRetryMaxWaitSecs] = useState(21600)
+  const [steerGate, setSteerGate] = useState(false)
   const [startWithWindows, setStartWithWindows] = useState(false)
   const [autostartLoaded, setAutostartLoaded] = useState(false)
   const [editorExecutable, setEditorExecutable] = useState('')
@@ -139,6 +141,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       if (settings['appearance.theme'] === 'dark' || settings['appearance.theme'] === 'light' || settings['appearance.theme'] === 'system') setAppearanceTheme(settings['appearance.theme'])
       if (['small', 'default', 'large', 'larger'].includes(String(settings['appearance.textSize']))) setTextSize(settings['appearance.textSize'] as typeof textSize)
       setNotificationsEnabled(settings['notifications.enabled'] !== false)
+      if (typeof settings['retry.maxWaitSecs'] === 'number') setRetryMaxWaitSecs(settings['retry.maxWaitSecs'])
+      setSteerGate(settings['exec_gate.codex.steer'] === true)
       if (typeof settings.editorExecutable === 'string') setEditorExecutable(settings.editorExecutable)
       if (Array.isArray(settings.editorArgs) && settings.editorArgs.every((argument) => typeof argument === 'string')) setEditorArgs(JSON.stringify(settings.editorArgs))
       if (settings['permissions.default_mode'] === 'ask' || settings['permissions.default_mode'] === 'auto') setDefaultMode(settings['permissions.default_mode'])
@@ -438,6 +442,12 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               {EXPERIMENTS.map(({ name, label, hint, help }) => <SettingsRow key={name} label={<span className="experimental-label">{label}<span className="experimental-tag">Experimental</span><HelpTip text={help} /></span>} hint={hint}>
                 <button type="button" className={`toggle ${experiments[name] ? 'on' : ''}`} role="switch" aria-label={label} aria-checked={experiments[name]} disabled={saving} onClick={() => { const next = !experiments[name]; void saveSetting(`experimental.${name}`, next).then((failure) => { if (!failure) onExperimentChange?.(name, next) }) }}><i /></button>
               </SettingsRow>)}
+              {experiments.autoRetry && <SettingsRow label="Longest wait for a rate limit" hint="Automatic retry gives up when the limit resets later than this.">
+                <Select ariaLabel="Longest wait for a rate limit" variant="muted" value={String(retryMaxWaitSecs)} disabled={saving} onChange={(value) => { const next = Number(value); void saveSetting('retry.maxWaitSecs', next).then((failure) => { if (!failure) setRetryMaxWaitSecs(next) }) }} options={[{ value: '0', label: 'Do not wait' }, { value: '3600', label: '1 hour' }, { value: '21600', label: '6 hours' }, { value: '86400', label: '24 hours' }]} />
+              </SettingsRow>}
+              <SettingsRow label={<span className="experimental-label">Steer a running Codex turn<span className="experimental-tag">Experimental</span><HelpTip text="Adds Steer beside Queue while a Codex blob works, which adds your message to the turn that is running now. It uses Codex's turn/steer request and has not been verified against a live Codex turn. If the turn already ended, the message is queued instead. Claude Code and OpenCode only queue." /></span>} hint="Add a message to the turn that is running now.">
+                <button type="button" className={`toggle ${steerGate ? 'on' : ''}`} role="switch" aria-label="Steer a running Codex turn" aria-checked={steerGate} disabled={saving} onClick={() => { const next = !steerGate; void saveSetting('exec_gate.codex.steer', next).then((failure) => { if (!failure) setSteerGate(next) }) }}><i /></button>
+              </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Notifications">
               <SettingsRow label="Notify when a blob finishes or needs approval">

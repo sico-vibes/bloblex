@@ -44,7 +44,7 @@ import { ApprovalPill } from './approvalUi'
 import { BlobPage, ConfirmDialog } from './BlobPage'
 import { DictationButton } from './DictationButton'
 import { DictationIsland, type IslandPhase } from './DictationIsland'
-import { configureDictation, DEFAULT_SPEECH_MODEL_ID } from './dictation'
+import { configureDictation, DEFAULT_SPEECH_MODEL_ID, normalizeEngineChoice, setDictationEnginePrefs, type DictationEngineInfo } from './dictation'
 import { UpdateAvailableBanner, useMainUpdateOffer } from './UpdateBanner'
 import { SettingsSheet, type SettingsPageId } from './SettingsSheet'
 import { ProfileMenu, readProfileName, saveProfileName, syncProfileName } from './ProfileMenu'
@@ -143,6 +143,8 @@ export function App() {
     if (experiment) { changeExperiment(experiment.name, value === true); return }
     if (key === 'experimental.usageBar') setUsageBarEnabled(value === true)
     if (key === 'automations.paused') { setSchedulesPaused(value === true); return }
+    if (key === 'speech.engine') { setDictationEnginePrefs({ engine: normalizeEngineChoice(value) }); return }
+    if (key === 'speech.cloud.consent') { setDictationEnginePrefs({ consent: value === true }); return }
     if (key === 'claude.enableWorkflows') setClaudeWorkflowsEnabled(value === true)
     else if (key === 'experimental.usageTips') setUsageTipsEnabled(value === true)
     else if (key === 'experimental.usageTipDismissals') {
@@ -410,7 +412,7 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['claude.enableWorkflows', 'automations.paused', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
+      for (const key of ['claude.enableWorkflows', 'automations.paused', 'speech.engine', 'speech.cloud.consent', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
       setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }
@@ -2551,6 +2553,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const [dictationPhase, setDictationPhase] = useState<'idle' | IslandPhase>('idle')
   const [dictationError, setDictationError] = useState('')
   const [dictationLevel, setDictationLevel] = useState(0)
+  const [dictationEngine, setDictationEngine] = useState<DictationEngineInfo | null>(null)
   const [dictationWarming, setDictationWarming] = useState(false)
   const [dictationFinals, setDictationFinals] = useState('')
   const [dictationClock, setDictationClock] = useState<{ since: number | null; stoppedAt: number | null }>({ since: null, stoppedAt: null })
@@ -2806,6 +2809,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
         setDictationSurface(isCompanion ? 'companion' : 'none')
         if (isCompanion) {
           dictationHeard.current = false
+          setDictationEngine(null)
           setDictationPhase('listening'); setDictationError(''); setDictationFinals(''); setDictationWarming(false)
           setDictationClock({ since: Date.now(), stoppedAt: null })
           playDictationCue('record-start')
@@ -2832,6 +2836,10 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
         }
       }))
       add(await listen<{ level: number }>('bloblex-dictation-level', (event) => setDictationLevel(event.payload.level)))
+      add(await listen<{ engine: DictationEngineInfo['engine']; fallback?: boolean; reason?: string | null }>('bloblex-dictation-engine', (event) => {
+        if (dictationSurfaceRef.current !== 'companion') return
+        setDictationEngine({ engine: event.payload.engine, fallback: event.payload.fallback === true, reason: event.payload.reason ?? null })
+      }))
     })().catch(() => undefined)
     return () => { disposed = true; unsubs.forEach((unlisten) => unlisten()) }
   }, [])
@@ -2857,7 +2865,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const focusBlob = (size: number) => <BlobCanvas color={color} size={size} mood={displayMood} fileStage={fileStage} look={agent ? agentLook(agent) : null} soundCues={soundsEnabled} label={name} onDizzy={beginConfused} onDizzyRecovery={recoverFromConfused} />
   const dictating = dictationSurface === 'companion' && dictationPhase !== 'idle'
   const dictationText = `${dictationFinals}${dictationFinals && dictationPartial ? ' ' : ''}${dictationPartial}`
-  const dictationIsland = dictating ? <DictationIsland variant="companion" phase={dictationPhase as IslandPhase} level={dictationLevel} since={dictationClock.since} stoppedAt={dictationClock.stoppedAt} text={dictationText} warming={dictationWarming} errorText={dictationError} /> : null
+  const dictationIsland = dictating ? <DictationIsland variant="companion" engine={dictationEngine} phase={dictationPhase as IslandPhase} level={dictationLevel} since={dictationClock.since} stoppedAt={dictationClock.stoppedAt} text={dictationText} warming={dictationWarming} errorText={dictationError} /> : null
   const chatShown = mode === 'home' && view === 'chat' && !permission
 
   return <main className={`companion-root ${popIn ? 'pop-in' : ''}`} data-mode={mode} style={color ? { '--agent-accent': color } as React.CSSProperties : undefined} onMouseEnter={() => fsmRef.current?.mouseEntered()} onMouseLeave={() => fsmRef.current?.mouseLeft()}>

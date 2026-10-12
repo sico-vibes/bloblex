@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { playDictationCue } from './dictationSound'
 import { DictationIsland, type IslandPhase } from './DictationIsland'
+import type { DictationEngineInfo } from './dictation'
 
 type Phase = 'idle' | IslandPhase
 type DictationEvent = { type: string; owner?: string; text?: string }
@@ -25,6 +26,7 @@ export function DictationBubble() {
   const [partial, setPartial] = useState('')
   const [since, setSince] = useState<number | null>(null)
   const [stoppedAt, setStoppedAt] = useState<number | null>(null)
+  const [engine, setEngine] = useState<DictationEngineInfo | null>(null)
   const responsible = useRef(false)
   const heard = useRef(false)
   const pressStart = useRef<{ x: number; y: number; time: number } | null>(null)
@@ -46,6 +48,7 @@ export function DictationBubble() {
         const { type, text } = event.payload
         if (type === 'ready') {
           heard.current = false
+          setEngine(null)
           setFinals(''); setPartial(''); setErrorText(''); setWarming(false)
           setSince(Date.now()); setStoppedAt(null)
           setPhase('listening')
@@ -78,6 +81,10 @@ export function DictationBubble() {
         }
       }))
       add(await listen<{ level: number }>('bloblex-dictation-level', (event) => setLevel(event.payload.level)))
+      add(await listen<{ engine: DictationEngineInfo['engine']; fallback?: boolean; reason?: string | null }>('bloblex-dictation-engine', (event) => {
+        if (!responsible.current) return
+        setEngine({ engine: event.payload.engine, fallback: event.payload.fallback === true, reason: event.payload.reason ?? null })
+      }))
     })().catch(() => undefined)
     return () => {
       disposed = true
@@ -116,7 +123,7 @@ export function DictationBubble() {
 
   return (
     <div className="dictation-bubble-root" onPointerDown={onPointerDown} onPointerUp={onPointerUp}>
-      {phase !== 'idle' && <DictationIsland phase={phase} level={level} since={since} stoppedAt={stoppedAt} text={text} warming={warming} errorText={errorText} />}
+      {phase !== 'idle' && <DictationIsland phase={phase} level={level} since={since} stoppedAt={stoppedAt} text={text} warming={warming} errorText={errorText} engine={engine} />}
     </div>
   )
 }

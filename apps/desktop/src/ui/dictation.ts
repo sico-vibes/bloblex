@@ -5,6 +5,50 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 export type DictationPhase = 'idle' | 'starting' | 'downloading' | 'listening'
 
+export type DictationEngineChoice = 'local' | 'automatic' | 'cloud'
+/** Which engine produced (or will produce) the text, as reported by the native layer. Status only. */
+export interface DictationEngineInfo { engine: 'on-device' | 'chatgpt'; fallback: boolean; reason?: string | null }
+export interface CloudAuthStatus { authState: 'ready' | 'missing' | 'unreadable' | 'expired' | 'apiKey' | 'unsupported'; authMode?: string | null; expiresAt?: string | null }
+
+let enginePrefs: { engine: DictationEngineChoice; consent: boolean } = { engine: 'local', consent: false }
+/** The engine choice and consent the UI last read from settings; cloud is never used without both. */
+export function setDictationEnginePrefs(next: Partial<typeof enginePrefs>) {
+  enginePrefs = { ...enginePrefs, ...next }
+  enginePrefs.engine = normalizeEngineChoice(enginePrefs.engine)
+}
+export function dictationEnginePrefs() { return enginePrefs }
+export function normalizeEngineChoice(value: unknown): DictationEngineChoice {
+  return value === 'automatic' || value === 'cloud' ? value : 'local'
+}
+
+export function cloudAuthUsable(status: CloudAuthStatus | null | undefined): boolean {
+  return status?.authState === 'ready' || status?.authState === 'apiKey' || status?.authState === 'expired'
+}
+
+export async function cloudDictationStatus(): Promise<CloudAuthStatus | null> {
+  if (!isTauri()) return null
+  try { return await invoke<CloudAuthStatus>('speech_cloud_status') } catch { return null }
+}
+
+/** Plain words for the machine reason the native layer gives when it fell back or could not transcribe. */
+export function engineReasonText(reason: string | null | undefined): string {
+  switch (reason) {
+    case 'auth_missing': return 'Codex is not signed in'
+    case 'auth_required': return 'the Codex sign-in needs refreshing'
+    case 'rate_limited': return 'it is rate limited right now'
+    case 'challenged': return 'the service asked for a browser check'
+    case 'unavailable': return 'the service could not be reached'
+    case 'too_large':
+    case 'too_long': return 'the recording was too long'
+    case 'too_short': return 'the recording was too short'
+    case 'bad_response':
+    case 'rejected': return 'the service refused the recording'
+    case 'consent_required': return 'permission has not been given'
+    case 'model_not_ready': return 'no on-device model is installed'
+    default: return ''
+  }
+}
+
 type DictationEvent = { type: string; owner?: string; text?: string }
 
 export const DEFAULT_SPEECH_MODEL_ID = 'parakeet-tdt-0.6b-v3-int8'
@@ -106,7 +150,9 @@ export function useDictation({
       setPhase('starting')
       try {
         const status = await invoke<{ ready: boolean }>('speech_model_status', { modelId })
-        if (status && status.ready === false) {
+        // When ChatGPT will serve this session there is nothing to download first.
+        const cloudServes = enginePrefs.engine !== 'local' && enginePrefs.consent && cloudAuthUsable(await cloudDictationStatus())
+        if (status && status.ready === false && !cloudServes) {
           setPhase('downloading')
           let unlisten: UnlistenFn | undefined
           try {
@@ -124,7 +170,7 @@ export function useDictation({
           }
           setPhase('starting')
         }
-        await invoke('dictation_start', { modelId, owner })
+        await invoke('dictation_start', { modelId, owner, engine: enginePrefs.engine, cloudConsent: enginePrefs.consent })
       } catch (reason) {
         setPhase('idle')
         setError(String(reason))

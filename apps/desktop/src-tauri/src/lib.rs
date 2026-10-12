@@ -2232,6 +2232,7 @@ pub fn run() {
             quit_bloblex,
             speech::speech_models,
             speech::speech_model_status,
+            speech::speech_cloud_status,
             speech::speech_model_download,
             speech::dictation_start,
             speech::dictation_warm,

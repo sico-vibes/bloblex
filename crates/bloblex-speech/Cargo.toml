@@ -12,6 +12,8 @@ default = []
 native = ["dep:sherpa-onnx", "dep:cpal"]
 
 [dependencies]
+base64.workspace = true
+chrono.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -19,6 +21,7 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+zeroize.workspace = true
 cpal = { version = "0.15", optional = true }
 sherpa-onnx = { version = "1.13", optional = true }
 

@@ -2,7 +2,7 @@ import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { emit, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { Bot, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
+import { Bot, Brain, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
@@ -10,6 +10,8 @@ import { companionMonitorOptions, currentCompanionMonitor, inDesktop, permission
 import { agentColorHex } from './agentColor'
 import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
+import { MemoryPage } from './MemoryPage'
+import { cloudDictationStatus, normalizeEngineChoice, setDictationEnginePrefs, type CloudAuthStatus, type DictationEngineChoice } from './dictation'
 import { UpdatesPanel } from './UpdatesPanel'
 import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
 import { applyAppearance } from './appearance'
@@ -18,11 +20,12 @@ import { runtimeAuthSummary } from './launchChecks'
 import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTime, type DiscoveryStatus } from './runtimeDiscovery'
 import { ConfirmDialog } from './BlobPage'
 
-export type SettingsPageId = 'General' | 'Agents' | 'Speech' | 'Updates'
+export type SettingsPageId = 'General' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
   { id: 'Agents', label: 'Agents', icon: Bot },
+  { id: 'Memory', label: 'Memory', icon: Brain },
   { id: 'Speech', label: 'Speech', icon: Mic },
   { id: 'Updates', label: 'Updates', icon: Download },
 ]
@@ -91,6 +94,17 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [textSize, setTextSize] = useState<'small' | 'default' | 'large' | 'larger'>('default')
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
   const [retryMaxWaitSecs, setRetryMaxWaitSecs] = useState(21600)
+  const [profileAbout, setProfileAbout] = useState('')
+  const [speechEngine, setSpeechEngine] = useState<DictationEngineChoice>('local')
+  const [cloudConsent, setCloudConsent] = useState(false)
+  const [cloudStatus, setCloudStatus] = useState<CloudAuthStatus | null>(null)
+  const [consentFor, setConsentFor] = useState<DictationEngineChoice | null>(null)
+  useEffect(() => {
+    if (speechEngine === 'local') { setCloudStatus(null); return }
+    let active = true
+    void cloudDictationStatus().then((status) => { if (active) setCloudStatus(status) })
+    return () => { active = false }
+  }, [speechEngine])
   const [steerGate, setSteerGate] = useState(false)
   const [startWithWindows, setStartWithWindows] = useState(false)
   const [autostartLoaded, setAutostartLoaded] = useState(false)
@@ -142,6 +156,11 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       if (['small', 'default', 'large', 'larger'].includes(String(settings['appearance.textSize']))) setTextSize(settings['appearance.textSize'] as typeof textSize)
       setNotificationsEnabled(settings['notifications.enabled'] !== false)
       if (typeof settings['retry.maxWaitSecs'] === 'number') setRetryMaxWaitSecs(settings['retry.maxWaitSecs'])
+      if (typeof settings['profile.about'] === 'string') setProfileAbout(settings['profile.about'])
+      const loadedEngine = normalizeEngineChoice(settings['speech.engine'])
+      setSpeechEngine(loadedEngine)
+      setCloudConsent(settings['speech.cloud.consent'] === true)
+      setDictationEnginePrefs({ engine: loadedEngine, consent: settings['speech.cloud.consent'] === true })
       setSteerGate(settings['exec_gate.codex.steer'] === true)
       if (typeof settings.editorExecutable === 'string') setEditorExecutable(settings.editorExecutable)
       if (Array.isArray(settings.editorArgs) && settings.editorArgs.every((argument) => typeof argument === 'string')) setEditorArgs(JSON.stringify(settings.editorArgs))
@@ -252,6 +271,24 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
   const setCompanion = (visible: boolean) => guarded(async () => { await setCompanionVisibility(visible) })
   const saveSetting = (key: string, value: unknown) => guarded(async () => { await rpc('settings.set', { key, value }) })
+  const applySpeechEngine = async (engine: DictationEngineChoice, consent: boolean) => {
+    const failure = await guarded(async () => {
+      if (consent !== cloudConsent) {
+        await rpc('settings.set', { key: 'speech.cloud.consent', value: consent })
+        await rpc('settings.set', { key: 'speech.cloud.consentAt', value: consent ? new Date().toISOString() : null })
+      }
+      await rpc('settings.set', { key: 'speech.engine', value: engine })
+    })
+    if (failure) return
+    setSpeechEngine(engine)
+    setCloudConsent(consent)
+    setDictationEnginePrefs({ engine, consent })
+  }
+  const chooseSpeechEngine = (engine: DictationEngineChoice) => {
+    if (engine === 'local' || cloudConsent) { void applySpeechEngine(engine, cloudConsent); return }
+    setConsentFor(engine)
+  }
+  const withdrawCloudConsent = () => applySpeechEngine('local', false)
   const setStartPositionChoice = (value: string) => {
     if (value !== 'launch' && value !== 'last') return
     void saveSetting('companion.startPosition', value).then((failure) => { if (!failure) setStartPosition(value) })
@@ -521,13 +558,37 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             </SettingsGroup>
           </>}
 
+          {!loading && page === 'Memory' && <MemoryPage
+            agents={snapshot?.agents ?? []}
+            projects={snapshot?.projects ?? []}
+            enabled={experiments.memory}
+            about={profileAbout}
+            connected={inDesktop}
+            onEnabledChange={async (next) => { await rpc('settings.set', { key: 'experimental.memory', value: next }); onExperimentChange?.('memory', next) }}
+            onAboutSave={async (text) => { await rpc('settings.set', { key: 'profile.about', value: text }); setProfileAbout(text) }} />}
+
           {!loading && page === 'Speech' && <>
-            <p className="settings-intro">Dictation runs on this device with sherpa-onnx. Download a model once; your audio is never uploaded.</p>
+            <p className="settings-intro">Dictation runs on this device with sherpa-onnx by default. Download a model once; your audio stays here unless you choose ChatGPT below.</p>
             <SettingsGroup title="Dictation">
               <SettingsRow label="Dictation" hint="Shows the microphone in the composer and the companion, and listens for Ctrl+E.">
                 <button type="button" className={`toggle ${speechEnabled ? 'on' : ''}`} role="switch" aria-label="Dictation" aria-checked={speechEnabled} disabled={saving} onClick={() => { const next = !speechEnabled; void saveSetting('speech.enabled', next).then((failure) => { if (!failure) onSpeechEnabledChange?.(next) }) }}><i /></button>
               </SettingsRow>
               <SettingsRow label="Keyboard shortcut" hint={speechEnabled ? 'Starts or stops dictation from any window.' : 'Free for other apps while dictation is off.'}><kbd className="settings-kbd">Ctrl</kbd><kbd className="settings-kbd">E</kbd></SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup title="Transcription engine">
+              <SettingsRow label="Engine" hint="ChatGPT uses your Codex sign-in, needs no download, and sends each recording to OpenAI.">
+                <Select ariaLabel="Transcription engine" variant="muted" value={speechEngine} disabled={saving} onChange={(value) => chooseSpeechEngine(normalizeEngineChoice(value))} options={[
+                  { value: 'local', label: 'On this device' },
+                  { value: 'automatic', label: 'ChatGPT when available' },
+                  { value: 'cloud', label: 'ChatGPT via Codex sign-in' },
+                ]} />
+              </SettingsRow>
+              {speechEngine !== 'local' && <SettingsRow label="Codex sign-in" hint="Read from Codex's own sign-in file on this computer, only to make this request. Nothing is stored. If ChatGPT fails, dictation uses the on-device model when it is installed.">
+                <span className="settings-value" role="status">{cloudStatusText(cloudStatus)}</span>
+              </SettingsRow>}
+              {cloudConsent && <SettingsRow label="Permission" hint="You allowed sending dictation recordings to ChatGPT.">
+                <button type="button" className="secondary-button small" disabled={saving} onClick={() => void withdrawCloudConsent()}>Withdraw</button>
+              </SettingsRow>}
             </SettingsGroup>
             <SettingsGroup title="Speech model">
               {speechModels.length === 0 && <p className="settings-empty">No speech models reported.</p>}
@@ -555,6 +616,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             </SettingsGroup>
           </>}
 
+          {consentFor && <ConfirmDialog title="Send dictation to ChatGPT?" body="While this is on, each recording is sent to OpenAI's transcription service using your Codex sign-in, which Bloblex reads from Codex's own file on this computer. Recordings, text and the sign-in are not stored or logged by Bloblex. If ChatGPT is unavailable, dictation falls back to the on-device model when it is installed. You can withdraw this any time." confirmLabel="Allow ChatGPT transcription" cancelLabel="Keep on this device" onCancel={() => setConsentFor(null)} onConfirm={async () => { const engine = consentFor; setConsentFor(null); await applySpeechEngine(engine, true) }} />}
           {!loading && page === 'Updates' && <>
             <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />
             <SettingsGroup title="About">
@@ -575,6 +637,18 @@ function SettingsGroup({ title, action, children }: { title: string; action?: Re
     <div className="settings-group-head"><h3>{title}</h3>{action}</div>
     <div className="settings-card">{children}</div>
   </section>
+}
+
+function cloudStatusText(status: CloudAuthStatus | null): string {
+  switch (status?.authState) {
+    case 'ready': return 'Signed in'
+    case 'apiKey': return 'Using an API key from Codex'
+    case 'expired': return 'Sign-in may have expired; will try anyway'
+    case 'missing': return 'Not found. Run codex login in a terminal.'
+    case 'unreadable': return 'Could not read the Codex sign-in'
+    case 'unsupported': return 'Not supported on this device'
+    default: return 'Checking…'
+  }
 }
 
 function SettingsRow({ label, hint, children }: { label: ReactNode; hint?: string; children?: ReactNode }) {

@@ -1,0 +1,26 @@
+/* Memory settings page: review and edit the notes blobs can recall. */
+.memory-page { display: grid; gap: 16px; }
+.memory-about { display: grid; gap: 8px; padding: 14px; border-radius: var(--radius-lg); background: var(--surface-raised); }
+.memory-hint { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.45; }
+.memory-about-actions { display: flex; justify-content: flex-end; }
+.memory-notes { display: grid; gap: 10px; }
+.memory-toolbar { display: flex; align-items: center; gap: 10px; }
+.memory-search { min-width: 0; flex: 1; height: 34px; padding: 0 12px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 10px; background: transparent; font: inherit; }
+.memory-search:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.memory-heading { margin: 6px 0 0; display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--fs-sm); font-weight: 500; }
+.memory-heading b { padding: 1px 7px; color: var(--warning); border-radius: var(--radius-pill); background: var(--surface-warning); font-size: var(--fs-2xs); font-weight: 500; }
+.memory-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.memory-row { padding: 12px 14px; display: flex; align-items: flex-start; gap: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-raised); }
+.memory-row.unreviewed { border-color: var(--warning-line); }
+.memory-main { min-width: 0; flex: 1; display: grid; gap: 3px; }
+.memory-title { font-size: var(--fs-md, 14px); font-weight: 500; overflow-wrap: anywhere; }
+.memory-pin { margin-right: 6px; color: var(--warning); }
+.memory-meta { color: var(--text-3); font-size: var(--fs-xs); }
+.memory-body { margin: 2px 0 0; color: var(--text-2); font-size: var(--fs-sm); line-height: 1.5; display: -webkit-box; overflow: hidden; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
+.memory-actions .primary-button { display: inline-flex; align-items: center; gap: 5px; }
+.memory-empty { margin: 0; padding: 18px; color: var(--text-3); text-align: center; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); font-size: var(--fs-sm); }
+.memory-problem { margin: 0; color: var(--danger-ink); font-size: var(--fs-sm); }
+.blob-dialog.memory-dialog { width: min(500px, calc(100% - 32px)); max-height: calc(100% - 40px); overflow: auto; gap: 14px; }
+.memory-fields { display: grid; gap: 12px; }
+.memory-pin-row { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--fs-sm); }

@@ -33,6 +33,9 @@ const baseRuntimes: Runtime[] = [
 const composerPreviewSessionId = 'session-codex-composer-preview'
 /** Preview-only prompt queues, keyed by session id. */
 const fixtureQueues: Record<string, { items: Array<Record<string, unknown>>; paused: boolean }> = {}
+/** Preview-only automations and their runs. */
+const fixtureAutomations: Array<Record<string, unknown>> = []
+const fixtureRuns: Record<string, Array<Record<string, unknown>>> = {}
 const composerPreviewStorageKey = 'bloblex.preview.composer-session.v1'
 
 let agents: Agent[] = [
@@ -418,6 +421,62 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const payload = { sessionId: session.id, messageId: message.id, emoji, selected, reactions: message.reactions }
     notifyFixtureDaemon('message.reactions.changed', payload)
     return { reactions: message.reactions, selected } as T
+  }
+  if (typeof method === 'string' && method.startsWith('automation.')) {
+    const find = () => fixtureAutomations.find((item) => item.id === params.id)
+    const publish = (item: Record<string, unknown>) => notifyFixtureDaemon('automation.changed', { automation: { ...item } })
+    if (method === 'automation.list') return { automations: fixtureAutomations.filter((item) => !params.agentId || item.agentId === params.agentId).map((item) => ({ ...item })) } as T
+    if (method === 'automation.preview') {
+      const schedule = params.schedule as { kind?: string; cron?: string; at?: string } | undefined
+      if (!schedule || (schedule.kind === 'cron' && String(schedule.cron ?? '').trim().split(/\s+/).length !== 5)) throw rpcError('invalid_argument', 'That schedule is not valid.')
+      const base = Date.now()
+      return { occurrences: schedule.kind === 'once' ? [new Date(String(schedule.at)).toISOString()] : [1, 2, 3].map((n) => new Date(base + n * 86_400_000).toISOString()) } as T
+    }
+    if (method === 'automation.create' || method === 'automation.update') {
+      const schedule = params.schedule as Record<string, unknown> | undefined
+      const name = typeof params.name === 'string' ? params.name.trim() : ''
+      const prompt = typeof params.prompt === 'string' ? params.prompt.trim() : ''
+      if (!name || !prompt || !schedule) throw rpcError('invalid_argument', 'A name, a prompt and a schedule are required.')
+      if (params.approvalMode !== undefined && params.approvalMode !== 'plan' && params.approvalMode !== 'auto') throw rpcError('invalid_argument', 'approvalMode must be plan or auto')
+      const now = new Date().toISOString()
+      const existing = method === 'automation.update' ? find() : undefined
+      if (method === 'automation.update' && !existing) throw rpcError('not_found', 'That schedule is gone.')
+      const next = { ...(existing ?? { id: `automation-${Date.now()}`, createdBy: 'user', consecutiveFailures: 0, lastRunAt: null, lastRun: null, running: false, pauseReason: null }),
+        agentId: params.agentId ?? existing?.agentId, name, prompt, schedule, sessionMode: params.sessionMode ?? existing?.sessionMode ?? 'new',
+        approvalMode: params.approvalMode ?? existing?.approvalMode ?? 'auto', maxRuntimeSecs: params.maxRuntimeSecs ?? existing?.maxRuntimeSecs ?? 1800,
+        enabled: params.enabled === true || (existing?.enabled === true && params.enabled !== false),
+        nextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString(), updatedAt: now } as Record<string, unknown>
+      if (!existing) fixtureAutomations.push(next)
+      else Object.assign(existing, next)
+      publish(next)
+      return { automation: { ...next } } as T
+    }
+    const target = find()
+    if (!target) throw rpcError('not_found', 'That schedule is gone.')
+    if (method === 'automation.get') return { automation: { ...target } } as T
+    if (method === 'automation.pause' || method === 'automation.resume') {
+      const resume = method === 'automation.resume'
+      target.enabled = resume
+      target.pauseReason = resume ? null : 'user'
+      target.consecutiveFailures = 0
+      target.nextRunAt = resume ? new Date(Date.now() + 3 * 3_600_000).toISOString() : null
+      publish(target)
+      return { automation: { ...target } } as T
+    }
+    if (method === 'automation.delete') {
+      fixtureAutomations.splice(fixtureAutomations.indexOf(target), 1)
+      notifyFixtureDaemon('automation.deleted', { id: target.id })
+      return { deleted: true } as T
+    }
+    if (method === 'automation.run_now') {
+      const run = { id: `run-${Date.now()}`, automationId: target.id, sessionId: null, status: 'completed', reason: null, scheduledFor: new Date().toISOString(), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }
+      ;(fixtureRuns[String(target.id)] ??= []).unshift(run)
+      target.lastRun = run
+      target.lastRunAt = run.startedAt
+      publish(target)
+      return { run } as T
+    }
+    if (method === 'automation.runs') return { runs: fixtureRuns[String(target.id)] ?? [] } as T
   }
   if (method === 'session.steer') {
     const session = sessions.find((item) => item.id === params.sessionId)

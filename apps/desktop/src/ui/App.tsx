@@ -17,12 +17,14 @@ import { CompanionFsm, type CompanionMode } from '../blob/companionFsm'
 import { buildConversationItems, groupConversationActivity, type ConversationItem, type GroupedConversationItem } from './conversation'
 import { deriveCompanionStatus } from './companionStatus'
 import { AnalyticsView } from './AnalyticsView'
+import { SchedulesView, type AutomationInput } from './SchedulesView'
+import type { DaemonSchedule } from './automationSchedule'
 import { tokenValue, usageTokenBuckets } from './usagePresentation'
 import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermission } from './permissionSelection'
 import { ApprovalCard } from './ApprovalCard'
 import bloblexLogo from '../assets/bloblex-128.png'
 import { sessionsForPauseRequest } from './trayActions'
-import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, normalizeQueueState, type Agent, type ChatMessage, type ConnectionState, type DaemonEvent, type PermissionRequest, type Project, type Runtime, type Session, type Snapshot } from '../types'
+import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, isAutomation, normalizeQueueState, type Agent, type AutomationRun, type ChatMessage, type ConnectionState, type DaemonEvent, type PermissionRequest, type Project, type Runtime, type Session, type Snapshot } from '../types'
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
@@ -140,6 +142,7 @@ export function App() {
     const experiment = EXPERIMENTS.find(({ name }) => key === `experimental.${name}`)
     if (experiment) { changeExperiment(experiment.name, value === true); return }
     if (key === 'experimental.usageBar') setUsageBarEnabled(value === true)
+    if (key === 'automations.paused') { setSchedulesPaused(value === true); return }
     if (key === 'claude.enableWorkflows') setClaudeWorkflowsEnabled(value === true)
     else if (key === 'experimental.usageTips') setUsageTipsEnabled(value === true)
     else if (key === 'experimental.usageTipDismissals') {
@@ -155,6 +158,10 @@ export function App() {
     else if (key === 'experimental.runtimeLogos') setRuntimeLogos(value === true)
   }, [])
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
+  const [schedulesOpen, setSchedulesOpen] = useState(false)
+  const [schedulesAgentId, setSchedulesAgentId] = useState<string | null>(null)
+  const [schedulesPaused, setSchedulesPaused] = useState(false)
+  const [schedulesError, setSchedulesError] = useState<string | null>(null)
   const [launchVisible, setLaunchVisible] = useState(() => inDesktop && !companion && import.meta.env.MODE !== 'test')
   const [launchChecks, setLaunchChecks] = useState<LaunchCheck[]>([])
   const [launchServiceDown, setLaunchServiceDown] = useState(false)
@@ -403,7 +410,7 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['claude.enableWorkflows', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
+      for (const key of ['claude.enableWorkflows', 'automations.paused', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
       setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }
@@ -1541,6 +1548,48 @@ export function App() {
   const resumeQueue = () => void queueRpc('session.queue.resume', {})
   const cancelAutoRetry = () => void queueRpc('turn.retry.cancel', {})
 
+  /** Schedules (automations): the daemon owns the timer; these calls only edit definitions and read runs. */
+  const loadAutomations = useCallback(async () => {
+    try {
+      const result = await rpc<{ automations?: unknown[] }>('automation.list', {})
+      const list = (Array.isArray(result.automations) ? result.automations : []).filter(isAutomation)
+      setSnapshot((current) => current ? { ...current, automations: list } : current)
+      setSchedulesError(null)
+    } catch (reason) { setSchedulesError(messageOf(reason)) }
+  }, [])
+  useEffect(() => { if (schedulesOpen && connection === 'connected') void loadAutomations() }, [schedulesOpen, connection, loadAutomations])
+  const [schedulesNowMs, setSchedulesNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    if (!schedulesOpen) return
+    setSchedulesNowMs(Date.now())
+    const timer = window.setInterval(() => setSchedulesNowMs(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [schedulesOpen])
+  const automationPayload = (input: AutomationInput) => ({ agentId: input.agentId, name: input.name, prompt: input.prompt, schedule: input.schedule, sessionMode: input.sessionMode, approvalMode: input.approvalMode, maxRuntimeSecs: input.maxRuntimeSecs, ...(input.enabled === undefined ? {} : { enabled: input.enabled }) })
+  const createAutomation = async (input: AutomationInput) => { await rpc('automation.create', automationPayload(input)); await loadAutomations() }
+  const updateAutomation = async (id: string, input: AutomationInput) => { await rpc('automation.update', { id, ...automationPayload(input) }); await loadAutomations() }
+  const setAutomationEnabled = async (id: string, enabled: boolean) => { await rpc(enabled ? 'automation.resume' : 'automation.pause', { id }); await loadAutomations() }
+  const runAutomationNow = async (id: string) => { await rpc('automation.run_now', { id }); await loadAutomations() }
+  const deleteAutomation = async (id: string) => { await rpc('automation.delete', { id }); await loadAutomations() }
+  const loadAutomationRuns = async (id: string): Promise<AutomationRun[]> => {
+    const result = await rpc<{ runs?: AutomationRun[] }>('automation.runs', { id, limit: 20 })
+    return Array.isArray(result.runs) ? result.runs : []
+  }
+  const previewAutomation = async (schedule: DaemonSchedule): Promise<string[]> => {
+    const result = await rpc<{ occurrences?: Array<string | { local?: string; at?: string }> }>('automation.preview', { schedule, count: 3 })
+    return (result.occurrences ?? []).map((entry) => typeof entry === 'string' ? entry : entry.local ?? entry.at ?? '').filter(Boolean)
+  }
+  const setAutomationsPaused = async (paused: boolean) => {
+    await rpc('settings.set', { key: 'automations.paused', value: paused })
+    setSchedulesPaused(paused)
+  }
+  const openAutomationSession = (sessionId: string) => {
+    const target = sessions.find((item) => item.id === sessionId)
+    if (!target) { setError('This conversation is no longer available.'); return }
+    setSchedulesOpen(false); setBlobPage(null); setAnalyticsOpen(false); setSideSessionId(null)
+    selectSession(target)
+  }
+
 
   const answerPermission = async (permission: PermissionRequest, choice: string): Promise<boolean> => {
     const now = Date.now()
@@ -1613,6 +1662,7 @@ export function App() {
     const main = mainSessionFor(sessions, agent.id)
     setSideSessionId(null)
     setAnalyticsOpen(false)
+    setSchedulesOpen(false)
     setSelectedAgentId(agent.id)
     setSelectedRuntimeId(agent.runtimeId)
     setSelectedSessionId(main?.id ?? null)
@@ -1910,7 +1960,9 @@ export function App() {
           onShortcuts={experiments.shortcuts ? () => setShortcutsOpen(true) : undefined}
           usageActive={analyticsOpen}
           triggerRef={usageLinkRef}
-          onUsage={() => setAnalyticsOpen(true)}
+          onUsage={() => { setSchedulesOpen(false); setAnalyticsOpen(true) }}
+          onSchedules={() => { setAnalyticsOpen(false); setSchedulesAgentId(null); setSchedulesOpen(true) }}
+          schedulesActive={schedulesOpen}
           onSettings={() => { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }}
           onQuit={() => void quitBloblex()}
         />
@@ -1920,7 +1972,7 @@ export function App() {
         {updateOffer.version && <UpdateAvailableBanner version={updateOffer.version} onView={() => { setSettingsInitialPage('General'); setSettingsFocus('updates'); setSettingsSheet(true) }} onLater={updateOffer.dismiss} />}
         {(launchWarnings.length > 0 || discoveryStatus.retrying) && !agentWarningDismissed && <LaunchWarnings warnings={launchWarnings} retrying={discoveryStatus.retrying} onSettings={() => { setSettingsInitialPage('Agents'); setSettingsSheet(true) }} onDismiss={() => setAgentWarningDismissed(true)} />}
         {discoveryConfirmation && <aside className="launch-scan-confirmation" role="status">{discoveryConfirmation}</aside>}
-        {analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} quotas={snapshot?.quotas ?? []} connected={connection === 'connected'} onRefreshQuota={refreshQuota} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} projects={projects} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
+        {schedulesOpen ? <SchedulesView automations={snapshot?.automations ?? []} agents={agents} connected={connection === 'connected'} paused={schedulesPaused} nowMs={schedulesNowMs} agentId={schedulesAgentId} loadError={schedulesError} onBack={() => setSchedulesOpen(false)} onCreate={createAutomation} onUpdate={updateAutomation} onSetEnabled={setAutomationEnabled} onRunNow={runAutomationNow} onDelete={deleteAutomation} onLoadRuns={loadAutomationRuns} onPreview={previewAutomation} onSetPaused={setAutomationsPaused} onOpenSession={openAutomationSession} /> : analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} quotas={snapshot?.quotas ?? []} connected={connection === 'connected'} onRefreshQuota={refreshQuota} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} projects={projects} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         {showCreateBlobPrompt && <div className="first-run-prompt" role="status"><span>No blobs yet. Create one to organize these conversations.</span><button type="button" className="secondary-button small" onClick={() => openCreate()}>Create blob</button></div>}
         <header className="chat-header">
           <div className="chat-title">
@@ -2069,7 +2121,7 @@ export function App() {
       {messageSearchOpen && experiments.search && <MessageSearch agents={agents} onClose={() => setMessageSearchOpen(false)} onChoose={(result) => {
         const session = sessions.find((s) => s.id === result.sessionId)
         if (!session) { setError('This conversation is no longer available.'); return }
-        setBlobPage(null); setAnalyticsOpen(false)
+        setBlobPage(null); setAnalyticsOpen(false); setSchedulesOpen(false)
         const owner = agents.find((a) => a.id === session.agentId && !a.archived)
         if (session.agentId && !owner) {
           void rpc<{ agent: Agent }>('agent.get', { agentId: session.agentId }).then(({ agent }) => {

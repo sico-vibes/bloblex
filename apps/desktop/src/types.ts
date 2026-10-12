@@ -183,10 +183,13 @@ export interface Project extends JsonRecord {
   collapsed?: boolean
 }
 
-/** Side conversation between two blobs; absent on a blob's main conversation. */
+/** Side conversation between two blobs, or a scheduled run; absent on a blob's main conversation. */
 export interface SessionLink extends JsonRecord {
-  kind: 'side'
-  peerAgentId: string
+  kind: 'side' | 'automation'
+  /** Present on side conversations. */
+  peerAgentId?: string
+  automationId?: string
+  runId?: string
   peerName?: string
   originSessionId?: string
   /** Short title the sender gave the conversation, also its session title. */

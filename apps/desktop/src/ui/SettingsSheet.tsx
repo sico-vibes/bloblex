@@ -95,6 +95,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
   const [retryMaxWaitSecs, setRetryMaxWaitSecs] = useState(21600)
   const [profileAbout, setProfileAbout] = useState('')
+  const [keepAwake, setKeepAwake] = useState(false)
   const [speechEngine, setSpeechEngine] = useState<DictationEngineChoice>('local')
   const [cloudConsent, setCloudConsent] = useState(false)
   const [cloudStatus, setCloudStatus] = useState<CloudAuthStatus | null>(null)
@@ -157,6 +158,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       setNotificationsEnabled(settings['notifications.enabled'] !== false)
       if (typeof settings['retry.maxWaitSecs'] === 'number') setRetryMaxWaitSecs(settings['retry.maxWaitSecs'])
       if (typeof settings['profile.about'] === 'string') setProfileAbout(settings['profile.about'])
+      setKeepAwake(settings['power.keepAwake'] === true)
       const loadedEngine = normalizeEngineChoice(settings['speech.engine'])
       setSpeechEngine(loadedEngine)
       setCloudConsent(settings['speech.cloud.consent'] === true)
@@ -484,6 +486,11 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </SettingsRow>}
               <SettingsRow label={<span className="experimental-label">Steer a running Codex turn<span className="experimental-tag">Experimental</span><HelpTip text="Adds Steer beside Queue while a Codex blob works, which adds your message to the turn that is running now. It uses Codex's turn/steer request and has not been verified against a live Codex turn. If the turn already ended, the message is queued instead. Claude Code and OpenCode only queue." /></span>} hint="Add a message to the turn that is running now.">
                 <button type="button" className={`toggle ${steerGate ? 'on' : ''}`} role="switch" aria-label="Steer a running Codex turn" aria-checked={steerGate} disabled={saving} onClick={() => { const next = !steerGate; void saveSetting('exec_gate.codex.steer', next).then((failure) => { if (!failure) setSteerGate(next) }) }}><i /></button>
+              </SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup title="Power">
+              <SettingsRow label="Keep this computer awake while blobs work" hint="While a blob is working or a schedule is about to run, Bloblex asks Windows not to sleep on its own. It does not stop you closing the lid or choosing Sleep.">
+                <button type="button" className={`toggle ${keepAwake ? 'on' : ''}`} role="switch" aria-label="Keep this computer awake while blobs work" aria-checked={keepAwake} disabled={saving} onClick={() => { const next = !keepAwake; void saveSetting('power.keepAwake', next).then((failure) => { if (!failure) setKeepAwake(next) }) }}><i /></button>
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Notifications">

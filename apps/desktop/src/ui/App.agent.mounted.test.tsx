@@ -949,6 +949,29 @@ describe('blob roster and editor', () => {
     expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
   })
 
+  it('hands a conversation to another blob by drafting, never sending, in that blob\'s composer', async () => {
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'session.handoff.draft') return { draft: 'Continue from Claude\'s conversation "Landing page copy".\n\nYou: hello', carried: { messages: 1, truncated: false }, fromAgentId: 'agent-claude', title: 'Landing page copy' }
+      return base(method, params)
+    })
+    const view = startApp()
+    await view.settle()
+    await click(view.host.querySelector('[aria-label="More options"]'))
+    await click(menuItem(view.host, 'Continue in another blob…'))
+    const dialog = view.host.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('Nothing is sent until you send it.')
+    const names = [...dialog.querySelectorAll('.handoff-choice strong')].map((node) => node.textContent)
+    expect(names).not.toContain('Claude')
+    expect(names).toContain('Codex')
+    await click([...dialog.querySelectorAll<HTMLButtonElement>('.handoff-choice')].find((button) => button.textContent?.includes('Codex')))
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.handoff.draft', { fromSessionId: 'session-claude' })
+    expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
+    expect(view.host.querySelector('[role="dialog"]')).toBeNull()
+    expect(view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea')?.value).toContain('Continue from Claude')
+  })
+
   it('shows delegation chips and opens the side conversation read-only', async () => {
     const main = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T03:00:00.000Z', messages: [
       { id: 'u1', role: 'user', content: 'Ask @Codex to check the tests.' },

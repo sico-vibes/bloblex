@@ -137,3 +137,12 @@
 .message-mentions { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .mention { --mention: var(--text-1); display: inline-flex; align-items: center; gap: 3px; margin: 0 1px; color: color-mix(in srgb, var(--mention) 82%, var(--text-1)); font-weight: 600; vertical-align: -3px; white-space: nowrap; }
 .mention .blob-canvas { pointer-events: none; }
+
+/* Hand-off: pick the blob that continues this conversation. */
+.blob-dialog.handoff-dialog { width: min(420px, calc(100% - 32px)); max-height: calc(100% - 40px); overflow: auto; }
+.handoff-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.handoff-choice { width: 100%; padding: 8px 10px; display: flex; align-items: center; gap: 12px; color: var(--text-1); text-align: left; border: 0; border-radius: 10px; background: transparent; cursor: pointer; }
+.handoff-choice:hover:not(:disabled), .handoff-choice:focus-visible { outline: none; background: var(--surface-hover); }
+.handoff-choice:disabled { opacity: .55; cursor: default; }
+.handoff-choice span { display: grid; gap: 1px; }
+.handoff-choice small { color: var(--text-3); font-size: var(--fs-xs); }

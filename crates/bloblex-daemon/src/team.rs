@@ -135,25 +135,44 @@ pub fn attach(st: &AppState, session_id: &str, agent_id: Option<&str>, link: &Va
     }
 }
 
-fn tools() -> Value {
+/// The tool list for a session. Automation-run sessions get no tools at all
+/// (recursion guard): they must not message teammates, create conversations or
+/// schedule anything.
+fn tools(is_automation: bool) -> Value {
+    if is_automation {
+        return json!([]);
+    }
     json!([
         {"name":"list_blobs","description":"List your teammates in Bloblex: name, role, what each is for, project, whether they are busy, and which one is the leader.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
         {"name":"list_conversations","description":"List your side conversations with teammates, newest first: id, topic, teammate, who started it, size and the latest reply. Use it to find a conversation to continue.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"Only conversations with this teammate (optional)."}},"additionalProperties":false}},
-        {"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}}
+        {"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}},
+        {"name":"schedule_task","description":"Propose a scheduled task for your blob. It is created disabled and will never run until the user approves it in Bloblex. Use this only when the user asks for something recurring or at a set time.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}},
+        {"name":"list_my_schedules","description":"List this blob's scheduled tasks, whether each is enabled, and when it next runs.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}
     ])
 }
 
 /// MCP calls from `bloblexd mcp-bridge`, authorized by a per-session token.
 pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Value) -> Result<Value, DispatchError> {
+    // Recursion guard: a session linked to an automation run can neither use
+    // team/scheduling tools nor reach any automation write RPC.
+    let is_automation = st.db.session_detail(session_id).map(|row| row["link"]["kind"] == "automation").unwrap_or(false);
+    if is_automation && method.starts_with("automation.") {
+        return Err(derr("forbidden", "Automation runs cannot change automations.", StatusCode::FORBIDDEN));
+    }
     match method {
-        "mcp.tools.list" => Ok(json!({"tools":tools()})),
+        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation)})),
         "mcp.tools.call" => {
             let name = params["name"].as_str().unwrap_or("");
+            if is_automation {
+                return Err(derr("forbidden", "Automation runs cannot use team or scheduling tools.", StatusCode::FORBIDDEN));
+            }
             let args = &params["arguments"];
             let result = match name {
                 "list_blobs" => list_blobs(st, session_id).await,
                 "list_conversations" => list_conversations(st, session_id, args).await,
                 "message_blob" => message_blob(st, session_id, args).await,
+                "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
+                "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
                 _ => Err(format!("Unknown tool {name}.")),
             };
             Ok(match result {
@@ -389,6 +408,8 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
                 }
             }
         }
+        // Automation runs map the same turn outcome onto their run row.
+        crate::automations::after_turn(&st, &session_id, &outcome).await;
         // The durable user queue drains before Team deliveries, so a queued
         // prompt is sent first and any pending team delivery follows it.
         crate::queue::after_turn(&st, &session_id, &outcome).await;

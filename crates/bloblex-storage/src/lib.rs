@@ -7,6 +7,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod experiments;
+pub mod cron;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -436,6 +437,137 @@ fn ensure_queue_schema(c: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// Scheduled-automation schema. Additive and idempotent like the team/queue
+/// schemas, so it runs on every open after the versioned migrations. The
+/// partial unique index enforces single-flight: at most one `running` run per
+/// automation.
+fn ensure_automation_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch("CREATE TABLE IF NOT EXISTS automations(
+        id TEXT PRIMARY KEY NOT NULL,
+        agent_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('cron','once')),
+        cron TEXT,
+        timezone TEXT NOT NULL,
+        once_at TEXT,
+        session_mode TEXT NOT NULL DEFAULT 'new' CHECK(session_mode IN ('new','reuse')),
+        approval_mode TEXT NOT NULL DEFAULT 'auto' CHECK(approval_mode IN ('plan','auto')),
+        max_runtime_secs INTEGER NOT NULL DEFAULT 1800 CHECK(max_runtime_secs BETWEEN 60 AND 14400),
+        enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+        created_by TEXT NOT NULL DEFAULT 'user' CHECK(created_by IN ('user','agent')),
+        reuse_session_id TEXT,
+        next_run_at TEXT,
+        last_run_at TEXT,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0 CHECK(consecutive_failures>=0),
+        pause_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_automations_due ON automations(enabled,next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_automations_agent ON automations(agent_id);
+    CREATE TABLE IF NOT EXISTS automation_runs(
+        id TEXT PRIMARY KEY NOT NULL,
+        automation_id TEXT NOT NULL,
+        session_id TEXT,
+        status TEXT NOT NULL CHECK(status IN ('running','completed','failed','skipped','cancelled','timeout','interrupted')),
+        reason TEXT,
+        scheduled_for TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_runs_single_flight ON automation_runs(automation_id) WHERE status='running';
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_automation ON automation_runs(automation_id,started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_session ON automation_runs(session_id);")?;
+    Ok(())
+}
+
+/// The `schedule` object a caller and the DTO share. `once` keeps its zone so
+/// the UI can show the wall clock the user picked.
+fn automation_schedule(kind: &str, cron: Option<&str>, timezone: &str, once_at: Option<&str>) -> Value {
+    match kind {
+        "cron" => json!({"kind":"cron","cron":cron.unwrap_or(""),"timezone":timezone}),
+        "once" => json!({"kind":"once","timezone":timezone,"at":once_at}),
+        _ => json!({"kind":kind,"timezone":timezone}),
+    }
+}
+
+fn automation_run_dto(c: &Connection, id: &str) -> Result<Value, StorageError> {
+    c.query_row(
+        "SELECT id,automation_id,session_id,status,reason,scheduled_for,started_at,finished_at FROM automation_runs WHERE id=?1",
+        [id],
+        |r| Ok(json!({
+            "id":r.get::<_,String>(0)?,
+            "automationId":r.get::<_,String>(1)?,
+            "sessionId":r.get::<_,Option<String>>(2)?,
+            "status":r.get::<_,String>(3)?,
+            "reason":r.get::<_,Option<String>>(4)?,
+            "scheduledFor":r.get::<_,Option<String>>(5)?,
+            "startedAt":r.get::<_,String>(6)?,
+            "finishedAt":r.get::<_,Option<String>>(7)?,
+        })),
+    )
+    .optional()?
+    .ok_or(StorageError::AgentNotFound)
+}
+
+fn automation_read(c: &Connection, id: &str) -> Result<Value, StorageError> {
+    let row = c
+        .query_row(
+            "SELECT id,agent_id,name,prompt,schedule_kind,cron,timezone,once_at,session_mode,approval_mode,max_runtime_secs,enabled,created_by,reuse_session_id,next_run_at,last_run_at,consecutive_failures,pause_reason,created_at,updated_at FROM automations WHERE id=?1",
+            [id],
+            |r| Ok((
+                r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, String>(6)?, r.get::<_, Option<String>>(7)?,
+                r.get::<_, String>(8)?, r.get::<_, String>(9)?, r.get::<_, i64>(10)?, r.get::<_, bool>(11)?,
+                r.get::<_, String>(12)?, r.get::<_, Option<String>>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?,
+                r.get::<_, i64>(16)?, r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, String>(19)?,
+            )),
+        )
+        .optional()?
+        .ok_or(StorageError::AgentNotFound)?;
+    let (id, agent_id, name, prompt, schedule_kind, cron, timezone, once_at, session_mode, approval_mode, max_runtime_secs, enabled, created_by, reuse_session_id, next_run_at, last_run_at, consecutive_failures, pause_reason, created_at, updated_at) = row;
+    let running: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE automation_id=?1 AND status='running')", [&id], |r| r.get(0))?;
+    let last_run_id: Option<String> = c.query_row("SELECT id FROM automation_runs WHERE automation_id=?1 ORDER BY started_at DESC,id DESC LIMIT 1", [&id], |r| r.get(0)).optional()?;
+    let mut dto = json!({
+        "id":id,"agentId":agent_id,"name":name,"prompt":prompt,
+        "schedule":automation_schedule(&schedule_kind,cron.as_deref(),&timezone,once_at.as_deref()),
+        "sessionMode":session_mode,"approvalMode":approval_mode,"maxRuntimeSecs":max_runtime_secs,"enabled":enabled,
+        "createdBy":created_by,"reuseSessionId":reuse_session_id,"nextRunAt":next_run_at,"lastRunAt":last_run_at,
+        "consecutiveFailures":consecutive_failures,"pauseReason":pause_reason,"running":running,
+        "createdAt":created_at,"updatedAt":updated_at,
+    });
+    if let Some(last) = last_run_id {
+        dto["lastRun"] = automation_run_dto(c, &last)?;
+    }
+    Ok(dto)
+}
+
+/// Validate an `approvalMode` request field. Automations may only ever be
+/// `plan` or `auto`; `bypass`, `ask` and anything else are invalid.
+fn automation_approval_mode(input: &Value, default: &str) -> Result<String, StorageError> {
+    match input.get("approvalMode") {
+        None | Some(Value::Null) => Ok(default.to_owned()),
+        Some(Value::String(mode)) if mode == "plan" || mode == "auto" => Ok(mode.clone()),
+        _ => Err(StorageError::InvalidAgent),
+    }
+}
+
+fn automation_session_mode(input: &Value) -> Result<String, StorageError> {
+    match input.get("sessionMode") {
+        None | Some(Value::Null) => Ok("new".to_owned()),
+        Some(Value::String(mode)) if mode == "new" || mode == "reuse" => Ok(mode.clone()),
+        _ => Err(StorageError::InvalidAgent),
+    }
+}
+
+fn automation_runtime_secs(input: &Value) -> Result<i64, StorageError> {
+    match input.get("maxRuntimeSecs") {
+        None | Some(Value::Null) => Ok(1800),
+        Some(value) => value.as_i64().filter(|secs| (60..=14_400).contains(secs)).ok_or(StorageError::InvalidAgent),
+    }
+}
+
 fn migrate_session_controls(c: &mut Connection, path: Option<&Path>, backup_done: bool) -> Result<(), StorageError> {
     let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
     let pragma: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -718,6 +850,7 @@ impl Storage {
                 if !schema_v12_valid(&conn)? { return Err(StorageError::InvalidAgent); }
                 ensure_team_schema(&conn)?;
                 ensure_queue_schema(&conn)?;
+                ensure_automation_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==11 {
@@ -725,6 +858,7 @@ impl Storage {
                 migrate_message_reactions(&mut conn, path, false)?;
                 ensure_team_schema(&conn)?;
                 ensure_queue_schema(&conn)?;
+                ensure_automation_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==10 {
@@ -733,6 +867,7 @@ impl Storage {
                 migrate_session_model_lock(&mut conn, path, backup_done)?;
                 ensure_team_schema(&conn)?;
                 ensure_queue_schema(&conn)?;
+                ensure_automation_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -744,6 +879,7 @@ impl Storage {
                 migrate_session_model_lock(&mut conn, path, model_lock_backup)?;
                 ensure_team_schema(&conn)?;
                 ensure_queue_schema(&conn)?;
+                ensure_automation_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -850,6 +986,7 @@ impl Storage {
         migrate_session_model_lock(&mut conn, path, backup_v10_done)?;
         ensure_team_schema(&conn)?;
         ensure_queue_schema(&conn)?;
+                ensure_automation_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -1644,6 +1781,295 @@ impl Storage {
         c.execute("DELETE FROM queued_prompts WHERE id=?1 AND status IN ('queued','failed')", [id])?;
         Ok(())
     }
+    // ── Scheduled automations ──────────────────────────────────────────────
+    /// Insert an automation after full validation. New automations are
+    /// disabled unless the request explicitly sets `enabled:true`; run
+    /// sessions are clamped to `plan`/`auto` at execution time.
+    pub fn automation_create(&self, input: &Value) -> Result<Value, StorageError> {
+        let agent_id = input["agentId"].as_str().map(str::trim).filter(|s| !s.is_empty()).ok_or(StorageError::InvalidAgent)?.to_owned();
+        let name = input["name"].as_str().map(str::trim).unwrap_or("");
+        if !(1..=80).contains(&name.chars().count()) { return Err(StorageError::InvalidAgent); }
+        let prompt = input["prompt"].as_str().unwrap_or("");
+        if prompt.is_empty() || prompt.len() > 8000 { return Err(StorageError::InvalidAgent); }
+        let session_mode = automation_session_mode(input)?;
+        let approval_mode = automation_approval_mode(input, "auto")?;
+        let max_runtime_secs = automation_runtime_secs(input)?;
+        let enabled = match input.get("enabled") { None | Some(Value::Null) => false, Some(value) => value.as_bool().ok_or(StorageError::InvalidAgent)? };
+        let created_by = match input.get("createdBy") { None | Some(Value::Null) => "user".to_owned(), Some(Value::String(value)) if value == "user" || value == "agent" => value.clone(), _ => return Err(StorageError::InvalidAgent) };
+        let pause_reason = match input.get("pauseReason") { None | Some(Value::Null) => None, Some(Value::String(value)) => Some(value.clone()), _ => return Err(StorageError::InvalidAgent) };
+        let now = Utc::now();
+        let schedule = cron::parse_schedule(&input["schedule"], Some(now))?;
+        let next_run_at = cron::next_run_at(&schedule, now)?;
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let agent: Option<(bool,)> = tx.query_row("SELECT archived FROM agents WHERE id=?1", [&agent_id], |r| Ok((r.get(0)?,))).optional()?;
+        let (archived,) = agent.ok_or(StorageError::AgentNotFound)?;
+        if archived { return Err(StorageError::AgentConflict); }
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM automations", [], |r| r.get(0))?;
+        if count >= 50 { return Err(StorageError::AgentConflict); }
+        let id = Uuid::new_v4().to_string();
+        let now_text = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+        tx.execute(
+            "INSERT INTO automations(id,agent_id,name,prompt,schedule_kind,cron,timezone,once_at,session_mode,approval_mode,max_runtime_secs,enabled,created_by,reuse_session_id,next_run_at,last_run_at,consecutive_failures,pause_reason,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,?14,NULL,0,?15,?16,?16)",
+            params![id, agent_id, name, prompt, schedule.kind, schedule.cron, schedule.timezone, schedule.once_at, session_mode, approval_mode, max_runtime_secs, enabled, created_by, next_run_at, pause_reason, now_text],
+        )?;
+        let dto = automation_read(&tx, &id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    pub fn automation_get(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        automation_read(&c, id)
+    }
+
+    pub fn automation_list(&self, agent_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let ids = {
+            let mut q = c.prepare("SELECT id FROM automations WHERE (?1 IS NULL OR agent_id=?1) ORDER BY created_at,id")?;
+            let rows = q.query_map(params![agent_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        ids.iter().map(|id| automation_read(&c, id)).collect()
+    }
+
+    /// Update mutable fields and recompute `next_run_at` from the (possibly new)
+    /// schedule. `enabled` is the one toggle; pausing with a reason is a
+    /// separate call so a scheduler race cannot silently re-enable a blob.
+    pub fn automation_update(&self, id: &str, input: &Value) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing = automation_read(&tx, id)?;
+        let now = Utc::now();
+        let name = match input.get("name") { None => existing["name"].as_str().unwrap_or("").to_owned(), Some(value) => value.as_str().map(str::trim).filter(|value| (1..=80).contains(&value.chars().count())).ok_or(StorageError::InvalidAgent)?.to_owned() };
+        let prompt = match input.get("prompt") { None => existing["prompt"].as_str().unwrap_or("").to_owned(), Some(value) => value.as_str().filter(|value| !value.is_empty() && value.len() <= 8000).ok_or(StorageError::InvalidAgent)?.to_owned() };
+        let session_mode = match input.get("sessionMode") { None => existing["sessionMode"].as_str().unwrap_or("new").to_owned(), Some(_) => automation_session_mode(input)? };
+        let approval_mode = match input.get("approvalMode") { None => existing["approvalMode"].as_str().unwrap_or("auto").to_owned(), Some(_) => automation_approval_mode(input, "auto")? };
+        let max_runtime_secs = match input.get("maxRuntimeSecs") { None => existing["maxRuntimeSecs"].as_i64().unwrap_or(1800), Some(_) => automation_runtime_secs(input)? };
+        let enabled = match input.get("enabled") { None => existing["enabled"].as_bool().unwrap_or(false), Some(value) => value.as_bool().ok_or(StorageError::InvalidAgent)? };
+        let schedule = match input.get("schedule") {
+            None => cron::parse_schedule(&existing["schedule"], None)?,
+            Some(value) => cron::parse_schedule(value, Some(now))?,
+        };
+        let next_run_at = cron::next_run_at(&schedule, now)?;
+        let pause_reason: Option<String> = match input.get("pauseReason") {
+            None => existing["pauseReason"].as_str().map(str::to_owned),
+            Some(Value::Null) => None,
+            Some(Value::String(value)) => Some(value.clone()),
+            _ => return Err(StorageError::InvalidAgent),
+        };
+        let now_text = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+        tx.execute(
+            "UPDATE automations SET name=?2,prompt=?3,schedule_kind=?4,cron=?5,timezone=?6,once_at=?7,session_mode=?8,approval_mode=?9,max_runtime_secs=?10,enabled=?11,next_run_at=?12,pause_reason=?13,updated_at=?14 WHERE id=?1",
+            params![id, name, prompt, schedule.kind, schedule.cron, schedule.timezone, schedule.once_at, session_mode, approval_mode, max_runtime_secs, enabled, next_run_at, pause_reason, now_text],
+        )?;
+        let dto = automation_read(&tx, id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    pub fn automation_pause(&self, id: &str) -> Result<Value, StorageError> {
+        self.automation_set_enabled(id, false, Some("user"), false)
+    }
+
+    /// Resume clears the failure counter and pause reason and recomputes the
+    /// next occurrence from now.
+    pub fn automation_resume(&self, id: &str) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing = automation_read(&tx, id)?;
+        let schedule = cron::parse_schedule(&existing["schedule"], None)?;
+        let next_run_at = cron::next_run_at(&schedule, Utc::now())?;
+        tx.execute(
+            "UPDATE automations SET enabled=1,pause_reason=NULL,consecutive_failures=0,next_run_at=?2,updated_at=?3 WHERE id=?1",
+            params![id, next_run_at, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)],
+        )?;
+        let dto = automation_read(&tx, id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    fn automation_set_enabled(&self, id: &str, enabled: bool, pause_reason: Option<&str>, clear_failures: bool) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let changed = if clear_failures {
+            c.execute("UPDATE automations SET enabled=?2,pause_reason=?3,consecutive_failures=0,updated_at=?4 WHERE id=?1", params![id, enabled, pause_reason, now])?
+        } else {
+            c.execute("UPDATE automations SET enabled=?2,pause_reason=?3,updated_at=?4 WHERE id=?1", params![id, enabled, pause_reason, now])?
+        };
+        if changed == 0 { return Err(StorageError::AgentNotFound); }
+        automation_read(&c, id)
+    }
+
+    /// Delete the automation but keep its run history and run sessions.
+    pub fn automation_delete(&self, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        if c.execute("DELETE FROM automations WHERE id=?1", [id])? == 0 { return Err(StorageError::AgentNotFound); }
+        Ok(())
+    }
+
+    /// Pause every automation owned by an archived blob, returning the updated
+    /// DTOs so the daemon can emit `automation.changed`.
+    pub fn automation_pause_for_agent(&self, agent_id: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let ids = {
+            let mut q = c.prepare("SELECT id FROM automations WHERE agent_id=?1 AND (enabled=1 OR pause_reason IS NULL)")?;
+            let rows = q.query_map([agent_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        if ids.is_empty() { return Ok(Vec::new()); }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let mut updated = Vec::new();
+        for id in ids {
+            c.execute("UPDATE automations SET enabled=0,pause_reason='user',updated_at=?2 WHERE id=?1", params![id, now])?;
+            updated.push(automation_read(&c, &id)?);
+        }
+        Ok(updated)
+    }
+
+    pub fn automation_count(&self) -> Result<i64, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT COUNT(*) FROM automations", [], |r| r.get(0))?)
+    }
+
+    /// Enabled automations whose `next_run_at` has arrived.
+    pub fn automation_due(&self, now: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let ids = {
+            let mut q = c.prepare("SELECT id FROM automations WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at<=?1 ORDER BY next_run_at,id")?;
+            let rows = q.query_map([now], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        ids.iter().map(|id| automation_read(&c, id)).collect()
+    }
+
+    /// Write the next occurrence. `None` clears it (once, or a schedule with no
+    /// future occurrence).
+    pub fn automation_set_next(&self, id: &str, next_run_at: Option<&str>) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE automations SET next_run_at=?2,updated_at=?3 WHERE id=?1", params![id, next_run_at, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)])?;
+        automation_read(&c, id)
+    }
+
+    /// Record a completed occurrence: reset the failure counter and move to the
+    /// next occurrence (or disable a `once` automation).
+    pub fn automation_finish_success(&self, id: &str, next_run_at: Option<&str>, disable: bool) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        c.execute(
+            "UPDATE automations SET consecutive_failures=0,last_run_at=?2,next_run_at=?3,enabled=CASE WHEN ?4 THEN 0 ELSE enabled END,pause_reason=NULL,updated_at=?2 WHERE id=?1",
+            params![id, now, next_run_at, disable],
+        )?;
+        automation_read(&c, id)
+    }
+
+    /// Record a failed occurrence. Below the auto-pause threshold the caller
+    /// passes the retry time; at three consecutive failures the automation is
+    /// disabled with `pause_reason='auto_failures'`.
+    pub fn automation_finish_failure(&self, id: &str, failures: i64, next_run_at: Option<&str>, auto_pause: bool) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        if auto_pause {
+            c.execute(
+                "UPDATE automations SET consecutive_failures=?2,last_run_at=?3,next_run_at=NULL,enabled=0,pause_reason='auto_failures',updated_at=?3 WHERE id=?1",
+                params![id, failures, now],
+            )?;
+        } else {
+            c.execute(
+                "UPDATE automations SET consecutive_failures=?2,last_run_at=?3,next_run_at=?4,updated_at=?3 WHERE id=?1",
+                params![id, failures, now, next_run_at],
+            )?;
+        }
+        automation_read(&c, id)
+    }
+
+    pub fn automation_set_reuse_session(&self, id: &str, session_id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE automations SET reuse_session_id=?2,updated_at=?3 WHERE id=?1", params![id, session_id, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)])?;
+        Ok(())
+    }
+
+    // ── Automation runs ────────────────────────────────────────────────────
+    pub fn automation_run_insert(&self, id: &str, automation_id: &str, session_id: Option<&str>, status: &str, reason: Option<&str>, scheduled_for: Option<&str>, started_at: &str) -> Result<Value, StorageError> {
+        if !["running", "completed", "failed", "skipped", "cancelled", "timeout", "interrupted"].contains(&status) { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute(
+            "INSERT INTO automation_runs(id,automation_id,session_id,status,reason,scheduled_for,started_at,finished_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![id, automation_id, session_id, status, reason, scheduled_for, started_at, if status == "running" { None } else { Some(started_at) }],
+        )?;
+        automation_run_dto(&c, id)
+    }
+
+    /// Finish a run only while it is still `running`, so a watchdog timeout is
+    /// not overwritten by the later `turn.cancelled` event.
+    pub fn automation_run_finish(&self, id: &str, status: &str, reason: Option<&str>) -> Result<Option<Value>, StorageError> {
+        if !["completed", "failed", "skipped", "cancelled", "timeout", "interrupted"].contains(&status) { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute("UPDATE automation_runs SET status=?2,reason=?3,finished_at=?4 WHERE id=?1 AND status='running'", params![id, status, reason, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)])?;
+        if changed == 0 { return Ok(None); }
+        Ok(Some(automation_run_dto(&c, id)?))
+    }
+
+    pub fn automation_run_get(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        automation_run_dto(&c, id)
+    }
+
+    pub fn automation_run_running_for(&self, automation_id: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let id: Option<String> = c.query_row("SELECT id FROM automation_runs WHERE automation_id=?1 AND status='running' LIMIT 1", [automation_id], |r| r.get(0)).optional()?;
+        id.map(|id| automation_run_dto(&c, &id)).transpose()
+    }
+
+    /// The run a session belongs to, if it is still running.
+    pub fn automation_run_running_for_session(&self, session_id: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let id: Option<String> = c.query_row("SELECT id FROM automation_runs WHERE session_id=?1 AND status='running' ORDER BY started_at DESC LIMIT 1", [session_id], |r| r.get(0)).optional()?;
+        id.map(|id| automation_run_dto(&c, &id)).transpose()
+    }
+
+    /// Running runs joined with their runtime cap, for the watchdog.
+    pub fn automation_runs_running(&self) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT r.id,r.automation_id,r.session_id,r.started_at,a.max_runtime_secs FROM automation_runs r JOIN automations a ON a.id=r.automation_id WHERE r.status='running'")?;
+        let rows = q.query_map([], |r| Ok(json!({
+            "id":r.get::<_,String>(0)?,"automationId":r.get::<_,String>(1)?,"sessionId":r.get::<_,Option<String>>(2)?,
+            "startedAt":r.get::<_,String>(3)?,"maxRuntimeSecs":r.get::<_,i64>(4)?,
+        })))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn automation_running_count(&self) -> Result<i64, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT COUNT(*) FROM automation_runs WHERE status='running'", [], |r| r.get(0))?)
+    }
+
+    /// After a restart, running runs become `interrupted` (not failures) and
+    /// their sessions are left untouched.
+    pub fn automation_interrupt_running(&self) -> Result<usize, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute("UPDATE automation_runs SET status='interrupted',finished_at=?1 WHERE status='running'", [Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)])?;
+        Ok(changed)
+    }
+
+    /// Run history newest first, optionally before a cursor run id.
+    pub fn automation_runs_list(&self, automation_id: &str, limit: usize, before: Option<&str>) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let cursor: Option<(String, String)> = match before {
+            Some(id) => c.query_row("SELECT started_at,id FROM automation_runs WHERE id=?1 AND automation_id=?2", params![id, automation_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?,
+            None => None,
+        };
+        let ids = {
+            let mut q = c.prepare(
+                "SELECT id FROM automation_runs WHERE automation_id=?1 AND (?2 IS NULL OR started_at<?2 OR (started_at=?2 AND id<?3)) ORDER BY started_at DESC,id DESC LIMIT ?4",
+            )?;
+            let (started, cursor_id) = cursor.map_or((None, None), |(started, id)| (Some(started), Some(id)));
+            let rows = q.query_map(params![automation_id, started, cursor_id, limit as i64], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        ids.iter().map(|id| automation_run_dto(&c, id)).collect()
+    }
+
     pub fn insert_usage(&self, u: &Value) -> Result<(), StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -2295,7 +2721,7 @@ impl Storage {
         Ok(())
     }
     pub fn resolve_permission_policy(&self,id:&str,resolved_by:&str,choice:&str)->Result<(),StorageError>{
-        if !["policy:auto","policy:bypass"].contains(&resolved_by){return Err(StorageError::InvalidAgent)}
+        if !["policy:auto","policy:bypass","policy:automation"].contains(&resolved_by){return Err(StorageError::InvalidAgent)}
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         let changed=c.execute("UPDATE permission_requests SET status='resolved',resolved_by=?2,data=json_set(data,'$.status','resolved','$.choice',?3,'$.resolvedBy',?2) WHERE id=?1 AND status='resolving'",params![id,resolved_by,choice])?;
         if changed!=1{return Err(StorageError::AgentConflict)} Ok(())
@@ -2391,6 +2817,8 @@ impl Storage {
         if k=="notifications.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         if k=="experimental.autoRetry" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         if k=="retry.maxWaitSecs" && !v.as_u64().is_some_and(|secs| secs<=86_400){return Err(StorageError::InvalidAgent)}
+        if k=="automations.paused" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+        if k=="automations.maxConcurrent" && !v.as_u64().is_some_and(|count| (1..=3).contains(&count)){return Err(StorageError::InvalidAgent)}
         if k=="experimental.usageTips" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         if k=="experimental.usageTipDismissals" && !valid_usage_tip_dismissals(v){return Err(StorageError::InvalidAgent)}
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -2402,7 +2830,7 @@ impl Storage {
             let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same { events.push(push_settings_event(&tx,k,enabled)?); }
-        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") {
+        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") {
             // Window-level preferences: the main window and the companion both follow them live.
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same {
@@ -4334,5 +4762,133 @@ mod tests {
         db.update_session_state("s-queue2", "idle").unwrap();
         db.session_delete("s-queue2").unwrap();
         assert!(matches!(db.queue_get("s-queue2", &id), Err(StorageError::AgentNotFound)));
+    }
+}
+
+#[cfg(test)]
+mod automation_tests {
+    use super::*;
+    use chrono::{Duration, SecondsFormat};
+
+    fn fixture() -> (Storage, String) {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-auto","provider":"codex"})).unwrap();
+        let (agent, _) = db.agent_create(&json!({"name":"Timer","runtimeId":"rt-auto"})).unwrap();
+        (db, agent["id"].as_str().unwrap().to_owned())
+    }
+
+    fn now_text() -> String {
+        chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    }
+
+    fn cron_task(agent_id: &str, name: &str, enabled: bool) -> Value {
+        json!({"agentId":agent_id,"name":name,"prompt":"p","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"Europe/Berlin"},"enabled":enabled})
+    }
+
+    #[test]
+    fn automation_create_defaults_validates_and_persists() {
+        let (db, agent_id) = fixture();
+        let created = db
+            .automation_create(&json!({"agentId":agent_id,"name":"Morning","prompt":"Say hi","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"Europe/Berlin"}}))
+            .unwrap();
+        assert_eq!(created["enabled"], false, "new automations default disabled");
+        assert_eq!(created["approvalMode"], "auto");
+        assert_eq!(created["sessionMode"], "new");
+        assert_eq!(created["maxRuntimeSecs"], 1800);
+        assert_eq!(created["createdBy"], "user");
+        assert_eq!(created["running"], false);
+        assert!(created["nextRunAt"].is_string());
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(db.automation_get(id).unwrap()["name"], "Morning");
+        assert_eq!(db.automation_list(Some(&agent_id)).unwrap().len(), 1);
+        assert_eq!(db.automation_count().unwrap(), 1);
+
+        let future = (chrono::Utc::now() + Duration::days(1)).to_rfc3339();
+        assert_eq!(db.automation_create(&json!({"agentId":agent_id,"name":"Once","prompt":"x","schedule":{"kind":"once","at":future}})).unwrap()["enabled"], false);
+        assert_eq!(db.automation_count().unwrap(), 2);
+
+        for bad in [
+            json!({"agentId":agent_id,"name":"","prompt":"x","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"}}),
+            json!({"agentId":agent_id,"name":"x","prompt":"","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"}}),
+            json!({"agentId":agent_id,"name":"x","prompt":"y","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"Nope/Nope"}}),
+            json!({"agentId":agent_id,"name":"x","prompt":"y","schedule":{"kind":"cron","cron":"bogus","timezone":"UTC"}}),
+            json!({"agentId":agent_id,"name":"x","prompt":"y","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"},"approvalMode":"bypass"}),
+            json!({"agentId":agent_id,"name":"x","prompt":"y","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"},"approvalMode":"ask"}),
+            json!({"agentId":agent_id,"name":"x","prompt":"y","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"},"maxRuntimeSecs":10}),
+            json!({"agentId":agent_id,"name":"x","prompt":"y","schedule":{"kind":"once","at":(chrono::Utc::now()+Duration::seconds(10)).to_rfc3339()}}),
+            json!({"agentId":"missing","name":"x","prompt":"y","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"}}),
+        ] {
+            assert!(db.automation_create(&bad).is_err(), "should reject {bad}");
+        }
+    }
+
+    #[test]
+    fn automation_update_pause_resume_and_delete_behave() {
+        let (db, agent_id) = fixture();
+        let created = db.automation_create(&cron_task(&agent_id, "First", true)).unwrap();
+        let id = created["id"].as_str().unwrap().to_owned();
+        assert_eq!(created["enabled"], true);
+        let updated = db.automation_update(&id, &json!({"name":"Renamed","maxRuntimeSecs":600})).unwrap();
+        assert_eq!(updated["name"], "Renamed");
+        assert_eq!(updated["maxRuntimeSecs"], 600);
+        assert!(db.automation_update(&id, &json!({"approvalMode":"bypass"})).is_err());
+        let paused = db.automation_pause(&id).unwrap();
+        assert_eq!(paused["enabled"], false);
+        assert_eq!(paused["pauseReason"], "user");
+        let resumed = db.automation_resume(&id).unwrap();
+        assert_eq!(resumed["enabled"], true);
+        assert_eq!(resumed["pauseReason"], Value::Null);
+        assert_eq!(resumed["consecutiveFailures"], 0);
+        for index in 0..49 {
+            db.automation_create(&cron_task(&agent_id, &format!("Task {index}"), false)).unwrap();
+        }
+        assert!(db.automation_create(&cron_task(&agent_id, "Overflow", false)).is_err(), "50 automation cap");
+        db.automation_run_insert("run-keep", &id, Some("sess-keep"), "completed", None, None, &now_text()).unwrap();
+        db.automation_delete(&id).unwrap();
+        assert!(db.automation_get(&id).is_err());
+        assert_eq!(db.automation_run_get("run-keep").unwrap()["status"], "completed", "run history survives deletion");
+        assert!(db.automation_delete("missing").is_err());
+    }
+
+    #[test]
+    fn automation_runs_are_single_flight_and_ordered_newest_first() {
+        let (db, agent_id) = fixture();
+        let created = db.automation_create(&cron_task(&agent_id, "Runs", true)).unwrap();
+        let id = created["id"].as_str().unwrap().to_owned();
+        db.automation_run_insert("r1", &id, Some("s1"), "running", None, None, "2026-01-01T00:00:00.000Z").unwrap();
+        assert_eq!(db.automation_running_count().unwrap(), 1);
+        assert!(db.automation_run_running_for(&id).unwrap().is_some());
+        assert!(db.automation_run_insert("r2", &id, Some("s2"), "running", None, None, &now_text()).is_err(), "single-flight unique index");
+        assert!(db.automation_run_finish("r1", "completed", Some("late:120")).unwrap().is_some());
+        assert!(db.automation_run_finish("r1", "failed", None).unwrap().is_none(), "already finished");
+        db.automation_run_insert("r2", &id, Some("s2"), "failed", Some("provider_error"), None, "2026-01-02T00:00:00.000Z").unwrap();
+        db.automation_run_insert("r3", &id, Some("s3"), "skipped", Some("still_running"), None, "2026-01-03T00:00:00.000Z").unwrap();
+        let runs = db.automation_runs_list(&id, 10, None).unwrap();
+        assert_eq!(runs[0]["id"], "r3", "newest first");
+        assert_eq!(runs[2]["id"], "r1");
+        let page = db.automation_runs_list(&id, 10, Some("r3")).unwrap();
+        assert_eq!(page[0]["id"], "r2");
+        assert_eq!(page.len(), 2);
+        assert_eq!(db.automation_interrupt_running().unwrap(), 0);
+        db.automation_run_insert("r4", &id, Some("s4"), "running", None, None, &now_text()).unwrap();
+        assert_eq!(db.automation_interrupt_running().unwrap(), 1);
+        assert_eq!(db.automation_run_get("r4").unwrap()["status"], "interrupted");
+    }
+
+    #[test]
+    fn automation_settings_and_agent_pause_are_validated() {
+        let (db, agent_id) = fixture();
+        assert!(db.set_setting("automations.paused", &json!("yes")).is_err());
+        assert!(db.set_setting("automations.maxConcurrent", &json!(0)).is_err());
+        assert!(db.set_setting("automations.maxConcurrent", &json!(4)).is_err());
+        assert_eq!(db.set_setting("automations.paused", &json!(true)).unwrap()[0]["payload"], json!({"key":"automations.paused","value":true}));
+        assert_eq!(db.set_setting("automations.maxConcurrent", &json!(2)).unwrap()[0]["type"], "settings.changed");
+        let created = db.automation_create(&cron_task(&agent_id, "Agent task", true)).unwrap();
+        assert_eq!(created["enabled"], true);
+        let paused = db.automation_pause_for_agent(&agent_id).unwrap();
+        assert_eq!(paused.len(), 1);
+        assert_eq!(paused[0]["enabled"], false);
+        assert_eq!(paused[0]["pauseReason"], "user");
+        assert!(db.automation_pause_for_agent(&agent_id).unwrap().is_empty(), "already paused");
     }
 }

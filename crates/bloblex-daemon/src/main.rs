@@ -41,6 +41,7 @@ mod retry;
 mod experiments;
 mod quota;
 mod quota_sources;
+mod automations;
 
 use quota::{normalize_codex_quota, PollFailure, PollOutcome, QuotaPollGate, QUOTA_POLL_INTERVAL, QUOTA_REQUEST_TIMEOUT};
 
@@ -65,6 +66,7 @@ struct AppState {
     stopping: Arc<tokio::sync::Notify>,
     team: Arc<team::Team>,
     queue: Arc<queue::Queue>,
+    automations: Arc<automations::Automations>,
 }
 #[derive(Clone)]
 struct Adapters {
@@ -646,6 +648,7 @@ async fn quota_poll_loop(st: AppState, mut events: broadcast::Receiver<EventEnve
 async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, DispatchError> {
     match method {
         "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" => team::team_rpc(st, method, &p).await,
+        "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
         "exec.snapshot.get" => {
             let id=p["snapshotId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","snapshotId is required",StatusCode::BAD_REQUEST))?;
             st.db.exec_snapshot_get(id).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?.ok_or_else(||derr("not_found","execution snapshot not found",StatusCode::NOT_FOUND))
@@ -711,7 +714,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.broadcast_persisted(events);
             Ok(json!({"agent":agent}))
         }
-        "agent.delete" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agent":agent})) }
+        "agent.delete" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;st.broadcast_persisted(events);automations::pause_for_agent(st, id).await;Ok(json!({"agent":agent})) }
         "agent.reorder" => { let rt=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;let ids=p["agentIds"].as_array().filter(|a|a.iter().all(Value::is_string)).ok_or_else(||derr("invalid_argument","agentIds must be an array of strings",StatusCode::BAD_REQUEST))?.iter().map(|v|v.as_str().unwrap().to_owned()).collect::<Vec<_>>();let (agents,events)=st.db.agent_reorder(rt,&ids).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agents":agents})) }
         "app.snapshot" => st.db.snapshot().map_err(|e| {
             derr(
@@ -1081,6 +1084,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if k=="retry.maxWaitSecs"&&!p["value"].as_u64().is_some_and(|secs|secs<=86_400){return Err(derr("invalid_argument","retry.maxWaitSecs requires an integer between 0 and 86400",StatusCode::BAD_REQUEST));}
             if k=="claude.enableWorkflows"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","claude.enableWorkflows requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="permissions.default_mode"&&!p["value"].as_str().is_some_and(|v|["ask","auto"].contains(&v)){return Err(derr("invalid_argument","permissions.default_mode must be ask or auto",StatusCode::BAD_REQUEST));}
+            if k=="automations.paused"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","automations.paused requires a JSON boolean",StatusCode::BAD_REQUEST));}
+            if k=="automations.maxConcurrent"&&!p["value"].as_u64().is_some_and(|count|(1..=3).contains(&count)){return Err(derr("invalid_argument","automations.maxConcurrent requires an integer between 1 and 3",StatusCode::BAD_REQUEST));}
             if k.to_ascii_lowercase().contains("token")
                 || k.to_ascii_lowercase().contains("secret")
                 || k.to_ascii_lowercase().contains("password")
@@ -1091,7 +1096,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::BAD_REQUEST,
                 ));
             }
-            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="retry.maxWaitSecs";
+            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent";
             let events=st.db.set_setting(k, &p["value"]).map_err(|e| {
                 derr(
                     if validation_key{"invalid_argument"}else{"internal"},
@@ -1179,6 +1184,16 @@ fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,Dis
         if let Some(mode) = lock.get("approvalMode").and_then(Value::as_str) { options.approval_mode = parse_mode(mode); }
         options.plan_mode = lock.get("planMode").and_then(Value::as_bool).unwrap_or(false);
         options.enable_workflows = lock.get("enableWorkflows").and_then(Value::as_bool).unwrap_or(false);
+    }
+    // Unattended rail: an automation session is always plan or auto, regardless
+    // of the blob, its lock or the global default. This also holds across
+    // restarts and `session.model.update` because both rebuild options here.
+    if session["link"]["kind"] == "automation" {
+        // `plan` is plan mode over an auto permission policy; the provider is
+        // never asked to bypass. Unclassified permission requests are denied.
+        options.approval_mode = ApprovalMode::Auto;
+        options.plan_mode = session["link"]["approvalMode"].as_str() == Some("plan");
+        options.enable_workflows = false;
     }
     if let Some(session_id) = session["id"].as_str() {
         team::attach(st, session_id, session["agentId"].as_str(), &session["link"], &mut options);
@@ -1539,7 +1554,7 @@ fn recognized_cli_version(provider: &str, version: &str) -> bool {
         _ => false,
     }
 }
-async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let agent_supplied=p.get("agentId").is_some(); let runtime_supplied=p.get("runtimeId").is_some();
     if agent_supplied==runtime_supplied{return Err(derr("invalid_argument","exactly one of agentId or runtimeId is required",StatusCode::BAD_REQUEST));}
     let agent_id=if agent_supplied{Some(p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId must be a string",StatusCode::BAD_REQUEST))?.to_owned())}else{None};
@@ -1575,7 +1590,16 @@ async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     // differently shaped `{ id, ... }` response.
     let options_session=json!({"agentId":agent_id,"provider":provider});
     let base_options=exec_options_for_session(st,&options_session)?;
-    let (mut exec_options,model_lock)=resolve_session_model_lock(st,&runtime,base_options).await;
+    let (mut exec_options,mut model_lock)=resolve_session_model_lock(st,&runtime,base_options).await;
+    // Automation sessions must never inherit bypass/ask from the blob or a
+    // global default. Pin the clamped mode into the lock and the launch options.
+    if p["link"]["kind"] == "automation" {
+        let plan = p["link"]["approvalMode"].as_str() == Some("plan");
+        if let Some(map) = model_lock.as_object_mut() { map.insert("approvalMode".to_owned(), json!(if plan { "plan" } else { "auto" })); }
+        exec_options.approval_mode = ApprovalMode::Auto;
+        exec_options.plan_mode = plan;
+        exec_options.enable_workflows = false;
+    }
     let id = Uuid::new_v4().to_string();
     team::attach(st, &id, agent_id.as_deref(), &p["link"], &mut exec_options);
     if let Some((setting, error)) = preflight_exec_options(st,&runtime,&provider,&exec_options).await {
@@ -1991,13 +2015,22 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
         if let Some(map) = lock.as_object_mut() { map.remove("serviceTier"); }
         options.service_tier = exec_options_for_session(st, &json!({"agentId": row["agentId"]}))?.service_tier;
     }
-    match approval_mode.clone() {
-        Some(Some(mode)) => { options.approval_mode = parse_mode(&mode); lock["approvalMode"] = json!(mode); }
-        Some(None) => {
-            if let Some(map) = lock.as_object_mut() { map.remove("approvalMode"); }
-            options.approval_mode = exec_options_for_session(st, &json!({"agentId": row["agentId"]}))?.approval_mode;
+    if row["link"]["kind"] == "automation" {
+        // An automation session's permission mode is fixed by the automation;
+        // it can never be raised to bypass or lowered to ask from here.
+        let plan = row["link"]["approvalMode"].as_str() == Some("plan");
+        options.approval_mode = ApprovalMode::Auto;
+        options.plan_mode = plan;
+        lock["approvalMode"] = json!(if plan { "plan" } else { "auto" });
+    } else {
+        match approval_mode.clone() {
+            Some(Some(mode)) => { options.approval_mode = parse_mode(&mode); lock["approvalMode"] = json!(mode); }
+            Some(None) => {
+                if let Some(map) = lock.as_object_mut() { map.remove("approvalMode"); }
+                options.approval_mode = exec_options_for_session(st, &json!({"agentId": row["agentId"]}))?.approval_mode;
+            }
+            None => {}
         }
-        None => {}
     }
     if let Some((_, error)) = preflight_exec_options(st, &runtime, row["provider"].as_str().unwrap_or(""), &options).await {
         return Err(error);
@@ -2062,6 +2095,7 @@ enum PromptOrigin {
     User,
     Team,
     Queue,
+    Automation,
 }
 
 /// The prompt path accepts `meta` only from daemon-internal callers, and only
@@ -2083,6 +2117,14 @@ fn sanitize_prompt_meta(value: &Value, origin: PromptOrigin) -> Option<Value> {
             let attempt = object.get("attempt")?.as_u64().filter(|attempt| *attempt >= 1)?;
             Some(json!({"kind":"auto_retry","retryOf":retry_of,"attempt":attempt}))
         }
+        PromptOrigin::Automation => {
+            if kind != "automation" {
+                return None;
+            }
+            let automation_id = object.get("automationId")?.as_str().filter(|id| !id.is_empty())?;
+            let run_id = object.get("runId")?.as_str().filter(|id| !id.is_empty())?;
+            Some(json!({"kind":"automation","automationId":automation_id,"runId":run_id}))
+        }
     }
 }
 
@@ -2098,6 +2140,12 @@ pub(crate) async fn session_prompt_for_team(st: &AppState, p: Value) -> Result<V
 /// allowlisted `auto_retry` meta survives sanitization here.
 pub(crate) async fn session_prompt_queued(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     session_prompt_impl(st, p, PromptOrigin::Queue).await
+}
+
+/// Entry point for a scheduled-automation run. Only allowlisted `automation`
+/// meta (`automationId`, `runId`) survives sanitization here.
+pub(crate) async fn session_prompt_for_automation(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    session_prompt_impl(st, p, PromptOrigin::Automation).await
 }
 
 async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> Result<Value, DispatchError> {
@@ -2671,7 +2719,7 @@ async fn forward_events_with_timeouts(
             }
         };
         let Some(ev) = received else { break; };
-        let event_guard = gate.lock().await;
+        let mut event_guard = Some(gate.lock().await);
         if !session_gate_is_current(&st, &sid, &gate).await
             || session_is_deleted(&st, &sid).await
             || !st.db.session_exists(&sid).unwrap_or(false)
@@ -2806,12 +2854,14 @@ async fn forward_events_with_timeouts(
                 let turn_id=turn.clone();
                 let (kind,normalized)=normalized_permission(&provider,&raw);
                 let base_summary=bloblex_agent_core::permission_summary(&kind,&normalized);
+                let is_automation = session["link"]["kind"]=="automation";
                 let (summary,decision)=if is_team_tool_permission(&raw) { (base_summary,Some(("policy:team".to_owned(),"TEAM".to_owned()))) }
                 else if mode=="bypass" { (base_summary,Some(("policy:bypass".to_owned(),"BYPASS".to_owned()))) }
-                else if mode=="auto" {
+                else if mode=="auto" || is_automation {
                     let project=PathBuf::from(session["projectPath"].as_str().unwrap_or(""));
-                    let classified=bloblex_agent_core::classify_permission(&kind,&normalized,&project);let category=classified.category.to_owned();let decision=classified.allowed.then(||("policy:auto".to_owned(),category));(classified.summary,decision)
+                    let classified=bloblex_agent_core::classify_permission(&kind,&normalized,&project);let category=classified.category.to_owned();let decision=(mode=="auto"&&classified.allowed).then(||("policy:auto".to_owned(),category));(classified.summary,decision)
                 } else {(base_summary,None)};
+                let auto_approved = decision.is_some();
                 if inserted.is_ok() && session["state"]=="working" && st.active_turns.lock().await.contains_key(&sid) {
                     if let Some((resolved_by,category))=decision {
                         let choice=choices.iter().find(|c|["allow","allow_once","accept","yes"].contains(&c.as_str())).cloned();
@@ -2819,7 +2869,7 @@ async fn forward_events_with_timeouts(
                         if let Some((_,reserved_provider_id))=st.db.begin_permission_reply(&id,&choice).ok().flatten() {
                         let active = { st.sessions.lock().await.get(&sid).cloned() };
                         if let Some(active)=active {
-                            drop(event_guard);
+                            drop(event_guard.take());
                             let reply_result = active.adapter.reply_permission(&reserved_provider_id,&choice).await;
                             let _event_guard = gate.lock().await;
                             if !session_gate_is_current(&st, &sid, &gate).await || session_is_deleted(&st, &sid).await
@@ -2833,7 +2883,33 @@ async fn forward_events_with_timeouts(
                             } else { let _=st.db.finish_permission_policy_reply(&id,false,&resolved_by,&choice); }
                         } else { let _=st.db.finish_permission_policy_reply(&id,false,&resolved_by,&choice); }
                             }
+                        }
                     }
+                }
+                // Unattended rail: an automation-run permission the classifier did
+                // not approve under `auto` is auto-denied, never left pending.
+                if is_automation && !auto_approved && inserted.is_ok() && session["state"]=="working" && st.active_turns.lock().await.contains_key(&sid) {
+                    let deny_choice=choices.iter().find(|c|["deny","reject","no","deny_once","deny_always"].contains(&c.as_str())).cloned()
+                        .or_else(|| choices.iter().find(|c|!["allow","allow_once","accept","yes"].contains(&c.as_str())).cloned());
+                    if let Some(choice)=deny_choice {
+                        if let Some((_,reserved_provider_id))=st.db.begin_permission_reply(&id,&choice).ok().flatten() {
+                            let active = { st.sessions.lock().await.get(&sid).cloned() };
+                            if let Some(active)=active {
+                                drop(event_guard.take());
+                                let reply_result = active.adapter.reply_permission(&reserved_provider_id,&choice).await;
+                                let _event_guard = gate.lock().await;
+                                if !session_gate_is_current(&st, &sid, &gate).await || session_is_deleted(&st, &sid).await
+                                    || !st.db.session_exists(&sid).unwrap_or(false) || !st.sessions.lock().await.contains_key(&sid)
+                                { break; }
+                                if reply_result.is_ok() {
+                                    let _=st.db.finish_permission_policy_reply(&id,true,"policy:automation",&choice);
+                                    let category=bloblex_agent_core::classify_permission(&kind,&normalized,&PathBuf::from(session["projectPath"].as_str().unwrap_or(""))).category.to_owned();
+                                    st.emit("permission.auto_denied",json!({"permissionId":id,"sessionId":sid,"automationId":session["link"]["automationId"],"runId":session["link"]["runId"],"category":category,"summary":summary.chars().take(160).collect::<String>()})).await;
+                                    st.emit("permission.resolved",json!({"permissionId":id,"choice":choice})).await;
+                                    continue;
+                                } else { let _=st.db.finish_permission_policy_reply(&id,false,"policy:automation",&choice); }
+                            } else { let _=st.db.finish_permission_policy_reply(&id,false,"policy:automation",&choice); }
+                        }
                     }
                 }
                 if inserted.is_ok() && session["state"] == "working" {
@@ -3005,6 +3081,18 @@ async fn forward_events_with_timeouts(
                 )
             }
             AgentEvent::QuestionRequested { provider_request_id, title, questions } => {
+                // Unattended rail: an automation run cannot wait on a question.
+                // Dismiss it so the turn can finish.
+                let is_automation = st.db.session_detail(&sid).map(|row| row["link"]["kind"]=="automation").unwrap_or(false);
+                if is_automation {
+                    let active = st.sessions.lock().await.get(&sid).cloned();
+                    if let Some(active)=active {
+                        drop(event_guard.take());
+                        let _ = active.adapter.answer_question(&provider_request_id, None).await;
+                        let _event_guard = gate.lock().await;
+                    }
+                    continue;
+                }
                 let id = Uuid::new_v4().to_string();
                 let questions = serde_json::to_value(&questions).unwrap_or(Value::Null);
                 if st.db.insert_question(&id, &sid, &provider_request_id, &title, &questions).is_err() { continue; }
@@ -3136,8 +3224,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         stopping: Arc::new(tokio::sync::Notify::new()),
         team: Arc::new(team::Team::default()),
         queue: Arc::new(queue::Queue::default()),
+        automations: Arc::new(automations::Automations::default()),
     };
     if let Ok(paused) = st.db.queue_paused_sessions() { st.queue.mark_startup_paused(paused); }
+    // A run interrupted by an unclean exit is not a failure; leave its session.
+    let _ = st.db.automation_interrupt_running();
     // Drop automatic retries that missed their window while the daemon was down.
     retry::reconcile_restart(&st).await;
     for id in recovered_sessions {
@@ -3157,6 +3248,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(quota_poll_loop(quota_state, st.events.subscribe()));
     let queue_state = st.clone();
     tokio::spawn(queue::due_loop(queue_state));
+    let automation_state = st.clone();
+    tokio::spawn(automations::sweep_loop(automation_state));
     let deletion_state = st.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
@@ -3845,7 +3938,7 @@ mod phase2a_tests {
 
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default())};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default())};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -5809,5 +5902,280 @@ mod phase2a_tests {
         dispatch(&st, "settings.set", json!({"key":"retry.maxWaitSecs","value":86400})).await.unwrap();
         dispatch(&st, "settings.set", json!({"key":"retry.maxWaitSecs","value":0})).await.unwrap();
         assert_eq!(st.db.settings().unwrap()["retry.maxWaitSecs"], 0);
+    }
+
+    // ── Phase 4A: scheduled automations ────────────────────────────────────
+    #[derive(Default)]
+    struct AutomationAdapter;
+    #[async_trait::async_trait]
+    impl AgentAdapter for AutomationAdapter {
+        async fn probe(&self,_:&RuntimeSpec)->Result<bloblex_agent_core::ProbeResult,bloblex_agent_core::AdapterError>{Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))}
+        async fn new_session(&self,_:&RuntimeSpec,request:NewSessionRequest,_:tokio::sync::mpsc::Sender<AgentEvent>)->Result<SessionHandle,bloblex_agent_core::AdapterError>{
+            Ok(SessionHandle{session_id:request.session_id,provider_session_id:format!("automation-{}",Uuid::new_v4()),capabilities:bloblex_agent_core::AgentCapabilities::default()})
+        }
+        async fn resume_session(&self,_:&RuntimeSpec,_:ResumeSessionRequest,_:tokio::sync::mpsc::Sender<AgentEvent>)->Result<SessionHandle,bloblex_agent_core::AdapterError>{Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))}
+        async fn prompt(&self,_:&SessionHandle,_:PromptRequest)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+        async fn cancel(&self,_:&SessionHandle)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+        async fn reply_permission(&self,_:&str,_:&str)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+        async fn close_session(&self,_:&SessionHandle)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+    }
+
+    fn automation_state()->(AppState,broadcast::Receiver<EventEnvelope>){
+        let(st,rx)=state();
+        let st=AppState{adapters:Arc::new(Adapters{acp:st.adapters.acp.clone(),codex:Arc::new(AutomationAdapter),claude:st.adapters.claude.clone()}),..st};
+        (st,rx)
+    }
+
+    fn unique_agent(st:&AppState,approval:Option<&str>)->String{
+        let mut fields=json!({"name":format!("Timer {}",Uuid::new_v4()),"runtimeId":"rt-test"});
+        if let Some(mode)=approval{fields["approvalMode"]=json!(mode);}
+        let(agent,_)=st.db.agent_create(&fields).unwrap();
+        agent["id"].as_str().unwrap().to_owned()
+    }
+
+    fn minutes_ago(minutes:i64)->String{
+        (Utc::now()-chrono::Duration::minutes(minutes)).to_rfc3339_opts(chrono::SecondsFormat::Millis,true)
+    }
+
+    fn cron_automation(st:&AppState,agent:&str,name:&str)->Value{
+        let created=st.db.automation_create(&json!({"agentId":agent,"name":name,"prompt":"do the thing","schedule":{"kind":"cron","cron":"*/5 * * * *","timezone":"UTC"},"enabled":true})).unwrap();
+        created
+    }
+
+    #[tokio::test]
+    async fn automations_coalesce_missed_runs_skip_overlaps_and_respect_global_pause(){
+        let(st,_)=automation_state();
+        let agent=unique_agent(&st,None);
+        let created=cron_automation(&st,&agent,"Coalesce");
+        let id=created["id"].as_str().unwrap().to_owned();
+        // Simulate a machine asleep for many occurrences.
+        st.db.automation_set_next(&id,Some(&minutes_ago(30))).unwrap();
+        automations::sweep(&st).await;
+        let runs=st.db.automation_runs_list(&id,20,None).unwrap();
+        assert_eq!(runs.len(),1,"many missed occurrences coalesce into exactly one run");
+        assert_eq!(runs[0]["status"],"running");
+        assert!(runs[0]["reason"].as_str().unwrap_or("").starts_with("late:"),"a late start is recorded");
+        let next=st.db.automation_get(&id).unwrap()["nextRunAt"].as_str().unwrap_or("").to_owned();
+        assert!(next>Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis,true),"next run moves past now");
+        // Single-flight: force due while the run is still live.
+        st.db.automation_set_next(&id,Some(&minutes_ago(1))).unwrap();
+        automations::sweep(&st).await;
+        let runs=st.db.automation_runs_list(&id,20,None).unwrap();
+        assert_eq!(runs.iter().filter(|r|r["status"]=="running").count(),1,"one running run per automation");
+        assert!(runs.iter().any(|r|r["status"]=="skipped"&&r["reason"]=="still_running"));
+        // Global kill switch: no new runs.
+        let before=st.db.automation_runs_list(&id,50,None).unwrap().len();
+        st.db.set_setting("automations.paused",&json!(true)).unwrap();
+        st.db.automation_set_next(&id,Some(&minutes_ago(1))).unwrap();
+        automations::sweep(&st).await;
+        assert_eq!(st.db.automation_runs_list(&id,50,None).unwrap().len(),before,"pause stops new runs");
+    }
+
+    #[tokio::test]
+    async fn automations_defer_when_busy_then_skip_after_fifteen_minutes(){
+        let(st,_)=automation_state();
+        let agent=unique_agent(&st,None);
+        st.db.set_setting("automations.maxConcurrent",&json!(1)).unwrap();
+        let a=cron_automation(&st,&agent,"Holder");
+        let a_id=a["id"].as_str().unwrap().to_owned();
+        let b=cron_automation(&st,&agent,"Waiting");
+        let b_id=b["id"].as_str().unwrap().to_owned();
+        st.db.automation_set_next(&a_id,Some(&minutes_ago(1))).unwrap();
+        st.db.automation_set_next(&b_id,Some(&minutes_ago(1))).unwrap();
+        st.db.automation_run_insert("holder-run",&a_id,Some("held"),"running",None,None,&minutes_ago(0)).unwrap();
+        automations::sweep(&st).await;
+        assert!(st.db.automation_runs_list(&b_id,10,None).unwrap().is_empty(),"a busy automation stays due");
+        st.automations.set_busy_since(&b_id,Utc::now()-chrono::Duration::minutes(16));
+        automations::sweep(&st).await;
+        let b_runs=st.db.automation_runs_list(&b_id,10,None).unwrap();
+        assert!(b_runs.iter().any(|r|r["status"]=="skipped"&&r["reason"]=="busy"),"after 15 minutes a busy automation is skipped");
+    }
+
+    #[tokio::test]
+    async fn automation_max_runtime_times_out_and_counts_as_a_failure(){
+        let(st,_)=automation_state();
+        let agent=unique_agent(&st,None);
+        let created=cron_automation(&st,&agent,"Watchdog");
+        let id=created["id"].as_str().unwrap().to_owned();
+        st.db.automation_run_insert("timeout-run",&id,None,"running",None,None,&minutes_ago(120)).unwrap();
+        automations::sweep(&st).await;
+        assert_eq!(st.db.automation_run_get("timeout-run").unwrap()["status"],"timeout");
+        assert_eq!(st.db.automation_get(&id).unwrap()["consecutiveFailures"],1);
+    }
+
+    #[tokio::test]
+    async fn automation_failures_retry_then_pause_and_success_resets(){
+        let(st,_)=automation_state();
+        let agent=unique_agent(&st,None);
+        let created=cron_automation(&st,&agent,"Retries");
+        let id=created["id"].as_str().unwrap().to_owned();
+        st.db.create_session("auto-session","rt-test","codex",".","Auto").unwrap();
+        st.db.update_session_state("auto-session","idle").unwrap();
+        for (run, expected) in [("run-1",1),("run-2",2),("run-3",3)] {
+            st.db.set_session_link("auto-session",&json!({"kind":"automation","automationId":id,"runId":run,"approvalMode":"auto"})).unwrap();
+            st.db.automation_run_insert(run,&id,Some("auto-session"),"running",None,None,&Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis,true)).unwrap();
+            automations::after_turn(&st,"auto-session","turn.error").await;
+            let auto=st.db.automation_get(&id).unwrap();
+            assert_eq!(auto["consecutiveFailures"],expected);
+            if expected<3 {
+                assert_eq!(auto["enabled"],true);
+                assert!(auto["nextRunAt"].is_string(),"a retry is scheduled inside the occurrence");
+            }
+        }
+        let paused=st.db.automation_get(&id).unwrap();
+        assert_eq!(paused["enabled"],false);
+        assert_eq!(paused["pauseReason"],"auto_failures");
+        assert_eq!(paused["nextRunAt"],Value::Null);
+        // A later success resets the counter.
+        let other=cron_automation(&st,&agent,"Reset");
+        let other_id=other["id"].as_str().unwrap().to_owned();
+        st.db.create_session("auto-reset","rt-test","codex",".","Reset").unwrap();
+        st.db.update_session_state("auto-reset","idle").unwrap();
+        st.db.set_session_link("auto-reset",&json!({"kind":"automation","automationId":other_id,"runId":"reset-run","approvalMode":"auto"})).unwrap();
+        st.db.automation_run_insert("reset-run",&other_id,Some("auto-reset"),"running",None,None,&Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis,true)).unwrap();
+        automations::after_turn(&st,"auto-reset","turn.completed").await;
+        let done=st.db.automation_get(&other_id).unwrap();
+        assert_eq!(done["consecutiveFailures"],0);
+        assert_eq!(st.db.automation_run_get("reset-run").unwrap()["status"],"completed");
+    }
+
+    #[tokio::test]
+    async fn once_automation_disables_itself_after_its_run(){
+        let(st,_)=automation_state();
+        let agent=unique_agent(&st,None);
+        let at=(Utc::now()+chrono::Duration::hours(1)).to_rfc3339();
+        let created=st.db.automation_create(&json!({"agentId":agent,"name":"One shot","prompt":"go","schedule":{"kind":"once","at":at},"enabled":true})).unwrap();
+        let id=created["id"].as_str().unwrap().to_owned();
+        st.db.create_session("once-session","rt-test","codex",".","Once").unwrap();
+        st.db.update_session_state("once-session","idle").unwrap();
+        st.db.set_session_link("once-session",&json!({"kind":"automation","automationId":id,"runId":"once-run","approvalMode":"auto"})).unwrap();
+        st.db.automation_run_insert("once-run",&id,Some("once-session"),"running",None,None,&Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis,true)).unwrap();
+        automations::after_turn(&st,"once-session","turn.completed").await;
+        let auto=st.db.automation_get(&id).unwrap();
+        assert_eq!(auto["enabled"],false);
+        assert_eq!(auto["nextRunAt"],Value::Null);
+    }
+
+    #[test]
+    fn automation_run_sessions_clamp_bypass_to_auto_or_plan(){
+        let(st,_)=state();
+        let(agent,_)=st.db.agent_create(&json!({"name":"Bypass blob","runtimeId":"rt-test","approvalMode":"bypass"})).unwrap();
+        let agent_id=agent["id"].as_str().unwrap();
+        let plain=json!({"agentId":agent_id,"provider":"codex"});
+        assert_eq!(exec_options_for_session(&st,&plain).unwrap().approval_mode,ApprovalMode::Bypass);
+        let auto=json!({"agentId":agent_id,"provider":"codex","link":{"kind":"automation","approvalMode":"auto"}});
+        assert_eq!(exec_options_for_session(&st,&auto).unwrap().approval_mode,ApprovalMode::Auto);
+        let plan=json!({"agentId":agent_id,"provider":"codex","link":{"kind":"automation","approvalMode":"plan"}});
+        let plan_options=exec_options_for_session(&st,&plan).unwrap();
+        assert_eq!(plan_options.approval_mode,ApprovalMode::Auto);
+        assert!(plan_options.plan_mode,"plan automations enable plan mode on an auto policy");
+        let missing=json!({"agentId":agent_id,"provider":"codex","link":{"kind":"automation"}});
+        assert_eq!(exec_options_for_session(&st,&missing).unwrap().approval_mode,ApprovalMode::Auto);
+    }
+
+    #[tokio::test]
+    async fn automation_recursion_guard_blocks_tools_and_schedule_task_only_proposes(){
+        let(st,_)=state();
+        let(agent,_)=st.db.agent_create(&json!({"name":"Scheduler blob","runtimeId":"rt-test"})).unwrap();
+        let agent_id=agent["id"].as_str().unwrap().to_owned();
+        st.db.create_session_for_agent("guard-normal","rt-test","codex",".","Normal",Some(&agent_id)).unwrap();
+        st.db.update_session_state("guard-normal","idle").unwrap();
+        let tools=team::mcp_rpc(&st,"guard-normal","mcp.tools.list",&json!({})).await.unwrap();
+        let names=tools["tools"].as_array().unwrap().iter().map(|t|t["name"].as_str().unwrap()).collect::<Vec<_>>();
+        assert!(names.contains(&"schedule_task"));
+        assert!(names.contains(&"list_my_schedules"));
+        let message=automations::schedule_task_tool(&st,"guard-normal",&json!({"name":"Daily report","prompt":"summarize","when":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"}})).await.unwrap();
+        assert!(message.contains("approve"));
+        let proposed=st.db.automation_list(Some(&agent_id)).unwrap();
+        assert_eq!(proposed.len(),1);
+        assert_eq!(proposed[0]["enabled"],false);
+        assert_eq!(proposed[0]["pauseReason"],"needs_approval");
+        assert_eq!(proposed[0]["createdBy"],"agent");
+        assert_eq!(proposed[0]["approvalMode"],"plan");
+        automations::sweep(&st).await;
+        assert!(st.db.automation_runs_list(proposed[0]["id"].as_str().unwrap(),10,None).unwrap().is_empty(),"a proposed automation never runs on its own");
+        // An automation-linked session has no write tools and no scheduling RPCs.
+        st.db.create_session("guard-auto","rt-test","codex",".","Auto").unwrap();
+        st.db.set_session_link("guard-auto",&json!({"kind":"automation","automationId":"x","runId":"y","approvalMode":"auto"})).unwrap();
+        assert!(team::mcp_rpc(&st,"guard-auto","mcp.tools.list",&json!({})).await.unwrap()["tools"].as_array().unwrap().is_empty());
+        assert_eq!(team::mcp_rpc(&st,"guard-auto","mcp.tools.call",&json!({"name":"schedule_task","arguments":{}})).await.unwrap_err().1.code,"forbidden");
+        assert_eq!(team::mcp_rpc(&st,"guard-auto","automation.create",&json!({})).await.unwrap_err().1.code,"forbidden");
+    }
+
+    #[tokio::test]
+    async fn archiving_a_blob_pauses_its_automations(){
+        let(st,_)=state();
+        let(agent,_)=st.db.agent_create(&json!({"name":"Archived blob","runtimeId":"rt-test"})).unwrap();
+        let agent_id=agent["id"].as_str().unwrap().to_owned();
+        let created=st.db.automation_create(&json!({"agentId":agent_id,"name":"Archive me","prompt":"p","schedule":{"kind":"cron","cron":"0 0 * * *","timezone":"UTC"},"enabled":true})).unwrap();
+        assert_eq!(created["enabled"],true);
+        dispatch(&st,"agent.delete",json!({"agentId":agent_id})).await.unwrap();
+        let auto=st.db.automation_get(created["id"].as_str().unwrap()).unwrap();
+        assert_eq!(auto["enabled"],false);
+        assert_eq!(auto["pauseReason"],"user");
+    }
+
+    #[tokio::test]
+    async fn automation_permissions_are_auto_denied_with_an_audit_event_and_questions_dismissed(){
+        let(st,mut observed)=state();
+        let(agent,_)=st.db.agent_create(&json!({"name":"Auto blob","runtimeId":"rt-test"})).unwrap();
+        let agent_id=agent["id"].as_str().unwrap().to_owned();
+        let sid="auto-deny-session";
+        st.db.create_session_for_agent(sid,"rt-test","claude",".","Auto",Some(&agent_id)).unwrap();
+        st.db.set_session_link(sid,&json!({"kind":"automation","automationId":"auto-1","runId":"run-1","approvalMode":"auto"})).unwrap();
+        st.db.create_turn("auto-deny-turn",sid).unwrap();
+        st.db.update_session_state(sid,"working").unwrap();
+        st.active_turns.lock().await.insert(sid.into(),"auto-deny-turn".into());
+        let adapter=Arc::new(PolicyAdapter::default());
+        let handle=SessionHandle{session_id:sid.into(),provider_session_id:"native".into(),capabilities:bloblex_agent_core::AgentCapabilities::default()};
+        let runtime=RuntimeSpec{runtime_id:"rt-test".into(),provider:"claude".into(),executable:PathBuf::from("fake"),args:vec![],cwd:None};
+        st.sessions.lock().await.insert(sid.into(),ActiveSession{handle,runtime,adapter:adapter.clone(),launch_approval_mode:ApprovalMode::Ask});
+        let(tx,rx)=tokio::sync::mpsc::channel(8);
+        let task=tokio::spawn(forward_events(st.clone(),sid.into(),"claude".into(),"rt-test".into(),rx));
+        tx.send(AgentEvent::PermissionRequested{provider_request_id:"req-deny".into(),title:"Network".into(),detail:None,choices:vec!["allow".into(),"deny".into()],raw:json!({"request":{"tool_name":"NetworkFetch","input":{"url":"https://example.invalid"}}})}).await.unwrap();
+        let mut denied=None;
+        for _ in 0..50 {
+            if let Ok(event)=observed.try_recv(){
+                if event.event_type=="permission.auto_denied"{denied=Some(event.payload);break;}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let denied=denied.expect("auto denial audit event");
+        assert_eq!(denied["automationId"],"auto-1");
+        assert_eq!(denied["runId"],"run-1");
+        assert_eq!(adapter.replies.load(std::sync::atomic::Ordering::SeqCst),1,"the provider receives the deny choice");
+        assert_eq!(st.db.permission_resolved_by(denied["permissionId"].as_str().unwrap()).unwrap().as_deref(),Some("policy:automation"));
+        tx.send(AgentEvent::QuestionRequested{provider_request_id:"q-1".into(),title:"Which one?".into(),questions:vec![]}).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        let mut surfaced=false;
+        while let Ok(event)=observed.try_recv(){ if event.event_type=="permission.requested"&&event.payload["kind"]=="question"{surfaced=true;} }
+        assert!(!surfaced,"an automation question is dismissed, never surfaced");
+        drop(tx);
+        let _=tokio::time::timeout(std::time::Duration::from_secs(5),task).await;
+    }
+
+    #[tokio::test]
+    async fn automation_rpc_create_list_and_preview_validate_and_emit(){
+        let(st,mut events)=state();
+        let(agent,_)=st.db.agent_create(&json!({"name":"RPC blob","runtimeId":"rt-test"})).unwrap();
+        let agent_id=agent["id"].as_str().unwrap().to_owned();
+        let created=dispatch(&st,"automation.create",json!({"agentId":agent_id,"name":"Nightly","prompt":"run tests","schedule":{"kind":"cron","cron":"0 3 * * *","timezone":"UTC"}})).await.unwrap();
+        assert_eq!(created["automation"]["enabled"],false,"the RPC default is disabled");
+        assert_eq!(events.recv().await.unwrap().event_type,"automation.changed");
+        assert_eq!(dispatch(&st,"automation.create",json!({"agentId":agent_id,"name":"Bad","prompt":"p","schedule":{"kind":"cron","cron":"0 3 * * *","timezone":"UTC"},"approvalMode":"bypass"})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"automation.list",json!({"agentId":agent_id})).await.unwrap()["automations"].as_array().unwrap().len(),1);
+        let id=created["automation"]["id"].as_str().unwrap();
+        assert_eq!(dispatch(&st,"automation.get",json!({"id":id})).await.unwrap()["automation"]["name"],"Nightly");
+        let preview=dispatch(&st,"automation.preview",json!({"schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"Europe/Berlin"},"count":2})).await.unwrap();
+        assert_eq!(preview["utc"].as_array().unwrap().len(),2);
+        assert_eq!(preview["local"].as_array().unwrap().len(),2);
+        assert_eq!(dispatch(&st,"automation.preview",json!({"schedule":{"kind":"cron","cron":"bad","timezone":"UTC"}})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"automation.preview",json!({"schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"},"count":11})).await.unwrap_err().1.code,"invalid_argument");
+        dispatch(&st,"automation.pause",json!({"id":id})).await.unwrap();
+        assert_eq!(st.db.automation_get(id).unwrap()["pauseReason"],"user");
+        dispatch(&st,"automation.resume",json!({"id":id})).await.unwrap();
+        assert_eq!(st.db.automation_get(id).unwrap()["pauseReason"],Value::Null);
+        dispatch(&st,"automation.delete",json!({"id":id})).await.unwrap();
+        assert!(st.db.automation_get(id).is_err());
     }
 }

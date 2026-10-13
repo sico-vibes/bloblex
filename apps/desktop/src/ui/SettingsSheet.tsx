@@ -593,7 +593,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label="Keyboard shortcut" hint={speechEnabled ? 'Starts or stops dictation from any window.' : 'Free for other apps while dictation is off.'}><kbd className="settings-kbd">Ctrl</kbd><kbd className="settings-kbd">E</kbd></SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Transcription engine">
-              <SettingsRow label="Engine" hint="ChatGPT uses your Codex sign-in and sends each recording to OpenAI. OpenAI's bot check currently blocks most third-party apps from this service (we confirmed it on 13 October 2026), so on-device is the dependable choice and ChatGPT dictation falls back to it.">
+              <SettingsRow label="Engine" hint="ChatGPT uses your Codex sign-in and sends each recording to OpenAI. OpenAI's bot check currently blocks most third-party apps from this service (confirmed on 13 October 2026, even when carrying Cloudflare's cookies on a retry the way bb does), so on-device is the dependable choice and ChatGPT dictation falls back to it.">
                 <Select ariaLabel="Transcription engine" variant="muted" value={speechEngine} disabled={saving} onChange={(value) => chooseSpeechEngine(normalizeEngineChoice(value))} options={[
                   { value: 'local', label: 'On this device' },
                   { value: 'automatic', label: 'ChatGPT when available' },

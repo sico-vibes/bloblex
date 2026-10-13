@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { RobotHead } from 'robot-heads'
+import { RobotHead } from '../vendor/robot-heads'
 import type { BlobCanvasProps } from './BlobCanvas'
 import { GREETING_REFERENCE } from './greetingScene'
 import { moodWithFileReference } from './characterState'
@@ -29,12 +29,23 @@ export function BitbotCanvas({ color, size = 52, mood = 'idle', className = '', 
   const effectiveMood = moodWithFileReference(mood, fileStage)
   const bot = useMemo(() => resolveBot(look, color), [look, color])
   const [dizzy, setDizzy] = useState(false)
+  const [visible, setVisible] = useState(true)
+  const [hot, setHot] = useState(false)
   const taps = useRef<number[]>([])
   const frame = useRef<HTMLSpanElement>(null)
   const completion = useRef(onGreetingComplete)
   const dizzyCallbacks = useRef({ start: onDizzy, recovery: onDizzyRecovery })
   useEffect(() => { completion.current = onGreetingComplete }, [onGreetingComplete])
   useEffect(() => { dizzyCallbacks.current = { start: onDizzy, recovery: onDizzyRecovery } }, [onDizzy, onDizzyRecovery])
+
+  // A robot that is scrolled out of view, or in a hidden window, does not draw.
+  useEffect(() => {
+    const element = frame.current
+    if (!element || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   // The welcome: the robot waits a beat, then hops with one full spin.
   useEffect(() => {
@@ -77,6 +88,12 @@ export function BitbotCanvas({ color, size = 52, mood = 'idle', className = '', 
   const height = greeting ? size * GREETING_REFERENCE.height / 100 : size
   const robotSize = greeting ? Math.round(height * 0.86) : size
   const state = dizzy ? 'error' : robotStateFor(effectiveMood)
+  // Drawing a head costs real CPU, so only heads that have something to say
+  // move: ones that are busy, asking, hovered, big (hero and editor), or in
+  // the welcome. Idle and sleeping avatars hold their still pose, which the
+  // library draws once.
+  const lively = state !== 'idle' && state !== 'sleeping'
+  const animate = visible && (greeting || dizzy || hot || lively || robotSize >= 96)
   return <span
     ref={frame}
     className={`blob-canvas-frame bitbot-frame ${className}`}
@@ -84,6 +101,8 @@ export function BitbotCanvas({ color, size = 52, mood = 'idle', className = '', 
     data-tauri-drag-region={dragRegion ? '' : undefined}
     data-bitbot-shape={bot.shape}
     onPointerDown={onPointerDown}
+    onPointerEnter={() => setHot(true)}
+    onPointerLeave={() => setHot(false)}
   >
     <RobotHead
       shape={bot.shape}
@@ -93,6 +112,7 @@ export function BitbotCanvas({ color, size = 52, mood = 'idle', className = '', 
       trimColor={bot.trim}
       screenColor={bot.screen}
       speed={1}
+      paused={!animate}
       antenna={false}
       floorShadow={!mini}
       interactive={!greeting}

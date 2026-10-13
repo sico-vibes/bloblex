@@ -10,6 +10,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
+
 use base64::Engine as _;
 use serde::Serialize;
 use thiserror::Error;
@@ -36,6 +39,80 @@ pub const REASON_CLOUD_COOLDOWN: &str = "cloud_cooldown";
 /// Error code the UI maps when no engine could transcribe: the cloud failed
 /// (or was not chosen) and no on-device model could run either.
 pub const BOTH_ENGINES_UNAVAILABLE: &str = "both_engines_unavailable";
+
+/// Cloudflare cookies the ChatGPT edge has set for us, kept in memory only and
+/// replayed on later requests to that host. This is how bb's ChatGPT client
+/// (get-bb/bb, `provider-codex/src/ai/chatgpt-fetch.ts`) gets past the soft
+/// bot-management challenge: the first request is answered with a challenge and
+/// the cookies that go with it, and a second request that carries them passes.
+/// Only the Cloudflare cookie names below are kept; nothing is ever written to
+/// disk or logged.
+static CLOUDFLARE_COOKIES: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+
+const CLOUDFLARE_COOKIE_NAMES: [&str; 9] = [
+    "__cf_bm",
+    "__cflb",
+    "__cfruid",
+    "__cfseq",
+    "__cfwaitingroom",
+    "_cfuvid",
+    "cf_clearance",
+    "cf_ob_info",
+    "cf_use_ob",
+];
+
+fn cookie_jar() -> &'static Mutex<BTreeMap<String, String>> {
+    CLOUDFLARE_COOKIES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn is_cloudflare_cookie(name: &str) -> bool {
+    CLOUDFLARE_COOKIE_NAMES.contains(&name) || name.starts_with("cf_chl_")
+}
+
+/// Keeps the allowed Cloudflare cookies from a response's `Set-Cookie` headers.
+fn store_cloudflare_cookies(headers: &reqwest::header::HeaderMap) {
+    let Ok(mut jar) = cookie_jar().lock() else { return };
+    for value in headers.get_all(reqwest::header::SET_COOKIE) {
+        let Ok(text) = value.to_str() else { continue };
+        let pair = text.split(';').next().unwrap_or("").trim();
+        let Some((name, _)) = pair.split_once('=') else { continue };
+        let name = name.trim();
+        if is_cloudflare_cookie(name) {
+            jar.insert(name.to_string(), pair.to_string());
+        }
+    }
+}
+
+/// The `Cookie` header to send, or `None` when nothing has been stored.
+fn cloudflare_cookie_header() -> Option<String> {
+    let jar = cookie_jar().lock().ok()?;
+    if jar.is_empty() {
+        None
+    } else {
+        Some(jar.values().cloned().collect::<Vec<_>>().join("; "))
+    }
+}
+
+/// The names (never the values) of the Cloudflare cookies currently held, for
+/// diagnostics.
+pub fn stored_cloudflare_cookie_names() -> Vec<String> {
+    cookie_jar().lock().map(|jar| jar.keys().cloned().collect()).unwrap_or_default()
+}
+
+/// Forget stored cookies (tests, and a sign-out).
+pub fn reset_cloudflare_cookies() {
+    if let Ok(mut jar) = cookie_jar().lock() {
+        jar.clear();
+    }
+}
+
+fn is_cloudflare_challenge(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap) -> bool {
+    status == reqwest::StatusCode::FORBIDDEN
+        && headers
+            .get("cf-mitigated")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("challenge"))
+}
 
 /// How the user asked dictation to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -780,32 +857,47 @@ impl CloudTranscriber {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| CloudError::Unavailable)?;
-        let mut request = client
-            .post(url)
-            .header(
-                reqwest::header::CONTENT_TYPE,
-                format!("multipart/form-data; boundary={boundary}"),
-            )
-            .header(
-                reqwest::header::USER_AGENT,
-                concat!("bloblex-desktop/", env!("CARGO_PKG_VERSION")),
-            )
-            .header("originator", "bloblex")
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", credentials.secret.expose()),
-            )
-            .body(body);
-        if chatgpt {
-            if let Some(account_id) = credentials.account_id.as_deref() {
-                request = request.header("chatgpt-account-id", account_id);
+        let send = || {
+            let mut request = client
+                .post(url.as_str())
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .header(
+                    reqwest::header::USER_AGENT,
+                    concat!("bloblex-desktop/", env!("CARGO_PKG_VERSION")),
+                )
+                .header("originator", "bloblex")
+                .header(
+                    reqwest::header::AUTHORIZATION,
+                    format!("Bearer {}", credentials.secret.expose()),
+                )
+                .body(body.clone());
+            if chatgpt {
+                if let Some(account_id) = credentials.account_id.as_deref() {
+                    request = request.header("chatgpt-account-id", account_id);
+                }
+                if credentials.fedramp {
+                    request = request.header("X-OpenAI-Fedramp", "true");
+                }
+                if let Some(cookie) = cloudflare_cookie_header() {
+                    request = request.header(reqwest::header::COOKIE, cookie);
+                }
             }
-            if credentials.fedramp {
-                request = request.header("X-OpenAI-Fedramp", "true");
+            request
+        };
+
+        // Like bb: send once; if the edge answers with a challenge, keep the
+        // Cloudflare cookies it set and send once more carrying them.
+        let mut response = send().send().await.map_err(|_| CloudError::Unavailable)?;
+        if chatgpt {
+            store_cloudflare_cookies(response.headers());
+            if is_cloudflare_challenge(response.status(), response.headers()) {
+                response = send().send().await.map_err(|_| CloudError::Unavailable)?;
+                store_cloudflare_cookies(response.headers());
             }
         }
-
-        let mut response = request.send().await.map_err(|_| CloudError::Unavailable)?;
         let status = response.status();
         if status.is_redirection() {
             return Err(CloudError::Unavailable);
@@ -876,6 +968,9 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    /// The cookie jar is process-wide, so tests that touch it run one at a time.
+    static COOKIE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn encode_segment(bytes: &[u8]) -> String {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
@@ -966,6 +1061,36 @@ mod tests {
             let _ = socket.write_all(&out).await;
             let _ = socket.shutdown().await;
             request
+        });
+        (address, handle)
+    }
+
+    /// Answer successive connections with the given responses, in order, and
+    /// return every request received.
+    async fn serve_sequence(
+        responses: Vec<(&str, &str, Vec<u8>)>,
+    ) -> (SocketAddr, tokio::task::JoinHandle<Vec<Vec<u8>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let responses: Vec<(String, String, Vec<u8>)> = responses
+            .into_iter()
+            .map(|(status, headers, body)| (status.to_string(), headers.to_string(), body))
+            .collect();
+        let handle = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for (status_line, headers, body) in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                requests.push(read_http_request(&mut socket).await);
+                let head = format!(
+                    "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\n{headers}Connection: close\r\n\r\n",
+                    body.len()
+                );
+                let mut out = head.into_bytes();
+                out.extend_from_slice(&body);
+                let _ = socket.write_all(&out).await;
+                let _ = socket.shutdown().await;
+            }
+            requests
         });
         (address, handle)
     }
@@ -1418,11 +1543,60 @@ mod tests {
 
     #[tokio::test]
     async fn cloudflare_challenge_maps_to_challenged() {
+        let _guard = COOKIE_TEST_LOCK.lock().await;
+        reset_cloudflare_cookies();
         let (_dir, path) = chatgpt_auth(serde_json::json!({ "exp": now_epoch_seconds() + 3600 }));
-        let (address, _handle) =
-            serve_once("403 Forbidden", "cf-mitigated: challenge\r\n", b"no".to_vec()).await;
+        // A challenge is retried once; when the second answer is a challenge too, it stays one.
+        let challenge = ("403 Forbidden", "cf-mitigated: challenge\r\n", b"no".to_vec());
+        let (address, handle) = serve_sequence(vec![challenge.clone(), challenge]).await;
         let result = transcriber(address, path).transcribe_samples(&sample(), None).await;
         assert_eq!(result.unwrap_err(), CloudError::Challenged);
+        assert_eq!(handle.await.unwrap().len(), 2, "one retry, no more");
+    }
+
+    #[tokio::test]
+    async fn a_challenge_is_retried_once_with_only_the_cloudflare_cookies_it_set() {
+        let _guard = COOKIE_TEST_LOCK.lock().await;
+        reset_cloudflare_cookies();
+        let (_dir, path) = chatgpt_auth(serde_json::json!({ "exp": now_epoch_seconds() + 3600 }));
+        let (address, handle) = serve_sequence(vec![
+            (
+                "403 Forbidden",
+                "cf-mitigated: challenge\r\nSet-Cookie: __cf_bm=abc123; Path=/; HttpOnly\r\nSet-Cookie: _cfuvid=uv9; Path=/\r\nSet-Cookie: session=nope; Path=/\r\n",
+                b"challenge".to_vec(),
+            ),
+            ("200 OK", "Content-Type: application/json\r\n", br#"{"text":"hello there"}"#.to_vec()),
+        ])
+        .await;
+        let result = transcriber(address, path).transcribe_samples(&sample(), None).await;
+        assert_eq!(result.unwrap(), "hello there");
+        let requests = handle.await.unwrap();
+        let text = |bytes: &Vec<u8>| String::from_utf8_lossy(bytes).to_lowercase();
+        assert!(!text(&requests[0]).contains("cookie:"), "nothing to replay on the first request");
+        let second = text(&requests[1]);
+        assert!(second.contains("cookie: "));
+        assert!(second.contains("__cf_bm=abc123") && second.contains("_cfuvid=uv9"));
+        assert!(!second.contains("session=nope"), "only Cloudflare cookies are kept");
+        reset_cloudflare_cookies();
+    }
+
+    #[tokio::test]
+    async fn stored_cookies_travel_with_the_next_dictation() {
+        let _guard = COOKIE_TEST_LOCK.lock().await;
+        reset_cloudflare_cookies();
+        let (_dir, path) = chatgpt_auth(serde_json::json!({ "exp": now_epoch_seconds() + 3600 }));
+        let (first, _) = serve_sequence(vec![(
+            "200 OK",
+            "Content-Type: application/json\r\nSet-Cookie: cf_clearance=ok77; Path=/\r\n",
+            br#"{"text":"one"}"#.to_vec(),
+        )])
+        .await;
+        assert_eq!(transcriber(first, path.clone()).transcribe_samples(&sample(), None).await.unwrap(), "one");
+        let (second, handle) = serve_sequence(vec![("200 OK", "Content-Type: application/json\r\n", br#"{"text":"two"}"#.to_vec())]).await;
+        assert_eq!(transcriber(second, path).transcribe_samples(&sample(), None).await.unwrap(), "two");
+        let request = String::from_utf8_lossy(&handle.await.unwrap()[0]).to_lowercase();
+        assert!(request.contains("cookie: cf_clearance=ok77"));
+        reset_cloudflare_cookies();
     }
 
     #[tokio::test]

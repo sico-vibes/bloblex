@@ -9,8 +9,11 @@
 //   facts about the auth file (auth_mode, account-id presence, token expiry).
 // It never prints the token, any request header, or any response body.
 //
-// No bot-protection bypass: this identifies as Bloblex and does not imitate
-// Codex, a browser, or any other client, and does not retry a challenge.
+// It identifies as Bloblex and does not imitate Codex, a browser, or any other
+// client. Like bb (get-bb/bb, provider-codex/src/ai/chatgpt-fetch.ts) it keeps the
+// Cloudflare cookies from a challenged response (names only are printed) and
+// sends the request once more carrying them. It uses Node's own fetch, so
+// comparing its result with the Rust client's isolates the network stack.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -121,18 +124,34 @@ async function probe(auth) {
   if (auth.accountId) headers['chatgpt-account-id'] = auth.accountId
   if (auth.fedramp) headers['X-OpenAI-Fedramp'] = 'true'
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
-  let response
-  try {
-    response = await fetch('https://chatgpt.com/backend-api/transcribe', {
-      method: 'POST',
-      headers,
-      body,
-      signal: controller.signal,
-    })
-  } finally {
-    clearTimeout(timer)
+  const ALLOWED = new Set(['__cf_bm', '__cflb', '__cfruid', '__cfseq', '__cfwaitingroom', '_cfuvid', 'cf_clearance', 'cf_ob_info', 'cf_use_ob'])
+  const jar = new Map()
+  const keep = (res) => {
+    for (const line of res.headers.getSetCookie?.() ?? []) {
+      const pair = line.split(';')[0].trim()
+      const name = pair.split('=')[0].trim()
+      if (ALLOWED.has(name) || name.startsWith('cf_chl_')) jar.set(name, pair)
+    }
+  }
+  const once = async () => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+    try {
+      const sent = { ...headers }
+      if (jar.size) sent.Cookie = [...jar.values()].join('; ')
+      const res = await fetch('https://chatgpt.com/backend-api/transcribe', { method: 'POST', headers: sent, body, signal: controller.signal })
+      keep(res)
+      return res
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  let response = await once()
+  const attempts = [response.status]
+  if (response.status === 403 && (response.headers.get('cf-mitigated') || '').toLowerCase() === 'challenge') {
+    await response.arrayBuffer()
+    response = await once()
+    attempts.push(response.status)
   }
 
   const bytes = Buffer.from(await response.arrayBuffer())
@@ -149,6 +168,8 @@ async function probe(auth) {
 
   return {
     status: response.status,
+    attempts,
+    cloudflareCookieNames: [...jar.keys()],
     headerNames,
     cfMitigated: response.headers.get('cf-mitigated'),
     contentType: response.headers.get('content-type'),

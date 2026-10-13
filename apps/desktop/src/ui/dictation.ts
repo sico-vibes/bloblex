@@ -186,9 +186,9 @@ export function useDictation({
       setPhase('starting')
       try {
         const status = await invoke<{ ready: boolean }>('speech_model_status', { modelId })
-        // When ChatGPT will serve this session there is nothing to download first.
-        const cloudServes = enginePrefs.engine === 'cloud' && enginePrefs.consent && cloudAuthUsable(await cloudDictationStatus())
-        if (status && status.ready === false && !cloudServes) {
+        // The on-device model is always made ready first: ChatGPT dictation is blocked
+        // for third-party apps, so it must be there to fall back on.
+        if (status && status.ready === false) {
           setPhase('downloading')
           let unlisten: UnlistenFn | undefined
           try {

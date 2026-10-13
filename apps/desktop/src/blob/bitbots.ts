@@ -5,7 +5,7 @@
 
 import { useSyncExternalStore } from 'react'
 import type { BlobMood } from './characterState'
-import type { RobotHeadState } from 'robot-heads'
+import type { RobotHeadState } from '../vendor/robot-heads'
 
 const CACHE_KEY = 'bloblex.bitbots'
 

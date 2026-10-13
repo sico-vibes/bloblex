@@ -57,3 +57,16 @@ OpenAI's private ChatGPT transcription endpoint (`chatgpt.com/backend-api/transc
 - Whether the endpoint behaves differently for the official Codex/ChatGPT clients — not tested, and imitating them is against the rules.
 - Live microphone capture and a real cloud transcription call were not exercised; the error mapping is proven against a local mock HTTP server in unit tests.
 - `apps/desktop/src-tauri/src/speech.rs` was **not compiled** in this worktree: the apostrophe in the checkout path (`D:\Basem's\...`) breaks that crate's build script. The Director checks the desktop crate from a plain path.
+
+## Follow-up: bb's cookie-carrying retry (13 October 2026, later)
+
+bb (get-bb/bb, `plugins/provider-codex/src/ai/chatgpt-fetch.ts`) sends the same request and, on a `403` with `cf-mitigated: challenge`, keeps the Cloudflare cookies from that response (`__cf_bm`, `_cfuvid`, `cf_clearance`, `cf_chl_*` and a few more) in memory and retries once carrying them. Bloblex now does exactly that (`bloblex_speech::cloud`, in-memory jar, chatgpt.com mode only, one retry).
+
+Live results with Bloblex's own identity (`originator: bloblex`, our User-Agent), a valid Codex sign-in, 1.2 s of silence:
+
+| Stack | First request | Retry carrying the cookies |
+|---|---|---|
+| Rust (reqwest, rustls), `cargo run -p bloblex-speech --example cloud_probe` | 403 challenge, sets `__cf_bm` | 403 challenge |
+| Node `fetch` (undici), `scripts/live-checks/live-cloud-dictation.mjs` | 403 challenge, sets `__cf_bm` | 403 challenge |
+
+So the network stack and the missing cookies are not the difference. What remains is the client identity bb sends (`originator: bb`, `User-Agent: bb-host-daemon`), which Bloblex does not copy: presenting another application's identity to get past a bot check is impersonation. Not verified: whether bb itself passes from this machine, and whether OpenAI allow-lists specific originators.

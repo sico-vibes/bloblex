@@ -11,7 +11,7 @@ Roadmap and decisions: [docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md). Wor
 | Branch | What it holds |
 |---|---|
 | `integration/improvement-v2` (this checkout) | Phases 1-7 (backend and UI) merged, on top of `17591b9`. **Start here.** |
-| `phase3b-replay` (worktree `../Blolblex-wt-phase1`) | Backend chain tip. Phase 3B (recorded-wire replay harness) was in progress there; anything uncommitted in that worktree is the lane's unfinished work. Everything committed on it before 3B is in the integration branch. |
+| `phase3b-replay` (worktree `../Blolblex-wt-phase1`) | Backend chain tip, fully merged into the integration branch. |
 | `phase7-cloud-dictation` (worktree `../Blolblex-wt-p7`) | Cloud dictation and keep-awake (merged into integration). |
 | `plan/improvement-v2`, `phase1-ui`, `phase2-ui`, `phase1-lifecycle`, `phase2-queue`, `phase3-retry`, `phase4-automations` | Stepping stones, all contained in the integration branch. |
 
@@ -21,7 +21,7 @@ Roadmap and decisions: [docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md). Wor
 |---|---|---|
 | 1 Reliability | One turn-end path; timeouts now drain queued team messages; watchdog waits during approvals; typed recovery hints; delivery fact; context-change notices | Context-reset dividers (chat and island) |
 | 2 Queue / steer | Durable per-session queue, send later, pause rules, due loop; gated Codex `turn/steer` (off by default, evidence `none`) | Composer stays usable during a turn, queue banner, send-later popover, Steer button when enabled |
-| 3 Retry | `experimental.autoRetry`: one "Please continue." after overload or a known rate-limit reset; never resends the prompt | Retry notices with Cancel, queue retry rows, settings |
+| 3 Retry (+3B) | Replay tests for all three adapters (synthesised fixtures). `experimental.autoRetry`: one "Please continue." after overload or a known rate-limit reset; never resends the prompt | Retry notices with Cancel, queue retry rows, settings |
 | 4 Schedules | Cron/once automations, coalescing, single-flight, caps, bypass impossible, unclassified permissions auto-denied, agents can only propose | Schedules page, editor with presets and preview, run history, approvals, global pause; Pause all also pauses schedules |
 | 4B Power | `set_keep_awake` thread holding `ES_SYSTEM_REQUIRED` | Opt-in Power setting, wanted only while working or a run is due |
 | 5 Memory | `experimental.memory` (off by default): MCP memory tools, bounded per-prompt catalog, FTS5 store with versions, rails, `profile.about`; agent notes for a project or everyone need approval and `memory.sharedAgentWrites` | Memory settings page, about-you, review and approval, shared-notes switch |
@@ -31,14 +31,14 @@ Roadmap and decisions: [docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md). Wor
 ### Gates last run
 
 - Desktop: `npx tsc -b` clean; Vitest 497/497 on the integration branch.
-- Rust workspace excluding the desktop crate (`RUST_MIN_STACK=33554432 cargo test --workspace --exclude bloblex-desktop`): 444 passed, 0 failed. (One earlier run failed `catalog_timeout_kills_the_child_and_failure_is_provider_unavailable` in `bloblex-adapter-acp` while the machine was busy; it is a wall-clock timeout test, passed 3 of 3 in isolation and in the full re-run, and is worth watching.)
+- Rust workspace excluding the desktop crate (`RUST_MIN_STACK=33554432 cargo test --workspace --exclude bloblex-desktop`): 459 passed, 0 failed, run with `--no-fail-fast`. (One earlier run failed `catalog_timeout_kills_the_child_and_failure_is_provider_unavailable` in `bloblex-adapter-acp` while the machine was busy; it is a wall-clock timeout test, passed 3 of 3 in isolation and in every later full run, and is worth watching.)
 - Desktop crate: lib tests (including `power::` and `speech::`) pass from a plain path (`D:\c7`, a detached checkout). **Building the desktop crate from this folder fails** because the apostrophe in `Basem's` breaks the Windows resource compiler and `assets/icon` is not tracked; use a plain-path checkout, as the earlier `D:\u18` checks did.
 - One daemon test (`agent_rpc_crud_reorder_archive_errors_and_persisted_event_sequence`) overflows the default test stack on the untouched base commit; run Rust tests with `RUST_MIN_STACK=33554432`.
 
 ### Known gaps and risks
 
 - Scheduled runs are excluded from a blob's main conversation in both the UI and the daemon (the daemon already excluded any linked session; Phase 6A made it explicit and tested it).
-- Not built: the first-run onboarding state machine, an island badge for running schedules, a UI switch for `questions.expirySecs`, and (in progress) the replay-harness tests (Phase 3B). The ask-user tool is OpenCode-only; whether Codex's native question tool is plan-mode only is still unprobed.
+- Not built: the first-run onboarding state machine, an island badge for running schedules, a UI switch for `questions.expirySecs`, and real-CLI wire captures (the replay fixtures in `docs/evidence/wire-fixtures.md` are synthesised from the fakes). The ask-user tool is OpenCode-only; whether Codex's native question tool is plan-mode only is still unprobed.
 - `turn/steer`, the ChatGPT transcription endpoint (WAV acceptance, Cloudflare behaviour), real auto-retry timing, scheduler end-to-end timing, `powercfg /requests` with keep-awake, and the memory catalog reaching a real prompt are all unverified live. See the evidence files in `docs/evidence/`.
 - Cloud dictation reads the Codex sign-in file under an owner-approved, dictation-only exception recorded in `AGENTS.md`. It is opt-in, off by default, and falls back to the on-device model.
 - Open product call: agent-written memories for a project or everyone stay unused until approved (the recommended default, implemented in the spec).

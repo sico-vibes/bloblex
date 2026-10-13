@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 mod updates;
 mod speech;
+mod power;
 
 #[cfg(test)]
 mod file_inspection_tests;
@@ -2132,6 +2133,7 @@ pub fn run() {
         .manage(AppState::default())
         .manage(updates::UpdateService::default())
         .manage(speech::SpeechState::default())
+        .manage(power::PowerState::default())
         .setup(|app| {
             let mut start_at_last_position = false;
             let mut hotkey_enabled = true;
@@ -2245,13 +2247,18 @@ pub fn run() {
             updates::updates_get_state,
             updates::updates_set_preferences,
             updates::updates_check,
-            updates::updates_install
+            updates::updates_install,
+            power::set_keep_awake,
+            power::keep_awake_state
         ])
         .build(tauri::generate_context!())
         .expect("Bloblex desktop application failed to start")
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 updates::stop_background_checker(app);
+                if let Some(power) = app.try_state::<power::PowerState>() {
+                    power.release();
+                }
                 if let Some(state) = app.try_state::<AppState>() {
                     state.stop_child();
                 }

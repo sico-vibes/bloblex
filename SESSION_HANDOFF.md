@@ -49,6 +49,15 @@ Roadmap and decisions: [docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md). Wor
 2. Build the installer in a private plain-path directory and run the live checks listed in each evidence file with a throwaway database.
 3. Merge `integration/improvement-v2` into `main` when satisfied. Nothing has been merged into `main`.
 
+## Published (13 October 2026, beta.19)
+
+The improvement plan v2 (Phases 1-7, see the section above) shipped as manual-only [v0.1.0-beta.19](docs/releases/0.1.0-beta.19.md), tagged at `4a4d0f6`, with `main` and the annotated tag pushed to GitHub.
+
+- Installer built in `D:19`: 13,562,185 bytes, SHA-256 `8e2946b1d35028abdbd439433fb61649fbf1c904b9cc26665b2cf0bfb61afed4`, `NotSigned`. The installer and `SHA256SUMS.txt` are published as a prerelease (`--latest=false`); GitHub's digest matches. The rolling signed updater stays at beta.6.
+- Boot smoke of the built daemon on a temporary database passed (snapshot, runtime discovery of all three CLIs, schedule and memory RPCs). No coding prompt was sent and no user database was touched.
+- Everything new was verified only with fake providers, unit tests and browser fixtures. The "Unverified" list in the release notes is the live-test backlog: live provider turns, `turn/steer`, ChatGPT transcription, real retry timing, an end-to-end scheduled run, keep-awake effect and clean-machine install.
+- Stepping-stone branches and the worktrees `../Blolblex-wt-phase1`, `../Blolblex-wt-p7` and `D:19` are cleanup candidates; nothing was removed.
+
 ## Published (12 October 2026, beta.18)
 
 The user's model, context and Usage follow-up shipped as manual-only [v0.1.0-beta.18](docs/releases/0.1.0-beta.18.md), source commit `65f5211`. The reviewed changes, version bump and annotated tag are pushed to `main` and GitHub. The user authorized publication after the implementation report.

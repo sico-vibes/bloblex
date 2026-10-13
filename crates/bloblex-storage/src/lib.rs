@@ -482,6 +482,166 @@ fn ensure_automation_schema(c: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// Memory schema (Phase 5A). Additive and idempotent like the team/queue
+/// schemas. `memory_fts` is a standalone FTS5 table over `title`, `body` and
+/// `tags`, kept in sync by explicit writes inside the same transaction as the
+/// `memory_records` change (no triggers, so soft deletes can drop the row).
+fn ensure_memory_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS memory_records(
+            id TEXT PRIMARY KEY NOT NULL,
+            scope TEXT NOT NULL CHECK(scope IN ('blob','project','shared')),
+            scope_id TEXT,
+            kind TEXT NOT NULL CHECK(kind IN ('fact','preference','decision','procedure','reference')),
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '[]',
+            importance INTEGER NOT NULL DEFAULT 50 CHECK(importance BETWEEN 0 AND 100),
+            pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1)),
+            origin TEXT NOT NULL CHECK(origin IN ('user','agent')),
+            reviewed INTEGER NOT NULL DEFAULT 0 CHECK(reviewed IN (0,1)),
+            source_session_id TEXT,
+            version INTEGER NOT NULL DEFAULT 1 CHECK(version>=1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            deleted_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_records_scope ON memory_records(scope,scope_id,deleted_at);
+        CREATE INDEX IF NOT EXISTS idx_memory_records_updated ON memory_records(deleted_at,updated_at);
+        CREATE TABLE IF NOT EXISTS memory_versions(
+            record_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            changed_by TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            PRIMARY KEY(record_id,version)
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(record_id UNINDEXED, title, body, tags);",
+    )?;
+    Ok(())
+}
+
+const MEMORY_COLUMNS: &str = "id,scope,scope_id,kind,title,body,tags,importance,pinned,origin,reviewed,source_session_id,version,created_at,updated_at,deleted_at";
+
+fn memory_dto_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let tags: String = row.get(6)?;
+    Ok(json!({
+        "id": row.get::<_, String>(0)?,
+        "scope": row.get::<_, String>(1)?,
+        "scopeId": row.get::<_, Option<String>>(2)?,
+        "kind": row.get::<_, String>(3)?,
+        "title": row.get::<_, String>(4)?,
+        "body": row.get::<_, String>(5)?,
+        "tags": serde_json::from_str::<Value>(&tags).unwrap_or_else(|_| json!([])),
+        "importance": row.get::<_, i64>(7)?,
+        "pinned": row.get::<_, bool>(8)?,
+        "origin": row.get::<_, String>(9)?,
+        "reviewed": row.get::<_, bool>(10)?,
+        "sourceSessionId": row.get::<_, Option<String>>(11)?,
+        "version": row.get::<_, i64>(12)?,
+        "createdAt": row.get::<_, String>(13)?,
+        "updatedAt": row.get::<_, String>(14)?,
+        "deletedAt": row.get::<_, Option<String>>(15)?,
+    }))
+}
+
+fn memory_read(c: &Connection, id: &str) -> Result<Option<Value>, StorageError> {
+    c.query_row(&format!("SELECT {MEMORY_COLUMNS} FROM memory_records WHERE id=?1"), [id], memory_dto_from_row).optional().map_err(StorageError::from)
+}
+
+fn memory_all(c: &Connection) -> Result<Vec<Value>, StorageError> {
+    let mut query = c.prepare(&format!("SELECT {MEMORY_COLUMNS} FROM memory_records"))?;
+    let rows = query.query_map([], memory_dto_from_row)?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn memory_valid_scope(scope: &str) -> bool { matches!(scope, "blob" | "project" | "shared") }
+fn memory_valid_kind(kind: &str) -> bool { matches!(kind, "fact" | "preference" | "decision" | "procedure" | "reference") }
+
+fn memory_validate_title(title: &str) -> Result<String, StorageError> {
+    let title = title.trim();
+    if title.is_empty() || title.chars().count() > 120 { return Err(StorageError::InvalidAgent); }
+    Ok(title.to_owned())
+}
+fn memory_validate_body(body: &str) -> Result<String, StorageError> {
+    let body = body.trim();
+    if body.is_empty() || body.chars().count() > 2000 { return Err(StorageError::InvalidAgent); }
+    Ok(body.to_owned())
+}
+fn memory_validate_tags(tags: &Value) -> Result<String, StorageError> {
+    let items = tags.as_array().ok_or(StorageError::InvalidAgent)?;
+    if items.len() > 8 { return Err(StorageError::InvalidAgent); }
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let tag = item.as_str().map(str::trim).ok_or(StorageError::InvalidAgent)?;
+        if tag.is_empty() || tag.chars().count() > 32 { return Err(StorageError::InvalidAgent); }
+        out.push(tag.to_owned());
+    }
+    Ok(serde_json::to_string(&out)?)
+}
+fn memory_validate_importance(value: Option<&Value>) -> Result<i64, StorageError> {
+    match value {
+        None | Some(Value::Null) => Ok(50),
+        Some(value) => value.as_i64().filter(|number| (0..=100).contains(number)).ok_or(StorageError::InvalidAgent),
+    }
+}
+fn memory_resolve_scope_id(c: &Connection, scope: &str, scope_id: Option<&str>) -> Result<Option<String>, StorageError> {
+    match scope {
+        "shared" => Ok(None),
+        "blob" => {
+            let id = scope_id.map(str::trim).filter(|value| !value.is_empty()).ok_or(StorageError::InvalidAgent)?;
+            if !c.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1)", [id], |r| r.get::<_, bool>(0))? { return Err(StorageError::InvalidAgent); }
+            Ok(Some(id.to_owned()))
+        }
+        "project" => {
+            let id = scope_id.map(str::trim).filter(|value| !value.is_empty()).ok_or(StorageError::InvalidAgent)?;
+            if !c.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [id], |r| r.get::<_, bool>(0))? { return Err(StorageError::InvalidAgent); }
+            Ok(Some(id.to_owned()))
+        }
+        _ => Err(StorageError::InvalidAgent),
+    }
+}
+
+/// Turn a user query into a safe FTS5 MATCH expression: each term becomes a
+/// quoted prefix, so punctuation cannot change the query grammar.
+fn memory_fts_expression(query: &str) -> String {
+    let mut terms = Vec::new();
+    for raw in query.split_whitespace() {
+        let cleaned = raw.chars().filter(|ch| ch.is_alphanumeric() || *ch == '_').collect::<String>();
+        if cleaned.is_empty() { continue; }
+        terms.push(format!("\"{}\"*", cleaned.replace('"', "\"\"")));
+    }
+    terms.join(" ")
+}
+
+fn memory_search_ids(c: &Connection, query: &str) -> Result<Vec<String>, StorageError> {
+    let expression = memory_fts_expression(query);
+    if expression.is_empty() { return Ok(Vec::new()); }
+    let mut statement = c.prepare("SELECT record_id FROM memory_fts WHERE memory_fts MATCH ?1 ORDER BY bm25(memory_fts)")?;
+    let ids = statement.query_map([expression], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(ids)
+}
+
+fn memory_visible_to(row: &Value, agent_id: &str, project_id: Option<&str>) -> bool {
+    match row["scope"].as_str() {
+        Some("blob") => row["scopeId"].as_str() == Some(agent_id),
+        Some("project") => project_id.is_some_and(|project| row["scopeId"].as_str() == Some(project)),
+        Some("shared") => true,
+        _ => false,
+    }
+}
+
+fn memory_is_live_reviewed(row: &Value) -> bool { row["reviewed"] == true && row["deletedAt"].is_null() }
+
+fn memory_catalog_order(rows: &mut [Value]) {
+    rows.sort_by(|a, b| {
+        b["pinned"].as_bool().unwrap_or(false).cmp(&a["pinned"].as_bool().unwrap_or(false))
+            .then_with(|| b["importance"].as_i64().unwrap_or(0).cmp(&a["importance"].as_i64().unwrap_or(0)))
+            .then_with(|| b["updatedAt"].as_str().unwrap_or("").cmp(a["updatedAt"].as_str().unwrap_or("")))
+    });
+}
+
 /// The `schedule` object a caller and the DTO share. `once` keeps its zone so
 /// the UI can show the wall clock the user picked.
 fn automation_schedule(kind: &str, cron: Option<&str>, timezone: &str, once_at: Option<&str>) -> Value {
@@ -851,6 +1011,7 @@ impl Storage {
                 ensure_team_schema(&conn)?;
                 ensure_queue_schema(&conn)?;
                 ensure_automation_schema(&conn)?;
+                ensure_memory_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==11 {
@@ -859,6 +1020,7 @@ impl Storage {
                 ensure_team_schema(&conn)?;
                 ensure_queue_schema(&conn)?;
                 ensure_automation_schema(&conn)?;
+                ensure_memory_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==10 {
@@ -868,6 +1030,7 @@ impl Storage {
                 ensure_team_schema(&conn)?;
                 ensure_queue_schema(&conn)?;
                 ensure_automation_schema(&conn)?;
+                ensure_memory_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -880,6 +1043,7 @@ impl Storage {
                 ensure_team_schema(&conn)?;
                 ensure_queue_schema(&conn)?;
                 ensure_automation_schema(&conn)?;
+                ensure_memory_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -987,6 +1151,7 @@ impl Storage {
         ensure_team_schema(&conn)?;
         ensure_queue_schema(&conn)?;
                 ensure_automation_schema(&conn)?;
+                ensure_memory_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -2821,6 +2986,9 @@ impl Storage {
         if k=="automations.maxConcurrent" && !v.as_u64().is_some_and(|count| (1..=3).contains(&count)){return Err(StorageError::InvalidAgent)}
         if k=="experimental.usageTips" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         if k=="experimental.usageTipDismissals" && !valid_usage_tip_dismissals(v){return Err(StorageError::InvalidAgent)}
+        if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+        if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+        if k=="profile.about" && !v.as_str().is_some_and(|text| text.trim().chars().count()<=1500){return Err(StorageError::InvalidAgent)}
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let previous:Option<String>=tx.query_row("SELECT value FROM settings WHERE key=?1",[k],|r|r.get(0)).optional()?;
@@ -2830,7 +2998,7 @@ impl Storage {
             let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same { events.push(push_settings_event(&tx,k,enabled)?); }
-        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") {
+        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("memory.") {
             // Window-level preferences: the main window and the companion both follow them live.
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same {
@@ -3045,6 +3213,195 @@ impl Storage {
     }
     fn usage_rows_locked(&self, c: &Connection) -> Result<Value, StorageError> {
         self.usage_summary_locked(c, "0000", "9999")
+    }
+
+    // ── Memory: durable notes scoped to a blob, a project or everyone ──────
+    pub fn memory_get(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        memory_read(&c, id)?.ok_or(StorageError::AgentNotFound)
+    }
+    pub fn memory_list(&self, filter: &Value) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let scope = filter.get("scope").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty());
+        if let Some(scope) = scope { if !memory_valid_scope(scope) { return Err(StorageError::InvalidAgent); } }
+        let scope_id = filter.get("scopeId").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty());
+        let status = match filter.get("status") {
+            None | Some(Value::Null) => "all",
+            Some(Value::String(value)) if value == "all" || value == "unreviewed" => value.as_str(),
+            _ => return Err(StorageError::InvalidAgent),
+        };
+        let include_deleted = match filter.get("includeDeleted") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(value)) => *value,
+            _ => return Err(StorageError::InvalidAgent),
+        };
+        let query = filter.get("query").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty());
+        let limit = match filter.get("limit") {
+            None | Some(Value::Null) => 100usize,
+            Some(value) => value.as_u64().filter(|n| (1..=200).contains(n)).ok_or(StorageError::InvalidAgent)? as usize,
+        };
+        let ranked = query.map(|query| memory_search_ids(&c, query)).transpose()?;
+        let mut rows = memory_all(&c)?;
+        rows.retain(|row| {
+            if !include_deleted && !row["deletedAt"].is_null() { return false; }
+            if status == "unreviewed" && row["reviewed"] == true { return false; }
+            if let Some(scope) = scope { if row["scope"] != scope { return false; } }
+            if let Some(scope_id) = scope_id { if row["scopeId"].as_str() != Some(scope_id) { return false; } }
+            if let Some(ranked) = &ranked { if !ranked.iter().any(|id| Some(id.as_str()) == row["id"].as_str()) { return false; } }
+            true
+        });
+        rows.sort_by(|a, b| {
+            b["pinned"].as_bool().unwrap_or(false).cmp(&a["pinned"].as_bool().unwrap_or(false))
+                .then_with(|| b["updatedAt"].as_str().unwrap_or("").cmp(a["updatedAt"].as_str().unwrap_or("")))
+        });
+        rows.truncate(limit);
+        Ok(rows)
+    }
+    pub fn memory_create(&self, input: &Value) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let scope = input["scope"].as_str().map(str::trim).filter(|value| !value.is_empty()).ok_or(StorageError::InvalidAgent)?;
+        if !memory_valid_scope(scope) { return Err(StorageError::InvalidAgent); }
+        let kind = input["kind"].as_str().map(str::trim).filter(|value| !value.is_empty()).ok_or(StorageError::InvalidAgent)?;
+        if !memory_valid_kind(kind) { return Err(StorageError::InvalidAgent); }
+        let title = memory_validate_title(input["title"].as_str().unwrap_or(""))?;
+        let body = memory_validate_body(input["body"].as_str().unwrap_or(""))?;
+        let tags = memory_validate_tags(input.get("tags").unwrap_or(&json!([])))?;
+        let importance = memory_validate_importance(input.get("importance"))?;
+        let pinned = match input.get("pinned") { None | Some(Value::Null) => false, Some(Value::Bool(value)) => *value, _ => return Err(StorageError::InvalidAgent) };
+        let origin = match input["origin"].as_str().unwrap_or("user") { "user" => "user", "agent" => "agent", _ => return Err(StorageError::InvalidAgent) };
+        let reviewed = match input.get("reviewed") { None | Some(Value::Null) => origin == "user", Some(Value::Bool(value)) => *value, _ => return Err(StorageError::InvalidAgent) };
+        let source_session = input.get("sourceSessionId").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty());
+        let scope_id = memory_resolve_scope_id(&c, scope, input.get("scopeId").and_then(Value::as_str))?;
+        if c.query_row("SELECT COUNT(*) FROM memory_records WHERE deleted_at IS NULL", [], |row| row.get::<_, i64>(0))? >= 1000 {
+            return Err(StorageError::InvalidAgent);
+        }
+        let live_in_scope: i64 = c.query_row(
+            "SELECT COUNT(*) FROM memory_records WHERE deleted_at IS NULL AND scope=?1 AND ((scope_id IS NULL AND ?2 IS NULL) OR scope_id=?2)",
+            params![scope, scope_id],
+            |row| row.get(0),
+        )?;
+        if live_in_scope >= 300 { return Err(StorageError::InvalidAgent); }
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO memory_records(id,scope,scope_id,kind,title,body,tags,importance,pinned,origin,reviewed,source_session_id,version,created_at,updated_at,deleted_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?13,NULL)",
+            params![id, scope, scope_id, kind, title, body, tags, importance, pinned, origin, reviewed, source_session, now],
+        )?;
+        tx.execute("INSERT INTO memory_fts(record_id,title,body,tags) VALUES(?1,?2,?3,?4)", params![id, title, body, tags])?;
+        tx.execute("INSERT INTO memory_versions(record_id,version,title,body,changed_by,changed_at) VALUES(?1,1,?2,?3,?4,?5)", params![id, title, body, origin, now])?;
+        let record = tx.query_row(&format!("SELECT {MEMORY_COLUMNS} FROM memory_records WHERE id=?1"), [&id], memory_dto_from_row)?;
+        tx.commit()?;
+        Ok(record)
+    }
+    pub fn memory_update(&self, id: &str, expected_version: i64, patch: &Value, changed_by: &str) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let row = memory_read(&c, id)?.ok_or(StorageError::AgentNotFound)?;
+        if !row["deletedAt"].is_null() { return Err(StorageError::AgentConflict); }
+        let current = row["version"].as_i64().unwrap_or(1);
+        if current != expected_version { return Err(StorageError::AgentConflict); }
+        let title = match patch.get("title") { None | Some(Value::Null) => row["title"].as_str().unwrap_or("").to_owned(), Some(_) => memory_validate_title(patch["title"].as_str().unwrap_or(""))? };
+        let body = match patch.get("body") { None | Some(Value::Null) => row["body"].as_str().unwrap_or("").to_owned(), Some(_) => memory_validate_body(patch["body"].as_str().unwrap_or(""))? };
+        let kind = match patch.get("kind") {
+            None | Some(Value::Null) => row["kind"].as_str().unwrap_or("fact").to_owned(),
+            Some(Value::String(value)) if memory_valid_kind(value) => value.clone(),
+            _ => return Err(StorageError::InvalidAgent),
+        };
+        let tags = match patch.get("tags") { None | Some(Value::Null) => serde_json::to_string(&row["tags"])?, Some(value) => memory_validate_tags(value)? };
+        let importance = match patch.get("importance") { None | Some(Value::Null) => row["importance"].as_i64().unwrap_or(50), Some(value) => memory_validate_importance(Some(value))? };
+        let pinned = match patch.get("pinned") { None | Some(Value::Null) => row["pinned"].as_bool().unwrap_or(false), Some(Value::Bool(value)) => *value, _ => return Err(StorageError::InvalidAgent) };
+        let version = current + 1;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("UPDATE memory_records SET title=?2,body=?3,kind=?4,tags=?5,importance=?6,pinned=?7,version=?8,updated_at=?9 WHERE id=?1", params![id, title, body, kind, tags, importance, pinned, version, now])?;
+        tx.execute("DELETE FROM memory_fts WHERE record_id=?1", [id])?;
+        tx.execute("INSERT INTO memory_fts(record_id,title,body,tags) VALUES(?1,?2,?3,?4)", params![id, title, body, tags])?;
+        tx.execute("INSERT INTO memory_versions(record_id,version,title,body,changed_by,changed_at) VALUES(?1,?2,?3,?4,?5,?6)", params![id, version, title, body, changed_by, now])?;
+        tx.execute("DELETE FROM memory_versions WHERE record_id=?1 AND version NOT IN (SELECT version FROM memory_versions WHERE record_id=?1 ORDER BY version DESC LIMIT 10)", [id])?;
+        let record = tx.query_row(&format!("SELECT {MEMORY_COLUMNS} FROM memory_records WHERE id=?1"), [id], memory_dto_from_row)?;
+        tx.commit()?;
+        Ok(record)
+    }
+    pub fn memory_approve(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let row = memory_read(&c, id)?.ok_or(StorageError::AgentNotFound)?;
+        if !row["deletedAt"].is_null() { return Err(StorageError::AgentConflict); }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        c.execute("UPDATE memory_records SET reviewed=1,updated_at=?2 WHERE id=?1 AND reviewed=0", params![id, now])?;
+        memory_read(&c, id)?.ok_or(StorageError::AgentNotFound)
+    }
+    pub fn memory_delete(&self, id: &str, expected_version: Option<i64>, changed_by: &str) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let row = memory_read(&c, id)?.ok_or(StorageError::AgentNotFound)?;
+        if !row["deletedAt"].is_null() { return Err(StorageError::AgentConflict); }
+        let version = row["version"].as_i64().unwrap_or(1);
+        if let Some(expected) = expected_version { if version != expected { return Err(StorageError::AgentConflict); } }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("UPDATE memory_records SET deleted_at=?2,updated_at=?2 WHERE id=?1", params![id, now])?;
+        tx.execute("DELETE FROM memory_fts WHERE record_id=?1", [id])?;
+        tx.execute(
+            "INSERT OR REPLACE INTO memory_versions(record_id,version,title,body,changed_by,changed_at) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![id, version, row["title"].as_str().unwrap_or(""), row["body"].as_str().unwrap_or(""), changed_by, now],
+        )?;
+        let record = tx.query_row(&format!("SELECT {MEMORY_COLUMNS} FROM memory_records WHERE id=?1"), [id], memory_dto_from_row)?;
+        tx.commit()?;
+        Ok(record)
+    }
+    pub fn memory_restore(&self, id: &str) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let row = memory_read(&c, id)?.ok_or(StorageError::AgentNotFound)?;
+        if row["deletedAt"].is_null() { return Err(StorageError::AgentConflict); }
+        if c.query_row("SELECT COUNT(*) FROM memory_records WHERE deleted_at IS NULL", [], |r| r.get::<_, i64>(0))? >= 1000 {
+            return Err(StorageError::InvalidAgent);
+        }
+        let tags = serde_json::to_string(&row["tags"])?;
+        let title = row["title"].as_str().unwrap_or("").to_owned();
+        let body = row["body"].as_str().unwrap_or("").to_owned();
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("UPDATE memory_records SET deleted_at=NULL,updated_at=?2 WHERE id=?1", params![id, now])?;
+        tx.execute("DELETE FROM memory_fts WHERE record_id=?1", [id])?;
+        tx.execute("INSERT INTO memory_fts(record_id,title,body,tags) VALUES(?1,?2,?3,?4)", params![id, title, body, tags])?;
+        let record = tx.query_row(&format!("SELECT {MEMORY_COLUMNS} FROM memory_records WHERE id=?1"), [id], memory_dto_from_row)?;
+        tx.commit()?;
+        Ok(record)
+    }
+    pub fn memory_visible_catalog(&self, agent_id: &str, project_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut rows = memory_all(&c)?.into_iter()
+            .filter(|row| memory_is_live_reviewed(row) && memory_visible_to(row, agent_id, project_id))
+            .collect::<Vec<_>>();
+        memory_catalog_order(&mut rows);
+        Ok(rows)
+    }
+    pub fn memory_visible_search(&self, agent_id: &str, project_id: Option<&str>, query: &str, limit: usize) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut out = Vec::new();
+        for id in memory_search_ids(&c, query)? {
+            if out.len() >= limit { break; }
+            if let Some(row) = memory_read(&c, &id)? {
+                if memory_is_live_reviewed(&row) && memory_visible_to(&row, agent_id, project_id) { out.push(row); }
+            }
+        }
+        Ok(out)
+    }
+    pub fn memory_visible_get(&self, id: &str, agent_id: &str, project_id: Option<&str>) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let Some(row) = memory_read(&c, id)? else { return Ok(None) };
+        if memory_is_live_reviewed(&row) && memory_visible_to(&row, agent_id, project_id) { Ok(Some(row)) } else { Ok(None) }
+    }
+    pub fn memory_versions(&self, id: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut statement = c.prepare("SELECT version,title,body,changed_by,changed_at FROM memory_versions WHERE record_id=?1 ORDER BY version")?;
+        let rows = statement.query_map([id], |row| Ok(json!({
+            "version": row.get::<_, i64>(0)?,
+            "title": row.get::<_, String>(1)?,
+            "body": row.get::<_, String>(2)?,
+            "changedBy": row.get::<_, String>(3)?,
+            "changedAt": row.get::<_, String>(4)?,
+        })))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 }
 
@@ -4890,5 +5247,164 @@ mod automation_tests {
         assert_eq!(paused[0]["enabled"], false);
         assert_eq!(paused[0]["pauseReason"], "user");
         assert!(db.automation_pause_for_agent(&agent_id).unwrap().is_empty(), "already paused");
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    fn fixture() -> (Storage, String, String) {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-mem","provider":"codex","status":"online"})).unwrap();
+        let (agent, _) = db.agent_create(&json!({"name":"Memory","runtimeId":"rt-mem"})).unwrap();
+        let (project, _) = db.project_create("Proj", None).unwrap();
+        (db, agent["id"].as_str().unwrap().to_owned(), project["id"].as_str().unwrap().to_owned())
+    }
+    fn note(scope: &str, scope_id: Option<&str>, title: &str, body: &str) -> Value {
+        let mut input = json!({"scope":scope,"kind":"fact","title":title,"body":body});
+        if let Some(id) = scope_id { input["scopeId"] = json!(id); }
+        input
+    }
+
+    #[test]
+    fn fts5_is_available_and_schema_is_idempotent() {
+        let (db, agent, _) = fixture();
+        {
+            let c = db.conn.lock().unwrap();
+            ensure_memory_schema(&c).unwrap();
+            ensure_memory_schema(&c).unwrap();
+            let fts: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_fts')", [], |r| r.get(0)).unwrap();
+            assert!(fts, "bundled rusqlite must provide FTS5");
+        }
+        db.memory_create(&note("blob", Some(&agent), "Deploy notes", "The release runs on staging first")).unwrap();
+        let hits = db.memory_visible_search(&agent, None, "release", 8).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["title"], "Deploy notes");
+    }
+
+    #[test]
+    fn a_query_is_ranked_by_relevance() {
+        let (db, agent, _) = fixture();
+        db.memory_create(&note("blob", Some(&agent), "Second", "ranking appears once")).unwrap();
+        db.memory_create(&note("blob", Some(&agent), "First", "ranking ranking ranking")).unwrap();
+        let hits = db.memory_visible_search(&agent, None, "ranking", 8).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0]["title"], "First", "the denser match ranks first");
+    }
+
+    #[test]
+    fn crud_and_optimistic_versions() {
+        let (db, agent, _) = fixture();
+        let created = db.memory_create(&note("blob", Some(&agent), "Coffee", "The user prefers oat milk")).unwrap();
+        assert_eq!(created["version"], 1);
+        assert_eq!(created["reviewed"], true);
+        assert_eq!(created["origin"], "user");
+        let id = created["id"].as_str().unwrap().to_owned();
+        assert_eq!(db.memory_get(&id).unwrap()["title"], "Coffee");
+        let updated = db.memory_update(&id, 1, &json!({"body":"The user prefers oat milk, no sugar"}), "user").unwrap();
+        assert_eq!(updated["version"], 2);
+        assert_eq!(updated["body"], "The user prefers oat milk, no sugar");
+        assert!(matches!(db.memory_update(&id, 1, &json!({"title":"Stale"}), "user"), Err(StorageError::AgentConflict)));
+        assert!(matches!(db.memory_update(&id, 2, &json!({"importance":200}), "user"), Err(StorageError::InvalidAgent)));
+        assert_eq!(db.memory_list(&json!({})).unwrap().len(), 1);
+        assert_eq!(db.memory_list(&json!({"scope":"blob","scopeId":agent})).unwrap().len(), 1);
+        assert_eq!(db.memory_list(&json!({"scope":"project"})).unwrap().len(), 0);
+        assert_eq!(db.memory_list(&json!({"query":"oat"})).unwrap().len(), 1);
+        assert_eq!(db.memory_list(&json!({"query":"missing-term"})).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn soft_delete_restore_and_version_history() {
+        let (db, agent, _) = fixture();
+        let created = db.memory_create(&note("blob", Some(&agent), "Note", "initial body")).unwrap();
+        let id = created["id"].as_str().unwrap().to_owned();
+        let deleted = db.memory_delete(&id, Some(1), "user").unwrap();
+        assert!(deleted["deletedAt"].is_string());
+        assert_eq!(db.memory_list(&json!({})).unwrap().len(), 0, "soft-deleted records leave the list");
+        assert_eq!(db.memory_list(&json!({"includeDeleted":true})).unwrap().len(), 1);
+        assert_eq!(db.memory_visible_search(&agent, None, "initial", 8).unwrap().len(), 0, "deleted rows leave the index");
+        assert!(matches!(db.memory_delete(&id, None, "user"), Err(StorageError::AgentConflict)));
+        let restored = db.memory_restore(&id).unwrap();
+        assert!(restored["deletedAt"].is_null());
+        assert_eq!(db.memory_visible_search(&agent, None, "initial", 8).unwrap().len(), 1);
+        for index in 0..15 {
+            db.memory_update(&id, index + 1, &json!({"body": format!("body {index}")}), "user").unwrap();
+        }
+        let c = db.conn.lock().unwrap();
+        let versions: i64 = c.query_row("SELECT COUNT(*) FROM memory_versions WHERE record_id=?1", [&id], |r| r.get(0)).unwrap();
+        assert_eq!(versions, 10, "only the ten newest versions are kept");
+    }
+
+    #[test]
+    fn catalog_orders_pinned_then_importance_then_recency() {
+        let (db, agent, _) = fixture();
+        db.memory_create(&json!({"scope":"blob","scopeId":agent,"kind":"fact","title":"A","body":"aaa","importance":10})).unwrap();
+        db.memory_create(&json!({"scope":"blob","scopeId":agent,"kind":"fact","title":"B","body":"bbb","importance":1,"pinned":true})).unwrap();
+        db.memory_create(&json!({"scope":"blob","scopeId":agent,"kind":"fact","title":"C","body":"ccc","importance":90})).unwrap();
+        let order = db.memory_visible_catalog(&agent, None).unwrap().iter().map(|record| record["title"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        assert_eq!(order, ["B", "C", "A"]);
+    }
+
+    #[test]
+    fn caps_are_enforced_per_scope() {
+        let (db, agent, _) = fixture();
+        for index in 0..300 {
+            db.memory_create(&note("blob", Some(&agent), &format!("Note {index}"), "body")).unwrap();
+        }
+        assert!(matches!(db.memory_create(&note("blob", Some(&agent), "Overflow", "body")), Err(StorageError::InvalidAgent)));
+    }
+
+    #[test]
+    fn visibility_is_scoped_to_blob_project_and_shared() {
+        let (db, agent_a, project) = fixture();
+        let (agent_b, _) = db.agent_create(&json!({"name":"Other","runtimeId":"rt-mem"})).unwrap();
+        let agent_b = agent_b["id"].as_str().unwrap().to_owned();
+        db.memory_create(&note("blob", Some(&agent_a), "A private", "only agent a")).unwrap();
+        db.memory_create(&note("blob", Some(&agent_b), "B private", "only agent b")).unwrap();
+        db.memory_create(&note("project", Some(&project), "Project", "shared within the project")).unwrap();
+        db.memory_create(&note("shared", None, "Shared", "everyone")).unwrap();
+        let catalog = db.memory_visible_catalog(&agent_a, Some(&project)).unwrap();
+        let titles = catalog.iter().filter_map(|row| row["title"].as_str()).collect::<Vec<_>>();
+        assert!(titles.contains(&"A private") && titles.contains(&"Project") && titles.contains(&"Shared"));
+        assert!(!titles.contains(&"B private"), "another blob's private notes are never visible");
+        let b_catalog = db.memory_visible_catalog(&agent_b, None).unwrap();
+        let b_titles = b_catalog.iter().filter_map(|row| row["title"].as_str()).collect::<Vec<_>>();
+        assert!(!b_titles.contains(&"A private") && !b_titles.contains(&"Project"), "no project when the blob has none");
+        assert!(db.memory_visible_get(&catalog[0]["id"].as_str().unwrap().to_owned(), &agent_a, Some(&project)).unwrap().is_some());
+    }
+
+    #[test]
+    fn unreviewed_records_are_hidden_until_approved() {
+        let (db, agent, _) = fixture();
+        let mut input = note("blob", Some(&agent), "Agent note", "written by the agent");
+        input["origin"] = json!("agent");
+        input["reviewed"] = json!(false);
+        let created = db.memory_create(&input).unwrap();
+        let id = created["id"].as_str().unwrap().to_owned();
+        assert_eq!(created["reviewed"], false);
+        assert_eq!(db.memory_visible_search(&agent, None, "agent", 8).unwrap().len(), 0, "unreviewed records are not searchable");
+        assert!(db.memory_visible_get(&id, &agent, None).unwrap().is_none());
+        assert_eq!(db.memory_visible_catalog(&agent, None).unwrap().len(), 0);
+        assert_eq!(db.memory_list(&json!({"status":"unreviewed"})).unwrap().len(), 1, "the review list still sees it");
+        let approved = db.memory_approve(&id).unwrap();
+        assert_eq!(approved["reviewed"], true);
+        assert_eq!(db.memory_visible_search(&agent, None, "agent", 8).unwrap().len(), 1);
+        assert!(db.memory_visible_get(&id, &agent, None).unwrap().is_some());
+        assert_eq!(db.memory_visible_catalog(&agent, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn create_validates_scope_scope_id_kind_and_lengths() {
+        let (db, agent, _) = fixture();
+        assert!(db.memory_create(&json!({"scope":"galaxy","kind":"fact","title":"t","body":"b"})).is_err());
+        assert!(db.memory_create(&json!({"scope":"blob","scopeId":"missing","kind":"fact","title":"t","body":"b"})).is_err());
+        assert!(db.memory_create(&json!({"scope":"project","scopeId":"missing","kind":"fact","title":"t","body":"b"})).is_err());
+        assert!(db.memory_create(&json!({"scope":"blob","scopeId":agent,"kind":"rumour","title":"t","body":"b"})).is_err());
+        assert!(db.memory_create(&json!({"scope":"blob","scopeId":agent,"kind":"fact","title":"","body":"b"})).is_err());
+        assert!(db.memory_create(&json!({"scope":"blob","scopeId":agent,"kind":"fact","title":&"t".repeat(121),"body":"b"})).is_err());
+        assert!(db.memory_create(&json!({"scope":"blob","scopeId":agent,"kind":"fact","title":"t","body":&"b".repeat(2001)})).is_err());
+        assert!(db.memory_create(&json!({"scope":"blob","scopeId":agent,"kind":"fact","title":"t","body":"b","tags":["a","b","c","d","e","f","g","h","i"]})).is_err());
+        assert!(db.memory_create(&json!({"scope":"shared","kind":"fact","title":"t","body":"b","tags":[]})).is_ok());
     }
 }

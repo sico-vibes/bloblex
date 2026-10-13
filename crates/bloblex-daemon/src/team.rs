@@ -46,6 +46,8 @@ impl Team {
         self.grants.lock().unwrap().insert(token.clone(), session_id.to_owned());
         token
     }
+    #[cfg(test)]
+    pub(crate) fn token_for_test(&self, session_id: &str) -> String { self.token_for(session_id) }
     pub fn grant(&self, token: &str) -> Option<String> {
         let grants = self.grants.lock().unwrap();
         grants.iter().find(|(candidate, _)| bloblex_security::capability_matches(candidate, token)).map(|(_, session)| session.clone())
@@ -72,6 +74,10 @@ fn user_name(st: &AppState) -> Option<String> {
     st.db.settings().ok().and_then(|settings| settings["profile.name"].as_str().map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned))
 }
 
+fn profile_about(st: &AppState) -> Option<String> {
+    st.db.settings().ok().and_then(|settings| settings["profile.about"].as_str().map(str::trim).filter(|about| !about.is_empty()).map(str::to_owned))
+}
+
 /// The folder a blob works in: its project's folder, or its own workspace.
 pub fn workspace_for(st: &AppState, agent: &Value) -> PathBuf {
     if let Some(project) = agent["projectId"].as_str().and_then(|id| st.db.project_get(id).ok()) {
@@ -93,6 +99,9 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
         Some(user) => format!("The user is {user}."),
         None => "The user has not set a name; address them as the admin.".into(),
     });
+    if let Some(about) = profile_about(st) {
+        lines.push(format!("About the user (from their own notes): {about}"));
+    }
     let project = agent["projectId"].as_str().and_then(|id| st.db.project_get(id).ok());
     lines.push(match project {
         Some(project) => format!("You work in the project \"{}\" at {}. Treat that folder as your workspace.", project["name"].as_str().unwrap_or("project"), workspace.display()),
@@ -135,35 +144,42 @@ pub fn attach(st: &AppState, session_id: &str, agent_id: Option<&str>, link: &Va
     }
 }
 
-/// The tool list for a session. Automation-run sessions get no tools at all
-/// (recursion guard): they must not message teammates, create conversations or
-/// schedule anything.
-fn tools(is_automation: bool) -> Value {
+/// The tool list for a session. Automation-run sessions get no team or
+/// scheduling tools (recursion guard): they must not message teammates, create
+/// conversations or schedule anything. Memory tools are only listed while
+/// `experimental.memory` is on; automation runs may keep memory tools but the
+/// write rails restrict them to blob scope.
+fn tools(is_automation: bool, memory_enabled: bool) -> Value {
+    let memory = if memory_enabled { crate::memory::tool_schemas() } else { Vec::new() };
     if is_automation {
-        return json!([]);
+        return json!(memory);
     }
-    json!([
-        {"name":"list_blobs","description":"List your teammates in Bloblex: name, role, what each is for, project, whether they are busy, and which one is the leader.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
-        {"name":"list_conversations","description":"List your side conversations with teammates, newest first: id, topic, teammate, who started it, size and the latest reply. Use it to find a conversation to continue.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"Only conversations with this teammate (optional)."}},"additionalProperties":false}},
-        {"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}},
-        {"name":"schedule_task","description":"Propose a scheduled task for your blob. It is created disabled and will never run until the user approves it in Bloblex. Use this only when the user asks for something recurring or at a set time.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}},
-        {"name":"list_my_schedules","description":"List this blob's scheduled tasks, whether each is enabled, and when it next runs.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}
-    ])
+    let mut list: Vec<Value> = vec![
+        json!({"name":"list_blobs","description":"List your teammates in Bloblex: name, role, what each is for, project, whether they are busy, and which one is the leader.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
+        json!({"name":"list_conversations","description":"List your side conversations with teammates, newest first: id, topic, teammate, who started it, size and the latest reply. Use it to find a conversation to continue.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"Only conversations with this teammate (optional)."}},"additionalProperties":false}}),
+        json!({"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}}),
+        json!({"name":"schedule_task","description":"Propose a scheduled task for your blob. It is created disabled and will never run until the user approves it in Bloblex. Use this only when the user asks for something recurring or at a set time.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}}),
+        json!({"name":"list_my_schedules","description":"List this blob's scheduled tasks, whether each is enabled, and when it next runs.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
+    ];
+    list.extend(memory);
+    json!(list)
 }
 
 /// MCP calls from `bloblexd mcp-bridge`, authorized by a per-session token.
 pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Value) -> Result<Value, DispatchError> {
     // Recursion guard: a session linked to an automation run can neither use
-    // team/scheduling tools nor reach any automation write RPC.
+    // team/scheduling tools nor reach any automation write RPC. Memory tools
+    // are allowed, but only while the feature is on and only blob scope.
     let is_automation = st.db.session_detail(session_id).map(|row| row["link"]["kind"] == "automation").unwrap_or(false);
+    let memory_enabled = crate::memory::enabled(st);
     if is_automation && method.starts_with("automation.") {
         return Err(derr("forbidden", "Automation runs cannot change automations.", StatusCode::FORBIDDEN));
     }
     match method {
-        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation)})),
+        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation, memory_enabled)})),
         "mcp.tools.call" => {
             let name = params["name"].as_str().unwrap_or("");
-            if is_automation {
+            if is_automation && !name.starts_with("memory_") {
                 return Err(derr("forbidden", "Automation runs cannot use team or scheduling tools.", StatusCode::FORBIDDEN));
             }
             let args = &params["arguments"];
@@ -173,6 +189,11 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "message_blob" => message_blob(st, session_id, args).await,
                 "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
+                "memory_search" if memory_enabled => crate::memory::tool_search(st, session_id, args).await,
+                "memory_get" if memory_enabled => crate::memory::tool_get(st, session_id, args).await,
+                "memory_write" if memory_enabled => crate::memory::tool_write(st, session_id, args).await,
+                "memory_update" if memory_enabled => crate::memory::tool_update(st, session_id, args).await,
+                "memory_forget" if memory_enabled => crate::memory::tool_forget(st, session_id, args).await,
                 _ => Err(format!("Unknown tool {name}.")),
             };
             Ok(match result {

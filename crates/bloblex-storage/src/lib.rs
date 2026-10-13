@@ -410,6 +410,7 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
         ("leader", "ALTER TABLE agents ADD COLUMN leader INTEGER NOT NULL DEFAULT 0"),
         ("hidden", "ALTER TABLE agents ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"),
         ("look", "ALTER TABLE agents ADD COLUMN look TEXT"),
+        ("notification_level", "ALTER TABLE agents ADD COLUMN notification_level TEXT"),
     ] {
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name=?1)", [column], |r| r.get(0))?;
         if !exists { c.execute(ddl, [])?; }
@@ -1211,7 +1212,7 @@ impl Storage {
     pub fn agent_list(&self, include_archived: bool, runtime_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         {
-            let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look)) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
+            let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
             let vals=q.query_map(params![include_archived,runtime_id],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
             vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
         }
@@ -1344,18 +1345,57 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.query_row("SELECT content FROM messages WHERE session_id=?1 AND role='assistant' AND trim(content)<>'' ORDER BY sequence DESC LIMIT 1", [session], |r| r.get(0)).optional()?)
     }
-    /// A blob's main conversation: its newest open session that is not a side conversation.
+    /// A blob's main conversation: its newest open session that is neither a
+    /// side conversation, an automation run, nor a hand-off draft. Bloblex keeps
+    /// exactly one main conversation per blob, so none of those may replace it.
     pub fn main_session(&self, agent_id: &str) -> Result<Option<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        Ok(c.query_row("SELECT id FROM sessions WHERE agent_id=?1 AND archived=0 AND json_extract(data,'$.link') IS NULL ORDER BY updated_at DESC LIMIT 1", [agent_id], |r| r.get(0)).optional()?)
+        Ok(c.query_row("SELECT id FROM sessions WHERE agent_id=?1 AND archived=0 AND (json_extract(data,'$.link') IS NULL OR json_extract(data,'$.link.kind') NOT IN ('side','automation','handoff')) ORDER BY updated_at DESC LIMIT 1", [agent_id], |r| r.get(0)).optional()?)
     }
-    pub fn insert_question(&self, id: &str, session: &str, provider_id: &str, title: &str, questions: &Value) -> Result<(), StorageError> {
+    pub fn insert_question(&self, id: &str, session: &str, provider_id: &str, title: &str, questions: &Value, expires_at: Option<&str>) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
         if !exists { return Ok(()); }
         let data = json!({"id":id,"sessionId":session,"kind":"question","title":title,"detail":null,"choices":["answer","dismiss"],"questions":questions,"status":"pending"});
-        c.execute("INSERT INTO permission_requests(id,session_id,provider_request_id,status,data) VALUES(?1,?2,?3,'pending',?4)", params![id, session, provider_id, data.to_string()])?;
+        c.execute("INSERT INTO permission_requests(id,session_id,provider_request_id,status,data,expires_at) VALUES(?1,?2,?3,'pending',?4,?5)", params![id, session, provider_id, data.to_string(), expires_at])?;
         Ok(())
+    }
+    /// The provider request id stored for a permission or question card.
+    pub fn permission_provider_id(&self, id: &str) -> Result<Option<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT provider_request_id FROM permission_requests WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten())
+    }
+    /// The stored normalized `data` object for a permission or question card.
+    pub fn permission_get(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row("SELECT data FROM permission_requests WHERE id=?1", [id], |r| r.get(0)).optional()?;
+        Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)
+    }
+    /// Marks a resolving question answered or dismissed. The row must be in the
+    /// resolving state set by `begin_permission_reply`.
+    pub fn resolve_question(&self, id: &str, status: &str) -> Result<(), StorageError> {
+        if !["answered", "dismissed"].contains(&status) { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute("UPDATE permission_requests SET status='resolved',data=json_set(data,'$.status',?2) WHERE id=?1 AND status='resolving'", params![id, status])?;
+        if changed != 1 { return Err(StorageError::AgentConflict); }
+        Ok(())
+    }
+    /// Marks every pending card whose expiry has passed as `expired`, returning
+    /// `{id,sessionId}` for each so the caller can announce the change. Expired
+    /// cards are never treated as answered.
+    pub fn expire_due_questions(&self, now: &str) -> Result<Vec<Value>, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let rows: Vec<(String, String)> = {
+            let mut q = tx.prepare("SELECT id,session_id FROM permission_requests WHERE status='pending' AND expires_at IS NOT NULL AND expires_at<=?1")?;
+            let collected = q.query_map([now], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            collected
+        };
+        for (id, _) in &rows {
+            tx.execute("UPDATE permission_requests SET status='expired',data=json_set(data,'$.status','expired') WHERE id=?1 AND status='pending'", [id])?;
+        }
+        tx.commit()?;
+        Ok(rows.into_iter().map(|(id, session_id)| json!({"id":id,"sessionId":session_id})).collect())
     }
     pub fn permission_kind(&self, id: &str) -> Result<Option<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -1387,16 +1427,16 @@ impl Storage {
     pub fn agent_update(&self,id:&str,input:&Value)->Result<(Value,Vec<Value>),StorageError>{
         validate_agent_id(id)?;validate_agent_fields(input,false)?; let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?; let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut old=agent_read(&tx,id)?; if old["archived"]==true{return Err(StorageError::AgentConflict)}
-        let mut next=old.clone(); for k in ["name","runtimeId","description","instructions","color","outfit","look","model","thinking","serviceTier","approvalMode","customArgs","customEnv","maxConcurrency","defaultProject"]{if let Some(v)=input.get(k){next[k]=v.clone();}}
+        let mut next=old.clone(); for k in ["name","runtimeId","description","instructions","color","outfit","look","model","thinking","serviceTier","approvalMode","customArgs","customEnv","maxConcurrency","defaultProject","notificationLevel"]{if let Some(v)=input.get(k){next[k]=v.clone();}}
         let name=next["name"].as_str().unwrap_or("").trim().to_owned(); let key=name.to_lowercase(); ensure_name_free(&tx,&key,Some(id))?;
         let old_runtime=old["runtimeId"].as_str().unwrap_or("").to_owned(); let runtime=next["runtimeId"].as_str().unwrap_or("").to_owned(); if !runtime_exists(&tx,&runtime)?{return Err(StorageError::AgentNotFound)}
         let old_order=if runtime!=old_runtime{active_order(&tx,&old_runtime)?}else{vec![]};
-        let unchanged= ["name","runtimeId","description","instructions","color","outfit","look","model","thinking","serviceTier","approvalMode","customArgs","customEnv","maxConcurrency","defaultProject"].iter().all(|k|next[*k]==old[*k]);
+        let unchanged= ["name","runtimeId","description","instructions","color","outfit","look","model","thinking","serviceTier","approvalMode","customArgs","customEnv","maxConcurrency","defaultProject","notificationLevel"].iter().all(|k|next[*k]==old[*k]);
         if unchanged { tx.commit()?; return Ok((old,vec![])); }
         let color=next["color"].as_str().unwrap_or("mint");let color=if color.starts_with('#'){color.to_ascii_uppercase()}else{color.to_owned()};
         let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
         if runtime!=old_runtime { let pos:i64=tx.query_row("SELECT COALESCE(MAX(sort_order)+1,0) FROM agents WHERE runtime_id=?1 AND archived=0",[&runtime],|r|r.get(0))?;tx.execute("UPDATE agents SET runtime_id=?2,sort_order=?3 WHERE id=?1",params![id,runtime,pos])?;shift_active(&tx,&old_runtime)?;let old_ids=old_order.iter().filter(|a|a["id"]!=id).map(|a|a["id"].as_str().unwrap_or("").to_owned()).collect::<Vec<_>>();assign_active_order(&tx,&old_ids,&old_order,&now)?; }
-        tx.execute("UPDATE agents SET name=?2,name_key=?3,description=?4,instructions=?5,color=?6,outfit=?7,model=?8,thinking=?9,service_tier=?10,approval_mode=?11,custom_args=?12,custom_env=?13,max_concurrency=?14,default_project=?15,updated_at=?16 WHERE id=?1",params![id,name,key,next["description"].as_str().unwrap_or(""),next["instructions"].as_str().unwrap_or(""),color,next["outfit"].as_str().unwrap_or("auto"),nullable(&next["model"]),nullable(&next["thinking"]),nullable(&next["serviceTier"]),nullable(&next["approvalMode"]),next["customArgs"].to_string(),next["customEnv"].to_string(),next["maxConcurrency"].as_i64().unwrap_or(1),nullable(&next["defaultProject"]),now])?;
+        tx.execute("UPDATE agents SET name=?2,name_key=?3,description=?4,instructions=?5,color=?6,outfit=?7,model=?8,thinking=?9,service_tier=?10,approval_mode=?11,custom_args=?12,custom_env=?13,max_concurrency=?14,default_project=?15,notification_level=?16,updated_at=?17 WHERE id=?1",params![id,name,key,next["description"].as_str().unwrap_or(""),next["instructions"].as_str().unwrap_or(""),color,next["outfit"].as_str().unwrap_or("auto"),nullable(&next["model"]),nullable(&next["thinking"]),nullable(&next["serviceTier"]),nullable(&next["approvalMode"]),next["customArgs"].to_string(),next["customEnv"].to_string(),next["maxConcurrency"].as_i64().unwrap_or(1),nullable(&next["defaultProject"]),nullable(&next["notificationLevel"]),now])?;
         tx.execute("UPDATE agents SET look=?2 WHERE id=?1",params![id,look_column(&next["look"])])?;
         old=agent_read(&tx,id)?; let mut events=Vec::new();
         if runtime!=old_runtime {
@@ -2648,6 +2688,17 @@ impl Storage {
         if !matches!(role.as_str(), "user" | "assistant") { return Err(StorageError::InvalidAgent); }
         Ok(json!({"id":id,"sessionId":session,"role":role,"content":content,"createdAt":created_at}))
     }
+    /// The last `limit` user and assistant messages of a session, oldest first,
+    /// for a hand-off draft. Thinking, notices, plans and tool output are all
+    /// excluded, so only conversation text is ever carried over.
+    pub fn handoff_messages(&self, session: &str, limit: usize) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let limit = limit.clamp(1, 50) as i64;
+        let mut q = c.prepare("SELECT role,content FROM messages WHERE session_id=?1 AND role IN ('user','assistant') AND trim(content)<>'' ORDER BY sequence DESC LIMIT ?2")?;
+        let mut rows = q.query_map(params![session, limit], |r| Ok(json!({"role":r.get::<_,String>(0)?,"content":r.get::<_,String>(1)?})))?.collect::<Result<Vec<_>,_>>()?;
+        rows.reverse();
+        Ok(rows)
+    }
     /// Toggles a local user's allowlisted reaction on a message. The message
     /// and session are checked together in the same write transaction.
     pub fn toggle_message_reaction(&self, session: &str, message_id: &str, emoji: &str) -> Result<Value, StorageError> {
@@ -2848,11 +2899,17 @@ impl Storage {
     ) -> Result<Option<(String, String)>, StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let found:Option<(String,Option<String>,String)>=tx.query_row("SELECT session_id,provider_request_id,data FROM permission_requests WHERE id=?1 AND status='pending'",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        let Some((session, provider, data)) = found else {
+        let found:Option<(String,Option<String>,String,Option<String>)>=tx.query_row("SELECT session_id,provider_request_id,data,expires_at FROM permission_requests WHERE id=?1 AND status='pending'",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+        let Some((session, provider, data, expires_at)) = found else {
             tx.rollback()?;
             return Ok(None);
         };
+        // An expired card can no longer be answered: leave it pending; the
+        // periodic sweep marks it expired.
+        if expires_at.as_deref().is_some_and(|expiry| expiry <= Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true).as_str()) {
+            tx.rollback()?;
+            return Ok(None);
+        }
         let mut data: Value = serde_json::from_str(&data)?;
         let choices = data["choices"].as_array().cloned().unwrap_or_default();
         if !choices.iter().any(|x| x.as_str() == Some(choice)) {
@@ -3166,7 +3223,7 @@ impl Storage {
         Ok(result)
     }
     fn agent_rows_locked(&self,c:&Connection,include_archived:bool)->Result<Vec<Value>,StorageError>{
-        let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look)) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
+        let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
         let mut q=c.prepare(sql)?;let vals=q.query_map([include_archived],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
     }
     fn session_detail_locked(&self, c: &Connection, id: &str) -> Result<Value, StorageError> {
@@ -3699,6 +3756,7 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
     if v.get("customArgs").is_some_and(|x|!x.is_array()||!x.as_array().unwrap().is_empty())||v.get("customEnv").is_some_and(|x|!x.is_object()||!x.as_object().unwrap().values().all(Value::is_string))||v.get("maxConcurrency").is_some_and(|x|!x.as_i64().is_some_and(|n|(1..=50).contains(&n))){return Err(StorageError::InvalidAgent)}
     for key in ["model","thinking","serviceTier","defaultProject","approvalMode"] { if v.get(key).is_some_and(|x|!x.is_null()&&!x.is_string()){return Err(StorageError::InvalidAgent)} }
     if v.get("approvalMode").and_then(Value::as_str).is_some_and(|s| !["ask","auto","bypass"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if v.get("notificationLevel").is_some_and(|x| !x.is_null() && !x.as_str().is_some_and(|s| ["all","input","muted"].contains(&s))){return Err(StorageError::InvalidAgent)}
     if v.get("outfit").is_some_and(|value| !value.as_str().is_some_and(|s| ["auto","none","party-hat","beanie","crown","sunglasses","round-glasses","bow","scarf","witch-hat","santa-hat","pumpkin","bunny-ears"].contains(&s))) { return Err(StorageError::InvalidAgent); }
     if v.get("look").is_some_and(|look| !look.is_null() && !valid_look(look)) { return Err(StorageError::InvalidAgent); }
     if create && (!v["name"].is_string()||!v["runtimeId"].is_string()){return Err(StorageError::InvalidAgent)}
@@ -3805,9 +3863,9 @@ fn push_team_event(tx: &Transaction<'_>, event_type: &str, payload: &Value) -> R
     tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,?3,?4)", params![id, ts, event_type, payload.to_string()])?;
     Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":event_type,"payload":payload}))
 }
-fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look)) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
-fn insert_agent(tx:&Transaction<'_>,id:&str,v:&Value,name:&str,key:&str,pos:i64,now:&str)->Result<(),StorageError>{let color=v["color"].as_str().unwrap_or("mint");let color=if color.starts_with('#'){color.to_ascii_uppercase()}else{color.into()};tx.execute("INSERT INTO agents(id,name,name_key,description,instructions,color,outfit,runtime_id,model,thinking,service_tier,approval_mode,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?18)",params![id,name,key,v["description"].as_str().unwrap_or(""),v["instructions"].as_str().unwrap_or(""),color,v["outfit"].as_str().unwrap_or("auto"),v["runtimeId"].as_str().unwrap_or(""),nullable(&v["model"]),nullable(&v["thinking"]),nullable(&v["serviceTier"]),nullable(&v["approvalMode"]),v.get("customArgs").cloned().unwrap_or(json!([])).to_string(),v.get("customEnv").cloned().unwrap_or(json!({})).to_string(),v["maxConcurrency"].as_i64().unwrap_or(1),nullable(&v["defaultProject"]),pos,now])?;tx.execute("UPDATE agents SET look=?2 WHERE id=?1",params![id,look_column(&v["look"])])?;Ok(())}
-fn push_agent_event(tx:&Transaction<'_>,action:&str,a:&Value)->Result<Value,StorageError>{let payload=json!({"action":action,"agentId":a["id"],"runtimeId":a["runtimeId"],"updatedAt":a["updatedAt"],"archived":a["archived"],"sortOrder":a["sortOrder"]});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'agent.changed',?3)",params![id,ts,payload.to_string()])?;Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"agent.changed","payload":payload}))}
+fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
+fn insert_agent(tx:&Transaction<'_>,id:&str,v:&Value,name:&str,key:&str,pos:i64,now:&str)->Result<(),StorageError>{let color=v["color"].as_str().unwrap_or("mint");let color=if color.starts_with('#'){color.to_ascii_uppercase()}else{color.into()};tx.execute("INSERT INTO agents(id,name,name_key,description,instructions,color,outfit,runtime_id,model,thinking,service_tier,approval_mode,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at,notification_level) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?18,?19)",params![id,name,key,v["description"].as_str().unwrap_or(""),v["instructions"].as_str().unwrap_or(""),color,v["outfit"].as_str().unwrap_or("auto"),v["runtimeId"].as_str().unwrap_or(""),nullable(&v["model"]),nullable(&v["thinking"]),nullable(&v["serviceTier"]),nullable(&v["approvalMode"]),v.get("customArgs").cloned().unwrap_or(json!([])).to_string(),v.get("customEnv").cloned().unwrap_or(json!({})).to_string(),v["maxConcurrency"].as_i64().unwrap_or(1),nullable(&v["defaultProject"]),pos,now,nullable(&v["notificationLevel"])])?;tx.execute("UPDATE agents SET look=?2 WHERE id=?1",params![id,look_column(&v["look"])])?;Ok(())}
+fn push_agent_event(tx:&Transaction<'_>,action:&str,a:&Value)->Result<Value,StorageError>{let payload=json!({"action":action,"agentId":a["id"],"runtimeId":a["runtimeId"],"updatedAt":a["updatedAt"],"archived":a["archived"],"sortOrder":a["sortOrder"],"notificationLevel":a["notificationLevel"]});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'agent.changed',?3)",params![id,ts,payload.to_string()])?;Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"agent.changed","payload":payload}))}
 fn snapshot_requested(v:&Value)->Value{
     let mut result=json!({"model":v["model"],"thinking":v["thinking"],"serviceTier":v["serviceTier"],"approvalMode":v["approvalMode"],"instructionsPresent":v["instructionsPresent"].as_bool().unwrap_or(false),"extraArgs":[],"maxConcurrency":v["maxConcurrency"].as_u64().unwrap_or(1)});
     if let Some(keys)=v["customEnvKeys"].as_array(){result["envKeys"]=json!(keys.iter().filter_map(Value::as_str).collect::<Vec<_>>());}
@@ -4888,8 +4946,8 @@ mod tests {
         assert!(db.turn_reply("side", "other").unwrap().is_none());
 
         let questions = json!([{"id":"q1","header":"Scope","question":"Which?","options":[{"label":"A","description":""}],"multiSelect":false,"allowOther":true}]);
-        db.insert_question("perm-q", "main", "provider-q", "Questions", &questions).unwrap();
-        db.insert_question("perm-ghost", "missing", "provider-q", "Questions", &questions).unwrap();
+        db.insert_question("perm-q", "main", "provider-q", "Questions", &questions, None).unwrap();
+        db.insert_question("perm-ghost", "missing", "provider-q", "Questions", &questions, None).unwrap();
         assert_eq!(db.permission_kind("perm-q").unwrap().as_deref(), Some("question"));
         assert!(db.permission_kind("perm-ghost").unwrap().is_none());
         let pending = db.snapshot().unwrap()["permissions"].as_array().unwrap().iter().find(|perm| perm["id"] == "perm-q").cloned().unwrap();
@@ -5406,5 +5464,41 @@ mod memory_tests {
         assert!(db.memory_create(&json!({"scope":"blob","scopeId":agent,"kind":"fact","title":"t","body":&"b".repeat(2001)})).is_err());
         assert!(db.memory_create(&json!({"scope":"blob","scopeId":agent,"kind":"fact","title":"t","body":"b","tags":["a","b","c","d","e","f","g","h","i"]})).is_err());
         assert!(db.memory_create(&json!({"scope":"shared","kind":"fact","title":"t","body":"b","tags":[]})).is_ok());
+    }
+
+    #[test]
+    fn notification_level_column_is_idempotent_and_round_trips_in_dtos_and_events() {
+        let root = std::env::temp_dir().join(format!("bloblex-notify-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("db.sqlite");
+        let kept_id;
+        {
+            let db = Storage::open(&path).unwrap();
+            db.upsert_runtime(&json!({"id":"rt-notify","provider":"codex"})).unwrap();
+            let (agent, events) = db.agent_create(&json!({"name":"Quiet","runtimeId":"rt-notify","notificationLevel":"muted"})).unwrap();
+            assert_eq!(agent["notificationLevel"], "muted");
+            assert_eq!(events[0]["payload"]["notificationLevel"], "muted");
+            kept_id = agent["id"].as_str().unwrap().to_owned();
+            let (default_agent, _) = db.agent_create(&json!({"name":"Loud","runtimeId":"rt-notify"})).unwrap();
+            assert_eq!(default_agent["notificationLevel"], "all", "a missing level normalises to all");
+            assert_eq!(db.agent_list(false, None).unwrap()[0]["notificationLevel"].is_string(), true);
+            let columns: i64 = db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='notification_level'", [], |r| r.get(0)).unwrap();
+            assert_eq!(columns, 1);
+            assert!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt-notify","notificationLevel":"loud"})).is_err());
+            let (updated, events) = db.agent_update(&kept_id, &json!({"notificationLevel":"input"})).unwrap();
+            assert_eq!(updated["notificationLevel"], "input");
+            assert_eq!(events[0]["payload"]["notificationLevel"], "input");
+            let (cleared, _) = db.agent_update(&kept_id, &json!({"notificationLevel":null})).unwrap();
+            assert_eq!(cleared["notificationLevel"], "all");
+            assert!(db.agent_update(&kept_id, &json!({"notificationLevel":"loud"})).is_err());
+        }
+        {
+            // Reopening an existing database re-runs the additive column ensure.
+            let db = Storage::open(&path).unwrap();
+            assert_eq!(db.agent_get(&kept_id).unwrap()["notificationLevel"], "all");
+            let columns: i64 = db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='notification_level'", [], |r| r.get(0)).unwrap();
+            assert_eq!(columns, 1);
+        }
+        let _ = fs::remove_dir_all(root);
     }
 }

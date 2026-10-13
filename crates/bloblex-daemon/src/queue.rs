@@ -271,6 +271,8 @@ async fn send_claimed(st: &AppState, session_id: &str, item: &Value) {
     let request = prompt_params(session_id, item);
     let result = if item["kind"] == "retry" {
         crate::session_prompt_queued(st, request).await
+    } else if item["meta"]["kind"] == "question_answer" {
+        crate::session_prompt_for_question_answer(st, request).await
     } else {
         session_prompt(st, request).await
     };

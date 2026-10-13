@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use bloblex_speech::capture::{start_capture, AudioFrame};
 use bloblex_speech::cloud::{
-    auth_status, resolve_engine, AudioBuffer, CloudError, CloudTranscriber, EnginePreference,
-    ResolvedEngine, CLOUD_SAMPLE_RATE, MAX_BUFFER_SAMPLES,
+    auth_status, resolve_engine, AudioBuffer, CloudCooldown, CloudError, CloudTranscriber,
+    EnginePreference, ResolvedEngine, BOTH_ENGINES_UNAVAILABLE, CLOUD_SAMPLE_RATE, MAX_BUFFER_SAMPLES,
 };
 use bloblex_speech::{
     catalog, downmix_to_mono, get_catalog_model, model_manager, resample_to_rate, rms_level,
@@ -41,6 +41,7 @@ static BUBBLE_GENERATION: AtomicU64 = AtomicU64::new(0);
 pub struct SpeechState {
     lifecycle: Arc<Mutex<DictationLifecycle>>,
     worker: Mutex<Option<WorkerHandle>>,
+    cloud_cooldown: Arc<Mutex<CloudCooldown>>,
 }
 
 struct WorkerHandle {
@@ -62,6 +63,8 @@ struct SessionPlan {
     owner: DictationOwner,
     engine: ResolvedEngine,
     has_local_fallback: bool,
+    /// Why a healthy cloud engine was skipped, if it was (e.g. `cloud_cooldown`).
+    reason: Option<&'static str>,
 }
 
 fn parse_owner(owner: Option<String>) -> Result<DictationOwner, String> {
@@ -147,6 +150,8 @@ struct CloudFailureEvents {
     reason: Option<&'static str>,
     /// Emit the calm error for an unrecovered failure.
     emit_error: bool,
+    /// The machine code for that unrecovered failure: both engines unavailable.
+    error_code: Option<&'static str>,
     /// Emit `stopped` so the UI finishes normally.
     emit_stopped: bool,
 }
@@ -155,7 +160,7 @@ struct CloudFailureEvents {
 /// could take over; `recovered` is whether it actually produced output. A
 /// fallback is announced only when it truly ran; an unrecovered failure emits
 /// the error and no `stopped`, so the UI never turns the error into "Nothing
-/// heard".
+/// heard". An unrecovered failure carries one clear code, `both_engines_unavailable`.
 fn cloud_failure_events(
     error: &CloudError,
     has_local_fallback: bool,
@@ -166,6 +171,7 @@ fn cloud_failure_events(
         announce_fallback: used_fallback,
         reason: used_fallback.then(|| error.code()),
         emit_error: !used_fallback,
+        error_code: (!used_fallback).then_some(BOTH_ENGINES_UNAVAILABLE),
         emit_stopped: used_fallback,
     }
 }
@@ -234,6 +240,15 @@ fn teardown_worker(state: &SpeechState) {
             let _ = join.join();
         }
     }
+}
+
+/// Whether the cloud engine is still cooling down after a persistent failure.
+fn cloud_paused(state: &SpeechState) -> bool {
+    state
+        .cloud_cooldown
+        .lock()
+        .map(|cooldown| cooldown.active(Instant::now()))
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -314,7 +329,7 @@ pub fn dictation_start(
         (Some(manifest), Some(directory)) => model_manager::model_is_ready(directory, manifest),
         _ => false,
     };
-    let resolved = resolve_engine(preference, consent, &auth_status(), local_ready);
+    let resolved = resolve_engine(preference, consent, &auth_status(), local_ready, cloud_paused(&state));
     if let Some(code) = resolved.unavailable {
         return Err(if preference == EnginePreference::Local {
             "speech_model_not_ready".to_string()
@@ -326,6 +341,7 @@ pub fn dictation_start(
         owner,
         engine: resolved.primary,
         has_local_fallback: resolved.fallback.is_some(),
+        reason: resolved.reason,
     };
 
     {
@@ -417,8 +433,9 @@ fn spawn_worker(
     let capture_commands = commands.clone();
     let worker_app = app.clone();
     let lifecycle = Arc::clone(&state.lifecycle);
+    let cooldown = Arc::clone(&state.cloud_cooldown);
     let join = thread::spawn(move || {
-        run_worker(worker_app, manifest, directory, lifecycle, receiver, capture_commands, start);
+        run_worker(worker_app, manifest, directory, lifecycle, cooldown, receiver, capture_commands, start);
     });
     *state
         .worker
@@ -498,6 +515,7 @@ fn run_worker(
     manifest: Option<SpeechModelManifest>,
     directory: Option<PathBuf>,
     lifecycle: Arc<Mutex<DictationLifecycle>>,
+    cooldown: Arc<Mutex<CloudCooldown>>,
     receiver: Receiver<WorkerCommand>,
     capture_commands: Sender<WorkerCommand>,
     start: Option<SessionPlan>,
@@ -543,7 +561,7 @@ fn run_worker(
             show_dictation_bubble(&app);
         }
         emit(&app, owner, "ready", None);
-        emit_engine_choice(&app, owner, plan.engine, false, None);
+        emit_engine_choice(&app, owner, plan.engine, false, plan.reason);
 
         match plan.engine {
             ResolvedEngine::OnDevice => {
@@ -634,11 +652,17 @@ fn run_worker(
                             let samples = buffer.samples().to_vec();
                             match transcribe_cloud(&samples) {
                                 Ok(text) => {
+                                    if let Ok(mut cooldown) = cooldown.lock() {
+                                        cooldown.clear();
+                                    }
                                     if !text.is_empty() {
                                         emit(&app, owner, "final", Some(&text));
                                     }
                                 }
                                 Err(error) => {
+                                    if let Ok(mut cooldown) = cooldown.lock() {
+                                        cooldown.record(Instant::now(), &error);
+                                    }
                                     let recovered = plan.has_local_fallback
                                         && fallback_to_local(
                                             &app, owner, &mut engine, &manifest, &directory, &samples,
@@ -662,7 +686,7 @@ fn run_worker(
                                             &app,
                                             owner,
                                             &cloud_failure_message(&error, plan.has_local_fallback),
-                                            Some(error.code()),
+                                            events.error_code,
                                         );
                                         if let Ok(mut lifecycle) = lifecycle.lock() {
                                             let _ = lifecycle.begin_stop(owner);
@@ -781,6 +805,7 @@ mod tests {
         assert!(recovered.announce_fallback);
         assert_eq!(recovered.reason, Some("rate_limited"));
         assert!(!recovered.emit_error);
+        assert_eq!(recovered.error_code, None);
         assert!(recovered.emit_stopped);
 
         // Fallback exists but failed: no announcement, error, no stopped.
@@ -788,12 +813,14 @@ mod tests {
         assert!(!failed.announce_fallback);
         assert_eq!(failed.reason, None);
         assert!(failed.emit_error);
+        assert_eq!(failed.error_code, Some("both_engines_unavailable"));
         assert!(!failed.emit_stopped);
 
-        // No fallback at all: error, no stopped.
+        // No fallback at all: error, no stopped, one clear code.
         let absent = cloud_failure_events(&error, false, false);
         assert!(!absent.announce_fallback);
         assert!(absent.emit_error);
+        assert_eq!(absent.error_code, Some("both_engines_unavailable"));
         assert!(!absent.emit_stopped);
     }
 
@@ -807,5 +834,12 @@ mod tests {
         let message = cloud_failure_message(&error, true);
         assert!(message.contains("rejected"));
         assert!(!message.contains("http"));
+    }
+
+    #[test]
+    fn challenged_message_does_not_say_verification_required() {
+        let message = cloud_failure_message(&CloudError::Challenged, false);
+        assert!(!message.contains("verification"));
+        assert!(message.contains("OpenAI"));
     }
 }

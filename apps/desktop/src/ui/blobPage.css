@@ -238,3 +238,12 @@
 .import-empty { margin-top: 14px; color: var(--danger-ink); font-size: var(--fs-sm); }
 .import-dialog .blob-dialog-actions { margin-top: 16px; }
 .import-dialog { gap: 0; }
+
+/* Confirm dialogs with an icon: the icon sits beside the title and body instead of above them,
+   which removes the empty band that used to sit under the icon. */
+.blob-dialog:has(> .blob-dialog-icon) { width: min(400px, calc(100% - 32px)); padding: 20px 20px 18px; grid-template-columns: 40px minmax(0, 1fr); column-gap: 14px; row-gap: 4px; align-items: start; }
+.blob-dialog:has(> .blob-dialog-icon) > .blob-dialog-icon { grid-column: 1; grid-row: 1 / span 2; margin: 0; }
+.blob-dialog:has(> .blob-dialog-icon) > h2 { grid-column: 2; min-height: 40px; display: flex; align-items: center; }
+.blob-dialog:has(> .blob-dialog-icon) > p { grid-column: 2; }
+.blob-dialog:has(> .blob-dialog-icon) > .hold-confirm-error, .blob-dialog:has(> .blob-dialog-icon) > .blob-dialog-actions, .blob-dialog:has(> .blob-dialog-icon) > .sr-only, .blob-dialog:has(> .blob-dialog-icon) > span:not(.blob-dialog-icon) { grid-column: 1 / -1; }
+.blob-dialog:has(> .blob-dialog-icon) > .blob-dialog-actions { margin-top: 12px; }

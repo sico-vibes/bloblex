@@ -49,8 +49,25 @@ function view(items: Automation[], extra: Partial<ComponentProps<typeof Schedule
 describe('SchedulesView', () => {
   it('shows an empty state with a way to create the first schedule', async () => {
     view([])
-    expect(q('.schedules-empty')?.textContent).toContain('Nothing scheduled yet')
+    expect(q('.schedules-empty')?.textContent).toContain('No automations yet')
     expect(q<HTMLButtonElement>('.schedules-new')?.disabled).toBe(false)
+  })
+
+  it('starts from an idea: the editor opens filled in and creates an action, not a message', async () => {
+    const handlers = view([])
+    const idea = all('.schedules-template').find((node) => node.textContent?.includes('Check my email'))!
+    await click(idea)
+    await flush()
+    const dialog = q('[role="dialog"]')!
+    expect(dialog.textContent).toContain('New automation')
+    expect((dialog.querySelector('input[maxlength="80"]') as HTMLInputElement).value).toBe('Email check')
+    expect((dialog.querySelector('textarea') as HTMLTextAreaElement).value).toContain('Check my email')
+    expect((dialog.querySelector('input[type="time"]') as HTMLInputElement).value).toBe('08:30')
+    expect((dialog.querySelector('input[name="approval"]:checked') as HTMLInputElement).closest('label')?.textContent).toContain('Read-only')
+    await click(all('[role="dialog"] button').find((button) => button.textContent === 'Create automation'))
+    await flush()
+    expect(handlers.onCreate).toHaveBeenCalledOnce()
+    expect(handlers.onCreate.mock.calls[0][0]).toMatchObject({ name: 'Email check', approvalMode: 'plan', enabled: true })
   })
 
   it('lists schedules with plain-language timing, the blob, and next run', () => {
@@ -115,8 +132,8 @@ describe('SchedulesView', () => {
     const handlers = view([])
     await click(q('.schedules-new'))
     const dialog = q('[role="dialog"]')!
-    expect(dialog.textContent).toContain('New schedule')
-    const create = () => all('[role="dialog"] button').find((button) => button.textContent === 'Create schedule') as HTMLButtonElement
+    expect(dialog.textContent).toContain('New automation')
+    const create = () => all('[role="dialog"] button').find((button) => button.textContent === 'Create automation') as HTMLButtonElement
     expect(create().disabled).toBe(true)
     await type(dialog.querySelector<HTMLInputElement>('input[placeholder="Morning summary"]'), 'Morning summary')
     await type(dialog.querySelector<HTMLTextAreaElement>('textarea'), 'Summarise the repository changes.')
@@ -144,7 +161,7 @@ describe('SchedulesView', () => {
   it('toggles the global pause and reports errors without crashing', async () => {
     const onSetPaused = vi.fn(async () => { throw new Error('The daemon refused.') })
     view([], { onSetPaused })
-    await click(q('[aria-label="Pause all schedules"]'))
+    await click(q('[aria-label="Pause all automations"]'))
     await flush()
     expect(onSetPaused).toHaveBeenCalledWith(true)
     expect(q('[role="alert"]')?.textContent).toBe('The daemon refused.')

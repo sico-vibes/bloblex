@@ -1162,7 +1162,7 @@ describe('opt-in conversation experiments', () => {
     await click(document.querySelector('[aria-label="Add your thumbs up reaction"]'))
     await view.settle()
     expect(h.rpc).toHaveBeenCalledWith('message.reaction.toggle', { sessionId:'session-claude', messageId:'u1', emoji:'👍' })
-    expect(firstUser.querySelector('.message-reaction-badges')?.textContent).toContain('👍')
+    expect(firstUser.querySelector('.message-reaction-badge')?.textContent).toContain('👍')
   })
 
   it('shows the daemon’s safe refusal after a failed Revert and leaves the file in review', async () => {

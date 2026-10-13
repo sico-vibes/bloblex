@@ -13,7 +13,7 @@ type Unlisten = () => void
 const noop: Unlisten = () => undefined
 let discoveryAttempts = 0
 const pendingDeletes = new Map<string, { deadline: number; timer: number; archived: boolean }>()
-const fixtureSettings: Record<string, unknown> = { 'notifications.enabled': true, 'claude.enableWorkflows': false }
+const fixtureSettings: Record<string, unknown> = { 'notifications.enabled': true, 'claude.enableWorkflows': true }
 const daemonListeners = new Set<(event: DaemonEvent) => void>()
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 const flags = () => new URLSearchParams(location.search)
@@ -418,8 +418,8 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (!message || !['user', 'assistant'].includes(String(message.role)) || !allowed.includes(emoji)) throw rpcError('invalid_argument', 'Reaction or message is unsupported.')
     const prior = Array.isArray(message.reactions) ? message.reactions.filter((item): item is string => typeof item === 'string' && allowed.includes(item)) : []
     const selected = !prior.includes(emoji)
-    const order = new Map(allowed.map((item, index) => [item, index]))
-    message.reactions = (selected ? [...prior, emoji] : prior.filter((item) => item !== emoji)).sort((left, right) => order.get(left)! - order.get(right)!)
+    // One reaction per message: a different emoji replaces it, the same one removes it.
+    message.reactions = selected ? [emoji] : []
     const payload = { sessionId: session.id, messageId: message.id, emoji, selected, reactions: message.reactions }
     notifyFixtureDaemon('message.reactions.changed', payload)
     return { reactions: message.reactions, selected } as T

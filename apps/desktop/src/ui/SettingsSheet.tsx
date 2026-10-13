@@ -465,7 +465,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </form>
             </SettingsGroup>
             <SettingsGroup title="Experimental">
-              <SettingsRow label={<span className="experimental-label">Claude dynamic workflows<span className="experimental-tag">Experimental</span><HelpTip text="When enabled, new Claude Code sessions receive enableWorkflows:true as a session-local setting. Bloblex does not edit Claude's config. Claude Code can still reject this when a managed policy forbids it. Off preserves Claude's own default." /></span>} hint="Allow dynamic workflows in Claude conversations. Off by default; existing conversations keep their launch settings.">
+              <SettingsRow label={<span className="experimental-label">Claude dynamic workflows and Ultracode<HelpTip text="On by default. New Claude Code sessions receive enableWorkflows:true as a session-local setting, which is also what makes the Ultracode effort level available. Bloblex does not edit Claude's config. Claude Code can still decline this when a managed policy forbids it. Turning it off keeps Claude's own default and hides Ultracode." /></span>} hint="Lets Claude run dynamic workflows and offers Ultracode in the effort selector. Existing conversations keep their launch settings.">
                 <button type="button" className={`toggle ${claudeWorkflowsEnabled ? 'on' : ''}`} role="switch" aria-label="Claude dynamic workflows" aria-checked={claudeWorkflowsEnabled} disabled={saving} onClick={() => { const next = !claudeWorkflowsEnabled; void saveSetting('claude.enableWorkflows', next).then((failure) => { if (!failure) onClaudeWorkflowsChange?.(next) }) }}><i /></button>
               </SettingsRow>
               <SettingsRow label={<span className="experimental-label">Usage tips<span className="experimental-tag">Experimental</span><HelpTip text="Shows a notice above the active composer when the selected CLI reports 75%, 90% or 100% use in a current quota window. It uses the reported window reset when available, can be dismissed per period, and includes no estimates or upgrade link." /></span>} hint="Accurate high-usage notices from the selected coding agent.">
@@ -587,7 +587,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label="Keyboard shortcut" hint={speechEnabled ? 'Starts or stops dictation from any window.' : 'Free for other apps while dictation is off.'}><kbd className="settings-kbd">Ctrl</kbd><kbd className="settings-kbd">E</kbd></SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Transcription engine">
-              <SettingsRow label="Engine" hint="ChatGPT uses your Codex sign-in, needs no download, and sends each recording to OpenAI.">
+              <SettingsRow label="Engine" hint="ChatGPT uses your Codex sign-in and sends each recording to OpenAI. OpenAI's bot check currently blocks most third-party apps from this service (we confirmed it on 13 October 2026), so on-device is the dependable choice and ChatGPT dictation falls back to it.">
                 <Select ariaLabel="Transcription engine" variant="muted" value={speechEngine} disabled={saving} onChange={(value) => chooseSpeechEngine(normalizeEngineChoice(value))} options={[
                   { value: 'local', label: 'On this device' },
                   { value: 'automatic', label: 'ChatGPT when available' },

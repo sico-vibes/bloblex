@@ -146,3 +146,15 @@
 .handoff-choice:disabled { opacity: .55; cursor: default; }
 .handoff-choice span { display: grid; gap: 1px; }
 .handoff-choice small { color: var(--text-3); font-size: var(--fs-xs); }
+
+/* ── Header: one centred line, no divider, content fades in underneath ─────── */
+.conversation-frame::before { content: ""; position: absolute; z-index: 3; top: 0; left: 0; right: 12px; height: 26px; background: linear-gradient(to bottom, var(--surface-app), transparent); pointer-events: none; }
+.chat-title { gap: 2px; min-height: 36px; }
+.chat-title > * { flex: 0 0 auto; align-self: center; }
+.chat-title > .runtime-mark-tip { height: 28px; margin-right: 4px; display: inline-flex; align-items: center; vertical-align: baseline; }
+.chat-title > .runtime-mark-tip .runtime-mark, .chat-title > .runtime-mark-tip .provider-logo { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
+.chat-title .chat-title-button, .chat-title .chat-title-text { flex: 0 1 auto; height: 28px; padding: 0 8px; display: inline-flex; align-items: center; line-height: 1; }
+.chat-title > .runtime-problem-anchor { height: 28px; }
+.chat-title .role-chip { height: 20px; margin-left: 6px; padding: 0 7px; display: inline-flex; align-items: center; line-height: 1; }
+.chat-title .conversation-auto-title { flex: 0 1 auto; height: 16px; margin-left: 10px; padding-left: 10px; display: inline-flex; align-items: center; border-left: 1px solid var(--line-strong); line-height: 1; }
+.chat-title > .side-menu-wrap { margin-left: 8px; display: inline-flex; align-items: center; }

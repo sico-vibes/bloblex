@@ -1,7 +1,8 @@
-// Schedules: automations that prompt a blob by itself. The daemon owns the
-// timer and the runs; this view lists them and edits their definition.
+// Automations: actions a blob performs by itself on a schedule ("every
+// morning, brief me on the news"). The daemon owns the timer and the runs;
+// this view lists them and edits their definition.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, CalendarClock, ChevronDown, Pencil, Play, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, CalendarClock, ChevronDown, Mail, Newspaper, Pencil, Play, Plus, Trash2, FlaskConical, GitBranch } from 'lucide-react'
 import type { Agent, Automation, AutomationRun } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -65,6 +66,26 @@ const PRESET_CHOICES: Array<{ value: SchedulePreset; label: string }> = [
   { value: 'custom', label: 'Custom (cron)' },
 ]
 
+/** Starting points: what people typically want a blob to do on its own. */
+interface AutomationTemplate {
+  id: string
+  title: string
+  hint: string
+  name: string
+  prompt: string
+  preset: SchedulePreset
+  time: string
+  approvalMode: 'plan' | 'auto'
+  icon: typeof Mail
+}
+
+const TEMPLATES: AutomationTemplate[] = [
+  { id: 'brief', title: 'Morning brief', hint: 'The news that matters to your work, each morning.', name: 'Morning brief', prompt: 'Give me a short brief of the news that matters for my work today: at most five bullets, each with one line of context and a link when you have one.', preset: 'daily', time: '08:00', approvalMode: 'plan', icon: Newspaper },
+  { id: 'email', title: 'Check my email', hint: 'What needs a reply or a decision, nothing sent.', name: 'Email check', prompt: 'Check my email and tell me what needs my attention: replies I owe, meetings to confirm and anything urgent. Skip newsletters. Do not send, archive or delete anything.', preset: 'daily', time: '08:30', approvalMode: 'plan', icon: Mail },
+  { id: 'checkin', title: 'Project check-in', hint: 'What changed in the repository since yesterday.', name: 'Project check-in', prompt: 'Summarise what changed in this project since yesterday: commits, open branches and anything that looks stuck. End with what you would do first today.', preset: 'weekdays', time: '09:00', approvalMode: 'plan', icon: GitBranch },
+  { id: 'tests', title: 'Nightly tests', hint: 'Run the test suite and report only failures.', name: 'Nightly tests', prompt: 'Run the project test suite. Report what failed and the likely cause for each failure. If everything passes, say so in one line.', preset: 'daily', time: '23:00', approvalMode: 'auto', icon: FlaskConical },
+]
+
 function pauseText(automation: Automation): string {
   switch (automation.pauseReason) {
     case 'needs_approval': return 'Waiting for your approval'
@@ -86,6 +107,7 @@ function stamp(value: string | null | undefined) {
 export function SchedulesView(props: SchedulesViewProps) {
   const { automations, agents, connected, paused, nowMs, agentId, loadError, onBack, onSetPaused } = props
   const [editing, setEditing] = useState<Automation | 'new' | null>(null)
+  const [startFrom, setStartFrom] = useState<AutomationTemplate | null>(null)
   const [deleting, setDeleting] = useState<Automation | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
@@ -115,44 +137,51 @@ export function SchedulesView(props: SchedulesViewProps) {
   return <div className="schedules-page" data-schedules-root>
     <header className="blob-page-header">
       <button ref={backRef} type="button" className="analytics-icon-button" aria-label="Back" title="Back" onClick={onBack}><ArrowLeft size={16} /></button>
-      <strong className="blob-page-heading">Schedules</strong>
-      <button type="button" className="primary-button small schedules-new" disabled={!connected || agents.filter((a) => !a.archived).length === 0} onClick={() => setEditing('new')}><Plus size={14} aria-hidden="true" />New schedule</button>
+      <strong className="blob-page-heading">Automations</strong>
+      <button type="button" className="primary-button small schedules-new" disabled={!connected || agents.filter((a) => !a.archived).length === 0} onClick={() => { setStartFrom(null); setEditing('new') }}><Plus size={14} aria-hidden="true" />New automation</button>
     </header>
     <div className="schedules-scroll"><div className="schedules-column">
-      <section className="schedules-global" aria-label="Schedule controls">
+      <section className="schedules-global" aria-label="Automation controls">
         <div>
-          <strong>Pause all schedules</strong>
-          <p>Schedules run only while Bloblex is running and your computer is awake. If runs were missed, one run starts when you are back.</p>
+          <strong>Pause all automations</strong>
+          <p>Automations run only while Bloblex is running and your computer is awake. If runs were missed, one run starts when you are back.</p>
         </div>
-        <button type="button" className={`toggle ${paused ? 'on' : ''}`} role="switch" aria-label="Pause all schedules" aria-checked={paused} disabled={!connected} onClick={() => void act('global', () => onSetPaused(!paused))}><i /></button>
+        <button type="button" className={`toggle ${paused ? 'on' : ''}`} role="switch" aria-label="Pause all automations" aria-checked={paused} disabled={!connected} onClick={() => void act('global', () => onSetPaused(!paused))}><i /></button>
       </section>
       {(problem || loadError) && <p className="schedules-problem" role="alert">{problem ?? loadError}</p>}
-      {!connected && <p className="blob-muted" role="status">Connect to the local runtime to manage schedules.</p>}
+      {!connected && <p className="blob-muted" role="status">Connect to the local runtime to manage automations.</p>}
       {connected && visible.length === 0 && <div className="schedules-empty">
         <CalendarClock size={22} aria-hidden="true" />
-        <strong>Nothing scheduled yet</strong>
-        <p>Ask a blob to do something on its own, like a morning summary of your repository or a nightly test run.</p>
+        <strong>No automations yet</strong>
+        <p>An automation is something a blob does by itself, on a schedule: check your email every morning, brief you on the news, run the tests overnight. Start from an idea or write your own.</p>
+        <ul className="schedules-templates" aria-label="Ideas to start from">{TEMPLATES.map((template) => <li key={template.id}>
+          <button type="button" className="schedules-template" disabled={agents.filter((a) => !a.archived).length === 0} onClick={() => { setStartFrom(template); setEditing('new') }}>
+            <template.icon size={16} aria-hidden="true" /><span><strong>{template.title}</strong><small>{template.hint}</small></span>
+          </button>
+        </li>)}</ul>
       </div>}
       {proposals.length > 0 && <section aria-label="Proposed by blobs" className="schedules-group">
         <h3>Proposed by your blobs</h3>
         <p className="schedules-note">These stay off until you approve them.</p>
         <ul className="schedules-list">{proposals.map(card)}</ul>
       </section>}
-      {rest.length > 0 && <ul className="schedules-list" aria-label="Schedules">{rest.map(card)}</ul>}
+      {rest.length > 0 && <ul className="schedules-list" aria-label="Automations">{rest.map(card)}</ul>}
     </div></div>
     {editing && <AutomationEditor
-      key={editing === 'new' ? 'new' : editing.id}
+      key={editing === 'new' ? `new-${startFrom?.id ?? ''}` : editing.id}
       existing={editing === 'new' ? null : editing}
+      template={editing === 'new' ? startFrom : null}
       agents={agents.filter((agent) => !agent.archived)}
       defaultAgentId={agentId ?? null}
-      onClose={() => setEditing(null)}
+      onClose={() => { setEditing(null); setStartFrom(null) }}
       onPreview={props.onPreview}
       onSave={async (input) => {
         if (editing === 'new') await props.onCreate({ ...input, enabled: true })
         else await props.onUpdate(editing.id, input)
         setEditing(null)
+        setStartFrom(null)
       }} />}
-    {deleting && <ConfirmDialog title={`Delete “${deleting.name}”?`} body="The schedule stops. Conversations it already started stay where they are." confirmLabel="Delete" cancelLabel="Keep" tone="danger" onCancel={() => setDeleting(null)} onConfirm={async () => {
+    {deleting && <ConfirmDialog title={`Delete “${deleting.name}”?`} body="The automation stops. Conversations it already started stay where they are." confirmLabel="Delete" cancelLabel="Keep" tone="danger" onCancel={() => setDeleting(null)} onConfirm={async () => {
       const target = deleting
       setDeleting(null)
       await act(target.id, () => props.onDelete(target.id))
@@ -227,8 +256,9 @@ function ScheduleCard({ automation, agent, nowMs, busy, onToggle, onRunNow, onEd
   </li>
 }
 
-function AutomationEditor({ existing, agents, defaultAgentId, onClose, onSave, onPreview }: {
+function AutomationEditor({ existing, template, agents, defaultAgentId, onClose, onSave, onPreview }: {
   existing: Automation | null
+  template: AutomationTemplate | null
   agents: readonly Agent[]
   defaultAgentId: string | null
   onClose: () => void
@@ -237,11 +267,11 @@ function AutomationEditor({ existing, agents, defaultAgentId, onClose, onSave, o
 }) {
   const entered = useDialogEntered()
   const { ref, close } = useDialogAccessibility(onClose)
-  const [name, setName] = useState(existing?.name ?? '')
+  const [name, setName] = useState(existing?.name ?? template?.name ?? '')
   const [agentId, setAgentId] = useState(existing?.agentId ?? defaultAgentId ?? agents[0]?.id ?? '')
-  const [prompt, setPrompt] = useState(existing?.prompt ?? '')
-  const [draft, setDraft] = useState<ScheduleDraft>(() => existing ? scheduleToDraft(existing.schedule) : defaultDraft(localTimeZone()))
-  const [approvalMode, setApprovalMode] = useState<'plan' | 'auto'>(existing?.approvalMode ?? 'auto')
+  const [prompt, setPrompt] = useState(existing?.prompt ?? template?.prompt ?? '')
+  const [draft, setDraft] = useState<ScheduleDraft>(() => existing ? scheduleToDraft(existing.schedule) : { ...defaultDraft(localTimeZone()), ...(template ? { preset: template.preset, time: template.time } : {}) })
+  const [approvalMode, setApprovalMode] = useState<'plan' | 'auto'>(existing?.approvalMode ?? template?.approvalMode ?? 'auto')
   const [sessionMode, setSessionMode] = useState<'new' | 'reuse'>(existing?.sessionMode ?? 'new')
   const [maxRuntime, setMaxRuntime] = useState(String(existing?.maxRuntimeSecs ?? 1800))
   const [saving, setSaving] = useState(false)
@@ -271,20 +301,22 @@ function AutomationEditor({ existing, agents, defaultAgentId, onClose, onSave, o
     try {
       await onSave({ agentId, name: name.trim(), prompt: prompt.trim(), schedule, sessionMode, approvalMode, maxRuntimeSecs: Number(maxRuntime) })
     } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : 'The schedule could not be saved.')
+      setFailure(reason instanceof Error ? reason.message : 'The automation could not be saved.')
       setSaving(false)
     }
   }
 
   return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`}>
     <section ref={ref} className="blob-dialog schedule-dialog" role="dialog" aria-modal="true" aria-labelledby="schedule-dialog-title" tabIndex={-1}>
-      <h2 id="schedule-dialog-title">{existing ? 'Edit schedule' : 'New schedule'}</h2>
+      <h2 id="schedule-dialog-title">{existing ? 'Edit automation' : 'New automation'}</h2>
+      {!existing && <div className="schedule-ideas" role="group" aria-label="Start from an idea">{TEMPLATES.map((idea) => <button key={idea.id} type="button" className="schedule-idea" aria-pressed={name === idea.name && prompt === idea.prompt} onClick={() => { setName(idea.name); setPrompt(idea.prompt); set({ preset: idea.preset, time: idea.time }); setApprovalMode(idea.approvalMode) }}><idea.icon size={13} aria-hidden="true" />{idea.title}</button>)}</div>}
       <label className="blob-field"><span>Name</span><input data-dialog-initial-focus value={name} maxLength={80} placeholder="Morning summary" onChange={(event) => setName(event.target.value)} /></label>
       <div className="blob-field"><span>Blob</span>
         <Select ariaLabel="Blob" variant="field" value={agentId} onChange={setAgentId} options={agents.map((agent) => ({ value: agent.id, label: agent.name }))} />
       </div>
       <label className="blob-field"><span>What should it do?<small className={prompt.length > 8000 ? 'over' : ''}>{prompt.length}/8000</small></span>
         <textarea rows={4} value={prompt} placeholder="Summarise what changed in the repository since yesterday and list anything that needs my attention." onChange={(event) => setPrompt(event.target.value)} />
+        <small className="schedule-zone">It uses the tools your coding agent already has. If it cannot do something, the run says so.</small>
       </label>
       <div className="blob-field"><span>When</span>
         <div className="schedule-when">
@@ -316,7 +348,7 @@ function AutomationEditor({ existing, agents, defaultAgentId, onClose, onSave, o
       {failure && <p className="schedules-problem" role="alert">{failure}</p>}
       <div className="blob-dialog-actions">
         <button type="button" className="secondary-button" onClick={close}>Cancel</button>
-        <button type="button" className="primary-button" disabled={!valid || saving} onClick={() => void submit()}>{saving ? 'Saving…' : existing ? 'Save' : 'Create schedule'}</button>
+        <button type="button" className="primary-button" disabled={!valid || saving} onClick={() => void submit()}>{saving ? 'Saving…' : existing ? 'Save' : 'Create automation'}</button>
       </div>
     </section>
   </div>

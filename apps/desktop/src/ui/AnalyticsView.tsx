@@ -179,8 +179,10 @@ function ProviderWeeklyUsage({ quotas }: { quotas: Record<string, unknown>[] }) 
     { id: 'opencode', label: 'OpenCode', logo: 'opencode' },
   ]
   return <section ref={sectionRef} className="analytics-provider-usage" data-orb-visible={orbVisible} aria-labelledby="provider-weekly-heading">
-    <h3 id="provider-weekly-heading">Provider weekly usage</h3>
-    <p className="blob-muted">Account plan limits across all conversations. These readings are not filtered by date range, project or blob.</p>
+    <div className="analytics-section-head">
+      <h3 id="provider-weekly-heading">Plan limits</h3>
+      <p>Weekly usage of each signed-in account, across every conversation. Not filtered by date range, project or blob.</p>
+    </div>
     <div className="analytics-orbs">{rows.map((item) => {
       const provider = parsed.find((row) => row.provider === item.id)
       const weekly = provider?.windows.find((window) => window.label === 'Weekly')
@@ -190,9 +192,8 @@ function ProviderWeeklyUsage({ quotas }: { quotas: Record<string, unknown>[] }) 
       const reset = provider?.stale ? null : resetIn(weekly?.resetsAt ?? null)
       const resetCopy = provider?.stale ? 'Reset withheld for a stale reading' : reset ? `Resets in ${reset}` : 'Weekly reset unavailable'
       return <div className="analytics-orb-item" key={item.id} data-provider={item.id} role="group" aria-label={`${item.label}: ${used === null ? freshness ?? 'weekly usage unknown' : `${used}% used${provider?.stale ? ', stale reading' : ''}`}${reset ? `, resets in ${reset}` : ''}`}>
-        <div className={`analytics-orb ${used === null ? 'unknown' : used === 0 ? 'empty' : ''}`} style={{ '--orb-fill': `${used ?? 0}%` } as CSSProperties} role="img" aria-hidden="true"><span className="analytics-orb-wave" /><span className="analytics-orb-wave second" /></div>
-        <div className="analytics-orb-label"><ProviderLogo provider={item.logo} size={16} /><strong>{item.label}</strong></div>
-        <span className="analytics-orb-value">{used === null ? 'Unknown' : `${used}% used`}</span>
+        <div className={`analytics-orb ${used === null ? 'unknown' : used === 0 ? 'empty' : ''}`} style={{ '--orb-fill': `${used ?? 0}%` } as CSSProperties} role="img" aria-hidden="true"><ProviderLogo provider={item.logo} size={32} /></div>
+        <span className="analytics-orb-value">{used === null ? 'Unknown' : <><b>{used}%</b> used</>}</span>
         <small>{freshness ?? resetCopy}{provider?.stale && used !== null ? ' · stale' : !provider?.stale && updated ? ` · ${updated.toLowerCase()}` : ''}</small>
       </div>
     })}</div>
@@ -261,6 +262,7 @@ function AnalyticsBody({ data, agents, quotas, metric, panel, updatedAt, onMetri
   const clock = updatedAt ? formatUpdatedClock(updatedAt, data.range.tz) : null
   return <>
     <p className="analytics-freshness" role="status"><span>Time zone {data.range.tz}</span>{clock && <span>Updated {clock}</span>}<button type="button" className="analytics-icon-button" aria-label="Refresh usage and provider quotas" title="Refresh usage and provider quotas" onClick={onRefresh}><RefreshCw size={15} /></button></p>
+    <ProviderWeeklyUsage quotas={quotas} />
     <div className="analytics-cards">
       <article className="analytics-card" data-analytics-card="tokens"><h3>Tokens</h3><strong data-figure>{tokenTotal}</strong><small>Input {formatExactNumber(data.totals.tokens.input)} · Output {formatExactNumber(data.totals.tokens.output)} · Cache read {formatExactNumber(data.totals.tokens.cacheRead)} · Cache write {formatExactNumber(data.totals.tokens.cacheWrite)} · Reasoning {formatExactNumber(data.totals.tokens.reasoning)}</small></article>
       <article className="analytics-card" data-analytics-card="runtime"><h3>Run time</h3><strong data-figure>{formatRunTime(data.totals.runTimeMs)}</strong><small>Completed and failed turns</small></article>
@@ -281,7 +283,7 @@ function AnalyticsBody({ data, agents, quotas, metric, panel, updatedAt, onMetri
           const missing = unreportedRunsNote(row.unreportedRuns)
           return <div className="analytics-leader-row" key={row.key} data-agent-id={row.agentId ?? (row.kind === 'other' ? 'other' : 'null')} data-leader-kind={row.kind} role="group" aria-label={`${row.name}. ${detail}${missing ? `. ${missing}` : ''}`}><div className="analytics-leader-top"><span className="analytics-leader-identity">{agent && <BlobCanvas color={color} size={24} mood="idle" mini decorative label={agent.name} look={agentLook(agent)} />}<strong>{row.name}</strong></span><span>{detail}</span></div><div className="analytics-leader-track" role="img" aria-label={`${row.name} bar, ${tokenText} tokens`} data-fraction={fraction === null ? 'null' : String(fraction)}>{fraction !== null && <div className={color ? 'analytics-leader-fill' : 'analytics-leader-fill is-unassigned'} style={{ width: `${fraction * 100}%`, background: color || undefined }} />}</div>{missing && <p className="analytics-leader-note" role="note">{missing}</p>}</div>
         })}</div>
-      </div><ProviderWeeklyUsage quotas={quotas} /></> : <ErrorsPanel data={data} agents={agents} leaderboard={leaderboard} />}
+      </div></> : <ErrorsPanel data={data} agents={agents} leaderboard={leaderboard} />}
     </AnalyticsTabs>
   </>
 }

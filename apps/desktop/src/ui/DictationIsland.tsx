@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, CircleAlert } from 'lucide-react'
-import { engineReasonText, type DictationEngineInfo } from './dictation'
+import { engineReasonText, friendlyDictationError, type DictationEngineInfo } from './dictation'
 
 // The dictation island: a red recording dot and timer on the left, level bars
 // on the right, and the words so far underneath. The bars follow the
@@ -32,7 +32,7 @@ export function DictationIsland({ phase, level, since, stoppedAt, text, warming 
   engine?: DictationEngineInfo | null
 }) {
   const mode: WaveMode = phase === 'processing' ? 'transcribing' : phase === 'silent' ? 'silent' : warming ? 'loading' : 'live'
-  const shown = phase === 'error' ? errorText : lastWords(text)
+  const shown = phase === 'error' ? friendlyDictationError(errorText) : lastWords(text)
   const expanded = !!shown && phase !== 'done'
   return <div className={`dictation-island on-${variant} is-${phase} ${expanded ? 'is-expanded' : ''}`} role="status" aria-live="polite" aria-label={label(phase, warming)}>
     <div className="dictation-island-row">

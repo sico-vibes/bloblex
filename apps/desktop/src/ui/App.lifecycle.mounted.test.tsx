@@ -86,8 +86,14 @@ import type { Snapshot } from '../types'
 
 const runtimeA = { id: 'runtime-a', provider: 'codex', status: 'online', protocolFamily: 'app-server' }
 const runtimeB = { id: 'runtime-b', provider: 'claude', status: 'online', protocolFamily: 'stream-json' }
-const sessionA = { id: 'session-a', runtimeId: 'runtime-a', title: 'Alpha task', projectPath: 'C:/work/alpha', state: 'idle', messages: [] }
-const sessionB = { id: 'session-b', runtimeId: 'runtime-b', title: 'Beta task', projectPath: 'C:/work/beta', state: 'idle', messages: [] }
+const sessionA = { id: 'session-a', runtimeId: 'runtime-a', agentId: 'agent-a', title: 'Alpha task', projectPath: 'C:/work/alpha', state: 'idle', messages: [] }
+const sessionB = { id: 'session-b', runtimeId: 'runtime-b', agentId: 'agent-b', title: 'Beta task', projectPath: 'C:/work/beta', state: 'idle', messages: [] }
+
+// With no blobs the main window shows its create-your-first-blob state instead of a
+// stray conversation, so tests of the conversation view need at least one blob.
+const someBlob = { id: 'agent-a', name: 'Alpha blob', description: '', instructions: '', color: 'blue', runtimeId: 'runtime-a', sortOrder: 0, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, archived: false, createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' }
+
+const otherBlob = { ...someBlob, id: 'agent-b', name: 'Beta blob', runtimeId: 'runtime-b', sortOrder: 1 }
 
 function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   return { sequence: 20, runtimes: [runtimeA, runtimeB], sessions: [sessionA, sessionB], permissions: [], usage: [], budgets: [], ...overrides }
@@ -265,8 +271,19 @@ describe('App mounted lifecycle', () => {
     expect(stops.map((stop) => stop.mock.calls.length)).toEqual([1, 1])
   })
 
-  it('hydrates the stored runtime/session and does not let an unrelated session update steal selection', async () => {
+  it('invites you to create your first blob instead of opening a leftover conversation', async () => {
+    // Conversations exist (for example from blobs that were removed) but no blob does.
     configure(snapshot(), { activeSession: 'session-b', activeRuntime: 'runtime-b' })
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelector('.empty-conversation h1')?.textContent).toBe('Create your first blob')
+    expect(view.host.querySelector('.empty-conversation button')?.textContent).toContain('Create your first blob')
+    expect(view.host.querySelector('.message-list')).toBeNull()
+    expect(view.host.querySelector('.header-actions')?.hasAttribute('hidden')).toBe(true)
+  })
+
+  it('hydrates the stored runtime/session and does not let an unrelated session update steal selection', async () => {
+    configure(snapshot({ agents: [someBlob, otherBlob] as never }), { activeSession: 'session-b', activeRuntime: 'runtime-b' })
     const view = startApp()
     await view.settle()
     expect(view.host.querySelector('.context-pane')?.textContent).toContain('Beta task')
@@ -316,7 +333,7 @@ describe('App mounted lifecycle', () => {
   })
 
   it('focuses the approval when the active composer becomes disabled', async () => {
-    configure(snapshot())
+    configure(snapshot({ agents: [someBlob, otherBlob] as never }))
     const view = startApp()
     await view.settle()
     const composer = view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')!
@@ -335,7 +352,7 @@ describe('App mounted lifecycle', () => {
 
   it('refreshes the applied model on exec.options.changed while the session remains working', async () => {
     const workingSession = { ...sessionA, state: 'working' }
-    configure(snapshot({ sessions: [workingSession, sessionB] }))
+    configure(snapshot({ sessions: [workingSession, sessionB], agents: [someBlob, otherBlob] as never }))
     let latestModel = 'model-before'
     let useDeferredSnapshot = false
     const nextSnapshot = deferred<unknown>()

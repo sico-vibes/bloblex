@@ -22,7 +22,8 @@
 
 /* Pills: quiet text buttons that gain a surface on hover/open. */
 .composer-pill { max-width: 220px; height: 30px; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); border: 1px solid transparent; border-radius: var(--radius-pill); background: transparent; font-size: var(--fs-sm); font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer; transition: color 120ms ease, background 120ms ease, border-color 120ms ease; }
-.composer-pill > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* line-height 1 plus overflow:hidden clips descenders (g, p, y); the padding gives them room without moving the pill. */
+.composer-pill > span { min-width: 0; padding-block: .2em; margin-block: -.2em; overflow: hidden; text-overflow: ellipsis; }
 .composer-pill:hover:not(:disabled), .composer-pill[aria-expanded="true"] { color: var(--text-1); background: var(--surface-hover); }
 .composer-pill:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .composer-pill:disabled { cursor: default; opacity: .55; }
@@ -134,7 +135,7 @@
 .session-effort-popover { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 10px); width: min(320px, calc(100vw - 32px)); padding: 13px 14px 12px; display: grid; gap: 12px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-overlay); box-shadow: var(--shadow-pop); transform-origin: bottom right; animation: composer-menu-in 140ms cubic-bezier(.2,.8,.2,1) both; }
 .session-effort-popover-heading { min-height: 24px; display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); }
 .session-effort-title { color: var(--text-3); font-weight: 500; }
-.session-effort-value { position: relative; min-width: 0; flex: 1 1 auto; display: grid; overflow: hidden; color: var(--text-1); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.session-effort-value { position: relative; min-width: 0; flex: 1 1 auto; display: grid; padding-block: .2em; margin-block: -.2em; overflow: hidden; color: var(--text-1); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
 .session-effort-popover.claude .session-effort-value { color: var(--meter-claude); }
 .session-effort-value.ultra > span { background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet) 60%, #f0b6e8); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .session-effort-value-in { grid-area: 1 / 1; animation: effort-label-in 160ms cubic-bezier(.2,0,0,1) both; }

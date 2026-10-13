@@ -1,20 +1,32 @@
-.message-action-shell { width: 100%; min-width: 0; margin: 0 0 6px; display: flex; align-items: flex-start; gap: 7px; }
+/* The toolbar sits beside the bubble: right of the assistant's, left of yours,
+   centred on it. The time appears inside the toolbar so the bubble's own height
+   is the height the toolbar centres on. */
+.message-action-shell { width: 100%; min-width: 0; margin: 0 0 6px; display: flex; align-items: center; gap: 4px; }
 .message-action-shell.group-start, .message-action-shell.user { margin-top: 14px; }
-.message-action-shell.user { justify-content: flex-end; }
-.message-action-shell > .message-row { width: auto; max-width: calc(100% - 108px); min-width: 0; margin: 0; flex: 0 1 auto; }
+.message-action-shell.user { flex-direction: row-reverse; }
+.message-action-shell .message-time { display: none; }
+.message-action-shell > .message-row { width: auto; max-width: calc(100% - 100px); min-width: 0; margin: 0; flex: 0 1 auto; }
 .message-action-shell > .message-row .message-content { max-width: 100%; }
-.message-actions { min-width: 0; padding: 2px 0; display: flex; flex: 0 0 auto; align-items: center; gap: 3px; opacity: 0; transition: opacity 100ms ease; }
+.message-actions { position: relative; min-width: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 1px; opacity: 0; transition: opacity 100ms ease; }
+.message-action-time { position: absolute; left: 100%; margin-left: 6px; color: var(--text-3); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.message-action-shell.user .message-action-time { left: auto; right: 100%; margin: 0 6px 0 0; }
 .message-action-shell:hover .message-actions, .message-action-shell:focus-within .message-actions { opacity: 1; }
 .message-action-shell .message-actions.open { opacity: 1; }
-.message-action-button { width: 27px; height: 27px; padding: 0; display: grid; place-items: center; color: var(--text-2); border: 1px solid transparent; border-radius: 8px; background: var(--surface-subtle); cursor: pointer; }
-.message-action-button:hover:not(:disabled), .message-action-button[aria-expanded="true"] { color: var(--text-1); border-color: var(--line); background: var(--surface-hover); }
+.message-action-button { width: 26px; height: 26px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 8px; background: transparent; cursor: pointer; transition: color 120ms ease; }
+.message-action-button:hover:not(:disabled), .message-action-button[aria-expanded="true"], .message-action-button.copied { color: var(--text-1); }
 .message-action-button:focus-visible, .message-reaction-option:focus-visible, .reply-context-cancel:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .message-action-button:disabled { color: var(--text-3); cursor: default; }
 .message-reaction-picker { position: fixed; z-index: 240; width: 232px; padding: 6px; display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 3px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-overlay); box-shadow: var(--shadow-pop); }
 .message-reaction-option { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; font-size: 18px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
 .message-reaction-option:hover, .message-reaction-option[aria-pressed="true"] { background: var(--surface-selected-strong); }
-.message-reaction-badges { display: inline-flex; align-items: center; gap: 4px; justify-self: start; margin-top: -1px; padding: 2px 5px; color: var(--text-2); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-subtle); font-size: 13px; line-height: 1; }
-.message-row.user .message-reaction-badges { justify-self: end; }
+/* One reaction, hung off the bubble's top corner and ringed in the page colour so it reads as part of the bubble. */
+.message-bubble-wrap { position: relative; width: fit-content; min-width: 0; max-width: 100%; }
+.message-reaction-badge { position: absolute; top: -11px; right: 10px; z-index: 1; min-width: 26px; height: 22px; padding: 0 5px; display: inline-grid; place-items: center; color: var(--text-1); border: 2px solid var(--surface-app); border-radius: var(--radius-pill); background: var(--surface-overlay); box-sizing: content-box; font: inherit; font-size: 13px; line-height: 1; cursor: default; }
+button.message-reaction-badge { cursor: pointer; transition: transform 120ms ease; }
+button.message-reaction-badge:hover { transform: scale(1.08); }
+button.message-reaction-badge:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.message-row.user .message-reaction-badge { right: auto; left: 10px; }
+.message-row:has(.message-reaction-badge), .message-action-shell:has(.message-reaction-badge) { margin-top: 18px; }
 .reply-context-strip { min-width: 0; width: min(100%,800px); min-height: 30px; margin: 0 auto 7px; padding: 4px 7px 4px 9px; display: flex; align-items: center; gap: 8px; color: var(--text-2); border-radius: 8px; background: var(--surface-subtle); font-size: var(--fs-xs); line-height: 1.35; }
 .composer-box > .reply-context-strip { width: 100%; margin: 0; }
 .reply-context-copy, .reply-context-link { min-width: 0; display: flex; flex: 1; align-items: center; gap: 7px; color: inherit; }
@@ -54,5 +66,5 @@
 .undo-toasts { position: fixed; bottom: 24px; right: 24px; z-index: 120; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 48px)); }
 .undo-toast { display: flex; align-items: center; gap: 20px; justify-content: space-between; background: var(--surface-overlay); color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 16px; }
 @media (hover: none) { .message-actions { opacity: 1; } }
-@media (max-width: 620px) { .message-action-shell { gap: 4px; } .message-action-shell > .message-row { max-width: calc(100% - 98px); } .message-action-button { width: 25px; height: 25px; } .usage-tip { width: 100%; } }
-@media (prefers-reduced-motion: reduce) { .message-actions { transition: none; } }
+@media (max-width: 620px) { .message-action-shell > .message-row { max-width: calc(100% - 92px); } .message-action-button { width: 24px; height: 24px; } .usage-tip { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .message-actions, .message-action-button, button.message-reaction-badge { transition: none; } }

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { CornerUpLeft, Copy, RotateCcw, SmilePlus, SquarePen, X } from 'lucide-react'
+import { Check, CornerUpLeft, Copy, RotateCcw, SmilePlus, SquarePen, X } from 'lucide-react'
 import { createPortal } from 'react-dom'
 
 export const MESSAGE_REACTIONS = [
@@ -33,8 +33,10 @@ export function messageExcerpt(value: string, limit = 160) {
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat
 }
 
-export function MessageActions({ text, reactions = [], canReply = true, onReply, onToggleReaction, onError }: {
+export function MessageActions({ text, time, reactions = [], canReply = true, onReply, onToggleReaction, onError }: {
   text: string
+  /** Local time of the message, shown beside the buttons on hover. */
+  time?: string
   reactions?: string[]
   canReply?: boolean
   onReply: () => void
@@ -42,6 +44,16 @@ export function MessageActions({ text, reactions = [], canReply = true, onReply,
   onError: (error: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const copiedTimer = useRef<number | null>(null)
+  useEffect(() => () => { if (copiedTimer.current) window.clearTimeout(copiedTimer.current) }, [])
+  const copy = () => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      if (copiedTimer.current) window.clearTimeout(copiedTimer.current)
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 1500)
+    }).catch(() => onError('Could not copy this message.'))
+  }
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
@@ -116,16 +128,23 @@ export function MessageActions({ text, reactions = [], canReply = true, onReply,
       </div>, document.body)}
     </div>
     <button type="button" className="message-action-button" aria-label={canReply ? 'Reply to message' : 'This message cannot be quoted'} title={canReply ? 'Reply' : 'Message text is unavailable'} disabled={!canReply} onClick={onReply}><CornerUpLeft size={15} aria-hidden="true" /></button>
-    <button type="button" className="message-action-button" aria-label="Copy message text" title="Copy" disabled={!text} onClick={() => { void navigator.clipboard.writeText(text).catch(() => onError('Could not copy this message.')) }}><Copy size={14} aria-hidden="true" /></button>
+    <button type="button" className={`message-action-button${copied ? ' copied' : ''}`} aria-label={copied ? 'Copied' : 'Copy message text'} title={copied ? 'Copied' : 'Copy'} disabled={!text} onClick={copy}>{copied ? <Check size={15} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}</button>
+    {time && <span className="message-action-time" aria-hidden="true">{time}</span>}
+    <span className="sr-only" role="status" aria-live="polite">{copied ? 'Copied to clipboard' : ''}</span>
   </div>
 }
 
-export function MessageReactionBadges({ reactions }: { reactions?: unknown }) {
-  const selected = Array.isArray(reactions) ? MESSAGE_REACTIONS.filter(({ emoji }) => reactions.includes(emoji)) : []
-  if (!selected.length) return null
-  return <span className="message-reaction-badges" role="group" aria-label="Your reactions">
-    {selected.map(({ emoji, label }) => <span key={emoji} role="img" aria-label={label} title={label}>{emoji}</span>)}
-  </span>
+/**
+ * A message carries one reaction, shown as a small pill hanging off the
+ * bubble's corner. When `onRemove` is given, clicking it takes the reaction
+ * back; otherwise it is just a mark.
+ */
+export function MessageReactionBadges({ reactions, onRemove }: { reactions?: unknown; onRemove?: (emoji: string) => void }) {
+  const selected = Array.isArray(reactions) ? MESSAGE_REACTIONS.find(({ emoji }) => reactions.includes(emoji)) : undefined
+  if (!selected) return null
+  const { emoji, label } = selected
+  if (!onRemove) return <span className="message-reaction-badge" role="img" aria-label={`Your reaction: ${label}`} title={label}>{emoji}</span>
+  return <button type="button" className="message-reaction-badge" aria-label={`Remove your ${label.toLowerCase()} reaction`} title="Remove reaction" onClick={() => onRemove(emoji)}>{emoji}</button>
 }
 
 export function ReplyContextStrip({ target, compact = false, available = true, onCancel, onJump }: {

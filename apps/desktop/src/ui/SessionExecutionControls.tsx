@@ -52,20 +52,22 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
     return () => { cancelled = true }
   }, [session.runtimeId, session.id, model, rawSessionLock.enableWorkflows])
 
-  // OpenCode keeps effort behind an execution check; until it passes the pill
-  // is shown greyed out with an explanation instead of failing on use.
-  const [thinkingLocked, setThinkingLocked] = useState<'unsupported' | 'gated' | null>(null)
+  // When the daemon says effort cannot be chosen (this model has no levels, or
+  // the runtime does not allow it) the pill is shown greyed out with the reason
+  // instead of failing on use. The answer is per model for OpenCode.
+  const [thinkingLocked, setThinkingLocked] = useState<'unsupported' | 'gated' | 'no-levels' | null>(null)
   useEffect(() => {
     let cancelled = false
     setThinkingLocked(null)
-    void rpc<{ settings?: { thinking?: { supported?: boolean; enabled?: boolean } } }>('runtime.capabilities', { runtimeId: session.runtimeId }).then((caps) => {
+    const params = { runtimeId: session.runtimeId, sessionId: session.id, ...(model ? { model } : {}) }
+    void rpc<{ settings?: { thinking?: { supported?: boolean; enabled?: boolean; reason?: string } } }>('runtime.capabilities', params).then((caps) => {
       const thinkingGate = caps?.settings?.thinking
       if (cancelled || !thinkingGate) return
-      if (thinkingGate.supported === false) setThinkingLocked('unsupported')
+      if (thinkingGate.supported === false) setThinkingLocked(thinkingGate.reason === 'model_has_no_effort_levels' ? 'no-levels' : 'unsupported')
       else if (thinkingGate.enabled === false) setThinkingLocked('gated')
     }).catch(() => undefined)
     return () => { cancelled = true }
-  }, [session.runtimeId])
+  }, [session.runtimeId, session.id, model])
 
   useEffect(() => {
     sessionGeneration.current += 1
@@ -141,7 +143,7 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
       efforts={efforts}
       defaultThinking={selectedModel?.defaultThinking ?? null}
       unavailableReason={catalogUnavailable ? 'Runtime model capabilities are unavailable. Bloblex cannot verify or change effort levels without a validated catalog.' : selectedModel ? null : catalog ? 'The selected model is not in the validated runtime catalog. Bloblex cannot verify selectable effort levels.' : 'Runtime model capabilities are still unavailable.'}
-      lockedReason={!model && catalog?.validated ? 'Choose a model before selecting effort.' : thinkingLocked ? `${providerBrand(catalog?.provider ?? "").name || "This runtime"} doesn't let Bloblex pick an effort level yet, so it uses the model's own default.` : null}
+      lockedReason={!model && catalog?.validated ? 'Choose a model before selecting effort.' : thinkingLocked === 'no-levels' ? `${selectedModel?.displayName ?? 'This model'} has no effort levels, so it always runs at its own default.` : thinkingLocked ? `${providerBrand(catalog?.provider ?? "").name || "This runtime"} doesn't let Bloblex pick an effort level yet, so it uses the model's own default.` : null}
       workflowEnabled={rawSessionLock.enableWorkflows === true}
       value={thinking}
       draftValue={activeDraft}
@@ -316,7 +318,7 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
       <div className="session-effort-popover-heading">
         <span className="session-effort-title">Effort</span>
         <span className={`session-effort-value ${atTop && lastIsUltra ? 'ultra' : ''}`} aria-live="polite"><span key={visibleLabel} className="session-effort-value-in">{visibleLabel}</span></span>
-        {defaultThinking && efforts.length > 0 && <span className="session-effort-default-label">Model default · {labelizeEffort(defaultThinking, provider)}</span>}
+        {defaultThinking && efforts.length > 0 && !visibleLabel.startsWith('Model default') && <span className="session-effort-default-label">Model default · {labelizeEffort(defaultThinking, provider)}</span>}
       </div>
       {efforts.length > 0 ? <>
         <div className="session-effort-meter-frame">

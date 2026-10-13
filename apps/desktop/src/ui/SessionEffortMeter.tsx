@@ -42,7 +42,7 @@ export function SessionEffortMeter({ trackRef, style, count, position, recommend
     let raf = 0, width = 0, height = 0, dpr = 1, last = 0
     let particles: Particle[] = []
     const seed = () => { particles = Array.from({ length: Math.max(6, Math.round(width / 24)) }, () => ({ x: Math.random() * width, y: 4 + Math.random() * Math.max(1, height - 8), r: .8 + Math.random() * .9, phase: Math.random() * Math.PI * 2, twinkle: 2.5 + Math.random() * 4.5, flow: 85 + Math.random() * 50 })) }
-    const animated = () => !motion.matches && !document.hidden && (stateRef.current.style === 'magnetic' || (stateRef.current.style === 'claude' && stateRef.current.top))
+    const animated = () => !motion.matches && !document.hidden && (stateRef.current.style === 'magnetic' || stateRef.current.style === 'claude')
     const resize = () => {
       const rect = host.getBoundingClientRect(); if (!rect.width || !rect.height) return
       const nextDpr = Math.min(window.devicePixelRatio || 1, 2)
@@ -57,19 +57,22 @@ export function SessionEffortMeter({ trackRef, style, count, position, recommend
     const drawClaude = (time: number, state: State) => {
       // A dither that thickens towards the knob: only the edge nearest the
       // chosen level lights up, like Claude's own effort selector.
+      // The dither is always moving; the top levels (Max, Ultracode) add
+      // colour, a longer reach and a livelier shimmer.
       const end = knobX(state), cell = 3, gap = 1, rows = Math.floor(height / (cell + gap)), top0 = (height - rows * (cell + gap) + gap) / 2
-      const reach = Math.max(36, Math.min(end, width * .62))
-      const twinkle = state.top && !motion.matches ? time / 1000 : 0
+      const reach = Math.max(36, Math.min(end, width * (state.top ? .82 : .62)))
+      const twinkle = motion.matches ? 0 : (time / 1000) * (state.top ? 1.35 : .7)
+      const boost = state.top ? 1.3 : 1
       for (let x = 2; x < end - 2; x += cell + gap) {
         const t = 1 - (end - x) / reach; if (t <= 0) continue
-        const density = Math.pow(t, 1.6)
+        const density = Math.min(1, Math.pow(t, 1.6) * boost)
         for (let row = 0; row < rows; row++) {
           const h = hash(x * 12.9898 + row * 78.233, 43758.5453)
           const flicker = twinkle ? .5 + .5 * Math.sin(twinkle * (2 + h * 3) + h * 40) : 1
           if (h > density * (.55 + .45 * flicker)) continue
-          const alpha = (.16 + .62 * t) * (.6 + .4 * hash(x * 3.1 + row * 7.7, 12731.13))
+          const alpha = Math.min(1, (.16 + .62 * t) * (.6 + .4 * hash(x * 3.1 + row * 7.7, 12731.13)) * (state.top ? 1.25 : 1))
           ctx.globalAlpha = alpha
-          ctx.fillStyle = state.top ? (h < .35 ? '#c9b6f2' : '#e9e4f5') : '#e6e6ea'
+          ctx.fillStyle = state.top ? (h < .22 ? '#a58bf0' : h < .45 ? '#c9b6f2' : '#e9e4f5') : '#e6e6ea'
           ctx.fillRect(x, top0 + row * (cell + gap), cell, cell)
         }
       }

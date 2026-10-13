@@ -135,7 +135,7 @@
 /* ── Header ──────────────────────────────────────────────────────────── */
 .conversation-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; background: var(--surface-app); }
 .first-run-prompt { min-height: 46px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-2); border-bottom: 1px solid var(--line); background: var(--surface-panel); font-size: var(--fs-xs); }
-.chat-header { height: 52px; flex: 0 0 auto; padding: 0 10px 0 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+.chat-header { height: 52px; flex: 0 0 auto; padding: 0 10px 0 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .chat-title { min-width: 0; display: flex; align-items: center; gap: 2px; }
 .runtime-problem-anchor { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; vertical-align: middle; }
 .runtime-problem-marker { padding: 2px; display: inline-grid; place-items: center; color: var(--status-danger); border: 0; border-radius: 4px; background: transparent; line-height: 1; cursor: pointer; }
@@ -149,6 +149,7 @@
 .session-switcher { min-width: 0; max-width: 300px; }
 .session-switcher .select-trigger { max-width: 300px; }
 .header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; }
+.header-actions[hidden] { display: none; }
 .model-pill { height: 26px; max-width: 220px; margin-right: 4px; padding: 0 10px; display: inline-flex; align-items: center; overflow: hidden; color: var(--text-2); border-radius: var(--radius-pill); background: var(--surface-raised); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; cursor: default; }
 .approval-pill { height: 22px; padding: 0 9px; display: inline-flex; align-items: center; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); font-size: var(--fs-2xs); }
 .approval-pill-bypass { color: var(--status-working); border-color: var(--warning-line); }
@@ -164,7 +165,7 @@
 /* ── Conversation ────────────────────────────────────────────────────── */
 .message-list { min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 .conversation-layout { width: min(820px, calc(100% - 24px)); min-height: 100%; margin: 0 auto; display: flex; align-items: stretch; gap: 10px; }
-.chat-column { width: min(760px, 100%); min-width: 0; min-height: 100%; margin: 0 auto; padding: 20px 0 24px; display: flex; flex: 1 1 auto; flex-direction: column; }
+.chat-column { width: min(760px, 100%); min-width: 0; min-height: 100%; margin: 0 auto; padding: 30px 0 24px; display: flex; flex: 1 1 auto; flex-direction: column; }
 @media (prefers-reduced-motion: reduce) { .conversation-outline-tick { transition: none; } }
 .session-first-state { margin: auto; padding: 24px 0 40px; display: grid; justify-items: center; text-align: center; }
 .session-first-state .blob-canvas-frame { margin-bottom: 16px; }
@@ -276,7 +277,7 @@
 .dictation-island-wave i { width: 3px; min-height: 3px; border-radius: 999px; background: #fff; transition: height 90ms ease-out, opacity 90ms ease-out; }
 .dictation-island-wave:not(.live) i { transition: none; }
 .dictation-island-text { margin: -2px 0 0; padding: 0 2px 13px; overflow: hidden; color: rgba(255, 255, 255, 0.92); font-size: 13px; font-weight: 500; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; animation: island-text 200ms ease-out both; }
-.dictation-island-text.error { color: rgba(255, 255, 255, 0.85); -webkit-line-clamp: 1; }
+.dictation-island-text.error { color: rgba(255, 255, 255, 0.85); font-size: 12.5px; line-height: 1.4; -webkit-line-clamp: 3; }
 /* In the companion it sits above the composer, or over the island when the chat is closed. */
 .dictation-island.on-companion { width: 100%; padding: 0 12px; border-color: var(--companion-alpha-12, rgba(255, 255, 255, 0.12)); border-radius: 14px; background: var(--companion-surface-card, #171717); box-shadow: none; animation-name: island-text; }
 .dictation-island.on-companion .dictation-island-row { height: 36px; }

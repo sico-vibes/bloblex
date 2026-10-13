@@ -49,6 +49,42 @@ export function engineReasonText(reason: string | null | undefined): string {
   }
 }
 
+const CLOUD_REASON_COPY: Record<string, string> = {
+  'verification required': "OpenAI's bot check blocked it",
+  "blocked by openai's bot check": "OpenAI's bot check blocked it",
+  'request rejected': 'ChatGPT refused the recording',
+  'sign-in required': 'you are not signed in to Codex',
+  'sign-in expired': 'your Codex sign-in expired (run `codex login` in a terminal)',
+  'rate limited': 'ChatGPT is rate limiting you right now',
+  unavailable: 'ChatGPT could not be reached',
+  'recording too large': 'the recording was too long',
+  'recording too short': 'the recording was too short',
+  'unreadable response': 'ChatGPT sent back something unreadable',
+  rejected: 'ChatGPT refused the recording',
+}
+
+/**
+ * The native layer words a failed ChatGPT dictation tersely; this restates it
+ * in plain language and says what to do next. Anything else passes through.
+ */
+export function friendlyDictationError(raw: string): string {
+  const text = raw.trim()
+  if (/^OpenAI blocks transcription from apps that are not its own clients/i.test(text)) {
+    return "OpenAI's bot check blocks ChatGPT dictation from third-party apps, and the on-device speech model is not installed yet. Download it in Settings, Speech."
+  }
+  const none = /^ChatGPT transcription is unavailable \((.+?)\) and no on-device model is installed\.?$/i.exec(text)
+  if (none) {
+    const reason = CLOUD_REASON_COPY[none[1].toLowerCase()] ?? none[1]
+    return `ChatGPT dictation did not work: ${reason}. Download the on-device speech model in Settings, Speech, to dictate offline.`
+  }
+  const both = /^ChatGPT transcription failed \((.+?)\), and the on-device model could not run\.?$/i.exec(text)
+  if (both) {
+    const reason = CLOUD_REASON_COPY[both[1].toLowerCase()] ?? both[1]
+    return `ChatGPT dictation did not work: ${reason}. The on-device model could not start either; check Settings, Speech.`
+  }
+  return text
+}
+
 type DictationEvent = { type: string; owner?: string; text?: string }
 
 export const DEFAULT_SPEECH_MODEL_ID = 'parakeet-tdt-0.6b-v3-int8'
@@ -151,7 +187,7 @@ export function useDictation({
       try {
         const status = await invoke<{ ready: boolean }>('speech_model_status', { modelId })
         // When ChatGPT will serve this session there is nothing to download first.
-        const cloudServes = enginePrefs.engine !== 'local' && enginePrefs.consent && cloudAuthUsable(await cloudDictationStatus())
+        const cloudServes = enginePrefs.engine === 'cloud' && enginePrefs.consent && cloudAuthUsable(await cloudDictationStatus())
         if (status && status.ready === false && !cloudServes) {
           setPhase('downloading')
           let unlisten: UnlistenFn | undefined

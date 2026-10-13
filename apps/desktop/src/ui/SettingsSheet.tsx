@@ -95,6 +95,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
   const [retryMaxWaitSecs, setRetryMaxWaitSecs] = useState(21600)
   const [profileAbout, setProfileAbout] = useState('')
+  const [sharedMemoryWrites, setSharedMemoryWrites] = useState(false)
   const [keepAwake, setKeepAwake] = useState(false)
   const [speechEngine, setSpeechEngine] = useState<DictationEngineChoice>('local')
   const [cloudConsent, setCloudConsent] = useState(false)
@@ -158,6 +159,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       setNotificationsEnabled(settings['notifications.enabled'] !== false)
       if (typeof settings['retry.maxWaitSecs'] === 'number') setRetryMaxWaitSecs(settings['retry.maxWaitSecs'])
       if (typeof settings['profile.about'] === 'string') setProfileAbout(settings['profile.about'])
+      setSharedMemoryWrites(settings['memory.sharedAgentWrites'] === true)
       setKeepAwake(settings['power.keepAwake'] === true)
       const loadedEngine = normalizeEngineChoice(settings['speech.engine'])
       setSpeechEngine(loadedEngine)
@@ -569,6 +571,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             agents={snapshot?.agents ?? []}
             projects={snapshot?.projects ?? []}
             enabled={experiments.memory}
+            sharedWrites={sharedMemoryWrites}
+            onSharedWritesChange={async (next) => { await rpc('settings.set', { key: 'memory.sharedAgentWrites', value: next }); setSharedMemoryWrites(next) }}
             about={profileAbout}
             connected={inDesktop}
             onEnabledChange={async (next) => { await rpc('settings.set', { key: 'experimental.memory', value: next }); onExperimentChange?.('memory', next) }}

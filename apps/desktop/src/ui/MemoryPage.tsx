@@ -33,13 +33,16 @@ export interface MemoryPageProps {
   agents: readonly Agent[]
   projects: readonly Project[]
   enabled: boolean
+  /** Whether blobs may propose notes for a project or everyone (each waits for approval). */
+  sharedWrites: boolean
   about: string
   connected: boolean
   onEnabledChange: (next: boolean) => Promise<void>
+  onSharedWritesChange: (next: boolean) => Promise<void>
   onAboutSave: (text: string) => Promise<void>
 }
 
-export function MemoryPage({ agents, projects, enabled, about, connected, onEnabledChange, onAboutSave }: MemoryPageProps) {
+export function MemoryPage({ agents, projects, enabled, sharedWrites, about, connected, onEnabledChange, onSharedWritesChange, onAboutSave }: MemoryPageProps) {
   const [records, setRecords] = useState<MemoryRecord[] | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -102,6 +105,15 @@ export function MemoryPage({ agents, projects, enabled, about, connected, onEnab
         </span>
       </div>
     </section>
+
+    {enabled && <section className="settings-group" aria-label="Shared notes">
+      <div className="settings-row">
+        <span className="settings-row-copy"><strong>Let blobs suggest shared notes</strong><small>Blobs may propose notes for a project or for everyone. Each one waits for your approval before anyone uses it.</small></span>
+        <span className="settings-row-control">
+          <button type="button" className={`toggle ${sharedWrites ? 'on' : ''}`} role="switch" aria-label="Let blobs suggest shared notes" aria-checked={sharedWrites} disabled={!connected || busy} onClick={() => void run(() => onSharedWritesChange(!sharedWrites))}><i /></button>
+        </span>
+      </div>
+    </section>}
 
     <section className="memory-about" aria-label="About you">
       <label className="blob-field"><span>About you<small className={aboutOver ? 'over' : ''}>{aboutDraft.length}/{ABOUT_LIMIT}</small></span>

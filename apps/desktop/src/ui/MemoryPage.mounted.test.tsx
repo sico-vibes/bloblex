@@ -38,9 +38,9 @@ const type = async (element: HTMLInputElement | HTMLTextAreaElement | null, valu
 }
 
 async function mount(extra: Partial<React.ComponentProps<typeof MemoryPage>> = {}) {
-  const props = { onEnabledChange: vi.fn(async () => undefined), onAboutSave: vi.fn(async () => undefined) }
+  const props = { onEnabledChange: vi.fn(async () => undefined), onSharedWritesChange: vi.fn(async () => undefined), onAboutSave: vi.fn(async () => undefined) }
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  await act(async () => root.render(<MemoryPage agents={agents} projects={projects} enabled={false} about="" connected {...props} {...extra} />))
+  await act(async () => root.render(<MemoryPage agents={agents} projects={projects} enabled={false} sharedWrites={false} about="" connected {...props} {...extra} />))
   await tick()
   return props
 }
@@ -122,6 +122,18 @@ describe('MemoryPage', () => {
     await act(async () => { dialog.querySelector<HTMLElement>('.select-trigger[aria-label^="Blob"]')!.click() })
     await click(create())
     expect(mocks.rpc).toHaveBeenCalledWith('memory.create', { scope: 'blob', scopeId: 'a1', kind: 'fact', title: 'Likes short answers', body: 'Keep replies brief.', pinned: false })
+  })
+
+  it('offers shared-note suggestions only while memory is on and saves the choice', async () => {
+    const off = await mount()
+    expect(q('[aria-label="Let blobs suggest shared notes"]')).toBeNull()
+    act(() => root.unmount()); host.remove()
+    const on = await mount({ enabled: true })
+    const toggle = q('[aria-label="Let blobs suggest shared notes"]')
+    expect(toggle?.getAttribute('aria-checked')).toBe('false')
+    await click(toggle)
+    expect(on.onSharedWritesChange).toHaveBeenCalledWith(true)
+    expect(off.onSharedWritesChange).not.toHaveBeenCalled()
   })
 
   it('confirms before deleting', async () => {

@@ -648,21 +648,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         }
         "agent.get" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?; st.db.agent_get(id).map(|agent|json!({"agent":agent})).map_err(agent_error) }
         "permissions.policy.get" => { let default=st.db.default_approval_mode().map_err(agent_error)?;let agents=st.db.agent_list(false,None).map_err(agent_error)?;let per_agent=agents.iter().map(|a|json!({"agentId":a["id"],"mode":a["approvalMode"],"effectiveMode":a["effectiveApprovalMode"]})).collect::<Vec<_>>();Ok(json!({"defaultMode":default,"perAgent":per_agent})) }
-        "agent.create" => {
-            let runtime_id = p["runtimeId"].as_str().ok_or_else(|| derr("invalid_argument", "runtimeId is required", StatusCode::BAD_REQUEST))?;
-            let mut fields = p.clone();
-            if let Ok(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id).cloned().ok_or(()) {
-                if let Ok(catalog) = fetch_model_catalog(st, &runtime, false).await {
-                    if let Some(normalized) = normalize_model_fields(catalog["provider"].as_str().unwrap_or(""), &fields, &catalog) {
-                        if let Some(target) = fields.as_object_mut() { for (key, value) in normalized.as_object().unwrap() { target.insert(key.clone(), value.clone()); } }
-                    }
-                }
-            }
-            validate_agent_catalog(st, runtime_id, &fields).await?;
-            let (agent, events) = st.db.agent_create(&fields).map_err(agent_error)?;
-            st.broadcast_persisted(events);
-            Ok(json!({"agent":agent}))
-        }
+        "agent.create" => Ok(json!({"agent": agent_create_from_rpc(st, p.clone()).await?})),
         "agent.update" => {
             let id = p["agentId"].as_str().ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
             let existing = st.db.agent_get(id).map_err(agent_error)?;
@@ -1153,13 +1139,17 @@ fn adapter_for(a: &Adapters, provider: &str) -> Option<Arc<dyn AgentAdapter>> {
         _ => None,
     }
 }
+/// Claude dynamic workflows (and therefore Ultracode) are on for new sessions
+/// unless the owner explicitly turns them off. An unset or non-boolean setting
+/// means on; only an explicit `false` disables them.
+fn claude_workflows_enabled(settings: &Value) -> bool { settings["claude.enableWorkflows"] != false }
 fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,DispatchError>{
     let default=st.db.default_approval_mode().map_err(agent_error)?;
     let mut options = if let Some(agent_id)=session["agentId"].as_str() {
         let a=st.db.agent_get(agent_id).map_err(agent_error)?;
         let env=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
         let mode=a["approvalMode"].as_str().unwrap_or(&default);
-        ExecOptions{plan_mode:false,mcp_servers:Vec::new(),approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),enable_workflows:session["provider"]=="claude"&&st.db.settings().ok().is_some_and(|settings|settings["claude.enableWorkflows"]==true),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32}
+        ExecOptions{plan_mode:false,mcp_servers:Vec::new(),approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),enable_workflows:session["provider"]=="claude"&&st.db.settings().map(|settings|claude_workflows_enabled(&settings)).unwrap_or(true),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32}
     } else { ExecOptions{approval_mode:parse_mode(&default),max_concurrency:4,..ExecOptions::default()} };
     if let Some(lock) = session["modelLock"].as_object() {
         // Presence of the lock object is significant: explicit null means the
@@ -1220,7 +1210,7 @@ async fn resolve_session_model_lock(
 /// Bloblex's own MCP tools (list_blobs, list_conversations, message_blob) are app-owned and safe.
 fn is_team_tool_permission(raw: &Value) -> bool {
     let text = raw.to_string();
-    ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob", "bloblex_list_conversations", "bloblex__list_conversations", "bloblex_memory_", "bloblex__memory_"].iter().any(|needle| text.contains(needle))
+    ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob", "bloblex_list_conversations", "bloblex__list_conversations", "bloblex_memory_", "bloblex__memory_", "bloblex_list_projects", "bloblex__list_projects", "bloblex_create_blob", "bloblex__create_blob", "bloblex_update_blob", "bloblex__update_blob"].iter().any(|needle| text.contains(needle))
 }
 fn parse_mode(s:&str)->ApprovalMode{match s{"auto"=>ApprovalMode::Auto,"bypass"=>ApprovalMode::Bypass,_=>ApprovalMode::Ask}}
 fn provider_mode(provider:&str)->&'static str{match provider{"claude"=>"bypassPermissions","codex"=>"never",_=>"daemon_allow_all"}}
@@ -1271,7 +1261,7 @@ async fn fetch_model_catalog(st: &AppState, runtime: &Value, refresh: bool) -> R
 }
 
 async fn fetch_model_catalog_for(st: &AppState, runtime: &Value, refresh: bool, workflow_override: Option<bool>, model_hint: Option<&str>) -> Result<Value, DispatchError> {
-    let workflows = runtime["provider"] == "claude" && workflow_override.unwrap_or_else(|| st.db.settings().ok().is_some_and(|settings| settings["claude.enableWorkflows"] == true));
+    let workflows = runtime["provider"] == "claude" && workflow_override.unwrap_or_else(|| st.db.settings().map(|settings| claude_workflows_enabled(&settings)).unwrap_or(true));
     let mut spec = runtime_from(runtime);
     let effective_model_hint = model_hint.or_else(|| (runtime["provider"] == "claude" && workflows).then_some("sonnet"));
     spec.args.extend(catalog_probe_args(runtime["provider"].as_str().unwrap_or(""), workflows, effective_model_hint));
@@ -1404,9 +1394,29 @@ async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) 
         }
     }
     let runtime = st.runtimes.read().await.iter().find(|r| r["id"] == runtime_id).cloned().ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
-    let workflows = runtime["provider"] == "claude" && st.db.settings().ok().is_some_and(|settings| settings["claude.enableWorkflows"] == true);
+    let workflows = runtime["provider"] == "claude" && st.db.settings().map(|settings| claude_workflows_enabled(&settings)).unwrap_or(true);
     let catalog = match fetch_model_catalog_for(st, &runtime, false, Some(workflows), value["model"].as_str()).await { Ok(c) => c, Err(_) => return Ok(()) };
     validate_option_values_against_catalog(value["model"].as_str(),value["thinking"].as_str(),value["serviceTier"].as_str(),Some(&catalog),runtime["provider"]=="codex")
+}
+/// The shared body of `agent.create`: normalize the requested model/effort
+/// against the runtime catalog, validate it, persist the blob and broadcast the
+/// normal creation events. The team leader's `create_blob` tool reuses this so a
+/// blob it creates goes through exactly the same path as the RPC.
+async fn agent_create_from_rpc(st: &AppState, mut fields: Value) -> Result<Value, DispatchError> {
+    let runtime_id = fields["runtimeId"].as_str().ok_or_else(|| derr("invalid_argument", "runtimeId is required", StatusCode::BAD_REQUEST))?.to_owned();
+    if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id.as_str()).cloned() {
+        if let Ok(catalog) = fetch_model_catalog(st, &runtime, false).await {
+            if let Some(normalized) = normalize_model_fields(catalog["provider"].as_str().unwrap_or(""), &fields, &catalog) {
+                if let (Some(target), Some(source)) = (fields.as_object_mut(), normalized.as_object()) {
+                    for (key, value) in source { target.insert(key.clone(), value.clone()); }
+                }
+            }
+        }
+    }
+    validate_agent_catalog(st, &runtime_id, &fields).await?;
+    let (agent, events) = st.db.agent_create(&fields).map_err(agent_error)?;
+    st.broadcast_persisted(events);
+    Ok(agent)
 }
 fn validate_option_values_against_catalog(model_id:Option<&str>,thinking:Option<&str>,service_tier:Option<&str>,catalog:Option<&Value>,allow_standard_turn_tier:bool)->Result<(),DispatchError>{
     if service_tier==Some("fast")||(service_tier==Some("standard")&&!allow_standard_turn_tier){return Err(derr("invalid_argument","serviceTier must be a catalog tier id; standard speed is a per-turn default request",StatusCode::BAD_REQUEST));}
@@ -3447,6 +3457,14 @@ mod phase2a_tests {
         assert_eq!(event.event_type, "message.reactions.changed");
         assert_eq!(event.payload, json!({"sessionId":"reaction-session","messageId":message_id,"emoji":"❤️","selected":true,"reactions":["❤️"]}));
         assert_eq!(st.db.session_detail("reaction-session").unwrap()["messages"][0]["reactions"], json!(["❤️"]));
+        let replaced = dispatch(&st, "message.reaction.toggle", json!({"sessionId":"reaction-session","messageId":message_id,"emoji":"👍"})).await.unwrap();
+        assert_eq!(replaced, json!({"selected":true,"reactions":["👍"]}), "a different emoji replaces the previous reaction");
+        let replaced_event = events.recv().await.unwrap();
+        assert_eq!(replaced_event.payload, json!({"sessionId":"reaction-session","messageId":message_id,"emoji":"👍","selected":true,"reactions":["👍"]}));
+        let removed = dispatch(&st, "message.reaction.toggle", json!({"sessionId":"reaction-session","messageId":message_id,"emoji":"👍"})).await.unwrap();
+        assert_eq!(removed, json!({"selected":false,"reactions":[]}), "toggling the sole reaction removes it");
+        assert_eq!(events.recv().await.unwrap().payload["reactions"], json!([]));
+        assert_eq!(st.db.session_detail("reaction-session").unwrap()["messages"][0]["reactions"], json!([]));
         assert_eq!(dispatch(&st, "message.reaction.toggle", json!({"sessionId":"reaction-session","messageId":message_id,"emoji":"🔥"})).await.unwrap_err().1.code, "invalid_argument");
         st.db.create_session("reaction-side", "rt-test", "codex", ".", "Side").unwrap();
         st.db.set_session_link("reaction-side", &json!({"kind":"side","peerAgentId":"peer","originSessionId":"reaction-session"})).unwrap();
@@ -3874,6 +3892,110 @@ mod phase2a_tests {
         let refused = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"again"})).await;
         assert!(refused["content"][0]["text"].as_str().unwrap().contains("too many blobs"));
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+    #[tokio::test]
+    async fn team_leader_tools_create_and_update_but_are_hidden_from_non_leaders() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-create";
+        st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
+        *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:Arc::new(TeamAdapter::default()), claude:Arc::new(ClaudeAdapter::default()) });
+        let lead = st.db.agent_create(&json!({"name":"Boss","runtimeId":runtime_id})).unwrap().0;
+        let mate = st.db.agent_create(&json!({"name":"Worker","runtimeId":runtime_id})).unwrap().0;
+        let lead_id = lead["id"].as_str().unwrap().to_owned();
+        let mate_id = mate["id"].as_str().unwrap().to_owned();
+        st.db.agent_set_team(&lead_id, &json!({"leader":true})).unwrap();
+        st.db.create_session_for_agent("boss-create", runtime_id, "codex", ".", "Boss", Some(&lead_id)).unwrap();
+        st.db.update_session_state("boss-create", "idle").unwrap();
+        st.db.create_session_for_agent("worker-create", runtime_id, "codex", ".", "Worker", Some(&mate_id)).unwrap();
+        st.db.update_session_state("worker-create", "idle").unwrap();
+
+        // A non-leader is not offered the creation tools and is refused with the leader tag.
+        let worker_tools = tool_names(&team::mcp_rpc(&st, "worker-create", "mcp.tools.list", &json!({})).await.unwrap());
+        for tool in ["list_projects", "create_blob", "update_blob"] { assert!(!worker_tools.contains(&tool.to_owned()), "{tool} must be hidden from non-leaders"); }
+        for tool in ["list_projects", "create_blob", "update_blob"] {
+            let refused = call_tool(&st, "worker-create", tool, json!({"blob":"Boss","name":"Nope"})).await;
+            assert_eq!(refused["isError"], true, "{tool} must be refused for a non-leader");
+            assert_eq!(refused["content"][0]["text"], "Only the team leader (Boss) can create blobs. Ask the user to tag @Boss.");
+        }
+        // The leader sees all three.
+        let boss_tools = tool_names(&team::mcp_rpc(&st, "boss-create", "mcp.tools.list", &json!({})).await.unwrap());
+        for tool in ["list_projects", "create_blob", "update_blob"] { assert!(boss_tools.contains(&tool.to_owned()), "{tool} must be listed for the leader"); }
+
+        // An unknown project lists the available ones; list_projects shows them.
+        let project = st.db.project_create("Rocket", Some(".")).unwrap().0;
+        let project_id = project["id"].as_str().unwrap().to_owned();
+        let unknown = call_tool(&st, "boss-create", "create_blob", json!({"name":"Pilot","project":"Nowhere"})).await;
+        assert_eq!(unknown["isError"], true);
+        assert!(unknown["content"][0]["text"].as_str().unwrap().contains("Available projects: Rocket"), "{unknown}");
+        let projects = call_tool(&st, "boss-create", "list_projects", json!({})).await;
+        assert!(projects["content"][0]["text"].as_str().unwrap().contains("Rocket"), "{projects}");
+
+        // The leader creates a blob attached to the project.
+        let created = call_tool(&st, "boss-create", "create_blob", json!({"name":"CTO Bot","role":"CTO","description":"Owns the plan.","instructions":"Be concise.","project":"Rocket"})).await;
+        assert!(created.get("isError").is_none(), "{created}");
+        let text = created["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Created blob CTO Bot (CTO) in Rocket on codex"), "{text}");
+        let cto_id = st.db.agent_list(false, None).unwrap().iter().find(|a| a["name"] == "CTO Bot").unwrap()["id"].as_str().unwrap().to_owned();
+        let cto = st.db.agent_get(&cto_id).unwrap();
+        assert_eq!(cto["role"], "CTO");
+        assert_eq!(cto["projectId"], project_id.as_str());
+        assert_eq!(cto["leader"], false);
+        assert_eq!(cto["effectiveApprovalMode"], "ask");
+        // The creation is recorded as a team note in the leader's conversation.
+        let notes = st.db.session_detail("boss-create").unwrap()["messages"].as_array().cloned().unwrap_or_default();
+        assert!(notes.iter().any(|m| m["role"] == "notice" && m["content"].as_str().unwrap_or("").contains("Created blob CTO Bot (CTO) in Rocket.")), "{notes:?}");
+
+        // Duplicate names, unknown providers and oversized fields are refused.
+        assert_eq!(call_tool(&st, "boss-create", "create_blob", json!({"name":"cto bot"})).await["isError"], true);
+        assert_eq!(call_tool(&st, "boss-create", "create_blob", json!({"name":"X","provider":"gemini"})).await["isError"], true);
+        assert_eq!(call_tool(&st, "boss-create", "create_blob", json!({"name":"Y","role":"z".repeat(41)})).await["isError"], true);
+
+        // update_blob edits role, description and instructions but never the leader flag.
+        let updated = call_tool(&st, "boss-create", "update_blob", json!({"blob":"CTO Bot","role":"VP","description":"Sets direction.","instructions":"New style."})).await;
+        assert!(updated.get("isError").is_none(), "{updated}");
+        let cto = st.db.agent_get(&cto_id).unwrap();
+        assert_eq!(cto["role"], "VP");
+        assert_eq!(cto["description"], "Sets direction.");
+        assert_eq!(cto["instructions"], "New style.");
+        assert_eq!(cto["leader"], false);
+
+        // At most five blobs per turn.
+        for index in 0..4 { let r = call_tool(&st, "boss-create", "create_blob", json!({"name":format!("Bot {index}")})).await; assert!(r.get("isError").is_none(), "{r}"); }
+        let sixth = call_tool(&st, "boss-create", "create_blob", json!({"name":"Bot six"})).await;
+        assert_eq!(sixth["isError"], true);
+        assert!(sixth["content"][0]["text"].as_str().unwrap().contains("already created 5 blobs"), "{sixth}");
+
+        // At most twelve non-archived blobs in total.
+        for index in 0..5 { st.db.agent_create(&json!({"name":format!("Filler {index}"),"runtimeId":runtime_id})).unwrap(); }
+        st.db.create_session_for_agent("boss-create-2", runtime_id, "codex", ".", "Boss 2", Some(&lead_id)).unwrap();
+        st.db.update_session_state("boss-create-2", "idle").unwrap();
+        let full = call_tool(&st, "boss-create-2", "create_blob", json!({"name":"Too many"})).await;
+        assert_eq!(full["isError"], true);
+        assert!(full["content"][0]["text"].as_str().unwrap().contains("at most 12"), "{full}");
+    }
+
+    #[tokio::test]
+    async fn runtime_instructions_tag_the_leader_and_reserve_creation_for_them() {
+        let (st, _) = state();
+        let runtime_id = "rt-instructions";
+        st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
+        let lead = st.db.agent_create(&json!({"name":"Boss","runtimeId":runtime_id})).unwrap().0;
+        let mate = st.db.agent_create(&json!({"name":"Worker","runtimeId":runtime_id})).unwrap().0;
+        let main = json!({"kind":"main"});
+        // With no leader yet, a non-leader is told to ask the user to set one.
+        let no_leader = team::runtime_instructions(&st, &mate, &main, std::path::Path::new("."));
+        assert!(no_leader.contains("need to set a team leader"), "{no_leader}");
+        assert!(!no_leader.contains("tag the leader as @"), "{no_leader}");
+        // The leader (the viewer) gets the creation paragraph, not the refusal.
+        st.db.agent_set_team(lead["id"].as_str().unwrap(), &json!({"leader":true})).unwrap();
+        let lead = st.db.agent_get(lead["id"].as_str().unwrap()).unwrap();
+        let as_leader = team::runtime_instructions(&st, &lead, &main, std::path::Path::new("."));
+        assert!(as_leader.contains("You are the only blob who can create teammates"), "{as_leader}");
+        assert!(!as_leader.contains("You cannot create or change blobs"), "{as_leader}");
+        // Another blob is told to tag the leader by its real name.
+        let named = team::runtime_instructions(&st, &mate, &main, std::path::Path::new("."));
+        assert!(named.contains("tag the leader as @Boss so the user can ask them"), "{named}");
     }
     #[tokio::test]
     async fn experimental_delete_can_be_undone_and_due_deletion_uses_the_existing_gate() {
@@ -5425,6 +5547,30 @@ mod phase2a_tests {
         assert_eq!(normalized_catalog_model_hint("claude", Some("Default (recommended)".into())), Some("sonnet".into()));
         assert_eq!(normalized_catalog_model_hint("claude", Some("claude-opus-5-5".into()),), Some("claude-opus-5-5".into()));
         assert_eq!(normalized_catalog_model_hint("codex", Some("provider default".into())), Some("provider default".into()));
+    }
+
+    #[test]
+    fn claude_workflows_default_on_unless_explicitly_disabled() {
+        assert!(claude_workflows_enabled(&json!({})), "unset is on");
+        assert!(claude_workflows_enabled(&json!({"claude.enableWorkflows":true})));
+        assert!(claude_workflows_enabled(&json!({"claude.enableWorkflows":"yes"})), "a non-boolean is on");
+        assert!(!claude_workflows_enabled(&json!({"claude.enableWorkflows":false})), "only an explicit false is off");
+    }
+
+    #[tokio::test]
+    async fn claude_catalog_offers_ultracode_by_default_without_a_setting() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-default-workflows";
+        let runtime = json!({"id":runtime_id,"provider":"claude","executablePath":"unused-test-runtime","launchArgs":[],"status":"online"});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await = vec![runtime];
+        let args = Arc::new(StdMutex::new(Vec::new()));
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:Arc::new(CodexAdapter::default()), claude:Arc::new(WorkflowCatalogAdapter { seen_args:args.clone() }) });
+        let catalog = dispatch(&st, "runtime.models", json!({"runtimeId":runtime_id,"refresh":true})).await.unwrap();
+        let efforts = catalog["models"][0]["supportedThinking"].as_array().unwrap();
+        assert!(efforts.iter().any(|effort| effort == "ultracode"), "workflows, and so Ultracode, are on by default");
+        let calls = args.lock().unwrap();
+        assert!(calls.iter().any(|call| call == &["--model", "sonnet", "--settings", r#"{"enableWorkflows":true}"#]), "{calls:?}");
     }
 
     #[tokio::test]

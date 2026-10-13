@@ -201,7 +201,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
         <span className="settings-row-control"><Select ariaLabel="Project" variant="muted" value={draft.projectId ?? ''} onChange={(value) => onDraftChange({ ...draft, projectId: value || null })} options={[{ value: '', label: 'No project (casual)' }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} /></span>
       </div>
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Team leader</strong><small>The leader coordinates the other blobs and reports back. Only one blob leads.</small></span>
+        <span className="settings-row-copy"><strong>Team leader</strong><small>The leader coordinates the other blobs, reports back, and is the only blob that can create new ones when you ask it to. Only one blob leads.</small></span>
         <span className="settings-row-control"><button type="button" role="switch" aria-checked={draft.leader} aria-label="Team leader" className={`toggle ${draft.leader ? 'on' : ''}`} onClick={() => onDraftChange({ ...draft, leader: !draft.leader })}><i /></button></span>
       </div>
     </EditGroup>

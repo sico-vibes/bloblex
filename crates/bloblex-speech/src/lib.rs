@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod chunker;
+pub mod cloud;
 pub mod error;
 pub mod level;
 pub mod manifest;

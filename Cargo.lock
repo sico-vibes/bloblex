@@ -560,6 +560,8 @@ dependencies = [
 name = "bloblex-speech"
 version = "0.1.0-beta.18"
 dependencies = [
+ "base64 0.22.1",
+ "chrono",
  "cpal",
  "reqwest 0.12.28",
  "serde",
@@ -570,6 +572,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

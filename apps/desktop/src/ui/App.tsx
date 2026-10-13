@@ -28,7 +28,7 @@ import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, isAu
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
-import { AutoRetryNotice, ContextResetDivider, ConversationPicker, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
+import { AutoRetryNotice, ContextResetDivider, ConversationPicker, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
 import { hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
@@ -53,7 +53,7 @@ import { ProviderLogo, RuntimeMark } from './providerBrand'
 import { useClock } from './useClock'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { initialiseSeen, isUnread, markSeen, unreadNeedsApproval, type SeenSessions } from './sessionSeen'
-import { notificationForTransition } from './notificationTransitions'
+import { notificationAllowed, notificationForTransition } from './notificationTransitions'
 import { flashMainWindow, sendDesktopNotification } from '../desktopIntegrations'
 import { stampCompanionDragRegions } from './companionDrag'
 import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, waitingBlobCount, type ExperimentName } from './experiments'
@@ -143,6 +143,7 @@ export function App() {
     if (experiment) { changeExperiment(experiment.name, value === true); return }
     if (key === 'experimental.usageBar') setUsageBarEnabled(value === true)
     if (key === 'automations.paused') { setSchedulesPaused(value === true); return }
+    if (key === 'power.keepAwake') { setKeepAwakeEnabled(value === true); return }
     if (key === 'speech.engine') { setDictationEnginePrefs({ engine: normalizeEngineChoice(value) }); return }
     if (key === 'speech.cloud.consent') { setDictationEnginePrefs({ consent: value === true }); return }
     if (key === 'claude.enableWorkflows') setClaudeWorkflowsEnabled(value === true)
@@ -161,8 +162,12 @@ export function App() {
   }, [])
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [schedulesOpen, setSchedulesOpen] = useState(false)
+  const [handoffOpen, setHandoffOpen] = useState(false)
+  const [handoffBusy, setHandoffBusy] = useState(false)
+  const [handoffError, setHandoffError] = useState<string | null>(null)
   const [schedulesAgentId, setSchedulesAgentId] = useState<string | null>(null)
   const [schedulesPaused, setSchedulesPaused] = useState(false)
+  const [keepAwakeEnabled, setKeepAwakeEnabled] = useState(false)
   const [schedulesError, setSchedulesError] = useState<string | null>(null)
   const [launchVisible, setLaunchVisible] = useState(() => inDesktop && !companion && import.meta.env.MODE !== 'test')
   const [launchChecks, setLaunchChecks] = useState<LaunchCheck[]>([])
@@ -412,7 +417,7 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['claude.enableWorkflows', 'automations.paused', 'speech.engine', 'speech.cloud.consent', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
+      for (const key of ['claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
       setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }
@@ -548,6 +553,7 @@ export function App() {
       const notification = notificationForTransition(previous, next)
       if (!notification || mainAttention) continue
       const agent = agents.find((item) => item.id === session.agentId)
+      if (!notificationAllowed(agent?.notificationLevel, notification.state)) continue
       const name = agent?.name ?? labelize(session.provider, 'Blob')
       const title = formatUnknownSafe(session.title, 'Conversation')
       if (notificationsEnabled) void sendDesktopNotification(name, notification.body(title)).catch(() => undefined)
@@ -854,9 +860,10 @@ export function App() {
     let unlistenNotice: (() => void) | undefined
     void listen<string>('bloblex-tray-notice', (event) => setError(event.payload)).then((stop) => { if (cancelled) stop(); else unlistenNotice = stop })
     void listen('bloblex-pause-all-requested', () => {
-      if (!window.confirm('Pause all agents? Bloblex will send a cancellation request for every active session. A cancelled turn may not be resumable.')) return
+      if (!window.confirm('Pause all agents? Bloblex will send a cancellation request for every active session. A cancelled turn may not be resumable. Scheduled runs are paused too until you turn them back on in Schedules.')) return
       void (async () => {
         try {
+          await rpc('settings.set', { key: 'automations.paused', value: true }).then(() => setSchedulesPaused(true)).catch(() => undefined)
           const response = await rpc<{ sessions?: Session[] }>('session.list')
           const targets = sessionsForPauseRequest(response.sessions ?? [])
           if (!targets.length) { setError('There are no active sessions to cancel.'); return }
@@ -1579,7 +1586,13 @@ export function App() {
   }
   const previewAutomation = async (schedule: DaemonSchedule): Promise<string[]> => {
     const result = await rpc<{ occurrences?: Array<string | { local?: string; at?: string }> }>('automation.preview', { schedule, count: 3 })
-    return (result.occurrences ?? []).map((entry) => typeof entry === 'string' ? entry : entry.local ?? entry.at ?? '').filter(Boolean)
+    const zone = schedule.kind === 'cron' ? schedule.timezone : undefined
+    const show = (iso: string) => {
+      const at = new Date(iso)
+      if (Number.isNaN(at.getTime())) return iso
+      try { return at.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', ...(zone ? { timeZone: zone } : {}) }) } catch { return at.toLocaleString() }
+    }
+    return (result.occurrences ?? []).map((entry) => typeof entry === 'string' ? entry : entry.at ?? entry.local ?? '').filter(Boolean).map(show)
   }
   const setAutomationsPaused = async (paused: boolean) => {
     await rpc('settings.set', { key: 'automations.paused', value: paused })
@@ -1591,6 +1604,24 @@ export function App() {
     setSchedulesOpen(false); setBlobPage(null); setAnalyticsOpen(false); setSideSessionId(null)
     selectSession(target)
   }
+
+  // Keep-awake: only while the user opted in and a blob is working, a scheduled run is going, or one is about to start.
+  const [powerNowMs, setPowerNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    if (!keepAwakeEnabled || companion) return
+    const timer = window.setInterval(() => setPowerNowMs(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [keepAwakeEnabled, companion])
+  useEffect(() => { if (keepAwakeEnabled && !companion && connection === 'connected') void loadAutomations() }, [keepAwakeEnabled, companion, connection, loadAutomations])
+  const keepAwakeWanted = keepAwakeEnabled && !companion && (
+    sessions.some((item) => ['working', 'starting', 'waiting_permission'].includes(item.state ?? ''))
+    || (snapshot?.automations ?? []).some((item) => item.running === true || (item.enabled && !!item.nextRunAt && Date.parse(item.nextRunAt) - powerNowMs < 15 * 60_000 && Date.parse(item.nextRunAt) - powerNowMs > -60_000))
+  )
+  useEffect(() => {
+    if (!inDesktop || companion) return
+    void invoke('set_keep_awake', { enabled: keepAwakeWanted }).catch(() => undefined)
+  }, [keepAwakeWanted, companion])
+  useEffect(() => () => { if (inDesktop) void invoke('set_keep_awake', { enabled: false }).catch(() => undefined) }, [])
 
 
   const answerPermission = async (permission: PermissionRequest, choice: string): Promise<boolean> => {
@@ -1991,7 +2022,7 @@ export function App() {
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setMoreOpen(false); restoreMoreFocus() } }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
-              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />Blob settings</button>}<span className="menu-separator" /><button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
+              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />Blob settings</button>}{selectedSession && !sideSession && agents.filter((item) => !item.archived && !item.hidden && item.id !== activeSelectedAgent?.id).length > 0 && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); setHandoffError(null); setHandoffOpen(true) }}><ArrowUpRight size={15} />Continue in another blob…</button>}<span className="menu-separator" /><button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bloblex</button></div>}
             </div>
           </div>
         </header>
@@ -2135,6 +2166,17 @@ export function App() {
           setSearchTarget(result)
         }
       }} />}
+      {handoffOpen && selectedSession && <HandoffDialog agents={agents} sourceAgentId={activeSelectedAgent?.id ?? null} busy={handoffBusy} error={handoffError} onClose={() => setHandoffOpen(false)} onPick={(target) => void (async () => {
+        setHandoffBusy(true)
+        setHandoffError(null)
+        try {
+          const result = await rpc<{ draft?: string }>('session.handoff.draft', { fromSessionId: selectedSession.id })
+          const draftText = typeof result.draft === 'string' ? result.draft : ''
+          setHandoffOpen(false)
+          selectAgent(target)
+          requestAnimationFrame(() => { setComposer(draftText); composerRef.current?.focus() })
+        } catch (reason) { setHandoffError(messageOf(reason)) } finally { setHandoffBusy(false) }
+      })()} />}
       {shortcutsOpen && experiments.shortcuts && <ShortcutSheet speechEnabled={speechEnabled} onClose={() => setShortcutsOpen(false)} />}
       <UndoToasts toasts={undoToasts} onRemove={removeUndoToast} onError={setError} />
       {revertTarget && <ConfirmDialog title={`Revert ${String(revertTarget.file.path)}?`} body="Only this turn’s saved change will be reversed. Later edits that conflict with it prevent the revert." confirmLabel="Revert change" cancelLabel="Keep it" tone="warning" onConfirm={async () => {

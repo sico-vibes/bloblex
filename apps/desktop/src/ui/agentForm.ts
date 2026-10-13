@@ -19,6 +19,8 @@ export interface AgentDraft {
   thinking: string | null
   serviceTier: string | null
   approvalMode: ApprovalMode | null
+  /** Absent means "all". */
+  notificationLevel?: 'all' | 'input' | 'muted'
   /** Team placement, saved separately through agent.team.update. */
   role: string
   projectId: string | null
@@ -79,6 +81,7 @@ export function draftFromAgent(agent: Agent): AgentDraft {
     thinking: agent.thinking,
     serviceTier: agent.serviceTier,
     approvalMode: agent.approvalMode ?? null,
+    notificationLevel: agent.notificationLevel === 'input' || agent.notificationLevel === 'muted' ? agent.notificationLevel : 'all',
     role: typeof agent.role === 'string' ? agent.role : '',
     projectId: typeof agent.projectId === 'string' ? agent.projectId : null,
     leader: agent.leader === true,
@@ -120,6 +123,7 @@ export function isAgentDirty(draft: AgentDraft, baseline: AgentDraft) {
     || nullableText(draft.thinking) !== nullableText(baseline.thinking)
     || nullableText(draft.serviceTier) !== nullableText(baseline.serviceTier)
     || (draft.approvalMode ?? null) !== (baseline.approvalMode ?? null)
+    || (draft.notificationLevel ?? 'all') !== (baseline.notificationLevel ?? 'all')
 }
 
 export function validateAgentDraft(draft: AgentDraft, otherActiveNames: readonly string[]): FieldErrors {
@@ -153,6 +157,7 @@ export function createParams(draft: AgentDraft, gate: ExecutionSendGate = CLOSED
   if (gate.thinking && nullableText(draft.thinking)) params.thinking = nullableText(draft.thinking)
   if (gate.serviceTier && nullableText(draft.serviceTier)) params.serviceTier = nullableText(draft.serviceTier)
   if (draft.approvalMode) params.approvalMode = draft.approvalMode
+  if (draft.notificationLevel === 'input' || draft.notificationLevel === 'muted') params.notificationLevel = draft.notificationLevel
   return params
 }
 
@@ -188,6 +193,7 @@ export function updateParams(agentId: string, draft: AgentDraft, baseline: Agent
   if (gate.thinking && nullableText(draft.thinking) !== nullableText(baseline.thinking)) params.thinking = nullableText(draft.thinking)
   if (gate.serviceTier && nullableText(draft.serviceTier) !== nullableText(baseline.serviceTier)) params.serviceTier = nullableText(draft.serviceTier)
   if ((draft.approvalMode ?? null) !== (baseline.approvalMode ?? null)) params.approvalMode = draft.approvalMode
+  if ((draft.notificationLevel ?? 'all') !== (baseline.notificationLevel ?? 'all')) params.notificationLevel = draft.notificationLevel === 'input' || draft.notificationLevel === 'muted' ? draft.notificationLevel : null
   return params
 }
 

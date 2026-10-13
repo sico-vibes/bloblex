@@ -22,6 +22,12 @@ import { agentColorHex, previewHex } from './agentColor'
 import { labelizeEffort } from './effortLabels'
 import { preferredConcreteModel } from './modelPreferences'
 
+const NOTIFICATION_LEVEL_HELP: Record<'all' | 'input' | 'muted', string> = {
+  all: 'Tells you when it finishes, fails or needs you.',
+  input: 'Tells you only when it needs an approval or an answer.',
+  muted: 'Stays quiet. You can still see it in the app.',
+}
+
 export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, sessionId, autoApprovals, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
   runtimes: Runtime[]
@@ -270,6 +276,15 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
         </span>
       </div>
       {autoApprovals && <div className="blob-form"><AutoApprovedList actions={autoApprovals} /></div>}
+    </EditGroup>
+
+    <EditGroup title="Notifications">
+      <div className="settings-row">
+        <span className="settings-row-copy"><strong>Notify me</strong><small>{NOTIFICATION_LEVEL_HELP[draft.notificationLevel ?? 'all']}</small></span>
+        <span className="settings-row-control">
+          <Select ariaLabel="Notify me" variant="muted" value={draft.notificationLevel ?? 'all'} onChange={(value) => onDraftChange({ ...draft, notificationLevel: value === 'input' || value === 'muted' ? value : 'all' })} options={[{ value: 'all', label: 'About everything' }, { value: 'input', label: 'Only when it needs me' }, { value: 'muted', label: 'Never' }]} />
+        </span>
+      </div>
     </EditGroup>
 
     <EditGroup title="Details">

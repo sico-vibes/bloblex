@@ -166,6 +166,8 @@ export interface Agent extends JsonRecord {
   updatedAt: string
   approvalMode?: ApprovalMode | null
   effectiveApprovalMode?: ApprovalMode | null
+  /** What this blob may notify about: everything, only what needs the user, or nothing. */
+  notificationLevel?: 'all' | 'input' | 'muted' | null
   /** Team placement: owning project (null = casual), role label, leader, sidebar visibility. */
   projectId?: string | null
   role?: string
@@ -181,10 +183,13 @@ export interface Project extends JsonRecord {
   collapsed?: boolean
 }
 
-/** Side conversation between two blobs; absent on a blob's main conversation. */
+/** Side conversation between two blobs, or a scheduled run; absent on a blob's main conversation. */
 export interface SessionLink extends JsonRecord {
-  kind: 'side'
-  peerAgentId: string
+  kind: 'side' | 'automation'
+  /** Present on side conversations. */
+  peerAgentId?: string
+  automationId?: string
+  runId?: string
   peerName?: string
   originSessionId?: string
   /** Short title the sender gave the conversation, also its session title. */

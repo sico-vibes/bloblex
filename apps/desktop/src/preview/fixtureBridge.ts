@@ -514,6 +514,16 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (method === 'memory.delete') { target.deletedAt = new Date().toISOString(); notifyFixtureDaemon('memory.deleted', { id: target.id }); return { deleted: true } as T }
     if (method === 'memory.restore') { target.deletedAt = null; notifyFixtureDaemon('memory.changed', { record: { ...target } }); return { record: { ...target } } as T }
   }
+  if (method === 'session.handoff.draft') {
+    const source = sessions.find((item) => item.id === params.fromSessionId)
+    if (!source || source.archived) throw rpcError('not_found', 'Conversation not found.')
+    const owner = agents.find((item) => item.id === source.agentId)
+    const recent = (source.messages ?? []).filter((message) => message.role === 'user' || message.role === 'assistant').slice(-8)
+    const lines = recent.map((message) => `${message.role === 'user' ? 'You' : owner?.name ?? 'Assistant'}: ${String(message.content ?? '').slice(0, 600)}`)
+    const title = String(source.title || 'Conversation')
+    const note = typeof params.note === 'string' && params.note.trim() ? `\n\n${params.note.trim()}` : ''
+    return { draft: `Continue from ${owner?.name ?? 'another blob'}'s conversation "${title}".${note}\n\n${lines.join('\n')}`.slice(0, 4200), carried: { messages: recent.length, truncated: false }, fromAgentId: source.agentId ?? null, title } as T
+  }
   if (method === 'session.steer') {
     const session = sessions.find((item) => item.id === params.sessionId)
     if (!session || session.archived) throw rpcError('not_found', 'Conversation not found.')

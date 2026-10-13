@@ -17,6 +17,15 @@ describe('team selectors', () => {
     expect(splitReferences('plain', null)).toEqual([{ text: 'plain' }])
   })
 
+  it('never treats a scheduled run as the main conversation of a blob', () => {
+    const sessions = [
+      session('main', { agentId: 'a', updatedAt: '2026-10-01T00:00:00Z' }),
+      session('run', { agentId: 'a', updatedAt: '2026-10-05T00:00:00Z', link: { kind: 'automation', automationId: 'x', runId: 'r' } }),
+    ]
+    expect(mainSessionFor(sessions, 'a')?.id).toBe('main')
+    expect(mainSessionFor([sessions[1]], 'a')).toBeNull()
+  })
+
   it('keeps one main conversation per blob and lists side conversations for both sides', () => {
     const sessions = [
       session('old', { agentId: 'a', updatedAt: '2026-10-01T00:00:00Z' }),

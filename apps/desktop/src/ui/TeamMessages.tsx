@@ -1,6 +1,7 @@
 // Team surfaces inside a conversation: delegation chips, relayed replies,
 // side-conversation header, proposed plans, inline questions and @mentions.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { ArrowLeftRight, Check, ChevronDown, ClipboardList, Hash, RotateCw, Send, X } from 'lucide-react'
 import type { Agent, PermissionRequest, Session, UserQuestion } from '../types'
 import { agentLook } from '../blob/look'
@@ -31,6 +32,37 @@ export function ReplyChip({ from, name, onOpen }: { from: Agent | null | undefin
     <button type="button" className="team-chip incoming" style={accentOf(from)} onClick={onOpen} disabled={!onOpen} aria-label={`Message from ${name}. Open side conversation`} title={onOpen ? 'Open the side conversation' : undefined}>
       <span>Message from</span><MiniBlob agent={from} name={name} /><b>{name}</b>
     </button>
+  </div>
+}
+
+/** Choose which blob continues this conversation. The daemon only drafts the message; nothing is sent. */
+export function HandoffDialog({ agents, sourceAgentId, busy, error, onPick, onClose }: {
+  agents: readonly Agent[]
+  sourceAgentId: string | null
+  busy: boolean
+  error: string | null
+  onPick: (agent: Agent) => void
+  onClose: () => void
+}) {
+  const entered = useDialogEntered()
+  const { ref, close } = useDialogAccessibility(onClose, () => !busy)
+  const choices = agents.filter((agent) => !agent.archived && !agent.hidden && agent.id !== sourceAgentId)
+  return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`}>
+    <section ref={ref} className="blob-dialog handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title" tabIndex={-1}>
+      <h2 id="handoff-title">Continue in another blob</h2>
+      <p>Pick who should pick this up. Bloblex puts a short summary and the latest messages in their composer. Nothing is sent until you send it.</p>
+      {choices.length === 0 && <p className="blob-muted">There is no other blob to hand this to.</p>}
+      <ul className="handoff-list">
+        {choices.map((agent, index) => <li key={agent.id}>
+          <button type="button" className="handoff-choice" data-dialog-initial-focus={index === 0 ? '' : undefined} disabled={busy} onClick={() => onPick(agent)}>
+            <MiniBlob agent={agent} name={agent.name} size={26} />
+            <span><strong>{agent.name}</strong>{agent.role?.trim() ? <small>{agent.role}</small> : null}</span>
+          </button>
+        </li>)}
+      </ul>
+      {error && <p className="schedules-problem" role="alert">{error}</p>}
+      <div className="blob-dialog-actions"><button type="button" className="secondary-button" disabled={busy} onClick={close}>Cancel</button></div>
+    </section>
   </div>
 }
 

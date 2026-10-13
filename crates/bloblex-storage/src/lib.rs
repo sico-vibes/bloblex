@@ -2712,16 +2712,21 @@ impl Storage {
         ).optional()?;
         let role = role.ok_or(StorageError::AgentNotFound)?;
         if !matches!(role.as_str(), "user" | "assistant") { return Err(StorageError::InvalidAgent); }
-        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM message_reactions WHERE session_id=?1 AND message_id=?2 AND emoji=?3)", params![session,message_id,emoji], |r| r.get(0))?;
-        if exists {
-            tx.execute("DELETE FROM message_reactions WHERE session_id=?1 AND message_id=?2 AND emoji=?3", params![session,message_id,emoji])?;
-        } else {
+        // At most one reaction per message. Toggling the sole reaction removes
+        // it; toggling a different one replaces it. A legacy message that still
+        // carries several reactions collapses to the chosen one on this toggle.
+        let existing: Vec<String> = {
+            let mut statement = tx.prepare("SELECT emoji FROM message_reactions WHERE session_id=?1 AND message_id=?2")?;
+            let rows = statement.query_map(params![session,message_id], |r| r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+            rows
+        };
+        let selected = !(existing.len() == 1 && existing.first().is_some_and(|current| current == emoji));
+        tx.execute("DELETE FROM message_reactions WHERE session_id=?1 AND message_id=?2", params![session,message_id])?;
+        if selected {
             tx.execute("INSERT INTO message_reactions(session_id,message_id,emoji,created_at) VALUES(?1,?2,?3,?4)", params![session,message_id,emoji,Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)])?;
         }
-        let mut statement = tx.prepare("SELECT emoji FROM message_reactions WHERE session_id=?1 AND message_id=?2 ORDER BY CASE emoji WHEN '👍' THEN 0 WHEN '👎' THEN 1 WHEN '❤️' THEN 2 WHEN '😂' THEN 3 WHEN '🎉' THEN 4 ELSE 5 END")?;
-        let reactions = statement.query_map(params![session,message_id], |r| r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
-        drop(statement);
-        let payload = json!({"sessionId":session,"messageId":message_id,"emoji":emoji,"selected":!exists,"reactions":reactions});
+        let reactions = if selected { vec![emoji.to_owned()] } else { Vec::new() };
+        let payload = json!({"sessionId":session,"messageId":message_id,"emoji":emoji,"selected":selected,"reactions":reactions});
         let event = push_team_event(&tx, "message.reactions.changed", &payload)?;
         tx.commit()?;
         Ok(event)
@@ -5066,6 +5071,38 @@ mod tests {
         db.session_delete("s-message").unwrap();
         let conn = db.conn.lock().unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM message_reactions WHERE session_id='s-message'", [], |r| r.get::<_,i64>(0)).unwrap(), 0, "deleting a conversation removes its reactions");
+    }
+
+    #[test]
+    fn a_message_keeps_at_most_one_reaction_and_toggling_replaces_or_removes_it() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-reaction","provider":"codex"})).unwrap();
+        db.create_session("s-react", "rt-reaction", "codex", ".", "Reactions").unwrap();
+        db.create_turn("t-react", "s-react").unwrap();
+        let message = db.append_message("s-react", "t-react", "assistant", "A reply").unwrap();
+        let id = message["id"].as_str().unwrap();
+        let first = db.toggle_message_reaction("s-react", id, "👍").unwrap();
+        assert_eq!(first["payload"]["reactions"], json!(["👍"]));
+        assert_eq!(first["payload"]["selected"], true);
+        let replaced = db.toggle_message_reaction("s-react", id, "❤️").unwrap();
+        assert_eq!(replaced["payload"]["reactions"], json!(["❤️"]), "a different emoji replaces the previous one");
+        assert_eq!(replaced["payload"]["selected"], true);
+        assert_eq!(db.session_detail("s-react").unwrap()["messages"][0]["reactions"], json!(["❤️"]));
+        let removed = db.toggle_message_reaction("s-react", id, "❤️").unwrap();
+        assert_eq!(removed["payload"]["reactions"], json!([]), "toggling the sole reaction removes it");
+        assert_eq!(removed["payload"]["selected"], false);
+        assert_eq!(db.session_detail("s-react").unwrap()["messages"][0]["reactions"], json!([]));
+        // A legacy message that still carries several reactions collapses to the chosen one.
+        {
+            let conn = db.conn.lock().unwrap();
+            for emoji in ["👍", "😂"] {
+                conn.execute("INSERT INTO message_reactions(session_id,message_id,emoji,created_at) VALUES(?1,?2,?3,?4)", params!["s-react", id, emoji, "2026-01-01T00:00:00Z"]).unwrap();
+            }
+        }
+        let collapsed = db.toggle_message_reaction("s-react", id, "😂").unwrap();
+        assert_eq!(collapsed["payload"]["reactions"], json!(["😂"]), "several reactions collapse to the chosen one");
+        assert_eq!(collapsed["payload"]["selected"], true);
+        assert_eq!(db.session_detail("s-react").unwrap()["messages"][0]["reactions"], json!(["😂"]));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! the automatic fallback. See `docs/IMPROVEMENT_PHASE_7_SPEC.md`.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use serde::Serialize;
@@ -28,6 +28,14 @@ pub const MIN_SPEECH_SAMPLES: usize = CLOUD_SAMPLE_RATE as usize;
 pub const MAX_BUFFER_SAMPLES: usize = CLOUD_SAMPLE_RATE as usize * 60 * 10;
 /// A response body is parsed only to this size; anything larger is a bad response.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+/// After a persistent cloud failure, `automatic` mode stops retrying the cloud
+/// for this long and goes straight to the on-device engine.
+pub const CLOUD_COOLDOWN: Duration = Duration::from_secs(10 * 60);
+/// Engine-event reason code when a session skipped a cooling-down cloud engine.
+pub const REASON_CLOUD_COOLDOWN: &str = "cloud_cooldown";
+/// Error code the UI maps when no engine could transcribe: the cloud failed
+/// (or was not chosen) and no on-device model could run either.
+pub const BOTH_ENGINES_UNAVAILABLE: &str = "both_engines_unavailable";
 
 /// How the user asked dictation to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,24 +80,68 @@ pub struct Resolved {
     pub fallback: Option<ResolvedEngine>,
     /// A stable machine code when no engine can run the session.
     pub unavailable: Option<&'static str>,
+    /// Why the session was routed away from a healthy cloud engine, if so.
+    pub reason: Option<&'static str>,
 }
 
 /// Decide which engine a session should use. Pure and total so the desktop can
 /// trust it before touching the microphone. Consent is always an input, never
-/// inferred.
+/// inferred. `cloud_paused` is the cool-down state after a persistent cloud
+/// failure; it only diverts `automatic` sessions that could run on-device, so a
+/// user who explicitly chose the cloud still gets it.
 pub fn resolve_engine(
     preference: EnginePreference,
     consent: bool,
     auth: &AuthStatus,
     local_ready: bool,
+    cloud_paused: bool,
 ) -> Resolved {
     match preference {
         EnginePreference::Local => Resolved {
             primary: ResolvedEngine::OnDevice,
             fallback: None,
             unavailable: (!local_ready).then_some("model_not_ready"),
+            reason: None,
         },
-        EnginePreference::Automatic | EnginePreference::Cloud => {
+        EnginePreference::Automatic => {
+            let cloud_ready = consent
+                && matches!(
+                    auth.state,
+                    AuthState::Ready | AuthState::ApiKey | AuthState::Expired
+                );
+            if cloud_ready && cloud_paused && local_ready {
+                return Resolved {
+                    primary: ResolvedEngine::OnDevice,
+                    fallback: None,
+                    unavailable: None,
+                    reason: Some(REASON_CLOUD_COOLDOWN),
+                };
+            }
+            if cloud_ready {
+                Resolved {
+                    primary: ResolvedEngine::ChatGpt,
+                    fallback: local_ready.then_some(ResolvedEngine::OnDevice),
+                    unavailable: None,
+                    reason: None,
+                }
+            } else if local_ready {
+                Resolved {
+                    primary: ResolvedEngine::OnDevice,
+                    fallback: None,
+                    unavailable: None,
+                    reason: None,
+                }
+            } else {
+                let code = if consent { "auth_missing" } else { "consent_required" };
+                Resolved {
+                    primary: ResolvedEngine::OnDevice,
+                    fallback: None,
+                    unavailable: Some(code),
+                    reason: None,
+                }
+            }
+        }
+        EnginePreference::Cloud => {
             let cloud_ready = consent
                 && matches!(
                     auth.state,
@@ -100,12 +152,14 @@ pub fn resolve_engine(
                     primary: ResolvedEngine::ChatGpt,
                     fallback: local_ready.then_some(ResolvedEngine::OnDevice),
                     unavailable: None,
+                    reason: None,
                 }
             } else if local_ready {
                 Resolved {
                     primary: ResolvedEngine::OnDevice,
                     fallback: None,
                     unavailable: None,
+                    reason: None,
                 }
             } else {
                 let code = if consent { "auth_missing" } else { "consent_required" };
@@ -113,6 +167,7 @@ pub fn resolve_engine(
                     primary: ResolvedEngine::OnDevice,
                     fallback: None,
                     unavailable: Some(code),
+                    reason: None,
                 }
             }
         }
@@ -202,13 +257,23 @@ impl CloudError {
             Self::AuthMissing => "sign-in required",
             Self::AuthRequired => "sign-in expired",
             Self::RateLimited => "rate limited",
-            Self::Challenged => "verification required",
+            Self::Challenged => "blocked by OpenAI's bot check",
             Self::Unavailable => "unavailable",
             Self::TooLarge => "recording too large",
             Self::TooShort => "recording too short",
             Self::BadResponse => "unreadable response",
-            Self::Rejected(_) => "rejected",
+            Self::Rejected(_) => "request rejected",
         }
+    }
+
+    /// True for failures persistent enough to pause the cloud engine: being
+    /// challenged or blocked, rate limited, or the service being unreachable.
+    /// A later dictation in the same run then goes straight to on-device.
+    pub fn is_persistent(&self) -> bool {
+        matches!(
+            self,
+            Self::Challenged | Self::RateLimited | Self::Unavailable
+        )
     }
 
     /// A calm sentence that names the reason class and never the response body.
@@ -222,11 +287,50 @@ impl CloudError {
             }
             Self::TooLarge => "That recording is too large to transcribe. Keep it under ten minutes.".to_string(),
             Self::TooShort => "That recording was too short to transcribe.".to_string(),
+            Self::Challenged => {
+                "OpenAI blocks transcription from apps that are not its own clients, and no on-device model is installed. Use the on-device model or dictate inside the ChatGPT app.".to_string()
+            }
+            Self::Rejected(code) => format!(
+                "ChatGPT rejected the transcription request (HTTP {code}), and no on-device model is installed."
+            ),
             other => format!(
                 "ChatGPT transcription is unavailable ({}) and no on-device model is installed.",
                 other.reason()
             ),
         }
+    }
+}
+
+/// A small in-memory cool-down so repeated dictations stop retrying a cloud
+/// engine that just failed persistently. Time is injected as `Instant`, so the
+/// logic is pure and the desktop only supplies the clock.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CloudCooldown {
+    until: Option<Instant>,
+}
+
+impl CloudCooldown {
+    pub fn new() -> Self {
+        Self { until: None }
+    }
+
+    /// Record a failure at `now`. Returns true when it began a cool-down.
+    pub fn record(&mut self, now: Instant, error: &CloudError) -> bool {
+        if !error.is_persistent() {
+            return false;
+        }
+        self.until = Some(now + CLOUD_COOLDOWN);
+        true
+    }
+
+    /// Whether the cloud engine is still paused at `now`.
+    pub fn active(&self, now: Instant) -> bool {
+        matches!(self.until, Some(until) if until > now)
+    }
+
+    /// Clear the cool-down, for example after a later cloud success.
+    pub fn clear(&mut self) {
+        self.until = None;
     }
 }
 
@@ -1111,49 +1215,146 @@ mod tests {
         use ResolvedEngine::{ChatGpt, OnDevice};
 
         let ready = status(AuthState::Ready);
+        let resolved = |primary, fallback, unavailable, reason| Resolved {
+            primary,
+            fallback,
+            unavailable,
+            reason,
+        };
         assert_eq!(
-            resolve_engine(Local, true, &ready, true),
-            Resolved { primary: OnDevice, fallback: None, unavailable: None }
+            resolve_engine(Local, true, &ready, true, false),
+            resolved(OnDevice, None, None, None)
         );
         assert_eq!(
-            resolve_engine(Local, true, &ready, false),
-            Resolved { primary: OnDevice, fallback: None, unavailable: Some("model_not_ready") }
+            resolve_engine(Local, true, &ready, false, false),
+            resolved(OnDevice, None, Some("model_not_ready"), None)
         );
         assert_eq!(
-            resolve_engine(Cloud, false, &ready, true),
-            Resolved { primary: OnDevice, fallback: None, unavailable: None }
+            resolve_engine(Cloud, false, &ready, true, false),
+            resolved(OnDevice, None, None, None)
         );
         assert_eq!(
-            resolve_engine(Cloud, false, &ready, false),
-            Resolved { primary: OnDevice, fallback: None, unavailable: Some("consent_required") }
+            resolve_engine(Cloud, false, &ready, false, false),
+            resolved(OnDevice, None, Some("consent_required"), None)
         );
         assert_eq!(
-            resolve_engine(Automatic, true, &ready, true),
-            Resolved { primary: ChatGpt, fallback: Some(OnDevice), unavailable: None }
+            resolve_engine(Automatic, true, &ready, true, false),
+            resolved(ChatGpt, Some(OnDevice), None, None)
         );
         assert_eq!(
-            resolve_engine(Cloud, true, &ready, false),
-            Resolved { primary: ChatGpt, fallback: None, unavailable: None }
+            resolve_engine(Cloud, true, &ready, false, false),
+            resolved(ChatGpt, None, None, None)
         );
 
         let missing = status(AuthState::Missing);
         assert_eq!(
-            resolve_engine(Automatic, true, &missing, true),
-            Resolved { primary: OnDevice, fallback: None, unavailable: None }
+            resolve_engine(Automatic, true, &missing, true, false),
+            resolved(OnDevice, None, None, None)
         );
         assert_eq!(
-            resolve_engine(Automatic, true, &missing, false),
-            Resolved { primary: OnDevice, fallback: None, unavailable: Some("auth_missing") }
+            resolve_engine(Automatic, true, &missing, false, false),
+            resolved(OnDevice, None, Some("auth_missing"), None)
         );
-        assert_eq!(resolve_engine(Cloud, true, &status(AuthState::Expired), true).primary, ChatGpt);
-        assert_eq!(resolve_engine(Cloud, true, &status(AuthState::ApiKey), true).primary, ChatGpt);
         assert_eq!(
-            resolve_engine(Cloud, true, &status(AuthState::Unsupported), false).unavailable,
+            resolve_engine(Cloud, true, &status(AuthState::Expired), true, false).primary,
+            ChatGpt
+        );
+        assert_eq!(
+            resolve_engine(Cloud, true, &status(AuthState::ApiKey), true, false).primary,
+            ChatGpt
+        );
+        assert_eq!(
+            resolve_engine(Cloud, true, &status(AuthState::Unsupported), false, false).unavailable,
             Some("auth_missing")
         );
         assert_eq!(EnginePreference::parse("automatic"), Automatic);
         assert_eq!(EnginePreference::parse("cloud"), Cloud);
         assert_eq!(EnginePreference::parse("nonsense"), Local);
+    }
+
+    #[test]
+    fn automatic_skips_a_cooling_cloud_when_local_can_run() {
+        let ready = status(AuthState::Ready);
+        // Automatic + cool-down + local ready: straight to on-device, reason set.
+        assert_eq!(
+            resolve_engine(EnginePreference::Automatic, true, &ready, true, true),
+            Resolved {
+                primary: ResolvedEngine::OnDevice,
+                fallback: None,
+                unavailable: None,
+                reason: Some("cloud_cooldown"),
+            }
+        );
+        // An explicit cloud choice overrides the cool-down.
+        assert_eq!(
+            resolve_engine(EnginePreference::Cloud, true, &ready, true, true).primary,
+            ResolvedEngine::ChatGpt
+        );
+        // Without a local model the cool-down cannot divert, so cloud is still tried.
+        assert_eq!(
+            resolve_engine(EnginePreference::Automatic, true, &ready, false, true).primary,
+            ResolvedEngine::ChatGpt
+        );
+    }
+
+    #[test]
+    fn cool_down_pauses_then_expires_with_an_injected_clock() {
+        let start = Instant::now();
+        let mut cooldown = CloudCooldown::new();
+        assert!(!cooldown.active(start));
+
+        // A transient failure does not start a cool-down.
+        assert!(!cooldown.record(start, &CloudError::Rejected(403)));
+        assert!(!cooldown.active(start));
+
+        // A challenge does, and expires exactly after the window.
+        assert!(cooldown.record(start, &CloudError::Challenged));
+        assert!(cooldown.active(start));
+        assert!(cooldown.active(start + CLOUD_COOLDOWN - Duration::from_secs(1)));
+        assert!(!cooldown.active(start + CLOUD_COOLDOWN));
+        assert!(!cooldown.active(start + CLOUD_COOLDOWN + Duration::from_secs(1)));
+
+        // Recording again extends from the new moment.
+        cooldown.record(start + Duration::from_secs(30), &CloudError::Unavailable);
+        assert!(cooldown.active(start + Duration::from_secs(31)));
+
+        cooldown.clear();
+        assert!(!cooldown.active(start + Duration::from_secs(31)));
+    }
+
+    #[test]
+    fn persistent_errors_start_a_cool_down_and_transient_ones_do_not() {
+        for error in [CloudError::Challenged, CloudError::RateLimited, CloudError::Unavailable] {
+            assert!(error.is_persistent(), "{error:?} should be persistent");
+            let mut cooldown = CloudCooldown::new();
+            assert!(cooldown.record(Instant::now(), &error));
+            assert!(cooldown.active(Instant::now()));
+        }
+        for error in [
+            CloudError::AuthMissing,
+            CloudError::AuthRequired,
+            CloudError::TooLarge,
+            CloudError::TooShort,
+            CloudError::BadResponse,
+            CloudError::Rejected(403),
+        ] {
+            assert!(!error.is_persistent(), "{error:?} should not be persistent");
+            assert!(!CloudCooldown::new().record(Instant::now(), &error));
+        }
+    }
+
+    #[test]
+    fn challenged_and_rejected_copy_is_truthful_not_verification() {
+        let challenged = CloudError::Challenged;
+        assert_eq!(challenged.code(), "challenged");
+        assert!(!challenged.reason().contains("verification"));
+        assert!(!challenged.user_message().contains("verification"));
+        assert!(challenged.user_message().contains("OpenAI"));
+
+        let rejected = CloudError::Rejected(403);
+        assert_eq!(rejected.code(), "rejected");
+        assert!(!rejected.reason().contains("verification"));
+        assert!(rejected.user_message().contains("HTTP 403"));
     }
 
     #[tokio::test]

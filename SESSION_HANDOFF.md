@@ -1,6 +1,54 @@
 # Bloblex session handoff
 
-Current as of 12 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+Current as of 13 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+
+## Improvement plan v2: overnight status (12-13 October 2026)
+
+Roadmap and decisions: [docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md). Work ran through the delegation pipeline in `AGENTS.md`: OpenCode DeepSeek (high) wrote backend code from specs in `docs/IMPROVEMENT_PHASE_*_SPEC.md`; the Director wrote all UI/UX, reviewed every diff, re-ran the gates itself and committed. **Everything below is fake-peer or unit verified. No real CLI, microphone, installer or native window was exercised, and nothing was pushed or released.**
+
+### Where the code is
+
+| Branch | What it holds |
+|---|---|
+| `integration/improvement-v2` (this checkout) | Phases 1-4, 7 and all UI merged, on top of `17591b9`. **Start here.** |
+| `phase5-memory` (worktree `../Blolblex-wt-phase1`) | Backend chain. Phase 5A (memory) was in progress there; anything uncommitted in that worktree is the lane's unfinished work. |
+| `phase7-cloud-dictation` (worktree `../Blolblex-wt-p7`) | Cloud dictation and keep-awake (merged into integration). |
+| `plan/improvement-v2`, `phase1-ui`, `phase2-ui`, `phase1-lifecycle`, `phase2-queue`, `phase3-retry`, `phase4-automations` | Stepping stones, all contained in the integration branch. |
+
+### What exists
+
+| Phase | Backend | UI |
+|---|---|---|
+| 1 Reliability | One turn-end path; timeouts now drain queued team messages; watchdog waits during approvals; typed recovery hints; delivery fact; context-change notices | Context-reset dividers (chat and island) |
+| 2 Queue / steer | Durable per-session queue, send later, pause rules, due loop; gated Codex `turn/steer` (off by default, evidence `none`) | Composer stays usable during a turn, queue banner, send-later popover, Steer button when enabled |
+| 3 Retry | `experimental.autoRetry`: one "Please continue." after overload or a known rate-limit reset; never resends the prompt | Retry notices with Cancel, queue retry rows, settings |
+| 4 Schedules | Cron/once automations, coalescing, single-flight, caps, bypass impossible, unclassified permissions auto-denied, agents can only propose | Schedules page, editor with presets and preview, run history, approvals, global pause; Pause all also pauses schedules |
+| 4B Power | `set_keep_awake` thread holding `ES_SYSTEM_REQUIRED` | Opt-in Power setting, wanted only while working or a run is due |
+| 5 Memory | **In progress** (`docs/IMPROVEMENT_PHASE_5A_SPEC.md`) | Memory settings page, about-you, review of agent-saved notes (needs `memory.*` RPCs) |
+| 6 Questions / hand-off | **Not started** (`docs/IMPROVEMENT_PHASE_6A_SPEC.md`) | Hand-off dialog and per-blob notification level (need `session.handoff.draft` and the agent field) |
+| 7 Cloud dictation | `bloblex-speech::cloud`, native worker path, status command and engine event | Engine choice, consent dialog, indicator, Codex sign-in status |
+
+### Gates last run
+
+- Desktop: `npx tsc -b` clean; Vitest 496/496 on the integration branch.
+- Rust workspace excluding the desktop crate (`RUST_MIN_STACK=33554432 cargo test --workspace --exclude bloblex-desktop`): 419 passed, 0 failed.
+- Desktop crate: lib tests (including `power::` and `speech::`) pass from a plain path (`D:\c7`, a detached checkout). **Building the desktop crate from this folder fails** because the apostrophe in `Basem's` breaks the Windows resource compiler and `assets/icon` is not tracked; use a plain-path checkout, as the earlier `D:\u18` checks did.
+- One daemon test (`agent_rpc_crud_reorder_archive_errors_and_persisted_event_sequence`) overflows the default test stack on the untouched base commit; run Rust tests with `RUST_MIN_STACK=33554432`.
+
+### Known gaps and risks
+
+- **UI calls RPCs that the backend branch does not have yet:** `memory.*` (Phase 5A, running), `session.handoff.draft` and agent `notificationLevel` (Phase 6A). Until they land those two surfaces show an inline error, nothing crashes.
+- **Daemon half of "scheduled runs are never a blob's main conversation" is not done** (Phase 6A part 4). The UI already skips them; `agent.conversation` in the daemon would still pick the newest non-side session, so a run may be reopened as the blob's conversation after a restart. Do this before enabling schedules for real.
+- Not built: the onboarding state machine, an island badge for running schedules, replay-harness tests (Phase 3B), ask-user shim for OpenCode (6A part 1).
+- `turn/steer`, the ChatGPT transcription endpoint (WAV acceptance, Cloudflare behaviour), real auto-retry timing, scheduler end-to-end timing, `powercfg /requests` with keep-awake, and the memory catalog reaching a real prompt are all unverified live. See the evidence files in `docs/evidence/`.
+- Cloud dictation reads the Codex sign-in file under an owner-approved, dictation-only exception recorded in `AGENTS.md`. It is opt-in, off by default, and falls back to the on-device model.
+- Open product call: agent-written memories for a project or everyone stay unused until approved (the recommended default, implemented in the spec).
+
+### Suggested next steps
+
+1. Let the 5A lane finish, review and commit it, then run Phase 6A (already specified) and Phase 3B.
+2. Build the installer in a private plain-path directory and run the live checks listed in each evidence file with a throwaway database.
+3. Merge `integration/improvement-v2` into `main` when satisfied. Nothing has been merged into `main`.
 
 ## Published (12 October 2026, beta.18)
 

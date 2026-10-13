@@ -356,7 +356,12 @@ pub async fn sweep_loop(st: AppState) {
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
-            _ = interval.tick() => sweep(&st).await,
+            _ = interval.tick() => {
+                sweep(&st).await;
+                // Questions left by OpenCode's `ask_user` expire on the same
+                // periodic sweep, so no separate loop is needed.
+                crate::questions::sweep(&st).await;
+            },
             _ = st.stopping.notified() => break,
         }
     }

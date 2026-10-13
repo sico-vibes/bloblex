@@ -149,7 +149,7 @@ pub fn attach(st: &AppState, session_id: &str, agent_id: Option<&str>, link: &Va
 /// conversations or schedule anything. Memory tools are only listed while
 /// `experimental.memory` is on; automation runs may keep memory tools but the
 /// write rails restrict them to blob scope.
-fn tools(is_automation: bool, memory_enabled: bool) -> Value {
+fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool) -> Value {
     let memory = if memory_enabled { crate::memory::tool_schemas() } else { Vec::new() };
     if is_automation {
         return json!(memory);
@@ -161,6 +161,8 @@ fn tools(is_automation: bool, memory_enabled: bool) -> Value {
         json!({"name":"schedule_task","description":"Propose a scheduled task for your blob. It is created disabled and will never run until the user approves it in Bloblex. Use this only when the user asks for something recurring or at a set time.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}}),
         json!({"name":"list_my_schedules","description":"List this blob's scheduled tasks, whether each is enabled, and when it next runs.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
     ];
+    // OpenCode has no native question tool over ACP, so the bridge offers one.
+    if ask_user { list.push(crate::questions::tool_schema()); }
     list.extend(memory);
     json!(list)
 }
@@ -170,13 +172,21 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
     // Recursion guard: a session linked to an automation run can neither use
     // team/scheduling tools nor reach any automation write RPC. Memory tools
     // are allowed, but only while the feature is on and only blob scope.
-    let is_automation = st.db.session_detail(session_id).map(|row| row["link"]["kind"] == "automation").unwrap_or(false);
+    let session = st.db.session_detail(session_id).ok();
+    let is_automation = session.as_ref().map(|row| row["link"]["kind"] == "automation").unwrap_or(false);
+    // `ask_user` exists only where the provider has no native question tool:
+    // OpenCode main conversations, never automation runs or side conversations.
+    let ask_user = session.as_ref().is_some_and(|row| {
+        row["archived"] != true
+            && row["provider"].as_str() == Some("opencode")
+            && !matches!(row["link"]["kind"].as_str(), Some("side" | "automation"))
+    });
     let memory_enabled = crate::memory::enabled(st);
     if is_automation && method.starts_with("automation.") {
         return Err(derr("forbidden", "Automation runs cannot change automations.", StatusCode::FORBIDDEN));
     }
     match method {
-        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation, memory_enabled)})),
+        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation, memory_enabled, ask_user)})),
         "mcp.tools.call" => {
             let name = params["name"].as_str().unwrap_or("");
             if is_automation && !name.starts_with("memory_") {
@@ -189,6 +199,8 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "message_blob" => message_blob(st, session_id, args).await,
                 "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
+                "ask_user" if ask_user => crate::questions::ask_user_tool(st, session_id, args).await,
+                "ask_user" => Err("ask_user is only available to OpenCode main conversations.".into()),
                 "memory_search" if memory_enabled => crate::memory::tool_search(st, session_id, args).await,
                 "memory_get" if memory_enabled => crate::memory::tool_get(st, session_id, args).await,
                 "memory_write" if memory_enabled => crate::memory::tool_write(st, session_id, args).await,

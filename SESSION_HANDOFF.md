@@ -2,6 +2,22 @@
 
 Current as of 13 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
+## Owner review follow-up and Bitbots (13 October 2026, after beta.19)
+
+Not released. Everything is on local `main`; nothing was pushed or tagged after the beta.19 docs commit `2a397ee`.
+
+**Review fixes.**
+- ChatGPT dictation: a live probe (`scripts/live-checks/live-cloud-dictation.mjs`, evidence `docs/evidence/cloud-dictation-diagnosis-2026-10-13.md`) showed `chatgpt.com/backend-api/transcribe` answers an honest non-browser client with a Cloudflare managed challenge (403, `cf-mitigated: challenge`). The Codex login is valid; this is not an auth failure and cannot be fixed without impersonating another client, which we will not do. The Codex app-server has no plain transcription request (only `thread/realtime/*`). The copy now says so; `automatic` mode cools the cloud down for ten minutes after a persistent failure; an unrecovered failure carries `both_engines_unavailable`; the UI no longer skips the on-device download for `automatic`.
+- OpenCode effort: `opencode-go/deepseek-v4.1-flash` does expose `low|high|max`. The gate defaulted off and databases were seeded closed; the gate now defaults open, a one-time marker migration (`migration.opencodeEffortGateOpened`) opens it, `runtime.capabilities` answers per model with a reason, and the ACP adapter selects the `thought_level` option by category.
+- Leader tools: only the team leader gets `list_projects`, `create_blob`, `update_blob` on the bridge (never bypass, 5 per turn, 12 in total, note in the transcript); non-leaders are told to tag `@<Leader>`.
+- `claude.enableWorkflows` is on unless explicitly false (so Ultracode is offered); one reaction per message; no hairline under the header, aligned header row, centred message actions with copy feedback, Usage page rebuilt (plan limits first, logo orbs), Automations replace Schedules and the send-later clock is gone, `Create your first blob` when no blob exists.
+
+**Bitbots (experimental, off by default).** Settings, Experimental, Bitbots (flashing badge). While on: `BlobCanvas` renders robot-heads (MIT, 2D canvas) instead of the blob engine on every surface (`blob/BitbotCanvas.tsx`, `blob/bitbots.ts` store and mood-to-face map); the theme is `ui/bitbots.css` (DeepSeek draft, audited and patched by the Director) and loads with the Doto and DM Mono fonts only while on. Per blob: four outlines (rectangle, square, circle, hexagon) and shell/trim/screen colours, stored as an optional `bot` object inside the blob's `look` (validated by the daemon). Antenna is always off and speed always 1 (not user-settable). The welcome is a robot that hops with one full spin; pixel clouds sit behind the intro.
+
+**Gates.** Rust workspace excluding desktop: 472 passed, 0 failed (`RUST_MIN_STACK=33554432`; one pre-existing test overflows the default stack). Desktop crate library: 34 passed. Desktop UI: typecheck clean, 516 tests passed, production build splits the theme and fonts into lazy assets.
+
+**Unverified.** Bitbots in the real native windows and companion; Doto in the dev preview from the apostrophe path (the unquoted font URL breaks there, production bundles it fine); the leader tools and `turn/steer` against live CLIs; the effect of OpenCode effort on provider behaviour; Cloudflare behaviour of the dictation endpoint from other networks.
+
 ## Improvement plan v2: overnight status (12-13 October 2026)
 
 Roadmap and decisions: [docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md). Work ran through the delegation pipeline in `AGENTS.md`: OpenCode DeepSeek (high) wrote backend code from specs in `docs/IMPROVEMENT_PHASE_*_SPEC.md`; the Director wrote all UI/UX, reviewed every diff, re-ran the gates itself and committed. **Everything below is fake-peer or unit verified. No real CLI, microphone, installer or native window was exercised, and nothing was pushed or released. The work is on local `main`.**

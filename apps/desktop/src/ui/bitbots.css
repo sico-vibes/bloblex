@@ -901,3 +901,16 @@
   }
 }
 
+
+/* ── Director's pass (written after auditing the draft in the browser) ───── */
+/* Pixel circle: a stepped polygon, so round things stay round-ish without anti-aliased curves. */
+:root[data-bitbots="on"] {
+  --bb-pixel-circle: polygon(30% 0, 70% 0, 70% 8%, 84% 8%, 84% 16%, 92% 16%, 92% 30%, 100% 30%, 100% 70%, 92% 70%, 92% 84%, 84% 84%, 84% 92%, 70% 92%, 70% 100%, 30% 100%, 30% 92%, 16% 92%, 16% 84%, 8% 84%, 8% 70%, 0 70%, 0 30%, 8% 30%, 8% 16%, 16% 16%, 16% 8%, 30% 8%);
+}
+:root[data-bitbots="on"] .analytics-orb { border-radius: 0; clip-path: var(--bb-pixel-circle); transition: none; }
+:root[data-bitbots="on"] .analytics-orb::before { border-radius: 0; box-shadow: none; clip-path: var(--bb-pixel-circle); }
+:root[data-bitbots="on"] .analytics-orb.unknown { opacity: .55; }
+:root[data-bitbots="on"] .analytics-orb-value b { font-family: var(--bb-font-display); font-weight: 900; letter-spacing: .03em; }
+/* Doto and DM Mono are wider than the UI font: keep rows from truncating names. */
+:root[data-bitbots="on"] .team-row-name strong { font-size: 13px; }
+:root[data-bitbots="on"] .team-row-name .role-chip, :root[data-bitbots="on"] .bot-row-line time { font-size: 10px; }

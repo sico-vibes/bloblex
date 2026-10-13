@@ -46,3 +46,8 @@
 .empty-conversation { position: relative; }
 .empty-conversation > .empty-art, .empty-conversation > h1, .empty-conversation > p, .empty-conversation > button { position: relative; z-index: 1; }
 .bb-clouds.empty-clouds { inset: -150px -160px auto -160px; height: 224px; }
+
+/* While the theme is on its own tag rules would flatten the badge; keep it flashing. */
+:root[data-bitbots="on"] .experimental-tag.flashy { color: #141414; border: 2px solid transparent; border-radius: 0; background: linear-gradient(#ece8e2, #ece8e2) padding-box, conic-gradient(from var(--bb-spin), #e17a56, #f0b84a, #8bd17c, #6fb1e0, #d95f9a, #e17a56) border-box; animation: bb-spin 2.4s steps(24) infinite; }
+:root[data-bitbots="on"] .experimental-tag.flashy::before, :root[data-bitbots="on"] .experimental-tag.flashy::after { border-radius: 0; }
+@media (prefers-reduced-motion: reduce) { :root[data-bitbots="on"] .experimental-tag.flashy { animation: none; } }

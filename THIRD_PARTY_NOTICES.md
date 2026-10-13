@@ -53,6 +53,12 @@ Copyright (c) 2026 Fayaz Ahmed
 
 The dictation island in `apps/desktop/src/ui/DictationIsland.tsx` adapts the layout and wave motion of the MIT-licensed [Kaze](https://github.com/fayazara/Kaze/tree/ee8fb5cfa7b509154a4cbeb848388d4e4816979c) island (`Kaze/UI/Island/IslandView.swift` at `ee8fb5cfa7b509154a4cbeb848388d4e4816979c`, reviewed on 11 October 2026): a red recording dot with the elapsed time, eleven tapered level bars with the newest on the right, the bars blending into a breathing (loading) or travelling (transcribing) motion, a short shake when nothing was heard, and the island growing to show the live words. It is re-implemented in React and CSS for Bloblex's own window and colours; no Kaze source files or assets are included.
 
+## Bitbots robots and fonts
+
+The robots in Bitbots mode (Settings, Experimental) are drawn by [robot-heads](https://github.com/fayazara/robot-heads) 0.3.0, MIT License, Copyright (c) 2026 Fayaz Ahmed (the licence text below applies). It is a dependency of `apps/desktop`; it is loaded in every window but only draws while the mode is on.
+
+The pixel theme is set in [Doto](https://fonts.google.com/specimen/Doto) and [DM Mono](https://fonts.google.com/specimen/DM+Mono), both under the SIL Open Font License 1.1, bundled through the `@fontsource/doto` and `@fontsource/dm-mono` packages, and loaded only while the mode is on. The palette and the dotted, dithered look follow the reference site claudes.dev.
+
 ## Companion sounds
 
 The moments the companion plays a sound for (peek, open, close, switching, sending, a new reply, pokes, and agent work, finish, error, approval and question) follow the desktop companion [Coucou](https://github.com/Louis-CFM/coucou) (reviewed at `dd344853dc36e1edbce098d28c4e63a4ed2433c1`). Coucou's sound files are not licensed for reuse and none are included: every Bloblex cue in `apps/desktop/src/blob/soundCues.ts` is an original tone synthesized with Web Audio oscillators.

@@ -10,10 +10,17 @@ use std::{
     time::Duration,
 };
 
+#[path = "wire_support/wire_replay.rs"]
+mod wire_replay;
+
 const FIXTURE: &str = include_str!("../../tests/fixtures/models-verbose.txt");
 const ISOLATION_MARKER: &str = "bloblex-oc-catalog";
 
 fn main() {
+    wire_replay::init("opencode", "1.18.34");
+    if let Some(path) = wire_replay::replay_path_from_args() {
+        std::process::exit(wire_replay::run_replay(&path));
+    }
     let args: Vec<String> = env::args().skip(1).collect();
     let flags = Flags::parse(&args);
     if args.iter().any(|arg| arg == "models") {
@@ -36,6 +43,7 @@ struct Flags {
     variant_models: BTreeSet<String>,
     efforts: Vec<String>,
     usage: String,
+    permission: bool,
 }
 
 impl Flags {
@@ -45,6 +53,7 @@ impl Flags {
         let mut variant_models = "opencode-go/deepseek-v4.1-flash".to_owned();
         let mut efforts = "low,high,max,default".to_owned();
         let mut usage = "sequence".to_owned();
+        let mut permission = false;
         let mut index = 0;
         while index < args.len() {
             let arg = &args[index];
@@ -55,6 +64,7 @@ impl Flags {
                 "--variant-models" => variant_models = next.unwrap_or("").to_owned(),
                 "--efforts" => efforts = next.unwrap_or("").to_owned(),
                 "--usage" => usage = next.unwrap_or("sequence").to_owned(),
+                "--permission-request" => permission = true,
                 _ => {}
             }
             index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--usage") {
@@ -69,6 +79,7 @@ impl Flags {
             variant_models: csv(&variant_models).into_iter().collect(),
             efforts: csv(&efforts),
             usage,
+            permission,
         }
     }
 }
@@ -106,6 +117,7 @@ struct Session {
     efforts: Vec<String>,
     variant_models: BTreeSet<String>,
     prompt_id: Option<Value>,
+    permission_pending: Option<(Value, Value)>,
     turns: u32,
 }
 
@@ -121,6 +133,7 @@ impl Session {
             efforts: flags.efforts.clone(),
             variant_models: flags.variant_models.clone(),
             prompt_id: None,
+            permission_pending: None,
             turns: 0,
         }
     }
@@ -169,8 +182,15 @@ fn acp_main(_args: &[String], flags: &Flags) {
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+        wire_replay::input(&message);
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
         if method.is_empty() {
+            if let Some((request_id, prompt_id)) = session.permission_pending.clone() {
+                if message.get("id") == Some(&request_id) && message.get("result").is_some() {
+                    session.permission_pending = None;
+                    finish_prompt(&mut stdout, &prompt_id, "end_turn", false);
+                }
+            }
             continue;
         }
         let mut entry = json!({"method": method});
@@ -251,6 +271,25 @@ fn apply_option(session: &mut Session, config_id: &str, value: &str) -> bool {
 fn handle_prompt(stdout: &mut impl Write, flags: &Flags, session: &mut Session, id: &Value) {
     session.turns += 1;
     let turn = session.turns;
+    if flags.permission {
+        let request_id = json!(format!("permission-{turn}"));
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "native-session",
+                "toolCall": {"title": "Run command", "rawInput": "echo safe"},
+                "options": [
+                    {"optionId": "allow_once", "kind": "allow_once", "name": "Allow once"},
+                    {"optionId": "reject_once", "kind": "reject_once", "name": "Reject once"}
+                ]
+            }
+        });
+        notify(stdout, &serde_json::to_string(&request).unwrap_or_default());
+        session.permission_pending = Some((request_id, id.clone()));
+        return;
+    }
     if flags.usage == "cancel" {
         session.prompt_id = Some(id.clone());
         notify(stdout, &chunk("fixture response"));
@@ -318,6 +357,9 @@ fn error(stdout: &mut impl Write, id: &Value, code: i64, message: &str) {
 }
 
 fn notify(stdout: &mut impl Write, line: &str) {
+    if let Ok(value) = serde_json::from_str::<Value>(line) {
+        wire_replay::out(&value);
+    }
     let _ = writeln!(stdout, "{line}");
     let _ = stdout.flush();
 }

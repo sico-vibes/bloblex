@@ -1,0 +1,12 @@
+{"header":{"cliVersion":"1.18.34","provider":"opencode","scenario":"simple-turn.ndjson","synthesised":true}}
+{"dir":"in","msg":{"id":"<masked>","jsonrpc":"2.0","method":"initialize","params":{"clientCapabilities":{},"clientInfo":{"name":"Bloblex","version":"0.1.0"},"protocolVersion":1}},"t":0}
+{"dir":"out","msg":{"id":"1","jsonrpc":"2.0","result":{"agentCapabilities":{"loadSession":true},"agentInfo":{"name":"fake-opencode","version":"test"},"protocolVersion":1}},"t":1}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"initialized","params":{}},"t":2}
+{"dir":"in","msg":{"id":"<masked>","jsonrpc":"2.0","method":"session/new","params":{"cwd":"<masked>","mcpServers":[]}},"t":2}
+{"dir":"out","msg":{"id":"2","jsonrpc":"2.0","result":{"configOptions":[{"currentValue":"opencode/big-pickle","id":"model","options":[{"name":"opencode/big-pickle","value":"opencode/big-pickle"},{"name":"opencode-go/deepseek-v4.1-flash","value":"opencode-go/deepseek-v4.1-flash"}]},{"currentValue":"build","id":"mode","options":[{"name":"build","value":"build"},{"name":"plan","value":"plan"}]}],"sessionId":"native-session"}},"t":3}
+{"dir":"in","msg":{"id":"<masked>","jsonrpc":"2.0","method":"session/prompt","params":{"prompt":[{"text":"hello","type":"text"}],"sessionId":"<masked>"}},"t":4}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"native-session","update":{"cost":{"amount":0.0015894,"currency":"USD"},"sessionUpdate":"usage_update","size":200000,"used":4000}}},"t":4}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"native-session","update":{"content":{"text":"fixture response","type":"text"},"sessionUpdate":"agent_message_chunk"}}},"t":5}
+{"dir":"out","msg":{"id":"3","jsonrpc":"2.0","result":{"stopReason":"end_turn","usage":{"inputTokens":120,"outputTokens":30,"thoughtTokens":23,"totalTokens":150}}},"t":5}
+{"dir":"in","msg":{"id":"<masked>","jsonrpc":"2.0","method":"session/close","params":{"sessionId":"<masked>"}},"t":259}
+{"dir":"out","msg":{"id":"4","jsonrpc":"2.0","result":{}},"t":260}

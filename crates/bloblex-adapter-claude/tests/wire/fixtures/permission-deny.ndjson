@@ -1,0 +1,9 @@
+{"header":{"cliVersion":"2.1.286","provider":"claude","scenario":"permission-deny.ndjson","synthesised":true}}
+{"dir":"out","msg":{"model":"init-only-echo","session_id":"<masked>","subtype":"init","type":"system"},"t":0}
+{"dir":"in","msg":{"request":{"subtype":"get_context_usage"},"request_id":"<masked>","type":"control_request"},"t":0}
+{"dir":"in","msg":{"message":{"content":"hello","role":"user"},"type":"user"},"t":1}
+{"dir":"out","msg":{"message":{"content":[{"id":"tool-1","input":{"command":"echo safe"},"name":"Bash","type":"tool_use"}],"model":"claude-sonnet-test"},"type":"assistant"},"t":1}
+{"dir":"out","msg":{"request":{"input":{"command":"echo safe"},"subtype":"can_use_tool","tool_name":"Bash"},"request_id":21,"type":"control_request"},"t":2}
+{"dir":"in","msg":{"response":{"request_id":"<masked>","response":{"behavior":"deny","message":"Denied in Bloblex"},"subtype":"success"},"type":"control_response"},"t":3}
+{"dir":"out","msg":{"is_error":false,"modelUsage":{},"result":"fake permission denied","session_id":"<masked>","total_cost_usd":0.0,"type":"result","usage":{"input_tokens":3,"output_tokens":2}},"t":3}
+{"dir":"in","msg":{"request":{"subtype":"get_context_usage"},"request_id":"<masked>","type":"control_request"},"t":3}

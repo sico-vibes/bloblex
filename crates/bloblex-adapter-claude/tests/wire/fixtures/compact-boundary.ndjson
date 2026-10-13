@@ -1,0 +1,8 @@
+{"header":{"cliVersion":"2.1.286","provider":"claude","scenario":"compact-boundary.ndjson","synthesised":true}}
+{"dir":"out","msg":{"model":"init-only-echo","session_id":"<masked>","subtype":"init","type":"system"},"t":0}
+{"dir":"in","msg":{"request":{"subtype":"get_context_usage"},"request_id":"<masked>","type":"control_request"},"t":0}
+{"dir":"in","msg":{"message":{"content":"hello","role":"user"},"type":"user"},"t":1}
+{"dir":"out","msg":{"compact_metadata":{"pre_tokens":120000,"trigger":"auto"},"subtype":"compact_boundary","type":"system"},"t":1}
+{"dir":"out","msg":{"is_error":false,"modelUsage":{},"result":"fake response","session_id":"<masked>","total_cost_usd":0.012,"type":"result","usage":{"cache_creation_input_tokens":1,"cache_read_input_tokens":2,"input_tokens":7,"output_tokens":4,"output_tokens_details":{"thinking_tokens":3}}},"t":1}
+{"dir":"in","msg":{"request":{"subtype":"get_context_usage"},"request_id":"<masked>","type":"control_request"},"t":2}
+{"dir":"in","msg":{"request":{"subtype":"get_context_usage"},"request_id":"<masked>","type":"control_request"},"t":2}

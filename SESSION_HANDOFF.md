@@ -4,13 +4,13 @@ Current as of 13 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V
 
 ## Improvement plan v2: overnight status (12-13 October 2026)
 
-Roadmap and decisions: [docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md). Work ran through the delegation pipeline in `AGENTS.md`: OpenCode DeepSeek (high) wrote backend code from specs in `docs/IMPROVEMENT_PHASE_*_SPEC.md`; the Director wrote all UI/UX, reviewed every diff, re-ran the gates itself and committed. **Everything below is fake-peer or unit verified. No real CLI, microphone, installer or native window was exercised, and nothing was pushed or released.**
+Roadmap and decisions: [docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md). Work ran through the delegation pipeline in `AGENTS.md`: OpenCode DeepSeek (high) wrote backend code from specs in `docs/IMPROVEMENT_PHASE_*_SPEC.md`; the Director wrote all UI/UX, reviewed every diff, re-ran the gates itself and committed. **Everything below is fake-peer or unit verified. No real CLI, microphone, installer or native window was exercised, and nothing was pushed or released. The work is on local `main`.**
 
 ### Where the code is
 
 | Branch | What it holds |
 |---|---|
-| `integration/improvement-v2` (this checkout) | Phases 1-7 (backend and UI) merged, on top of `17591b9`. **Start here.** |
+| `main` (this checkout) | Phases 1-7 (backend and UI), fast-forwarded from `integration/improvement-v2` on 13 October 2026 on top of `17591b9`. **Local only: not pushed.** |
 | `phase3b-replay` (worktree `../Blolblex-wt-phase1`) | Backend chain tip, fully merged into the integration branch. |
 | `phase7-cloud-dictation` (worktree `../Blolblex-wt-p7`) | Cloud dictation and keep-awake (merged into integration). |
 | `plan/improvement-v2`, `phase1-ui`, `phase2-ui`, `phase1-lifecycle`, `phase2-queue`, `phase3-retry`, `phase4-automations` | Stepping stones, all contained in the integration branch. |

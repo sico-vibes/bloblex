@@ -1,6 +1,6 @@
 # Bloblex improvement plan v2: a BB-informed, companion-style roadmap
 
-Status: approved by the owner, 12 October 2026. **Phases 1-7 are implemented on `integration/improvement-v2` and verified only with fake peers and unit tests (replay fixtures are synthesised, not real captures).** See `SESSION_HANDOFF.md` for branches, gates, gaps and next steps. Baseline `17591b9` (beta.18). Supersedes the QA draft, kept as [IMPROVEMENT_PLAN_v1_qa-draft.md](IMPROVEMENT_PLAN_v1_qa-draft.md).
+Status: approved by the owner, 12 October 2026. **Phases 1-7 are implemented and merged into local `main` (from `integration/improvement-v2`) and verified only with fake peers and unit tests (replay fixtures are synthesised, not real captures).** See `SESSION_HANDOFF.md` for branches, gates, gaps and next steps. Baseline `17591b9` (beta.18). Supersedes the QA draft, kept as [IMPROVEMENT_PLAN_v1_qa-draft.md](IMPROVEMENT_PLAN_v1_qa-draft.md).
 
 ## Context
 

@@ -4,7 +4,7 @@ Current as of 13 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V
 
 ## Owner review follow-up and Bitbots (13 October 2026, after beta.19)
 
-Not released. Everything is on local `main`; nothing was pushed or tagged after the beta.19 docs commit `2a397ee`.
+Released as manual-only [v0.1.0-beta.20](docs/releases/0.1.0-beta.20.md) (tag at `34631aa`; installer SHA-256 `cdbabd0857d86680a515aa6368effbb45de514466887f1614aa1c1235401ca4c`, unsigned; the signed updater feed stays at beta.6). A later owner pass (one focus mark on the composer, a pixel switch, equal automation idea cards, robot editor spacing, archive card and conversation rows) is included.
 
 **Review fixes.**
 - ChatGPT dictation: a live probe (`scripts/live-checks/live-cloud-dictation.mjs`, evidence `docs/evidence/cloud-dictation-diagnosis-2026-10-13.md`) showed `chatgpt.com/backend-api/transcribe` answers an honest non-browser client with a Cloudflare managed challenge (403, `cf-mitigated: challenge`). The Codex login is valid; this is not an auth failure and cannot be fixed without impersonating another client, which we will not do. The Codex app-server has no plain transcription request (only `thread/realtime/*`). The copy now says so; `automatic` mode cools the cloud down for ten minutes after a persistent failure; an unrecovered failure carries `both_engines_unavailable`; the UI no longer skips the on-device download for `automatic`.

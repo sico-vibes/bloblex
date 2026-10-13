@@ -1,12 +1,20 @@
 use serde_json::{json, Value};
 use std::{io::{self, BufRead, Write}, path::PathBuf};
 
+#[path = "wire_support/wire_replay.rs"]
+mod wire_replay;
+
 fn emit(value: Value) {
+    wire_replay::out(&value);
     println!("{}", value);
     let _ = io::stdout().flush();
 }
 
 fn main() {
+    wire_replay::init("claude", "2.1.286");
+    if let Some(path) = wire_replay::replay_path_from_args() {
+        std::process::exit(wire_replay::run_replay(&path));
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let audit = args.iter().find_map(|arg| arg.strip_prefix("--fake-audit=")).map(PathBuf::from);
     let model = args.windows(2).find(|pair| pair[0] == "--model").map(|pair| pair[1].clone());
@@ -55,6 +63,7 @@ fn main() {
     let stdin = io::stdin();
     for line in stdin.lock().lines().flatten() {
         let Ok(input) = serde_json::from_str::<Value>(&line) else { continue };
+        wire_replay::input(&input);
         if input["type"] == "control_request" && input["request"]["subtype"] == "list_models" {
             emit(json!({"type":"control_response","response":{"subtype":"success","request_id":input["request_id"],"response":{"models":[{"value":"claude-sonnet-test","displayName":"Test Sonnet","providerId":"anthropic","supportedEffortLevels":["low","high"],"defaultEffort":"low","supportsFastMode":true}],"resolvedModel":"claude-sonnet-test"}}}));
         } else if input["type"] == "control_request" && input["request"]["subtype"] == "get_settings" {
@@ -68,6 +77,15 @@ fn main() {
                     emit(json!({"type":"system","subtype":"api_retry","attempt":attempt,"max_attempts":count,
                         "error":format!("API error (attempt {attempt}/{count}): undefined Connection error.")}));
                 }
+                continue;
+            }
+            if let Some(status) = args.iter().find_map(|arg| arg.strip_prefix("--fake-api-error-status=")).and_then(|value| value.parse::<u64>().ok()) {
+                emit(json!({"type":"result","is_error":true,"api_error_status":status,"session_id":session_id,"result":"fake provider error","usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{},"total_cost_usd":0.0}));
+                continue;
+            }
+            if args.iter().any(|arg| arg == "--fake-tool-permission") {
+                emit(json!({"type":"assistant","message":{"model":"claude-sonnet-test","content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"echo safe"}}]}}));
+                emit(json!({"type":"control_request","request_id":21,"request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"echo safe"}}}));
                 continue;
             }
             if args.iter().any(|arg| arg == "--fake-permission-roundtrip") {
@@ -84,6 +102,16 @@ fn main() {
                 "result":if fail {"fake provider error"} else {"fake response"},
                 "usage":if fail {json!({"input_tokens":0,"output_tokens":0,"output_tokens_details":{"thinking_tokens":0}})} else {json!({"input_tokens":7,"output_tokens":4,"cache_read_input_tokens":2,"cache_creation_input_tokens":1,"output_tokens_details":{"thinking_tokens":3}})},
                 "modelUsage":if fail {json!({})} else {model_usage},"total_cost_usd":if fail {0.0} else {0.012}}));
+        } else if input["type"] == "control_response"
+            && args.iter().any(|arg| arg == "--fake-tool-permission")
+        {
+            if input["response"]["request_id"] == 21 {
+                let allowed = input["response"]["response"]["behavior"] == "allow";
+                let (result, is_error) = if allowed { ("fake response", false) } else { ("fake permission denied", false) };
+                emit(json!({"type":"result","is_error":is_error,"session_id":session_id,
+                    "result":result,"usage":{"input_tokens":3,"output_tokens":2},
+                    "modelUsage":{},"total_cost_usd":0.0}));
+            }
         } else if input["type"] == "control_response"
             && args.iter().any(|arg| arg == "--fake-permission-roundtrip")
         {

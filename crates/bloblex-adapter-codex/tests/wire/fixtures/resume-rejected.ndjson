@@ -1,0 +1,6 @@
+{"header":{"cliVersion":"0.159.3","provider":"codex","scenario":"resume-rejected.ndjson","synthesised":true}}
+{"dir":"in","msg":{"id":"<masked>","jsonrpc":"2.0","method":"initialize","params":{"capabilities":{"experimentalApi":true},"clientInfo":{"name":"Bloblex","version":"0.1.0"}}},"t":0}
+{"dir":"out","msg":{"id":"1","jsonrpc":"2.0","result":{"serverInfo":{"name":"fake","version":"1"}}},"t":1}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"initialized","params":{}},"t":2}
+{"dir":"in","msg":{"id":"<masked>","jsonrpc":"2.0","method":"thread/resume","params":{"approvalPolicy":"on-request","cwd":"<masked>","sandbox":"workspace-write","threadId":"<masked>"}},"t":2}
+{"dir":"out","msg":{"error":{"code":-32000,"message":"thread not found"},"id":"2","jsonrpc":"2.0"},"t":3}

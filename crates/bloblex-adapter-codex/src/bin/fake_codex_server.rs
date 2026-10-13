@@ -4,7 +4,24 @@ use std::{
     fs::OpenOptions,
     io::{self, BufRead, Write},
 };
+
+#[path = "wire_support/wire_replay.rs"]
+mod wire_replay;
+
+macro_rules! out_line {
+    ($value:expr) => {{
+        let value = $value;
+        wire_replay::out(&value);
+        println!("{}", value);
+        let _ = io::stdout().flush();
+    }};
+}
+
 fn main() {
+    wire_replay::init("codex", "0.159.3");
+    if let Some(path) = wire_replay::replay_path_from_args() {
+        std::process::exit(wire_replay::run_replay(&path));
+    }
     let mut iter = std::env::args().skip(1);
     let mut record = None;
     let mut pidfile = None;
@@ -39,6 +56,7 @@ fn main() {
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        wire_replay::input(&v);
         if let Some(f) = log.as_mut() {
             let mut recorded = v.clone();
             if recorded["params"]["developerInstructions"].is_string() {
@@ -74,11 +92,9 @@ fn main() {
                     }
                 }
             }
-            println!(
-                "{}",
+            out_line!(
                 json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"requested turn option rejected"}})
             );
-            let _ = io::stdout().flush();
             continue;
         }
         if method == "thread/resume" && (mode.starts_with("resume-") || (mode == "crash-reject" && !crash_enabled)) {
@@ -87,8 +103,7 @@ fn main() {
             } else {
                 "requested startup option rejected"
             };
-            println!("{}", json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":message}}));
-            let _ = io::stdout().flush();
+            out_line!(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":message}}));
             continue;
         }
         let params = &v["params"];
@@ -104,10 +119,9 @@ fn main() {
                 None
             };
             match error {
-                Some(error) => println!("{}", json!({"jsonrpc":"2.0","id":id,"error":error})),
-                None => println!("{}", json!({"jsonrpc":"2.0","id":id,"result":{"turnId":expected}})),
+                Some(error) => out_line!(json!({"jsonrpc":"2.0","id":id,"error":error})),
+                None => out_line!(json!({"jsonrpc":"2.0","id":id,"result":{"turnId":expected}})),
             }
-            let _ = io::stdout().flush();
             continue;
         }
         let (result, notes) = match method {
@@ -226,8 +240,7 @@ fn main() {
             _ => (json!({}), vec![]),
         };
         if !id.is_null() {
-            println!("{}", json!({"jsonrpc":"2.0","id":id,"result":result}));
-            let _ = io::stdout().flush();
+            out_line!(json!({"jsonrpc":"2.0","id":id,"result":result}));
         }
         if method == "turn/start"
             && ((mode == "interleave" && v["params"]["input"][0]["text"] == "slow")
@@ -237,18 +250,17 @@ fn main() {
                 note["method"] == "turn/started"
                     || (mode == "cancel-timeout" && note["method"] == "item/agentMessage/delta")
             });
-            for note in immediate { println!("{note}"); }
+            for note in immediate { out_line!(note); }
             let delay = if mode == "cancel-timeout" { 2500 } else { 5000 };
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(delay));
-                for note in delayed { println!("{note}"); }
+                for note in delayed { out_line!(note); }
             });
         } else if method == "turn/start" && matches!(mode.as_str(), "crash" | "crash-reject") && crash_enabled {
-            for note in notes.into_iter().filter(|note| note["method"] == "turn/started") { println!("{note}"); }
+            for note in notes.into_iter().filter(|note| note["method"] == "turn/started") { out_line!(note); }
         } else {
             for note in notes {
-                println!("{note}");
-                let _ = io::stdout().flush();
+                out_line!(note);
             }
         }
     }

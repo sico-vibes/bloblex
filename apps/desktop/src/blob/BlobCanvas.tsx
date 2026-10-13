@@ -5,11 +5,13 @@ import { drawGreetingScene, GREETING_END_MS, GREETING_REFERENCE } from './greeti
 import { DizzyRecoveryDeadline, GreetingLifecycle } from './motion'
 import { playCompanionCue, unlockCompanionAudioFromGesture } from './soundCues'
 import type { BlobLook } from './look'
+import { BitbotCanvas } from './BitbotCanvas'
+import { useBitbots } from './bitbots'
 
 export type { BlobMood } from './characterState'
 import type { BlobMood } from './characterState'
 
-interface Props {
+export interface BlobCanvasProps {
   color: string
   size?: number
   mood?: BlobMood
@@ -78,7 +80,7 @@ const LOVE_COOLDOWN_MS = 6000
  * avatar, so a blob keeps one face language everywhere. With `greeting`, the
  * canvas plays the companion welcome scene instead.
  */
-export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, effectOverscanTop = 0, decorative = false, look = null, soundCues = false, onGreetingComplete, onDizzy, onDizzyRecovery }: Props) {
+function ClassicBlobCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, effectOverscanTop = 0, decorative = false, look = null, soundCues = false, onGreetingComplete, onDizzy, onDizzyRecovery }: BlobCanvasProps) {
   const effectiveMood = moodWithFileReference(mood, fileStage)
   const canvas = useRef<HTMLCanvasElement>(null)
   const frame = useRef<HTMLSpanElement>(null)
@@ -316,4 +318,13 @@ export function BlobCanvas({ color, size = 52, mood = 'idle', className = '', la
   return <span ref={frame} className={`blob-canvas-frame ${className}`} style={{ width, height, position: 'relative', display: 'inline-block', flex: '0 0 auto', verticalAlign: 'top', overflow: 'visible' }} data-tauri-drag-region={dragRegion ? '' : undefined}>
     <canvas ref={canvas} className="blob-canvas" width={width} height={canvasHeight} style={{ width, height: canvasHeight, position: 'absolute', left: 0, bottom: 0, pointerEvents: 'none' }} role={decorative ? undefined : 'img'} aria-hidden={decorative || undefined} aria-label={decorative ? undefined : `${label} ${effectiveMood}`} data-effect-overscan-top={overscanTop || undefined} />
   </span>
+}
+
+/**
+ * Bloblex character. In Bitbots mode every surface draws the pixel robot;
+ * otherwise the classic blob engine does. Both take the same props.
+ */
+export function BlobCanvas(props: BlobCanvasProps) {
+  const bitbots = useBitbots()
+  return bitbots ? <BitbotCanvas {...props} /> : <ClassicBlobCanvas {...props} />
 }

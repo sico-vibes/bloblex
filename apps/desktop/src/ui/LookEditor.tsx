@@ -2,8 +2,10 @@ import { useId, useState, type KeyboardEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Dices, RotateCcw, Shuffle } from 'lucide-react'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
+import { useBitbots } from '../blob/bitbots'
+import { BotEditor } from './BotEditor'
 import {
-  BLOB_SHAPES, SHAPE_LABELS, controlsFor, shuffleLook, traitPosition, withTrait,
+  BLOB_SHAPES, SHAPE_LABELS, controlsFor, randomBot, shuffleLook, traitPosition, withTrait,
   type BlobLook, type BlobShape, type LookControl,
 } from '../blob/look'
 import { inDesktop } from '../tauri'
@@ -45,6 +47,7 @@ export function LookEditor({ look, color, colorHex, name, onLookChange, onColorC
   onColorChange: (color: string) => void
 }) {
   const [tab, setTab] = useState<LookTab>('style')
+  const bitbots = useBitbots()
   const [mood, setMood] = useState<BlobMood>('idle')
   const tabsId = useId()
   const pinned = Object.keys(look.traits ?? {}).length
@@ -68,12 +71,16 @@ export function LookEditor({ look, color, colorHex, name, onLookChange, onColorC
         {PREVIEW_MOODS.map((item) => <button key={item.mood} type="button" role="radio" aria-checked={mood === item.mood} className={mood === item.mood ? 'active' : undefined} onClick={() => setMood(item.mood)}>{item.label}</button>)}
       </div>
       <div className="look-stage-actions">
-        <button type="button" className="ghost-button small" onClick={() => onLookChange(shuffleLook(look))} title="New face and proportions, same shape"><Shuffle size={13} />Shuffle</button>
-        <button type="button" className="ghost-button small" onClick={() => onLookChange(shuffleLook(look, true))} title="A random shape and face"><Dices size={13} />Surprise me</button>
+        {bitbots
+          ? <button type="button" className="ghost-button small" onClick={() => onLookChange({ ...look, bot: randomBot() })} title="A random outline and colours"><Dices size={13} />Surprise me</button>
+          : <>
+            <button type="button" className="ghost-button small" onClick={() => onLookChange(shuffleLook(look))} title="New face and proportions, same shape"><Shuffle size={13} />Shuffle</button>
+            <button type="button" className="ghost-button small" onClick={() => onLookChange(shuffleLook(look, true))} title="A random shape and face"><Dices size={13} />Surprise me</button>
+          </>}
       </div>
     </div>
 
-    <div className="look-panel">
+    {bitbots ? <div className="look-panel"><BotEditor look={look} color={color} colorHex={colorHex} onLookChange={onLookChange} onColorChange={onColorChange} /></div> : <div className="look-panel">
       <div className="look-tabs" role="tablist" aria-label="Look">
         {TABS.map((item, index) => <button
           key={item.id}
@@ -98,7 +105,7 @@ export function LookEditor({ look, color, colorHex, name, onLookChange, onColorC
         {tab === 'tune' && <TuneControls look={look} onChange={onLookChange} />}
       </div>
 
-    </div>
+    </div>}
   </div>
 }
 

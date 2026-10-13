@@ -11,12 +11,15 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@fontsource/dm-mono": "5.3.0",
+    "@fontsource/doto": "5.3.0",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-autostart": "^2.5.0",
     "@tauri-apps/plugin-notification": "^2.3.0",
     "lucide-react": "^0.468.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "robot-heads": "0.3.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.0",

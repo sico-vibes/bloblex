@@ -3794,7 +3794,18 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
 fn valid_look(look: &Value) -> bool {
     const SHAPES: [&str; 10] = ["round","organic","boxy","capsule","cloud","droplet","hexagon","sun","triangle","cat"];
     let Some(object) = look.as_object() else { return false };
-    if object.keys().any(|key| !["shape","seed","traits"].contains(&key.as_str())) { return false; }
+    if object.keys().any(|key| !["shape","seed","traits","bot"].contains(&key.as_str())) { return false; }
+    // Bitbots theme styling: a robot outline and three colours, all optional.
+    if let Some(bot) = object.get("bot").filter(|bot| !bot.is_null()) {
+        let Some(bot) = bot.as_object() else { return false };
+        const BOT_SHAPES: [&str; 4] = ["rectangle","square","circle","hexagon"];
+        if bot.keys().any(|key| !["shape","shell","trim","screen"].contains(&key.as_str())) { return false; }
+        if bot.get("shape").is_some_and(|shape| !shape.as_str().is_some_and(|shape| BOT_SHAPES.contains(&shape))) { return false; }
+        for key in ["shell","trim","screen"] {
+            let ok = bot.get(key).is_none_or(|color| color.as_str().is_some_and(|color| color.len() == 7 && color.starts_with('#') && color[1..].chars().all(|c| c.is_ascii_hexdigit())));
+            if !ok { return false; }
+        }
+    }
     if !object.get("shape").and_then(Value::as_str).is_some_and(|shape| SHAPES.contains(&shape)) { return false; }
     if object.get("seed").is_some_and(|seed| !seed.is_null() && !seed.as_str().is_some_and(|seed| !seed.trim().is_empty() && seed.chars().count() <= 80 && !seed.contains(' '))) { return false; }
     if let Some(traits) = object.get("traits").filter(|traits| !traits.is_null()) {
@@ -4994,6 +5005,23 @@ mod tests {
         assert!(db.permission_kind("perm-ghost").unwrap().is_none());
         let pending = db.snapshot().unwrap()["permissions"].as_array().unwrap().iter().find(|perm| perm["id"] == "perm-q").cloned().unwrap();
         assert_eq!((pending["kind"].as_str(), pending["questions"][0]["id"].as_str()), (Some("question"), Some("q1")));
+    }
+    #[test]
+    fn a_look_may_carry_bitbot_styling_but_only_valid_styling() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-bot","provider":"codex"})).unwrap();
+        let styled = json!({"shape":"round","seed":"blob-1","bot":{"shape":"hexagon","shell":"#2b49a3","trim":"#93a6c8","screen":"#e8f2ff"}});
+        let made = db.agent_create(&json!({"name":"Botty","runtimeId":"rt-bot","look":styled})).unwrap().0;
+        assert_eq!(made["look"], styled);
+        for bad in [
+            json!({"shape":"round","bot":{"shape":"triangle"}}),
+            json!({"shape":"round","bot":{"shell":"blue"}}),
+            json!({"shape":"round","bot":{"antenna":true}}),
+            json!({"shape":"round","bot":{"speed":2}}),
+            json!({"shape":"round","bot":"yes"}),
+        ] {
+            assert!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt-bot","look":bad})).is_err(), "{bad}");
+        }
     }
     #[test]
     fn blob_look_is_validated_saved_updated_and_cleared() {

@@ -67,7 +67,7 @@ describe('SchedulesView', () => {
     await click(all('[role="dialog"] button').find((button) => button.textContent === 'Create automation'))
     await flush()
     expect(handlers.onCreate).toHaveBeenCalledOnce()
-    expect(handlers.onCreate.mock.calls[0][0]).toMatchObject({ name: 'Email check', approvalMode: 'plan', enabled: true })
+    expect((handlers.onCreate.mock.calls[0] as unknown[])[0]).toMatchObject({ name: 'Email check', approvalMode: 'plan', enabled: true })
   })
 
   it('lists schedules with plain-language timing, the blob, and next run', () => {

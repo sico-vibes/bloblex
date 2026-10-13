@@ -284,6 +284,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().has('activity')) fixtureSettings['experimental.activityDetails'] = true
     if (flags().has('usage-bar')) fixtureSettings['experimental.usageBar'] = true
     if (flags().has('logos')) fixtureSettings['experimental.runtimeLogos'] = true
+    if (flags().has('bitbots')) fixtureSettings['experimental.bitbots'] = true
     if (flags().get('chat')) fixtureSettings['companion.chatSize'] = flags().get('chat')
     return { settings: { ...fixtureSettings, ...(fixturePreset() === 'usage-tip-90' ? { 'experimental.usageTips': true } : {}) } } as T
   }

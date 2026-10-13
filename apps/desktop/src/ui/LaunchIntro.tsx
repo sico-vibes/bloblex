@@ -3,9 +3,12 @@ import { BlobCanvas } from '../blob/BlobCanvas'
 import { hexToRGB } from '../blob/blobEngine'
 import { drawGreetingScene, GREETING_BODY, GREETING_END_MS, GREETING_GROWN_MS, GREETING_REFERENCE } from '../blob/greetingScene'
 import { agentColorHex } from './agentColor'
+import { agentLook, type BlobLook } from '../blob/look'
 import type { Agent, Runtime } from '../types'
 import { type LaunchCheck } from './launchChecks'
 import { ProviderLogo } from './providerBrand'
+import { PixelClouds } from './PixelClouds'
+import { useBitbots } from '../blob/bitbots'
 
 /** The working mascot's canvas size; the greeting is scaled so the body matches it. */
 const STAGE_SIZE = 150
@@ -27,6 +30,7 @@ export function LaunchIntro({ checks, runtimes, agent = null, onComplete, onRetr
   const finished = checks.length > 0 && checks.every((check) => check.state !== 'running')
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const [phase, setPhase] = useState<Phase>('scanning')
+  const bitbots = useBitbots()
   const color = agent ? agentColorHex(agent.color) : '#b7a7f4'
   useEffect(() => { onCompleteRef.current = onComplete }, [onComplete])
 
@@ -77,10 +81,11 @@ export function LaunchIntro({ checks, runtimes, agent = null, onComplete, onRetr
   const running = checks.find((check) => check.state === 'running')
   const status = serviceDown ? 'Bloblex could not connect to its service.' : finished ? 'Ready for your next conversation.' : running?.label ?? 'Getting Bloblex ready…'
   return <main className={`launch-intro${reducedMotion ? ' reduced-motion' : ''}`} data-phase={phase} aria-label="Bloblex launch checks" onPointerDown={() => { if (phase === 'greeting' && autoComplete) complete() }}>
+    <PixelClouds className="launch-clouds" />
     <section className="launch-intro-content">
       {!reducedMotion && <div className="launch-blob-stage">
         {phase === 'greeting'
-          ? <LaunchGreeting color={color} onDone={greetingDone} />
+          ? bitbots ? <BitbotWelcome color={color} look={agent ? agentLook(agent) : null} onDone={greetingDone} /> : <LaunchGreeting color={color} onDone={greetingDone} />
           : <BlobCanvas color={color} size={STAGE_SIZE} mood={serviceDown ? 'error' : phase === 'ready' ? 'idle' : 'working'} label={agent?.name ?? 'Bloblex'} />}
       </div>}
       <p className="launch-status" role="status" aria-live="polite">{status}</p>
@@ -117,6 +122,19 @@ function LaunchChecklist({ checks, names }: { checks: LaunchCheck[]; names: Map<
       </li>
     })}</ol>
   </div>
+}
+
+/** Bitbots welcome: the working robot hops with one sudden full spin, then the app opens. */
+function BitbotWelcome({ color, look, onDone }: { color: string; look: BlobLook | null; onDone: () => void }) {
+  const frame = useRef<HTMLSpanElement>(null)
+  const doneRef = useRef(onDone)
+  useEffect(() => { doneRef.current = onDone }, [onDone])
+  useEffect(() => {
+    const spin = window.setTimeout(() => frame.current?.querySelector<HTMLElement>('[role="img"]')?.click(), 420)
+    const end = window.setTimeout(() => doneRef.current(), 2300)
+    return () => { window.clearTimeout(spin); window.clearTimeout(end) }
+  }, [])
+  return <span ref={frame} className="launch-bitbot-welcome"><BlobCanvas color={color} size={STAGE_SIZE} mood="idle" look={look} label="Bloblex" /></span>
 }
 
 /** The companion's welcome wave, without its island card, continuing from the full-size mascot. */

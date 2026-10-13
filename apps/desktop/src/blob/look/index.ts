@@ -7,6 +7,9 @@
 
 import { BLOB_SHAPES, layoutForm, shapeForPosition, type BlobShape, type FormLayout } from './forms'
 import { traits, type TraitOverrides } from './seed'
+import { normalizeBot, type BotStyle } from './bot'
+
+export * from './bot'
 
 export { BLOB_SHAPES, type BlobShape, type FormLayout, type FormEye } from './forms'
 export type { TraitOverrides } from './seed'
@@ -16,6 +19,8 @@ export interface BlobLook {
   /** Fills every unpinned trait. Agents default to their id. */
   seed?: string | null
   traits?: TraitOverrides
+  /** The robot's outline and colours, read only while Bitbots mode is on. */
+  bot?: BotStyle
 }
 
 export const SHAPE_LABELS: Record<BlobShape, string> = {
@@ -58,13 +63,15 @@ export function normalizeLook(raw: unknown): BlobLook | null {
     }
     if (Object.keys(pinned).length) look.traits = pinned
   }
+  const bot = normalizeBot(value.bot)
+  if (bot) look.bot = bot
   return look
 }
 
 /** The look an agent wears: its stored look, else a round blob seeded by its id. */
 export function agentLook(agent: { id?: string | null; look?: unknown } | null | undefined): BlobLook {
   const stored = normalizeLook(agent?.look)
-  return { shape: stored?.shape ?? 'round', seed: stored?.seed || agent?.id || 'blob', traits: stored?.traits }
+  return { shape: stored?.shape ?? 'round', seed: stored?.seed || agent?.id || 'blob', traits: stored?.traits, ...(stored?.bot ? { bot: stored.bot } : {}) }
 }
 
 /** The look the editor previews: the draft's look, else the default for this blob id. */
@@ -78,7 +85,7 @@ export function sameLook(a: BlobLook | null | undefined, b: BlobLook | null | un
 
 function lookKey(look: BlobLook) {
   const pinned = Object.entries(look.traits ?? {}).sort(([a], [b]) => a.localeCompare(b))
-  return JSON.stringify([look.shape, look.seed ?? '', pinned])
+  return JSON.stringify([look.shape, look.seed ?? '', pinned, look.bot ?? null])
 }
 
 /**

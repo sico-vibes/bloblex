@@ -19,6 +19,8 @@ import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
 import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTime, type DiscoveryStatus } from './runtimeDiscovery'
 import { ConfirmDialog } from './BlobPage'
+import { setBitbotsEnabled, useBitbots } from '../blob/bitbots'
+import './bitbotsUi.css'
 
 export type SettingsPageId = 'General' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
 
@@ -275,6 +277,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
   const setCompanion = (visible: boolean) => guarded(async () => { await setCompanionVisibility(visible) })
   const saveSetting = (key: string, value: unknown) => guarded(async () => { await rpc('settings.set', { key, value }) })
+  const bitbots = useBitbots()
   const applySpeechEngine = async (engine: DictationEngineChoice, consent: boolean) => {
     const failure = await guarded(async () => {
       if (consent !== cloudConsent) {
@@ -465,6 +468,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </form>
             </SettingsGroup>
             <SettingsGroup title="Experimental">
+              <SettingsRow label={<span className="experimental-label">Bitbots<span className="experimental-tag flashy">Experimental</span><HelpTip text="Turns every blob into a pixel LED robot and gives the whole app a pixel look: dot-matrix headings, square corners, dotted borders, a pixel companion and welcome. Robots show what they are doing on their own face, so the corner status badges go away. You can still pick each robot's outline (rectangle, square, circle or hexagon) and its shell, trim and screen colours. Robots by robot-heads (MIT)." /></span>} hint="Pixel robots instead of blobs, and a pixel look for the whole app.">
+                <button type="button" className={`toggle ${bitbots ? 'on' : ''}`} role="switch" aria-label="Bitbots" aria-checked={bitbots} disabled={saving} onClick={() => { const next = !bitbots; void saveSetting('experimental.bitbots', next).then((failure) => { if (!failure) setBitbotsEnabled(next) }) }}><i /></button>
+              </SettingsRow>
               <SettingsRow label={<span className="experimental-label">Claude dynamic workflows and Ultracode<HelpTip text="On by default. New Claude Code sessions receive enableWorkflows:true as a session-local setting, which is also what makes the Ultracode effort level available. Bloblex does not edit Claude's config. Claude Code can still decline this when a managed policy forbids it. Turning it off keeps Claude's own default and hides Ultracode." /></span>} hint="Lets Claude run dynamic workflows and offers Ultracode in the effort selector. Existing conversations keep their launch settings.">
                 <button type="button" className={`toggle ${claudeWorkflowsEnabled ? 'on' : ''}`} role="switch" aria-label="Claude dynamic workflows" aria-checked={claudeWorkflowsEnabled} disabled={saving} onClick={() => { const next = !claudeWorkflowsEnabled; void saveSetting('claude.enableWorkflows', next).then((failure) => { if (!failure) onClaudeWorkflowsChange?.(next) }) }}><i /></button>
               </SettingsRow>

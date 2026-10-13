@@ -914,3 +914,53 @@
 /* Doto and DM Mono are wider than the UI font: keep rows from truncating names. */
 :root[data-bitbots="on"] .team-row-name strong { font-size: 13px; }
 :root[data-bitbots="on"] .team-row-name .role-chip, :root[data-bitbots="on"] .bot-row-line time { font-size: 10px; }
+
+/* ── Director's pass 2 (owner review of the first draft) ─────────────────── */
+/* One focus mark on the composer: the box. The field inside stays quiet. */
+:root[data-bitbots="on"] .composer-box textarea:focus,
+:root[data-bitbots="on"] .composer-box textarea:focus-visible,
+:root[data-bitbots="on"] .composer-box input:focus-visible { outline: none; box-shadow: none; }
+
+/* Pixel switch: a notched rail and a square knob with a bevel that steps across. */
+:root[data-bitbots="on"] .toggle,
+:root[data-bitbots="on"] .companion-sidebar-card .toggle {
+  width: 42px; height: 22px; padding: 3px; display: flex; align-items: center;
+  border: 2px solid var(--bb-line-strong); border-radius: 0;
+  background: repeating-linear-gradient(90deg, transparent 0 6px, rgba(236, 232, 226, .07) 6px 8px), var(--bb-input);
+  transition: border-color 120ms steps(2), background-color 120ms steps(2);
+}
+:root[data-bitbots="on"] .toggle i,
+:root[data-bitbots="on"] .companion-sidebar-card .toggle b {
+  width: 12px; height: 12px; display: block; border-radius: 0; background: var(--bb-ink-2);
+  box-shadow: inset 2px 2px 0 rgba(236, 232, 226, .28), inset -2px -2px 0 rgba(0, 0, 0, .38);
+  transition: transform 140ms steps(3), background-color 120ms steps(2);
+}
+:root[data-bitbots="on"] .toggle.on,
+:root[data-bitbots="on"] .companion-sidebar-card .toggle.on {
+  border-color: var(--bb-accent);
+  background: repeating-linear-gradient(90deg, transparent 0 6px, rgba(225, 122, 86, .2) 6px 8px), rgba(225, 122, 86, .12);
+}
+:root[data-bitbots="on"] .toggle.on i,
+:root[data-bitbots="on"] .companion-sidebar-card .toggle.on b {
+  transform: translateX(20px); background: var(--bb-accent);
+  box-shadow: inset 2px 2px 0 rgba(255, 255, 255, .3), inset -2px -2px 0 rgba(0, 0, 0, .3);
+}
+:root[data-bitbots="on"] .toggle:disabled { opacity: .5; }
+/* The companion window's own switch. */
+:root[data-bitbots="on"] .switch { width: 42px; height: 22px; flex-basis: 42px; border: 2px solid var(--bb-line-strong); border-radius: 0; background: repeating-linear-gradient(90deg, transparent 0 6px, rgba(236, 232, 226, .07) 6px 8px), var(--bb-input); transition: border-color 120ms steps(2); }
+:root[data-bitbots="on"] .switch::after { top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 0; background: var(--bb-ink-2); box-shadow: inset 2px 2px 0 rgba(236, 232, 226, .28), inset -2px -2px 0 rgba(0, 0, 0, .38); transition: transform 140ms steps(3); }
+:root[data-bitbots="on"] .switch.on { border-color: var(--bb-accent); background: repeating-linear-gradient(90deg, transparent 0 6px, rgba(225, 122, 86, .2) 6px 8px), rgba(225, 122, 86, .12); }
+:root[data-bitbots="on"] .switch.on::after { transform: translateX(20px); background: var(--bb-accent); }
+
+/* A day with no data: a dotted marker floating above the baseline, not a box sitting on it. */
+:root[data-bitbots="on"] .analytics-chart .analytics-gap { fill: none; stroke: var(--bb-line-strong); stroke-width: 2; stroke-dasharray: 3 3; rx: 0; transform: translateY(-10px); }
+
+/* The archive card is one row: no separators between its parts. */
+:root[data-bitbots="on"] .settings-card.blob-archive-card > * + * { border-top: 0; }
+:root[data-bitbots="on"] .blob-archive-icon { border-radius: 0; }
+
+/* Conversation rows keep the square corners the base file rounds on first/last. */
+:root[data-bitbots="on"] .settings-card > .blob-session-row,
+:root[data-bitbots="on"] .settings-card > .blob-session-row:first-child,
+:root[data-bitbots="on"] .settings-card > .blob-session-row:last-child { border-radius: 0; }
+:root[data-bitbots="on"] .blob-session-row:hover { background: var(--bb-hover); box-shadow: inset 2px 0 0 var(--bb-accent); }

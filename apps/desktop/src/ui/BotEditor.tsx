@@ -66,7 +66,7 @@ export function BotEditor({ look, color, colorHex, onLookChange, onColorChange }
         <SwatchGrid value={color} onChange={onColorChange} />
       </div>
     </div>
-    <p className="bot-fixed-note">Every robot keeps its antenna off and moves at one speed, so a team reads as one set. Robots by <a href={CREDIT_URL} target="_blank" rel="noopener noreferrer">robot-heads</a> · MIT.</p>
+    <p className="bot-fixed-note">Robots by <a href={CREDIT_URL} target="_blank" rel="noopener noreferrer">robot-heads</a> · MIT</p>
   </div>
 }
 

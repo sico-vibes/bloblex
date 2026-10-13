@@ -42,6 +42,8 @@ struct Flags {
     models: Vec<String>,
     variant_models: BTreeSet<String>,
     efforts: Vec<String>,
+    effort_id: String,
+    reject_effort: Option<String>,
     usage: String,
     permission: bool,
 }
@@ -52,6 +54,8 @@ impl Flags {
         let mut models = "opencode/big-pickle,opencode-go/deepseek-v4.1-flash".to_owned();
         let mut variant_models = "opencode-go/deepseek-v4.1-flash".to_owned();
         let mut efforts = "low,high,max,default".to_owned();
+        let mut effort_id = "effort".to_owned();
+        let mut reject_effort = None;
         let mut usage = "sequence".to_owned();
         let mut permission = false;
         let mut index = 0;
@@ -63,11 +67,13 @@ impl Flags {
                 "--models" => models = next.unwrap_or("").to_owned(),
                 "--variant-models" => variant_models = next.unwrap_or("").to_owned(),
                 "--efforts" => efforts = next.unwrap_or("").to_owned(),
+                "--effort-id" => effort_id = next.unwrap_or("effort").to_owned(),
+                "--reject-effort" => reject_effort = next.map(str::to_owned),
                 "--usage" => usage = next.unwrap_or("sequence").to_owned(),
                 "--permission-request" => permission = true,
                 _ => {}
             }
-            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--usage") {
+            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--usage") {
                 2
             } else {
                 1
@@ -78,6 +84,8 @@ impl Flags {
             models: csv(&models),
             variant_models: csv(&variant_models).into_iter().collect(),
             efforts: csv(&efforts),
+            effort_id,
+            reject_effort,
             usage,
             permission,
         }
@@ -115,6 +123,8 @@ struct Session {
     modes: Vec<String>,
     effort: Option<String>,
     efforts: Vec<String>,
+    effort_id: String,
+    reject_effort: Option<String>,
     variant_models: BTreeSet<String>,
     prompt_id: Option<Value>,
     permission_pending: Option<(Value, Value)>,
@@ -131,6 +141,8 @@ impl Session {
             modes,
             effort: None,
             efforts: flags.efforts.clone(),
+            effort_id: flags.effort_id.clone(),
+            reject_effort: flags.reject_effort.clone(),
             variant_models: flags.variant_models.clone(),
             prompt_id: None,
             permission_pending: None,
@@ -139,9 +151,9 @@ impl Session {
     }
 
     fn options(&self) -> Value {
-        let mut options = vec![select("model", &self.model, &self.models), select("mode", &self.mode, &self.modes)];
+        let mut options = vec![select("model", "model", &self.model, &self.models), select("mode", "mode", &self.mode, &self.modes)];
         if self.effort.is_some() {
-            options.push(select("effort", self.effort.as_deref().unwrap_or("low"), &self.efforts));
+            options.push(select(&self.effort_id, "thought_level", self.effort.as_deref().unwrap_or("low"), &self.efforts));
         }
         Value::Array(options)
     }
@@ -165,9 +177,10 @@ fn config_has_bloblex_agent() -> bool {
         .is_some()
 }
 
-fn select(id: &str, current: &str, values: &[String]) -> Value {
+fn select(id: &str, category: &str, current: &str, values: &[String]) -> Value {
     json!({
         "id": id,
+        "category": category,
         "currentValue": current,
         "options": values.iter().map(|value| json!({"value": value, "name": value})).collect::<Vec<_>>()
     })
@@ -260,7 +273,11 @@ fn apply_option(session: &mut Session, config_id: &str, value: &str) -> bool {
             session.mode = value.to_owned();
             true
         }
-        "effort" if session.effort.is_some() && session.efforts.iter().any(|effort| effort == value) => {
+        id if id == session.effort_id
+            && session.effort.is_some()
+            && session.efforts.iter().any(|effort| effort == value)
+            && session.reject_effort.as_deref() != Some(value) =>
+        {
             session.effort = Some(value.to_owned());
             true
         }

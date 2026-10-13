@@ -85,7 +85,7 @@ fn migrate_exec_snapshots(c:&mut Connection,path:Option<&Path>,backup_done:bool)
     }
     tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_usage_exec_snapshot ON usage_events(exec_snapshot_id);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_provider_update ON usage_events(runtime_id,provider_update_id) WHERE provider_update_id IS NOT NULL;")?;
-    let gates=[("exec_gate.claude.model",true),("exec_gate.claude.thinking",true),("exec_gate.claude.instructions",true),("exec_gate.codex.model",true),("exec_gate.codex.thinking",true),("exec_gate.codex.serviceTier",true),("exec_gate.codex.instructions",true),("exec_gate.codex.steer",false),("exec_gate.opencode.model",true),("exec_gate.opencode.thinking",false),("exec_gate.opencode.instructions",true)];
+    let gates=[("exec_gate.claude.model",true),("exec_gate.claude.thinking",true),("exec_gate.claude.instructions",true),("exec_gate.codex.model",true),("exec_gate.codex.thinking",true),("exec_gate.codex.serviceTier",true),("exec_gate.codex.instructions",true),("exec_gate.codex.steer",false),("exec_gate.opencode.model",true),("exec_gate.opencode.thinking",true),("exec_gate.opencode.instructions",true)];
     for (key,enabled) in gates {
         let changed=tx.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,?2)",params![key,if enabled{"true"}else{"false"}])?;
         if changed>0 { push_settings_event(&tx,key,enabled)?; }
@@ -487,6 +487,19 @@ fn ensure_automation_schema(c: &Connection) -> Result<(), StorageError> {
 /// schemas. `memory_fts` is a standalone FTS5 table over `title`, `body` and
 /// `tags`, kept in sync by explicit writes inside the same transaction as the
 /// `memory_records` change (no triggers, so soft deletes can drop the row).
+/// One-time: OpenCode effort is catalog-validated now, but databases seeded
+/// earlier carry `exec_gate.opencode.thinking = false`, a value nobody could
+/// have chosen (no screen exposes that gate). Open it once; the marker keeps any
+/// later operator choice intact.
+fn ensure_opencode_effort_gate_open(c: &Connection) -> Result<(), StorageError> {
+    const MARKER: &str = "migration.opencodeEffortGateOpened";
+    let done: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1)", [MARKER], |r| r.get(0))?;
+    if done { return Ok(()); }
+    c.execute("UPDATE settings SET value='true' WHERE key='exec_gate.opencode.thinking' AND value='false'", [])?;
+    c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,'true')", [MARKER])?;
+    Ok(())
+}
+
 fn ensure_memory_schema(c: &Connection) -> Result<(), StorageError> {
     c.execute_batch(
         "CREATE TABLE IF NOT EXISTS memory_records(
@@ -1013,6 +1026,7 @@ impl Storage {
                 ensure_queue_schema(&conn)?;
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
+                ensure_opencode_effort_gate_open(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==11 {
@@ -1022,6 +1036,7 @@ impl Storage {
                 ensure_queue_schema(&conn)?;
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
+                ensure_opencode_effort_gate_open(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==10 {
@@ -1032,6 +1047,7 @@ impl Storage {
                 ensure_queue_schema(&conn)?;
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
+                ensure_opencode_effort_gate_open(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1045,6 +1061,7 @@ impl Storage {
                 ensure_queue_schema(&conn)?;
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
+                ensure_opencode_effort_gate_open(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1153,6 +1170,7 @@ impl Storage {
         ensure_queue_schema(&conn)?;
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
+                ensure_opencode_effort_gate_open(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -4789,9 +4807,28 @@ mod tests {
         assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),1);drop(c);let _=fs::remove_dir_all(dir);
     }
     #[test]
+    fn opencode_effort_gate_is_opened_once_for_databases_seeded_closed() {
+        let db = Storage::open_in_memory().unwrap();
+        // A database seeded closed by an older build, before the marker existed.
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute("UPDATE settings SET value='false' WHERE key='exec_gate.opencode.thinking'", []).unwrap();
+            c.execute("DELETE FROM settings WHERE key='migration.opencodeEffortGateOpened'", []).unwrap();
+            ensure_opencode_effort_gate_open(&c).unwrap();
+        }
+        assert_eq!(db.settings().unwrap()["exec_gate.opencode.thinking"], true);
+        // After the marker, a deliberate operator choice is kept.
+        db.set_setting("exec_gate.opencode.thinking", &json!(false)).unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            ensure_opencode_effort_gate_open(&c).unwrap();
+        }
+        assert_eq!(db.settings().unwrap()["exec_gate.opencode.thinking"], false);
+    }
+    #[test]
     fn migration_2_to_3_seeds_gates_preserves_operator_values_and_reopens_without_backup_or_sidecars(){
         let(dir,path)=v2_fixture();
-        {let db=Storage::open(&path).unwrap();let settings=db.settings().unwrap();assert_eq!(settings["exec_gate.codex.model"],false);for key in ["exec_gate.claude.model","exec_gate.claude.thinking","exec_gate.claude.instructions","exec_gate.codex.thinking","exec_gate.codex.serviceTier","exec_gate.codex.instructions","exec_gate.opencode.model","exec_gate.opencode.instructions"]{assert_eq!(settings[key],true);}assert_eq!(settings["exec_gate.opencode.thinking"],false);}
+        {let db=Storage::open(&path).unwrap();let settings=db.settings().unwrap();assert_eq!(settings["exec_gate.codex.model"],false);for key in ["exec_gate.claude.model","exec_gate.claude.thinking","exec_gate.claude.instructions","exec_gate.codex.thinking","exec_gate.codex.serviceTier","exec_gate.codex.instructions","exec_gate.opencode.model","exec_gate.opencode.thinking","exec_gate.opencode.instructions"]{assert_eq!(settings[key],true);}}
         let backup_dir=dir.join("backups");let before=fs::read_dir(&backup_dir).unwrap().count();assert_eq!(before,20);
         {let c=Connection::open_with_flags(&path,OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),12);assert_eq!(c.query_row("SELECT MAX(version) FROM schema_migrations",[],|r|r.get::<_,i64>(0)).unwrap(),12);assert_eq!(c.query_row("SELECT COUNT(*) FROM usage_events WHERE usage_status='unreported' AND exec_snapshot_id IS NULL AND provider_update_id IS NULL AND context_used IS NULL AND context_size IS NULL AND reported_cost_decimal IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),2);assert_eq!(c.query_row("SELECT count(*) FROM app_events WHERE event_type='settings.changed'",[],|r|r.get::<_,i64>(0)).unwrap(),10);for (table,column) in [("sessions","claude_instruction_sha256"),("sessions","codex_thread_instruction_sha256"),("sessions","opencode_cost_total"),("usage_events","reported_cost_decimal")] {assert_eq!(c.query_row("SELECT type FROM pragma_table_info(?1) WHERE name=?2",params![table,column],|r|r.get::<_,String>(0)).unwrap(),"TEXT");}assert!(!c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name='cumulative_cost_micros')",[],|r|r.get::<_,bool>(0)).unwrap());}
         drop(Storage::open(&path).unwrap());assert_eq!(fs::read_dir(&backup_dir).unwrap().count(),before);

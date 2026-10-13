@@ -274,7 +274,17 @@ fn model_from(header: &str, value: &Value) -> Result<ModelInfo, String> {
         Some(_) => return Err("verbose model variants are invalid".into()),
     };
     let display = value["name"].as_str().unwrap_or(header).to_owned();
-    let supported = variant_keys.clone();
+    // `default` is a synthetic "use the model's own default" choice, not a
+    // selectable level; the UI offers that as the null selection. Every other
+    // variant key is a real level, kept in OpenCode's spelling but ordered low
+    // to high so the picker is deterministic across catalog snapshots.
+    let mut supported = variant_keys
+        .iter()
+        .filter(|level| level.as_str() != "default")
+        .cloned()
+        .collect::<Vec<_>>();
+    supported.sort_by_key(|level| effort_rank(level));
+    supported.dedup();
     Ok(ModelInfo {
         id: composed,
         display_name: display,
@@ -291,6 +301,24 @@ fn model_from(header: &str, value: &Value) -> Result<ModelInfo, String> {
         release_date: value.get("release_date").and_then(Value::as_str).filter(|date| is_iso_date(date)).map(str::to_owned),
         context_window: value.pointer("/limit/context").and_then(Value::as_u64),
     })
+}
+
+/// Deterministic low-to-high ordering for reasoning-effort levels. Known
+/// OpenCode levels get a fixed rank; anything else sorts after them
+/// lexicographically so the output never depends on catalog key order.
+pub(crate) fn effort_rank(level: &str) -> (u8, String) {
+    let rank = match level {
+        "none" => 0,
+        "minimal" => 1,
+        "low" => 2,
+        "medium" => 3,
+        "high" => 4,
+        "xhigh" => 5,
+        "max" => 6,
+        "ultra" => 7,
+        _ => 100,
+    };
+    (rank, level.to_owned())
 }
 
 fn is_iso_date(value: &str) -> bool {

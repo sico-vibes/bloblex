@@ -510,6 +510,66 @@ async fn missing_effort_and_service_tier_stop_before_prompt() {
 }
 
 #[tokio::test]
+async fn effort_option_is_selected_by_thought_level_category_not_by_hard_coded_id() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec![
+        "--record".into(),
+        temp.record().to_string_lossy().into(),
+        "--effort-id".into(),
+        "think".into(),
+    ];
+    let exec = options(Some("opencode-go/deepseek-v4.1-flash"), Some("high"), None);
+    let (handle, mut events) = open_session(&adapter, args, exec.clone()).await;
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-category".into(), text: "hello".into(), exec_options: exec })
+        .await
+        .unwrap();
+    let trace = rpc_trace(&read_record(&temp.record()));
+    assert!(
+        trace.contains(&"session/set_config_option think=high".to_owned()),
+        "effort is sent under the provider's own option id, found by category: {trace:?}",
+    );
+    let mut seen = Vec::new();
+    while let Ok(event) = events.try_recv() { seen.push(event); }
+    let outcomes = take_outcomes(&seen);
+    assert_eq!(outcomes["thinking"].evidence_value.as_ref().and_then(|value| value.as_str()), Some("high"));
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
+async fn rejected_effort_value_is_a_typed_error_and_never_reaches_the_prompt() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec![
+        "--record".into(),
+        temp.record().to_string_lossy().into(),
+        "--reject-effort".into(),
+        "high".into(),
+    ];
+    let (handle, mut events) = open_session(&adapter, args, options(Some("opencode-go/deepseek-v4.1-flash"), None, None)).await;
+    let error = adapter
+        .prompt(
+            &handle,
+            PromptRequest { attachments: Vec::new(),
+                turn_id: "turn-reject".into(),
+                text: "hello".into(),
+                exec_options: options(Some("opencode-go/deepseek-v4.1-flash"), Some("high"), None),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("OpenCode rejected the effort setting"), "{error}");
+    let mut seen = Vec::new();
+    while let Ok(event) = events.try_recv() { seen.push(event); }
+    let outcomes = take_outcomes(&seen);
+    assert_eq!(outcomes["thinking"].applied, Some(false));
+    let trace = rpc_trace(&read_record(&temp.record()));
+    assert!(trace.iter().all(|call| call != "session/prompt"), "a rejected effort stops before the prompt");
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
 async fn changed_instructions_do_not_reach_the_prompt() {
     let temp = Temp::new();
     let adapter = AcpAdapter::default();
@@ -752,7 +812,7 @@ async fn verbose_catalog_includes_zen_and_go_models_with_per_model_efforts() {
     assert!(catalog.models[0].supported_thinking.is_empty());
     assert!(catalog.models.iter().all(|model| model.host_dependent && model.service_tiers.is_empty()));
     assert_eq!(catalog.models[1].id, "opencode-go/deepseek-v4.1-flash");
-    assert_eq!(catalog.models[1].supported_thinking, ["high", "low", "max"]);
+    assert_eq!(catalog.models[1].supported_thinking, ["low", "high", "max"], "levels are ordered low to high");
     let record = read_record(&temp.record());
     assert_eq!(record["config"]["ok"], false);
     let isolated: BTreeSet<_> = record["isolated_dirs"]

@@ -662,9 +662,18 @@ impl AcpAdapter {
         rejected: &str,
         turn_id: Option<&str>,
     ) -> Result<(), AdapterError> {
+        // Effort is discovered by the `thought_level` category when the id is
+        // not literally `effort`; model and mode resolve by their own id.
+        let Some(resolved_id) = ({
+            let options = c.config_options.lock().await;
+            exec::resolve_option_id(&options, config_id)
+        }) else {
+            Self::fail_setting(c, turn_id, outcome_key, json!(value), missing).await;
+            return Err(AdapterError::Protocol(missing.into()));
+        };
         let offered = {
             let options = c.config_options.lock().await;
-            exec::config_option(&options, config_id)
+            exec::config_option(&options, &resolved_id)
                 .map(exec::option_values)
                 .unwrap_or_default()
         };
@@ -675,7 +684,7 @@ impl AcpAdapter {
         let result = match Self::request(
             c,
             "session/set_config_option",
-            json!({"sessionId": provider_session_id, "configId": config_id, "value": value}),
+            json!({"sessionId": provider_session_id, "configId": resolved_id.clone(), "value": value}),
         )
         .await
         {
@@ -686,7 +695,7 @@ impl AcpAdapter {
             }
         };
         let updated = exec::options_from_result(&result);
-        let echoed = exec::config_option(&updated, config_id).and_then(exec::current_value);
+        let echoed = exec::config_option(&updated, &resolved_id).and_then(exec::current_value);
         *c.config_options.lock().await = updated;
         if echoed.as_deref() != Some(value) {
             Self::fail_setting(c, turn_id, outcome_key, json!(value), rejected).await;

@@ -205,6 +205,23 @@ pub(crate) fn config_option<'a>(options: &'a [Value], id: &str) -> Option<&'a Va
     options.iter().find(|option| option["id"].as_str() == Some(id))
 }
 
+/// Resolves the option id to send for a logical setting. The id wins when it
+/// is present; otherwise `effort` is matched by its ACP category
+/// `thought_level`, because OpenCode's own option id is not guaranteed.
+pub(crate) fn resolve_option_id(options: &[Value], id: &str) -> Option<String> {
+    if let Some(option) = config_option(options, id) {
+        return Some(option["id"].as_str().unwrap_or(id).to_owned());
+    }
+    let category = match id {
+        "effort" => "thought_level",
+        _ => return None,
+    };
+    options
+        .iter()
+        .find(|option| option["category"].as_str() == Some(category))
+        .and_then(|option| option["id"].as_str().map(str::to_owned))
+}
+
 pub(crate) fn option_values(option: &Value) -> BTreeSet<String> {
     option["options"]
         .as_array()

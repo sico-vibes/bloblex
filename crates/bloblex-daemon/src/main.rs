@@ -1466,8 +1466,12 @@ async fn preflight_exec_options(st:&AppState,runtime:&Value,provider:&str,option
     None
 }
 /// Gates seeded before a setting existed have no stored row. Claude fast mode
-/// is validated against the model catalog, so it is open unless disabled.
-fn gate_default(provider: &str, setting: &str) -> bool { provider == "claude" && setting == "serviceTier" }
+/// and OpenCode effort are validated against the model catalog (see
+/// `docs/evidence/opencode-effort-2026-10-13.md`), so they are open unless
+/// explicitly disabled. The stored `exec_gate.*` value remains the off-switch.
+fn gate_default(provider: &str, setting: &str) -> bool {
+    (provider == "claude" && setting == "serviceTier") || (provider == "opencode" && setting == "thinking")
+}
 const EXEC_UNAVAILABLE: &str = "The requested setting is unavailable for this runtime until its execution check passes.";
 fn safe_requested_options(options: &ExecOptions) -> Value {
     json!({"model":options.model,"thinking":options.thinking,"serviceTier":options.service_tier,"approvalMode":options.approval_mode.as_str(),"instructionsPresent":options.instructions.is_some(),"extraArgs":[],"maxConcurrency":options.max_concurrency,"customEnvKeys":options.env.keys().collect::<Vec<_>>()})
@@ -1489,6 +1493,37 @@ fn exec_option_rejection(st: &AppState, provider: &str, options: &ExecOptions) -
     }
     Ok(None)
 }
+/// The model whose effort the caller is asking about: an explicit `model`,
+/// else the agent's saved model, else the session's model lock.
+async fn capability_selected_model(st:&AppState,p:&Value,runtime_id:&str)->Option<String>{
+    if let Some(model)=p.get("model").and_then(Value::as_str).map(str::trim).filter(|model|!model.is_empty()){return Some(model.to_owned());}
+    if let Some(agent_id)=p.get("agentId").and_then(Value::as_str){
+        if let Ok(agent)=st.db.agent_get(agent_id){
+            if let Some(model)=agent["model"].as_str().map(str::trim).filter(|model|!model.is_empty()){return Some(model.to_owned());}
+        }
+    }
+    if let Some(session_id)=p.get("sessionId").and_then(Value::as_str){
+        if let Ok(session)=st.db.session_detail(session_id){
+            if session["runtimeId"].as_str()==Some(runtime_id){
+                if let Some(model)=session["modelLock"]["model"].as_str().map(str::trim).filter(|model|!model.is_empty()){return Some(model.to_owned());}
+            }
+        }
+    }
+    None
+}
+
+/// Per-model OpenCode effort support from the verbose catalog: `Some(true)`
+/// when the model lists at least one level, `Some(false)` when it lists none,
+/// `None` when the catalog is unavailable or does not carry the model.
+async fn opencode_thinking_support(st:&AppState,runtime:&Value,model:&str)->Option<bool>{
+    let catalog=fetch_model_catalog_for(st,runtime,false,None,Some(model)).await.ok()?;
+    if catalog["validated"]!=true||catalog["fallback"]==true{return None;}
+    let models=catalog["models"].as_array()?;
+    let selected=models.iter().find(|candidate|candidate["id"].as_str()==Some(model))?;
+    let levels=selected["supportedThinking"].as_array()?;
+    Some(!levels.is_empty())
+}
+
 async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError>{
     let runtime_id=p["runtimeId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;
     let runtime=st.runtimes.read().await.iter().find(|r|r["id"]==runtime_id).cloned().ok_or_else(||derr("not_found","runtime not found",StatusCode::NOT_FOUND))?;
@@ -1496,17 +1531,27 @@ async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError
     let table:[(&str,bool,&str,&str);6]=match provider{
         "claude"=>[("model",true,"spawn","provider_echo"),("thinking",true,"spawn","usage_effect"),("serviceTier",true,"spawn","request_shape"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape"),("steer",false,"turn","none")],
         "codex"=>[("model",true,"spawn","provider_echo"),("thinking",true,"turn","usage_effect"),("serviceTier",true,"turn","provider_echo"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape"),("steer",true,"turn","none")],
-        "opencode"=>[("model",true,"session","provider_echo"),("thinking",true,"session","none"),("serviceTier",false,"session","none"),("instructions",true,"session","successful_turn"),("customEnv",true,"process","request_shape"),("steer",false,"turn","none")],
+        "opencode"=>[("model",true,"session","provider_echo"),("thinking",true,"session","provider_echo"),("serviceTier",false,"session","none"),("instructions",true,"session","successful_turn"),("customEnv",true,"process","request_shape"),("steer",false,"turn","none")],
         _=>[("model",false,"turn","none"),("thinking",false,"turn","none"),("serviceTier",false,"turn","none"),("instructions",false,"turn","none"),("customEnv",false,"process","none"),("steer",false,"turn","none")],
     };
     let settings=st.db.settings().map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+    // OpenCode publishes an effort option per model. When a model is in scope the
+    // verbose catalog decides whether effort is offered; with no model in scope
+    // the provider-level gate answer stands.
+    let opencode_thinking = if provider == "opencode" {
+        match capability_selected_model(st, p, runtime_id).await {
+            Some(model) => opencode_thinking_support(st, &runtime, &model).await,
+            None => None,
+        }
+    } else { None };
     let mut reported=serde_json::Map::new();
-    for (setting,supported,scope,evidence) in table {
+    for (setting,provider_supported,scope,evidence) in table {
         let key=match setting{"model"=>format!("exec_gate.{provider}.model"),"thinking"=>format!("exec_gate.{provider}.thinking"),"serviceTier"=>format!("exec_gate.{provider}.serviceTier"),"instructions"=>format!("exec_gate.{provider}.instructions"),"steer"=>format!("exec_gate.{provider}.steer"),_=>String::new()};
         let gate=if key.is_empty(){true}else{settings[&key].as_bool().unwrap_or(gate_default(provider,setting))};
+        let supported=if setting=="thinking"{provider_supported && opencode_thinking.unwrap_or(true)}else{provider_supported};
         let mut value=json!({"supported":supported,"enabled":supported&&gate,"scope":scope,"evidence":evidence});
         if setting=="customEnv"{value["allowedKeys"]=json!(["LANG","LC_ALL","TZ","NO_COLOR","TERM"]);}
-        if !supported{value["reason"]=json!(if setting=="customEnv"{"environment options are unsupported for this runtime"}else{"setting is unsupported by this runtime"});}
+        if !supported{value["reason"]=json!(if setting=="customEnv"{"environment options are unsupported for this runtime"}else if setting=="thinking"&&provider=="opencode"{"model_has_no_effort_levels"}else if setting=="thinking"{"provider_unsupported"}else{"setting is unsupported by this runtime"});}
         else if !gate{value["reason"]=json!("execution entry gate is disabled");}
         reported.insert(setting.into(),value);
     }
@@ -4850,7 +4895,7 @@ mod phase2a_tests {
         let after=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-test"})).await.unwrap();assert_eq!(after["settings"]["model"]["supported"],true);assert_eq!(after["settings"]["model"]["enabled"],false);
         dispatch(&st,"settings.set",json!({"key":"exec_gate.codex.model","value":false})).await.unwrap();assert!(events.try_recv().is_err());
         let claude=json!({"id":"rt-claude","provider":"claude"});*st.runtimes.write().await=vec![claude];let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-claude"})).await.unwrap();assert_eq!(caps["settings"]["serviceTier"]["supported"],true);assert_eq!(caps["settings"]["serviceTier"]["enabled"],true,"Claude fast mode is catalog-validated and open unless its gate is disabled");assert_eq!(caps["settings"]["thinking"]["evidence"],"usage_effect");
-        *st.runtimes.write().await=vec![json!({"id":"rt-opencode","provider":"opencode"})];st.db.upsert_runtime(&json!({"id":"rt-opencode","provider":"opencode"})).unwrap();let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(caps["settings"]["thinking"]["supported"],true);assert_eq!(caps["settings"]["thinking"]["enabled"],false);assert_eq!(caps["settings"]["serviceTier"]["supported"],false);st.db.set_setting("exec_gate.opencode.thinking",&json!(true)).unwrap();let enabled=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(enabled["settings"]["thinking"]["supported"],true);assert_eq!(enabled["settings"]["thinking"]["enabled"],true);
+        *st.runtimes.write().await=vec![json!({"id":"rt-opencode","provider":"opencode"})];st.db.upsert_runtime(&json!({"id":"rt-opencode","provider":"opencode"})).unwrap();let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(caps["settings"]["thinking"]["supported"],true);assert_eq!(caps["settings"]["thinking"]["enabled"],true,"OpenCode effort is catalog-validated and open unless its gate is disabled");assert_eq!(caps["settings"]["thinking"]["evidence"],"provider_echo");assert_eq!(caps["settings"]["serviceTier"]["supported"],false);st.db.set_setting("exec_gate.opencode.thinking",&json!(false)).unwrap();let disabled=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(disabled["settings"]["thinking"]["supported"],true);assert_eq!(disabled["settings"]["thinking"]["enabled"],false);assert_eq!(disabled["settings"]["thinking"]["reason"],"execution entry gate is disabled");st.db.set_setting("exec_gate.opencode.thinking",&json!(true)).unwrap();let enabled=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode"})).await.unwrap();assert_eq!(enabled["settings"]["thinking"]["supported"],true);assert_eq!(enabled["settings"]["thinking"]["enabled"],true);
         let agent=st.db.agent_create(&json!({"name":"Capped","runtimeId":"rt-opencode","maxConcurrency":8})).unwrap().0;let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode","agentId":agent["id"]})).await.unwrap();assert_eq!(caps["agentConcurrency"]["configuredMaxConcurrency"],8);assert_eq!(caps["agentConcurrency"]["effectiveMaxConcurrency"],4);
     }
     #[tokio::test]
@@ -4932,6 +4977,8 @@ mod phase2a_tests {
         let(st,_)=state();
         let requested=ExecOptions{thinking:Some("high".into()),..ExecOptions::default()};
         assert!(exec_option_rejection(&st,"opencode",&ExecOptions::default()).unwrap().is_none());
+        assert!(exec_option_rejection(&st,"opencode",&requested).unwrap().is_none(),"OpenCode effort is catalog-validated and defaults open");
+        st.db.set_setting("exec_gate.opencode.thinking",&json!(false)).unwrap();
         assert_eq!(exec_option_rejection(&st,"opencode",&requested).unwrap().unwrap().1,EXEC_UNAVAILABLE);
         st.db.set_setting("exec_gate.opencode.thinking",&json!(true)).unwrap();
         assert!(exec_option_rejection(&st,"opencode",&requested).unwrap().is_none());
@@ -5206,6 +5253,39 @@ mod phase2a_tests {
         )
         .await
         .unwrap();
+    }
+    #[tokio::test]
+    async fn opencode_thinking_capability_follows_the_selected_models_catalog_levels(){
+        let (mut st, _) = state();
+        let runtime_id = "rt-opencode-effort-levels";
+        let runtime = json!({"id":runtime_id,"provider":"opencode","status":"online","executablePath":"unused-test-runtime","launchArgs":[]});
+        st.db.upsert_runtime(&runtime).unwrap();
+        let model = |id:&str, levels:Vec<&str>| bloblex_agent_core::ModelInfo {
+            id:id.into(), display_name:id.into(), provider_id:None,
+            supported_thinking:levels.into_iter().map(str::to_owned).collect(),
+            default_thinking:None, service_tiers:Vec::new(), default_service_tier:None,
+            variants:None, host_dependent:true, is_default:None, group:None, availability:None, release_date:None, context_window:None,
+        };
+        let catalog = bloblex_agent_core::ModelCatalog{
+            models: vec![model("opencode-go/deepseek-v4.1-flash", vec!["low","high","max"]), model("opencode/big-pickle", vec![])],
+            fetched_at:"2026-10-13T00:00:00Z".into(), expires_at:"2026-10-13T00:01:00Z".into(),
+            fallback:false, source:"fake_test_catalog".into(), validated:true,
+        };
+        st.adapters = Arc::new(Adapters{ acp:Arc::new(CatalogAdapter(catalog)), codex:Arc::new(CodexAdapter::default()), claude:Arc::new(ClaudeAdapter::default()) });
+        *st.runtimes.write().await = vec![runtime];
+
+        let with_levels = dispatch(&st,"runtime.capabilities",json!({"runtimeId":runtime_id,"model":"opencode-go/deepseek-v4.1-flash"})).await.unwrap();
+        assert_eq!(with_levels["settings"]["thinking"]["supported"],true);
+        assert_eq!(with_levels["settings"]["thinking"]["enabled"],true);
+        assert_eq!(with_levels["settings"]["thinking"]["evidence"],"provider_echo");
+        assert!(with_levels["settings"]["thinking"].get("reason").is_none());
+
+        let without_levels = dispatch(&st,"runtime.capabilities",json!({"runtimeId":runtime_id,"model":"opencode/big-pickle"})).await.unwrap();
+        assert_eq!(without_levels["settings"]["thinking"]["supported"],false);
+        assert_eq!(without_levels["settings"]["thinking"]["enabled"],false);
+        assert_eq!(without_levels["settings"]["thinking"]["reason"],"model_has_no_effort_levels");
+        assert_eq!(without_levels["settings"]["thinking"]["evidence"],"provider_echo");
+        assert_eq!(without_levels["settings"]["model"]["supported"],true,"a model with no effort levels still supports model selection");
     }
     #[tokio::test]
     async fn catalog_validation_rejects_turn_values_but_accepts_custom_ids_without_authority(){

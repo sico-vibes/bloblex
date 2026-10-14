@@ -137,6 +137,7 @@ Observed 14 Oct 2026, OpenCode 2.0.28. These are not 1.18.34 results. This docs 
 - `opencode models --verbose` is rejected (`Unrecognized flag: --verbose`). Plain `opencode models` prints one `provider/model` per line.
 - `opencode acp` accepts only `--login`. `acp --cwd <dir>` is rejected: the CLI prints help and never speaks ACP. The working directory comes from the process cwd and from `session/new`'s `cwd`.
 - ACP `session/new` returns `configOptions`: `model` (select, category `model`); `effort` (select, category `thought_level`, options `low`, `medium`, `high`, `default`, for the CURRENT model only); `mode` (select, `build` or `plan`).
+- `session/set_config_option {configId:"model", value}` returns the full `configOptions` with `effort` rebuilt for the newly selected model (observed 14 Oct 2026: `deepseek-v4.1-flash` gives `low,high,max,default`; `kimi-k3` gives `max,default`; `opencode/big-pickle` has no `effort` option). Walking all 115 models in one session took about 1.1 s with no model call. Bloblex uses this to build per-model levels ([FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md](FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md)).
 - Bloblex's ACP launch is described in [FIX3_OPENCODE2_ACP_LAUNCH_SPEC.md](FIX3_OPENCODE2_ACP_LAUNCH_SPEC.md). Auth parsing is in `crates/bloblex-runtime/src/lib.rs` (`auth_status` at line 265, `parse_opencode_auth_list` at line 387).
 
 Conflicts with the 1.18.34 statements above and with the code:

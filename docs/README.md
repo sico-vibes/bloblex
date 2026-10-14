@@ -14,7 +14,7 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 
 - **AI agents:** read [AGENTS.md](../AGENTS.md) first. It is the owner directive, with dated amendments newest first. Then [OPERATING_MODEL.md](OPERATING_MODEL.md) (the rules in effect today, derived from AGENTS.md). Then [implementation-status.md](implementation-status.md) for open gaps and [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for release state.
 - **New contributors:** [README.md](../README.md), then [windows-development.md](windows-development.md), [PRODUCT.md](../PRODUCT.md), [DESIGN.md](../DESIGN.md), [ipc-contract.md](ipc-contract.md) and [runtime-capabilities.md](runtime-capabilities.md).
-- **Release state today:** `v0.1.0-beta.24` ([releases/0.1.0-beta.24.md](releases/0.1.0-beta.24.md)). The signed updater feed is still at `v0.1.0-beta.6` ([UPDATER.md](UPDATER.md)).
+- **Release state today:** `v0.1.0-beta.25` ([releases/0.1.0-beta.25.md](releases/0.1.0-beta.25.md)). The signed updater feed is still at `v0.1.0-beta.6` ([UPDATER.md](UPDATER.md)).
 
 ## Rules and ownership
 
@@ -72,7 +72,8 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 | [BITBOTS_THEME_SPEC.md](BITBOTS_THEME_SPEC.md) | CSS-only pixel theme ("Bitbots") spec. | historical (feature shipped as an experimental setting; see [SESSION_HANDOFF.md](../SESSION_HANDOFF.md)) | 14 Oct 2026: header |
 | [FIX2_CODEX_TEAM_INSTRUCTIONS_SPEC.md](FIX2_CODEX_TEAM_INSTRUCTIONS_SPEC.md) | Codex threads keep stale team instructions; send changed text per turn, with echo evidence. | historical; implemented and released in `v0.1.0-beta.24` | 14 Oct 2026: added with the fix |
 | [FIX3_OPENCODE2_ACP_LAUNCH_SPEC.md](FIX3_OPENCODE2_ACP_LAUNCH_SPEC.md) | OpenCode 2 rejects `acp --cwd`; launch and catalog without it. | historical; implemented and released in `v0.1.0-beta.24` | 14 Oct 2026: added with the fix |
-| [FIX4_CLIPPY_CLEANUP_SPEC.md](FIX4_CLIPPY_CLEANUP_SPEC.md) | Clippy cleanup to zero findings, no behavior change. | current; queued, not started | 14 Oct 2026: added |
+| [FIX4_CLIPPY_CLEANUP_SPEC.md](FIX4_CLIPPY_CLEANUP_SPEC.md) | Clippy cleanup to zero findings, no behavior change. | current; part 1 merged (`e47412a`), part 2 (adapter-acp and daemon) in progress | 14 Oct 2026: updated |
+| [FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md](FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md) | OpenCode 2 per-model effort levels and a validated catalog. | historical; implemented and released in `v0.1.0-beta.25` | 14 Oct 2026: added with the fix |
 
 ## Runbooks
 
@@ -108,7 +109,7 @@ Immutable records. Only broken links were repaired. Their wording and conclusion
 
 ## Release notes
 
-Immutable records. The newest is [0.1.0-beta.24](releases/0.1.0-beta.24.md). Earlier notes are historical.
+Immutable records. The newest is [0.1.0-beta.25](releases/0.1.0-beta.25.md). Earlier notes are historical.
 
 | Document | Status | Last verified |
 | --- | --- | --- |
@@ -135,7 +136,8 @@ Immutable records. The newest is [0.1.0-beta.24](releases/0.1.0-beta.24.md). Ear
 | [releases/0.1.0-beta.21.md](releases/0.1.0-beta.21.md) | historical | 14 Oct 2026: links only |
 | [releases/0.1.0-beta.22.md](releases/0.1.0-beta.22.md) | historical | 14 Oct 2026: links only |
 | [releases/0.1.0-beta.23.md](releases/0.1.0-beta.23.md) | historical | 14 Oct 2026: links only |
-| [releases/0.1.0-beta.24.md](releases/0.1.0-beta.24.md) | historical (newest manual-only release) | 14 Oct 2026: written with the release |
+| [releases/0.1.0-beta.24.md](releases/0.1.0-beta.24.md) | historical | 14 Oct 2026: written with the release |
+| [releases/0.1.0-beta.25.md](releases/0.1.0-beta.25.md) | historical (newest manual-only release) | 14 Oct 2026: written with the release |
 
 ## Handoff and history
 

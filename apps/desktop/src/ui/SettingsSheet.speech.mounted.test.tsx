@@ -43,49 +43,52 @@ async function openSpeech(settings: Record<string, unknown> = {}, auth: Record<s
 }
 
 describe('Speech settings: transcription engine', () => {
-  it('defaults to on-device, never offers ChatGPT without asking, and says audio stays here', async () => {
+  it('defaults to on device, offers only On device and Cloud, and carries no engine explanations', async () => {
     await openSpeech()
-    expect(host.textContent).toContain('your audio stays here unless you choose ChatGPT below')
     expect(selectValue(host, 'Transcription engine')).toBe('local')
     expect(host.textContent).not.toContain('Read from Codex')
+    expect(host.textContent).not.toContain('Codex sign-in')
+    expect(host.textContent).not.toContain('Withdraw')
+    expect(host.textContent).not.toContain('ChatGPT when available')
     expect(dictationEnginePrefs()).toEqual({ engine: 'local', consent: false })
   })
 
-  it('asks for permission before enabling ChatGPT and saves consent then engine', async () => {
+  it('asks for permission before enabling the cloud engine and saves consent then engine', async () => {
     await openSpeech()
     await chooseOption(host, 'Transcription engine', 'automatic')
     await tick()
     const dialog = host.querySelector('[role="dialog"]')!
-    expect(dialog.textContent).toContain('Send dictation to ChatGPT?')
+    expect(dialog.textContent).toContain('Use cloud dictation?')
     expect(dialog.textContent).toContain('not stored or logged')
     expect(mocks.rpc).not.toHaveBeenCalledWith('settings.set', expect.objectContaining({ key: 'speech.engine' }))
-    await act(async () => { ([...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Allow ChatGPT transcription') as HTMLElement).click() })
+    await act(async () => { ([...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Allow cloud') as HTMLElement).click() })
     await tick()
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'speech.cloud.consent', value: true })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'speech.engine', value: 'automatic' })
     expect(dictationEnginePrefs()).toEqual({ engine: 'automatic', consent: true })
-    expect(host.textContent).toContain('Signed in')
+    // No sign-in status row and no separate permission row once it is on.
+    expect(host.textContent).not.toContain('Signed in')
+    expect(host.textContent).not.toContain('Withdraw')
   })
 
   it('keeps the on-device engine when the dialog is declined', async () => {
     await openSpeech()
-    await chooseOption(host, 'Transcription engine', 'cloud')
+    await chooseOption(host, 'Transcription engine', 'automatic')
     await tick()
-    await act(async () => { ([...host.querySelectorAll('[role="dialog"] button')].find((button) => button.textContent === 'Keep on this device') as HTMLElement).click() })
+    await act(async () => { ([...host.querySelectorAll('[role="dialog"] button')].find((button) => button.textContent === 'Keep on device') as HTMLElement).click() })
     await tick()
     expect(mocks.rpc).not.toHaveBeenCalledWith('settings.set', expect.objectContaining({ key: 'speech.cloud.consent' }))
     expect(dictationEnginePrefs()).toEqual({ engine: 'local', consent: false })
   })
 
-  it('shows the Codex sign-in problem plainly and lets the user withdraw permission', async () => {
-    await openSpeech({ 'speech.engine': 'cloud', 'speech.cloud.consent': true }, { authState: 'missing' })
-    expect(host.textContent).toContain('Not found. Run codex login in a terminal.')
-    expect(dictationEnginePrefs()).toEqual({ engine: 'cloud', consent: true })
-    const withdraw = [...host.querySelectorAll('button')].find((button) => button.textContent === 'Withdraw')!
-    await act(async () => { withdraw.click() })
+  it('reads an older stored cloud choice as Cloud and switches back to On device without a permission row', async () => {
+    await openSpeech({ 'speech.engine': 'cloud', 'speech.cloud.consent': true })
+    expect(selectValue(host, 'Transcription engine')).toBe('automatic')
+    expect(dictationEnginePrefs()).toEqual({ engine: 'automatic', consent: true })
+    expect(host.textContent).not.toContain('Withdraw')
+    await chooseOption(host, 'Transcription engine', 'local')
     await tick()
-    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'speech.cloud.consent', value: false })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'speech.engine', value: 'local' })
-    expect(dictationEnginePrefs()).toEqual({ engine: 'local', consent: false })
+    expect(dictationEnginePrefs().engine).toBe('local')
   })
 })

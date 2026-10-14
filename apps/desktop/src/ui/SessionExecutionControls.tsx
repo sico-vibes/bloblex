@@ -5,12 +5,12 @@ import { rpc } from '../tauri'
 import { parseModelCatalog, type CatalogModel, type ModelCatalog, type ServiceTierOption } from '../executionContract'
 import { ConfirmDialog } from './BlobPage'
 import { moveMenuFocus, usePopoverDismiss } from './ComposerControls'
-import { providerBrand } from './providerBrand'
+import { ProviderLogo, providerBrand } from './providerBrand'
 import { positionFromPointer, SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
 import { Tip } from './Tip'
 import { labelizeEffort } from './effortLabels'
 import { concreteModelForSelection } from './modelPreferences'
-import { modelDisplayName } from './modelDisplayName'
+import { organizeModels, presentedModelName } from './modelPresentation'
 export { labelizeEffort } from './effortLabels'
 
 type Lock = SessionModelLock
@@ -112,7 +112,8 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   }
   const providerStyle = resolveProviderStyle(catalog?.provider ?? '', selectedModel?.providerId, selectedModel?.id ?? model, selectedModel?.displayName)
   const pendingForSession = pendingModel?.sessionId === session.id ? pendingModel : null
-  const modelLabel = model ? (selectedModel ? modelDisplayName(selectedModel) : model) : 'Choose a model'
+  const catalogProvider = catalog?.provider ?? ''
+  const modelLabel = model ? presentedModelName(catalogProvider, selectedModel ?? { id: model, displayName: model }) : 'Choose a model'
   const modelAriaLabel = modelLabel
   const fastTier = fastTierFor(selectedModel)
   const fastOn = !!fastTier && serviceTier === fastTier.id
@@ -135,7 +136,7 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
       ? <ModelMenu provider={catalog.provider} models={catalog.models} model={model ?? null} label={modelLabel} ariaLabel={modelAriaLabel} fastTier={fastTier} fastOn={fastOn} disabled={sessionBusy} saving={saving} onSelect={(next) => {
         if (next !== model) { setEffortDraft(null); setPendingModel({ sessionId:session.id, model:next }) }
       }} onFast={(enabled) => void setFast(enabled)} />
-      : <button type="button" className="composer-pill model-pill unavailable" aria-label={`Conversation model, ${modelLabel}; model catalog unavailable`} title="Model choices are unavailable until the runtime reports a catalog." disabled><span>{shortModelName(modelLabel)}</span></button>}
+      : <button type="button" className="composer-pill model-pill unavailable" aria-label={`Conversation model, ${modelLabel}; model catalog unavailable`} title="Model choices are unavailable until the runtime reports a catalog." disabled><span>{modelLabel}</span></button>}
     <EffortControl
       provider={catalog?.provider ?? ''}
       key={`${session.id}:${model ?? 'unselected'}:${pendingForSession?.model ?? 'no-pending-model'}`}
@@ -372,10 +373,13 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
   useEffect(() => { if (disabled) setOpen(false) }, [disabled])
   const choose = (next: string) => { close(true); onSelect(next) }
   const brand = providerBrand(provider).name
+  const ordered = useMemo(() => organizeModels(provider, models), [provider, models])
   return <div ref={rootRef} className="composer-popover-anchor">
     <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''}`} aria-haspopup="menu" aria-expanded={open} aria-label={`Conversation model: ${ariaLabel}${fastOn ? ', fast mode on' : ''}`} disabled={disabled || (saving && !open)} onClick={() => setOpen((value) => !value)}>
       {saving ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : fastOn ? <Zap size={13} aria-hidden="true" className="model-pill-fast" /> : null}
-      <span>{shortModelName(label)}</span>
+      <ProviderLogo provider={provider} size={14} />
+      <i className="model-pill-divider" aria-hidden="true" />
+      <span>{label}</span>
       <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
     </button>
     {open && <div ref={menuRef} className="composer-menu model-menu align-right" role="menu" aria-label="Conversation model" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
@@ -383,10 +387,10 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
       <div className="composer-menu-scroll">
         {!model && <p className="composer-menu-note" role="status">Choose an explicit model for this conversation.</p>}
         {model && !models.some((item) => item.id === model) && <p className="composer-menu-note" role="status">Saved model {model} is not currently offered. Choose an available model to continue.</p>}
-        {models.map((item, index) => <div key={item.id} role="none">
-          {item.group && item.group !== models[index - 1]?.group && <div className="composer-menu-group" role="presentation">{item.group}</div>}
+        {ordered.map((item, index) => <div key={item.id} role="none">
+          {item.group && item.group !== ordered[index - 1]?.group && <div className="composer-menu-group" role="presentation">{item.group}</div>}
           <button type="button" role="menuitemradio" aria-checked={model === item.id} className="composer-menu-item" data-value={item.id} disabled={saving} onClick={() => choose(item.id)}>
-            <span className="composer-menu-text"><strong>{modelDisplayName(item)}</strong></span>
+            <span className="composer-menu-text"><strong>{presentedModelName(provider, item)}</strong></span>
             {model === item.id && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
           </button>
         </div>)}

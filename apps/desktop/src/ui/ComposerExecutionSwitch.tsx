@@ -3,7 +3,7 @@ import { ChevronDown, Cpu } from 'lucide-react'
 import type { Agent } from '../types'
 import { rpc } from '../tauri'
 import { ProviderLogo, providerBrand } from './providerBrand'
-import { modelDisplayName } from './modelDisplayName'
+import { organizeModels, presentedModelName } from './modelPresentation'
 import {
   capabilityState, parseCapabilities, parseModelCatalog, selectionAfterModelChange, sendGateFor,
   type ModelCatalog, type RuntimeCapabilities,
@@ -58,11 +58,11 @@ export function ComposerExecutionSwitch({ agent, provider, onAgentUpdated, onErr
   const choices = selected?.supportedThinking ?? []
   if (loading || (!modelEnabled && !thinkingEnabled)) return null
   const labelled = catalog?.models.find((model) => model.id === agent.model)
-  const modelLabel = labelled ? modelDisplayName(labelled) : (agent.model || 'Default model')
+  const modelLabel = labelled ? presentedModelName(provider ?? '', labelled) : (agent.model || 'Default model')
   return <div ref={rootRef} className="composer-execution-wrap" onKeyDown={(event) => { if (event.key === 'Escape' && open) { event.preventDefault(); closeMenu() } }}>
     <button ref={triggerRef} type="button" className="composer-execution-pill" aria-label={`Model and thinking: ${modelLabel}${agent.thinking ? `, ${agent.thinking}` : ''}`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}><Cpu size={13} /><span>{modelLabel}{agent.thinking ? ` · ${agent.thinking}` : ''}</span><ChevronDown size={12} /></button>
     {open && <div ref={menuRef} className="menu-surface composer-execution-menu" role="menu" aria-label="Model and thinking">
-      {modelEnabled && <><div className={`select-group-label ${provider ? 'provider-group-label' : ''}`}>{provider && <ProviderLogo provider={provider} size={16} />}{provider ? `${providerBrand(provider).name} models` : 'Model'}</div><button type="button" role="menuitemradio" aria-checked={!agent.model} className="menu-item" onClick={() => void update('model', null)}>Default model</button>{(catalog?.models ?? []).map((model, index, all) => <span key={model.id}>{model.group && model.group !== all[index - 1]?.group && <div className="select-group-label">{model.group}</div>}<button type="button" role="menuitemradio" aria-checked={agent.model === model.id} className="menu-item" onClick={() => void update('model', model.id)}>{modelDisplayName(model)}{model.isDefault ? <small className="menu-item-trail">Default</small> : null}</button></span>)}</>}
+      {modelEnabled && <><div className={`select-group-label ${provider ? 'provider-group-label' : ''}`}>{provider && <ProviderLogo provider={provider} size={16} />}{provider ? `${providerBrand(provider).name} models` : 'Model'}</div><button type="button" role="menuitemradio" aria-checked={!agent.model} className="menu-item" onClick={() => void update('model', null)}>Default model</button>{organizeModels(provider ?? '', catalog?.models ?? []).map((model, index, all) => <span key={model.id}>{model.group && model.group !== all[index - 1]?.group && <div className="select-group-label">{model.group}</div>}<button type="button" role="menuitemradio" aria-checked={agent.model === model.id} className="menu-item" onClick={() => void update('model', model.id)}>{presentedModelName(provider ?? '', model)}{model.isDefault ? <small className="menu-item-trail">Default</small> : null}</button></span>)}</>}
       {thinkingEnabled && choices.length > 0 && <><span className="menu-separator" /><div className="select-group-label">Thinking</div><button type="button" role="menuitemradio" aria-checked={!agent.thinking} className="menu-item" onClick={() => void update('thinking', null)}>Default</button>{choices.map((level) => <button type="button" role="menuitemradio" aria-checked={agent.thinking === level} className="menu-item" key={level} onClick={() => void update('thinking', level)}>{level}</button>)}</>}
     </div>}
   </div>

@@ -5,6 +5,10 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 export type DictationPhase = 'idle' | 'starting' | 'downloading' | 'listening'
 
+/**
+ * What the owner chooses: on this device, or the cloud (ChatGPT, falling back to the device
+ * model). The older 'cloud' value (no fallback) is kept readable and treated as 'automatic'.
+ */
 export type DictationEngineChoice = 'local' | 'automatic' | 'cloud'
 /** Which engine produced (or will produce) the text, as reported by the native layer. Status only. */
 export interface DictationEngineInfo { engine: 'on-device' | 'chatgpt'; fallback: boolean; reason?: string | null }
@@ -18,7 +22,31 @@ export function setDictationEnginePrefs(next: Partial<typeof enginePrefs>) {
 }
 export function dictationEnginePrefs() { return enginePrefs }
 export function normalizeEngineChoice(value: unknown): DictationEngineChoice {
-  return value === 'automatic' || value === 'cloud' ? value : 'local'
+  return value === 'automatic' || value === 'cloud' ? 'automatic' : 'local'
+}
+
+/** "140 MB", "1.2 GB"; the size shown before a speech model is downloaded. */
+export function formatModelSize(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return ''
+  const mb = bytes / (1024 * 1024)
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`
+}
+
+export interface SpeechModelInfo { id: string; label: string; sizeBytes: number | null }
+
+/** What the download prompt needs: the model's name and size, or just its id when the list is unavailable. */
+export async function speechModelInfo(modelId: string): Promise<SpeechModelInfo> {
+  try {
+    const rows = await invoke<Array<{ id: string; label?: string; sizeBytes?: number }>>('speech_models')
+    const row = rows.find((item) => item.id === modelId)
+    if (row) return { id: row.id, label: row.label ?? row.id, sizeBytes: typeof row.sizeBytes === 'number' ? row.sizeBytes : null }
+  } catch { /* the prompt still works without a size */ }
+  return { id: modelId, label: 'Speech model', sizeBytes: null }
+}
+
+/** The native layer says this when ChatGPT failed and no on-device model is installed. */
+function mentionsMissingLocalModel(text: string): boolean {
+  return /no on-device model is installed|on-device speech model is not installed|not installed yet/i.test(text)
 }
 
 export function cloudAuthUsable(status: CloudAuthStatus | null | undefined): boolean {
@@ -127,6 +155,8 @@ export function useDictation({
   const [partial, setPartial] = useState('')
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  /** True while the owner is being asked to download (or is downloading) the on-device model. */
+  const [modelPrompt, setModelPrompt] = useState(false)
   const onFinalRef = useRef(onFinal)
   const onPartialRef = useRef(onPartial)
   onFinalRef.current = onFinal
@@ -165,6 +195,7 @@ export function useDictation({
         setWarming(false)
         setPartial('')
         onPartialRef.current?.('')
+        if (mentionsMissingLocalModel(payload.text ?? '')) { setModelPrompt(true); return }
         setError(payload.text ?? 'Dictation failed.')
       }
     })
@@ -179,6 +210,29 @@ export function useDictation({
     }
   }, [owner, supported])
 
+  const begin = useCallback(async () => {
+    await invoke('dictation_start', { modelId, owner, engine: enginePrefs.engine, cloudConsent: enginePrefs.consent })
+  }, [modelId, owner])
+
+  /** Downloads the on-device model, reporting progress; the caller starts dictation after. */
+  const download = useCallback(async () => {
+    setPhase('downloading')
+    let unlisten: UnlistenFn | undefined
+    try {
+      unlisten = await listen<{ modelId: string; completed: number; total: number }>(
+        'bloblex-speech-download',
+        (event) => {
+          if (event.payload.modelId !== modelId) return
+          setProgress(event.payload.total ? event.payload.completed / event.payload.total : 0)
+        },
+      )
+      await invoke('speech_model_download', { modelId })
+    } finally {
+      unlisten?.()
+      setProgress(0)
+    }
+  }, [modelId])
+
   const toggle = useCallback(async () => {
     if (!supported) return
     if (phase === 'idle') {
@@ -186,31 +240,20 @@ export function useDictation({
       setPhase('starting')
       try {
         const status = await invoke<{ ready: boolean }>('speech_model_status', { modelId })
-        // The on-device model is always made ready first: ChatGPT dictation is blocked
-        // for third-party apps, so it must be there to fall back on.
-        if (status && status.ready === false) {
-          setPhase('downloading')
-          let unlisten: UnlistenFn | undefined
-          try {
-            unlisten = await listen<{ modelId: string; completed: number; total: number }>(
-              'bloblex-speech-download',
-              (event) => {
-                if (event.payload.modelId !== modelId) return
-                setProgress(event.payload.total ? event.payload.completed / event.payload.total : 0)
-              },
-            )
-            await invoke('speech_model_download', { modelId })
-          } finally {
-            unlisten?.()
-            setProgress(0)
-          }
-          setPhase('starting')
+        const cloud = enginePrefs.engine !== 'local' && enginePrefs.consent
+        // The cloud engine needs no download. Only on-device dictation does, and the owner
+        // is asked first, with the size, instead of a download starting by itself.
+        if (status && status.ready === false && !cloud) {
+          setPhase('idle')
+          setModelPrompt(true)
+          return
         }
-        await invoke('dictation_start', { modelId, owner, engine: enginePrefs.engine, cloudConsent: enginePrefs.consent })
+        await begin()
       } catch (reason) {
         setPhase('idle')
         const raw = String(reason)
-        setError(engineReasonText(raw) ? `ChatGPT transcription is not available: ${engineReasonText(raw)}.` : raw)
+        if (mentionsMissingLocalModel(raw)) { setModelPrompt(true); return }
+        setError(engineReasonText(raw) ? `Cloud dictation is not available: ${engineReasonText(raw)}.` : raw)
       }
     } else if (phase !== 'downloading') {
       setPhase('idle')
@@ -221,7 +264,24 @@ export function useDictation({
         // The session may already be winding down; the stopped event is authoritative.
       }
     }
-  }, [modelId, owner, phase, supported])
+  }, [begin, modelId, owner, phase, supported])
+
+  /** The owner agreed to the download: fetch the model, then start dictating. */
+  const acceptModelPrompt = useCallback(async () => {
+    setError(null)
+    try {
+      await download()
+      setModelPrompt(false)
+      setPhase('starting')
+      await begin()
+    } catch (reason) {
+      setPhase('idle')
+      setModelPrompt(false)
+      setError(String(reason))
+    }
+  }, [begin, download])
+
+  const dismissModelPrompt = useCallback(() => { if (phase !== 'downloading') setModelPrompt(false) }, [phase])
 
   useEffect(() => {
     if (!supported) return
@@ -243,5 +303,5 @@ export function useDictation({
     }
   }, [supported, toggle])
 
-  return { phase, warming, partial, progress, error, toggle, active: phase === 'starting' || phase === 'listening' }
+  return { phase, warming, partial, progress, error, toggle, modelPrompt, acceptModelPrompt, dismissModelPrompt, active: phase === 'starting' || phase === 'listening' }
 }

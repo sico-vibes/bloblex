@@ -246,7 +246,8 @@
 .send-button:active:not(:disabled) { transform: scale(0.94); }
 .send-button:disabled { color: var(--text-3); background: var(--surface-disabled); opacity: 1; }
 .dictation-button { width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border: 0; border-radius: 50%; background: transparent; transition: transform 120ms ease, color 120ms ease, background 120ms ease; }
-.dictation-button:hover:not(:disabled) { color: var(--text-1); }
+.dictation-button:hover:not(:disabled):not(.active) { color: var(--text-1); background: var(--surface-hover); }
+.dictation-button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .dictation-button:active:not(:disabled) { transform: scale(0.94); }
 .dictation-button.active { color: var(--text-inverse); background: var(--text-1); animation: dictation-pulse 1.4s ease-in-out infinite; }
 .dictation-button:disabled { color: var(--text-3); opacity: 0.6; }

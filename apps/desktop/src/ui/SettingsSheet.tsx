@@ -11,7 +11,7 @@ import { agentColorHex } from './agentColor'
 import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
 import { MemoryPage } from './MemoryPage'
-import { cloudDictationStatus, normalizeEngineChoice, setDictationEnginePrefs, type CloudAuthStatus, type DictationEngineChoice } from './dictation'
+import { normalizeEngineChoice, setDictationEnginePrefs, type DictationEngineChoice } from './dictation'
 import { UpdatesPanel } from './UpdatesPanel'
 import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
 import { applyAppearance } from './appearance'
@@ -101,14 +101,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [keepAwake, setKeepAwake] = useState(false)
   const [speechEngine, setSpeechEngine] = useState<DictationEngineChoice>('local')
   const [cloudConsent, setCloudConsent] = useState(false)
-  const [cloudStatus, setCloudStatus] = useState<CloudAuthStatus | null>(null)
   const [consentFor, setConsentFor] = useState<DictationEngineChoice | null>(null)
-  useEffect(() => {
-    if (speechEngine === 'local') { setCloudStatus(null); return }
-    let active = true
-    void cloudDictationStatus().then((status) => { if (active) setCloudStatus(status) })
-    return () => { active = false }
-  }, [speechEngine])
   const [steerGate, setSteerGate] = useState(false)
   const [startWithWindows, setStartWithWindows] = useState(false)
   const [autostartLoaded, setAutostartLoaded] = useState(false)
@@ -295,7 +288,6 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     if (engine === 'local' || cloudConsent) { void applySpeechEngine(engine, cloudConsent); return }
     setConsentFor(engine)
   }
-  const withdrawCloudConsent = () => applySpeechEngine('local', false)
   const setStartPositionChoice = (value: string) => {
     if (value !== 'launch' && value !== 'last') return
     void saveSetting('companion.startPosition', value).then((failure) => { if (!failure) setStartPosition(value) })
@@ -585,7 +577,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             onAboutSave={async (text) => { await rpc('settings.set', { key: 'profile.about', value: text }); setProfileAbout(text) }} />}
 
           {!loading && page === 'Speech' && <>
-            <p className="settings-intro">Dictation runs on this device with sherpa-onnx by default. Download a model once; your audio stays here unless you choose ChatGPT below.</p>
+            <p className="settings-intro">Dictate into any message with the microphone or Ctrl+E. Choose where the audio is transcribed.</p>
             <SettingsGroup title="Dictation">
               <SettingsRow label="Dictation" hint="Shows the microphone in the composer and the companion, and listens for Ctrl+E.">
                 <button type="button" className={`toggle ${speechEnabled ? 'on' : ''}`} role="switch" aria-label="Dictation" aria-checked={speechEnabled} disabled={saving} onClick={() => { const next = !speechEnabled; void saveSetting('speech.enabled', next).then((failure) => { if (!failure) onSpeechEnabledChange?.(next) }) }}><i /></button>
@@ -593,19 +585,12 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label="Keyboard shortcut" hint={speechEnabled ? 'Starts or stops dictation from any window.' : 'Free for other apps while dictation is off.'}><kbd className="settings-kbd">Ctrl</kbd><kbd className="settings-kbd">E</kbd></SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Transcription engine">
-              <SettingsRow label="Engine" hint="ChatGPT uses your Codex sign-in and sends each recording to OpenAI. OpenAI's bot check currently blocks most third-party apps from this service (confirmed on 13 October 2026, even when carrying Cloudflare's cookies on a retry the way bb does), so on-device is the dependable choice and ChatGPT dictation falls back to it.">
-                <Select ariaLabel="Transcription engine" variant="muted" value={speechEngine} disabled={saving} onChange={(value) => chooseSpeechEngine(normalizeEngineChoice(value))} options={[
-                  { value: 'local', label: 'On this device' },
-                  { value: 'automatic', label: 'ChatGPT when available' },
-                  { value: 'cloud', label: 'ChatGPT via Codex sign-in' },
+              <SettingsRow label="Engine">
+                <Select ariaLabel="Transcription engine" variant="muted" value={speechEngine === 'local' ? 'local' : 'automatic'} disabled={saving} onChange={(value) => chooseSpeechEngine(normalizeEngineChoice(value))} options={[
+                  { value: 'local', label: 'On device' },
+                  { value: 'automatic', label: 'Cloud' },
                 ]} />
               </SettingsRow>
-              {speechEngine !== 'local' && <SettingsRow label="Codex sign-in" hint="Read from Codex's own sign-in file on this computer, only to make this request. Nothing is stored. If ChatGPT fails, dictation uses the on-device model when it is installed.">
-                <span className="settings-value" role="status">{cloudStatusText(cloudStatus)}</span>
-              </SettingsRow>}
-              {cloudConsent && <SettingsRow label="Permission" hint="You allowed sending dictation recordings to ChatGPT.">
-                <button type="button" className="secondary-button small" disabled={saving} onClick={() => void withdrawCloudConsent()}>Withdraw</button>
-              </SettingsRow>}
             </SettingsGroup>
             <SettingsGroup title="Speech model">
               {speechModels.length === 0 && <p className="settings-empty">No speech models reported.</p>}
@@ -633,7 +618,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             </SettingsGroup>
           </>}
 
-          {consentFor && <ConfirmDialog title="Send dictation to ChatGPT?" body="While this is on, each recording is sent to OpenAI's transcription service using your Codex sign-in, which Bloblex reads from Codex's own file on this computer. Recordings, text and the sign-in are not stored or logged by Bloblex. If ChatGPT is unavailable, dictation falls back to the on-device model when it is installed. You can withdraw this any time." confirmLabel="Allow ChatGPT transcription" cancelLabel="Keep on this device" onCancel={() => setConsentFor(null)} onConfirm={async () => { const engine = consentFor; setConsentFor(null); await applySpeechEngine(engine, true) }} />}
+          {consentFor && <ConfirmDialog title="Use cloud dictation?" body="Each recording is sent to OpenAI's ChatGPT transcription service using your signed-in Codex account, which Bloblex reads from Codex's own file on this computer. Recordings, text and the sign-in are not stored or logged by Bloblex. If the cloud is unavailable, dictation uses the on-device model when it is installed. Choose On device in Settings to stop." confirmLabel="Allow cloud" cancelLabel="Keep on device" onCancel={() => setConsentFor(null)} onConfirm={async () => { const engine = consentFor; setConsentFor(null); await applySpeechEngine(engine, true) }} />}
           {!loading && page === 'Updates' && <>
             <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />
             <SettingsGroup title="About">
@@ -654,18 +639,6 @@ function SettingsGroup({ title, action, children }: { title: string; action?: Re
     <div className="settings-group-head"><h3>{title}</h3>{action}</div>
     <div className="settings-card">{children}</div>
   </section>
-}
-
-function cloudStatusText(status: CloudAuthStatus | null): string {
-  switch (status?.authState) {
-    case 'ready': return 'Signed in'
-    case 'apiKey': return 'Using an API key from Codex'
-    case 'expired': return 'Sign-in may have expired; will try anyway'
-    case 'missing': return 'Not found. Run codex login in a terminal.'
-    case 'unreadable': return 'Could not read the Codex sign-in'
-    case 'unsupported': return 'Not supported on this device'
-    default: return 'Checking…'
-  }
 }
 
 function SettingsRow({ label, hint, children }: { label: ReactNode; hint?: string; children?: ReactNode }) {

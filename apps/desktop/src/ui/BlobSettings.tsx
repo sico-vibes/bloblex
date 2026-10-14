@@ -1,3 +1,4 @@
+import { organizeModels, presentedModelName } from './modelPresentation'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Project, Runtime } from '../types'
 import { labelize } from '../types'
@@ -228,7 +229,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
           else applyModel(value || null, false)
         }} options={[
           { value: '', label: !catalog ? (loading ? 'Loading models…' : 'Model unavailable') : 'Choose a model', disabled: true },
-          ...(catalog?.models ?? []).map((model, index, models) => ({ value: model.id, label: model.displayName, group: model.group && model.group !== models[index - 1]?.group ? model.group : undefined, ...(index === 0 ? { groupBefore: [{ label: `${providerBrand(provider).name} models`, provider }] } : {}) })),
+          ...organizeModels(provider, catalog?.models ?? []).map((model, index, models) => ({ value: model.id, label: presentedModelName(provider, model), group: model.group && model.group !== models[index - 1]?.group ? model.group : undefined, ...(index === 0 ? { groupBefore: [{ label: `${providerBrand(provider).name} models`, provider }] } : {}) })),
           ...(draft.model && !custom && !(catalog?.models ?? []).some((model) => model.id === draft.model)
             ? [{
                 value: draft.model,

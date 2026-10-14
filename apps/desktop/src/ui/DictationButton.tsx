@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { LoaderCircle, Mic } from 'lucide-react'
 import { DEFAULT_SPEECH_MODEL_ID, useDictation } from './dictation'
+import { SpeechModelDialog } from './SpeechModelDialog'
 
 export { DEFAULT_SPEECH_MODEL_ID }
 
@@ -26,7 +27,7 @@ export function DictationButton({
   autoStart?: boolean
   onAutoStarted?: () => void
 }) {
-  const { phase, active, warming, error, progress, toggle } = useDictation({ owner, modelId, onFinal, onPartial })
+  const { phase, active, warming, error, progress, toggle, modelPrompt, acceptModelPrompt, dismissModelPrompt } = useDictation({ owner, modelId, onFinal, onPartial })
   const started = useRef(false)
   useEffect(() => {
     if (!autoStart || started.current || disabled) return
@@ -46,6 +47,7 @@ export function DictationButton({
           ? 'Stop dictation (Ctrl+E)'
           : 'Start dictation (Ctrl+E)'
   return (
+    <>
     <button
       type="button"
       className={`dictation-button ${active ? 'active' : ''} ${warming ? 'warming' : ''}`}
@@ -59,5 +61,7 @@ export function DictationButton({
         ? <span className="dictation-progress" style={{ ['--progress' as string]: `${Math.round(progress * 360)}deg` }} aria-hidden="true" />
         : phase === 'starting' ? <LoaderCircle size={16} className="spinning" /> : <Mic size={16} />}
     </button>
+    {modelPrompt && <SpeechModelDialog modelId={modelId} downloading={downloading} progress={progress} onAccept={() => void acceptModelPrompt()} onDismiss={dismissModelPrompt} />}
+    </>
   )
 }

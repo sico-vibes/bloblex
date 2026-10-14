@@ -530,7 +530,9 @@
 :root[data-bitbots="on"] .composer-icon-button { border: 2px solid transparent; }
 :root[data-bitbots="on"] .composer-icon-button:hover:not(:disabled) { border-color: var(--bb-line); background: var(--bb-hover); }
 :root[data-bitbots="on"] .send-button,
+:root[data-bitbots="on"] .model-pill-divider { width: 2px; background: var(--bb-line-strong); }
 :root[data-bitbots="on"] .dictation-button { background: transparent; color: var(--bb-ink-2); border: 2px solid transparent; }
+:root[data-bitbots="on"] .dictation-button:hover:not(:disabled):not(.active) { color: var(--bb-ink); background: var(--bb-hover); border-color: var(--bb-line); }
 :root[data-bitbots="on"] .send-button { background: var(--bb-accent); color: #141414; }
 :root[data-bitbots="on"] .send-button.cancel { background: var(--bb-selected-strong); color: var(--bb-ink); }
 :root[data-bitbots="on"] .send-button:disabled { background: var(--surface-disabled); color: var(--bb-ink-3); }
@@ -649,6 +651,9 @@
 /* ── 10. Dialogs, sheets, cards ──────────────────────────────────────────── */
 :root[data-bitbots="on"] .blob-dialog { border: 2px solid var(--bb-line-strong); background: var(--bb-overlay); }
 :root[data-bitbots="on"] .blob-dialog-icon { border: 2px solid var(--bb-line); background: var(--bb-selected); }
+:root[data-bitbots="on"] .speech-model-dialog-progress { border-radius: 0; border: 2px solid var(--bb-line); background: var(--bb-bg); }
+:root[data-bitbots="on"] .speech-model-dialog-progress i { background: var(--bb-accent); transition: none; }
+:root[data-bitbots="on"] .speech-model-dialog-progress b { color: var(--bb-ink); mix-blend-mode: difference; }
 :root[data-bitbots="on"] .blob-card { border: 2px solid var(--bb-line); background: var(--bb-raised); }
 :root[data-bitbots="on"] .hold-confirm-button { border: 2px solid var(--bb-danger); }
 :root[data-bitbots="on"] .hold-confirm-button.holding { border-color: var(--bb-danger); }

@@ -31,6 +31,8 @@
 .composer-pill[aria-expanded="true"] .composer-pill-chevron { transform: rotate(180deg); }
 .model-pill { color: var(--text-1); }
 .model-pill.unavailable { color: var(--text-3); }
+.model-pill-divider { flex: 0 0 auto; width: 1px; height: 14px; background: var(--line-strong); }
+.model-pill .provider-logo { flex: 0 0 auto; }
 .model-pill-fast { flex: 0 0 auto; color: var(--mode-fast); fill: color-mix(in srgb, var(--mode-fast) 20%, transparent); }
 .permission-pill.mode-auto { color: var(--text-2); }
 .permission-pill.mode-auto svg:first-child { color: var(--good); }

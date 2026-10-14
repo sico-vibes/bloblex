@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, CircleAlert } from 'lucide-react'
-import { engineReasonText, friendlyDictationError, type DictationEngineInfo } from './dictation'
+import { friendlyDictationError, type DictationEngineInfo } from './dictation'
 
 // The dictation island: a red recording dot and timer on the left, level bars
 // on the right, and the words so far underneath. The bars follow the
@@ -14,7 +14,7 @@ type WaveMode = 'live' | 'loading' | 'transcribing' | 'silent'
 
 const BARS = 11
 
-export function DictationIsland({ phase, level, since, stoppedAt, text, warming = false, errorText = '', variant = 'bubble', engine = null }: {
+export function DictationIsland({ phase, level, since, stoppedAt, text, warming = false, errorText = '', variant = 'bubble' }: {
   phase: IslandPhase
   /** Latest microphone level from the engine (0 to about 0.3). */
   level: number
@@ -28,7 +28,7 @@ export function DictationIsland({ phase, level, since, stoppedAt, text, warming 
   warming?: boolean
   errorText?: string
   variant?: 'bubble' | 'companion'
-  /** Which engine is transcribing; shown only when ChatGPT is involved so on-device stays quiet. */
+  /** Accepted for callers that still pass it; the island never names the engine. */
   engine?: DictationEngineInfo | null
 }) {
   const mode: WaveMode = phase === 'processing' ? 'transcribing' : phase === 'silent' ? 'silent' : warming ? 'loading' : 'live'
@@ -40,7 +40,6 @@ export function DictationIsland({ phase, level, since, stoppedAt, text, warming 
         {phase === 'done' ? <Check size={14} strokeWidth={3} className="dictation-island-check" aria-hidden="true" />
           : phase === 'error' ? <CircleAlert size={14} className="dictation-island-alert" aria-hidden="true" />
           : <>{phase === 'listening' && <span className="dictation-island-dot" aria-hidden="true" />}<Elapsed since={since} until={phase === 'listening' ? null : stoppedAt ?? null} /></>}
-        {engine && (engine.engine === 'chatgpt' || engine.fallback) && phase !== 'error' && <span className="dictation-island-note dictation-island-engine" title={engine.fallback ? `ChatGPT was not used: ${engineReasonText(engine.reason) || 'it was unavailable'}` : 'Your audio is sent to ChatGPT for this transcription'}>{engine.fallback ? 'On this device' : 'ChatGPT'}</span>}
         {warming && phase === 'listening' && <span className="dictation-island-note">Getting ready</span>}
         {phase === 'done' && <span className="dictation-island-note">Added to your message</span>}
         {phase === 'silent' && <span className="dictation-island-note">Nothing heard</span>}

@@ -90,7 +90,12 @@
 .blob-dialog { width: min(440px, calc(100% - 32px)); margin: auto; padding: 22px; display: grid; gap: 12px; border-radius: var(--radius-lg); background: var(--surface-overlay); box-shadow: var(--shadow-pop); color: var(--text-1); }
 .blob-dialog h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; text-align: left; }
 .blob-dialog p { margin: 0; color: var(--text-2); font-size: var(--fs-sm); line-height: 1.5; }
-.blob-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.blob-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.blob-dialog-actions > button { min-width: 0; white-space: nowrap; }
+.speech-model-dialog { width: min(440px, calc(100% - 32px)); }
+.speech-model-dialog-progress { position: relative; height: 26px; overflow: hidden; display: grid; place-items: center; border-radius: var(--radius-pill); background: var(--surface-selected); }
+.speech-model-dialog-progress i { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--text-1) 18%, transparent); transition: width 200ms ease; }
+.speech-model-dialog-progress b { position: relative; color: var(--text-1); font-size: var(--fs-xs); font-weight: 600; }
 .sheet-backdrop.blob-dialog-backdrop { align-items: center; opacity: 0; transition: opacity 180ms cubic-bezier(.16,1,.3,1); }
 .blob-dialog-backdrop.is-entered { opacity: 1; }
 .blob-dialog-backdrop { --shared-dialog-panel-duration: 300ms; --shared-dialog-content-duration: 150ms; --success-content-duration: 80ms; --shared-dialog-ease: cubic-bezier(0.22, 1, 0.36, 1); }

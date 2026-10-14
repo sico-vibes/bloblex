@@ -1650,7 +1650,18 @@ impl Storage {
         let status=if failed||pending{"partial"}else{"applied"};
         tx.execute("UPDATE exec_snapshots SET applied_json=?2,evidence_json=?3,status=?4 WHERE id=?1",params![id,applied.to_string(),evidence.to_string(),status])?;
         if snapshot["provider"]=="claude"&&outcomes["instructions"]["applied"]==true { tx.execute("UPDATE sessions SET claude_instruction_sha256=?2 WHERE id=?1",params![snapshot["sessionId"].as_str().unwrap_or(""),snapshot["instructionSha256"].as_str()])?; }
-        if snapshot["provider"]=="codex"&&outcomes["instructions"]["applied"]==true { tx.execute("UPDATE sessions SET codex_thread_instruction_sha256=COALESCE(codex_thread_instruction_sha256,?2) WHERE id=?1",params![snapshot["sessionId"].as_str().unwrap_or(""),snapshot["instructionSha256"].as_str()])?; }
+        if snapshot["provider"]=="codex"&&outcomes["instructions"]["applied"]==true {
+            // A successful new-thread turn proves the text installed at
+            // thread/start: keep the first write only (COALESCE). An
+            // applied-with-evidence change on an existing thread proves the
+            // installed text moved, so it takes the explicit overwrite path.
+            let session=snapshot["sessionId"].as_str().unwrap_or("");let hash=snapshot["instructionSha256"].as_str();
+            if outcomes["instructions"]["evidenceKind"].as_str()==Some("provider_echo") {
+                tx.execute("UPDATE sessions SET codex_thread_instruction_sha256=?2 WHERE id=?1",params![session,hash])?;
+            } else {
+                tx.execute("UPDATE sessions SET codex_thread_instruction_sha256=COALESCE(codex_thread_instruction_sha256,?2) WHERE id=?1",params![session,hash])?;
+            }
+        }
         let payload=json!({"sessionId":snapshot["sessionId"],"turnId":turn_id,"agentId":snapshot["agentId"],"runtimeId":snapshot["runtimeId"],"requested":snapshot["requested"],"applied":outcomes,"snapshotId":id});
         let event_id=Uuid::new_v4().to_string();let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'exec.options.changed',?3)",params![event_id,now,payload.to_string()])?;
         let event=json!({"v":1,"eventId":event_id,"sequence":tx.last_insert_rowid(),"timestamp":now,"type":"exec.options.changed","payload":payload});
@@ -4873,6 +4884,27 @@ mod tests {
         db.update_exec_snapshot_evidence("t-empty",&json!({"instructions":{"requested":null,"applied":true,"evidenceKind":"successful_turn","evidenceValue":null}})).unwrap();
         assert_eq!(db.claude_instruction_sha256("s-instructions").unwrap(),None);
         db.create_session("s-codex-instructions","rt","codex",".","codex").unwrap();db.create_turn("t-codex","s-codex-instructions").unwrap();db.create_exec_snapshot("s-codex-instructions","t-codex","snap-codex",&json!({}),&json!({}),&json!({}),Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),&json!({}),"partial").unwrap();db.update_exec_snapshot_evidence("t-codex",&json!({"instructions":{"applied":true}})).unwrap();assert_eq!(db.claude_instruction_sha256("s-codex-instructions").unwrap(),None);assert_eq!(db.codex_thread_instruction_sha256("s-codex-instructions").unwrap().as_deref(),Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"));
+    }
+    #[test]
+    fn codex_thread_instruction_hash_advances_only_with_provider_echo_evidence(){
+        let db=Storage::open_in_memory().unwrap();
+        db.create_session("s-codex-echo","rt","codex",".","codex").unwrap();
+        let first="a".repeat(64);let second="b".repeat(64);let third="c".repeat(64);
+        // First write on a new thread keeps the COALESCE path.
+        db.create_turn("e1","s-codex-echo").unwrap();
+        db.create_exec_snapshot("s-codex-echo","e1","se1",&json!({}),&json!({}),&json!({}),Some(first.as_str()),&json!({}),"partial").unwrap();
+        db.update_exec_snapshot_evidence("e1",&json!({"instructions":{"applied":true,"evidenceKind":"successful_turn"}})).unwrap();
+        assert_eq!(db.codex_thread_instruction_sha256("s-codex-echo").unwrap().as_deref(),Some(first.as_str()));
+        // Applied-with-evidence overwrites the stored thread hash.
+        db.create_turn("e2","s-codex-echo").unwrap();
+        db.create_exec_snapshot("s-codex-echo","e2","se2",&json!({}),&json!({}),&json!({}),Some(second.as_str()),&json!({}),"partial").unwrap();
+        db.update_exec_snapshot_evidence("e2",&json!({"instructions":{"applied":true,"evidenceKind":"provider_echo"}})).unwrap();
+        assert_eq!(db.codex_thread_instruction_sha256("s-codex-echo").unwrap().as_deref(),Some(second.as_str()));
+        // An unverified (resumed) turn never changes it.
+        db.create_turn("e3","s-codex-echo").unwrap();
+        db.create_exec_snapshot("s-codex-echo","e3","se3",&json!({}),&json!({}),&json!({}),Some(third.as_str()),&json!({}),"partial").unwrap();
+        db.update_exec_snapshot_evidence("e3",&json!({"instructions":{"applied":null,"evidenceKind":"none","reason":"instructions_sent_unverified"}})).unwrap();
+        assert_eq!(db.codex_thread_instruction_sha256("s-codex-echo").unwrap().as_deref(),Some(second.as_str()));
     }
     #[test]
     fn rejected_turn_writes_error_message_snapshot_and_event_atomically_without_reservation(){

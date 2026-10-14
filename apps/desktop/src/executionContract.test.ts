@@ -63,7 +63,7 @@ describe('execution contract parsing', () => {
 
   it('words instruction timing from the provider and scope without upgrading weak evidence', () => {
     const codex = instructionNote('codex', setting({ supported: true, enabled: true, scope: 'thread', evidence: 'successful_turn' }))
-    expect(codex).toContain('Applies to new conversations.')
+    expect(codex).toContain('Sent with the next message, including in existing conversations.')
     const launch = instructionNote('opencode', setting({ supported: true, enabled: true, scope: 'launch', evidence: 'request_shape' }))
     expect(launch).toContain('Applies when the next conversation starts.')
     expect(launch.toLowerCase()).toContain('not confirmed')

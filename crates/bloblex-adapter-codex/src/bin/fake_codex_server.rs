@@ -66,6 +66,17 @@ fn main() {
                 recorded["params"]["developerInstructionsExact"] = json!(actual == "sentinel instruction");
                 recorded["params"]["developerInstructions"] = json!("[redacted]");
             }
+            if recorded["params"]["collaborationMode"].is_object() {
+                let settings = &mut recorded["params"]["collaborationMode"]["settings"];
+                if settings["developer_instructions"].is_string() {
+                    let actual = v["params"]["collaborationMode"]["settings"]["developer_instructions"].as_str().unwrap();
+                    settings["developerInstructionsSha256"] = json!(bloblex_agent_core::instruction_sha256(actual));
+                    settings["developerInstructionsPresent"] = json!(true);
+                    settings["developer_instructions"] = json!("[redacted]");
+                } else {
+                    settings["developerInstructionsPresent"] = json!(false);
+                }
+            }
             if recorded["params"]["input"][0]["text"].is_string() {
                 let actual = v["params"]["input"][0]["text"].as_str().unwrap();
                 recorded["params"]["input"][0]["textSha256"] = json!(bloblex_agent_core::instruction_sha256(actual));
@@ -134,8 +145,13 @@ fn main() {
                     Some(v) => Some(v),
                     None => None,
                 };
+                let model = if mode == "no-model" {
+                    Value::Null
+                } else {
+                    json!(params["model"].as_str().unwrap_or("model-default"))
+                };
                 (
-                    json!({"thread":{"id":thread_id},"model":params["model"].as_str().unwrap_or("model-default"),"reasoningEffort":"low","serviceTier":tier}),
+                    json!({"thread":{"id":thread_id},"model":model,"reasoningEffort":"low","serviceTier":tier}),
                     vec![],
                 )
             }
@@ -147,8 +163,13 @@ fn main() {
                 if mode == "replay" {
                     notes.push(json!({"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":thread_id,"turnId":"old-turn","delta":"stale answer"}}));
                 }
+                let model = if mode == "no-model" {
+                    Value::Null
+                } else {
+                    json!(params["model"].as_str().unwrap_or("model-default"))
+                };
                 (
-                    json!({"thread":{"id":thread_id},"model":params["model"].as_str().unwrap_or("model-default"),"reasoningEffort":"low","serviceTier":params["serviceTier"]}),
+                    json!({"thread":{"id":thread_id},"model":model,"reasoningEffort":"low","serviceTier":params["serviceTier"]}),
                     notes,
                 )
             }
@@ -195,12 +216,22 @@ fn main() {
                         "fail-overload" => ("failed", json!({"message":"server overloaded","codexErrorInfo":"serverOverloaded"})),
                         _ => ("completed", Value::Null),
                     };
-                    vec![
+                    let mut notes = vec![
                         json!({"jsonrpc":"2.0","method":"turn/started","params":{"threadId":thread_id,"turn":{"id":tid}}}),
                         json!({"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":thread_id,"turnId":tid,"delta":format!("answer:{thread_id}")}}),
                         json!({"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"threadId":thread_id,"turnId":tid,"tokenUsage":{"last":{"inputTokens":10,"cachedInputTokens":2,"cacheWriteInputTokens":1,"outputTokens":4,"reasoningOutputTokens":3,"totalTokens":17}}}}),
-                        json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":thread_id,"turn":{"id":tid,"status":status,"error":error}}}),
-                    ]
+                    ];
+                    if mode == "echo-instructions" || mode == "echo-other" {
+                        let developer = if mode == "echo-other" {
+                            json!("other instructions")
+                        } else {
+                            params["collaborationMode"]["settings"]["developer_instructions"].clone()
+                        };
+                        let model = params["model"].as_str().unwrap_or("model-default");
+                        notes.push(json!({"jsonrpc":"2.0","method":"thread/settings/updated","params":{"threadId":thread_id,"threadSettings":{"collaborationMode":{"mode":"default","settings":{"model":model,"developer_instructions":developer}}}}}));
+                    }
+                    notes.push(json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":thread_id,"turn":{"id":tid,"status":status,"error":error}}}));
+                    notes
                 };
                 (result, notes)
             }

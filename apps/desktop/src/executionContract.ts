@@ -248,7 +248,7 @@ export function instructionNote(provider: string, setting: CapabilitySetting | n
   const scope = (setting?.scope ?? '').toLowerCase()
   const codex = provider.toLowerCase().includes('codex')
   let timing = 'Saved with this blob.'
-  if (codex) timing = 'Applies to new conversations.'
+  if (codex) timing = 'Sent with the next message, including in existing conversations.'
   else if (scope === 'thread' || scope === 'launch' || scope === 'spawn' || scope === 'resume' || scope === 'process') timing = 'Applies when the next conversation starts.'
   else if (scope === 'turn') timing = 'Applies on the next turn.'
   const evidence = evidencePlain(setting?.evidence ?? '')

@@ -41,6 +41,10 @@ struct Conn {
     /// Whether the last turn ran in plan collaboration mode; the mode is sticky
     /// on the thread, so leaving plan mode must be sent explicitly.
     plan_active: AtomicBool,
+    /// Bloblex session id, so notification handling can advance the shared
+    /// per-session instruction hash map below.
+    session_id: String,
+    instruction_hashes: Arc<Mutex<HashMap<String, Option<String>>>>,
 }
 
 struct SharedProcess {
@@ -180,6 +184,15 @@ struct TurnState {
     options: ExecOptions,
     usage: Option<Value>,
     completed: bool,
+    /// Set when this turn sent the blob's developer instructions through
+    /// `collaborationMode` on a default-mode turn. The outer `Some` records
+    /// that we sent them; the inner value is the hash of the text (`None` for
+    /// empty text that was sent as JSON `null`).
+    instruction_apply: Option<Option<String>>,
+    /// Whether a `thread/settings/updated` echo was observed during this turn.
+    instruction_echo_seen: bool,
+    /// Hash of the `developer_instructions` carried by the last echo observed.
+    instruction_echo_hash: Option<String>,
 }
 #[derive(Clone, Default)]
 struct ThreadMeta {
@@ -201,7 +214,7 @@ pub struct CodexAdapter {
     processes: Arc<Mutex<HashMap<String, Arc<SharedProcess>>>>,
     start_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     instruction_context: Mutex<HashMap<String, (Option<String>, Option<String>)>>,
-    thread_instruction_hashes: Mutex<HashMap<String, Option<String>>>,
+    thread_instruction_hashes: Arc<Mutex<HashMap<String, Option<String>>>>,
     idle_shutdown_ms: AtomicU64,
 }
 impl CodexAdapter {
@@ -250,6 +263,7 @@ impl CodexAdapter {
     async fn spawn(
         &self,
         r: &RuntimeSpec,
+        session_id: &str,
         cwd: &Path,
         events: EventSender,
         options: &ExecOptions,
@@ -279,6 +293,8 @@ impl CodexAdapter {
             events: SessionEventSink::new(events),
             meta: Mutex::new(ThreadMeta::default()),
             turn: Mutex::new(TurnState::default()),
+            session_id: session_id.to_owned(),
+            instruction_hashes: Arc::clone(&self.thread_instruction_hashes),
         }))
     }
 
@@ -432,11 +448,11 @@ impl CodexAdapter {
                             let status = p["turn"]["status"].as_str().unwrap_or("");
                             let success = status == "completed";
                             let failed = !success;
-                            let (options, usage) = {
+                            let (options, usage, instruction_apply, echo_seen, echo_hash) = {
                                 let mut t = r.turn.lock().await;
                                 if t.completed { continue; }
                                 t.completed = true;
-                                (t.options.clone(), t.usage.take())
+                                (t.options.clone(), t.usage.take(), t.instruction_apply.clone(), t.instruction_echo_seen, t.instruction_echo_hash.clone())
                             };
                             reader.active_turns.lock().await.remove(thread_id);
                             let turn_id = r.turn_id.lock().await.clone().unwrap_or_default();
@@ -447,10 +463,31 @@ impl CodexAdapter {
                                     report,
                             });
                             if success {
-                                let outcomes =
+                                let mut outcomes =
                                     outcomes_for_success(&meta, &options, usage.as_ref());
+                                // A developer-instructions change sent through
+                                // `collaborationMode` is reported only from the
+                                // observed settings echo, never from the request
+                                // shape alone (FIX2 honesty rules).
+                                let mut installed_hash = None;
+                                if let Some(desired) = instruction_apply {
+                                    let echo_matches = echo_seen && echo_hash == desired;
+                                    let rejected = echo_seen && !echo_matches;
+                                    outcomes.insert(
+                                        "instructions".into(),
+                                        instructions_outcome(desired.as_deref(), echo_seen, echo_matches),
+                                    );
+                                    if !rejected { installed_hash = Some(desired); }
+                                }
                                 if !outcomes.is_empty() {
                                     let _ = r.events.enqueue(AgentEvent::ExecApplied { turn_id, outcomes });
+                                }
+                                if let Some(hash) = installed_hash {
+                                    let mut current = r.meta.lock().await;
+                                    current.baseline_hash = hash.clone();
+                                    current.desired_hash = hash.clone();
+                                    drop(current);
+                                    r.instruction_hashes.lock().await.insert(r.session_id.clone(), hash);
                                 }
                                 r.meta.lock().await.first_success_pending = false;
                                 let _ = r.events.enqueue(AgentEvent::TurnCompleted);
@@ -465,6 +502,19 @@ impl CodexAdapter {
                                     let _ = r.events.enqueue(AgentEvent::RecoveryHint { kind, retry_after_secs: None });
                                 }
                                 let _ = r.events.enqueue(AgentEvent::Error { message: p["turn"]["error"].to_string() });
+                            }
+                        }
+                        "thread/settings/updated" => {
+                            // The provider echoes the effective collaboration
+                            // settings here. Only the hash is retained.
+                            let applies = r.turn.lock().await.instruction_apply.is_some();
+                            if applies {
+                                let echo = p["threadSettings"]["collaborationMode"]["settings"]["developer_instructions"]
+                                    .as_str()
+                                    .and_then(instruction_sha256);
+                                let mut turn = r.turn.lock().await;
+                                turn.instruction_echo_seen = true;
+                                turn.instruction_echo_hash = echo;
                             }
                         }
                         _ => {
@@ -550,7 +600,7 @@ impl CodexAdapter {
         removed
     }
 
-    async fn resume_after_crash(&self, session_id: &str, old: &Arc<Conn>) -> Result<Arc<Conn>, AdapterError> {
+    async fn resume_after_crash(&self, session_id: &str, old: &Arc<Conn>, current: &ExecOptions) -> Result<Arc<Conn>, AdapterError> {
         let process = self.acquire_process(&old.process_key, &old.runtime, &old.cwd, &old.base_options).await?;
         let previous_id = old.turn.lock().await.thread_id.clone().ok_or_else(|| AdapterError::Process("Codex session has no provider thread".into()))?;
         let new = Arc::new(Conn { plan_active: AtomicBool::new(false),
@@ -565,12 +615,19 @@ impl CodexAdapter {
             events: old.events.clone(),
             meta: Mutex::new(old.meta.lock().await.clone()),
             turn: Mutex::new(TurnState { thread_id: Some(previous_id.clone()), ..TurnState::default() }),
+            session_id: session_id.to_owned(),
+            instruction_hashes: Arc::clone(&self.thread_instruction_hashes),
         });
+        let installed_instruction_hash = new.meta.lock().await.baseline_hash.clone();
+        // The replacement thread must carry the text the current prompt asked
+        // for, not whatever the crashed connection was last spawned with.
+        let mut resume_options = new.base_options.clone();
+        resume_options.instructions = current.instructions.clone();
         let setup = async {
             let resumed = Self::startup_call(
                 &new,
                 "thread/resume",
-                Self::resume_params(&previous_id, &new.cwd, &new.base_options),
+                Self::resume_params(&previous_id, &new.cwd, &resume_options, installed_instruction_hash.as_deref()),
             ).await;
             let (thread, fresh) = match resumed {
                 Ok(thread) => (thread, false),
@@ -680,7 +737,7 @@ impl CodexAdapter {
         if let Some(config) = mcp_config(&options.mcp_servers) { p["config"] = config; }
         p
     }
-    fn resume_params(id: &str, cwd: &Path, options: &ExecOptions) -> Value {
+    fn resume_params(id: &str, cwd: &Path, options: &ExecOptions, installed_instruction_hash: Option<&str>) -> Value {
         let (approval,sandbox)=if options.approval_mode==ApprovalMode::Bypass {("never","danger-full-access")}else{("on-request","workspace-write")};
         let mut p = json!({"threadId":id,"cwd":cwd.to_string_lossy(),"approvalPolicy":approval,"sandbox":sandbox});
         if let Some(config) = mcp_config(&options.mcp_servers) { p["config"] = config; }
@@ -694,7 +751,23 @@ impl CodexAdapter {
         {
             p["serviceTier"] = json!(v)
         }
+        // Resend the current text only when it differs from the text stored for
+        // the thread. The resume response carries no accepted-or-not signal, so
+        // callers must not report this as applied.
+        if let Some(v) = &options.instructions {
+            if instruction_sha256(v).as_deref() != installed_instruction_hash {
+                p["developerInstructions"] = json!(v)
+            }
+        }
         p
+    }
+    /// The model a turn runs under: the explicitly requested one, else the
+    /// thread's configured model. This is the resolution plan mode already uses.
+    async fn turn_model(c: &Conn, requested: Option<&String>) -> Option<String> {
+        match requested {
+            Some(model) => Some(model.clone()),
+            None => c.meta.lock().await.model.clone(),
+        }
     }
     async fn set_thread_meta(
         c: &Conn,
@@ -1005,6 +1078,18 @@ fn outcome(
         evidence_kind: kind,
         evidence_value: value,
         reason,
+    }
+}
+/// Outcome for a developer-instructions change sent on this turn. Only a
+/// `thread/settings/updated` echo whose text hashes to the desired hash proves
+/// application; an absent echo is unverified and a mismatched echo is rejected.
+fn instructions_outcome(desired: Option<&str>, echo_seen: bool, echo_matches: bool) -> SettingOutcome {
+    if echo_seen && echo_matches {
+        outcome(json!(desired), Some(true), EvidenceKind::ProviderEcho, Some(json!(desired)), None)
+    } else if echo_seen {
+        outcome(json!(desired), Some(false), EvidenceKind::None, None, Some("instructions_change_requires_new_thread".into()))
+    } else {
+        outcome(json!(desired), None, EvidenceKind::None, None, Some("instructions_sent_unverified".into()))
     }
 }
 fn usage_report(last: Option<&Value>, model: Option<String>, success: bool) -> UsageReport {
@@ -1344,7 +1429,7 @@ impl AgentAdapter for CodexAdapter {
         q: NewSessionRequest,
         events: EventSender,
     ) -> Result<SessionHandle, AdapterError> {
-        let c = self.spawn(r, &q.project_path, events, &q.exec_options).await?;
+        let c = self.spawn(r, &q.session_id, &q.project_path, events, &q.exec_options).await?;
         let t = match Self::startup_call(
             &c,
             "thread/start",
@@ -1391,11 +1476,21 @@ impl AgentAdapter for CodexAdapter {
         q: ResumeSessionRequest,
         events: EventSender,
     ) -> Result<SessionHandle, AdapterError> {
-        let c = self.spawn(r, &q.project_path, events, &q.exec_options).await?;
+        let (desired, baseline) = self
+            .instruction_context
+            .lock()
+            .await
+            .get(&q.session_id)
+            .cloned()
+            .unwrap_or((
+                instruction_sha256(q.exec_options.instructions.as_deref().unwrap_or("")),
+                None,
+            ));
+        let c = self.spawn(r, &q.session_id, &q.project_path, events, &q.exec_options).await?;
         let t = match Self::startup_call(
             &c,
             "thread/resume",
-            Self::resume_params(&q.provider_session_id, &q.project_path, &q.exec_options),
+            Self::resume_params(&q.provider_session_id, &q.project_path, &q.exec_options, baseline.as_deref()),
         )
         .await {
             Ok(thread) => thread,
@@ -1407,16 +1502,6 @@ impl AgentAdapter for CodexAdapter {
             .to_owned();
         c.turn.lock().await.thread_id = Some(id.clone());
         c.process.routes.lock().await.insert(id.clone(), Arc::downgrade(&c));
-        let (desired, baseline) = self
-            .instruction_context
-            .lock()
-            .await
-            .get(&q.session_id)
-            .cloned()
-            .unwrap_or((
-                instruction_sha256(q.exec_options.instructions.as_deref().unwrap_or("")),
-                None,
-            ));
         let installed = self
             .thread_instruction_hashes
             .lock()
@@ -1449,7 +1534,7 @@ impl AgentAdapter for CodexAdapter {
             .cloned()
             .ok_or_else(|| AdapterError::Process("Codex session is not active".into()))?;
         if c.detached.load(Ordering::Acquire) || !c.process.alive.load(Ordering::Acquire) {
-            c = self.resume_after_crash(&h.session_id, &c).await?;
+            c = self.resume_after_crash(&h.session_id, &c, &q.exec_options).await?;
         }
         let provider_thread = c.turn.lock().await.thread_id.clone().ok_or_else(|| AdapterError::Process("Codex session has no provider thread".into()))?;
         let requested_hash =
@@ -1457,27 +1542,7 @@ impl AgentAdapter for CodexAdapter {
         let mut meta = c.meta.lock().await.clone();
         let changed = requested_hash != meta.baseline_hash;
         meta.desired_hash = requested_hash.clone();
-        *c.meta.lock().await = meta.clone();
-        if changed {
-            let mut m = std::collections::BTreeMap::new();
-            m.insert(
-                "instructions".into(),
-                outcome(
-                    json!(requested_hash),
-                    Some(false),
-                    EvidenceKind::None,
-                    None,
-                    Some("instructions_change_requires_new_thread".into()),
-                ),
-            );
-            let _ = c
-                .events
-                .send(AgentEvent::ExecApplied {
-                    turn_id: q.turn_id.clone(),
-                    outcomes: m,
-                })
-                .await;
-        }
+        *c.meta.lock().await = meta;
         // Images are passed by path; the app-server reads them itself.
         let mut input = if q.text.is_empty() && !q.attachments.is_empty() { Vec::new() } else { vec![json!({"type":"text","text":q.text})] };
         input.extend(q.attachments.iter().map(|attachment| json!({"type":"localImage","path":attachment.path})));
@@ -1488,15 +1553,46 @@ impl AgentAdapter for CodexAdapter {
         if let Some(v) = &q.exec_options.thinking {
             p["effort"] = json!(v)
         }
+        let in_plan = q.exec_options.plan_mode;
         let was_plan = c.plan_active.load(Ordering::SeqCst);
-        if q.exec_options.plan_mode || was_plan {
-            let model = q.exec_options.model.clone().or_else(|| c.meta.try_lock().ok().and_then(|meta| meta.model.clone()));
-            if let Some(model) = model {
-                // Plan mode keeps Codex's built-in planning instructions; leaving
-                // it restores this blob's own developer instructions.
-                let developer = if q.exec_options.plan_mode { Value::Null } else { json!(q.exec_options.instructions) };
-                p["collaborationMode"] = json!({"mode": if q.exec_options.plan_mode { "plan" } else { "default" }, "settings": {"model": model, "reasoning_effort": q.exec_options.thinking, "developer_instructions": developer}});
-                c.plan_active.store(q.exec_options.plan_mode, Ordering::SeqCst);
+        let leaving_plan = was_plan && !in_plan;
+        let pending_change = changed && !in_plan;
+        let model = Self::turn_model(&c, q.exec_options.model.as_ref()).await;
+        // A pending instructions change on an existing thread is sent through
+        // the per-turn collaborationMode path. A plan turn keeps Codex's
+        // built-in instructions; leaving plan mode restores this blob's current
+        // text. A change with no known model cannot be sent, so it keeps the
+        // original "applies to new conversations" outcome.
+        let mut instruction_apply: Option<Option<String>> = None;
+        if in_plan || leaving_plan || pending_change {
+            match model {
+                Some(model) => {
+                    let developer = if in_plan { Value::Null } else { json!(q.exec_options.instructions) };
+                    p["collaborationMode"] = json!({"mode": if in_plan { "plan" } else { "default" }, "settings": {"model": model, "reasoning_effort": q.exec_options.thinking, "developer_instructions": developer}});
+                    c.plan_active.store(in_plan, Ordering::SeqCst);
+                    if !in_plan { instruction_apply = Some(requested_hash.clone()); }
+                }
+                None if pending_change => {
+                    let mut m = std::collections::BTreeMap::new();
+                    m.insert(
+                        "instructions".into(),
+                        outcome(
+                            json!(requested_hash),
+                            Some(false),
+                            EvidenceKind::None,
+                            None,
+                            Some("instructions_change_requires_new_thread".into()),
+                        ),
+                    );
+                    let _ = c
+                        .events
+                        .send(AgentEvent::ExecApplied {
+                            turn_id: q.turn_id.clone(),
+                            outcomes: m,
+                        })
+                        .await;
+                }
+                None => {}
             }
         }
         if let Some(v) = q.exec_options.service_tier.as_ref() {
@@ -1514,6 +1610,9 @@ impl AgentAdapter for CodexAdapter {
             options: q.exec_options,
             usage: None,
             completed: false,
+            instruction_apply: instruction_apply.clone(),
+            instruction_echo_seen: false,
+            instruction_echo_hash: None,
         };
         *c.turn_id.lock().await = Some(q.turn_id);
         c.process.active_turns.lock().await.insert(provider_thread.clone());
@@ -1539,6 +1638,18 @@ impl AgentAdapter for CodexAdapter {
                             ),
                         );
                     }
+                }
+                if let Some(desired) = &instruction_apply {
+                    rejected.insert(
+                        "instructions".into(),
+                        outcome(
+                            json!(desired),
+                            Some(false),
+                            EvidenceKind::None,
+                            None,
+                            Some("instructions_change_requires_new_thread".into()),
+                        ),
+                    );
                 }
                 if !rejected.is_empty() {
                     let _ = c
@@ -1870,7 +1981,7 @@ mod tests {
         assert_eq!(delivered, TOOL_STARTED_FLOOD);
     }
 
-    #[test] fn approval_policy_and_sandbox_are_typed_and_bypass_only_for_bypass(){let cwd=Path::new("C:/project");let start=CodexAdapter::start_params(cwd,&ExecOptions::default());assert_eq!(start["approvalPolicy"],"on-request");assert_eq!(start["sandbox"],"workspace-write");let auto=CodexAdapter::start_params(cwd,&ExecOptions{approval_mode:ApprovalMode::Auto,..ExecOptions::default()});assert_eq!(auto["approvalPolicy"],"on-request");assert_eq!(auto["sandbox"],"workspace-write");let bypass=ExecOptions{approval_mode:ApprovalMode::Bypass,..ExecOptions::default()};let start=CodexAdapter::start_params(cwd,&bypass);assert_eq!(start["approvalPolicy"],"never");assert_eq!(start["sandbox"],"danger-full-access");let resume=CodexAdapter::resume_params("thread",cwd,&bypass);assert_eq!(resume["approvalPolicy"],"never");assert_eq!(resume["sandbox"],"danger-full-access");}
+    #[test] fn approval_policy_and_sandbox_are_typed_and_bypass_only_for_bypass(){let cwd=Path::new("C:/project");let start=CodexAdapter::start_params(cwd,&ExecOptions::default());assert_eq!(start["approvalPolicy"],"on-request");assert_eq!(start["sandbox"],"workspace-write");let auto=CodexAdapter::start_params(cwd,&ExecOptions{approval_mode:ApprovalMode::Auto,..ExecOptions::default()});assert_eq!(auto["approvalPolicy"],"on-request");assert_eq!(auto["sandbox"],"workspace-write");let bypass=ExecOptions{approval_mode:ApprovalMode::Bypass,..ExecOptions::default()};let start=CodexAdapter::start_params(cwd,&bypass);assert_eq!(start["approvalPolicy"],"never");assert_eq!(start["sandbox"],"danger-full-access");let resume=CodexAdapter::resume_params("thread",cwd,&bypass,None);assert_eq!(resume["approvalPolicy"],"never");assert_eq!(resume["sandbox"],"danger-full-access");}
     #[test]
     fn usage_subtraction_is_validated_and_keeps_reported_fallback() {
         let a = usage_report(
@@ -1949,7 +2060,15 @@ mod tests {
             ..ExecOptions::default()
         };
         assert_eq!(o.service_tier.as_deref(), Some("standard"));
-        let p = CodexAdapter::resume_params("thread", Path::new("."), &o);
+        let p = CodexAdapter::resume_params("thread", Path::new("."), &o, None);
         assert!(p.get("serviceTier").is_none());
+        // The current text is sent on resume only when it differs from the
+        // stored thread hash.
+        let differing = CodexAdapter::resume_params("thread", Path::new("."), &o, Some("0000000000000000000000000000000000000000000000000000000000000000"));
+        assert!(differing.get("developerInstructions").is_none(), "no instructions were requested");
+        let with_text = ExecOptions { instructions: Some("restored text".into()), ..o.clone() };
+        assert_eq!(CodexAdapter::resume_params("thread", Path::new("."), &with_text, None)["developerInstructions"], "restored text");
+        let same = instruction_sha256("restored text").unwrap();
+        assert!(CodexAdapter::resume_params("thread", Path::new("."), &with_text, Some(&same)).get("developerInstructions").is_none());
     }
 }

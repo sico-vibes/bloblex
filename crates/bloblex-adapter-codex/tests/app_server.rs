@@ -285,7 +285,7 @@ async fn exact_start_turn_resume_fields_and_replayed_usage_are_scoped() {
     }
     assert!(first_events.iter().any(|e| matches!(e,AgentEvent::ExecApplied{turn_id,outcomes} if turn_id=="local-1"&&outcomes["instructions"].applied==Some(true)&&outcomes["instructions"].evidence_kind==EvidenceKind::SuccessfulTurn)));
     assert!(first_events.iter().any(|e|matches!(e,AgentEvent::ExecApplied{turn_id,outcomes} if turn_id=="local-1"&&outcomes["model"].applied==Some(true)&&outcomes["model"].evidence_value==Some(json!("m1"))&&outcomes["serviceTier"].evidence_value==Some(json!("priority")))));
-    assert!(events.iter().any(|e|matches!(e,AgentEvent::ExecApplied{turn_id,outcomes} if turn_id=="local-2"&&outcomes["instructions"].applied==Some(false)&&outcomes["instructions"].reason.as_deref()==Some("instructions_change_requires_new_thread"))));
+    assert!(events.iter().any(|e|matches!(e,AgentEvent::ExecApplied{turn_id,outcomes} if turn_id=="local-2"&&outcomes["instructions"].applied.is_none()&&outcomes["instructions"].reason.as_deref()==Some("instructions_sent_unverified"))));
     assert!(events.iter().any(|e|matches!(e,AgentEvent::UsageReport{turn_id,report} if turn_id=="local-2"&&report.input_tokens==Some(7))));
     let rows = log(&record);
     let redacted_log = std::fs::read_to_string(&record).unwrap();
@@ -326,7 +326,8 @@ async fn exact_start_turn_resume_fields_and_replayed_usage_are_scoped() {
     assert!(turn.get("developerInstructions").is_none());
     let resume = &rows[4]["params"];
     assert_eq!(resume["threadId"], h.provider_session_id);
-    assert!(resume.get("developerInstructions").is_none());
+    assert_eq!(resume["developerInstructionsSha256"], instruction_sha256("sentinel instruction").unwrap());
+    assert_eq!(resume["developerInstructionsPresent"], true);
     for row in &rows {
         assert_ne!(row["params"]["serviceTier"], "fast");
         assert_ne!(row["params"]["serviceTier"], "standard");
@@ -1151,4 +1152,191 @@ async fn steer_accepts_with_the_schema_exact_request_and_reports_stale_and_rejec
     assert!(matches!(error, AdapterError::Rejected(_)));
     adapter.close_session(&handle).await.unwrap();
     let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+fn instructions(text: &str) -> ExecOptions {
+    ExecOptions { instructions: Some(text.into()), ..opts() }
+}
+
+/// Collects events until the turn ends, so a test observes the ExecApplied
+/// outcomes the completion path emits and never races the next turn.
+async fn drain_turn(rx: &mut tokio::sync::mpsc::Receiver<AgentEvent>) -> Vec<AgentEvent> {
+    let mut events = Vec::new();
+    loop {
+        let event = tokio::time::timeout(TURN_EVENT_TIMEOUT, rx.recv()).await.unwrap().unwrap();
+        let done = matches!(event, AgentEvent::TurnCompleted);
+        events.push(event);
+        if done { break; }
+    }
+    events
+}
+
+#[tokio::test]
+async fn changed_instructions_use_collaboration_mode_and_a_matching_echo_confirms_them() {
+    let (runtime, record) = setup(Some("echo-instructions"));
+    let adapter = CodexAdapter::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    // Unchanged hash: no collaborationMode churn on a normal turn.
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "same-1".into(), text: "hello".into(), exec_options: opts() }).await.unwrap();
+    drain_turn(&mut rx).await;
+    // Changed hash on an existing thread: the new text rides the turn.
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "change-1".into(), text: "hello".into(), exec_options: instructions("changed instructions") }).await.unwrap();
+    let events = drain_turn(&mut rx).await;
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ExecApplied { turn_id, outcomes }
+        if turn_id == "change-1"
+        && outcomes["instructions"].applied == Some(true)
+        && outcomes["instructions"].evidence_kind == EvidenceKind::ProviderEcho)));
+    // The confirmed change advances the baseline, so the next turn is quiet.
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "same-2".into(), text: "hello".into(), exec_options: instructions("changed instructions") }).await.unwrap();
+    drain_turn(&mut rx).await;
+    let turns = log(&record).into_iter().filter(|row| row["method"] == "turn/start").collect::<Vec<_>>();
+    assert!(turns[0]["params"].get("collaborationMode").is_none(), "an unchanged hash sends no collaborationMode");
+    assert_eq!(turns[1]["params"]["collaborationMode"]["mode"], "default");
+    assert_eq!(turns[1]["params"]["collaborationMode"]["settings"]["model"], "m1");
+    assert_eq!(turns[1]["params"]["collaborationMode"]["settings"]["developerInstructionsSha256"], instruction_sha256("changed instructions").unwrap());
+    assert!(turns[2]["params"].get("collaborationMode").is_none(), "an applied change is not resent");
+    let redacted = std::fs::read_to_string(&record).unwrap();
+    assert!(!redacted.contains("sentinel instruction"));
+    assert!(!redacted.contains("changed instructions"));
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+#[tokio::test]
+async fn an_unverified_instructions_change_reports_applied_null_and_sends_the_new_text() {
+    let (runtime, record) = setup(None);
+    let adapter = CodexAdapter::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "unverified".into(), text: "hello".into(), exec_options: instructions("changed instructions") }).await.unwrap();
+    let events = drain_turn(&mut rx).await;
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ExecApplied { turn_id, outcomes }
+        if turn_id == "unverified"
+        && outcomes["instructions"].applied.is_none()
+        && outcomes["instructions"].reason.as_deref() == Some("instructions_sent_unverified"))));
+    let turn = log(&record).into_iter().find(|row| row["method"] == "turn/start").unwrap();
+    assert_eq!(turn["params"]["collaborationMode"]["mode"], "default");
+    assert_eq!(turn["params"]["collaborationMode"]["settings"]["developerInstructionsSha256"], instruction_sha256("changed instructions").unwrap());
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+#[tokio::test]
+async fn a_mismatched_settings_echo_reports_the_change_as_rejected() {
+    let (runtime, record) = setup(Some("echo-other"));
+    let adapter = CodexAdapter::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "mismatch".into(), text: "hello".into(), exec_options: instructions("changed instructions") }).await.unwrap();
+    let events = drain_turn(&mut rx).await;
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ExecApplied { turn_id, outcomes }
+        if turn_id == "mismatch"
+        && outcomes["instructions"].applied == Some(false)
+        && outcomes["instructions"].reason.as_deref() == Some("instructions_change_requires_new_thread"))));
+    let redacted = std::fs::read_to_string(&record).unwrap();
+    assert!(!redacted.contains("changed instructions"));
+    assert!(!redacted.contains("other instructions"));
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+#[tokio::test]
+async fn a_plan_turn_sends_null_instructions_and_the_next_default_turn_restores_current_text() {
+    let (runtime, record) = setup(None);
+    let adapter = CodexAdapter::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "plan-1".into(), text: "hello".into(), exec_options: ExecOptions { plan_mode: true, ..opts() } }).await.unwrap();
+    drain_turn(&mut rx).await;
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "plan-2".into(), text: "hello".into(), exec_options: opts() }).await.unwrap();
+    drain_turn(&mut rx).await;
+    let turns = log(&record).into_iter().filter(|row| row["method"] == "turn/start").collect::<Vec<_>>();
+    assert_eq!(turns[0]["params"]["collaborationMode"]["mode"], "plan");
+    assert_eq!(turns[0]["params"]["collaborationMode"]["settings"]["developerInstructionsPresent"], false);
+    assert_eq!(turns[1]["params"]["collaborationMode"]["mode"], "default");
+    assert_eq!(turns[1]["params"]["collaborationMode"]["settings"]["developerInstructionsSha256"], instruction_sha256("sentinel instruction").unwrap());
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+#[tokio::test]
+async fn an_instructions_change_without_a_known_model_keeps_the_new_conversation_outcome() {
+    let (runtime, record) = setup(Some("no-model"));
+    let adapter = CodexAdapter::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let options = ExecOptions { model: None, instructions: Some("sentinel instruction".into()), ..opts() };
+    let handle = adapter
+        .new_session(&runtime, NewSessionRequest { session_id: "no-model".into(), project_path: PathBuf::from("."), exec_options: options.clone() }, tx)
+        .await
+        .unwrap();
+    adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "no-model-turn".into(), text: "hello".into(), exec_options: ExecOptions { instructions: Some("changed instructions".into()), ..options.clone() } }).await.unwrap();
+    let outcomes = tokio::time::timeout(TURN_EVENT_TIMEOUT, async {
+        loop {
+            if let Some(AgentEvent::ExecApplied { turn_id, outcomes }) = rx.recv().await {
+                if turn_id == "no-model-turn" { break outcomes; }
+            }
+        }
+    }).await.unwrap();
+    assert_eq!(outcomes["instructions"].applied, Some(false));
+    assert_eq!(outcomes["instructions"].reason.as_deref(), Some("instructions_change_requires_new_thread"));
+    let turns = log(&record).into_iter().filter(|row| row["method"] == "turn/start").collect::<Vec<_>>();
+    assert!(turns.iter().all(|row| row["params"].get("collaborationMode").is_none()), "no model means nothing is sent");
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+#[tokio::test]
+async fn a_rejected_turn_start_keeps_the_instruction_baseline_and_retries() {
+    let (runtime, record) = setup(Some("reject"));
+    let adapter = CodexAdapter::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let handle = adapter.new_session(&runtime, qnew(), tx).await.unwrap();
+    for turn in ["reject-1", "reject-2"] {
+        let result = adapter.prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: turn.into(), text: "hello".into(), exec_options: instructions("changed instructions") }).await;
+        assert!(result.is_err());
+        let outcomes = tokio::time::timeout(TURN_EVENT_TIMEOUT, async {
+            loop {
+                if let Some(AgentEvent::ExecApplied { turn_id, outcomes }) = rx.recv().await {
+                    if turn_id == turn { break outcomes; }
+                }
+            }
+        }).await.unwrap();
+        assert_eq!(outcomes["instructions"].applied, Some(false));
+        assert_eq!(outcomes["instructions"].reason.as_deref(), Some("instructions_change_requires_new_thread"));
+    }
+    let turns = log(&record).into_iter().filter(|row| row["method"] == "turn/start").collect::<Vec<_>>();
+    assert_eq!(turns.len(), 2, "a rejected turn/start is retried on the next turn");
+    let expected = instruction_sha256("changed instructions").unwrap();
+    assert!(turns.iter().all(|row| row["params"]["collaborationMode"]["settings"]["developerInstructionsSha256"] == json!(expected)));
+    adapter.close_session(&handle).await.unwrap();
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+}
+
+#[tokio::test]
+async fn resume_sends_developer_instructions_only_when_the_stored_hash_differs() {
+    let (runtime, record) = setup(None);
+    let adapter = CodexAdapter::default();
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let handle = adapter.new_session(&runtime, new_request("resume-diff", PathBuf::from("."), opts()), tx).await.unwrap();
+    let provider = handle.provider_session_id.clone();
+    adapter.close_session(&handle).await.unwrap();
+    let differ = instruction_sha256("changed instructions").unwrap();
+    let installed = instruction_sha256("sentinel instruction").unwrap();
+    adapter.set_instruction_hash_context("resume-diff", Some(differ.clone()), Some(installed)).await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let resumed = adapter.resume_session(&runtime, ResumeSessionRequest { session_id: "resume-diff".into(), provider_session_id: provider.clone(), project_path: PathBuf::from("."), exec_options: instructions("changed instructions") }, tx).await.unwrap();
+    adapter.close_session(&resumed).await.unwrap();
+    // Equal hash: nothing is resent.
+    adapter.set_instruction_hash_context("resume-diff", Some(differ.clone()), Some(differ.clone())).await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let resumed = adapter.resume_session(&runtime, ResumeSessionRequest { session_id: "resume-diff".into(), provider_session_id: provider, project_path: PathBuf::from("."), exec_options: instructions("changed instructions") }, tx).await.unwrap();
+    adapter.close_session(&resumed).await.unwrap();
+    let resumes = log(&record).into_iter().filter(|row| row["method"] == "thread/resume").collect::<Vec<_>>();
+    assert_eq!(resumes.len(), 2);
+    assert_eq!(resumes[0]["params"]["developerInstructionsSha256"], differ);
+    assert_eq!(resumes[0]["params"]["developerInstructionsPresent"], true);
+    assert!(resumes[1]["params"].get("developerInstructions").is_none(), "an equal stored hash sends nothing");
+    let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
+    let _ = std::fs::remove_dir_all(record.parent().unwrap());
 }

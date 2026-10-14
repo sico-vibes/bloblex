@@ -134,7 +134,7 @@ describe('live execution card', () => {
     expect(outcomes).toEqual(['Unknown', 'Applied', 'Unknown', 'Not applied'])
     const modelRow = view.host.querySelector('[data-outcome="Unknown"]')
     expect(modelRow?.textContent).not.toContain('Applied')
-    expect(view.host.textContent).toContain('Applies to new conversations.')
+    expect(view.host.textContent).toContain('Sent with the next message, including in existing conversations.')
   })
 
   it('hides the thinking control when the selected model has no model-specific effort evidence', async () => {

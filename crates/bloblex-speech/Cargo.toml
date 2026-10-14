@@ -14,13 +14,18 @@ native = ["dep:sherpa-onnx", "dep:cpal"]
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
-reqwest.workspace = true
+# `rustls-tls` is additive: the cloud client passes a preconfigured rustls
+# config, because the endpoint's edge challenges this platform's default TLS
+# stack (SChannel) and accepts rustls. See cloud.rs.
+reqwest = { workspace = true, features = ["rustls-tls"] }
+rustls = { version = "0.23", features = ["ring"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+webpki-roots = "0.26"
 zeroize.workspace = true
 cpal = { version = "0.15", optional = true }
 sherpa-onnx = { version = "1.13", optional = true }

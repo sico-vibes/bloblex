@@ -2,6 +2,18 @@
 
 Date: 13 October 2026. Worktree `Blolblex-wt-fix1-dictation`. Scope: `crates/bloblex-speech` (mainly `src/cloud.rs`), `apps/desktop/src-tauri/src/speech.rs`, `scripts/live-checks/live-cloud-dictation.mjs`.
 
+> **Corrected on 14 October 2026.** The root-cause attribution below is
+> superseded. That run concluded the challenge was about *who* Bloblex claims to
+> be, and that it "cannot be fixed on our side". Both are now falsified by live
+> probes: requests that identify as Bloblex (`originator: bloblex`, our
+> User-Agent) returned HTTP 200 with a transcript body, and the variable that
+> separates pass from challenge is the shape of the HTTP request the client
+> produces — not the identity, the audio container, the TLS library or the time.
+> bb is not on any allow-list. The statements in this file that are now known to
+> be wrong are marked **[superseded]**. Details and method:
+> [cloud-dictation-client-shape-2026-10-14.md](cloud-dictation-client-shape-2026-10-14.md).
+> The endpoint's *permission* status is unchanged and still unestablished.
+
 ## Symptom
 
 Starting dictation with the ChatGPT engine showed "ChatGPT transcription is unavailable (verification required) and no on-device model is installed." "verification required" was our `CloudError::Challenged` (a `403` with a `cf-mitigated` response header, `crates/bloblex-speech/src/cloud.rs`).
@@ -32,7 +44,7 @@ Result: **none suitable.** There is no plain transcription request (nothing that
 
 ## Confirmed root cause
 
-OpenAI's private ChatGPT transcription endpoint (`chatgpt.com/backend-api/transcribe`) answers this honest, non-browser client with a Cloudflare managed challenge (`403`, `cf-mitigated: challenge`, `server: cloudflare`, HTML body). The Codex login is valid (`auth_mode = chatgpt`, account id present, access token not expired), so this is **not** an authentication failure: it is OpenAI's anti-bot check blocking requests that do not come from its official clients. Cloudflare's managed challenge expects a browser to solve a JS challenge. We will not impersonate Codex, a browser or any other client, replay cookies, or solve/bypass the challenge, so **this cannot be fixed on our side**. The correct outcome is an honest message plus the existing on-device fallback.
+OpenAI's private ChatGPT transcription endpoint (`chatgpt.com/backend-api/transcribe`) answers this honest, non-browser client with a Cloudflare managed challenge (`403`, `cf-mitigated: challenge`, `server: cloudflare`, HTML body). The Codex login is valid (`auth_mode = chatgpt`, account id present, access token not expired), so this is **not** an authentication failure: it is OpenAI's anti-bot check blocking requests that do not come from its official clients. Cloudflare's managed challenge expects a browser to solve a JS challenge. We will not impersonate Codex, a browser or any other client, replay cookies, or solve/bypass the challenge. **[superseded]** The claim that followed — *"so this cannot be fixed on our side"* — was wrong: it assumed the challenge was an identity check. It is a client request-shape check, and Bloblex's own identity passes from a different HTTP client shape (see the correction above). The honest message plus the on-device fallback remains the shipped behaviour, not because the endpoint refuses third-party apps in general, but because the fix is a policy decision the owner has not yet made.
 
 ## Ruled out
 
@@ -54,7 +66,7 @@ OpenAI's private ChatGPT transcription endpoint (`chatgpt.com/backend-api/transc
 ## Not verified
 
 - The Task A probe's exact **response header-name list** and the `content-type` value were not persisted by the earlier run; this file records them only qualitatively. (Status, `cf-mitigated`, `server`, body length and JSON-parse result are established.)
-- Whether the endpoint behaves differently for the official Codex/ChatGPT clients — not tested, and imitating them is against the rules.
+- Whether the endpoint behaves differently for the official Codex/ChatGPT clients — not tested, and imitating them is against the rules. **[superseded in part]** bb's own client was run unmodified and succeeded (it identifies as bb, so this is not imitation). What remains untested is whether the official Codex or ChatGPT clients are treated the same way, and identifying the trigger would require bisecting request shape, which is a policy decision for the owner.
 - Live microphone capture and a real cloud transcription call were not exercised; the error mapping is proven against a local mock HTTP server in unit tests.
 - `apps/desktop/src-tauri/src/speech.rs` was **not compiled** in this worktree: the apostrophe in the checkout path (`D:\Basem's\...`) breaks that crate's build script. The Director checks the desktop crate from a plain path.
 
@@ -69,4 +81,4 @@ Live results with Bloblex's own identity (`originator: bloblex`, our User-Agent)
 | Rust (reqwest, rustls), `cargo run -p bloblex-speech --example cloud_probe` | 403 challenge, sets `__cf_bm` | 403 challenge |
 | Node `fetch` (undici), `scripts/live-checks/live-cloud-dictation.mjs` | 403 challenge, sets `__cf_bm` | 403 challenge |
 
-So the network stack and the missing cookies are not the difference. What remains is the client identity bb sends (`originator: bb`, `User-Agent: bb-host-daemon`), which Bloblex does not copy: presenting another application's identity to get past a bot check is impersonation. Not verified: whether bb itself passes from this machine, and whether OpenAI allow-lists specific originators.
+So the network stack and the missing cookies are not the difference. **[superseded]** This file originally concluded that the remaining difference was "the client identity bb sends (`originator: bb`, `User-Agent: bb-host-daemon`)". That is wrong. bb's identity is not privileged and there is no allow-list to join: requests carrying **Bloblex's** identity returned HTTP 200 from the same machine in the same minute, from `node:https` (OpenSSL) and from undici 7.29 in bb's Electron runtime, while undici 7.16 and `reqwest` were challenged. The variable is the HTTP request shape the client produces. bb's own tracker records the same challenge hitting bb users (get-bb/bb issues 1587 and 2159). See [cloud-dictation-client-shape-2026-10-14.md](cloud-dictation-client-shape-2026-10-14.md).

@@ -114,6 +114,47 @@ fn is_cloudflare_challenge(status: reqwest::StatusCode, headers: &reqwest::heade
             .is_some_and(|value| value.eq_ignore_ascii_case("challenge"))
 }
 
+/// TLS configuration for the ChatGPT transcription call.
+///
+/// OpenAI's edge answered this client with a Cloudflare challenge (`403`,
+/// `cf-mitigated: challenge`) while it used `reqwest`'s default backend —
+/// `native-tls`, i.e. SChannel on Windows. Passing a preconfigured `rustls`
+/// config through `use_preconfigured_tls` makes the same request, with the same
+/// URL, body, headers and identity, return `200`
+/// (`cargo run -p bloblex-speech --example cloud_probe`). The measured
+/// difference is the TLS stack's ClientHello fingerprint; `originator` stays
+/// `bloblex` and the User-Agent stays ours.
+///
+/// ALPN was tested and is **not** the cause: re-advertising `["http/1.1"]` on
+/// this rustls config still returned `200`. The config simply advertises
+/// nothing, which is rustls's own default here, rather than relying on ALPN.
+///
+/// See `docs/evidence/cloud-dictation-tls-backend-2026-10-14.md`.
+fn cloud_tls_config() -> Result<rustls::ClientConfig, CloudError> {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let mut tls = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|_| CloudError::Unavailable)?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    tls.alpn_protocols.clear();
+    Ok(tls)
+}
+
+/// The HTTP client every cloud transcription call uses: HTTP/1.1 only, no
+/// ALPN, no redirects, one total request budget.
+fn build_cloud_client(timeout: Duration) -> Result<reqwest::Client, CloudError> {
+    reqwest::Client::builder()
+        .use_preconfigured_tls(cloud_tls_config()?)
+        .http1_only()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| CloudError::Unavailable)
+}
+
 /// How the user asked dictation to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnginePreference {
@@ -852,11 +893,7 @@ impl CloudTranscriber {
 
         let boundary = make_boundary();
         let body = build_multipart(&boundary, wav, CLOUD_MODEL, prompt);
-        let client = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| CloudError::Unavailable)?;
+        let client = build_cloud_client(self.timeout)?;
         let send = || {
             let mut request = client
                 .post(url.as_str())
@@ -971,6 +1008,27 @@ mod tests {
 
     /// The cookie jar is process-wide, so tests that touch it run one at a time.
     static COOKIE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Pins the deliberate no-ALPN choice for the cloud client. This is not
+    /// what makes the request pass — rustls returns `200` with ALPN
+    /// re-advertised too (measured 14 October 2026) — it just keeps the
+    /// handshake minimal and fails if a future change starts advertising
+    /// protocols by accident.
+    #[test]
+    fn cloud_tls_config_advertises_no_alpn() {
+        let config = cloud_tls_config().expect("tls config builds");
+        assert!(
+            config.alpn_protocols.is_empty(),
+            "the cloud client advertises no ALPN by choice: {:?}",
+            config.alpn_protocols
+        );
+    }
+
+    /// The client is built with the no-ALPN rustls config and HTTP/1.1 only.
+    #[test]
+    fn build_cloud_client_succeeds() {
+        assert!(build_cloud_client(Duration::from_secs(5)).is_ok());
+    }
 
     fn encode_segment(bytes: &[u8]) -> String {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)

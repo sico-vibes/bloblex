@@ -324,11 +324,9 @@ pub async fn after_turn(st: &AppState, session_id: &str, outcome: &str) {
                 drain_next(st, session_id, true).await;
             }
         }
-        "turn.error" | "turn.cancelled" => {
-            if st.db.queue_has_queued(session_id).unwrap_or(false) {
-                st.queue.mark_paused(session_id);
-                emit_changed(st, session_id).await;
-            }
+        "turn.error" | "turn.cancelled" if st.db.queue_has_queued(session_id).unwrap_or(false) => {
+            st.queue.mark_paused(session_id);
+            emit_changed(st, session_id).await;
         }
         _ => {}
     }

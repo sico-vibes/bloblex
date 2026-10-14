@@ -72,7 +72,7 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 | [BITBOTS_THEME_SPEC.md](BITBOTS_THEME_SPEC.md) | CSS-only pixel theme ("Bitbots") spec. | historical (feature shipped as an experimental setting; see [SESSION_HANDOFF.md](../SESSION_HANDOFF.md)) | 14 Oct 2026: header |
 | [FIX2_CODEX_TEAM_INSTRUCTIONS_SPEC.md](FIX2_CODEX_TEAM_INSTRUCTIONS_SPEC.md) | Codex threads keep stale team instructions; send changed text per turn, with echo evidence. | historical; implemented and released in `v0.1.0-beta.24` | 14 Oct 2026: added with the fix |
 | [FIX3_OPENCODE2_ACP_LAUNCH_SPEC.md](FIX3_OPENCODE2_ACP_LAUNCH_SPEC.md) | OpenCode 2 rejects `acp --cwd`; launch and catalog without it. | historical; implemented and released in `v0.1.0-beta.24` | 14 Oct 2026: added with the fix |
-| [FIX4_CLIPPY_CLEANUP_SPEC.md](FIX4_CLIPPY_CLEANUP_SPEC.md) | Clippy cleanup to zero findings, no behavior change. | current; part 1 merged (`e47412a`), part 2 (adapter-acp and daemon) in progress | 14 Oct 2026: updated |
+| [FIX4_CLIPPY_CLEANUP_SPEC.md](FIX4_CLIPPY_CLEANUP_SPEC.md) | Clippy cleanup to zero findings, no behavior change. | historical; implemented in two parts (`e47412a` and the part 2 commit); `cargo clippy --workspace --exclude bloblex-desktop --all-targets -- -D warnings` passes | 14 Oct 2026: updated |
 | [FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md](FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md) | OpenCode 2 per-model effort levels and a validated catalog. | historical; implemented and released in `v0.1.0-beta.25` | 14 Oct 2026: added with the fix |
 
 ## Runbooks

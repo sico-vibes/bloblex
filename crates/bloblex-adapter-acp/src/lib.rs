@@ -123,18 +123,16 @@ impl SessionEventSink {
         let mut queue = self.0.events.lock().unwrap();
         if self.0.closed.load(Ordering::Acquire) { return Err(()); }
         // Coalesce only stream updates; every other event is retained in order, even above the cap.
-        if queue.len() >= SESSION_FORWARD_QUEUE_COALESCE_CAP {
-            if is_stream_event(&event) {
-                for pending in queue.iter_mut().rev() {
-                    if pending.delivered.is_some() || !is_stream_event(&pending.event) { break; }
-                    match merge_stream_event(&mut pending.event, event) {
-                        Ok(()) => {
-                            drop(queue);
-                            self.0.notify.notify_one();
-                            return Ok(());
-                        }
-                        Err(unmatched) => event = unmatched,
+        if queue.len() >= SESSION_FORWARD_QUEUE_COALESCE_CAP && is_stream_event(&event) {
+            for pending in queue.iter_mut().rev() {
+                if pending.delivered.is_some() || !is_stream_event(&pending.event) { break; }
+                match merge_stream_event(&mut pending.event, event) {
+                    Ok(()) => {
+                        drop(queue);
+                        self.0.notify.notify_one();
+                        return Ok(());
                     }
+                    Err(unmatched) => event = unmatched,
                 }
             }
         }
@@ -152,6 +150,8 @@ fn is_stream_event(event: &AgentEvent) -> bool {
     matches!(event, AgentEvent::AssistantDelta { .. } | AgentEvent::ThinkingDelta { .. } | AgentEvent::ToolUpdated { .. })
 }
 
+// The Err variant carries the whole AgentEvent; boxing would change the adapter's public event shape.
+#[allow(clippy::result_large_err)]
 fn merge_stream_event(previous: &mut AgentEvent, incoming: AgentEvent) -> Result<(), AgentEvent> {
     match (previous, incoming) {
         (AgentEvent::AssistantDelta { text: left }, AgentEvent::AssistantDelta { text: right })
@@ -653,6 +653,8 @@ impl AcpAdapter {
             .await;
     }
 
+    // One positional argument per config axis keeps the three call sites explicit.
+    #[allow(clippy::too_many_arguments)]
     async fn select(
         c: &Conn,
         provider_session_id: &str,

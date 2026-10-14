@@ -132,7 +132,7 @@ fn required_string(object: &Value, key: &str, limit: usize) -> Result<String, St
             Ok(text.to_owned())
         }
         Some(_) => Err(format!("{key} must be a string.")),
-        None | Some(Value::Null) => Err(format!("{key} is required.")),
+        None => Err(format!("{key} is required.")),
     }
 }
 

@@ -529,7 +529,7 @@ fn blocked_reset(entry: Option<Value>, now: DateTime<Utc>) -> Option<DateTime<Ut
                 .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
                 .map(|value| value.with_timezone(&Utc));
             if let Some(reset) = reset.filter(|reset| *reset > now) {
-                if best.map_or(true, |current| reset > current) {
+                if best.is_none_or(|current| reset > current) {
                     best = Some(reset);
                 }
             }

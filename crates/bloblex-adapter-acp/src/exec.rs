@@ -536,9 +536,7 @@ mod tests {
         assert!(value.get("model").is_none());
         assert!(value.get("agent").is_none());
 
-        let mut options = ExecOptions::default();
-        options.model = Some("opencode/ling".into());
-        options.instructions = Some("  ".into());
+        let mut options = ExecOptions { model: Some("opencode/ling".into()), instructions: Some("  ".into()), ..ExecOptions::default() };
         let model_only: Value = serde_json::from_str(&config_content(&options)).unwrap();
         assert_eq!(model_only["model"], "opencode/ling");
         assert!(model_only.get("agent").is_none());
@@ -647,10 +645,7 @@ mod tests {
 
     #[test]
     fn effort_stays_an_echo_and_failed_zeros_are_not_usage() {
-        let mut options = ExecOptions::default();
-        options.model = Some("opencode/ling".into());
-        options.thinking = Some("low".into());
-        options.instructions = Some("be brief".into());
+        let options = ExecOptions { model: Some("opencode/ling".into()), thinking: Some("low".into()), instructions: Some("be brief".into()), ..ExecOptions::default() };
         let echoes = Echoes {
             model: Some("opencode/ling".into()),
             mode: Some(AGENT_NAME.into()),

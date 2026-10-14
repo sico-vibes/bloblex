@@ -214,37 +214,31 @@ async fn fake_child_permission_reply_reaches_provider_and_resolves_prompt() {
             .await
     });
     let permission_id_a = loop {
-        match tokio::time::timeout(Duration::from_secs(5), events_a.recv())
+        if let AgentEvent::PermissionRequested {
+            provider_request_id,
+            choices,
+            ..
+        } = tokio::time::timeout(Duration::from_secs(5), events_a.recv())
             .await
             .unwrap()
             .unwrap()
         {
-            AgentEvent::PermissionRequested {
-                provider_request_id,
-                choices,
-                ..
-            } => {
-                assert_eq!(choices, vec!["allow_once", "reject_once"]);
-                break provider_request_id;
-            }
-            _ => {}
+            assert_eq!(choices, vec!["allow_once", "reject_once"]);
+            break provider_request_id;
         }
     };
     let permission_id_b = loop {
-        match tokio::time::timeout(Duration::from_secs(5), events_b.recv())
+        if let AgentEvent::PermissionRequested {
+            provider_request_id,
+            choices,
+            ..
+        } = tokio::time::timeout(Duration::from_secs(5), events_b.recv())
             .await
             .unwrap()
             .unwrap()
         {
-            AgentEvent::PermissionRequested {
-                provider_request_id,
-                choices,
-                ..
-            } => {
-                assert_eq!(choices, vec!["allow_once", "reject_once"]);
-                break provider_request_id;
-            }
-            _ => {}
+            assert_eq!(choices, vec!["allow_once", "reject_once"]);
+            break provider_request_id;
         }
     };
     assert_ne!(permission_id_a, permission_id_b);
@@ -639,16 +633,15 @@ async fn cancelling_pending_approval_settles_provider_request_and_rejects_late_r
             .await
     });
     let permission_id = loop {
-        match tokio::time::timeout(Duration::from_secs(5), events.recv())
+        if let AgentEvent::PermissionRequested {
+            provider_request_id,
+            ..
+        } = tokio::time::timeout(Duration::from_secs(5), events.recv())
             .await
             .unwrap()
             .unwrap()
         {
-            AgentEvent::PermissionRequested {
-                provider_request_id,
-                ..
-            } => break provider_request_id,
-            _ => {}
+            break provider_request_id;
         }
     };
     adapter.cancel(&handle).await.unwrap();

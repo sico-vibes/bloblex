@@ -56,6 +56,8 @@ struct AppState {
     db: Arc<Storage>,
     events: broadcast::Sender<EventEnvelope>,
     runtimes: Arc<RwLock<Vec<Value>>>,
+    // Cache entry (fetch time plus discovery rows) reads clearer inline than as a one-use alias.
+    #[allow(clippy::type_complexity)]
     discovery: Arc<Mutex<Option<(Instant, Vec<Value>)>>>,
     adapters: Arc<Adapters>,
     sessions: Arc<Mutex<HashMap<String, ActiveSession>>>,
@@ -2714,6 +2716,8 @@ fn completed_tool_state(raw: &Value) -> &'static str {
     }
 }
 
+// One parameter per measurement field keeps the previous/next pairing explicit.
+#[allow(clippy::too_many_arguments)]
 fn merge_context_measurement(
     previous_used: Option<u64>,
     previous_size: Option<u64>,
@@ -2789,7 +2793,7 @@ async fn forward_events_with_timeouts(
                     if let Some(active) = active {
                         provider_diagnostic = active.adapter.diagnostic(&active.handle.session_id).await;
                         let _ = active.adapter.close_session(&active.handle).await;
-                        if let Some(row) = st.db.session_detail(&sid).ok() {
+                        if let Ok(row) = st.db.session_detail(&sid) {
                             let options = exec_options_for_session(&st, &row).unwrap_or_default();
                             let (fresh_tx, fresh_rx) = tokio::sync::mpsc::channel(256);
                             if let Ok(handle) = active.adapter.resume_session(
@@ -4225,7 +4229,7 @@ mod phase2a_tests {
 
         assert_eq!(adapter.close_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(!st.sessions.lock().await.contains_key(session_id));
-        assert_eq!(st.db.session_exists(session_id).unwrap(), false);
+        assert!(!st.db.session_exists(session_id).unwrap());
         assert!(st.db.session_detail(session_id).is_err());
         let replay = st.db.replay_events(0, 100).unwrap();
         assert!(replay.iter().any(|event| event["type"] == "session.deleted"));
@@ -4526,7 +4530,7 @@ mod phase2a_tests {
             drop(tx);
             task.await.unwrap();
             assert_eq!(st.db.turn_failure_class(turn).unwrap().as_deref(),Some("timeout"));
-            assert_eq!(st.active_turns.lock().await.contains_key(sid),false);
+            assert!(!st.active_turns.lock().await.contains_key(sid));
             assert_eq!(adapter.close_calls.load(std::sync::atomic::Ordering::SeqCst),1);
             assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst),1);
             assert_eq!(st.db.session_detail(sid).unwrap()["state"],"idle");
@@ -4921,7 +4925,7 @@ mod phase2a_tests {
         let adapter=Arc::new(PolicyAdapter::default());let handle=SessionHandle{session_id:sid.into(),provider_session_id:"native".into(),capabilities:bloblex_agent_core::AgentCapabilities::default()};let runtime=RuntimeSpec{runtime_id:"rt-test".into(),provider:"claude".into(),executable:PathBuf::from("fake"),args:vec![],cwd:Some(root.clone())};st.sessions.lock().await.insert(sid.into(),ActiveSession{handle,runtime,adapter:adapter.clone(),launch_approval_mode:ApprovalMode::Ask});
         let(tx,rx)=tokio::sync::mpsc::channel(8);let task=tokio::spawn(forward_events(st.clone(),sid.into(),"claude".into(),"rt-test".into(),rx));tx.send(AgentEvent::PermissionRequested{provider_request_id:"req-read".into(),title:"Read file".into(),detail:Some("private body excluded".into()),choices:vec!["allow".into(),"deny".into()],raw:json!({"request":{"tool_name":"Read","input":{"file_path":"README.md"}}})}).await.unwrap();let received=tokio::time::timeout(std::time::Duration::from_secs(5),observed.recv()).await;let resolved=received.unwrap_or_else(|_|panic!("auto resolution timed out; replies={}, state={}",adapter.replies.load(std::sync::atomic::Ordering::SeqCst),st.db.session_detail(sid).unwrap()["state"])).unwrap();assert_eq!(resolved.event_type,"permission.auto_resolved");
         st.db.agent_update(&agent_id,&json!({"approvalMode":"bypass"})).unwrap();st.db.update_session_state(sid,"cancelling").unwrap();tx.send(AgentEvent::PermissionRequested{provider_request_id:"req-cancelled".into(),title:"Unknown tool".into(),detail:None,choices:vec!["allow".into(),"deny".into()],raw:json!({"request":{"tool_name":"NetworkFetch","input":{"url":"https://example.invalid"}}})}).await.unwrap();drop(tx);tokio::time::timeout(std::time::Duration::from_secs(5), task).await.unwrap().unwrap();
-        assert_eq!(adapter.replies.load(std::sync::atomic::Ordering::SeqCst),1);let mut audited=Some(resolved.payload);let mut surfaced=false;while let Ok(ev)=observed.try_recv(){if ev.event_type=="permission.auto_resolved"{audited=Some(ev.payload)}if ev.event_type=="permission.requested"{surfaced=true;}}let event=audited.expect("automatic decision audit");assert_eq!(event["mode"],"auto");assert_eq!(event["category"],"READ");assert!(event["summary"].as_str().unwrap().contains("README.md"));assert_eq!(st.db.permission_resolved_by(event["permissionId"].as_str().unwrap()).unwrap().as_deref(),Some("policy:auto"));assert!(surfaced,"cancelled session permission remains visible for user approval");let _=std::fs::remove_dir_all(root);
+        assert_eq!(adapter.replies.load(std::sync::atomic::Ordering::SeqCst),1);let mut audited=Some(resolved.payload);let mut surfaced=false;while let Ok(ev)=observed.try_recv(){if ev.event_type=="permission.auto_resolved"{audited=Some(ev.payload)}else if ev.event_type=="permission.requested"{surfaced=true;}}let event=audited.expect("automatic decision audit");assert_eq!(event["mode"],"auto");assert_eq!(event["category"],"READ");assert!(event["summary"].as_str().unwrap().contains("README.md"));assert_eq!(st.db.permission_resolved_by(event["permissionId"].as_str().unwrap()).unwrap().as_deref(),Some("policy:auto"));assert!(surfaced,"cancelled session permission remains visible for user approval");let _=std::fs::remove_dir_all(root);
     }
     #[tokio::test]
     async fn session_new_agent_xor_and_archived_conflict_are_validated(){
@@ -5510,7 +5514,7 @@ mod phase2a_tests {
 
         let effort = dispatch(&st, "session.model.update", json!({"sessionId":"workflow-update-on","thinking":"ultracode"})).await.unwrap();
         assert_eq!(effort["session"]["modelLock"]["enableWorkflows"], true);
-        assert_eq!(exec_options_for_session(&st, &st.db.session_detail("workflow-update-on").unwrap()).unwrap().enable_workflows, true);
+        assert!(exec_options_for_session(&st, &st.db.session_detail("workflow-update-on").unwrap()).unwrap().enable_workflows);
         let speed = dispatch(&st, "session.model.update", json!({"sessionId":"workflow-update-on","serviceTier":"priority"})).await.unwrap();
         assert_eq!(speed["session"]["modelLock"]["enableWorkflows"], true);
         assert_eq!(speed["session"]["modelLock"]["thinking"], "ultracode");
@@ -6235,8 +6239,7 @@ mod phase2a_tests {
     }
 
     fn cron_automation(st:&AppState,agent:&str,name:&str)->Value{
-        let created=st.db.automation_create(&json!({"agentId":agent,"name":name,"prompt":"do the thing","schedule":{"kind":"cron","cron":"*/5 * * * *","timezone":"UTC"},"enabled":true})).unwrap();
-        created
+        st.db.automation_create(&json!({"agentId":agent,"name":name,"prompt":"do the thing","schedule":{"kind":"cron","cron":"*/5 * * * *","timezone":"UTC"},"enabled":true})).unwrap()
     }
 
     #[tokio::test]
@@ -6556,7 +6559,7 @@ mod phase2a_tests {
         assert!(got["content"][0]["text"].as_str().unwrap().contains("Run cargo test before pushing."), "{got}");
         let forgot = call_tool(&st, sid, "memory_forget", json!({"id":id,"reason":"superseded"})).await;
         assert!(forgot.get("isError").is_none(), "{forgot}");
-        assert_eq!(st.db.memory_get(&id).unwrap()["deletedAt"].is_string(), true);
+        assert!(st.db.memory_get(&id).unwrap()["deletedAt"].is_string());
         let versions = st.db.memory_versions(&id).unwrap();
         assert_eq!(versions.last().unwrap()["changedBy"], "agent:superseded");
     }
@@ -6787,7 +6790,7 @@ mod phase2a_tests {
         let card = ask_user_card(&st, "open-main");
         let id = card["id"].as_str().unwrap().to_owned();
         assert_eq!(card["status"], "pending");
-        assert_eq!(card["expiresAt"].is_string(), true);
+        assert!(card["expiresAt"].is_string());
         let expires: chrono::DateTime<Utc> = card["expiresAt"].as_str().unwrap().parse().unwrap();
         let remaining = (expires - Utc::now()).num_seconds();
         assert!((3500..=3600).contains(&remaining), "expiry should be about an hour out, was {remaining}s");

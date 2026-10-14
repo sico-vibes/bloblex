@@ -191,13 +191,13 @@ fn key_from_credential_db(path: &Path) -> Option<String> {
 }
 
 fn resolve_opencode_saved_go_key(environment: &[(String, String)]) -> Option<String> {
-    let data_dir = opencode_data_dir(&environment);
+    let data_dir = opencode_data_dir(environment);
     if let Some(data_dir) = &data_dir {
         if let Some(key) = key_from_auth_file(&data_dir.join("auth.json")) {
             return Some(key);
         }
     }
-    for path in opencode_db_paths(&environment) {
+    for path in opencode_db_paths(environment) {
         if let Some(key) = key_from_credential_db(&path) {
             return Some(key);
         }

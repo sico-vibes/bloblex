@@ -19,6 +19,20 @@ Owner directive. Amends the 12 October dictation exception and the "No bypass of
 - **Evidence.** [docs/evidence/cloud-dictation-client-shape-2026-10-14.md](docs/evidence/cloud-dictation-client-shape-2026-10-14.md) records the falsified claims and the client-shape finding. The accepted client shape is the TLS stack: the endpoint challenges SChannel and accepts rustls, with ALPN tested and ruled out — [docs/evidence/cloud-dictation-tls-backend-2026-10-14.md](docs/evidence/cloud-dictation-tls-backend-2026-10-14.md).
 - **Commit and release authority, delegated once (14 October 2026).** The owner, acting as Director, directed the OpenCode lane to commit and publish the beta.22 dictation fix itself. This is a one-release exception to "the OpenCode lane never runs `git commit`" and to "implementers never run `git commit`"; the lane recorded it here rather than acting on a verbal instruction alone. It does not change the general rule, and the read-only second opinion on backend diffs still applies to later work.
 
+# Amendment (14 October 2026): clean up build files after every release
+
+Owner directive, to stop build leftovers filling the disk. A release is not finished until this is done.
+
+- **When.** Once a release is published and its GitHub asset digests have been checked against the local files, and the release entry is in [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+- **What is removed.** The short-path build worktree (`C:\b<N>`, or `D:\b<N>` where that drive exists) including its `target\desktop-release`, any lane worktree (`C:\fx<N>` and similar) whose result has been reviewed and merged or discarded, the temporary branches those lanes used, and throwaway probes or patches kept outside the repository. The installer needs no local copy: the published asset and the digest in the checklist are the record.
+- **What is kept.** The main checkout's `node_modules` and its `target` (they make every later gate fast), and any worktree that still holds unreviewed or unmerged work. A lane worktree is never deleted before its diff has been reviewed.
+- **How, in this order.**
+  1. Remove the `node_modules` junction first, as a link only: `[System.IO.Directory]::Delete('<worktree>\node_modules')`. Never recurse through it; it points at the main checkout's real `node_modules`.
+  2. `git worktree remove --force <worktree>`, then delete the directory if anything is left, then `git worktree prune`.
+  3. `git branch -D` the temporary lane branches.
+  4. Confirm with `git worktree list` and that the paths are gone.
+- **Report.** The release summary says which paths were removed and how much space came back.
+
 # Delegation pipeline (from 1 October 2026, evening)
 
 This section supersedes the older **Resume** and **User's current working arrangement** sections below; their text remains as history. The Director is the orchestrating Claude session acting as CTO. The Director directs and reviews every diff and never writes production code. Implementer lane `impl` is Codex `gpt-6-luna` at high effort. Implementer lane `impl-b` is Cursor `grok-4.7-high`, invoked through the `cursor-delegate` skill for bake-offs. QA lane `qa` is OpenCode `opencode-go/deepseek-v4.1-flash` and reports to the Director only. Cursor runs MUST go through `scripts/run-cursor-delegate.ps1` from PowerShell; it isolates Cursor from third-party hooks in `~/.claude/settings.json` and strips the Store PowerShell from PATH. Never edit the user's hooks or settings. other tools and other third-party harnesses are not part of this pipeline. Backend work is RESUMED according to [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Implementers never run `git commit`; the Director commits after review and gates. The invariants in **Scope and invariants** below remain in force.

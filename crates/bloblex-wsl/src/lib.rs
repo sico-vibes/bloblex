@@ -12,7 +12,7 @@ pub async fn distributions() -> Result<Vec<String>, String> {
     }
     let words = out
         .stdout
-        .chunks_exact(2)
+        .as_chunks::<2>().0.iter()
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
         .collect::<Vec<_>>();
     let text = String::from_utf16_lossy(&words);

@@ -213,7 +213,7 @@ async fn exact_start_turn_resume_fields_and_replayed_usage_are_scoped() {
     let adapter = CodexAdapter::default();
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let h = adapter.new_session(&r, qnew(), tx).await.unwrap();
-    let first = adapter
+    adapter
         .prompt(
             &h,
             PromptRequest { attachments: Vec::new(),
@@ -224,7 +224,6 @@ async fn exact_start_turn_resume_fields_and_replayed_usage_are_scoped() {
         )
         .await
         .unwrap();
-    let _ = first;
     let mut first_events = Vec::new();
     while first_events.len() < 4 {
         let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
@@ -763,10 +762,7 @@ async fn shared_process_routes_interleaved_threads_and_preserves_slow_session_te
     assert_eq!(b_delta, format!("answer:{}", b.provider_session_id));
     let mut b_completed = false;
     while !b_completed {
-        match tokio::time::timeout(TURN_EVENT_TIMEOUT, rx_b.recv()).await.unwrap().unwrap() {
-            AgentEvent::TurnCompleted => b_completed = true,
-            _ => {}
-        }
+        if let AgentEvent::TurnCompleted = tokio::time::timeout(TURN_EVENT_TIMEOUT, rx_b.recv()).await.unwrap().unwrap() { b_completed = true }
     }
 
     let mut a_delta = false;
@@ -785,10 +781,7 @@ async fn shared_process_routes_interleaved_threads_and_preserves_slow_session_te
     start_prompt(adapter.clone(), b.clone(), "after-close", "again").await.unwrap().unwrap();
     let mut completed = false;
     while !completed {
-        match tokio::time::timeout(TURN_EVENT_TIMEOUT, rx_b.recv()).await.unwrap().unwrap() {
-            AgentEvent::TurnCompleted => completed = true,
-            _ => {}
-        }
+        if let AgentEvent::TurnCompleted = tokio::time::timeout(TURN_EVENT_TIMEOUT, rx_b.recv()).await.unwrap().unwrap() { completed = true }
     }
     adapter.close_session(&b).await.unwrap();
     adapter.shutdown().await;
@@ -929,10 +922,7 @@ async fn timed_out_cancel_detaches_only_session_a_while_session_b_finishes() {
     start_prompt(adapter.clone(), b.clone(), "cancel-b-turn", "stream-b").await.unwrap().unwrap();
     let mut saw_b_stream = false;
     while !saw_b_stream {
-        match tokio::time::timeout(TURN_EVENT_TIMEOUT, rx_b.recv()).await.unwrap().unwrap() {
-            AgentEvent::AssistantDelta { text } => { assert_eq!(text, format!("answer:{}", b.provider_session_id)); saw_b_stream = true; }
-            _ => {}
-        }
+        if let AgentEvent::AssistantDelta { text } = tokio::time::timeout(TURN_EVENT_TIMEOUT, rx_b.recv()).await.unwrap().unwrap() { assert_eq!(text, format!("answer:{}", b.provider_session_id)); saw_b_stream = true; }
     }
     let pid: u32 = std::fs::read_to_string(record.with_extension("pid")).unwrap().parse().unwrap();
     let child = ProcessSignal::open(pid).expect("shared fake child process handle");
@@ -992,10 +982,7 @@ async fn crash_notifies_all_sessions_and_next_prompt_restarts_with_resume() {
     let restart = start_prompt(adapter.clone(), b.clone(), "restart-turn", "after-restart");
     let mut completed = false;
     while !completed {
-        match tokio::time::timeout(Duration::from_secs(3), rx_b.recv()).await.unwrap().unwrap() {
-            AgentEvent::TurnCompleted => completed = true,
-            _ => {}
-        }
+        if let AgentEvent::TurnCompleted = tokio::time::timeout(Duration::from_secs(3), rx_b.recv()).await.unwrap().unwrap() { completed = true }
     }
     restart.await.unwrap().unwrap();
     assert_eq!(method_count(&record, "initialize"), 2, "the next prompt lazily starts a replacement process");

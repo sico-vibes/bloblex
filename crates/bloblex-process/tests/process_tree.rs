@@ -1,5 +1,5 @@
 use bloblex_process::{prepare_command, ProcessTree, StdinWriter};
-use std::{fs, path::PathBuf, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{fs, time::{Duration, SystemTime, UNIX_EPOCH}};
 
 const NONREADING_CHILD_IO_TIMEOUT: Duration = Duration::from_secs(15);
 use tokio::{io::AsyncReadExt, process::Command};
@@ -10,7 +10,7 @@ fn child_is_alive(pid: u32) -> bool {
         let output = std::process::Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
             .output();
-        return output.ok().is_some_and(|out| String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()));
+        output.ok().is_some_and(|out| String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()))
     }
     #[cfg(unix)]
     {
@@ -49,7 +49,7 @@ async fn cancellation_terminates_the_parent_and_long_lived_grandchild() {
     }
     assert!(!child_is_alive(grandchild_pid), "grandchild process {grandchild_pid} remained alive");
     drop(owner);
-    let _ = fs::remove_dir_all(PathBuf::from(root));
+    let _ = fs::remove_dir_all(root);
 }
 
 #[tokio::test]

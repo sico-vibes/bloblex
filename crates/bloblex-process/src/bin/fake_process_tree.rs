@@ -8,6 +8,8 @@ fn main() {
     let signal = args.get(1).expect("signal path");
     let pid_path = args.get(2).expect("pid path");
     while !std::path::Path::new(signal).exists() { thread::sleep(Duration::from_millis(10)); }
+    // The worker child is intentionally left running; the test kills the whole process tree.
+    #[allow(clippy::zombie_processes)]
     let worker = Command::new(std::env::current_exe().unwrap()).arg("worker").spawn().unwrap();
     fs::write(pid_path, worker.id().to_string()).unwrap();
     loop { thread::sleep(Duration::from_secs(60)); }

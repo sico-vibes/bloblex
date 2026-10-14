@@ -61,6 +61,8 @@ fn main() {
         emit(json!({"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0},"errors":["prefix: No conversation found with session ID: elsewhere"]}));
     }
     let stdin = io::stdin();
+    // Fake provider reads UTF-8 JSON lines from the adapter; the read-error path is unreachable.
+    #[allow(clippy::lines_filter_map_ok)]
     for line in stdin.lock().lines().flatten() {
         let Ok(input) = serde_json::from_str::<Value>(&line) else { continue };
         wire_replay::input(&input);
@@ -114,8 +116,7 @@ fn main() {
             }
         } else if input["type"] == "control_response"
             && args.iter().any(|arg| arg == "--fake-permission-roundtrip")
-        {
-            if input["response"]["subtype"] == "success"
+            && input["response"]["subtype"] == "success"
                 && input["response"]["request_id"] == 17
                 && input["response"]["response"]["behavior"] == "allow"
             {
@@ -123,6 +124,5 @@ fn main() {
                     "result":"fake response","usage":{"input_tokens":3,"output_tokens":2},
                     "modelUsage":{},"total_cost_usd":0.0}));
             }
-        }
     }
 }

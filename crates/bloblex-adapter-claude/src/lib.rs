@@ -251,7 +251,7 @@ fn exact_usd_minor(decimal: &str) -> Option<i64> {
     if value.starts_with('-') { return None; }
     let mut parts=value.split('.'); let whole=parts.next()?.parse::<i64>().ok()?; let fraction=parts.next().unwrap_or("");
     if parts.next().is_some() || !fraction.bytes().all(|b|b.is_ascii_digit()) || fraction.len()>2 && fraction[2..].bytes().any(|b|b!=b'0') { return None; }
-    let first=if fraction.len()>0 { (fraction.as_bytes()[0]-b'0') as i64 } else { 0 };
+    let first=if !fraction.is_empty() { (fraction.as_bytes()[0]-b'0') as i64 } else { 0 };
     let second=if fraction.len()>1 { (fraction.as_bytes()[1]-b'0') as i64 } else { 0 };
     whole.checked_mul(100)?.checked_add(first*10+second)
 }
@@ -489,7 +489,7 @@ fn retry_event_has_connection_failure(value: &Value) -> bool {
 }
 
 fn record_api_retry(conn: &Conn, event: &Value) {
-    let _ = conn.api_retry_count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| Some(count.saturating_add(1)));
+    let _ = conn.api_retry_count.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| Some(count.saturating_add(1)));
     if retry_event_has_http_status(event) {
         conn.api_retry_http_status_seen.store(true, Ordering::Relaxed);
     }
@@ -501,6 +501,8 @@ fn record_api_retry(conn: &Conn, event: &Value) {
 #[derive(Default)]
 pub struct ClaudeAdapter {
     sessions: Mutex<HashMap<String, Arc<Conn>>>,
+    // (claude, codex) instruction-hash pair tracked per session; naming the tuple would not add meaning.
+    #[allow(clippy::type_complexity)]
     instruction_hash_context: Mutex<HashMap<String,(Option<String>,Option<String>)>>,
     private_tmp_override: Option<PathBuf>,
     system_root_override: Option<PathBuf>,
@@ -593,7 +595,6 @@ async fn parse_line(
             }
         }
         "result" if resume_rejected_result(v) => {
-            return;
         }
         "result" if v["is_error"].as_bool().unwrap_or(false) => {
             let terminal_reason = v["terminal_reason"].as_str().unwrap_or("");
@@ -735,6 +736,10 @@ impl ClaudeAdapter {
     /// Test seam: use a fake `System32/icacls.exe` while keeping the same ACL arguments.
     pub fn with_test_acl_executable(path:PathBuf,system_root:PathBuf)->Self{Self{sessions:Mutex::new(HashMap::new()),instruction_hash_context:Mutex::new(HashMap::new()),private_tmp_override:Some(path),system_root_override:Some(system_root)}}
     fn create_instruction_file(&self,text:&str)->std::io::Result<PrivateInstructionFile>{write_private_instruction_file_at_dir(self.private_tmp_override.as_deref(),text,self.system_root_override.as_deref())}
+    // Launch inputs for the persistent claude child; a parameter struct would only relocate them.
+    #[allow(clippy::too_many_arguments)]
+    // The paired single-line `if let ... {}` temp-file cleanups are not a missing `else`.
+    #[allow(clippy::possible_missing_else)]
     async fn start(
         &self,
         r: &RuntimeSpec,

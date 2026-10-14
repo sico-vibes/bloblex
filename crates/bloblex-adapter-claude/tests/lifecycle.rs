@@ -122,10 +122,7 @@ async fn default_permission_uses_the_stream_json_host_control_protocol() {
         .unwrap();
 
     let permission_id = loop {
-        match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap() {
-            AgentEvent::PermissionRequested { provider_request_id, .. } => break provider_request_id,
-            _ => {}
-        }
+        if let AgentEvent::PermissionRequested { provider_request_id, .. } = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap() { break provider_request_id }
     };
     assert_eq!(permission_id, "s-permission-roundtrip:17");
     adapter.reply_permission(&permission_id, "allow").await.unwrap();
@@ -287,7 +284,7 @@ async fn fake_provider_proves_argv_order_hash_restart_secure_file_lifecycle_and_
     assert!(changed_model < changed_effort && changed_effort < changed_file && changed_file < off && off < resume);
     let second_turn = rows.iter().find(|row| row["args"].as_array().unwrap().windows(2).any(|pair| pair[0] == "--model" && pair[1] == "claude-opus-test")).unwrap();
     assert!(second_turn["args"].as_array().unwrap().iter().any(|arg| arg == "--resume"), "option changes after a completed provider turn resume the saved session");
-    assert_eq!(std::fs::read_to_string(&rows.last().unwrap()["instructionPath"].as_str().map(PathBuf::from).unwrap()).unwrap(), "PRIVATE_SENTINEL_CHANGED");
+    assert_eq!(std::fs::read_to_string(rows.last().unwrap()["instructionPath"].as_str().map(PathBuf::from).unwrap()).unwrap(), "PRIVATE_SENTINEL_CHANGED");
 
     let catalog: ModelCatalog = adapter.model_catalog(&rt).await.unwrap();
     assert!(!catalog.fallback);

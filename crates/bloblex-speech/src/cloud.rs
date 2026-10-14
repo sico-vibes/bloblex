@@ -1190,7 +1190,7 @@ mod tests {
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nx")
                 .await;
             tokio::time::sleep(delay).await;
-            let _ = socket.write_all(&vec![b'x'; 99]).await;
+            let _ = socket.write_all(&[b'x'; 99]).await;
             let _ = socket.shutdown().await;
         });
         (address, handle)

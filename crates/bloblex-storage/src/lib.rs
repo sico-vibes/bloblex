@@ -188,6 +188,8 @@ fn migrate_exact_price_overrides(c: &mut Connection, path: Option<&Path>, backup
     if ledger != 7 || pragma != 7 { return Err(StorageError::InvalidAgent); }
     if let Some(database_path) = path { if !backup_done { verified_backup(c, database_path, 7)?; } }
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // Flat tuple of the v7 pricing-rule columns; a named type would only rename the same fields.
+    #[allow(clippy::type_complexity)]
     let old_rows: Vec<(String, String, String, String, String, String, Option<String>, Option<String>, String)> = {
         let mut q = tx.prepare("SELECT id,provider,model,aliases,currency,effective_from,effective_to,source_url,data FROM user_pricing_rules")?;
         let rows = q.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)))?.collect::<Result<Vec<_>, _>>()?;
@@ -1135,35 +1137,35 @@ impl Storage {
         migrate_agents(&mut conn, path,backup_done)?;
         migrate_exec_snapshots(&mut conn, path,backup_v2_done)?;
         let mut backup_v3_done=false;
-        if path.is_some() { let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?; if ledger==3 { verified_backup(&conn,path.unwrap(),3)?; backup_v3_done=true; } }
+        if let Some(database_path) = path { let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?; if ledger==3 { verified_backup(&conn,database_path,3)?; backup_v3_done=true; } }
         migrate_approval_modes(&mut conn,path,backup_v3_done)?;
         let mut backup_v4_done = false;
-        if path.is_some() {
+        if let Some(database_path) = path {
             let ledger: i64 = conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
-            if ledger == 4 { verified_backup(&conn, path.unwrap(), 4)?; backup_v4_done = true; }
+            if ledger == 4 { verified_backup(&conn, database_path, 4)?; backup_v4_done = true; }
         }
         migrate_turn_analytics(&mut conn, path, backup_v4_done)?;
         migrate_context_failure_class(&mut conn)?;
         migrate_session_controls(&mut conn, path, backup_v5_done)?;
         migrate_agent_outfits(&mut conn, path, backup_v6_done)?;
-        let backup_v7_done = if path.is_some() {
+        let backup_v7_done = if let Some(database_path) = path {
             let ledger: i64 = conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
-            if ledger == 7 { verified_backup(&conn, path.unwrap(), 7)?; true } else { false }
+            if ledger == 7 { verified_backup(&conn, database_path, 7)?; true } else { false }
         } else { false };
         migrate_exact_price_overrides(&mut conn, path, backup_v7_done)?;
-        let backup_v8_done = if path.is_some() {
+        let backup_v8_done = if let Some(database_path) = path {
             let ledger: i64 = conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
-            if ledger == 8 { verified_backup(&conn, path.unwrap(), 8)?; true } else { false }
+            if ledger == 8 { verified_backup(&conn, database_path, 8)?; true } else { false }
         } else { false };
         migrate_agent_outfit_ids(&mut conn, path, backup_v8_done)?;
-        let backup_v9_done = if path.is_some() {
+        let backup_v9_done = if let Some(database_path) = path {
             let ledger: i64 = conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
-            if ledger == 9 { verified_backup(&conn, path.unwrap(), 9)?; true } else { false }
+            if ledger == 9 { verified_backup(&conn, database_path, 9)?; true } else { false }
         } else { false };
         migrate_quota_snapshots(&mut conn, path, backup_v9_done)?;
-        let backup_v10_done = if path.is_some() {
+        let backup_v10_done = if let Some(database_path) = path {
             let ledger: i64 = conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
-            if ledger == 10 { verified_backup(&conn, path.unwrap(), 10)?; true } else { false }
+            if ledger == 10 { verified_backup(&conn, database_path, 10)?; true } else { false }
         } else { false };
         migrate_session_model_lock(&mut conn, path, backup_v10_done)?;
         ensure_team_schema(&conn)?;
@@ -1555,6 +1557,8 @@ impl Storage {
     ) -> Result<(), StorageError> {
         self.create_session_for_agent_with_model_lock(id, runtime_id, provider, project, title, agent_id, None)
     }
+    // Session creation mirrors the persisted column set; a struct would only relocate the fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_session_for_agent_with_model_lock(
         &self,
         id: &str,
@@ -1607,6 +1611,8 @@ impl Storage {
     pub fn codex_thread_instruction_sha256(&self,session_id:&str)->Result<Option<String>,StorageError>{
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;Ok(c.query_row("SELECT codex_thread_instruction_sha256 FROM sessions WHERE id=?1",[session_id],|r|r.get(0))?)
     }
+    // Snapshot creation mirrors the persisted columns; a struct would only relocate the fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_exec_snapshot(&self,session_id:&str,turn_id:&str,id:&str,requested:&Value,applied:&Value,evidence:&Value,instruction_sha256:Option<&str>,adapter_flags:&Value,status:&str)->Result<Value,StorageError>{
         let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let session:Option<(String,String,Option<String>)>=tx.query_row("SELECT runtime_id,provider,agent_id FROM sessions WHERE id=?1",[session_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
@@ -1622,6 +1628,8 @@ impl Storage {
     }
     /// Atomically records a preflight-rejected turn, user message, rejected
     /// snapshot and rejection event. This path intentionally creates no capacity reservation.
+    // Rejected-turn recording mirrors the persisted columns; a struct would only relocate the fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn reject_exec_turn(&self,session_id:&str,turn_id:&str,snapshot_id:&str,text:&str,requested:&Value,applied:&Value,evidence:&Value,instruction_sha256:Option<&str>,adapter_flags:&Value,event_payload:&Value)->Result<(Value,Value),StorageError>{
         let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (runtime,provider,agent):(String,String,Option<String>)=tx.query_row("SELECT runtime_id,provider,agent_id FROM sessions WHERE id=?1",[session_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
@@ -2224,6 +2232,8 @@ impl Storage {
     }
 
     // ── Automation runs ────────────────────────────────────────────────────
+    // Run insertion mirrors the persisted columns; a struct would only relocate the fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn automation_run_insert(&self, id: &str, automation_id: &str, session_id: Option<&str>, status: &str, reason: Option<&str>, scheduled_for: Option<&str>, started_at: &str) -> Result<Value, StorageError> {
         if !["running", "completed", "failed", "skipped", "cancelled", "timeout", "interrupted"].contains(&status) { return Err(StorageError::InvalidAgent); }
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -2402,8 +2412,7 @@ impl Storage {
                     r.get::<_, String>(7)?,
                 ))
             })?;
-            let values = rows.collect::<Result<Vec<_>, _>>()?;
-            values
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         let now = Utc::now();
         let mut reservations = Vec::new();
@@ -2504,6 +2513,8 @@ impl Storage {
     }
     pub fn latest_turn_tokens(&self, turn_id: &str) -> Result<Option<i64>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        // Four nullable usage counters read from one row; a named type would not add meaning.
+        #[allow(clippy::type_complexity)]
         let row: Option<(Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = c.query_row(
             "SELECT input_tokens,output_tokens,cache_read_tokens,cache_write_tokens FROM usage_events WHERE turn_id=?1 ORDER BY rowid DESC LIMIT 1",
             [turn_id],
@@ -2909,6 +2920,8 @@ impl Storage {
         )?;
         Ok(())
     }
+    // Permission rows mirror the persisted columns; a struct would only relocate the fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_permission(
         &self,
         id: &str,
@@ -3000,6 +3013,8 @@ impl Storage {
         let (used, size, _, _) = session_context_locked(&c, id)?;
         Ok((used.and_then(|value| u64::try_from(value).ok()), size.and_then(|value| u64::try_from(value).ok())))
     }
+    // Context counters plus the model label and estimated flag; a named type would not add meaning.
+    #[allow(clippy::type_complexity)]
     pub fn session_context_state(&self, id: &str) -> Result<(Option<u64>, Option<u64>, Option<String>, bool), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let (used, size, model, estimated) = session_context_locked(&c, id)?;
@@ -3210,6 +3225,8 @@ impl Storage {
         from: &str,
         to: &str,
     ) -> Result<Value, StorageError> {
+        // Five nullable usage sums read from one row; a named type would not add meaning.
+        #[allow(clippy::type_complexity)]
         let (i,o,cr,cw,r):(Option<i64>,Option<i64>,Option<i64>,Option<i64>,Option<i64>)=c.query_row("SELECT SUM(input_tokens),SUM(output_tokens),SUM(cache_read_tokens),SUM(cache_write_tokens),SUM(reasoning_tokens) FROM usage_events WHERE timestamp>=?1 AND timestamp<=?2",params![from,to],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
         Ok(json!({"from":from,"to":to,"inputTokens":i,"outputTokens":o,"cacheReadTokens":cr,"cacheWriteTokens":cw,"reasoningTokens":r}))
     }
@@ -3527,6 +3544,8 @@ fn session_event_summary_locked(c: &Connection, id: &str) -> Result<Value, Stora
     Ok(summary)
 }
 
+// Context counters plus the model label and estimated flag; a named type would not add meaning.
+#[allow(clippy::type_complexity)]
 fn session_context_locked(c: &Connection, id: &str) -> Result<(Option<i64>, Option<i64>, Option<String>, bool), StorageError> {
     let event: Option<(String, String)> = c.query_row(
         "SELECT event_type,payload FROM app_events WHERE event_type IN ('session.context.updated','session.context.reset') AND json_valid(payload) AND json_extract(payload,'$.sessionId')=?1 ORDER BY sequence DESC LIMIT 1",
@@ -4868,7 +4887,10 @@ mod tests {
         let first=db.create_exec_snapshot("s","t1","snap1",&json!({"model":"gpt-6","thinking":"high","serviceTier":"priority","instructions":"do-not-store-this","instructionsPresent":true,"maxConcurrency":3,"customEnvKeys":["LANG"],"customEnv":{"LANG":"private-value"}}),&json!({"model":{"requested":"gpt-6","applied":true}}),&json!({"model":{"evidenceKind":"provider_echo","evidenceValue":"gpt-6"},"raw":"provider-json-must-not-be-here"}),Some("sha256-safe"),&json!({"adapter":"codex","version":"0.1"}),"applied").unwrap();
         let stored=first.to_string();assert!(!stored.contains("do-not-store-this"));assert!(!stored.contains("private-value"));assert!(!stored.contains("provider-json-must-not-be-here"));assert_eq!(first["requested"]["envKeys"][0],"LANG");assert_eq!(first["requested"]["extraArgs"],json!([]));
         db.insert_usage(&json!({"id":"u1","runtimeId":"rt","sessionId":"s","turnId":"t1","provider":"codex","timestamp":"2026-10-02T00:00:00Z","providerUpdateId":"update-1","usageStatus":"reported","contextUsed":12,"contextSize":100,"reportedCostDecimal":"0.000048588","raw":{"private":"raw-provider-data"}})).unwrap();
-        let c=db.conn.lock().unwrap();let row:(Option<String>,Option<String>,String,Option<i64>,Option<i64>,Option<String>,String)=c.query_row("SELECT exec_snapshot_id,provider_update_id,usage_status,context_used,context_size,reported_cost_decimal,raw FROM usage_events WHERE id='u1'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).unwrap();assert_eq!(row,(Some("snap1".into()),Some("update-1".into()),"reported".into(),Some(12),Some(100),None,"{}".into()));drop(c);
+        let c=db.conn.lock().unwrap();
+        // Flat tuple of the queried usage-event columns; a named type would only rename them.
+        #[allow(clippy::type_complexity)]
+        let row:(Option<String>,Option<String>,String,Option<i64>,Option<i64>,Option<String>,String)=c.query_row("SELECT exec_snapshot_id,provider_update_id,usage_status,context_used,context_size,reported_cost_decimal,raw FROM usage_events WHERE id='u1'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).unwrap();assert_eq!(row,(Some("snap1".into()),Some("update-1".into()),"reported".into(),Some(12),Some(100),None,"{}".into()));drop(c);
         db.create_turn("t2","s").unwrap();db.create_exec_snapshot("s","t2","snap2",&json!({"maxConcurrency":1}),&json!({}),&json!({}),None,&json!({}),"runtime_default").unwrap();assert_eq!(db.exec_snapshot_latest("s").unwrap().unwrap()["id"],"snap2");let (items,next)=db.exec_snapshot_list("s",Some("snap1"),10).unwrap();assert_eq!(items.len(),1);assert_eq!(items[0]["id"],"snap2");assert!(next.is_none());db.set_session_exec_snapshot("s","snap2",true).unwrap();let (_,event)=db.update_exec_snapshot_evidence("t2",&json!({"model":{"requested":"gpt-6","applied":true,"evidenceKind":"provider_echo","evidenceValue":"gpt-6"}})).unwrap();assert_eq!(event["type"],"exec.options.changed");let updated=db.exec_snapshot_get("snap2").unwrap().unwrap();assert_eq!(updated["applied"]["model"]["applied"],true);assert_eq!(updated["evidence"]["model"]["kind"],"provider_echo");let c=db.conn.lock().unwrap();let ptrs:(String,String)=c.query_row("SELECT first_exec_snapshot_id,latest_exec_snapshot_id FROM sessions WHERE id='s'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(ptrs,("snap1".into(),"snap2".into()));
     }
     #[test]
@@ -5274,7 +5296,7 @@ mod tests {
         let first_id = first["id"].as_str().unwrap().to_owned();
         let second_id = second["id"].as_str().unwrap().to_owned();
         let scheduled_id = scheduled["id"].as_str().unwrap().to_owned();
-        assert!(matches!(db.queue_reorder("s-queue", &[second_id.clone()]), Err(StorageError::InvalidAgent)), "a partial set is invalid");
+        assert!(matches!(db.queue_reorder("s-queue", std::slice::from_ref(&second_id)), Err(StorageError::InvalidAgent)), "a partial set is invalid");
         assert!(matches!(db.queue_reorder("s-queue", &[second_id.clone(), second_id.clone()]), Err(StorageError::InvalidAgent)), "duplicates are invalid");
         db.queue_reorder("s-queue", &[second_id.clone(), first_id.clone()]).unwrap();
         let items = db.queue_list("s-queue").unwrap();
@@ -5563,7 +5585,7 @@ mod memory_tests {
         let b_catalog = db.memory_visible_catalog(&agent_b, None).unwrap();
         let b_titles = b_catalog.iter().filter_map(|row| row["title"].as_str()).collect::<Vec<_>>();
         assert!(!b_titles.contains(&"A private") && !b_titles.contains(&"Project"), "no project when the blob has none");
-        assert!(db.memory_visible_get(&catalog[0]["id"].as_str().unwrap().to_owned(), &agent_a, Some(&project)).unwrap().is_some());
+        assert!(db.memory_visible_get(catalog[0]["id"].as_str().unwrap(), &agent_a, Some(&project)).unwrap().is_some());
     }
 
     #[test]
@@ -5615,7 +5637,7 @@ mod memory_tests {
             kept_id = agent["id"].as_str().unwrap().to_owned();
             let (default_agent, _) = db.agent_create(&json!({"name":"Loud","runtimeId":"rt-notify"})).unwrap();
             assert_eq!(default_agent["notificationLevel"], "all", "a missing level normalises to all");
-            assert_eq!(db.agent_list(false, None).unwrap()[0]["notificationLevel"].is_string(), true);
+            assert!(db.agent_list(false, None).unwrap()[0]["notificationLevel"].is_string());
             let columns: i64 = db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='notification_level'", [], |r| r.get(0)).unwrap();
             assert_eq!(columns, 1);
             assert!(db.agent_create(&json!({"name":"Bad","runtimeId":"rt-notify","notificationLevel":"loud"})).is_err());

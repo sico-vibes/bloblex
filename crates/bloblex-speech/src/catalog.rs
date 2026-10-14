@@ -24,6 +24,8 @@ fn hugging_face_files(
         .collect()
 }
 
+// Flat constructor mirroring the pinned manifest fields; a builder would obscure the pinned values.
+#[allow(clippy::too_many_arguments)]
 fn manifest(
     id: &str,
     label: &str,

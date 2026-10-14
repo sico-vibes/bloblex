@@ -115,8 +115,8 @@ impl SessionEventSink {
         let mut queue = self.0.events.lock().unwrap();
         if self.0.closed.load(Ordering::Acquire) { return Err(()); }
         // Coalesce only stream updates; every other event is retained in order, even above the cap.
-        if queue.len() >= SESSION_FORWARD_QUEUE_COALESCE_CAP {
-            if is_stream_event(&event) {
+        if queue.len() >= SESSION_FORWARD_QUEUE_COALESCE_CAP
+            && is_stream_event(&event) {
                 for pending in queue.iter_mut().rev() {
                     if pending.delivered.is_some() || !is_stream_event(&pending.event) { break; }
                     match merge_stream_event(&mut pending.event, event) {
@@ -129,7 +129,6 @@ impl SessionEventSink {
                     }
                 }
             }
-        }
         queue.push_back(QueuedEvent { event, delivered: None });
         drop(queue);
         self.0.notify.notify_one();
@@ -144,6 +143,8 @@ fn is_stream_event(event: &AgentEvent) -> bool {
     matches!(event, AgentEvent::AssistantDelta { .. } | AgentEvent::ThinkingDelta { .. } | AgentEvent::ToolUpdated { .. } | AgentEvent::ContextUpdated { .. })
 }
 
+// The Err variant carries the whole AgentEvent; boxing would change the adapter's public event shape.
+#[allow(clippy::result_large_err)]
 fn merge_stream_event(previous: &mut AgentEvent, incoming: AgentEvent) -> Result<(), AgentEvent> {
     match (previous, incoming) {
         (AgentEvent::AssistantDelta { text: left }, AgentEvent::AssistantDelta { text: right })
@@ -213,6 +214,8 @@ pub struct CodexAdapter {
     sessions: Mutex<HashMap<String, Arc<Conn>>>,
     processes: Arc<Mutex<HashMap<String, Arc<SharedProcess>>>>,
     start_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    // Per-session (claude, codex) instruction-hash pair; a named type would not add meaning.
+    #[allow(clippy::type_complexity)]
     instruction_context: Mutex<HashMap<String, (Option<String>, Option<String>)>>,
     thread_instruction_hashes: Arc<Mutex<HashMap<String, Option<String>>>>,
     idle_shutdown_ms: AtomicU64,
@@ -396,8 +399,8 @@ impl CodexAdapter {
                     let _ = write_response(&reader, &v["id"], json!({"decision":"accept"})).await;
                     continue;
                 }
-                if request_id.is_some() {
-                    if v["method"]
+                if request_id.is_some()
+                    && v["method"]
                         .as_str()
                         .is_some_and(|m| m.ends_with("requestApproval"))
                     {
@@ -411,7 +414,6 @@ impl CodexAdapter {
                                 raw: v.clone(),
                         });
                     }
-                }
                 if !method.is_empty() {
                     let expected = r.turn.lock().await.id.clone();
                     if method == "turn/started" {

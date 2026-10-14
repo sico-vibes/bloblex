@@ -548,7 +548,7 @@ mod tests {
             source_url: None,
             source: None, checked_at: None, notes: None, tiers: Vec::new(),
         };
-        assert!(resolve_rule_at("x", Some("m"), "2026-09-30T23:59:59Z", &[r.clone()]).is_some());
+        assert!(resolve_rule_at("x", Some("m"), "2026-09-30T23:59:59Z", std::slice::from_ref(&r)).is_some());
         assert!(resolve_rule_at("x", Some("m"), "2026-10-01T00:00:00Z", &[r]).is_none());
     }
 

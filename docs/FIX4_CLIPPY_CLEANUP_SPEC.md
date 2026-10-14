@@ -55,3 +55,16 @@ added with its reason, and any test whose result changed (there should be none).
 
 Read the whole diff. Spot-check the semantic suggestions above. Run the desktop
 crate's library tests too, since `bloblex-desktop` shares workspace crates.
+
+## 6. Execution order (14 October 2026, owner said go)
+
+FIX5 (`docs/FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md`) is running at the same time
+and owns `crates/bloblex-adapter-acp` and the daemon. To avoid conflicts this is
+run in two parts:
+
+- **Part 1 (now):** every workspace crate EXCEPT `bloblex-adapter-acp` and
+  `bloblex-daemon`. The gate is the clippy command from section 4 with
+  `--exclude bloblex-adapter-acp --exclude bloblex-daemon`... but clippy lints
+  dependencies of the selected crates too, so judge "zero findings" per crate:
+  `cargo clippy -p <crate> --no-deps --all-targets -- -D warnings` for each crate in part 1.
+- **Part 2 (after FIX5 is merged):** `bloblex-adapter-acp` and `bloblex-daemon`.

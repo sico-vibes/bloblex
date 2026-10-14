@@ -41,6 +41,7 @@
 - Matching the accepted request shape is allowed for this one call path. The accepted shape is the TLS stack: rustls, not the platform SChannel stack. (14 Oct amendment, lines 16 and 19; evidence `docs/evidence/cloud-dictation-tls-backend-2026-10-14.md`.)
 - Presenting another client's identity stays forbidden. `originator` stays `bloblex`. The User-Agent stays Bloblex's. Do not send `originator: bb`, `bb-host-daemon`, a Codex or browser User-Agent, or any other app's name. (Line 17.)
 - Stays forbidden: cookie replay, challenge-solving and retry loops. (Line 17.)
+- **Owner decision, 14 October 2026: leave this recorded.** No code or rule change was made; the conflict below stays visible until the owner revisits it.
 - **Open conflict:** `crates/bloblex-speech/src/cloud.rs:43-50` and `:921-935` keep Cloudflare cookies in memory and send them once more on a retry. That is cookie replay as line 17 defines it, and the 14 October FIX2 spec and the `beta.21` and `beta.22` release notes describe it as the kept "cookie retry". The owner must decide whether the shipped behaviour is allowed. This document does not resolve it.
 - Unchanged by the amendment: cloud dictation stays opt-in with consent; the on-device engine stays the default and fallback; no persistence or logging of token, audio or transcripts; dictation only. (Line 18.)
 

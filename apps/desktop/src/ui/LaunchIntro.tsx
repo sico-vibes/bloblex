@@ -88,6 +88,7 @@ export function LaunchIntro({ checks, runtimes, agent = null, onComplete, onRetr
           ? bitbots ? <BitbotWelcome color={color} look={agent ? agentLook(agent) : null} onDone={greetingDone} /> : <LaunchGreeting color={color} onDone={greetingDone} />
           : <BlobCanvas color={color} size={STAGE_SIZE} mood={serviceDown ? 'error' : phase === 'ready' ? 'idle' : 'working'} label={agent?.name ?? 'Bloblex'} />}
       </div>}
+      {bitbots && !reducedMotion && phase === 'scanning' && !serviceDown && <PixelScan />}
       <p className="launch-status" role="status" aria-live="polite">{status}</p>
       <LaunchChecklist checks={checks} names={names} />
       {serviceDown && <div className="launch-actions"><button className="primary-button" onClick={retry}>Retry</button><button className="secondary-button" onClick={continueOffline}>Continue offline</button></div>}
@@ -112,7 +113,7 @@ function LaunchChecklist({ checks, names }: { checks: LaunchCheck[]; names: Map<
     <ol className="launch-checklist" aria-label="Startup checks">{checks.map((check) => {
       const provider = check.id.startsWith('auth:') ? check.id.slice(5) : check.id.startsWith('models:') ? check.id.slice(7) : ''
       const providerId = names.get(provider)
-      const stateMark = check.state === 'ok' ? '✓' : check.state === 'warning' ? '!' : '×'
+      const stateMark = <StateGlyph state={check.state} />
       const detail = check.detail.startsWith('runtime:') ? (names.get(check.detail.slice(8)) ?? 'Coding agent') + ' found' : check.detail.startsWith('models:') ? (names.get(check.detail.slice(7)) ?? 'Coding agent') + ' models unavailable' : check.detail
       return <li key={check.id} data-state={check.state}>
         <span className={`launch-check-icon ${providerId ? 'has-provider' : ''}`} aria-hidden="true">
@@ -122,6 +123,21 @@ function LaunchChecklist({ checks, names }: { checks: LaunchCheck[]; names: Map<
       </li>
     })}</ol>
   </div>
+}
+
+/**
+ * Check, bang and cross drawn on a square grid so they sit at the exact centre
+ * of their circle or box, which a text glyph's font metrics never guarantee.
+ */
+function StateGlyph({ state }: { state: LaunchCheck['state'] }) {
+  return <svg className="launch-state-glyph" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {state === 'ok' ? <path d="M2.2 5.2 4.2 7.2 7.9 2.8" /> : state === 'warning' ? <path d="M5 2v3.5M5 8v.01" /> : <path d="M2.8 2.8l4.4 4.4M7.2 2.8 2.8 7.2" />}
+  </svg>
+}
+
+/** Bitbots scan: a row of pixels lights in a short run while Bloblex looks for coding agents. */
+function PixelScan() {
+  return <div className="launch-pixel-scan" aria-hidden="true">{Array.from({ length: 14 }, (_, index) => <i key={index} style={{ ['--i' as string]: index }} />)}</div>
 }
 
 /** Bitbots welcome: the working robot hops with one sudden full spin, then the app opens. */

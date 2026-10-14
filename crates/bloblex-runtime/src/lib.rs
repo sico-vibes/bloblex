@@ -212,7 +212,8 @@ fn safe_version(output: &str) -> Option<String> {
     // CLI version labels only; an unexpected response is never forwarded.
     let line = output.lines().next()?.trim();
     if line.len() > 100 || !line.chars().all(|c| c.is_ascii_alphanumeric() || " .()-_+".contains(c)) { return None; }
-    let version = line.split_whitespace().find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()) && part.contains('.'))?;
+    // OpenCode 2 prints `opencode v2.0.28`; the `v` is a label, not part of the number.
+    let version = line.split_whitespace().map(|part| part.strip_prefix('v').unwrap_or(part)).find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()) && part.contains('.'))?;
     if !version.chars().all(|c| c.is_ascii_digit() || c == '.') { return None; }
     Some(version.to_owned())
 }
@@ -256,10 +257,7 @@ async fn discover_one(id: &str, resolved: Option<ResolvedCommand>) -> Option<Dis
         runtime.probe_error = Some(error.into());
     }
     for key in ["newSession", "resume", "cancel", "permissions", "usage", "files"] {
-        runtime.capabilities.insert(key.into(), match (id, key) {
-            (_, "newSession" | "cancel") | ("claude" | "codex", "resume" | "usage") | ("codex" | "opencode", "permissions") => true,
-            _ => false,
-        });
+        runtime.capabilities.insert(key.into(), matches!((id, key), (_, "newSession" | "cancel") | ("claude" | "codex", "resume" | "usage") | ("codex" | "opencode", "permissions")));
     }
     Some(runtime)
 }
@@ -277,13 +275,33 @@ async fn auth_status(provider: &str, exe: &Path, args: &[String]) -> (AuthState,
             if let Some(states) = parse_opencode_auth_list(&output) {
                 return (aggregate_auth_states(&states), states, None);
             }
+            // A successful `auth list` that printed integration rows we could
+            // not classify is still evidence that the command ran; report the
+            // unknown state quietly instead of a checked-and-failed probe. The
+            // row text itself never leaves this function.
+            if opencode_auth_list_has_recognized_rows(&output) {
+                return (AuthState::Unknown, BTreeMap::new(), None);
+            }
         }
-        let mut model_args = args.iter().map(String::as_str).collect::<Vec<_>>();
-        model_args.extend(["models", "--verbose"]);
-        if let Ok((true, output)) = safe_status_output(exe, &model_args).await {
+        // v1 `models --verbose` still exposes gateway JSON. A non-zero exit
+        // falls through to the plain v2 listing rather than ending the check.
+        let mut verbose_args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        verbose_args.extend(["models", "--verbose"]);
+        if let Ok((true, output)) = safe_status_output(exe, &verbose_args).await {
             let states = opencode_model_gateways(&output);
             if !states.is_empty() {
                 return (aggregate_auth_states(&states), states, None);
+            }
+        }
+        // v2 `models` (no flags) prints one `provider/model` per line. A
+        // listing proves the CLI runs, not that anyone is signed in (the
+        // catalog lists gateway models whether or not a credential exists), so
+        // it reports a quiet unknown rather than a checked-and-failed probe.
+        let mut model_args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        model_args.push("models");
+        if let Ok((true, output)) = safe_status_output(exe, &model_args).await {
+            if opencode_plain_model_listing_names_a_gateway(&output) {
+                return (AuthState::Unknown, BTreeMap::new(), None);
             }
         }
         return (AuthState::Unknown, BTreeMap::new(), Some("Sign-in status could not be checked."));
@@ -314,20 +332,75 @@ fn safe_gateway_name(input: &str) -> Option<String> {
         _ => None,
     }
 }
+/// Map an OpenCode integration/display name onto an allow-listed gateway key.
+/// v2 `auth list` prints human display names (`OpenCode Console`, `OpenCode Go`,
+/// `OpenCode Zen`); v1 prints the gateway keys directly. `safe_gateway_name`
+/// stays the allow-list, so no key outside it can be produced.
+fn opencode_integration_key(raw_name: &str) -> Option<String> {
+    match raw_name.trim().to_ascii_lowercase().as_str() {
+        "opencode console" | "opencode zen" => return Some("opencode".into()),
+        "opencode go" => return Some("opencode-go".into()),
+        _ => {}
+    }
+    safe_gateway_name(raw_name)
+}
+/// Split an `auth list` row on `| : ,`, tab, and runs of two or more spaces.
+/// v2 uses whitespace-aligned columns; a v1 single-space or separator row is
+/// still handled by the word-based fallback in `parse_opencode_auth_list`.
+fn split_opencode_auth_fields(line: &str) -> Vec<String> {
+    let chars = line.chars().collect::<Vec<_>>();
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch == '|' || ch == ':' || ch == ',' || ch == '\t' {
+            fields.push(std::mem::take(&mut current));
+            index += 1;
+        } else if ch == ' ' {
+            let mut end = index;
+            while end < chars.len() && chars[end] == ' ' { end += 1; }
+            if end - index >= 2 { fields.push(std::mem::take(&mut current)); } else { current.push(' '); }
+            index = end;
+        } else {
+            current.push(ch);
+            index += 1;
+        }
+    }
+    fields.push(current);
+    fields.into_iter().map(|field| field.trim().to_owned()).filter(|field| !field.is_empty()).collect()
+}
+/// True when an `auth list` run printed at least one integration row we
+/// recognise, even if its status cell was not classifiable. Used to report a
+/// quiet unknown instead of a probe failure. Never returns row text.
+fn opencode_auth_list_has_recognized_rows(output: &str) -> bool {
+    output.lines().any(|line| {
+        let fields = split_opencode_auth_fields(line);
+        let name = if fields.len() >= 2 {
+            Some(fields[0].as_str())
+        } else {
+            fields.first().and_then(|field| field.split_whitespace().next())
+        };
+        name.and_then(opencode_integration_key).is_some()
+    })
+}
 fn parse_opencode_auth_list(output: &str) -> Option<BTreeMap<String, AuthState>> {
     let mut states = BTreeMap::new();
     for line in output.lines() {
-        let line = line.trim().trim_matches('|').trim();
-        let fields = line.split(|c: char| c == '|' || c == ':' || c == ',' || c == '\t').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>();
-        let (raw_name, status_fields): (&str, Vec<String>) = if fields.len() >= 2 { (fields[0], fields[1..].iter().map(|field| (*field).to_owned()).collect()) } else {
-            let words = line.split_whitespace().collect::<Vec<_>>();
+        let fields = split_opencode_auth_fields(line);
+        let (raw_name, status_fields): (String, Vec<String>) = if fields.len() >= 2 {
+            (fields[0].clone(), fields[1..].to_vec())
+        } else if let Some(single) = fields.first() {
+            let words = single.split_whitespace().collect::<Vec<_>>();
             if words.len() < 2 { continue; }
             let tail = if words.len() >= 3 && matches!((words[1].to_ascii_lowercase().as_str(), words[2].to_ascii_lowercase().as_str()), ("logged", "in") | ("logged", "out") | ("signed", "in") | ("signed", "out") | ("not", "configured") | ("not", "authenticated") | ("not", "logged") | ("no", "credentials")) {
                 if words[1].eq_ignore_ascii_case("not") && words[2].eq_ignore_ascii_case("logged") && words.get(3).is_some_and(|word| word.eq_ignore_ascii_case("in")) { words[1..4].join(" ") } else { words[1..3].join(" ") }
             } else { words[1].to_owned() };
-            (words[0], vec![tail])
+            (words[0].to_owned(), vec![tail])
+        } else {
+            continue;
         };
-        let Some(name) = safe_gateway_name(raw_name) else { continue; };
+        let Some(name) = opencode_integration_key(&raw_name) else { continue; };
         // Inspect only one status cell. A credential or other free-form value
         // after it is discarded, never copied into normalized runtime state.
         let state = status_fields.iter().find_map(|field| explicit_auth_state(field.as_str()));
@@ -338,7 +411,7 @@ fn parse_opencode_auth_list(output: &str) -> Option<BTreeMap<String, AuthState>>
 }
 fn explicit_auth_state(input: &str) -> Option<AuthState> {
     match input.trim().to_ascii_lowercase().as_str() {
-        "configured" | "authenticated" | "connected" | "signed in" | "logged in" | "true" | "yes" => Some(AuthState::Authenticated),
+        "configured" | "authenticated" | "connected" | "signed in" | "logged in" | "stored" | "true" | "yes" => Some(AuthState::Authenticated),
         "not configured" | "no credentials" | "unauthenticated" | "not authenticated" | "not logged in" | "signed out" | "logged out" | "missing" | "false" | "no" => Some(AuthState::Unauthenticated),
         _ => None,
     }
@@ -408,6 +481,14 @@ fn opencode_model_gateways(output: &str) -> BTreeMap<String, AuthState> {
     }
     states
 }
+/// v2 `opencode models` prints one `provider/model` per line. True when at least
+/// one line names an allow-listed gateway. That shows the CLI answered, never
+/// that anyone is signed in.
+fn opencode_plain_model_listing_names_a_gateway(output: &str) -> bool {
+    output.lines().any(|line| {
+        line.trim().split_once('/').is_some_and(|(provider, model)| !model.is_empty() && safe_gateway_name(provider).is_some())
+    })
+}
 async fn safe_status_output(exe: &Path, args: &[&str]) -> Result<(bool, String), &'static str> {
     let mut cmd = Command::new(exe);
     prepare_command(&mut cmd);
@@ -444,6 +525,7 @@ mod tests {
     fn version_output_is_reduced_to_a_numeric_version() {
         assert_eq!(safe_version("codex-cli 0.161.0"), Some("0.161.0".into()));
         assert_eq!(safe_version("2.1.296 (Claude Code)"), Some("2.1.296".into()));
+        assert_eq!(safe_version("opencode v2.0.28"), Some("2.0.28".into()));
         assert_eq!(safe_version("unexpected private diagnostic"), None);
         assert_eq!(safe_version("0.161.0\nprivate diagnostic"), Some("0.161.0".into()));
     }
@@ -592,7 +674,7 @@ mod tests {
     }
     #[tokio::test]
     async fn resolver_never_returns_a_powershell_script() {
-        assert!(!executable_extensions().iter().any(|extension| *extension == ".ps1"));
+        assert!(!executable_extensions().contains(&".ps1"));
     }
     #[test]
     fn opencode_auth_list_keeps_only_allowlisted_gateways_and_exact_state_bits() {
@@ -636,5 +718,74 @@ mod tests {
         assert!(!forwarded.contains("deepseek"));
         assert!(opencode_model_gateways("opencode-go/model-a\n{broken").is_empty());
         assert!(parse_opencode_auth_list("Provider | Auth\nopencode-go | OAuth").is_none());
+    }
+    /// Fixture command that prints exactly one `row` line; the runtime appends
+    /// the subcommand args, so on Windows `& rem` absorbs them.
+    fn auth_fixture(row: &str) -> ResolvedCommand {
+        #[cfg(windows)]
+        {
+            ResolvedCommand { executable: PathBuf::from("cmd.exe"), args: vec!["/d".into(), "/c".into(), format!("echo {row}& rem")] }
+        }
+        #[cfg(not(windows))]
+        {
+            ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec!["-c".into(), format!("printf '%s\\n' '{row}'")] }
+        }
+    }
+    #[test]
+    fn opencode_v2_auth_list_maps_display_names_to_allowlisted_gateways() {
+        let console = parse_opencode_auth_list("OpenCode Console  Default                     stored").unwrap();
+        assert_eq!(console.len(), 1);
+        assert!(matches!(console.get("opencode"), Some(AuthState::Authenticated)));
+        assert!(matches!(aggregate_auth_states(&console), AuthState::Authenticated));
+
+        let both = parse_opencode_auth_list("OpenCode Go  Default  stored\nOpenCode Console  Default  stored").unwrap();
+        assert_eq!(both.len(), 2);
+        assert!(matches!(both.get("opencode-go"), Some(AuthState::Authenticated)));
+        assert!(matches!(both.get("opencode"), Some(AuthState::Authenticated)));
+
+        let zen = parse_opencode_auth_list("OpenCode Zen  Default  stored").unwrap();
+        assert_eq!(zen.len(), 1);
+        assert!(matches!(zen.get("opencode"), Some(AuthState::Authenticated)));
+    }
+    #[tokio::test]
+    async fn opencode_v2_auth_list_row_signs_in_on_the_calling_path() {
+        let command = auth_fixture("OpenCode Console  Default                     stored");
+        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args).await;
+        assert!(matches!(state, AuthState::Authenticated));
+        assert_eq!(gateways.len(), 1);
+        assert!(matches!(gateways.get("opencode"), Some(AuthState::Authenticated)));
+        assert!(error.is_none());
+    }
+    #[tokio::test]
+    async fn opencode_v2_auth_list_unknown_status_is_a_quiet_unknown() {
+        let command = auth_fixture("OpenCode Console  Default  mystery-state");
+        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args).await;
+        assert!(matches!(state, AuthState::Unknown));
+        assert!(gateways.is_empty());
+        assert!(error.is_none());
+    }
+    #[test]
+    fn plain_models_listing_only_says_that_a_gateway_answered() {
+        assert!(opencode_plain_model_listing_names_a_gateway("opencode-go/glm-5.2\nopencode/big-pickle"));
+        assert!(opencode_plain_model_listing_names_a_gateway("opencode/big-pickle"));
+        assert!(!opencode_plain_model_listing_names_a_gateway("anthropic/claude"));
+        assert!(!opencode_plain_model_listing_names_a_gateway("opencode-go/"));
+        assert!(!opencode_plain_model_listing_names_a_gateway(""));
+    }
+    #[tokio::test]
+    async fn opencode_go_plain_models_is_a_quiet_unknown_not_a_sign_in() {
+        let command = auth_fixture("opencode-go/glm-5.2");
+        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args).await;
+        assert!(matches!(state, AuthState::Unknown), "a model listing is not proof of sign-in");
+        assert!(gateways.is_empty());
+        assert!(error.is_none());
+    }
+    #[tokio::test]
+    async fn opencode_zen_only_plain_models_is_a_quiet_unknown() {
+        let command = auth_fixture("opencode/big-pickle");
+        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args).await;
+        assert!(matches!(state, AuthState::Unknown));
+        assert!(gateways.is_empty());
+        assert!(error.is_none());
     }
 }

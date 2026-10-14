@@ -764,7 +764,18 @@
 :root[data-bitbots="on"] .launch-check-icon { border: 1px solid var(--bb-line); background: var(--bb-raised); }
 :root[data-bitbots="on"] .launch-state-mark { font-family: var(--bb-font-display); }
 :root[data-bitbots="on"] .launch-state-indicator { border: 1px solid var(--bb-bg); background: var(--bb-ink-2); color: var(--bb-bg); }
-:root[data-bitbots="on"] .launch-spinner { border: 2px solid var(--bb-line-strong); border-top-color: var(--bb-accent); animation: spin 800ms steps(8, end) infinite; }
+:root[data-bitbots="on"] .launch-state-glyph { stroke-linecap: square; stroke-linejoin: miter; }
+/* A 2x2 grid of pixels with one lit cell chasing round it; no ring. */
+:root[data-bitbots="on"] .launch-spinner { position: relative; width: 12px; height: 12px; border: 0; border-radius: 0; background: none; animation: none; }
+:root[data-bitbots="on"] .launch-spinner::before,
+:root[data-bitbots="on"] .launch-spinner::after { content: ""; position: absolute; left: 0; top: 0; width: 5px; height: 5px; }
+:root[data-bitbots="on"] .launch-spinner::before { background: var(--bb-line-strong); box-shadow: 7px 0 var(--bb-line-strong), 0 7px var(--bb-line-strong), 7px 7px var(--bb-line-strong); }
+:root[data-bitbots="on"] .launch-spinner::after { background: var(--bb-accent); animation: bb-pixel-chase 640ms steps(1, end) infinite; }
+@keyframes bb-pixel-chase { 0% { transform: translate(0, 0); } 25% { transform: translate(7px, 0); } 50% { transform: translate(7px, 7px); } 75% { transform: translate(0, 7px); } }
+/* The scan: a short bright run travels along a row of pixels, one step at a time. */
+:root[data-bitbots="on"] .launch-pixel-scan { display: flex; gap: 4px; margin: 2px 0 10px; }
+:root[data-bitbots="on"] .launch-pixel-scan i { width: 8px; height: 8px; background: var(--bb-line); animation: bb-scan-cell 1400ms steps(1, end) infinite; animation-delay: calc(var(--i) * 100ms); }
+@keyframes bb-scan-cell { 0% { background: var(--bb-accent); } 21% { background: var(--bb-accent-soft); } 28% { background: var(--bb-line); } 100% { background: var(--bb-line); } }
 :root[data-bitbots="on"] .launch-warning-notice { border-bottom: 2px dotted var(--bb-warning); background: var(--surface-warning); }
 :root[data-bitbots="on"] .onboarding-progress span { background: var(--surface-disabled); }
 :root[data-bitbots="on"] .onboarding-progress span.active { background: var(--bb-accent); }
@@ -890,7 +901,7 @@
   :root[data-bitbots="on"] .dictation-button.active,
   :root[data-bitbots="on"] .dictation-button.warming,
   :root[data-bitbots="on"] .spinning,
-  :root[data-bitbots="on"] .launch-spinner { animation: none !important; }
+  :root[data-bitbots="on"] .launch-spinner, :root[data-bitbots="on"] .launch-spinner::after, :root[data-bitbots="on"] .launch-pixel-scan i { animation: none !important; }
   :root[data-bitbots="on"] *,
   :root[data-bitbots="on"] *::before,
   :root[data-bitbots="on"] *::after {

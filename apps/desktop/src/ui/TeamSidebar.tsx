@@ -1,7 +1,7 @@
 // Project-first sidebar: projects group blobs; each blob is one ongoing
 // conversation. Casual blobs (no project) live under "Unassigned".
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Archive, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Star, Trash2, Copy as Duplicate, Download } from 'lucide-react'
+import { Archive, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Star, Trash2, Copy as Duplicate, Download } from 'lucide-react'
 import type { Agent, Project, Runtime, Session } from '../types'
 import { agentLook } from '../blob/look'
 import { RuntimeMark } from './providerBrand'
@@ -51,7 +51,7 @@ function MenuButton({ item, open, onOpen, onClose }: { item: Exclude<MenuItem, '
       onClick={() => { if (item.submenu) { onOpen(); return } onClose(); item.onSelect?.() }}>
       <span className="team-menu-icon" aria-hidden="true">{item.icon}</span>
       <span>{item.label}</span>
-      {item.checked && <span className="team-menu-check" aria-hidden="true">✓</span>}
+      {item.checked && <Check size={14} className="team-menu-check" aria-hidden="true" />}
       {item.submenu && <ChevronRight size={14} className="team-menu-caret" aria-hidden="true" />}
     </button>
     {open && item.submenu && <div ref={subRef} className="team-menu team-submenu" role="menu" aria-label={item.label} style={{ top: Math.max(0, (buttonRef.current?.offsetTop ?? 0) - 6) }}
@@ -63,7 +63,7 @@ function MenuButton({ item, open, onOpen, onClose }: { item: Exclude<MenuItem, '
         if (next >= 0) { event.preventDefault(); event.stopPropagation(); buttons[next]?.focus() }
       }}>
       {item.submenu.map((sub, index) => sub === 'separator' ? <span key={`sub-sep-${index}`} className="team-menu-separator" role="separator" /> : <button key={sub.label} type="button" role="menuitemradio" aria-checked={sub.checked === true} className="team-menu-item" disabled={sub.disabled} onClick={() => { onClose(); sub.onSelect?.() }}>
-        <span className="team-menu-icon" aria-hidden="true">{sub.icon}</span><span>{sub.label}</span>{sub.checked && <span className="team-menu-check" aria-hidden="true">✓</span>}
+        <span className="team-menu-icon" aria-hidden="true">{sub.icon}</span><span>{sub.label}</span>{sub.checked && <Check size={14} className="team-menu-check" aria-hidden="true" />}
       </button>)}
     </div>}
   </>

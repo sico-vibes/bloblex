@@ -402,6 +402,8 @@
 .launch-check-icon.has-provider { overflow: visible; }
 .launch-check-icon.has-provider > .provider-logo { width: 16px; height: 16px; }
 .launch-state-mark { display: grid; place-items: center; width: 20px; height: 20px; color: var(--text-2); font-size: var(--fs-sm); }
+.launch-state-glyph { display: block; width: 12px; height: 12px; }
+.launch-state-indicator .launch-state-glyph { width: 8px; height: 8px; }
 .launch-checklist li[data-state="warning"] .launch-state-mark { color: var(--status-working); }
 .launch-checklist li[data-state="failed"] .launch-state-mark { color: var(--status-danger); }
 .launch-state-indicator { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; display: grid; place-items: center; border: 1px solid var(--surface-app); border-radius: 50%; background: var(--text-2); color: var(--surface-app); font-size: 8px; line-height: 1; }

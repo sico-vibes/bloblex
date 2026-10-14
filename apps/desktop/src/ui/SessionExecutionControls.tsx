@@ -10,6 +10,7 @@ import { positionFromPointer, SessionEffortMeter, type EffortMeterStyle } from '
 import { Tip } from './Tip'
 import { labelizeEffort } from './effortLabels'
 import { concreteModelForSelection } from './modelPreferences'
+import { modelDisplayName } from './modelDisplayName'
 export { labelizeEffort } from './effortLabels'
 
 type Lock = SessionModelLock
@@ -111,7 +112,7 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   }
   const providerStyle = resolveProviderStyle(catalog?.provider ?? '', selectedModel?.providerId, selectedModel?.id ?? model, selectedModel?.displayName)
   const pendingForSession = pendingModel?.sessionId === session.id ? pendingModel : null
-  const modelLabel = model ? selectedModel?.displayName ?? model : 'Choose a model'
+  const modelLabel = model ? (selectedModel ? modelDisplayName(selectedModel) : model) : 'Choose a model'
   const modelAriaLabel = modelLabel
   const fastTier = fastTierFor(selectedModel)
   const fastOn = !!fastTier && serviceTier === fastTier.id
@@ -139,7 +140,7 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
       provider={catalog?.provider ?? ''}
       key={`${session.id}:${model ?? 'unselected'}:${pendingForSession?.model ?? 'no-pending-model'}`}
       providerStyle={providerStyle}
-      modelName={selectedModel?.displayName ?? modelLabel}
+      modelName={modelLabel}
       efforts={efforts}
       defaultThinking={selectedModel?.defaultThinking ?? null}
       unavailableReason={catalogUnavailable ? 'Runtime model capabilities are unavailable. Bloblex cannot verify or change effort levels without a validated catalog.' : selectedModel ? null : catalog ? 'The selected model is not in the validated runtime catalog. Bloblex cannot verify selectable effort levels.' : 'Runtime model capabilities are still unavailable.'}
@@ -308,7 +309,7 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
 
   const triggerLabel = value && efforts.includes(value) ? labelizeEffort(value, provider) : unlistedValue ? labelizeEffort(unlistedValue, provider) : defaultThinking ? labelizeEffort(defaultThinking, provider) : 'Model default'
   const savedTop = efforts.length > 1 && value === efforts[efforts.length - 1]
-  const trigger = <button type="button" className={`composer-pill session-effort-trigger ${savedTop ? 'highest' : ''} ${lockedReason ? 'locked' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={lockedReason ? `Effort: ${triggerLabel}. ${lockedReason}` : `Effort: ${triggerLabel}`} aria-disabled={lockedReason ? true : undefined} disabled={disabled && !lockedReason} onClick={toggle}>
+  const trigger = <button type="button" className={`composer-pill session-effort-trigger ${savedTop ? 'highest' : ''} ${isTopTierEffort(value) ? 'max-tier' : ''} ${lockedReason ? 'locked' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={lockedReason ? `Effort: ${triggerLabel}. ${lockedReason}` : `Effort: ${triggerLabel}`} aria-disabled={lockedReason ? true : undefined} disabled={disabled && !lockedReason} onClick={toggle}>
     <span>{triggerLabel}</span>
     <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
   </button>
@@ -317,14 +318,14 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
     {open && <div className={`session-effort-popover ${providerStyle} ${lastIsUltra ? 'has-ultra' : ''}`} role="dialog" aria-label={`Effort for ${modelName}`}>
       <div className="session-effort-popover-heading">
         <span className="session-effort-title">Effort</span>
-        <span className={`session-effort-value ${atTop && lastIsUltra ? 'ultra' : ''}`} aria-live="polite"><span key={visibleLabel} className="session-effort-value-in">{visibleLabel}</span></span>
+        <span className={`session-effort-value ${isTopTierEffort(visibleIndex >= 0 ? efforts[visibleIndex] : null) ? 'ultra' : ''}`} aria-live="polite"><span key={visibleLabel} className="session-effort-value-in">{visibleLabel}</span></span>
         {defaultThinking && efforts.length > 0 && !visibleLabel.startsWith('Model default') && <span className="session-effort-default-label">Model default · {labelizeEffort(defaultThinking, provider)}</span>}
       </div>
       {efforts.length > 0 ? <>
         <div className="session-effort-meter-frame">
           <div className="session-effort-caption"><span>Faster</span><span>Smarter</span></div>
           <SessionEffortMeter trackRef={trackRef} style={providerStyle} count={efforts.length} position={displayedPosition} recommendedIndex={-1} top={atTop} dragging={mode === 'drag'} settling={mode === 'settle'} valueText={mode === 'rest' && visibleIndex < 0 ? visibleLabel : labelizeEffort(efforts[stop] ?? '', provider)} disabled={disabled} onPointerDown={beginPointer} onPointerMove={movePointer} onPointerUp={finishPointer} onPointerCancel={abandonPointer} onLostPointerCapture={abandonPointer} onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} />
-          <div className="session-effort-labels" role="group" aria-label="Effort levels">{efforts.map((effort, index) => <button type="button" key={`${effort}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${isUltraEffort(effort) ? 'ultra' : ''}`} aria-pressed={visibleIndex === index} disabled={disabled} onClick={() => choose(effort)}>{labelizeEffort(effort, provider)}</button>)}</div>
+          <div className="session-effort-labels" role="group" aria-label="Effort levels">{efforts.map((effort, index) => <button type="button" key={`${effort}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${isTopTierEffort(effort) ? 'ultra' : ''}`} aria-pressed={visibleIndex === index} disabled={disabled} onClick={() => choose(effort)}>{labelizeEffort(effort, provider)}</button>)}</div>
         </div>
         {provider.toLowerCase() === 'claude' && !efforts.includes('ultracode') && <p className="session-effort-note">{workflowEnabled ? 'Claude Code did not report Ultracode for this model. The model needs catalog-reported Extra high support; managed policy may also keep it unavailable.' : 'Ultracode needs a model with catalog-reported Extra high and Claude dynamic workflows. Bloblex did not enable workflows for this conversation; its setting applies to new conversations. Claude config or managed policy may still provide it. Max remains separate.'}</p>}
         {lastIsUltra && atTop && <p className="session-effort-note">{providerStyle === 'claude' ? 'Claude Code reported Ultracode for this model. It runs at Extra high with dynamic workflows enabled for this session. Standard Max remains separate.' : 'Ultra is a separate catalog effort, distinct from Max.'}</p>}
@@ -335,6 +336,8 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
 }
 
 function isUltraEffort(value: string | null | undefined) { return value === 'ultra' || value === 'ultracode' }
+/** Max and the Ultra levels share one highlight, so Ultracode reads as the same tier as Max. */
+function isTopTierEffort(value: string | null | undefined) { return value === 'max' || isUltraEffort(value) }
 
 /** The catalog tier that means "fast": Claude reports `fast`, Codex names its priority tier Fast. */
 export function fastTierFor(model: CatalogModel | null | undefined): ServiceTierOption | null {
@@ -383,7 +386,7 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
         {models.map((item, index) => <div key={item.id} role="none">
           {item.group && item.group !== models[index - 1]?.group && <div className="composer-menu-group" role="presentation">{item.group}</div>}
           <button type="button" role="menuitemradio" aria-checked={model === item.id} className="composer-menu-item" data-value={item.id} disabled={saving} onClick={() => choose(item.id)}>
-            <span className="composer-menu-text"><strong>{item.displayName}</strong></span>
+            <span className="composer-menu-text"><strong>{modelDisplayName(item)}</strong></span>
             {model === item.id && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
           </button>
         </div>)}

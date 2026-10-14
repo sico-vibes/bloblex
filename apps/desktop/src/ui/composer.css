@@ -130,15 +130,18 @@
 .session-effort-trigger { color: var(--text-2); }
 .session-effort-trigger.highest > span { background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .session-effort-control.claude .session-effort-trigger.highest > span { background: none; color: var(--meter-claude); }
+/* Max and Ultracode wear the same gradient, in every provider. */
+.session-effort-control.composer-popover-anchor .session-effort-trigger.max-tier > span { background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .session-effort-trigger.locked { color: var(--text-3); opacity: .55; cursor: not-allowed; }
 .session-effort-trigger.locked:hover { background: transparent; }
 .session-effort-popover { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 10px); width: min(320px, calc(100vw - 32px)); padding: 13px 14px 12px; display: grid; gap: 12px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-overlay); box-shadow: var(--shadow-pop); transform-origin: bottom right; animation: composer-menu-in 140ms cubic-bezier(.2,.8,.2,1) both; }
+/* Six levels plus Ultracode need more room than five. */
+.session-effort-popover.has-ultra { width: min(404px, calc(100vw - 32px)); }
 .session-effort-popover-heading { min-height: 24px; display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); }
 .session-effort-title { color: var(--text-3); font-weight: 500; }
 .session-effort-value { position: relative; min-width: 0; flex: 1 1 auto; display: grid; padding-block: .2em; margin-block: -.2em; overflow: hidden; color: var(--text-1); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
 .session-effort-popover.claude .session-effort-value { color: var(--meter-claude); }
-.session-effort-value.ultra > span { background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet) 60%, #f0b6e8); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.session-effort-value-in { grid-area: 1 / 1; animation: effort-label-in 160ms cubic-bezier(.2,0,0,1) both; }
+.session-effort-value.ultra > span { background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet) 60%, #f0b6e8); -webkit-background-clip: text; background-clip: text; color: transparent; }.session-effort-value-in { grid-area: 1 / 1; animation: effort-label-in 160ms cubic-bezier(.2,0,0,1) both; }
 @keyframes effort-label-in { from { opacity: 0; transform: translateY(2px); filter: blur(1.5px) } to { opacity: 1; transform: none; filter: none } }
 .session-effort-default { flex: 0 0 auto; height: 24px; padding: 0 10px; color: var(--text-3); border: 1px solid var(--line); border-radius: var(--radius-pill); background: transparent; font-size: var(--fs-2xs); font-weight: 500; white-space: nowrap; cursor: pointer; transition: color 120ms ease, background 120ms ease, border-color 120ms ease; }
 .session-effort-default:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }

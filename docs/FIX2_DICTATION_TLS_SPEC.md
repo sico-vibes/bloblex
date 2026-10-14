@@ -1,10 +1,11 @@
 # Fix 2 spec: cloud dictation's TLS stack
 
-Status: **implemented in worktree `Blolblex-wt-fix2-alpn` (branch
-`fix2-dictation-alpn`), uncommitted, awaiting review.** Owner approved
-request-shape matching for this call path (`AGENTS.md`, amendment
-14 October 2026). This file replaces an earlier draft that named ALPN as the
-cause; ALPN was tested and ruled out.
+Status: **implemented and released** in `v0.1.0-beta.22` (tag at `b42cd6e`).
+Owner approved request-shape matching for this call path (`AGENTS.md`, amendment
+14 October 2026) and delegated this one commit and release to the OpenCode lane.
+The read-only second opinion from another lane was not run for this release. This
+file replaces an earlier draft that named ALPN as the cause; ALPN was tested and
+ruled out.
 
 ## Problem
 

@@ -1,8 +1,11 @@
 # Cloud dictation: the TLS backend fix (14 October 2026)
 
-Status: **implemented, uncommitted.** Worktree `Blolblex-wt-fix2-alpn`, branch
-`fix2-dictation-alpn`, based on `main` at `86e18a4`. Not reviewed, not committed,
-not released.
+Status: **released.** Shipped in `v0.1.0-beta.22` (annotated tag at `b42cd6e`,
+installer SHA-256 `ff8f1c0009dddef66d14e194c7675d65d1dd057eefc211075508aea1eb4fe066`).
+Implemented in the OpenCode lane under the owner's one-release commit and release
+delegation (`AGENTS.md`, 14 October 2026). The read-only second opinion from
+another lane was **not** run for this release; it remains the standing rule for
+later backend diffs.
 
 Supersedes the ALPN framing in `docs/FIX2_DICTATION_ALPN_SPEC.md`. The ALPN
 hypothesis was tested and **disproved**; see "Correction" below.

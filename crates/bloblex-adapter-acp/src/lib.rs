@@ -224,14 +224,11 @@ impl AcpAdapter {
         Duration::from_millis(if millis == 0 { 20_000 } else { millis })
     }
 
-    async fn spawn(
-        &self,
-        runtime: &RuntimeSpec,
-        cwd: &Path,
-        events: EventSender,
-        local_session_id: &str,
-        options: &ExecOptions,
-    ) -> Result<Arc<Conn>, AdapterError> {
+    /// The identity of a shared provider process: a hash of the launch inputs
+    /// that a running `opencode acp` process cannot change after it starts.
+    /// `spawn` and `reconnect` must agree on this construction, because the
+    /// same key means the same process, and a different key means a new one.
+    fn process_key(runtime: &RuntimeSpec, cwd: &Path, options: &ExecOptions) -> String {
         let config = exec::config_content(options);
         let inherited = std::env::vars_os()
             .map(|(key, value)| format!("{key:?}={value:?}\n"))
@@ -245,7 +242,18 @@ impl AcpAdapter {
             "config": config,
             "inheritedEnvironment": sha256_hex(inherited.as_bytes()),
         });
-        let key = sha256_hex(key_data.to_string().as_bytes());
+        sha256_hex(key_data.to_string().as_bytes())
+    }
+
+    async fn spawn(
+        &self,
+        runtime: &RuntimeSpec,
+        cwd: &Path,
+        events: EventSender,
+        local_session_id: &str,
+        options: &ExecOptions,
+    ) -> Result<Arc<Conn>, AdapterError> {
+        let key = Self::process_key(runtime, cwd, options);
         let process = self.acquire_process(&key, runtime, cwd, options).await?;
         let secret = exec::normalize_instructions(&options.instructions);
         Ok(Arc::new(Conn {
@@ -506,16 +514,44 @@ impl AcpAdapter {
         removed
     }
 
-    async fn resume_after_crash(&self, session_id: &str, old: &Arc<Conn>) -> Result<Arc<Conn>, AdapterError> {
-        let process = self.acquire_process(&old.process_key, &old.runtime, &old.cwd, &old.base_options).await?;
-        let prior_id = old.session_id.lock().await.clone().ok_or_else(|| AdapterError::Process("ACP session has no provider session id".into()))?;
+    /// True when the requested turn needs a process started with a different
+    /// configuration than the one this connection is on. Instructions only
+    /// matter when the turn carries some (clearing them just returns to the
+    /// provider's default mode on the running process), and `env` only when
+    /// the turn sets any. Model and effort are *not* part of this: they are
+    /// applied per session through `session/set_config_option`.
+    fn needs_reconnect(c: &Conn, options: &ExecOptions) -> bool {
+        if let Some(instructions) = exec::normalize_instructions(&options.instructions) {
+            if c.spawned_instructions.as_deref() != Some(instructions.as_str()) {
+                return true;
+            }
+        }
+        !options.env.is_empty() && options.env != c.spawned_env
+    }
+
+    /// Builds a `Conn` on `process` and re-establishes the provider session:
+    /// `session/load` for the existing provider id, falling back to
+    /// `session/new` only where a provider cannot resume. The replacement is
+    /// installed in `self.sessions` on success; on failure the freshly
+    /// acquired process is released and the caller's old connection is left
+    /// untouched. `options` is the configuration the new process was started
+    /// with, not necessarily the old connection's.
+    async fn establish_session(
+        &self,
+        session_id: &str,
+        old: &Arc<Conn>,
+        process: Arc<SharedProcess>,
+        process_key: String,
+        prior_id: String,
+        options: &ExecOptions,
+    ) -> Result<Arc<Conn>, AdapterError> {
         let new = Arc::new(Conn {
             process,
-            process_key: old.process_key.clone(),
+            process_key,
             detached: AtomicBool::new(false),
             runtime: old.runtime.clone(),
             cwd: old.cwd.clone(),
-            base_options: old.base_options.clone(),
+            base_options: options.clone(),
             incoming: Mutex::new(HashMap::new()),
             permission_options: Mutex::new(HashMap::new()),
             session_id: Mutex::new(None),
@@ -527,8 +563,8 @@ impl AcpAdapter {
             prompt_ack_pending: AtomicBool::new(false),
             local_session_id: old.local_session_id.clone(),
             events: old.events.clone(),
-            spawned_instructions: old.spawned_instructions.clone(),
-            spawned_env: old.spawned_env.clone(),
+            spawned_instructions: exec::normalize_instructions(&options.instructions),
+            spawned_env: options.env.clone(),
             config_options: Mutex::new(Vec::new()),
             default_mode: Mutex::new(None),
             applied: Mutex::new(exec::Echoes::default()),
@@ -576,6 +612,39 @@ impl AcpAdapter {
             let _ = new.events.enqueue(AgentEvent::SessionStarted { provider_session_id: provider_id });
         }
         self.sessions.lock().await.insert(session_id.to_owned(), new.clone());
+        Ok(new)
+    }
+
+    async fn resume_after_crash(&self, session_id: &str, old: &Arc<Conn>) -> Result<Arc<Conn>, AdapterError> {
+        let prior_id = old.session_id.lock().await.clone().ok_or_else(|| AdapterError::Process("ACP session has no provider session id".into()))?;
+        let options = old.base_options.clone();
+        let process = self.acquire_process(&old.process_key, &old.runtime, &old.cwd, &options).await?;
+        self.establish_session(session_id, old, process, old.process_key.clone(), prior_id, &options).await
+    }
+
+    /// Re-establishes the session on a process started with `options`, for when
+    /// the blob's instructions or environment changed since the current
+    /// process started (`OPENCODE_CONFIG_CONTENT` is read only at process
+    /// start). The conversation continues on the new process through
+    /// `session/load`. The old connection is detached only once the new one is
+    /// live, so a shared process is never killed while another session uses it
+    /// and a failed reconnect leaves the old connection usable.
+    async fn reconnect(
+        &self,
+        session_id: &str,
+        old: &Arc<Conn>,
+        options: &ExecOptions,
+    ) -> Result<Arc<Conn>, AdapterError> {
+        // Same guarantee the crash path relies on: a turn is never in flight
+        // while its connection is replaced.
+        if old.active_turn_id.lock().await.is_some() {
+            return Err(AdapterError::Protocol("cannot reconfigure OpenCode while a turn is running".into()));
+        }
+        let prior_id = old.session_id.lock().await.clone().ok_or_else(|| AdapterError::Process("ACP session has no provider session id".into()))?;
+        let key = Self::process_key(&old.runtime, &old.cwd, options);
+        let process = self.acquire_process(&key, &old.runtime, &old.cwd, options).await?;
+        let new = self.establish_session(session_id, old, process, key, prior_id.clone(), options).await?;
+        self.detach_route(old, Some(&prior_id), true).await;
         Ok(new)
     }
 
@@ -1101,6 +1170,12 @@ impl AgentAdapter for AcpAdapter {
             .ok_or_else(|| AdapterError::Process("ACP session missing".into()))?;
         if c.detached.load(Ordering::Acquire) || !c.process.alive.load(Ordering::Acquire) {
             c = self.resume_after_crash(&handle.session_id, &c).await?;
+        }
+        // A changed instruction text or environment needs a process started
+        // with the new configuration. Reconnect before options are applied so
+        // the turn runs on the right process instead of failing.
+        if Self::needs_reconnect(&c, &req.exec_options) {
+            c = self.reconnect(&handle.session_id, &c, &req.exec_options).await?;
         }
         let provider_id = c.session_id.lock().await.clone().ok_or_else(|| AdapterError::Process("ACP session missing provider id".into()))?;
         Self::apply_options(&c, &provider_id, &req.exec_options, Some(&req.turn_id)).await?;

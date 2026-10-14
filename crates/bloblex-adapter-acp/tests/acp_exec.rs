@@ -581,27 +581,191 @@ async fn rejected_effort_value_is_a_typed_error_and_never_reaches_the_prompt() {
 }
 
 #[tokio::test]
-async fn changed_instructions_do_not_reach_the_prompt() {
+async fn changed_instructions_reestablish_the_session_without_failing() {
     let temp = Temp::new();
     let adapter = AcpAdapter::default();
     let args = vec!["--record".into(), temp.record().to_string_lossy().into()];
-    let (handle, _) = open_session(&adapter, args, options(None, None, Some(SENTINEL))).await;
-    let error = adapter
+    let changed = "INSTRUCTION_APPLIED_ON_THE_NEW_PROCESS";
+    let (handle, mut events) = open_session(&adapter, args, options(None, None, Some(SENTINEL))).await;
+
+    adapter
         .prompt(
             &handle,
             PromptRequest { attachments: Vec::new(),
-                turn_id: "turn-changed".into(),
-                text: "hello".into(),
-                exec_options: options(None, None, Some("OTHER_INSTRUCTION_SHOULD_NOT_APPLY")),
+                turn_id: "turn-one".into(),
+                text: "first".into(),
+                exec_options: options(None, None, Some(SENTINEL)),
             },
         )
         .await
+        .unwrap();
+    let first_pid = read_record(&temp.record())["pid"].clone();
+
+    // The second turn changes the blob's instructions. OpenCode only reads
+    // `OPENCODE_CONFIG_CONTENT` at process start, so the adapter re-establishes
+    // the session on a process started with the new text instead of failing.
+    adapter
+        .prompt(
+            &handle,
+            PromptRequest { attachments: Vec::new(),
+                turn_id: "turn-two".into(),
+                text: "second".into(),
+                exec_options: options(None, None, Some(changed)),
+            },
+        )
+        .await
+        .unwrap();
+
+    let record = read_record(&temp.record());
+    assert_ne!(record["pid"], first_pid, "the changed configuration is a new process");
+    assert_eq!(
+        record["config"]["prompt_sha256"].as_str().unwrap(),
+        sha256_hex(changed.as_bytes()),
+        "the new process was started with the new instruction text"
+    );
+    assert_eq!(
+        rpc_trace(&record),
+        vec![
+            "initialize".to_owned(),
+            "initialized".to_owned(),
+            "session/load".to_owned(),
+            "session/set_config_option mode=bloblex".to_owned(),
+            "session/prompt".to_owned(),
+        ],
+        "the new process continues the existing provider session"
+    );
+    let load = record["rpc"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["method"] == "session/load")
+        .expect("the new process received session/load");
+    assert_eq!(load["sessionId"], "native-session", "session/load carries the existing provider id");
+    assert!(!serde_json::to_string(&record).unwrap().contains(changed), "instruction text is never recorded verbatim");
+
+    let mut seen = Vec::new();
+    while let Ok(event) = events.try_recv() { seen.push(event); }
+    let outcomes = take_outcomes(&seen);
+    assert_eq!(outcomes["instructions"].applied, Some(true), "the applied turn proves the instruction change");
+    assert!(matches!(outcomes["instructions"].evidence_kind, EvidenceKind::SuccessfulTurn));
+    assert_no_secret(&events_text(&seen));
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
+async fn unchanged_instructions_do_not_reestablish_the_session() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into()];
+    let exec = options(None, None, Some(SENTINEL));
+    let (handle, _) = open_session(&adapter, args, exec.clone()).await;
+    for turn in ["turn-stable-1", "turn-stable-2"] {
+        adapter
+            .prompt(
+                &handle,
+                PromptRequest { attachments: Vec::new(),
+                    turn_id: turn.into(),
+                    text: "hello".into(),
+                    exec_options: exec.clone(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let trace = rpc_trace(&read_record(&temp.record()));
+    assert!(trace.iter().all(|call| call != "session/load"), "stable text never respawns: {trace:?}");
+    assert_eq!(trace.iter().filter(|call| *call == "initialize").count(), 1, "no new process: {trace:?}");
+    assert_eq!(trace.iter().filter(|call| *call == "session/new").count(), 1, "the same provider session: {trace:?}");
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
+async fn changed_env_reestablishes_the_session() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into()];
+    let mut first = ExecOptions::default();
+    first.env.insert("LANG".into(), "fixture-a".into());
+    let (handle, _) = open_session(&adapter, args, first.clone()).await;
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-env-1".into(), text: "one".into(), exec_options: first })
+        .await
+        .unwrap();
+
+    let mut second = ExecOptions::default();
+    second.env.insert("LANG".into(), "fixture-b".into());
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-env-2".into(), text: "two".into(), exec_options: second })
+        .await
+        .unwrap();
+
+    let record = read_record(&temp.record());
+    assert_eq!(record["allow"]["LANG"], "fixture-b", "the new process carries the new environment");
+    assert!(rpc_trace(&record).contains(&"session/load".to_owned()), "an env change re-establishes the session");
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
+async fn rejected_load_falls_back_to_a_new_session_and_reports_the_reset() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into(), "--reject-load".into()];
+    let (handle, mut events) = open_session(&adapter, args, options(None, None, Some(SENTINEL))).await;
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-1".into(), text: "one".into(), exec_options: options(None, None, Some(SENTINEL)) })
+        .await
+        .unwrap();
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-2".into(), text: "two".into(), exec_options: options(None, None, Some("CHANGED_AFTER_LOAD_REJECT")) })
+        .await
+        .unwrap();
+
+    let mut seen = Vec::new();
+    while let Ok(event) = events.try_recv() { seen.push(event); }
+    assert!(
+        seen.iter().any(|event| matches!(event, AgentEvent::SessionStarted { .. })),
+        "a provider that cannot resume reports the context reset the crash path reports"
+    );
+    let trace = rpc_trace(&read_record(&temp.record()));
+    assert!(trace.contains(&"session/load".to_owned()));
+    assert!(trace.contains(&"session/new".to_owned()), "the rejected load falls back to a fresh session: {trace:?}");
+    assert!(trace.contains(&"session/prompt".to_owned()), "the turn still runs: {trace:?}");
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_reconnect_keeps_the_old_connection_usable() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec![
+        "--record".into(),
+        temp.record().to_string_lossy().into(),
+        "--fail-load".into(),
+        "provider exploded".into(),
+    ];
+    let (handle, _) = open_session(&adapter, args, options(None, None, Some(SENTINEL))).await;
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-1".into(), text: "one".into(), exec_options: options(None, None, Some(SENTINEL)) })
+        .await
+        .unwrap();
+
+    let error = adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-2".into(), text: "two".into(), exec_options: options(None, None, Some("CHANGED_BUT_RECONNECT_FAILS")) })
+        .await
         .unwrap_err();
     let rendered = error.to_string();
-    assert!(rendered.contains("instructions are fixed"));
+    assert!(rendered.contains("provider exploded"), "the provider error is surfaced: {rendered}");
+    assert!(!rendered.contains("instructions are fixed"), "the fixed-instructions error is not the normal path: {rendered}");
     assert!(!rendered.contains(SENTINEL));
-    assert!(!rendered.contains("OTHER_INSTRUCTION_SHOULD_NOT_APPLY"));
-    assert!(rpc_trace(&read_record(&temp.record())).iter().all(|call| call != "session/prompt"));
+
+    // The old connection was never disturbed: its original instructions still
+    // run on its original process.
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-3".into(), text: "three".into(), exec_options: options(None, None, Some(SENTINEL)) })
+        .await
+        .unwrap();
+    let record = read_record(&temp.record());
+    assert_eq!(record["config"]["prompt_sha256"].as_str().unwrap(), sha256_hex(SENTINEL.as_bytes()));
     adapter.close_session(&handle).await.unwrap();
 }
 

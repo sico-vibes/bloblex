@@ -61,6 +61,8 @@ struct Flags {
     efforts: Vec<String>,
     effort_id: String,
     reject_effort: Option<String>,
+    reject_load: bool,
+    fail_load: Option<String>,
     usage: String,
     permission: bool,
     v2: bool,
@@ -77,6 +79,8 @@ impl Flags {
         let mut efforts = "low,high,max,default".to_owned();
         let mut effort_id = "effort".to_owned();
         let mut reject_effort = None;
+        let mut reject_load = false;
+        let mut fail_load = None;
         let mut usage = "sequence".to_owned();
         let mut permission = false;
         let mut v2 = false;
@@ -94,6 +98,8 @@ impl Flags {
                 "--efforts" => efforts = next.unwrap_or("").to_owned(),
                 "--effort-id" => effort_id = next.unwrap_or("effort").to_owned(),
                 "--reject-effort" => reject_effort = next.map(str::to_owned),
+                "--reject-load" => reject_load = true,
+                "--fail-load" => fail_load = next.map(str::to_owned),
                 "--usage" => usage = next.unwrap_or("sequence").to_owned(),
                 "--permission-request" => permission = true,
                 "--v2" => v2 = true,
@@ -102,7 +108,7 @@ impl Flags {
                 "--pid-log" => pid_log = next.map(PathBuf::from),
                 _ => {}
             }
-            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--usage" | "--v2-stop-after" | "--pid-log") {
+            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--fail-load" | "--usage" | "--v2-stop-after" | "--pid-log") {
                 2
             } else {
                 1
@@ -115,6 +121,8 @@ impl Flags {
             efforts: csv(&efforts),
             effort_id,
             reject_effort,
+            reject_load,
+            fail_load,
             usage,
             permission,
             v2,
@@ -294,6 +302,7 @@ fn acp_main(_args: &[String], flags: &Flags) {
         }
         let mut entry = json!({"method": method});
         if method == "session/new" { entry["cwd"] = message["params"]["cwd"].clone(); }
+        if method == "session/load" { entry["sessionId"] = message["params"]["sessionId"].clone(); }
         if method == "session/set_config_option" {
             entry["configId"] = message["params"]["configId"].clone();
             entry["value"] = message["params"]["value"].clone();
@@ -320,6 +329,20 @@ fn acp_main(_args: &[String], flags: &Flags) {
                 );
             }
             "session/new" | "session/load" => {
+                // `--fail-load` returns a non-resume provider error (the
+                // reconnect must surface it); `--reject-load` returns the
+                // "session not found" evidence that lets the adapter fall back
+                // to `session/new`.
+                if method == "session/load" {
+                    if let Some(message) = &flags.fail_load {
+                        error(&mut stdout, &id, -32000, message);
+                        continue;
+                    }
+                    if flags.reject_load {
+                        error(&mut stdout, &id, -32000, "session not found");
+                        continue;
+                    }
+                }
                 let session_id = message["params"]["sessionId"].as_str().unwrap_or("native-session");
                 let mut result = json!({"sessionId": session_id});
                 if !env::args().any(|arg| arg == "--catalog-no-config-options") {

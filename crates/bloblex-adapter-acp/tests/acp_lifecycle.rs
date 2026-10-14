@@ -132,6 +132,26 @@ fn prompt(adapter: Arc<AcpAdapter>, handle: bloblex_agent_core::SessionHandle, t
     })
 }
 
+async fn prompt_with_instructions(
+    adapter: &Arc<AcpAdapter>,
+    handle: &bloblex_agent_core::SessionHandle,
+    turn_id: &str,
+    text: &str,
+    instructions: &str,
+) -> Result<(), bloblex_agent_core::AdapterError> {
+    adapter
+        .prompt(
+            handle,
+            PromptRequest {
+                attachments: Vec::new(),
+                turn_id: turn_id.into(),
+                text: text.into(),
+                exec_options: ExecOptions { instructions: Some(instructions.into()), ..ExecOptions::default() },
+            },
+        )
+        .await
+}
+
 async fn crash_report_before_error(events: &mut mpsc::Receiver<AgentEvent>) -> bool {
     let mut report = false;
     loop {
@@ -372,6 +392,43 @@ async fn different_acp_config_content_spawns_separate_processes() {
     adapter.close_session(&a).await.unwrap();
     adapter.close_session(&b).await.unwrap();
     adapter.shutdown().await;
+    let _ = std::fs::remove_dir_all(temp);
+}
+
+#[tokio::test]
+async fn changed_instructions_move_one_session_off_a_shared_process() {
+    let adapter = Arc::new(AcpAdapter::default());
+    let temp = test_temp_dir();
+    let pid_log = temp.join("acp-respawn-pids.log");
+    let runtime = runtime_with_log("success", Some(&pid_log));
+    let instructions = |text: &str| ExecOptions { instructions: Some(text.into()), ..ExecOptions::default() };
+    let (a, _events_a) = new_session_with(&adapter, &runtime, "respawn-a", instructions("alpha"), 32).await;
+    let (b, _events_b) = new_session_with(&adapter, &runtime, "respawn-b", instructions("alpha"), 32).await;
+    let read = || std::fs::read_to_string(&pid_log).unwrap_or_default();
+    assert_eq!(read().lines().filter(|line| line.starts_with("start:")).count(), 1, "matching configuration shares one child");
+
+    prompt_with_instructions(&adapter, &a, "a-one", "first", "alpha").await.unwrap();
+    // The second turn changes the blob's instructions: A re-establishes on a
+    // process started with the new text.
+    prompt_with_instructions(&adapter, &a, "a-two", "second", "beta").await.unwrap();
+
+    let log = read();
+    assert_eq!(log.lines().filter(|line| line.starts_with("start:")).count(), 2, "the changed configuration starts its own process: {log}");
+    assert!(log.contains("load:native-session-1"), "the new process continues A's provider session: {log}");
+    assert!(!log.lines().any(|line| line.starts_with("exit:")), "B still holds the shared process: {log}");
+
+    // B, which never changed its instructions, keeps working on the old process.
+    prompt_with_instructions(&adapter, &b, "b-one", "still shared", "alpha").await.unwrap();
+
+    adapter.close_session(&a).await.unwrap();
+    adapter.close_session(&b).await.unwrap();
+    adapter.shutdown().await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if read().lines().filter(|line| line.starts_with("exit:")).count() >= 2 { break; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.expect("both processes are reaped once no session uses them");
     let _ = std::fs::remove_dir_all(temp);
 }
 

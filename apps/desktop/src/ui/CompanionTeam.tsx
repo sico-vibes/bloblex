@@ -3,7 +3,7 @@
 // to a face and the line it is working on. Same projects, roles, leader and
 // side conversations as the main window.
 import { useState, type ReactNode } from 'react'
-import { ArrowLeftRight, ClipboardList, LayoutGrid, Pin, PinOff, Terminal, X } from 'lucide-react'
+import { ArrowLeftRight, Check, ClipboardList, LayoutGrid, Pin, PinOff, Terminal, X } from 'lucide-react'
 import type { Agent, ChatMessage, Project, Runtime, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -143,6 +143,65 @@ export function CompanionTeamPicker({ agents, projects, sessions, runtimes, conn
 }
 
 /**
+ * The companion settings' "Teammates on the island" control. Shows who is on
+ * the island now as small chips, switches between "Picked for you" (the list is
+ * empty and the island ranks teammates itself) and "Choose myself" (the saved
+ * `companion.pinnedBlobs` list), and while choosing lists the teammates with a
+ * checkbox each, up to the island's maximum. It reads and writes the same
+ * `pinned` list the all-blobs picker does.
+ */
+export function CompanionTeammatesSetting({ agents, sessions, runtimes, connected, focusedId, pinned, onPinnedChange }: {
+  agents: readonly Agent[]
+  sessions: readonly Session[]
+  runtimes: readonly Runtime[]
+  connected: boolean
+  focusedId: string | null
+  pinned: readonly string[]
+  onPinnedChange: (ids: string[]) => void
+}) {
+  const [choosing, setChoosing] = useState(false)
+  const candidates = agents.filter((agent) => !agent.archived && agent.hidden !== true && agent.id !== focusedId)
+  const manual = choosing || pinned.length > 0
+  const onIsland = manual
+    ? pinned.map((id) => candidates.find((agent) => agent.id === id)).filter((agent): agent is Agent => !!agent)
+    : pickPeers(agents, sessions, runtimes, connected, focusedId, pinned)
+  const full = pinned.length >= MAX_COMPANION_PEERS
+  const choose = (next: boolean) => {
+    if (next === manual) return
+    setChoosing(next)
+    // Choosing starts from what the island shows now, so nothing jumps.
+    onPinnedChange(next ? onIsland.map((agent) => agent.id) : [])
+  }
+  const toggle = (id: string) => onPinnedChange(pinned.includes(id) ? pinned.filter((item) => item !== id) : full ? [...pinned] : [...pinned, id])
+  return <div className="cset-teammates">
+    <div className="segmented" role="radiogroup" aria-label="Teammates on the island">
+      <button type="button" role="radio" aria-checked={!manual} className={!manual ? 'on' : undefined} onClick={() => choose(false)}>Picked for you</button>
+      <button type="button" role="radio" aria-checked={manual} className={manual ? 'on' : undefined} onClick={() => choose(true)}>Choose myself</button>
+    </div>
+    <p className="cset-note">{manual ? `Keep up to ${MAX_COMPANION_PEERS} on the island (${Math.min(pinned.length, MAX_COMPANION_PEERS)} of ${MAX_COMPANION_PEERS}).` : 'Ones that need you or are busy come first.'}</p>
+    {onIsland.length > 0
+      ? <ul className="cset-chips" aria-label="On the island now">
+        {onIsland.map((agent) => <li key={agent.id} className="cset-chip" style={{ ['--chip' as string]: agentColorHex(agent.color) }}><Face agent={agent} size={16} /><span>{agent.name}</span></li>)}
+      </ul>
+      : <p className="cset-note">{candidates.length === 0 ? 'No other blobs yet.' : 'None chosen yet. Until you pick some, the island picks for you.'}</p>}
+    {manual && candidates.length > 0 && <ul className="cset-checklist" aria-label="Choose teammates" data-companion-no-drag="">
+      {candidates.map((agent) => {
+        const state = blobState(agent, sessions, runtimes, connected)
+        const checked = pinned.includes(agent.id)
+        const blocked = !checked && full
+        return <li key={agent.id}>
+          <button type="button" role="checkbox" aria-checked={checked} className={`cset-check${checked ? ' on' : ''}`} disabled={blocked} title={blocked ? `Up to ${MAX_COMPANION_PEERS} on the island` : undefined} onClick={() => toggle(agent.id)}>
+            <Face agent={agent} size={18} mood={state === 'offline' ? 'offline' : 'idle'} />
+            <span className="cset-check-name">{agent.name}{agent.role?.trim() && <small>{agent.role.trim()}</small>}</span>
+            <span className="cset-box" aria-hidden="true">{checked && <Check size={11} strokeWidth={3} />}</span>
+          </button>
+        </li>
+      })}
+    </ul>}
+  </div>
+}
+
+/**
  * The focused blob's last steps as a short ticker: done steps dim, the current
  * one bright with its icon. New steps slide in from below.
  */
@@ -230,7 +289,7 @@ export function CompanionChatItem({ message, agents, onOpenSide, currentSessionI
   const quotedContext = reply && <ReplyContextStrip target={reply} compact available={reply.sourceSessionId === currentSessionId && availableMessageIds.has(reply.messageId)} onJump={jump} />
   if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}<div className="bubble"><CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div></div>
   const replyText = plain(text)
-  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply">{replyText}<MessageReactionBadges reactions={message.reactions} /></div></div> : null
+  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply message-bubble">{replyText}<MessageReactionBadges reactions={message.reactions} /></div></div> : null
 }
 
 /** Side conversations the focused blob took part in, newest first. */

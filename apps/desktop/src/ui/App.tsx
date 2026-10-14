@@ -13,7 +13,7 @@ import { COMPANION_CHAT_SIZE_LABELS, COMPANION_CHAT_SIZES, isCompanionChatSize, 
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { setBitbotsEnabled } from '../blob/bitbots'
 import { PixelClouds } from './PixelClouds'
-import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, unlockCompanionAudioFromGesture } from '../blob/soundCues'
+import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, setCompanionSoundVolume, unlockCompanionAudioFromGesture } from '../blob/soundCues'
 import { playDictationCue } from './dictationSound'
 import { CompanionFsm, type CompanionMode } from '../blob/companionFsm'
 import { buildConversationItems, groupConversationActivity, type ConversationItem, type GroupedConversationItem } from './conversation'
@@ -31,7 +31,9 @@ import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
 import { AutoRetryNotice, ContextResetDivider, ConversationPicker, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
-import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
+import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, CompanionTeammatesSetting, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
+import { SoundVolumeSlider } from './SoundVolumeSlider'
+import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
 import { hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
@@ -2597,6 +2599,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const [preparingFile, setPreparingFile] = useState(false)
   const [fileError, setFileError] = useState<string | null>(null)
   const [soundsEnabled, setSoundsEnabled] = useState(false)
+  const [soundVolume, setSoundVolume] = useState(DEFAULT_SOUND_VOLUME)
   const [soundError, setSoundError] = useState<string | null>(null)
   const [dropError, setDropError] = useState<string | null>(null)
   const [dictationSurface, setDictationSurface] = useState<'bubble' | 'companion' | 'none'>('none')
@@ -2828,11 +2831,33 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
       .then(() => { setSoundError(null); void emit('bloblex-sounds-changed', enabled)?.catch(() => undefined) })
       .catch((reason) => { setSoundsEnabled(!enabled); setCompanionSoundsEnabled(!enabled); setSoundError(messageOf(reason)) })
   }
+  // One short cue at the new level, so the slider is judged by ear. It is only
+  // heard when sounds are on and audio is already unlocked by a gesture.
+  const previewVolume = () => { void unlockCompanionAudioFromGesture().then((unlocked) => { if (unlocked) playCompanionCue('blip') }) }
+  const changeSoundVolume = (volume: number) => { setSoundVolume(volume); setCompanionSoundVolume(volume) }
+  const savedSoundVolume = useRef(DEFAULT_SOUND_VOLUME)
+  const commitSoundVolume = (volume: number) => {
+    changeSoundVolume(volume)
+    previewVolume()
+    void rpc('settings.set', { key: 'companion.soundVolume', value: volume })
+      .then(() => { savedSoundVolume.current = volume; setSoundError(null); void emit('bloblex-sound-volume-changed', { volume })?.catch(() => undefined) })
+      .catch((reason) => { changeSoundVolume(savedSoundVolume.current); setSoundError(messageOf(reason)) })
+  }
 
   useEffect(() => {
     let cancelled = false
     let receivedSoundUpdate = false
+    let receivedVolumeUpdate = false
     let unlisten: (() => void) | undefined
+    let unlistenVolume: (() => void) | undefined
+    void listen<{ volume?: unknown; preview?: boolean }>('bloblex-sound-volume-changed', (event) => {
+      receivedVolumeUpdate = true
+      const volume = normalizeSoundVolume(event.payload?.volume)
+      savedSoundVolume.current = volume
+      setSoundVolume(volume)
+      setCompanionSoundVolume(volume)
+      if (event.payload?.preview === true) previewVolume()
+    }).then((stop) => { if (cancelled) stop(); else unlistenVolume = stop })
     void listen<boolean>('bloblex-sounds-changed', (event) => {
       receivedSoundUpdate = true
       const enabled = event.payload === true
@@ -2845,9 +2870,11 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
         const settings = recordFrom(result.settings ?? result)
         const enabled = settings['companion.soundsEnabled'] === true
         if (!cancelled && !receivedSoundUpdate) { setSoundsEnabled(enabled); setCompanionSoundsEnabled(enabled) }
+        const volume = normalizeSoundVolume(settings['companion.soundVolume'])
+        if (!cancelled && !receivedVolumeUpdate) { savedSoundVolume.current = volume; setSoundVolume(volume); setCompanionSoundVolume(volume) }
       }).catch(() => undefined)
     })
-    return () => { cancelled = true; unlisten?.() }
+    return () => { cancelled = true; unlisten?.(); unlistenVolume?.() }
   }, [])
   useEffect(() => {
     let disposed = false
@@ -2926,7 +2953,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
         <div className="compact-copy" onClick={() => fsmRef.current?.click()}><span className="compact-name"><strong>{name}</strong>{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}<ApprovalPill mode={approvalMode} compact /></span><span role="status" aria-live="polite" className={`compact-status ${shimmering ? 'shimmer' : ''}`}>{statusLine}</span></div>
         {permission && <ShieldAlert className="companion-alert" size={15} aria-label="Approval required" />}
         {peers.length > 0 && <div className="mini-grid" aria-hidden="true" data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} look={agentLook(item)} label={item.name} /> })}</div>}
-        <button className="companion-collapse" aria-label="Expand companion" onClick={() => fsmRef.current?.click()}><ChevronUp size={15} /></button>
+        <button className="companion-collapse" aria-label="Expand companion" onClick={() => fsmRef.current?.click()}><ChevronUp size={14} /></button>
       </div> : <>
         <header className="island-header" data-tauri-drag-region>
           <nav className="tabs" aria-label="Companion navigation">
@@ -2940,7 +2967,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
             <ApprovalPill mode={approvalMode} compact />
             <button className={view === 'settings' ? 'on' : ''} aria-label="Settings" title="Settings" onClick={() => openView('settings')}><Settings2 size={14} /></button>
             <button className={soundsEnabled ? 'on' : ''} aria-label={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} aria-pressed={soundsEnabled} title={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} onClick={toggleSounds}>{soundsEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}</button>
-            <button className="companion-collapse" aria-label="Collapse companion" title="Collapse" disabled={!!permission} onClick={toggleExpanded}><ChevronDown size={15} /></button>
+            <button className="companion-collapse" aria-label="Collapse companion" title="Collapse" disabled={!!permission} onClick={toggleExpanded}><ChevronDown size={14} /></button>
           </div>
         </header>
         {confused && <span className="sr-only" role="status" aria-live="polite">A little dizzy. Returning to normal shortly.</span>}
@@ -3002,16 +3029,34 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
               ? recentSteps.length ? <ActivitySteps items={recentSteps} /> : <p className="companion-empty">No commands, tools or file changes reported for this conversation.</p>
               : <p className="companion-empty">Turn on Agent activity in Settings → Experimental to see each command, tool and file change here.</p>}
           </div> : <div className="island-card companion-settings-view">
-            <div className="card-stack wide">
-              <div className="settings-rows">
-                <div className="settings-line"><span>Companion sounds</span><button className={`switch ${soundsEnabled ? 'on' : ''}`} role="switch" aria-checked={soundsEnabled} aria-label="Companion sounds" onClick={toggleSounds} /></div>
-                <div className="settings-line"><span>Chat height</span><div className="segmented" role="radiogroup" aria-label="Chat height">{(Object.keys(COMPANION_CHAT_SIZES) as CompanionChatSize[]).map((size) => <button key={size} type="button" role="radio" aria-checked={chatSize === size} className={chatSize === size ? 'on' : undefined} onClick={() => { playCompanionCue('tick'); onChatSizeChange?.(size) }}>{COMPANION_CHAT_SIZE_LABELS[size]}</button>)}</div></div>
-                <div className="settings-line"><span>Teammates on the island</span><span className="settings-pinned">{pinned.length ? pinned.map((id) => agents.find((item) => item.id === id)?.name).filter(Boolean).join(', ') : 'Picked for you'}</span><button type="button" className="btn secondary small" onClick={() => { openView('overview'); window.setTimeout(() => document.querySelector<HTMLButtonElement>('.peers-all')?.click(), 60) }}>Choose</button></div>
-                <div className="settings-line"><span>Drag the island to place it anywhere.</span></div>
+            <div className="cset-body">
+              <div className="cset-col" data-companion-no-drag="">
+                <section className="cset-section" aria-labelledby="cset-sound">
+                  <h3 id="cset-sound">Sound</h3>
+                  <div className="cset-row">
+                    <span className="cset-copy"><strong>Companion sounds</strong><small>Short cues for replies and approvals.</small></span>
+                    <button type="button" className={`switch ${soundsEnabled ? 'on' : ''}`} role="switch" aria-checked={soundsEnabled} aria-label="Companion sounds" onClick={toggleSounds} />
+                  </div>
+                  <div className="cset-row">
+                    <span className="cset-copy"><strong>Volume</strong></span>
+                    <SoundVolumeSlider value={soundVolume} onChange={changeSoundVolume} onCommit={commitSoundVolume} />
+                  </div>
+                </section>
+                <section className="cset-section" aria-labelledby="cset-chat">
+                  <h3 id="cset-chat">Chat</h3>
+                  <div className="cset-row cset-row-stack">
+                    <span className="cset-copy"><strong>Height</strong></span>
+                    <div className="segmented" role="radiogroup" aria-label="Chat height">{(Object.keys(COMPANION_CHAT_SIZES) as CompanionChatSize[]).map((size) => <button key={size} type="button" role="radio" aria-checked={chatSize === size} className={chatSize === size ? 'on' : undefined} onClick={() => { playCompanionCue('tick'); onChatSizeChange?.(size) }}>{COMPANION_CHAT_SIZE_LABELS[size]}</button>)}</div>
+                  </div>
+                </section>
               </div>
-              {soundError && <p className="companion-drop-error" role="alert">{soundError}</p>}
-              <div className="actions"><button className="btn primary" onClick={onOpenSettings}>Open Bloblex settings</button><button className="btn secondary" onClick={() => void setCompanionVisibility(false)}>Hide companion</button></div>
+              <section className="cset-col cset-section" aria-labelledby="cset-team" data-companion-no-drag="">
+                <h3 id="cset-team">Teammates on the island</h3>
+                <CompanionTeammatesSetting agents={agents} sessions={sessions} runtimes={runtimes} connected={connected} focusedId={agent?.id ?? null} pinned={pinned} onPinnedChange={(ids) => { playCompanionCue('tick'); onPinnedChange?.(ids) }} />
+              </section>
             </div>
+            {soundError && <p className="companion-drop-error cset-error" role="alert">{soundError}</p>}
+            <div className="cset-footer"><button type="button" className="btn primary" onClick={onOpenSettings}>Open Bloblex settings</button><button type="button" className="btn secondary" onClick={() => void setCompanionVisibility(false)}>Hide companion</button><p className="cset-note cset-position">Drag the island to place it anywhere.</p></div>
           </div>}
         </section>
       </>}

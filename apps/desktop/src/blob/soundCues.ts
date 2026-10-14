@@ -8,6 +8,8 @@
 // gesture (the first click or key press after enabling), it is suspended while
 // the window is hidden or quiet, and several cues may overlap.
 
+import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from './soundVolume'
+
 export type CompanionCue =
   | 'peek' | 'open' | 'close' | 'hover' | 'blip' | 'tick' | 'send' | 'pop'
   | 'poke' | 'annoyed' | 'dizzy' | 'love' | 'welcome' | 'work' | 'finish'
@@ -59,10 +61,19 @@ const CUES: Record<Exclude<CompanionCue, 'completion'>, readonly Tone[]> = {
   sleep: [{ at: 0, duration: 0.3, from: 523.25, to: 440, type: 'sine', level: 0.35 }, { at: 0.26, duration: 0.42, from: 392, to: 349.2, type: 'sine', level: 0.3 }],
 }
 
-/** Overall loudness. Peaks land around a quiet UI level, under the system volume. */
+/** Overall loudness at the default volume. Peaks land around a quiet UI level, under the system volume. */
 export const MASTER_VOLUME = 0.32
 
+/**
+ * The master gain for a volume setting. The default volume keeps the loudness
+ * the cues always had; 100% is a quarter louder and 0 is silent.
+ */
+export function soundVolumeGain(volume: number): number {
+  return MASTER_VOLUME * (normalizeSoundVolume(volume) / DEFAULT_SOUND_VOLUME)
+}
+
 let soundsEnabled = false
+let soundVolume = DEFAULT_SOUND_VOLUME
 let audioContext: AudioContext | null = null
 let master: GainNode | null = null
 let boundDocument: Document | null = null
@@ -134,6 +145,22 @@ export function companionSoundsEnabled() {
   return soundsEnabled
 }
 
+/**
+ * Set the master volume (0 to 1). It scales every cue, including ones already
+ * playing, and never touches the enabled flag: 0 is as quiet as muted while
+ * sounds stay switched on.
+ */
+export function setCompanionSoundVolume(volume: number) {
+  soundVolume = normalizeSoundVolume(volume)
+  if (audioContext && master) {
+    try { master.gain.setValueAtTime(soundVolumeGain(soundVolume), audioContext.currentTime) } catch { /* context is closing */ }
+  }
+}
+
+export function companionSoundVolume() {
+  return soundVolume
+}
+
 /** Call from a user gesture (the Sounds toggle, a click) to create or resume audio. */
 export async function unlockCompanionAudioFromGesture(): Promise<boolean> {
   if (!soundsEnabled || documentIsHidden()) return false
@@ -144,7 +171,7 @@ export async function unlockCompanionAudioFromGesture(): Promise<boolean> {
     if (!audioContext || audioContext.state === 'closed') {
       audioContext = new AudioContextType()
       master = audioContext.createGain()
-      master.gain.setValueAtTime(MASTER_VOLUME, audioContext.currentTime)
+      master.gain.setValueAtTime(soundVolumeGain(soundVolume), audioContext.currentTime)
       master.connect(audioContext.destination)
     }
     context = audioContext
@@ -174,6 +201,8 @@ export function playCompanionCue(kind: CompanionCue): boolean {
     return true
   }
   if (context.state !== 'running') return false
+  // Volume 0 is muted without switching sounds off: the cue "plays" silently, so callers do not retry.
+  if (soundVolume <= 0) return true
   const tones = CUES[kind === 'completion' ? 'finish' : kind]
   const start = context.currentTime + 0.01
   const created: Array<{ oscillator: OscillatorNode; envelope: GainNode }> = []

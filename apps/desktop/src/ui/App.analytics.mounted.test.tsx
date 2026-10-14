@@ -65,7 +65,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: h.directListen, emit: h.emit }
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: h.getCurrentWindow }))
 vi.mock('../blob/soundCues', () => ({
   playCompanionCue: vi.fn(), unlockCompanionAudioFromGesture: vi.fn(),
-  setCompanionSoundsEnabled: vi.fn(), disposeCompanionAudio: vi.fn(),
+  setCompanionSoundsEnabled: vi.fn(), setCompanionSoundVolume: vi.fn(), disposeCompanionAudio: vi.fn(),
 }))
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: Record<string, unknown>) => <span data-shape={(props.look as { shape?: string } | null | undefined)?.shape ?? 'mascot'} /> }))
 

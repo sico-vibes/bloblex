@@ -55,7 +55,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: h.directListen, emit: h.emit }
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: h.getCurrentWindow }))
 vi.mock('../blob/soundCues', () => ({
   playCompanionCue: vi.fn(), unlockCompanionAudioFromGesture: vi.fn(),
-  setCompanionSoundsEnabled: vi.fn(), disposeCompanionAudio: vi.fn(),
+  setCompanionSoundsEnabled: vi.fn(), setCompanionSoundVolume: vi.fn(), disposeCompanionAudio: vi.fn(),
 }))
 vi.mock('../blob/BlobCanvas', async () => {
   const ReactModule = await import('react')
@@ -78,6 +78,7 @@ vi.mock('../blob/BlobCanvas', async () => {
 
 import { App } from './App'
 import type { Agent, Runtime, Session, Snapshot } from '../types'
+import { playCompanionCue, setCompanionSoundVolume, unlockCompanionAudioFromGesture } from '../blob/soundCues'
 
 const stamp = '2026-10-01T00:00:00.000Z'
 const DRAG = 'data-tauri-drag-region'
@@ -493,5 +494,125 @@ describe('side conversations across windows', () => {
     await deliver(mainWindow, 'session-claude')
     expect(mainWindow.host.querySelector('.side-header')).toBeNull()
     expect(mainWindow.host.querySelector('.composer-box textarea')?.getAttribute('aria-label')).toBe('Message Claude')
+  })
+})
+
+describe('companion settings panel', () => {
+  const setRange = (input: HTMLInputElement, percent: number) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    act(() => { setter.call(input, String(percent)); input.dispatchEvent(new Event('input', { bubbles: true })) })
+  }
+  const blips = () => vi.mocked(playCompanionCue).mock.calls.filter(([cue]) => cue === 'blip').length
+  const volumeSaves = () => h.rpc.mock.calls.filter(([method, params]) => method === 'settings.set' && params.key === 'companion.soundVolume')
+  const pinSaves = () => h.rpc.mock.calls.filter(([method, params]) => method === 'settings.set' && params.key === 'companion.pinnedBlobs').map(([, params]) => params.value)
+  const radio = (host: ParentNode, name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((item) => item.textContent === name)!
+
+  async function openSettings(settings: Record<string, unknown> = {}, snapshotValue = snapshot()) {
+    configure(snapshotValue)
+    const handlers: Record<string, (event: { payload: unknown }) => void> = {}
+    h.directListen.mockImplementation(async (eventName: string, handler: (event: { payload: unknown }) => void) => { handlers[eventName] = handler; return vi.fn() })
+    h.emit.mockResolvedValue(undefined)
+    h.rpc.mockImplementation(async (method: string) => {
+      if (method === 'events.replay') return { replayAvailable: true, events: [] }
+      if (method === 'settings.get') return { settings }
+      return {}
+    })
+    vi.mocked(unlockCompanionAudioFromGesture).mockResolvedValue(true)
+    vi.mocked(playCompanionCue).mockClear()
+    vi.mocked(setCompanionSoundVolume).mockClear()
+    const view = startApp('?companion=1')
+    await view.settle()
+    await press(view.host, 'Open companion home')
+    await view.settle()
+    await press(view.host, 'Settings')
+    await view.settle()
+    return { view, handlers }
+  }
+
+  it('groups the rows under labelled sections with the actions in a footer', async () => {
+    const { view } = await openSettings()
+    const panel = view.host.querySelector('.companion-settings-view')!
+    expect([...panel.querySelectorAll('.cset-section > h3')].map((heading) => heading.textContent)).toEqual(['Sound', 'Chat', 'Teammates on the island'])
+    expect(panel.querySelector('[role="switch"][aria-label="Companion sounds"]')).not.toBeNull()
+    expect(panel.querySelector('[role="radiogroup"][aria-label="Chat height"]')).not.toBeNull()
+    expect(panel.querySelector('.cset-footer')?.textContent).toContain('Drag the island to place it anywhere.')
+    expect([...panel.querySelectorAll('.cset-footer button')].map((button) => button.textContent)).toEqual(['Open Bloblex settings', 'Hide companion'])
+    // The old loose "Choose" hop to the overview is gone: choosing happens in the panel.
+    expect([...panel.querySelectorAll('button')].some((button) => button.textContent === 'Choose')).toBe(false)
+  })
+
+  it('applies the volume live, then saves it once and plays one preview cue on release', async () => {
+    const { view } = await openSettings({ 'companion.soundsEnabled': true })
+    const slider = view.host.querySelector<HTMLInputElement>('input[aria-label="Companion sound volume"]')!
+    const navigationBlips = blips()
+    expect(slider.value).toBe('80')
+    expect(vi.mocked(setCompanionSoundVolume)).toHaveBeenLastCalledWith(0.8)
+    expect(view.host.querySelector('.volume-value')?.textContent).toBe('80%')
+
+    act(() => { slider.dispatchEvent(new Event('pointerdown', { bubbles: true })) })
+    for (const percent of [70, 55, 40]) setRange(slider, percent)
+    expect(vi.mocked(setCompanionSoundVolume).mock.calls.map(([volume]) => volume).slice(-3)).toEqual([0.7, 0.55, 0.4])
+    expect(view.host.querySelector('.volume-value')?.textContent).toBe('40%')
+    expect(volumeSaves()).toHaveLength(0)
+    expect(blips()).toBe(navigationBlips)
+
+    await act(async () => { slider.dispatchEvent(new Event('pointerup', { bubbles: true })); await settleMicrotasks() })
+    expect(volumeSaves()).toEqual([['settings.set', { key: 'companion.soundVolume', value: 0.4 }]])
+    expect(blips()).toBe(navigationBlips + 1)
+    expect(h.emit).toHaveBeenCalledWith('bloblex-sound-volume-changed', { volume: 0.4 })
+  })
+
+  it('reads the saved volume, follows another window, and keeps the sounds switch alone', async () => {
+    const { view, handlers } = await openSettings({ 'companion.soundsEnabled': true, 'companion.soundVolume': 0.35 })
+    const slider = view.host.querySelector<HTMLInputElement>('input[aria-label="Companion sound volume"]')!
+    const navigationBlips = blips()
+    expect(slider.value).toBe('35')
+    expect(vi.mocked(setCompanionSoundVolume)).toHaveBeenCalledWith(0.35)
+    const sounds = view.host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Companion sounds"]')!
+    expect(sounds.getAttribute('aria-checked')).toBe('true')
+
+    await act(async () => { handlers['bloblex-sound-volume-changed']({ payload: { volume: 0.6, preview: true } }); await settleMicrotasks() })
+    expect(slider.value).toBe('60')
+    expect(vi.mocked(setCompanionSoundVolume)).toHaveBeenLastCalledWith(0.6)
+    expect(blips()).toBe(navigationBlips + 1)
+    expect(sounds.getAttribute('aria-checked')).toBe('true')
+    expect(volumeSaves()).toHaveLength(0)
+  })
+
+  it('treats a missing or invalid saved volume as the 80% default', async () => {
+    const { view } = await openSettings({ 'companion.soundVolume': 'loud' })
+    expect(view.host.querySelector<HTMLInputElement>('input[aria-label="Companion sound volume"]')!.value).toBe('80')
+  })
+
+  it('chooses teammates in the panel and persists them through the same pinned list', async () => {
+    const ops = agent({ id: 'agent-ops', name: 'Ops', color: '#7fd1a0', runtimeId: 'runtime-claude', sortOrder: 1 })
+    const docs = agent({ id: 'agent-docs', name: 'Docs', color: '#d1a07f', runtimeId: 'runtime-codex', sortOrder: 2 })
+    const { view } = await openSettings({}, snapshot({ agents: [claude, codex, ops, docs] }))
+    const panel = view.host.querySelector('.companion-settings-view')!
+    expect(radio(panel, 'Picked for you').getAttribute('aria-checked')).toBe('true')
+    const chipNames = () => [...panel.querySelectorAll('.cset-chip')].map((chip) => chip.textContent)
+    expect(chipNames().sort()).toEqual(['Codex', 'Docs', 'Ops'])
+
+    await act(async () => { radio(panel, 'Choose myself').click(); await settleMicrotasks() })
+    expect(pinSaves()).toHaveLength(1)
+    expect((pinSaves()[0] as string[]).sort()).toEqual(['agent-codex', 'agent-docs', 'agent-ops'])
+    const boxes = () => [...panel.querySelectorAll<HTMLButtonElement>('.cset-check')]
+    expect(boxes()).toHaveLength(3)
+    expect(boxes().every((box) => box.getAttribute('aria-checked') === 'true')).toBe(true)
+
+    // Unchecking two keeps one on the island, and the overview then shows exactly that teammate.
+    const named = (name: string) => boxes().find((box) => box.textContent?.startsWith(name))!
+    await act(async () => { named('Codex').click(); await settleMicrotasks() })
+    await act(async () => { named('Docs').click(); await settleMicrotasks() })
+    expect(pinSaves().at(-1)).toEqual(['agent-ops'])
+    expect(chipNames()).toEqual(['Ops'])
+    await press(view.host, 'Home')
+    await view.settle()
+    expect([...view.host.querySelectorAll('.peer')].map((peer) => peer.getAttribute('aria-label')?.split(':')[0])).toEqual(['Ops', 'Codex', 'Docs'])
+
+    await press(view.host, 'Settings')
+    await view.settle()
+    await act(async () => { radio(view.host, 'Picked for you').click(); await settleMicrotasks() })
+    expect(pinSaves().at(-1)).toEqual([])
   })
 })

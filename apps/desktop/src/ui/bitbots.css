@@ -851,7 +851,8 @@
 :root[data-bitbots="on"] .drop-tags span { border: 1px solid var(--bb-line); background: var(--bb-input); color: var(--bb-ink-2); }
 :root[data-bitbots="on"] .chat-bar { border: 2px solid var(--bb-line); background: var(--bb-input); }
 :root[data-bitbots="on"] .bubble { border: 2px solid var(--bb-line-strong); background: var(--bb-selected); color: var(--bb-ink); }
-:root[data-bitbots="on"] .reply { color: var(--bb-ink-2); }
+/* An assistant reply wears the main chat's .message-bubble skin; one step darker than the card so the frame reads. */
+:root[data-bitbots="on"] .reply.message-bubble { background: var(--bb-input); color: var(--bb-ink); }
 :root[data-bitbots="on"] .chat-input { font-family: var(--bb-font-body); caret-color: var(--bb-accent); }
 :root[data-bitbots="on"] .companion-attach { border: 2px solid transparent; }
 :root[data-bitbots="on"] .companion-attach:hover:not(:disabled) { border-color: var(--bb-line); background: var(--bb-hover); }
@@ -862,7 +863,21 @@
 :root[data-bitbots="on"] .list-card { border: 2px solid var(--bb-line); background: var(--bb-raised); }
 :root[data-bitbots="on"] .companion-activity-row { border: 1px solid var(--bb-line); background: var(--bb-bg); }
 :root[data-bitbots="on"] .companion-activity-row.team:hover { background: var(--bb-hover); }
-:root[data-bitbots="on"] .settings-line .segmented { margin-left: auto; }
+/* Companion settings panel: sections, teammate chips and checklist, volume. */
+:root[data-bitbots="on"] .cset-section > h3 { color: var(--bb-ink-3); font-family: var(--bb-font-display); }
+:root[data-bitbots="on"] .cset-copy strong { color: var(--bb-ink); font-family: var(--bb-font-display); font-weight: 700; }
+:root[data-bitbots="on"] .cset-copy small,
+:root[data-bitbots="on"] .cset-note { color: var(--bb-ink-2); }
+:root[data-bitbots="on"] .cset-footer { border-top: 2px dotted var(--bb-line); }
+:root[data-bitbots="on"] .cset-col { scrollbar-color: var(--bb-line-strong) transparent; }
+:root[data-bitbots="on"] .cset-chip { border: 2px solid var(--bb-line); background: var(--bb-input); color: var(--bb-ink); }
+:root[data-bitbots="on"] .cset-check { border: 2px solid transparent; font-family: var(--bb-font-body); }
+:root[data-bitbots="on"] .cset-check:hover:not(:disabled) { border-color: var(--bb-line); background: var(--bb-hover); }
+:root[data-bitbots="on"] .cset-box { border: 2px solid var(--bb-line-strong); background: var(--bb-input); }
+:root[data-bitbots="on"] .cset-check.on .cset-box { border-color: var(--bb-accent); background: var(--bb-accent); color: #141414; }
+:root[data-bitbots="on"] .volume-range::-webkit-slider-runnable-track { height: 8px; border: 2px solid var(--bb-line-strong); border-radius: 0; background: linear-gradient(90deg, var(--bb-accent) var(--fill), var(--bb-input) var(--fill)); }
+:root[data-bitbots="on"] .volume-range::-webkit-slider-thumb { width: 10px; height: 18px; margin-top: -7px; border: 2px solid #141414; border-radius: 0; background: var(--bb-ink); box-shadow: none; }
+:root[data-bitbots="on"] .volume-value { color: var(--bb-ink-2); font-family: var(--bb-font-body); }
 :root[data-bitbots="on"] .switch { border: 2px solid var(--bb-line-strong); background: var(--bb-input); }
 :root[data-bitbots="on"] .switch.on { border-color: var(--bb-accent); background: var(--bb-accent); }
 :root[data-bitbots="on"] .switch.on::after { background: #141414; }

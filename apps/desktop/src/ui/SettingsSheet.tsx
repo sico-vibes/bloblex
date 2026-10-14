@@ -20,6 +20,8 @@ import { runtimeAuthSummary } from './launchChecks'
 import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTime, type DiscoveryStatus } from './runtimeDiscovery'
 import { ConfirmDialog } from './BlobPage'
 import { setBitbotsEnabled, useBitbots } from '../blob/bitbots'
+import { SoundVolumeSlider } from './SoundVolumeSlider'
+import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import './bitbotsUi.css'
 
 export type SettingsPageId = 'General' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
@@ -90,6 +92,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [monitors, setMonitors] = useState<string[]>([])
   const [companionMonitor, setCompanionMonitorValue] = useState<string | null>(null)
   const [soundsEnabled, setSoundsEnabled] = useState(false)
+  const [soundVolume, setSoundVolume] = useState(DEFAULT_SOUND_VOLUME)
+  const savedSoundVolume = useRef(DEFAULT_SOUND_VOLUME)
   const [startPosition, setStartPosition] = useState<'launch' | 'last'>('launch')
   const [companionHotkey, setCompanionHotkey] = useState(true)
   const [appearanceTheme, setAppearanceTheme] = useState<'system' | 'dark' | 'light'>('system')
@@ -137,6 +141,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       if (typeof settings['companion.openAtStartup'] === 'boolean') setCompanionOpenAtStartup(settings['companion.openAtStartup'])
       if (typeof settings.closeToTray === 'boolean') setCloseToTrayValue(settings.closeToTray)
       if (typeof settings['companion.soundsEnabled'] === 'boolean') setSoundsEnabled(settings['companion.soundsEnabled'])
+      savedSoundVolume.current = normalizeSoundVolume(settings['companion.soundVolume'])
+      setSoundVolume(savedSoundVolume.current)
       if (settings['companion.startPosition'] === 'last') setStartPosition('last')
       if (typeof settings['companion.hotkey'] === 'boolean') setCompanionHotkey(settings['companion.hotkey'])
       if (settings['companion.hotkey'] !== false) {
@@ -342,6 +348,21 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     if (failure) { setSoundsEnabled(!enabled); onError(failure) }
   }
 
+  // The slider moves the shown value freely; the daemon setting is written once
+  // on release, and the companion (which owns the audio) applies it and plays one cue.
+  const saveSoundVolume = async (volume: number) => {
+    const previous = savedSoundVolume.current
+    setSoundVolume(volume)
+    try {
+      await rpc('settings.set', { key: 'companion.soundVolume', value: volume })
+      savedSoundVolume.current = volume
+      try { await emit('bloblex-sound-volume-changed', { volume, preview: true }) } catch { /* the companion hydrates the saved value on its next connection */ }
+    } catch (reason) {
+      setSoundVolume(previous)
+      onError(messageOf(reason))
+    }
+  }
+
   const saveDefaultMode = async (value: string) => {
     const mode = parseGlobalMode(value)
     if (value !== 'ask' && value !== 'auto') return
@@ -442,6 +463,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </SettingsRow>
               <SettingsRow label="Sounds" hint="Short cues when a blob finishes, fails or needs approval.">
                 <button type="button" className={`toggle ${soundsEnabled ? 'on' : ''}`} role="switch" aria-label="Companion sounds" aria-checked={soundsEnabled} onClick={() => void setSounds(!soundsEnabled)} disabled={saving}><i /></button>
+              </SettingsRow>
+              <SettingsRow label="Sound volume" hint="Applies to every companion cue. 0% is silent.">
+                <SoundVolumeSlider value={soundVolume} onChange={setSoundVolume} onCommit={(volume) => void saveSoundVolume(volume)} label="Companion sound volume" />
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Appearance">

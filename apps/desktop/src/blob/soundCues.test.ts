@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MASTER_VOLUME, disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, unlockCompanionAudioFromGesture, type CompanionCue } from './soundCues'
+import { MASTER_VOLUME, companionSoundVolume, companionSoundsEnabled, disposeCompanionAudio, playCompanionCue, setCompanionSoundVolume, setCompanionSoundsEnabled, soundVolumeGain, unlockCompanionAudioFromGesture, type CompanionCue } from './soundCues'
+import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume, percentToSoundVolume, soundVolumeToPercent } from './soundVolume'
 
 class FakeParam {
   readonly values: number[] = []
@@ -57,6 +58,7 @@ let reducedMotion = false
 
 afterEach(() => {
   disposeCompanionAudio()
+  setCompanionSoundVolume(DEFAULT_SOUND_VOLUME)
   FakeAudioContext.instances = []
   testDocument.hidden = false
   reducedMotion = false
@@ -163,5 +165,76 @@ describe('opt-in original companion sound cues', () => {
     expect(await unlockCompanionAudioFromGesture()).toBe(true)
     FakeAudioContext.instances[0].createOscillator = vi.fn(() => { throw new Error('Oscillator unavailable') })
     expect(playCompanionCue('error')).toBe(false)
+  })
+})
+
+describe('companion sound volume (companion.soundVolume)', () => {
+  it('reads a saved value defensively and converts to whole percent steps', () => {
+    expect(DEFAULT_SOUND_VOLUME).toBe(0.8)
+    expect(normalizeSoundVolume(undefined)).toBe(0.8)
+    expect(normalizeSoundVolume('0.2')).toBe(0.8)
+    expect(normalizeSoundVolume(Number.NaN)).toBe(0.8)
+    expect(normalizeSoundVolume(-1)).toBe(0)
+    expect(normalizeSoundVolume(7)).toBe(1)
+    expect(normalizeSoundVolume(0.35)).toBe(0.35)
+    expect(soundVolumeToPercent(0.35)).toBe(35)
+    expect(percentToSoundVolume(35)).toBe(0.35)
+    expect(percentToSoundVolume(140)).toBe(1)
+  })
+
+  it('keeps the default loudness at 80%, is louder at 100% and silent at 0', () => {
+    expect(soundVolumeGain(DEFAULT_SOUND_VOLUME)).toBe(MASTER_VOLUME)
+    expect(soundVolumeGain(1)).toBeCloseTo(MASTER_VOLUME * 1.25, 10)
+    expect(soundVolumeGain(0.4)).toBeCloseTo(MASTER_VOLUME * 0.5, 10)
+    expect(soundVolumeGain(0)).toBe(0)
+  })
+
+  it('applies a volume chosen before audio unlocks to the master gain, and moves it live afterwards', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('document', testDocument)
+    setCompanionSoundVolume(0.4)
+    expect(companionSoundVolume()).toBe(0.4)
+    setCompanionSoundsEnabled(true)
+    expect(await unlockCompanionAudioFromGesture()).toBe(true)
+    const [masterGain] = FakeAudioContext.instances[0].gains
+    expect(masterGain.gain.values).toEqual([soundVolumeGain(0.4)])
+
+    setCompanionSoundVolume(1)
+    expect(masterGain.gain.values.at(-1)).toBeCloseTo(soundVolumeGain(1), 10)
+    expect(companionSoundsEnabled()).toBe(true)
+    expect(playCompanionCue('blip')).toBe(true)
+  })
+
+  it('treats volume 0 as muted without turning sounds off, and recovers when raised', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('document', testDocument)
+    setCompanionSoundsEnabled(true)
+    expect(await unlockCompanionAudioFromGesture()).toBe(true)
+    const context = FakeAudioContext.instances[0]
+
+    setCompanionSoundVolume(0)
+    const before = context.oscillators.length
+    // Reported as played so callers do not try to re-unlock; nothing is synthesized.
+    expect(playCompanionCue('finish')).toBe(true)
+    expect(context.oscillators).toHaveLength(before)
+    expect(companionSoundsEnabled()).toBe(true)
+    expect(context.gains[0].gain.values.at(-1)).toBe(0)
+
+    setCompanionSoundVolume(0.5)
+    expect(playCompanionCue('finish')).toBe(true)
+    expect(context.oscillators.length).toBeGreaterThan(before)
+  })
+
+  it('keeps the chosen volume across disabling and re-enabling sounds', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('document', testDocument)
+    setCompanionSoundVolume(0.25)
+    setCompanionSoundsEnabled(true)
+    await unlockCompanionAudioFromGesture()
+    setCompanionSoundsEnabled(false)
+    setCompanionSoundsEnabled(true)
+    expect(await unlockCompanionAudioFromGesture()).toBe(true)
+    const context = FakeAudioContext.instances.at(-1)!
+    expect(context.gains[0].gain.values).toEqual([soundVolumeGain(0.25)])
   })
 })

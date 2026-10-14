@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
   listenForDaemonEvents: vi.fn(), listenForDaemonConnection: vi.fn(), listenForActiveSession: vi.fn(),
   listenForActiveRuntime: vi.fn(), listenForOpenSettings: vi.fn(), directListen: vi.fn(), emit: vi.fn(),
   getCurrentWindow: vi.fn(), playCompanionCue: vi.fn(), unlockCompanionAudioFromGesture: vi.fn(),
-  setCompanionSoundsEnabled: vi.fn(), disposeCompanionAudio: vi.fn(), daemonEventHandlers: [] as Array<(event: any) => void>,
+  setCompanionSoundsEnabled: vi.fn(), setCompanionSoundVolume: vi.fn(), disposeCompanionAudio: vi.fn(), daemonEventHandlers: [] as Array<(event: any) => void>,
 }))
 
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
@@ -58,6 +58,7 @@ vi.mock('../blob/soundCues', () => ({
   playCompanionCue: h.playCompanionCue,
   unlockCompanionAudioFromGesture: h.unlockCompanionAudioFromGesture,
   setCompanionSoundsEnabled: h.setCompanionSoundsEnabled,
+  setCompanionSoundVolume: h.setCompanionSoundVolume,
   disposeCompanionAudio: h.disposeCompanionAudio,
 }))
 vi.mock('../blob/BlobCanvas', async () => {

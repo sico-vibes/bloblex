@@ -135,7 +135,7 @@
 .message-author.target { color: var(--agent-accent, var(--text-2)); }
 .team-submenu { position: absolute; left: calc(100% + 6px); width: 210px; }
 .message-mentions { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.mention { --mention: var(--text-1); display: inline-flex; align-items: center; gap: 3px; margin: 0 1px; color: color-mix(in srgb, var(--mention) 82%, var(--text-1)); font-weight: 600; vertical-align: -3px; white-space: nowrap; }
+.mention { --mention: var(--text-1); display: inline-flex; align-items: center; gap: 6px; margin: 0 1px; color: color-mix(in srgb, var(--mention) 82%, var(--text-1)); font-weight: 600; vertical-align: -3px; white-space: nowrap; }
 .mention .blob-canvas { pointer-events: none; }
 
 /* Hand-off: pick the blob that continues this conversation. */

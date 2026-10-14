@@ -64,6 +64,8 @@ struct Flags {
     usage: String,
     permission: bool,
     v2: bool,
+    v2_all_answer: bool,
+    v2_stop_after: Option<u32>,
     pid_log: Option<PathBuf>,
 }
 
@@ -78,6 +80,8 @@ impl Flags {
         let mut usage = "sequence".to_owned();
         let mut permission = false;
         let mut v2 = false;
+        let mut v2_all_answer = false;
+        let mut v2_stop_after = None;
         let mut pid_log = None;
         let mut index = 0;
         while index < args.len() {
@@ -93,10 +97,12 @@ impl Flags {
                 "--usage" => usage = next.unwrap_or("sequence").to_owned(),
                 "--permission-request" => permission = true,
                 "--v2" => v2 = true,
+                "--v2-all-answer" => v2_all_answer = true,
+                "--v2-stop-after" => v2_stop_after = next.and_then(|value| value.parse().ok()),
                 "--pid-log" => pid_log = next.map(PathBuf::from),
                 _ => {}
             }
-            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--usage" | "--pid-log") {
+            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--usage" | "--v2-stop-after" | "--pid-log") {
                 2
             } else {
                 1
@@ -112,6 +118,8 @@ impl Flags {
             usage,
             permission,
             v2,
+            v2_all_answer,
+            v2_stop_after,
             pid_log,
         }
     }
@@ -154,8 +162,13 @@ struct Session {
     prompt_id: Option<Value>,
     permission_pending: Option<(Value, Value)>,
     turns: u32,
+    v2_model_calls: u32,
     v2: bool,
 }
+
+/// The `--v2` model that rejects `session/set_config_option` unless
+/// `--v2-all-answer` is given, so tests can exercise a provider error mid-walk.
+const V2_REJECT_MODEL: &str = "opencode-go/model-004";
 
 /// OpenCode 2's `session/new` lists every gateway model with a current choice
 /// and already publishes the current model's `thought_level` levels.
@@ -163,8 +176,21 @@ fn v2_models() -> Vec<String> {
     (1..=115).map(|index| format!("opencode-go/model-{index:03}")).collect()
 }
 
-fn v2_efforts() -> Vec<String> {
-    ["low", "medium", "high", "default"].into_iter().map(str::to_owned).collect()
+/// OpenCode 2 rebuilds the `effort` select for the newly selected model after
+/// `session/set_config_option {configId:"model"}`. This stands in for the
+/// provider's per-model answer. `None` means the model genuinely has no
+/// `effort` option; `default` stays in the option list because that is what the
+/// provider sends, and the catalog walk is expected to drop it.
+fn v2_efforts_for(model: &str) -> Option<Vec<String>> {
+    let levels: &[&str] = match model {
+        "opencode-go/model-001" => &["low", "medium", "high", "default"],
+        "opencode-go/model-002" => &["low", "high", "max", "default"],
+        "opencode-go/model-003" => return None,
+        "opencode-go/model-004" => &["max", "default"],
+        "opencode-go/model-005" => &["minimal", "none", "thinking", "default"],
+        _ => &["low", "high", "max", "default"],
+    };
+    Some(levels.iter().map(|level| (*level).to_owned()).collect())
 }
 
 impl Session {
@@ -177,30 +203,45 @@ impl Session {
             flags.models.first().cloned().unwrap_or_else(|| "opencode/big-pickle".into())
         };
         let effort = if flags.v2 { Some("default".to_owned()) } else { None };
+        let efforts = if flags.v2 { v2_efforts_for(&model).unwrap_or_default() } else { flags.efforts.clone() };
         Self {
             model,
             models,
             mode: "build".into(),
             modes: mode_list(),
             effort,
-            efforts: if flags.v2 { v2_efforts() } else { flags.efforts.clone() },
+            efforts,
             effort_id: flags.effort_id.clone(),
             reject_effort: flags.reject_effort.clone(),
             variant_models,
             prompt_id: None,
             permission_pending: None,
             turns: 0,
+            v2_model_calls: 0,
             v2: flags.v2,
         }
     }
 
     fn options(&self) -> Value {
         let mut options = vec![select("model", "model", &self.model, &self.models), select("mode", "mode", &self.mode, &self.modes)];
-        if self.v2 || self.effort.is_some() {
+        if let Some(efforts) = self.efforts_for() {
             let current = self.effort.as_deref().unwrap_or("default");
-            options.push(select(&self.effort_id, "thought_level", current, &self.efforts));
+            options.push(select(&self.effort_id, "thought_level", current, &efforts));
         }
         Value::Array(options)
+    }
+
+    /// The `effort` levels to publish for the current model: a per-model table
+    /// on the `--v2` shape, otherwise the flat `--efforts` set when the model
+    /// offers one.
+    fn efforts_for(&self) -> Option<Vec<String>> {
+        if self.v2 {
+            v2_efforts_for(&self.model)
+        } else if self.effort.is_some() {
+            Some(self.efforts.clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -289,6 +330,20 @@ fn acp_main(_args: &[String], flags: &Flags) {
             "session/set_config_option" => {
                 let config_id = message["params"]["configId"].as_str().unwrap_or("");
                 let value = message["params"]["value"].as_str().unwrap_or("");
+                if session.v2 && config_id == "model" {
+                    session.v2_model_calls += 1;
+                    // Stop answering to exercise the client's per-call budget.
+                    if flags.v2_stop_after.is_some_and(|limit| session.v2_model_calls > limit) {
+                        continue;
+                    }
+                    // One model rejects the change, as a provider can, without
+                    // failing the whole session.
+                    if !flags.v2_all_answer && value == V2_REJECT_MODEL {
+                        error(&mut stdout, &id, -32602, "model is not selectable");
+                        write_record(flags, &rpc, Some(&session));
+                        continue;
+                    }
+                }
                 if !apply_option(&mut session, config_id, value) {
                     error(&mut stdout, &id, -32602, "option value is not offered");
                 } else {
@@ -307,11 +362,15 @@ fn apply_option(session: &mut Session, config_id: &str, value: &str) -> bool {
     match config_id {
         "model" if session.models.iter().any(|model| model == value) => {
             session.model = value.to_owned();
-            session.effort = if session.variant_models.contains(value) {
-                Some(session.effort.clone().unwrap_or_else(|| session.efforts.first().cloned().unwrap_or_else(|| "low".into())))
+            if session.v2 {
+                session.effort = v2_efforts_for(value).map(|_| "default".to_owned());
             } else {
-                None
-            };
+                session.effort = if session.variant_models.contains(value) {
+                    Some(session.effort.clone().unwrap_or_else(|| session.efforts.first().cloned().unwrap_or_else(|| "low".into())))
+                } else {
+                    None
+                };
+            }
             true
         }
         "mode" if session.modes.iter().any(|mode| mode == value) => {

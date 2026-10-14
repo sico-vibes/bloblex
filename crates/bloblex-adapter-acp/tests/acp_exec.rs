@@ -235,6 +235,17 @@ fn take_outcomes(events: &[AgentEvent]) -> &BTreeMap<String, bloblex_agent_core:
         .unwrap()
 }
 
+fn catalog_model<'a>(
+    catalog: &'a bloblex_agent_core::ModelCatalog,
+    id: &str,
+) -> &'a bloblex_agent_core::ModelInfo {
+    catalog
+        .models
+        .iter()
+        .find(|model| model.id == id)
+        .unwrap_or_else(|| panic!("catalog is missing {id}"))
+}
+
 #[tokio::test]
 async fn session_setup_order_is_model_then_mode_then_effort_before_prompt() {
     let temp = Temp::new();
@@ -846,7 +857,7 @@ async fn config_options_fallback_uses_an_empty_bloblex_working_directory() {
     let runtime = runtime(vec!["--record".into(), temp.record().to_string_lossy().into(), "--verbose-invalid".into()]);
     let catalog = adapter.model_catalog(&runtime).await.unwrap();
     assert_eq!(catalog.source, "config_options");
-    assert!(!catalog.validated);
+    assert!(catalog.validated, "every model answered the walk even from the fallback");
     let record = read_record(&temp.record());
     let cwd = record["cwd"].as_str().unwrap();
     assert!(cwd.contains("bloblex-opencode-catalog-cwd-"));
@@ -903,7 +914,7 @@ async fn opencode2_session_and_catalog_spawn_without_the_removed_cwd_flag() {
 }
 
 #[tokio::test]
-async fn opencode2_config_options_catalog_flags_the_current_model_and_its_efforts_only() {
+async fn opencode2_config_options_catalog_walks_every_model_for_its_own_efforts() {
     let temp = Temp::new();
     let adapter = AcpAdapter::default();
     let args = vec![
@@ -914,20 +925,94 @@ async fn opencode2_config_options_catalog_flags_the_current_model_and_its_effort
     ];
     let catalog = adapter.model_catalog(&runtime(args)).await.unwrap();
     assert_eq!(catalog.source, "config_options");
-    assert!(!catalog.validated);
     assert!(!catalog.fallback);
     assert_eq!(catalog.models.len(), 115, "the v2 session lists the whole gateway");
-    let flagged = catalog.models.iter().filter(|model| model.is_default == Some(true)).collect::<Vec<_>>();
-    assert_eq!(flagged.len(), 1, "exactly the current model is flagged");
-    assert_eq!(flagged[0].id, "opencode-go/model-007");
-    assert_eq!(flagged[0].supported_thinking, ["low", "medium", "high"], "the current model's three real levels, low to high");
-    assert!(!flagged[0].supported_thinking.iter().any(|level| level == "default"), "`default` is synthetic, not a level");
+    // The walk selects every model, so each row carries that model's own answer.
+    assert_eq!(catalog_model(&catalog, "opencode-go/model-001").supported_thinking, ["low", "medium", "high"], "levels are ordered low to high");
+    assert_eq!(catalog_model(&catalog, "opencode-go/model-002").supported_thinking, ["low", "high", "max"]);
+    assert!(catalog_model(&catalog, "opencode-go/model-003").supported_thinking.is_empty(), "a model with no effort option has none");
+    assert_eq!(catalog_model(&catalog, "opencode-go/model-005").supported_thinking, ["none", "minimal", "thinking"], "unknown names stay after known ones");
+    assert!(catalog_model(&catalog, "opencode-go/model-004").supported_thinking.is_empty(), "the rejected model keeps no levels");
     assert!(
-        catalog.models.iter().filter(|model| model.is_default != Some(true)).all(|model| model.supported_thinking.is_empty()),
-        "no other model invents levels",
+        catalog.models.iter().all(|model| !model.supported_thinking.iter().any(|level| level == "default")),
+        "`default` is synthetic, not a level",
     );
+    let flagged = catalog.models.iter().filter(|model| model.is_default == Some(true)).collect::<Vec<_>>();
+    assert_eq!(flagged.len(), 1, "exactly the session's current model is flagged");
+    assert_eq!(flagged[0].id, "opencode-go/model-007");
+    assert!(!catalog.validated, "one model was rejected, so the walk is not complete");
     let argv = read_record(&temp.record())["argv"].clone();
     assert!(!argv.as_array().unwrap().iter().any(|arg| arg == "--cwd"));
+}
+
+#[tokio::test]
+async fn opencode2_config_options_catalog_is_validated_when_every_model_answers() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec![
+        "--record".into(),
+        temp.record().to_string_lossy().into(),
+        "--v2".into(),
+        "--v2-all-answer".into(),
+        "--verbose-invalid".into(),
+    ];
+    let catalog = adapter.model_catalog(&runtime(args)).await.unwrap();
+    assert_eq!(catalog.source, "config_options");
+    assert!(catalog.validated, "every model answered, so the provider's own lists are authoritative");
+    assert_eq!(catalog_model(&catalog, "opencode-go/model-004").supported_thinking, ["max"], "the previously rejected model now answers");
+    assert!(catalog_model(&catalog, "opencode-go/model-003").supported_thinking.is_empty(), "a model with no effort option still answers");
+    assert!(
+        catalog.models.iter().filter(|model| model.id != "opencode-go/model-003").all(|model| !model.supported_thinking.is_empty()),
+        "every other model reports its levels",
+    );
+}
+
+#[tokio::test]
+async fn opencode2_config_options_catalog_budget_keeps_partial_results_and_reaps_the_child() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec![
+        "--record".into(),
+        temp.record().to_string_lossy().into(),
+        "--v2".into(),
+        "--v2-stop-after".into(),
+        "3".into(),
+        "--verbose-invalid".into(),
+    ];
+    let started = Instant::now();
+    let catalog = adapter.model_catalog(&runtime(args)).await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(8), "a model that stops answering must not outlive the per-call budget");
+    assert_eq!(catalog.source, "config_options");
+    assert!(!catalog.validated, "a budget cut leaves the walk incomplete");
+    assert_eq!(catalog.models.len(), 115, "the partial catalog still lists every model");
+    assert_eq!(catalog_model(&catalog, "opencode-go/model-001").supported_thinking, ["low", "medium", "high"]);
+    assert_eq!(catalog_model(&catalog, "opencode-go/model-002").supported_thinking, ["low", "high", "max"]);
+    assert!(catalog_model(&catalog, "opencode-go/model-004").supported_thinking.is_empty(), "models after the cut keep no levels");
+    let pid = read_record(&temp.record())["pid"].as_u64().unwrap() as u32;
+    if let Some(child) = ProcessSignal::open(pid) {
+        assert!(child.wait_signaled(PROCESS_EXIT_TIMEOUT).await, "the catalog probe child must not linger");
+    }
+}
+
+#[tokio::test]
+async fn opencode2_session_selects_the_model_before_its_effort() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into(), "--v2".into()];
+    let exec = options(Some("opencode-go/model-002"), Some("high"), None);
+    let (handle, _) = open_session(&adapter, args, exec.clone()).await;
+    adapter
+        .prompt(
+            &handle,
+            PromptRequest { attachments: Vec::new(), turn_id: "turn-order".into(), text: "hello".into(), exec_options: exec },
+        )
+        .await
+        .unwrap();
+    let trace = rpc_trace(&read_record(&temp.record()));
+    let model_at = trace.iter().position(|call| call == "session/set_config_option model=opencode-go/model-002").expect("the model is selected");
+    let effort_at = trace.iter().position(|call| call == "session/set_config_option effort=high").expect("the effort is selected");
+    assert!(model_at < effort_at, "effort options depend on the model, so the model goes first: {trace:?}");
+    adapter.close_session(&handle).await.unwrap();
 }
 
 #[tokio::test]

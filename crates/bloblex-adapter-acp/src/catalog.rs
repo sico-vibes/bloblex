@@ -3,12 +3,13 @@ use bloblex_agent_core::{AdapterError, ModelCatalog, ModelInfo, RuntimeSpec};
 use bloblex_process::{prepare_command, ProcessTree};
 use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
-    process::{Child, Command},
+    process::{Child, ChildStdin, ChildStdout, Command},
 };
 use uuid::Uuid;
 
@@ -31,15 +32,15 @@ pub(crate) async fn fetch_model_catalog(
         Err(AdapterError::Process(message)) if message == ERR_CATALOG_TIMEOUT => return Err(AdapterError::Process(message)),
         Err(_) => {}
     }
-    let models = fetch_config_options(runtime, timeout).await.ok_or_else(|| AdapterError::Process(ERR_CATALOG.into()))?;
+    let catalog = fetch_config_options(runtime, timeout).await.ok_or_else(|| AdapterError::Process(ERR_CATALOG.into()))?;
     let fetched = unix_now();
     Ok(ModelCatalog {
-        models,
+        models: catalog.models,
         fetched_at: rfc3339_from_unix(fetched),
         expires_at: rfc3339_from_unix(fetched.saturating_add(60)),
         fallback: false,
         source: "config_options".into(),
-        validated: false,
+        validated: catalog.validated,
     })
 }
 
@@ -92,7 +93,29 @@ async fn fetch_verbose_catalog(
     parse_verbose_catalog(&text).map_err(|_| AdapterError::Process(ERR_CATALOG.into()))
 }
 
-async fn fetch_config_options(runtime: &RuntimeSpec, timeout: Duration) -> Option<Vec<ModelInfo>> {
+/// A config-options catalog plus whether the provider answered the effort
+/// question for every model it listed.
+struct ConfigCatalog {
+    models: Vec<ModelInfo>,
+    validated: bool,
+}
+
+/// How long one `session/set_config_option` may take before the walk abandons
+/// the probe. The whole walk is additionally bounded by the caller's catalog
+/// timeout, so a hung provider cannot exceed the existing catalog budget.
+const CONFIG_OPTION_CALL_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What the provider said for one `session/set_config_option` request.
+enum Reply {
+    /// A result was returned; it may or may not contain an `effort` option.
+    Result(Value),
+    /// The provider returned a JSON-RPC error for this request.
+    Rejected,
+    /// No matching reply arrived before the per-call budget ran out.
+    Missing,
+}
+
+async fn fetch_config_options(runtime: &RuntimeSpec, timeout: Duration) -> Option<ConfigCatalog> {
     let cwd = CatalogWorkingDirectory::new().ok()?;
     let cwd_arg = cwd.path().to_string_lossy().into_owned();
     let mut command = Command::new(&runtime.executable);
@@ -110,34 +133,150 @@ async fn fetch_config_options(runtime: &RuntimeSpec, timeout: Duration) -> Optio
     let process_tree = ProcessTree::attach(&mut child).ok()?;
     let stdin = child.stdin.take()?;
     let stdout = child.stdout.take()?;
-    let result = tokio::time::timeout(timeout, async move {
-        let mut stdin = stdin;
-        let mut stdout = BufReader::new(stdout).lines();
-        for request in [
-            r#"{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Bloblex","version":"0.1.0"}}}"#,
-            r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
-            &serde_json::json!({"jsonrpc":"2.0","id":"2","method":"session/new","params":{"cwd":cwd_arg,"mcpServers":[]}}).to_string(),
-        ] {
-            stdin.write_all(request.as_bytes()).await.ok()?;
-            stdin.write_all(b"\n").await.ok()?;
-        }
-        while let Some(line) = stdout.next_line().await.ok()? {
-            let message: Value = serde_json::from_str(&line).ok()?;
-            if message["id"].as_str() == Some("2") && message.get("error").is_none() {
-                return crate::exec::config_option_catalog(
-                    &crate::exec::options_from_result(&message["result"]),
-                );
-            }
-        }
-        None
-    })
-    .await
-    .ok()
-    .flatten();
+    // The walk enforces its own deadline and returns whatever it learned; the
+    // throwaway probe session is always reaped afterwards.
+    let result = walk_config_options(stdin, stdout, &cwd_arg, timeout).await;
     let _ = process_tree.terminate();
     let _ = child.kill().await;
     let _ = child.wait().await;
     result
+}
+
+/// OpenCode 2 answers `session/new` with the whole model list but a single
+/// `effort` option for the current model. It rebuilds that option for the newly
+/// selected model on every `session/set_config_option {configId:"model"}`, so
+/// the only way to learn every model's levels is to select each one in turn and
+/// read the `effort` select back. The walk is sequential and bounded: a model
+/// that errors keeps no levels, and the first model that does not answer ends
+/// the walk with the partial result.
+async fn walk_config_options(
+    mut stdin: ChildStdin,
+    stdout: ChildStdout,
+    cwd_arg: &str,
+    budget: Duration,
+) -> Option<ConfigCatalog> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut lines = BufReader::new(stdout).lines();
+    for request in [
+        serde_json::json!({"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Bloblex","version":"0.1.0"}}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","id":"2","method":"session/new","params":{"cwd":cwd_arg,"mcpServers":[]}}),
+    ] {
+        write_message(&mut stdin, &request).await?;
+    }
+
+    let session = match read_reply(&mut lines, "2", remaining_budget(&deadline)?).await {
+        Reply::Result(result) => result,
+        _ => return None,
+    };
+    let session_id = session["sessionId"].as_str()?.to_owned();
+    let options = crate::exec::options_from_result(&session);
+    let model_values = crate::exec::config_option(&options, "model")?["options"].as_array()?.clone();
+
+    let mut per_model: BTreeMap<String, crate::exec::ModelThinking> = BTreeMap::new();
+    // `validated` is what the daemon uses to check turn options against the
+    // provider. The model list is the provider's own complete list for the
+    // account, and each level set is the provider's own answer for that model,
+    // so a walk that reached every model without a rejection or budget cut is
+    // the authoritative source `validated` is meant to describe. Any skipped
+    // model keeps the whole catalog unvalidated even though the rest is real.
+    let mut validated = true;
+    let mut next_id = 3u64;
+    for model in &model_values {
+        let Some(model_id) = model["value"].as_str().or_else(|| model["id"].as_str()) else { continue; };
+        let Some(limit) = call_budget(&deadline) else { validated = false; break; };
+        let request_id = next_id.to_string();
+        next_id += 1;
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "session/set_config_option",
+            "params": {"sessionId": session_id, "configId": "model", "value": model_id}
+        });
+        if write_message(&mut stdin, &request).await.is_none() {
+            validated = false;
+            break;
+        }
+        match read_reply(&mut lines, &request_id, limit).await {
+            Reply::Result(result) => {
+                per_model.insert(model_id.to_owned(), thinking_from_options(&crate::exec::options_from_result(&result)));
+            }
+            // One rejected model keeps an empty list and does not fail the catalog.
+            Reply::Rejected => validated = false,
+            // A model that never answers is a budget cut: stop and keep what we have.
+            Reply::Missing => {
+                validated = false;
+                break;
+            }
+        }
+    }
+
+    let models = crate::exec::config_option_catalog(&options, &per_model)?;
+    Some(ConfigCatalog { models, validated })
+}
+
+/// Time left before the overall catalog budget is exhausted.
+fn remaining_budget(deadline: &tokio::time::Instant) -> Option<Duration> {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    (!remaining.is_zero()).then_some(remaining)
+}
+
+/// Time left for one walked `session/set_config_option`, capped at one call's
+/// budget. `None` means the overall catalog budget is exhausted.
+fn call_budget(deadline: &tokio::time::Instant) -> Option<Duration> {
+    remaining_budget(deadline).map(|remaining| remaining.min(CONFIG_OPTION_CALL_TIMEOUT))
+}
+
+async fn write_message(stdin: &mut ChildStdin, message: &Value) -> Option<()> {
+    let mut bytes = serde_json::to_vec(message).ok()?;
+    bytes.push(b'\n');
+    stdin.write_all(&bytes).await.ok()
+}
+
+async fn read_reply(
+    lines: &mut tokio::io::Lines<BufReader<ChildStdout>>,
+    id: &str,
+    limit: Duration,
+) -> Reply {
+    tokio::time::timeout(limit, async {
+        while let Ok(Some(line)) = lines.next_line().await {
+            let Ok(message) = serde_json::from_str::<Value>(&line) else { continue; };
+            if message["id"].as_str() != Some(id) {
+                continue;
+            }
+            if message.get("error").is_some() {
+                return Reply::Rejected;
+            }
+            return Reply::Result(message["result"].clone());
+        }
+        Reply::Missing
+    })
+    .await
+    .unwrap_or(Reply::Missing)
+}
+
+/// The provider's `effort` option for one model, matched by its `thought_level`
+/// category first and the conventional `effort` id second. `default` is the
+/// provider's synthetic "use the model default" choice, not a level; it is kept
+/// only as the concrete default when the provider's current value names one.
+fn thinking_from_options(options: &[Value]) -> crate::exec::ModelThinking {
+    let Some(option) = options
+        .iter()
+        .find(|option| option["category"].as_str() == Some("thought_level"))
+        .or_else(|| crate::exec::config_option(options, "effort"))
+    else {
+        return crate::exec::ModelThinking::default();
+    };
+    let mut levels = crate::exec::option_values(option)
+        .into_iter()
+        .filter(|level| level != "default")
+        .collect::<Vec<_>>();
+    levels.sort_by_key(|level| effort_rank(level));
+    levels.dedup();
+    let default = crate::exec::current_value(option)
+        .filter(|level| level != "default")
+        .filter(|level| levels.contains(level));
+    crate::exec::ModelThinking { levels, default }
 }
 
 async fn kill_child(child: &mut Child, process_tree: &ProcessTree) {

@@ -235,45 +235,40 @@ pub(crate) fn option_values(option: &Value) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-pub(crate) fn config_option_catalog(options: &[Value]) -> Option<Vec<ModelInfo>> {
+/// Per-model reasoning levels collected by walking the provider's `model`
+/// option. `levels` excludes the synthetic `default` choice and is ordered low
+/// to high; `default` is a concrete provider level only when the provider
+/// reported one for that model.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ModelThinking {
+    pub levels: Vec<String>,
+    pub default: Option<String>,
+}
+
+/// Builds the catalog rows from the provider's model list plus the per-model
+/// effort answer the caller collected. `options` is the `session/new` (or
+/// `session/load`) `configOptions`; `per_model` is keyed by model id and holds
+/// the levels the provider rebuilt for that model. A model the provider gave no
+/// effort option for (or that failed) has no entry and therefore no levels.
+pub(crate) fn config_option_catalog(
+    options: &[Value],
+    per_model: &BTreeMap<String, ModelThinking>,
+) -> Option<Vec<ModelInfo>> {
     let model_option = config_option(options, "model")?;
     let models = model_option["options"].as_array()?;
     let modes = config_option(options, "mode").map(option_values).unwrap_or_default();
-    // OpenCode publishes the selected model's reasoning levels as the select in
-    // the `thought_level` category; the option id is not guaranteed, so match the
-    // category first and fall back to the conventional `effort` id. This source
-    // only knows the levels of the current model, so no other row gets any.
-    let thought_level = options
-        .iter()
-        .find(|option| option["category"].as_str() == Some("thought_level"))
-        .or_else(|| config_option(options, "effort"));
-    let mut thinking = thought_level
-        .map(|option| {
-            option_values(option)
-                .into_iter()
-                .filter(|level| level.as_str() != "default")
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    thinking.sort_by_key(|level| crate::catalog::effort_rank(level));
-    thinking.dedup();
-    // The provider's current value names the current model's effort. `default` is
-    // its synthetic "use the model default" choice, not a concrete level.
-    let current_effort = thought_level
-        .and_then(current_value)
-        .filter(|level| level.as_str() != "default")
-        .filter(|level| thinking.contains(level));
     let selected_model = current_value(model_option);
     let mut catalog = Vec::new();
     for model in models {
         let id = model["value"].as_str().or_else(|| model["id"].as_str())?;
         let is_default = selected_model.as_deref() == Some(id);
+        let thinking = per_model.get(id);
         catalog.push(ModelInfo {
             id: id.to_owned(),
             display_name: model["name"].as_str().unwrap_or(id).to_owned(),
             provider_id: None,
-            supported_thinking: if is_default { thinking.clone() } else { Vec::new() },
-            default_thinking: if is_default { current_effort.clone() } else { None },
+            supported_thinking: thinking.map(|thinking| thinking.levels.clone()).unwrap_or_default(),
+            default_thinking: thinking.and_then(|thinking| thinking.default.clone()),
             service_tiers: Vec::new(),
             default_service_tier: None,
             variants: (!modes.is_empty()).then(|| modes.iter().cloned().collect()),
@@ -298,16 +293,6 @@ pub(crate) fn default_provider_mode(options: &[Value]) -> Option<String> {
         return Some("build".into());
     }
     None
-}
-
-#[cfg(test)]
-pub(crate) fn apply_model_efforts(models: &mut [ModelInfo], verbose_models: &[ModelInfo]) {
-    for model in models {
-        if let Some(verbose) = verbose_models.iter().find(|candidate| candidate.id == model.id) {
-            model.supported_thinking = verbose.supported_thinking.clone();
-            model.default_thinking = verbose.default_thinking.clone();
-        }
-    }
 }
 
 pub(crate) fn current_value(option: &Value) -> Option<String> {
@@ -578,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn config_option_effort_reaches_only_the_current_model() {
+    fn config_option_catalog_attaches_each_models_walked_levels() {
         let options = options_from_result(&json!({"configOptions":[
             {"id":"model","currentValue":"opencode-go/deepseek-v4.1-flash","options":[
                 {"value":"opencode/big-pickle","name":"Big Pickle"},
@@ -586,34 +571,20 @@ mod tests {
             ]},
             {"id":"effort","currentValue":"low","options":[{"value":"low"},{"value":"high"}]}
         ]}));
-        let mut models = config_option_catalog(&options).unwrap();
-        assert!(models.iter().find(|model| model.id == "opencode/big-pickle").unwrap().supported_thinking.is_empty());
+        // The walk gives each model its own answer; only the current model is flagged.
+        let mut per_model = BTreeMap::new();
+        per_model.insert(
+            "opencode-go/deepseek-v4.1-flash".to_owned(),
+            ModelThinking { levels: vec!["low".into(), "high".into()], default: Some("low".into()) },
+        );
+        let models = config_option_catalog(&options, &per_model).unwrap();
+        let pickle = models.iter().find(|model| model.id == "opencode/big-pickle").unwrap();
+        assert!(pickle.supported_thinking.is_empty());
+        assert_eq!(pickle.is_default, Some(false));
         let deepseek = models.iter().find(|model| model.id == "opencode-go/deepseek-v4.1-flash").unwrap();
         assert_eq!(deepseek.supported_thinking, ["low", "high"]);
         assert_eq!(deepseek.default_thinking.as_deref(), Some("low"));
-
-        let verbose_models = vec![ModelInfo {
-            id: "opencode-go/deepseek-v4.1-flash".into(),
-            display_name: "DeepSeek".into(),
-            provider_id: Some("opencode-go".into()),
-            supported_thinking: vec!["low".into(), "high".into()],
-            default_thinking: None,
-            service_tiers: Vec::new(),
-            default_service_tier: None,
-            variants: Some(vec!["low".into(), "high".into()]),
-            host_dependent: true,
-            is_default: None,
-            group: None,
-            availability: None,
-            release_date: None,
-            context_window: None,
-        }];
-        apply_model_efforts(&mut models, &verbose_models);
-        assert!(models.iter().find(|model| model.id == "opencode/big-pickle").unwrap().supported_thinking.is_empty());
-        assert_eq!(
-            models.iter().find(|model| model.id == "opencode-go/deepseek-v4.1-flash").unwrap().supported_thinking,
-            ["low", "high"],
-        );
+        assert_eq!(deepseek.is_default, Some(true));
     }
 
     #[test]

@@ -88,6 +88,18 @@ describe('daemon event reconciliation', () => {
     expect(completed.sessions?.[0].messages?.[0].content).toBe('hello world')
   })
 
+  it('places a notice above the message it names, and appends one that names nothing', () => {
+    const streamed = applyEvent(base(), event('message.delta', 6, { sessionId: 's-a', turnId: 't-a', messageId: 'm-text', role: 'assistant', delta: 'I asked them.' }))
+    const above = applyEvent(streamed, event('message.completed', 7, { sessionId: 's-a', messageId: 'n-sent', role: 'notice', beforeMessageId: 'm-text', message: { id: 'n-sent', role: 'notice', content: 'Messaged Mate' } }))
+    const ids = above.sessions?.[0].messages?.map((item) => item.id) ?? []
+    expect(ids.indexOf('n-sent')).toBeGreaterThanOrEqual(0)
+    expect(ids.indexOf('n-sent')).toBeLessThan(ids.indexOf('m-text'))
+    const below = applyEvent(above, event('message.completed', 8, { sessionId: 's-a', messageId: 'n-reply', role: 'notice', message: { id: 'n-reply', role: 'notice', content: 'Message from Mate' } }))
+    const after = below.sessions?.[0].messages?.map((item) => item.id) ?? []
+    expect(after[after.length - 1]).toBe('n-reply')
+    expect(after.indexOf('n-sent')).toBeLessThan(after.indexOf('m-text'))
+  })
+
   it('attaches provider failure detail to its turn without losing the failure class', () => {
     const initial = base()
     initial.sessions![0]!.turns = [{ id: 't-a', state: 'working' }]

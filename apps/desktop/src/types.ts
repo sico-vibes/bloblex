@@ -483,7 +483,13 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
             ? { ...current, ...message, id: messageId ?? current.id, content: `${typeof current.content === 'string' ? current.content : typeof current.text === 'string' ? current.text : ''}${delta}` }
             : { ...current, ...message, id: messageId ?? current.id, content: typeof message.content === 'string' ? message.content : current.content }
         } else {
-          messages.push(event.type === 'message.delta' && typeof payload.delta === 'string' ? { ...message, id: messageId, content: payload.delta } : { ...message, id: messageId })
+          const added = event.type === 'message.delta' && typeof payload.delta === 'string' ? { ...message, id: messageId, content: payload.delta } : { ...message, id: messageId }
+          // A notice for something the turn did ("Messaged X") names the message it reads
+          // above, so a live window shows what a reload shows.
+          const beforeId = typeof payload.beforeMessageId === 'string' ? payload.beforeMessageId : ''
+          const beforeIndex = beforeId ? messages.findIndex((item) => item.id === beforeId) : -1
+          if (beforeIndex >= 0) messages.splice(beforeIndex, 0, added)
+          else messages.push(added)
         }
         return { ...session, messages }
       }

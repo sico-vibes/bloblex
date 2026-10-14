@@ -2911,9 +2911,12 @@ async fn forward_events_with_timeouts(
                     .db
                     .finalize_latest_assistant(&sid, turn.as_deref().unwrap_or(""), &text)
                     .unwrap_or(Value::Null);
+                // Report the text finalized on the row: when a delegation notice
+                // split the turn, that is only this row's part of the turn.
+                let completed = m["content"].as_str().unwrap_or(text.as_str());
                 (
                     "message.completed",
-                    json!({"id":m["id"],"messageId":m["id"],"sessionId":sid,"turnId":turn,"sequence":m["sequence"],"createdAt":m["createdAt"],"role":"assistant","content":text}),
+                    json!({"id":m["id"],"messageId":m["id"],"sessionId":sid,"turnId":turn,"sequence":m["sequence"],"createdAt":m["createdAt"],"role":"assistant","content":completed}),
                 )
             }
             AgentEvent::ToolStarted {
@@ -3896,6 +3899,54 @@ mod phase2a_tests {
         let refused = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"again"})).await;
         assert!(refused["content"][0]["text"].as_str().unwrap().contains("too many blobs"));
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+    #[tokio::test]
+    async fn delegation_notice_splits_a_turn_and_reply_paths_read_one_row() {
+        let (st, _) = state();
+        st.db.create_session("split-turn", "rt-test", "codex", ".", "Split").unwrap();
+        st.db.create_turn("turn-split", "split-turn").unwrap();
+        let first = st.db.append_message_delta("split-turn", "turn-split", "I asked Mate. ").unwrap();
+        // The same path the message_blob tool takes to record the delegation.
+        team::note(&st, "split-turn", "Messaged Mate", json!({"kind":"delegation","direction":"sent"})).await;
+        let second = st.db.append_message_delta("split-turn", "turn-split", "Mate cannot answer.").unwrap();
+        assert_ne!(first["id"], second["id"]);
+        let shape: Vec<(String, String)> = st.db.session_detail("split-turn").unwrap()["messages"].as_array().unwrap().iter()
+            .map(|m| (m["role"].as_str().unwrap_or("").to_owned(), m["content"].as_str().unwrap_or("").to_owned()))
+            .collect();
+        assert_eq!(shape, vec![
+            ("assistant".to_owned(), "I asked Mate. ".to_owned()),
+            ("notice".to_owned(), "Messaged Mate".to_owned()),
+            ("assistant".to_owned(), "Mate cannot answer.".to_owned()),
+        ]);
+        // A quote/copy resolves one row, not the whole turn.
+        let source = st.db.message_reply_source("split-turn", second["id"].as_str().unwrap()).unwrap();
+        assert_eq!((source["role"].as_str(), source["content"].as_str()), (Some("assistant"), Some("Mate cannot answer.")));
+        // The side-reply relay still joins every assistant row of the turn.
+        assert_eq!(st.db.turn_reply("split-turn", "turn-split").unwrap().as_deref(), Some("I asked Mate. \n\nMate cannot answer."));
+    }
+    #[tokio::test]
+    async fn message_blob_notice_reads_above_the_text_its_turn_already_streamed() {
+        let (st, _) = state();
+        st.db.create_session("above-turn", "rt-test", "codex", ".", "Above").unwrap();
+        st.db.create_turn("turn-above", "above-turn").unwrap();
+        st.db.append_message("above-turn", "turn-above", "user", "Ask Mate what model they are").unwrap();
+        st.db.append_message_delta("above-turn", "turn-above", "I asked Mate.").unwrap();
+        // The turn is running when the message_blob tool records the delegation.
+        st.active_turns.lock().await.insert("above-turn".into(), "turn-above".into());
+        let mut events = st.events.subscribe();
+        team::note_above_turn_text(&st, "above-turn", "Messaged Mate", json!({"kind":"delegation","direction":"sent"})).await;
+        let shape: Vec<(String, String)> = st.db.session_detail("above-turn").unwrap()["messages"].as_array().unwrap().iter()
+            .map(|m| (m["role"].as_str().unwrap_or("").to_owned(), m["content"].as_str().unwrap_or("").to_owned()))
+            .collect();
+        assert_eq!(shape, vec![
+            ("user".to_owned(), "Ask Mate what model they are".to_owned()),
+            ("notice".to_owned(), "Messaged Mate".to_owned()),
+            ("assistant".to_owned(), "I asked Mate.".to_owned()),
+        ]);
+        // The live event names the message the notice reads above, so open windows match a reload.
+        let event = events.recv().await.unwrap();
+        assert_eq!(event.event_type, "message.completed");
+        assert!(event.payload["beforeMessageId"].is_string());
     }
     #[tokio::test]
     async fn team_leader_tools_create_and_update_but_are_hidden_from_non_leaders() {

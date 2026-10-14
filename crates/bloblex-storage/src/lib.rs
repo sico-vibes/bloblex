@@ -2673,6 +2673,48 @@ impl Storage {
         if let Some(references) = data.get("references") { message["references"] = references.clone(); }
         Ok(message)
     }
+    /// Appends a notice that must read ABOVE the assistant text its turn has
+    /// already produced, such as "Messaged X": the call is what the turn did, the
+    /// text after it is what the assistant says about it. The notice takes the
+    /// position of the turn's first assistant row and that turn's assistant rows
+    /// move below it, in their original order. Returns the notice and the id of
+    /// the row it now sits above (None when the turn has no assistant text yet,
+    /// in which case this is an ordinary append).
+    pub fn append_notice_above_turn_text(
+        &self,
+        session: &str,
+        turn: &str,
+        content: &str,
+        data: &Value,
+    ) -> Result<(Value, Option<String>), StorageError> {
+        let rows: Vec<(String, i64)> = {
+            let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+            if turn.is_empty() { Vec::new() } else {
+                let mut q = c.prepare("SELECT id,sequence FROM messages WHERE session_id=?1 AND role='assistant' AND turn_id=?2 ORDER BY sequence")?;
+                let collected = q.query_map(params![session, turn], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+                collected
+            }
+        };
+        let Some((first_id, first_sequence)) = rows.first().cloned() else {
+            return Ok((self.append_message_with_data(session, "", "notice", content, data)?, None));
+        };
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction()?;
+        let base: i64 = tx.query_row("SELECT COALESCE(MAX(sequence),0) FROM messages WHERE session_id=?1", [session], |r| r.get(0))?;
+        for (offset, (id, _)) in rows.iter().enumerate() {
+            tx.execute("UPDATE messages SET sequence=?2 WHERE id=?1", params![id, base + 1 + offset as i64])?;
+        }
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO messages(id,session_id,turn_id,sequence,role,content,created_at,data) VALUES(?1,?2,NULL,?3,'notice',?4,?5,?6)",
+            params![id, session, first_sequence, content, now, data.to_string()],
+        )?;
+        tx.commit()?;
+        let mut message = json!({"id":id,"sessionId":session,"turnId":"","sequence":first_sequence,"role":"notice","content":content,"createdAt":now});
+        if let Some(meta) = data.get("meta") { message["meta"] = meta.clone(); }
+        Ok((message, Some(first_id)))
+    }
     pub fn append_message_delta(
         &self,
         session: &str,
@@ -2691,7 +2733,10 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
         if !exists { return Ok(Value::Null); }
-        let row:Option<(String,String,i64,String)>=c.query_row("SELECT id,content,sequence,created_at FROM messages WHERE session_id=?1 AND role=?2 AND ((?3='' AND turn_id IS NULL) OR turn_id=?3) ORDER BY sequence DESC LIMIT 1",params![session,role,turn],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+        // A delegation notice split the turn: assistant text streamed after it
+        // belongs to a new row, not the row that came before the notice. The
+        // decision reads persisted notices, so replay keeps the same order.
+        let row:Option<(String,String,i64,String)>=c.query_row("SELECT id,content,sequence,created_at FROM messages WHERE session_id=?1 AND role=?2 AND ((?3='' AND turn_id IS NULL) OR turn_id=?3) AND (?2<>'assistant' OR sequence>COALESCE((SELECT MAX(sequence) FROM messages WHERE session_id=?1 AND role='notice' AND json_extract(data,'$.meta.kind')='delegation'),0)) ORDER BY sequence DESC LIMIT 1",params![session,role,turn],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
         if let Some((id, content, sequence, created_at)) = row {
             let content = format!("{content}{delta}");
             c.execute(
@@ -2780,18 +2825,53 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
         if !exists { return Ok(Value::Null); }
-        let row:Option<(String,i64,String)>=c.query_row("SELECT id,sequence,created_at FROM messages WHERE session_id=?1 AND role='assistant' AND turn_id=?2 ORDER BY sequence DESC LIMIT 1",params![session,turn],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        if let Some((id, seq, created)) = row {
-            c.execute(
-                "UPDATE messages SET content=?2 WHERE id=?1",
-                params![id, content],
-            )?;
-            Ok(
-                json!({"id":id,"sessionId":session,"turnId":turn,"sequence":seq,"role":"assistant","content":content,"createdAt":created}),
-            )
-        } else {
+        // One turn can own several assistant rows when a delegation notice split
+        // it; every row keeps the text streamed into it.
+        let rows: Vec<(String, String, i64, String)> = {
+            let mut q = c.prepare("SELECT id,content,sequence,created_at FROM messages WHERE session_id=?1 AND role='assistant' AND turn_id=?2 ORDER BY sequence")?;
+            let collected = q.query_map(params![session, turn], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<Vec<_>, _>>()?;
+            collected
+        };
+        let Some((last_row, head_rows)) = rows.split_last() else {
             drop(c);
-            self.append_message(session, turn, "assistant", content)
+            return self.append_message(session, turn, "assistant", content);
+        };
+        let (last_id, last_content, last_seq, last_created) = last_row.clone();
+        // A delegation notice newer than the newest row means the text produced
+        // after the notice was never written: it belongs to a new row.
+        let pending_split: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND role='notice' AND json_extract(data,'$.meta.kind')='delegation' AND sequence>?2)", params![session, last_seq], |r| r.get(0))?;
+        if pending_split {
+            // Strip the text already streamed into the existing rows; what is
+            // left is the post-notice text. A final message that does not repeat
+            // the earlier text is taken whole.
+            let mut remainder = content;
+            let mut repeats = true;
+            for (_id, row_content, _seq, _created) in &rows {
+                match remainder.strip_prefix(row_content.as_str()) {
+                    Some(rest) => remainder = rest,
+                    None => { repeats = false; break; }
+                }
+            }
+            let new_text = if repeats { remainder } else { content };
+            if new_text.is_empty() {
+                return Ok(json!({"id":last_id,"sessionId":session,"turnId":turn,"sequence":last_seq,"role":"assistant","content":last_content,"createdAt":last_created}));
+            }
+            drop(c);
+            return self.append_message(session, turn, "assistant", new_text);
+        }
+        // No pending split: finalize the newest row with the text that belongs to
+        // it. When the provider repeats the whole turn, drop the earlier rows'
+        // text; when it cannot be partitioned reliably, keep every row as
+        // streamed rather than overwrite one with the whole turn.
+        let mut head = String::new();
+        for (_id, row_content, _seq, _created) in head_rows {
+            head.push_str(row_content);
+        }
+        if let Some(text) = content.strip_prefix(head.as_str()) {
+            c.execute("UPDATE messages SET content=?2 WHERE id=?1", params![last_id, text])?;
+            Ok(json!({"id":last_id,"sessionId":session,"turnId":turn,"sequence":last_seq,"role":"assistant","content":text,"createdAt":last_created}))
+        } else {
+            Ok(json!({"id":last_id,"sessionId":session,"turnId":turn,"sequence":last_seq,"role":"assistant","content":last_content,"createdAt":last_created}))
         }
     }
     pub fn update_turn_state(&self, id: &str, state: &str) -> Result<(), StorageError> {
@@ -5333,6 +5413,203 @@ mod tests {
         db.update_session_state("s-queue2", "idle").unwrap();
         db.session_delete("s-queue2").unwrap();
         assert!(matches!(db.queue_get("s-queue2", &id), Err(StorageError::AgentNotFound)));
+    }
+
+    fn split_fixture() -> Storage {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-split","provider":"codex"})).unwrap();
+        db.create_session("split", "rt-split", "codex", ".", "Split").unwrap();
+        db.create_turn("turn-split", "split").unwrap();
+        db
+    }
+
+    fn delegation_notice(db: &Storage, session: &str, content: &str) {
+        db.append_message_with_data(session, "", "notice", content, &json!({"meta":{"kind":"delegation","direction":"sent"}})).unwrap();
+    }
+
+    fn message_shape(db: &Storage, session: &str) -> Vec<(String, String)> {
+        db.session_detail(session).unwrap()["messages"].as_array().unwrap().iter()
+            .map(|m| (m["role"].as_str().unwrap_or("").to_owned(), m["content"].as_str().unwrap_or("").to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn a_delegation_notice_sits_above_the_text_its_turn_already_streamed() {
+        let db = split_fixture();
+        db.append_message("split", "turn-split", "user", "Ask Mate what model they are").unwrap();
+        let streamed = db.append_message_delta("split", "turn-split", "I asked Mate. ").unwrap();
+        let meta = json!({"meta":{"kind":"delegation","direction":"sent"}});
+        let (notice, before) = db.append_notice_above_turn_text("split", "turn-split", "Messaged Mate", &meta).unwrap();
+        assert_eq!(before.as_deref(), streamed["id"].as_str(), "the event names the row the notice sits above");
+        assert!(notice["sequence"].as_i64() < db.session_detail("split").unwrap()["messages"][2]["sequence"].as_i64());
+        // Text that follows the call keeps landing on the same assistant row, below the notice.
+        db.append_message_delta("split", "turn-split", "They will reply here.").unwrap();
+        // The relayed answer arrives later and reads below.
+        db.append_message_with_data("split", "", "notice", "Message from Mate", &json!({"meta":{"kind":"delegation","direction":"received"}})).unwrap();
+        assert_eq!(message_shape(&db, "split"), vec![
+            ("user".to_owned(), "Ask Mate what model they are".to_owned()),
+            ("notice".to_owned(), "Messaged Mate".to_owned()),
+            ("assistant".to_owned(), "I asked Mate. They will reply here.".to_owned()),
+            ("notice".to_owned(), "Message from Mate".to_owned()),
+        ]);
+    }
+
+    #[test]
+    fn a_delegation_notice_with_no_turn_text_is_an_ordinary_append() {
+        let db = split_fixture();
+        db.append_message("split", "turn-split", "user", "Ask Mate").unwrap();
+        let meta = json!({"meta":{"kind":"delegation","direction":"sent"}});
+        let (_, before) = db.append_notice_above_turn_text("split", "turn-split", "Messaged Mate", &meta).unwrap();
+        assert!(before.is_none());
+        db.append_message_delta("split", "turn-split", "Asked.").unwrap();
+        assert_eq!(message_shape(&db, "split"), vec![
+            ("user".to_owned(), "Ask Mate".to_owned()),
+            ("notice".to_owned(), "Messaged Mate".to_owned()),
+            ("assistant".to_owned(), "Asked.".to_owned()),
+        ]);
+    }
+
+    #[test]
+    fn an_above_notice_keeps_a_split_turn_in_order_and_survives_reopen() {
+        let dir = std::env::temp_dir().join(format!("bloblex-above-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("db.sqlite");
+        {
+            let db = Storage::open(&path).unwrap();
+            db.upsert_runtime(&json!({"id":"rt-above","provider":"codex"})).unwrap();
+            db.create_session("above", "rt-above", "codex", ".", "Above").unwrap();
+            db.create_turn("turn-above", "above").unwrap();
+            db.append_message("above", "turn-above", "user", "Ask").unwrap();
+            db.append_message_delta("above", "turn-above", "Preface. ").unwrap();
+            let meta = json!({"meta":{"kind":"delegation","direction":"sent"}});
+            db.append_notice_above_turn_text("above", "turn-above", "Messaged A", &meta).unwrap();
+            db.append_notice_above_turn_text("above", "turn-above", "Messaged B", &meta).unwrap();
+            db.append_message_delta("above", "turn-above", "Both asked.").unwrap();
+        }
+        let db = Storage::open(&path).unwrap();
+        let shape = message_shape(&db, "above");
+        assert_eq!(shape.iter().map(|(role, content)| format!("{role}:{content}")).collect::<Vec<_>>(), vec![
+            "user:Ask".to_owned(), "notice:Messaged A".to_owned(), "notice:Messaged B".to_owned(), "assistant:Preface. Both asked.".to_owned(),
+        ]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delegation_notice_splits_assistant_rows_in_sequence_order() {
+        let db = split_fixture();
+        let first = db.append_message_delta("split", "turn-split", "I asked Mate. ").unwrap();
+        delegation_notice(&db, "split", "Messaged Mate");
+        let second = db.append_message_delta("split", "turn-split", "Mate could not answer.").unwrap();
+        assert_ne!(first["id"], second["id"]);
+        assert!(first["sequence"].as_i64() < second["sequence"].as_i64());
+        assert_eq!(message_shape(&db, "split"), vec![
+            ("assistant".to_owned(), "I asked Mate. ".to_owned()),
+            ("notice".to_owned(), "Messaged Mate".to_owned()),
+            ("assistant".to_owned(), "Mate could not answer.".to_owned()),
+        ]);
+        // Later deltas of the same turn keep appending to the split row.
+        db.append_message_delta("split", "turn-split", " Waiting.").unwrap();
+        assert_eq!(message_shape(&db, "split")[2].1, "Mate could not answer. Waiting.");
+    }
+
+    #[test]
+    fn non_delegation_notices_keep_a_single_assistant_row() {
+        let db = split_fixture();
+        db.append_message_delta("split", "turn-split", "First").unwrap();
+        db.append_message_with_data("split", "", "notice", "Context reset", &json!({"meta":{"kind":"context_reset"}})).unwrap();
+        db.append_message_delta("split", "turn-split", " second").unwrap();
+        assert_eq!(message_shape(&db, "split"), vec![
+            ("assistant".to_owned(), "First second".to_owned()),
+            ("notice".to_owned(), "Context reset".to_owned()),
+        ]);
+    }
+
+    #[test]
+    fn two_delegation_notices_split_a_turn_into_three_rows() {
+        let db = split_fixture();
+        db.append_message_delta("split", "turn-split", "One").unwrap();
+        delegation_notice(&db, "split", "Messaged Mate");
+        db.append_message_delta("split", "turn-split", "Two").unwrap();
+        delegation_notice(&db, "split", "Reply from Mate");
+        db.append_message_delta("split", "turn-split", "Three").unwrap();
+        assert_eq!(message_shape(&db, "split"), vec![
+            ("assistant".to_owned(), "One".to_owned()),
+            ("notice".to_owned(), "Messaged Mate".to_owned()),
+            ("assistant".to_owned(), "Two".to_owned()),
+            ("notice".to_owned(), "Reply from Mate".to_owned()),
+            ("assistant".to_owned(), "Three".to_owned()),
+        ]);
+    }
+
+    #[test]
+    fn split_turn_order_and_text_survive_reopen() {
+        let root = std::env::temp_dir().join(format!("bloblex-split-reopen-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("db.sqlite");
+        {
+            let db = Storage::open(&path).unwrap();
+            db.upsert_runtime(&json!({"id":"rt-split-file","provider":"codex"})).unwrap();
+            db.create_session("split-file", "rt-split-file", "codex", ".", "Split").unwrap();
+            db.create_turn("turn-file", "split-file").unwrap();
+            db.append_message_delta("split-file", "turn-file", "One").unwrap();
+            delegation_notice(&db, "split-file", "Messaged Mate");
+            db.append_message_delta("split-file", "turn-file", "Two").unwrap();
+        }
+        // A reload reads the persisted rows, not any in-memory ordering.
+        let db = Storage::open(&path).unwrap();
+        assert_eq!(message_shape(&db, "split-file"), vec![
+            ("assistant".to_owned(), "One".to_owned()),
+            ("notice".to_owned(), "Messaged Mate".to_owned()),
+            ("assistant".to_owned(), "Two".to_owned()),
+        ]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn finalize_partitions_the_full_turn_text_across_split_rows() {
+        let db = split_fixture();
+        let first = db.append_message_delta("split", "turn-split", "Alpha").unwrap();
+        delegation_notice(&db, "split", "Messaged Mate");
+        let second = db.append_message_delta("split", "turn-split", "Beta").unwrap();
+        // The provider repeats the whole turn: the pre-split text stays on the
+        // first row and only the remainder lands on the split row.
+        let done = db.finalize_latest_assistant("split", "turn-split", "AlphaBeta").unwrap();
+        assert_eq!(done["id"], second["id"]);
+        assert_eq!(done["content"], "Beta");
+        assert_eq!(message_shape(&db, "split"), vec![
+            ("assistant".to_owned(), "Alpha".to_owned()),
+            ("notice".to_owned(), "Messaged Mate".to_owned()),
+            ("assistant".to_owned(), "Beta".to_owned()),
+        ]);
+        // A final message that does not repeat the earlier text cannot be
+        // partitioned, so every row keeps what it streamed.
+        db.finalize_latest_assistant("split", "turn-split", "Gamma").unwrap();
+        assert_eq!(db.session_detail("split").unwrap()["messages"][2]["content"], "Beta");
+        assert_ne!(done["id"], first["id"]);
+    }
+
+    #[test]
+    fn finalize_after_a_notice_starts_the_post_notice_row() {
+        let db = split_fixture();
+        db.append_message_delta("split", "turn-split", "I asked Mate.").unwrap();
+        delegation_notice(&db, "split", "Messaged Mate");
+        // The provider never streamed the post-notice text: finalization puts it
+        // in a new row after the notice instead of rewriting the earlier one.
+        db.finalize_latest_assistant("split", "turn-split", "I asked Mate.Mate replied.").unwrap();
+        assert_eq!(message_shape(&db, "split"), vec![
+            ("assistant".to_owned(), "I asked Mate.".to_owned()),
+            ("notice".to_owned(), "Messaged Mate".to_owned()),
+            ("assistant".to_owned(), "Mate replied.".to_owned()),
+        ]);
+    }
+
+    #[test]
+    fn finalize_without_a_split_still_replaces_the_single_row() {
+        let db = split_fixture();
+        db.append_message_delta("split", "turn-split", "Draft").unwrap();
+        let done = db.finalize_latest_assistant("split", "turn-split", "Final text").unwrap();
+        assert_eq!(done["content"], "Final text");
+        assert_eq!(message_shape(&db, "split"), vec![("assistant".to_owned(), "Final text".to_owned())]);
     }
 }
 

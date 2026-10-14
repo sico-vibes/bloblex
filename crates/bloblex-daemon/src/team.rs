@@ -443,7 +443,7 @@ async fn message_blob(st: &AppState, session_id: &str, args: &Value) -> Result<S
         }
     };
     let preview = message.chars().take(280).collect::<String>();
-    note(st, session_id, &preview, json!({"kind":"delegation","direction":"sent","peerAgentId":target_id,"peerName":target_name,"sideSessionId":side,"topic":title})).await;
+    note_above_turn_text(st, session_id, &preview, json!({"kind":"delegation","direction":"sent","peerAgentId":target_id,"peerName":target_name,"sideSessionId":side,"topic":title})).await;
     let state = st.clone();
     let side_for_task = side.clone();
     tokio::spawn(async move {
@@ -536,6 +536,19 @@ pub fn reference_context(st: &AppState, session_id: &str, refs: &Value) -> Optio
 }
 
 /// A visible note in a conversation that is not a prompt (e.g. "Messaged Codex").
+/// A notice for something the blob DID during its running turn ("Messaged X").
+/// It is placed above the turn's assistant text so the call reads before what the
+/// assistant says about it; the event names the message it sits above so open
+/// windows insert it in the same place a reload would show it.
+pub(crate) async fn note_above_turn_text(st: &AppState, session_id: &str, content: &str, meta: Value) {
+    let turn = st.active_turns.lock().await.get(session_id).cloned().unwrap_or_default();
+    let Ok((message, before)) = st.db.append_notice_above_turn_text(session_id, &turn, content, &json!({"meta":meta})) else { return };
+    if message.is_null() { return; }
+    let mut payload = json!({"sessionId":session_id,"messageId":message["id"],"role":"notice","message":message});
+    if let Some(before) = before { payload["beforeMessageId"] = json!(before); }
+    st.emit("message.completed", payload).await;
+}
+
 pub(crate) async fn note(st: &AppState, session_id: &str, content: &str, meta: Value) {
     if let Ok(message) = st.db.append_message_with_data(session_id, "", "notice", content, &json!({"meta":meta})) {
         if !message.is_null() {

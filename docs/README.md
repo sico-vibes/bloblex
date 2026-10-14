@@ -14,7 +14,7 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 
 - **AI agents:** read [AGENTS.md](../AGENTS.md) first. It is the owner directive, with dated amendments newest first. Then [OPERATING_MODEL.md](OPERATING_MODEL.md) (the rules in effect today, derived from AGENTS.md). Then [implementation-status.md](implementation-status.md) for open gaps and [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for release state.
 - **New contributors:** [README.md](../README.md), then [windows-development.md](windows-development.md), [PRODUCT.md](../PRODUCT.md), [DESIGN.md](../DESIGN.md), [ipc-contract.md](ipc-contract.md) and [runtime-capabilities.md](runtime-capabilities.md).
-- **Release state today:** `v0.1.0-beta.25` ([releases/0.1.0-beta.25.md](releases/0.1.0-beta.25.md)). The signed updater feed is still at `v0.1.0-beta.6` ([UPDATER.md](UPDATER.md)).
+- **Release state today:** `v0.1.0-beta.26` ([releases/0.1.0-beta.26.md](releases/0.1.0-beta.26.md)). The signed updater feed is still at `v0.1.0-beta.6` ([UPDATER.md](UPDATER.md)).
 
 ## Rules and ownership
 
@@ -73,6 +73,7 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 | [FIX2_CODEX_TEAM_INSTRUCTIONS_SPEC.md](FIX2_CODEX_TEAM_INSTRUCTIONS_SPEC.md) | Codex threads keep stale team instructions; send changed text per turn, with echo evidence. | historical; implemented and released in `v0.1.0-beta.24` | 14 Oct 2026: added with the fix |
 | [FIX3_OPENCODE2_ACP_LAUNCH_SPEC.md](FIX3_OPENCODE2_ACP_LAUNCH_SPEC.md) | OpenCode 2 rejects `acp --cwd`; launch and catalog without it. | historical; implemented and released in `v0.1.0-beta.24` | 14 Oct 2026: added with the fix |
 | [FIX4_CLIPPY_CLEANUP_SPEC.md](FIX4_CLIPPY_CLEANUP_SPEC.md) | Clippy cleanup to zero findings, no behavior change. | historical; implemented in two parts (`e47412a` and the part 2 commit); `cargo clippy --workspace --exclude bloblex-desktop --all-targets -- -D warnings` passes | 14 Oct 2026: updated |
+| [FIX6_OPENCODE_INSTRUCTIONS_RESPAWN_SPEC.md](FIX6_OPENCODE_INSTRUCTIONS_RESPAWN_SPEC.md) | OpenCode turns failed when the blob's instructions changed; restart the process and reload the session. | historical; implemented and released in `v0.1.0-beta.26` | 14 Oct 2026: added with the fix |
 | [FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md](FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md) | OpenCode 2 per-model effort levels and a validated catalog. | historical; implemented and released in `v0.1.0-beta.25` | 14 Oct 2026: added with the fix |
 
 ## Runbooks
@@ -109,7 +110,7 @@ Immutable records. Only broken links were repaired. Their wording and conclusion
 
 ## Release notes
 
-Immutable records. The newest is [0.1.0-beta.25](releases/0.1.0-beta.25.md). Earlier notes are historical.
+Immutable records. The newest is [0.1.0-beta.26](releases/0.1.0-beta.26.md). Earlier notes are historical.
 
 | Document | Status | Last verified |
 | --- | --- | --- |
@@ -137,7 +138,8 @@ Immutable records. The newest is [0.1.0-beta.25](releases/0.1.0-beta.25.md). Ear
 | [releases/0.1.0-beta.22.md](releases/0.1.0-beta.22.md) | historical | 14 Oct 2026: links only |
 | [releases/0.1.0-beta.23.md](releases/0.1.0-beta.23.md) | historical | 14 Oct 2026: links only |
 | [releases/0.1.0-beta.24.md](releases/0.1.0-beta.24.md) | historical | 14 Oct 2026: written with the release |
-| [releases/0.1.0-beta.25.md](releases/0.1.0-beta.25.md) | historical (newest manual-only release) | 14 Oct 2026: written with the release |
+| [releases/0.1.0-beta.25.md](releases/0.1.0-beta.25.md) | historical | 14 Oct 2026: written with the release |
+| [releases/0.1.0-beta.26.md](releases/0.1.0-beta.26.md) | historical (newest manual-only release) | 14 Oct 2026: written with the release |
 
 ## Handoff and history
 

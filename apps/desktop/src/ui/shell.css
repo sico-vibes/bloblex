@@ -398,7 +398,7 @@
 .launch-checklist { width: 100%; margin: 0; padding: 66px 0; display: grid; gap: 2px; list-style: none; }
 .launch-checklist li { animation: launch-row-in 320ms cubic-bezier(.2, .8, .2, 1) both; }
 @keyframes launch-row-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-.launch-checklist li { min-height: 44px; display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 10px; }
+.launch-checklist li { min-height: 44px; display: grid; grid-template-columns: 20px minmax(0, max-content); justify-content: center; align-items: center; gap: 10px; }
 .launch-check-icon { position: relative; width: 20px; height: 20px; display: grid; place-items: center; color: var(--text-3); }
 .launch-check-icon.has-provider { overflow: visible; }
 .launch-check-icon.has-provider > .provider-logo { width: 16px; height: 16px; }

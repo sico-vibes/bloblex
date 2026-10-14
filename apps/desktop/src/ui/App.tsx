@@ -75,6 +75,7 @@ import { LAUNCH_OVERALL_TIMEOUT_REASON, LAUNCH_TIMEOUTS, launchWarningsFor, runL
 import { providerBrand } from './providerBrand'
 import { applyAppearance, applySurfaceAppearance, type TextSizeChoice, type ThemeChoice } from './appearance'
 import { SessionExecutionControls } from './SessionExecutionControls'
+import { composerMaxHeight, useAutosizeTextarea } from './useAutosize'
 import { ContextWindowIndicator } from './ContextWindowIndicator'
 import { QuotaBar } from './QuotaBar'
 import { quotaRows, quotaTone, resetIn, updatedAgo } from './quotaModel'
@@ -315,6 +316,7 @@ export function App() {
   const [pins, setPins] = useState<SidebarPins>(() => companion ? emptyPins() : readPins())
   const updatePins = (change: (current: SidebarPins) => SidebarPins) => setPins((current) => { const next = change(current); writePins(next); return next })
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  useAutosizeTextarea(composerRef, composer, composerMaxHeight)
   const messageListRef = useRef<HTMLElement>(null)
   /** The outline only appears once the conversation is long enough to scroll. */
   const [conversationScrollable, setConversationScrollable] = useState(false)
@@ -2590,6 +2592,8 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     return requested === 'chat' || requested === 'activity' || requested === 'settings' ? requested : 'overview'
   })
   const [draft, setDraft] = useState('')
+  const draftRef = useRef<HTMLTextAreaElement>(null)
+  useAutosizeTextarea(draftRef, draft, 132)
   const [dictationPartial, setDictationPartial] = useState('')
   const [sending, setSending] = useState(false)
   const [confused, setConfused] = useState(false)
@@ -3017,7 +3021,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
                 {agent && session && onSessionUpdated && onError && <SessionExecutionControls session={session} agent={agent} onSessionUpdated={onSessionUpdated} onError={onError} />}
                 {session && <ContextWindowIndicator used={session.contextUsed} size={session.contextSize} contextModel={session.contextModel} contextEstimated={session.contextEstimated} model={contextModel} isNewConversation={(session.messages ?? []).length === 0} quota={contextQuota} />}
                 <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !runtimeUsable(runtime) || !session || preparingFile}><Paperclip size={13} /></button>
-                <textarea className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} rows={1} />
+                <textarea ref={draftRef} className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} rows={1} />
                 {speechEnabled && <DictationButton owner="companion" modelId={speechModel} autoStart={dictateOnOpen} onAutoStarted={() => setDictateOnOpen(false)} onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} />}
                 <button className="send-btn" type={stopsTurn ? 'button' : 'submit'} disabled={!session || sending || !runtimeUsable(runtime) || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={stopsTurn ? cancelCompanionTurn : undefined} aria-label={queuesPrompt ? 'Queue message' : sessionBusy ? 'Cancel turn' : 'Send message'} title={queuesPrompt ? 'Add to the queue. It sends when this turn ends.' : undefined}>{sending ? <LoaderCircle size={13} className="spinning" /> : stopsTurn ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
               </form>

@@ -139,8 +139,17 @@
 /* The composer is one aligned row: every control is 30 px tall, like the main
    composer's pills; the model name truncates before anything else moves. */
 .chat-bar { min-height: 42px; padding: 5px 6px 5px 6px; display: flex; align-items: center; gap: 2px; border-radius: 12px; background: var(--companion-alpha-07); }
-.companion-chat-composer .session-execution-controls { min-width: 0; flex: 0 1 auto; gap: 0; }
-.companion-chat-composer .composer-popover-anchor { max-width: 150px; min-width: 0; display: flex; }
+/* The companion composer is two rows: the message gets the full width and grows with the
+   text, and the model, effort, context, attach, microphone and send controls sit below it. */
+.companion-chat-composer { flex-wrap: wrap; row-gap: 2px; padding: 8px 8px 6px; }
+.companion-chat-composer .chat-input { order: -1; flex: 1 1 100%; min-height: 40px; max-height: 132px; padding: 4px 4px 6px; overflow-y: hidden; }
+.companion-chat-composer .session-execution-controls { flex: 1 1 0; min-width: 0; }
+.companion-chat-composer .composer-popover-anchor { max-width: none; }
+.companion-chat-composer .model-pill { max-width: 100%; }
+.companion-chat-composer .composer-menu { right: auto; left: 0; max-width: min(300px, calc(100vw - 24px)); }
+.companion-chat-composer .composer-menu.align-right { right: auto; left: 0; transform-origin: bottom left; }
+.companion-chat-composer .session-effort-popover { right: auto; left: 0; max-width: calc(100vw - 24px); transform-origin: bottom left; }
+.companion-chat-composer .session-execution-controls { min-width: 0; flex: 1 1 0; gap: 0; }
 .companion-chat-composer .session-effort-control { max-width: none; flex: 0 0 auto; }
 .companion-chat-composer .composer-pill { min-width: 0; max-width: 100%; height: 30px; padding-inline: 8px; }
 .companion-chat-composer .composer-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

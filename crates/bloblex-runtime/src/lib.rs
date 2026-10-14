@@ -1,5 +1,6 @@
 use bloblex_protocol::{AuthState, ProtocolFamily};
 use bloblex_process::{prepare_command, ProcessTree};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -12,6 +13,17 @@ use tokio::{
     process::Command,
     time::{timeout, Duration},
 };
+
+/// Sign-in probe budget for Claude and Codex.
+const SIGN_IN_TIMEOUT_SECS: u64 = 5;
+/// OpenCode 2 answers commands through a background service, so a cold
+/// `auth list` can take several seconds. The whole OpenCode sign-in phase gets
+/// 15 s, and each probe in it may use the full budget: the first probe can
+/// answer with 15 s while the phase as a whole still fits the 31 s discovery
+/// budget alongside the 6 s version and protocol probes.
+const OPENCODE_SIGN_IN_TIMEOUT_SECS: u64 = 15;
+/// Upper bound for a credential file read, matching the daemon's quota reader.
+const MAX_CREDENTIAL_FILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -200,7 +212,10 @@ pub async fn discover() -> Vec<DiscoveredRuntime> {
     // Resolve away from the async executor; PATH may include slow network drives.
     let specs = tokio::task::spawn_blocking(|| ["claude", "codex", "opencode"].map(|id| (id, resolve_command(id)))).await;
     let Ok([claude, codex, opencode]) = specs else { return Vec::new(); };
-    collect_discovery(discover_one(claude.0, claude.1), discover_one(codex.0, codex.1), discover_one(opencode.0, opencode.1)).await
+    // The OpenCode stored-credential check is CLI-free and only ever reads
+    // these four variables; tests pass a synthetic set instead.
+    let environment = opencode_environment();
+    collect_discovery(discover_one(claude.0, claude.1, &environment), discover_one(codex.0, codex.1, &environment), discover_one(opencode.0, opencode.1, &environment)).await
 }
 
 async fn collect_discovery(a: impl std::future::Future<Output = Option<DiscoveredRuntime>>, b: impl std::future::Future<Output = Option<DiscoveredRuntime>>, c: impl std::future::Future<Output = Option<DiscoveredRuntime>>) -> Vec<DiscoveredRuntime> {
@@ -218,7 +233,7 @@ fn safe_version(output: &str) -> Option<String> {
     Some(version.to_owned())
 }
 
-async fn discover_one(id: &str, resolved: Option<ResolvedCommand>) -> Option<DiscoveredRuntime> {
+async fn discover_one(id: &str, resolved: Option<ResolvedCommand>, environment: &[(String, String)]) -> Option<DiscoveredRuntime> {
     let resolved = resolved?;
     let mut runtime = DiscoveredRuntime {
         id: format!("rt_{id}_{}", short_hash(&resolved.executable.to_string_lossy())),
@@ -249,7 +264,7 @@ async fn discover_one(id: &str, resolved: Option<ResolvedCommand>) -> Option<Dis
         return Some(runtime);
     }
     runtime.status = "online".into();
-    let (auth_state, gateway_auth_states, auth_error) = auth_status(id, &resolved.executable, &resolved.args).await;
+    let (auth_state, gateway_auth_states, auth_error) = auth_status(id, &resolved.executable, &resolved.args, environment).await;
     runtime.auth_state = auth_state;
     runtime.gateway_auth_states = gateway_auth_states;
     if let Some(error) = auth_error {
@@ -262,50 +277,16 @@ async fn discover_one(id: &str, resolved: Option<ResolvedCommand>) -> Option<Dis
     Some(runtime)
 }
 fn provider_display_name(provider: &str) -> &'static str { match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" } }
-async fn auth_status(provider: &str, exe: &Path, args: &[String]) -> (AuthState, BTreeMap<String, AuthState>, Option<&'static str>) {
+async fn auth_status(provider: &str, exe: &Path, args: &[String], environment: &[(String, String)]) -> (AuthState, BTreeMap<String, AuthState>, Option<&'static str>) {
+    if provider == "opencode" {
+        return opencode_auth_status(exe, args, environment).await;
+    }
     let mut av = args.iter().map(String::as_str).collect::<Vec<_>>();
     match provider {
         "claude" => av.extend(["auth", "status"]),
         "codex" => av.extend(["login", "status"]),
-        "opencode" => av.extend(["auth", "list"]),
         _ => return (AuthState::Unknown, BTreeMap::new(), None),
     };
-    if provider == "opencode" {
-        if let Ok((true, output)) = safe_status_output(exe, &av).await {
-            if let Some(states) = parse_opencode_auth_list(&output) {
-                return (aggregate_auth_states(&states), states, None);
-            }
-            // A successful `auth list` that printed integration rows we could
-            // not classify is still evidence that the command ran; report the
-            // unknown state quietly instead of a checked-and-failed probe. The
-            // row text itself never leaves this function.
-            if opencode_auth_list_has_recognized_rows(&output) {
-                return (AuthState::Unknown, BTreeMap::new(), None);
-            }
-        }
-        // v1 `models --verbose` still exposes gateway JSON. A non-zero exit
-        // falls through to the plain v2 listing rather than ending the check.
-        let mut verbose_args = args.iter().map(String::as_str).collect::<Vec<_>>();
-        verbose_args.extend(["models", "--verbose"]);
-        if let Ok((true, output)) = safe_status_output(exe, &verbose_args).await {
-            let states = opencode_model_gateways(&output);
-            if !states.is_empty() {
-                return (aggregate_auth_states(&states), states, None);
-            }
-        }
-        // v2 `models` (no flags) prints one `provider/model` per line. A
-        // listing proves the CLI runs, not that anyone is signed in (the
-        // catalog lists gateway models whether or not a credential exists), so
-        // it reports a quiet unknown rather than a checked-and-failed probe.
-        let mut model_args = args.iter().map(String::as_str).collect::<Vec<_>>();
-        model_args.push("models");
-        if let Ok((true, output)) = safe_status_output(exe, &model_args).await {
-            if opencode_plain_model_listing_names_a_gateway(&output) {
-                return (AuthState::Unknown, BTreeMap::new(), None);
-            }
-        }
-        return (AuthState::Unknown, BTreeMap::new(), Some("Sign-in status could not be checked."));
-    }
     let out = match safe_status_output(exe, &av).await { Ok((_, text)) => text, Err(error) => return (AuthState::Unknown, BTreeMap::new(), Some(error)) };
     if provider == "claude" {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) {
@@ -324,6 +305,178 @@ async fn auth_status(provider: &str, exe: &Path, args: &[String]) -> (AuthState,
     } else {
         (AuthState::Unknown, BTreeMap::new(), None)
     }
+}
+/// OpenCode sign-in. A CLI-free stored-credential check runs first and is the
+/// source of truth for "a credential is stored"; only when it finds nothing
+/// does the CLI get asked. OpenCode 2 answers through a background service, so
+/// the whole phase is capped at 15 s.
+async fn opencode_auth_status(exe: &Path, args: &[String], environment: &[(String, String)]) -> (AuthState, BTreeMap<String, AuthState>, Option<&'static str>) {
+    // A stored credential proves a credential is stored, never that it is
+    // valid; the label stays "signed in" as it does today for `stored`.
+    if let Some(states) = opencode_stored_gateways(environment) {
+        return (aggregate_auth_states(&states), states, None);
+    }
+    let limit = Duration::from_secs(OPENCODE_SIGN_IN_TIMEOUT_SECS);
+    match timeout(limit, opencode_auth_status_from_cli(exe, args)).await {
+        Ok(result) => result,
+        Err(_) => (AuthState::Unknown, BTreeMap::new(), Some("Sign-in status could not be checked.")),
+    }
+}
+async fn opencode_auth_status_from_cli(exe: &Path, args: &[String]) -> (AuthState, BTreeMap<String, AuthState>, Option<&'static str>) {
+    let limit = Duration::from_secs(OPENCODE_SIGN_IN_TIMEOUT_SECS);
+    let mut av = args.iter().map(String::as_str).collect::<Vec<_>>();
+    av.extend(["auth", "list"]);
+    if let Ok((true, output)) = safe_status_output_within(exe, &av, limit).await {
+        if let Some(states) = parse_opencode_auth_list(&output) {
+            return (aggregate_auth_states(&states), states, None);
+        }
+        // A successful `auth list` that printed integration rows we could
+        // not classify is still evidence that the command ran; report the
+        // unknown state quietly instead of a checked-and-failed probe. The
+        // row text itself never leaves this function.
+        if opencode_auth_list_has_recognized_rows(&output) {
+            return (AuthState::Unknown, BTreeMap::new(), None);
+        }
+    }
+    // v1 `models --verbose` still exposes gateway JSON. A non-zero exit
+    // falls through to the plain v2 listing rather than ending the check.
+    let mut verbose_args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    verbose_args.extend(["models", "--verbose"]);
+    if let Ok((true, output)) = safe_status_output_within(exe, &verbose_args, limit).await {
+        let states = opencode_model_gateways(&output);
+        if !states.is_empty() {
+            return (aggregate_auth_states(&states), states, None);
+        }
+    }
+    // v2 `models` (no flags) prints one `provider/model` per line. A
+    // listing proves the CLI runs, not that anyone is signed in (the
+    // catalog lists gateway models whether or not a credential exists), so
+    // it reports a quiet unknown rather than a checked-and-failed probe.
+    let mut model_args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    model_args.push("models");
+    if let Ok((true, output)) = safe_status_output_within(exe, &model_args, limit).await {
+        if opencode_plain_model_listing_names_a_gateway(&output) {
+            return (AuthState::Unknown, BTreeMap::new(), None);
+        }
+    }
+    (AuthState::Unknown, BTreeMap::new(), Some("Sign-in status could not be checked."))
+}
+/// The four environment variables the OpenCode data-dir rules honour, in the
+/// same shape the daemon's quota reader uses. Nothing else is read.
+fn opencode_environment() -> Vec<(String, String)> {
+    ["USERPROFILE", "HOME", "XDG_DATA_HOME", "OPENCODE_DB"]
+        .into_iter()
+        .filter_map(|name| env::var_os(name).map(|value| (name.to_owned(), value.to_string_lossy().into_owned())))
+        .collect()
+}
+fn opencode_data_dir(environment: &[(String, String)]) -> Option<PathBuf> {
+    let value = |key: &str| {
+        environment
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+    };
+    if let Some(path) = value("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(path).join("opencode"));
+    }
+    value("USERPROFILE")
+        .or_else(|| value("HOME"))
+        .filter(|value| !value.is_empty())
+        .map(|home| PathBuf::from(home).join(".local").join("share").join("opencode"))
+}
+fn opencode_db_paths(environment: &[(String, String)]) -> Vec<PathBuf> {
+    let value = |key: &str| {
+        environment
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+    };
+    if let Some(path) = value("OPENCODE_DB").filter(|value| !value.is_empty()) {
+        return vec![PathBuf::from(path)];
+    }
+    let Some(dir) = opencode_data_dir(environment) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("opencode") && name.ends_with(".db"))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.reverse();
+    paths
+}
+/// OpenCode 1 stores credentials in `auth.json`. Only the presence of a
+/// gateway entry is taken: the credential value is parsed as an ignored token
+/// and never materialised, stored, returned or logged.
+#[derive(Deserialize)]
+struct OpenCodeAuthPresence {
+    #[serde(rename = "opencode")]
+    zen: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "opencode-go")]
+    go: Option<serde::de::IgnoredAny>,
+}
+fn auth_file_gateways(path: &Path) -> Option<BTreeMap<String, AuthState>> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if metadata.len() > MAX_CREDENTIAL_FILE_BYTES {
+        return None;
+    }
+    let raw = std::fs::read(path).ok()?;
+    let presence = serde_json::from_slice::<OpenCodeAuthPresence>(&raw).ok()?;
+    let mut states = BTreeMap::new();
+    if presence.zen.is_some() {
+        states.insert("opencode".into(), AuthState::Authenticated);
+    }
+    if presence.go.is_some() {
+        states.insert("opencode-go".into(), AuthState::Authenticated);
+    }
+    (!states.is_empty()).then_some(states)
+}
+/// OpenCode 2 stores credentials in `opencode*.db`. Opened read-only with
+/// `query_only`, and only the `integration_id` column is selected: the `value`
+/// column (the secret) is never touched.
+fn credential_db_gateways(path: &Path) -> Option<BTreeMap<String, AuthState>> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    conn.pragma_update(None, "query_only", "ON").ok()?;
+    let mut statement = conn.prepare("SELECT integration_id FROM credential WHERE active=1").ok()?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0)).ok()?;
+    let mut states = BTreeMap::new();
+    for integration in rows.flatten() {
+        // `safe_gateway_name` is the allow-list: only `opencode` and
+        // `opencode-go` can be produced.
+        if let Some(name) = safe_gateway_name(&integration) {
+            states.insert(name, AuthState::Authenticated);
+        }
+    }
+    (!states.is_empty()).then_some(states)
+}
+/// Fast, CLI-free "is a credential stored" check. Returns `None` when the
+/// files or tables are missing or hold no matching row, so the caller falls
+/// through to the CLI instead of claiming `Unauthenticated`.
+fn opencode_stored_gateways(environment: &[(String, String)]) -> Option<BTreeMap<String, AuthState>> {
+    let mut states = BTreeMap::new();
+    if let Some(dir) = opencode_data_dir(environment) {
+        if let Some(found) = auth_file_gateways(&dir.join("auth.json")) {
+            states.extend(found);
+        }
+    }
+    for path in opencode_db_paths(environment) {
+        if let Some(found) = credential_db_gateways(&path) {
+            states.extend(found);
+        }
+    }
+    (!states.is_empty()).then_some(states)
 }
 fn safe_gateway_name(input: &str) -> Option<String> {
     match input.trim().trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_').to_ascii_lowercase().as_str() {
@@ -490,6 +643,9 @@ fn opencode_plain_model_listing_names_a_gateway(output: &str) -> bool {
     })
 }
 async fn safe_status_output(exe: &Path, args: &[&str]) -> Result<(bool, String), &'static str> {
+    safe_status_output_within(exe, args, Duration::from_secs(SIGN_IN_TIMEOUT_SECS)).await
+}
+async fn safe_status_output_within(exe: &Path, args: &[&str], limit: Duration) -> Result<(bool, String), &'static str> {
     let mut cmd = Command::new(exe);
     prepare_command(&mut cmd);
     cmd.args(args)
@@ -499,7 +655,7 @@ async fn safe_status_output(exe: &Path, args: &[&str]) -> Result<(bool, String),
         .kill_on_drop(true);
     let mut child = cmd.spawn().map_err(|_| "Could not start the sign-in check.")?;
     let process_tree = ProcessTree::attach(&mut child).map_err(|_| "Could not supervise the sign-in check.")?;
-    let result = timeout(Duration::from_secs(5), child.wait_with_output()).await;
+    let result = timeout(limit, child.wait_with_output()).await;
     let _ = process_tree.terminate();
     let out = result.map_err(|_| "Sign-in check timed out.")?.map_err(|_| "Could not read the sign-in result.")?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -552,13 +708,13 @@ mod tests {
     }
     #[tokio::test]
     async fn failed_probe_is_safe_visible_and_can_heal_on_the_same_executable() {
-        let failed = discover_one("codex", Some(fixture_command(false))).await.unwrap();
+        let failed = discover_one("codex", Some(fixture_command(false)), &[]).await.unwrap();
         assert_eq!(failed.status, "error");
         assert_eq!(failed.probe_step.as_deref(), Some("Protocol check"));
         assert_eq!(failed.probe_error.as_deref(), Some("Probe exited unsuccessfully."));
         assert!(!failed.probe_error.as_deref().unwrap().contains("PRIVATE_DIAGNOSTIC"));
         assert!(failed.capabilities.is_empty());
-        let healed = discover_one("codex", Some(fixture_command(true))).await.unwrap();
+        let healed = discover_one("codex", Some(fixture_command(true)), &[]).await.unwrap();
         assert_eq!(healed.id, failed.id);
         assert_eq!(healed.status, "online");
         assert!(healed.probe_error.is_none());
@@ -574,7 +730,7 @@ mod tests {
         let command = ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec![
             "-c".into(), "printf 'Usage: opencode acp --help\\nACP stdio protocol\\n' >&2".into(),
         ] };
-        let runtime = discover_one("opencode", Some(command)).await.unwrap();
+        let runtime = discover_one("opencode", Some(command), &[]).await.unwrap();
         assert_eq!(runtime.status, "online");
         assert!(runtime.probe_step.as_deref() != Some("Protocol check"), "stderr-only successful ACP help must pass protocol validation");
         assert_eq!(runtime.probe_step.as_deref(), Some("Sign-in check"));
@@ -590,7 +746,7 @@ mod tests {
         let command = ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec![
             "-c".into(), "printf 'PRIVATE ACP diagnostic\\n' >&2; exit 1".into(),
         ] };
-        let failed = discover_one("opencode", Some(command)).await.unwrap();
+        let failed = discover_one("opencode", Some(command), &[]).await.unwrap();
         assert_eq!(failed.status, "error");
         assert_eq!(failed.probe_step.as_deref(), Some("Protocol check"));
         assert_eq!(failed.probe_error.as_deref(), Some("Probe exited unsuccessfully."));
@@ -606,14 +762,14 @@ mod tests {
         let command = ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec![
             "-c".into(), "printf 'generic command help\\n'".into(),
         ] };
-        let unsupported = discover_one("opencode", Some(command)).await.unwrap();
+        let unsupported = discover_one("opencode", Some(command), &[]).await.unwrap();
         assert_eq!(unsupported.status, "error");
         assert_eq!(unsupported.probe_step.as_deref(), Some("Protocol check"));
         assert_eq!(unsupported.probe_error.as_deref(), Some("The CLI does not advertise the required protocol."));
     }
     #[tokio::test]
     async fn missing_executable_reports_a_fixed_error() {
-        let runtime = discover_one("codex", Some(ResolvedCommand { executable: PathBuf::from("bloblex-missing-probe-executable"), args: vec![] })).await.unwrap();
+        let runtime = discover_one("codex", Some(ResolvedCommand { executable: PathBuf::from("bloblex-missing-probe-executable"), args: vec![] }), &[]).await.unwrap();
         assert_eq!(runtime.probe_error.as_deref(), Some("Could not start the coding agent."));
         assert!(matches!(runtime.auth_state, AuthState::Unknown));
     }
@@ -750,7 +906,7 @@ mod tests {
     #[tokio::test]
     async fn opencode_v2_auth_list_row_signs_in_on_the_calling_path() {
         let command = auth_fixture("OpenCode Console  Default                     stored");
-        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args).await;
+        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args, &[]).await;
         assert!(matches!(state, AuthState::Authenticated));
         assert_eq!(gateways.len(), 1);
         assert!(matches!(gateways.get("opencode"), Some(AuthState::Authenticated)));
@@ -759,7 +915,7 @@ mod tests {
     #[tokio::test]
     async fn opencode_v2_auth_list_unknown_status_is_a_quiet_unknown() {
         let command = auth_fixture("OpenCode Console  Default  mystery-state");
-        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args).await;
+        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args, &[]).await;
         assert!(matches!(state, AuthState::Unknown));
         assert!(gateways.is_empty());
         assert!(error.is_none());
@@ -775,7 +931,7 @@ mod tests {
     #[tokio::test]
     async fn opencode_go_plain_models_is_a_quiet_unknown_not_a_sign_in() {
         let command = auth_fixture("opencode-go/glm-5.2");
-        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args).await;
+        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args, &[]).await;
         assert!(matches!(state, AuthState::Unknown), "a model listing is not proof of sign-in");
         assert!(gateways.is_empty());
         assert!(error.is_none());
@@ -783,9 +939,116 @@ mod tests {
     #[tokio::test]
     async fn opencode_zen_only_plain_models_is_a_quiet_unknown() {
         let command = auth_fixture("opencode/big-pickle");
-        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args).await;
+        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args, &[]).await;
         assert!(matches!(state, AuthState::Unknown));
         assert!(gateways.is_empty());
         assert!(error.is_none());
+    }
+    fn opencode_temp_dir(label: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("bloblex-runtime-{label}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+    #[test]
+    fn opencode_v1_auth_file_presence_is_a_stored_credential() {
+        let dir = opencode_temp_dir("opencode-v1-presence");
+        let data_dir = dir.join(".local").join("share").join("opencode");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(
+            data_dir.join("auth.json"),
+            r#"{"opencode-go":{"type":"api","key":"fixture-secret"}}"#,
+        )
+        .unwrap();
+        let environment = vec![("USERPROFILE".to_string(), dir.to_string_lossy().into_owned())];
+        let states = opencode_stored_gateways(&environment).unwrap();
+        assert_eq!(states.len(), 1);
+        assert!(matches!(states.get("opencode-go"), Some(AuthState::Authenticated)));
+        // The stored credential value never reaches runtime state.
+        assert!(!serde_json::to_string(&states).unwrap().contains("fixture-secret"));
+        // No data dir, no auth.json and no db: the check claims nothing.
+        assert!(opencode_stored_gateways(&[]).is_none());
+        assert_eq!(opencode_data_dir(&environment), Some(data_dir));
+        assert_eq!(
+            opencode_data_dir(&[("XDG_DATA_HOME".to_string(), "D:/data".to_string())]),
+            Some(PathBuf::from("D:/data/opencode"))
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn opencode_v2_credential_db_presence_selects_only_the_integration_id() {
+        let dir = opencode_temp_dir("opencode-v2-presence");
+        let db = dir.join("opencode.db");
+        {
+            // The table deliberately has no `value` column: a query that
+            // selected the secret column would fail here, so passing proves
+            // only `integration_id` (and `active`) is read.
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch("CREATE TABLE credential(integration_id TEXT, active INTEGER);").unwrap();
+            conn.execute("INSERT INTO credential VALUES('opencode',1)", []).unwrap();
+            conn.execute("INSERT INTO credential VALUES('anthropic',1)", []).unwrap();
+        }
+        let environment = vec![("OPENCODE_DB".to_string(), db.to_string_lossy().into_owned())];
+        let states = opencode_stored_gateways(&environment).unwrap();
+        assert_eq!(states.len(), 1);
+        assert!(matches!(states.get("opencode"), Some(AuthState::Authenticated)));
+
+        // An inactive credential is not a stored credential.
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute("UPDATE credential SET active=0", []).unwrap();
+        }
+        assert!(opencode_stored_gateways(&environment).is_none());
+
+        // A database without the table, and a missing file, claim nothing.
+        let empty = dir.join("empty.db");
+        Connection::open(&empty).unwrap();
+        assert!(credential_db_gateways(&empty).is_none());
+        assert!(credential_db_gateways(&dir.join("absent.db")).is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[tokio::test]
+    async fn opencode_stored_credential_short_circuits_a_slow_auth_list() {
+        let dir = opencode_temp_dir("opencode-presence-shortcut");
+        let db = dir.join("opencode.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch("CREATE TABLE credential(integration_id TEXT, active INTEGER);").unwrap();
+            conn.execute("INSERT INTO credential VALUES('opencode',1)", []).unwrap();
+        }
+        let environment = vec![("OPENCODE_DB".to_string(), db.to_string_lossy().into_owned())];
+        #[cfg(windows)]
+        let command = ResolvedCommand {
+            executable: PathBuf::from("cmd.exe"),
+            args: vec!["/d".into(), "/c".into(), "ping -n 30 127.0.0.1 > nul".into()],
+        };
+        #[cfg(not(windows))]
+        let command = ResolvedCommand {
+            executable: PathBuf::from("/bin/sh"),
+            args: vec!["-c".into(), "sleep 30".into()],
+        };
+        let result = timeout(Duration::from_secs(2), auth_status("opencode", &command.executable, &command.args, &environment)).await;
+        let (state, gateways, error) = result.expect("a stored credential must not wait on a slow CLI");
+        assert!(matches!(state, AuthState::Authenticated));
+        assert!(matches!(gateways.get("opencode"), Some(AuthState::Authenticated)));
+        assert!(error.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[tokio::test]
+    async fn opencode_presence_check_without_a_credential_falls_through_to_the_cli() {
+        let command = auth_fixture("OpenCode Console  Default  stored");
+        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args, &[]).await;
+        assert!(matches!(state, AuthState::Authenticated));
+        assert!(matches!(gateways.get("opencode"), Some(AuthState::Authenticated)));
+        assert!(error.is_none());
+        // A data dir with neither auth.json nor a database also claims nothing.
+        let dir = opencode_temp_dir("opencode-presence-empty");
+        let data_dir = dir.join(".local").join("share").join("opencode");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        assert!(opencode_stored_gateways(&[("USERPROFILE".to_string(), dir.to_string_lossy().into_owned())]).is_none());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

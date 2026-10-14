@@ -12,6 +12,8 @@ use zeroize::Zeroize;
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 const MAX_CREDENTIAL_FILE_BYTES: u64 = 1024 * 1024;
+/// Integration ids that carry the Zen/Go API key, most specific first.
+const OPENCODE_KEY_INTEGRATION_IDS: [&str; 2] = ["opencode-go", "opencode"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceFailure {
@@ -99,6 +101,33 @@ struct OpenCodeKeyValue {
     #[serde(rename = "type")]
     kind: Option<String>,
     key: Option<String>,
+    /// OpenCode 2 Console sign-in (`type: "oauth"`): the short-lived bearer token. The
+    /// `refresh` token is deliberately not deserialized, so it is never held here.
+    access: Option<String>,
+    /// Milliseconds since the epoch at which `access` stops working.
+    expires: Option<f64>,
+}
+
+/// The OAuth access token of an OpenCode 2 Console credential, when it has not
+/// expired. Bloblex never refreshes a token: an expired one is treated as no
+/// credential, and the CLI refreshes its own sign-in the next time it runs.
+fn oauth_access_token(value: &mut OpenCodeKeyValue, now_ms: f64) -> Option<String> {
+    value.key.zeroize();
+    let mut access = value.access.take()?;
+    if access.trim().is_empty() || value.expires.is_some_and(|expires| expires <= now_ms) {
+        access.zeroize();
+        return None;
+    }
+    let trimmed = access.trim().to_owned();
+    access.zeroize();
+    Some(trimmed)
+}
+
+fn now_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as f64)
+        .unwrap_or(0.0)
 }
 
 #[derive(Deserialize)]
@@ -177,17 +206,35 @@ fn key_from_credential_db(path: &Path) -> Option<String> {
     )
     .ok()?;
     conn.pragma_update(None, "query_only", "ON").ok()?;
-    let mut raw: Option<String> = conn.query_row(
-        "SELECT value FROM credential WHERE integration_id='opencode-go' AND active=1 ORDER BY time_created DESC LIMIT 1",
-        [],
-        |row| row.get(0),
-    ).optional().ok()?;
-    let value = serde_json::from_str::<OpenCodeKeyValue>(raw.as_deref()?);
-    if let Some(raw) = &mut raw {
-        raw.zeroize();
+    // OpenCode 1 stores the Go key under `opencode-go`; OpenCode 2 stores a
+    // single `opencode` Console credential that is the Zen/Go key. The Go
+    // credential wins when both exist.
+    for integration_id in OPENCODE_KEY_INTEGRATION_IDS {
+        let mut raw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM credential WHERE integration_id=?1 AND active=1 ORDER BY time_created DESC LIMIT 1",
+                [integration_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .ok()?;
+        let parsed = raw
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<OpenCodeKeyValue>(value).ok());
+        if let Some(raw) = &mut raw {
+            raw.zeroize();
+        }
+        let key = parsed.and_then(|mut value| {
+            if value.kind.as_deref() == Some("oauth") {
+                return oauth_access_token(&mut value, now_ms());
+            }
+            parsed_opencode_key(value, &["key", "api"])
+        });
+        if let Some(key) = key {
+            return Some(key);
+        }
     }
-    let value = value.ok()?;
-    parsed_opencode_key(value, &["key", "api"])
+    None
 }
 
 fn resolve_opencode_saved_go_key(environment: &[(String, String)]) -> Option<String> {
@@ -461,6 +508,102 @@ mod tests {
             Some("env-key")
         );
         assert_eq!(resolve_opencode_go_key(&[]), None);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn opencode_console_oauth_credential_uses_its_unexpired_access_token_only() {
+        let dir = temp_dir("opencode-console-oauth");
+        let db = dir.join("opencode.db");
+        let schema = "CREATE TABLE credential(id TEXT,integration_id TEXT,label TEXT,value TEXT,connector_id TEXT,method_id TEXT,active INTEGER,time_created INTEGER,time_updated INTEGER)";
+        let write = |value: &str| {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch("DROP TABLE IF EXISTS credential").unwrap();
+            conn.execute_batch(schema).unwrap();
+            conn.execute("INSERT INTO credential(integration_id,value,active,time_created) VALUES('opencode',?1,1,1)", params![value]).unwrap();
+        };
+        let future = now_ms() + 3_600_000.0;
+        let past = now_ms() - 3_600_000.0;
+        // The OpenCode 2 Console sign-in is OAuth: the access token is used, the refresh token never read.
+        write(&format!(r#"{{"type":"oauth","methodID":"console","refresh":"refresh-token","access":"access-token","expires":{future},"metadata":{{"server":"https://example.test"}}}}"#));
+        assert_eq!(key_from_credential_db(&db).as_deref(), Some("access-token"));
+        // An expired token is not a credential; Bloblex does not refresh it.
+        write(&format!(r#"{{"type":"oauth","methodID":"console","refresh":"refresh-token","access":"access-token","expires":{past}}}"#));
+        assert_eq!(key_from_credential_db(&db), None);
+        // An OAuth row with no access token is nothing.
+        write(r#"{"type":"oauth","refresh":"refresh-token"}"#);
+        assert_eq!(key_from_credential_db(&db), None);
+    }
+
+    #[test]
+    fn opencode_console_credential_resolves_and_the_go_credential_wins() {
+        let dir = temp_dir("opencode-console-key");
+        let db = dir.join("opencode.db");
+        let schema = "CREATE TABLE credential(id TEXT,integration_id TEXT,label TEXT,value TEXT,connector_id TEXT,method_id TEXT,active INTEGER,time_created INTEGER,time_updated INTEGER);";
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(schema).unwrap();
+            conn.execute(
+                "INSERT INTO credential(integration_id,value,active,time_created) VALUES('opencode',?1,1,1)",
+                params![r#"{"type":"api","key":"console-key"}"#],
+            )
+            .unwrap();
+        }
+        // OpenCode 2 stores no `opencode-go` row: the Console key is the Go key.
+        assert_eq!(key_from_credential_db(&db).as_deref(), Some("console-key"));
+        let environment = vec![("OPENCODE_DB".into(), db.to_string_lossy().to_string())];
+        assert_eq!(
+            resolve_opencode_go_key(&environment).as_deref(),
+            Some("console-key")
+        );
+
+        // An inactive Console credential is not a credential.
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute("UPDATE credential SET active=0 WHERE integration_id='opencode'", []).unwrap();
+        }
+        assert_eq!(key_from_credential_db(&db), None);
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute("UPDATE credential SET active=1 WHERE integration_id='opencode'", []).unwrap();
+            conn.execute(
+                "INSERT INTO credential(integration_id,value,active,time_created) VALUES('opencode-go',?1,1,2)",
+                params![r#"{"type":"api","key":"go-key"}"#],
+            )
+            .unwrap();
+        }
+        // With both rows, the Go credential is preferred.
+        assert_eq!(key_from_credential_db(&db).as_deref(), Some("go-key"));
+
+        // auth.json still wins for OpenCode 1 when both sources exist.
+        let data_dir = dir.join(".local").join("share").join("opencode");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(
+            data_dir.join("auth.json"),
+            r#"{"opencode-go":{"type":"api","key":"auth-file-key"}}"#,
+        )
+        .unwrap();
+        let both_sources = vec![
+            ("USERPROFILE".into(), dir.to_string_lossy().to_string()),
+            ("OPENCODE_DB".into(), db.to_string_lossy().to_string()),
+        ];
+        assert_eq!(
+            resolve_opencode_go_key(&both_sources).as_deref(),
+            Some("auth-file-key")
+        );
+
+        // A Console row of a non-API type is not a usable key.
+        let oauth_db = dir.join("opencode-oauth.db");
+        {
+            let conn = Connection::open(&oauth_db).unwrap();
+            conn.execute_batch(schema).unwrap();
+            conn.execute(
+                "INSERT INTO credential(integration_id,value,active,time_created) VALUES('opencode',?1,1,1)",
+                params![r#"{"type":"oauth","key":"oauth-key"}"#],
+            )
+            .unwrap();
+        }
+        assert_eq!(key_from_credential_db(&oauth_db), None);
         let _ = fs::remove_dir_all(dir);
     }
 

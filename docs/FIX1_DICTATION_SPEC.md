@@ -1,5 +1,7 @@
 # Fix 1A spec: why ChatGPT dictation says "verification required" (diagnose, then fix what is ours)
 
+> Status: historical spec. Its rule "No bypass of bot protection" (line 12) is amended for cloud dictation request-shape matching by the AGENTS.md amendment of 14 October 2026. `originator`, the User-Agent identity, cookie replay, challenge-solving and retry loops remain forbidden. The shipped result is in [FIX2_DICTATION_TLS_SPEC.md](FIX2_DICTATION_TLS_SPEC.md) and [evidence/cloud-dictation-tls-backend-2026-10-14.md](evidence/cloud-dictation-tls-backend-2026-10-14.md).
+
 Owner: OpenCode lane (backend/native only). Reviewer: Director. The desktop UI (`apps/desktop/src`) is the Director's; **do not touch it, and do not touch `crates/bloblex-daemon`, `crates/bloblex-adapter-*`.**
 Scope: `crates/bloblex-speech` (mainly `src/cloud.rs`), `apps/desktop/src-tauri/src/speech.rs`, `docs/evidence/`.
 

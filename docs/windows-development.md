@@ -21,7 +21,7 @@ Current launcher source selects a free loopback development port from 1420–143
 npm run desktop:bundle
 ```
 
-The script defaults to `target/desktop-release` unless a Cargo target is explicitly supplied. It builds both release sidecars, stages their target-triple-suffixed external binaries, then invokes Tauri's configured build. NSIS and MSI are configured bundle targets; an actual installer build/install/uninstall pass remains open. No trusted signed release is established. It still needs an approved Windows signing certificate or Store submission, updater signing keys, and release hosting configured in CI. No signing identity or updater key is checked into this repository.
+The script defaults to `target/desktop-release` unless a Cargo target is explicitly supplied. It builds both release sidecars, stages their target-triple-suffixed external binaries, then invokes Tauri's configured build. NSIS is the only configured bundle target (`bundle.targets` in `apps/desktop/src-tauri/tauri.conf.json`); an actual installer build/install/uninstall pass remains open. No trusted signed release is established. It still needs an approved Windows signing certificate or Store submission, updater signing keys, and release hosting configured in CI. No signing identity or updater key is checked into this repository.
 
 The updater remains disabled until a signing key and signed update endpoint are configured. Provider CLIs keep their own update channels.
 

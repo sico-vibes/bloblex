@@ -1,6 +1,8 @@
 # Implementation status
 
-Current as of 12 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
+> Status: current through `v0.1.0-beta.22` (14 October entry below). The newest release is `v0.1.0-beta.24` ([releases/0.1.0-beta.24.md](releases/0.1.0-beta.24.md)). The "Phase status" and "Work after the plan phases" tables describe the 1-12 October worktree and are historical; the "Still open" list is the current gap list.
+
+Current as of 14 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
 
 **14 October beta.22 scope:** [docs/releases/0.1.0-beta.22.md](releases/0.1.0-beta.22.md) — cloud dictation gets past OpenAI's edge by switching the cloud client's TLS stack from the platform default (`native-tls`/SChannel, challenged) to `rustls` (accepted). Same endpoint, body, headers and identity; `originator` stays `bloblex`. Verified live with the shipped client: `challenged` before, `ok` after, reproduced twice. Evidence: [client shape](evidence/cloud-dictation-client-shape-2026-10-14.md), [TLS backend](evidence/cloud-dictation-tls-backend-2026-10-14.md); spec [FIX2_DICTATION_TLS_SPEC.md](FIX2_DICTATION_TLS_SPEC.md). Falsified along the way: the identity theory, the audio container, the TLS *library* alone, header set/order/casing, address family, and ALPN. The endpoint's permission rests on the owner's account of OpenAI's reply and is owner-attested only. Unverified: real speech through a live microphone, other machines and networks, drift over time, and clean-machine installation.
 

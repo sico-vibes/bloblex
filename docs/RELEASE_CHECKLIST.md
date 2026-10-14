@@ -1,14 +1,16 @@
 # Release checklist
 
-Updated 14 October 2026. Manual-only `v0.1.0-beta.23` is published and is the newest versioned GitHub release. The signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`; manual-only betas do not change that feed. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
+Updated 14 October 2026. Manual-only `v0.1.0-beta.24` is published and is the newest versioned GitHub release. The signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`; manual-only betas do not change that feed. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
 
-Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.23`. Cargo.lock entries for the 15 crates inheriting the workspace version are beta.22; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
+Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.24`. Cargo.lock entries for the 15 crates inheriting the workspace version are beta.24 in this checkout; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
 
-`docs/releases/0.1.0-beta.23.md` is the published note for the current manual-only beta. The signed release script is not used for unsigned manual releases. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
+`docs/releases/0.1.0-beta.24.md` is the published note for the current manual-only beta. The signed release script is not used for unsigned manual releases. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
 
 ## Release command
 
 **Last step of every release: clean up.** Once the release is published and its asset digests match, remove the build worktree and its `target` and any reviewed lane worktrees, as set out in the 14 October 2026 amendment in `AGENTS.md` (remove the `node_modules` junction first, as a link). Note the space recovered in the release entry below.
+
+Status: **done for beta.24**. The [v0.1.0-beta.24](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.24) prerelease is published from `c2fca03` with its unsigned NSIS installer (14,170,249 bytes; SHA-256 `cc941d083c596e4c9fbb1701e43e5cc8f0e484bc3b214d17db7021708000b15d`) and `SHA256SUMS.txt`; both GitHub asset digests match local files. Main and the annotated tag are pushed; `main` additionally carries the build-cleanup rule commit `daf525e`, which is not part of the tagged build. Built in `C:24` (a detached worktree at `c2fca03`) with `--no-sign` and `createUpdaterArtifacts:false` passed as a config file; the staged daemon hash matches the compiled release binary and Authenticode status is `NotSigned` for both the installer and the app. Gates before the build: 494 Rust workspace tests excluding desktop (with `RUST_MIN_STACK=33554432`), desktop typecheck and 522 desktop tests (the production web build runs inside `tauri build`). Contents: OpenCode 2 launch fix (`acp --cwd` removed; verified live against 2.0.28: catalog of 115 models in about 2 seconds), the Codex team-instruction update with echo-only evidence, and the settings-note copy. Not done: a real OpenCode conversation end to end, a live Codex turn for the instruction update, the release-daemon boot smoke. Cleanup per the 14 October amendment: `C:24`, the docs lane worktree and its branch, and 521 MB of scratch probes removed; about 5.4 GB recovered (the main checkout's `target` and `node_modules` kept).
 
 Status: **done for beta.23**. The [v0.1.0-beta.23](https://github.com/sico-vibes/bloblex/releases/tag/v0.1.0-beta.23) prerelease is published from `23395c3` with its unsigned NSIS installer (14,165,249 bytes; SHA-256 `638c4e827365afb6508f9343eb847f39cd27de0abd01b523d9ece61994554f9c`) and `SHA256SUMS.txt`; both GitHub asset digests match local files. Main and the annotated tag are pushed. Built in `C:\b23` (a detached worktree at `23395c3`; this machine has no `D:` drive) with `--no-sign` and `createUpdaterArtifacts:false` passed as a config file, because the inline JSON override was mangled by the Windows shell; the staged daemon hash matches the compiled release binary and Authenticode status is `NotSigned` for both the installer and the app. Gates before the build: 483 Rust workspace tests excluding desktop (with `RUST_MIN_STACK=33554432`), desktop typecheck, 522 desktop tests and the production web build (run by `tauri build`). Contents: OpenCode 2 sign-in and version detection (`auth list` rows read, `stored` is signed in, `v`-prefixed version read, a plain `models` listing reports only a quiet unknown), effort picker width and Ultracode gradient, Claude model names carrying their release, centred check marks and the Bitbots pixel launch animation. Verified live against OpenCode 2.0.28 on the build machine (`online`, `Authenticated`, no probe error). Not done: the release-daemon boot smoke against a temporary database. Unverified: the UI in the installed native windows, a machine with no OpenCode credentials, and clean-machine installation. Known open issue: a Codex thread keeps the team instructions it started with, so a blob made leader after its thread began still believes it cannot create blobs.
 
@@ -69,7 +71,7 @@ Status: **done for beta.8 manual install**. `Bloblex_0.1.0-beta.8_x64-setup.exe`
 
 The release artifact is the NSIS installer only. An MSI is not a Bloblex release artifact: an MSI version cannot carry a `-beta.N` pre-release. `docs/UPDATER.md` sets the Windows bundle target to `nsis` only. The release script globs `<CARGO_TARGET_DIR>\release\bundle\nsis\*-setup.exe`, keeps the file whose name matches the release version, and requires the sibling `<installer>.sig`. It does not upload an MSI.
 
-`tauri.conf.json` has `bundle.targets: ["nsis"]`, `createUpdaterArtifacts: true`, the updater public key, and stable/beta endpoints. For beta.8 only, the build overrode `bundle.createUpdaterArtifacts` to `false` and passed `--no-sign`; this produced no `.sig` and no `latest.json`. The rolling beta channel was left unchanged.
+`apps/desktop/src-tauri/tauri.conf.json` has `bundle.targets: ["nsis"]`, `createUpdaterArtifacts: true`, the updater public key, and the stable endpoint in `plugins.updater.endpoints`. The beta endpoint is not in that file: `apps/desktop/src-tauri/src/updates.rs` (lines 19-21 and 231-234) sets the endpoint per channel. For beta.8 only, the build overrode `bundle.createUpdaterArtifacts` to `false` and passed `--no-sign`; this produced no `.sig` and no `latest.json`. The rolling beta channel was left unchanged.
 
 The beta.6 bundle run staged both `bloblexd-x86_64-pc-windows-msvc.exe` and `bloblex-hook-x86_64-pc-windows-msvc.exe` in `apps/desktop/src-tauri/binaries/` for packaging. These are local bundle outputs, not source changes.
 
@@ -100,7 +102,7 @@ Status: **done for beta.6**. The existing Tauri updater key files were used by t
 
 The updater key is a minisign key pair used by the Tauri updater plugin. It is not a Windows code-signing certificate. The release script reads the private key and password only while `npm run desktop:bundle` runs, from `%USERPROFILE%\.bloblex-release\updater.key` and `updater.pass`, or from `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` when those are already set. It then removes them from the process environment. It does not print them.
 
-The public half is configured in `tauri.conf.json` under `plugins.updater.pubkey` (`docs/UPDATER.md`).
+The public half is configured in `apps/desktop/src-tauri/tauri.conf.json` under `plugins.updater.pubkey` (`docs/UPDATER.md`).
 
 Losing the private key means existing installs cannot accept future updates: the app keeps the old public key and will reject signatures from a new key. Never commit `updater.key`, `updater.pass`, or the private-key environment values. The release script loaded the existing files into its build process and removed them from the process environment afterward.
 
@@ -108,7 +110,7 @@ Losing the private key means existing installs cannot accept future updates: the
 
 Status: **needs user**
 
-1. Set root `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the Cargo workspace `version` to the same non-pre-release semver (the current tree is `0.1.0-beta.6`).
+1. Set root `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the Cargo workspace `version` to the same non-pre-release semver (the current tree is `0.1.0-beta.24`).
 2. Add `docs/releases/<version>.md`.
 3. From a clean `main` checkout, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -Version <version>`.
 4. Because the version has no pre-release part, the script does not pass `--prerelease` or `--latest=false`. GitHub can mark that release as Latest.
@@ -121,7 +123,7 @@ Use `-DryRun` first. A dry run still needs the updater signing key if it is allo
 
 Status: **needs user**
 
-`tauri.conf.json` has no `bundle.windows.certificateThumbprint` and no `signCommand`. No certificate or Store identity is in the repo. The updater minisign key does not replace this certificate. An unsigned installer can be produced once bundling is configured; a trusted Windows install still needs a certificate or Store submission supplied by the user. Until then, Windows may show a SmartScreen warning on a first manual install. `docs/implementation-status.md` (WP-16) and `docs/windows-development.md` record the same certificate gap.
+`apps/desktop/src-tauri/tauri.conf.json` has no `bundle.windows.certificateThumbprint` and no `signCommand`. No certificate or Store identity is in the repo. The updater minisign key does not replace this certificate. An unsigned installer can be produced once bundling is configured; a trusted Windows install still needs a certificate or Store submission supplied by the user. Until then, Windows may show a SmartScreen warning on a first manual install. `docs/implementation-status.md` (WP-16) and `docs/windows-development.md` record the same certificate gap.
 
 ## Clean-VM install
 
@@ -156,7 +158,7 @@ From `docs/E2E_PLAN_V2.md` Phase 7. Where a row says recorded, the evidence is `
 
 Status: **done** (present in `app.security.csp`; not exercised in a WebView)
 
-The policy is one line in `tauri.conf.json`. Remote and special origins it allows:
+The policy is one line in `apps/desktop/src-tauri/tauri.conf.json`. Remote and special origins it allows:
 
 | Directive | Origins |
 | --- | --- |

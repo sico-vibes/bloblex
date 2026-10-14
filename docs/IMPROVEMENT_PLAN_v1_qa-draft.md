@@ -1,5 +1,7 @@
 # Bloblex improvement plan: CLI connectivity, reasoning effort, and dictation
 
+> Status: superseded by [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) (the owner-approved v2, 12 October 2026, which says it supersedes this draft). Kept as the QA record; its budget and path references are not current.
+
 Status: proposal for review. Author: QA lane (OpenCode), for the Director.
 Date: 12 October 2026. Baseline source: `17591b9` (beta.18).
 

@@ -52,4 +52,4 @@ Events (listen names): `bloblex-update-available` (payload `UpdateInfo`), `blobl
 5. Create the GitHub release (`--prerelease` when the version has a pre-release part) with the installer, its `.sig` and `latest.json`; then create-or-update the `channel-beta` pre-release and upload `latest.json` to it with `--clobber`.
 6. Print the release URL and the SHA-256 of the installer. Support `-DryRun` (everything except the `gh` calls and tagging).
 
-The public key is committed in `tauri.conf.json` (`plugins.updater.pubkey`); the private key is never committed.
+The public key is committed in `apps/desktop/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`); the private key is never committed.

@@ -1,5 +1,7 @@
 # Phase 7 spec: opt-in cloud dictation through the Codex login (backend and native)
 
+> Status: historical spec; the cloud dictation path shipped in `v0.1.0-beta.22` with a rustls client ([FIX2_DICTATION_TLS_SPEC.md](FIX2_DICTATION_TLS_SPEC.md)). The evidence file named in this spec (`docs/evidence/cloud-dictation-2026-10-12.md`, line 42) is not in the tree; the 13-14 October evidence is [cloud-dictation-diagnosis-2026-10-13.md](evidence/cloud-dictation-diagnosis-2026-10-13.md), [cloud-dictation-client-shape-2026-10-14.md](evidence/cloud-dictation-client-shape-2026-10-14.md) and [cloud-dictation-tls-backend-2026-10-14.md](evidence/cloud-dictation-tls-backend-2026-10-14.md). The request-shape rule in AGENTS.md (14 October 2026) is the current one.
+
 Owner: OpenCode lane (backend/native only). Reviewer: Director. Parent plan: `docs/IMPROVEMENT_PLAN.md` Phase 7. The desktop UI (`apps/desktop/src`) is built by the Director against this contract; **do not touch it, and do not touch `crates/bloblex-daemon`**.
 Scope: `crates/bloblex-speech` (new `src/cloud.rs`, `lib.rs` exports), `apps/desktop/src-tauri/src/speech.rs`, `apps/desktop/src-tauri/src/lib.rs` (command registration only), `docs/`. No new dependencies unless unavoidable; build multipart by hand (the workspace `reqwest` has `json` only; the desktop crate also has `blocking`).
 

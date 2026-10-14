@@ -1,5 +1,7 @@
 # Bloblex session handoff
 
+> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.23` ([docs/releases/0.1.0-beta.23.md](docs/releases/0.1.0-beta.23.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (12 October and 14 October amendments). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
+
 Current as of 13 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
 ## Owner review follow-up and Bitbots (13 October 2026, after beta.19)

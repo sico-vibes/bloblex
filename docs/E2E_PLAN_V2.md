@@ -1,5 +1,7 @@
 # Bloblex E2E plan: configurable blobs, sessions tree, token analytics, provider quota, release
 
+> Status: plan with dated checkpoints (the status section below is 5-6 October 2026). Budget and monetary items are retired (AGENTS.md, 12 October 2026 amendment). Current release: `v0.1.0-beta.23`. Open items: [implementation-status.md](implementation-status.md).
+
 ## Status (5 October 2026)
 
 The current 6 October uncommitted follow-up extends the conversation flow with lazy resume, provider title/context events, a persisted per-session model/effort lock, a keyboard-accessible message outline, and hold-to-confirm deletion. Claude's structured stream does not report a provider title; no title is inferred from prompts or transcripts. Individually reported context usage or window size is shown as available, and a percentage appears only when both values are known. Affected Rust crates passed together; desktop typecheck, mounted/full Vitest and production build passed. Native and live-provider verification of these additions remains open. See [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
@@ -38,23 +40,23 @@ The UI and code facts below describe that checkpoint, before Tasks 1–3; report
 
 - **UI:**
   - The character engine, the companion island and the chat-style shell are done (79/79 tests passing).
-  - The sidebar lists one blob per detected CLI (`runtimeRows` in [apps/desktop/src/ui/App.tsx](apps/desktop/src/ui/App.tsx)).
+  - The sidebar lists one blob per detected CLI (`runtimeRows` in [apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx)).
 - **Daemon:**
   - `session.new` takes only `{ runtimeId, projectPath, title }`.
-  - [crates/bloblex-agent-core/src/lib.rs](crates/bloblex-agent-core/src/lib.rs) `NewSessionRequest` / `PromptRequest` carry no model, effort, speed or instructions.
+  - [crates/bloblex-agent-core/src/lib.rs](../crates/bloblex-agent-core/src/lib.rs) `NewSessionRequest` / `PromptRequest` carry no model, effort, speed or instructions.
   - `runtime.profile.*` holds launcher profiles (executable and fixed args), not personas.
 - **Adapters:** all launch with fixed args.
   - Claude: `-p --output-format stream-json ...`
   - Codex: `app-server --listen stdio://`, with `thread/start` = cwd, approval and sandbox only.
   - OpenCode: `acp --cwd`; ACP can emit `usage_update` with context-window `used`/`size` and cost that appears cumulative for the session. It does not expose input/output/cache token buckets in that update; successful-run cost semantics remain unverified.
-- **Storage** ([crates/bloblex-storage/src/lib.rs](crates/bloblex-storage/src/lib.rs)):
+- **Storage** ([crates/bloblex-storage/src/lib.rs](../crates/bloblex-storage/src/lib.rs)):
   - `sessions.project_path` exists.
   - `usage_events` already holds model and tokens, plus `usage_valuations` by basis.
   - `usage.summary` only returns global totals. There is no breakdown by agent, day or model.
-- **Discovery:** `discover()` in [crates/bloblex-runtime/src/lib.rs](crates/bloblex-runtime/src/lib.rs) does not list models.
+- **Discovery:** `discover()` in [crates/bloblex-runtime/src/lib.rs](../crates/bloblex-runtime/src/lib.rs) does not list models.
 - **Icons:**
   - `assets/icon/bloblex.png` is a 963x958 PNG with alpha and transparent rounded corners already present; it shows a black rounded-square plate with a white blob.
-  - `bloblex.ico` and `tray.png` are still the old ones. `tray.png` is embedded via `include_bytes!` at [apps/desktop/src-tauri/src/lib.rs](apps/desktop/src-tauri/src/lib.rs) around line 1361.
+  - `bloblex.ico` and `tray.png` are still the old ones. `tray.png` is embedded via `include_bytes!` at [apps/desktop/src-tauri/src/lib.rs](../apps/desktop/src-tauri/src/lib.rs) around line 1361.
 
 ## Target data model
 
@@ -257,7 +259,7 @@ This phase depends on Phase 2a and the intervening native smoke gate; it does no
   - keyboard and focus;
   - reduced motion;
   - Quit and process-tree cleanup.
-- Carry over the open items from [docs/implementation-status.md](docs/implementation-status.md): installer, signing, updater, clean-VM install, and WSL.
+- Carry over the open items from [docs/implementation-status.md](implementation-status.md): installer, signing, updater, clean-VM install, and WSL.
 - **Later options:** a Pi adapter (`--model`, `--thinking`, `-p --mode json`), task queueing beyond the concurrency limit, and avatar upload or generation.
 
 ## Cross-cutting rules
@@ -267,8 +269,8 @@ This phase depends on Phase 2a and the intervening native smoke gate; it does no
 - The daemon owns state. React only renders normalized data.
 - Each phase ships with:
   - unit and mounted tests;
-  - fixture-preview pages (extend [apps/desktop/src/preview/fixtureBridge.ts](apps/desktop/src/preview/fixtureBridge.ts));
-  - an updated [SESSION_HANDOFF.md](SESSION_HANDOFF.md).
+  - fixture-preview pages (extend [apps/desktop/src/preview/fixtureBridge.ts](../apps/desktop/src/preview/fixtureBridge.ts));
+  - an updated [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
 - Store this plan as `docs/E2E_PLAN_V2.md` and link it from `SESSION_HANDOFF.md` and `AGENTS.md`.
 
 ## Suggested order

@@ -1,5 +1,7 @@
 ﻿# Installed runtime capabilities for Phase 2b
 
+> Status: evidence record of CLI builds observed 2 to 13 October 2026 (Claude Code 2.1.286, Codex 0.159.3, OpenCode 1.18.34 and 1.18.35). OpenCode 2.0.28 observations (14 October 2026) are in the OpenCode section, labelled as such.
+
 ## Shared provider processes
 
 Codex app-server and ACP keep one lazily started process per process key. Each key is a SHA-256 fingerprint of the runtime id, executable and launch arguments, project working directory, the allowlisted per-session environment overrides, provider config where applicable, and a fingerprint of the daemon's inherited environment. The inherited environment is fingerprinted in memory; its values are never logged. Different working directories or effective environment values get separate children.
@@ -125,6 +127,27 @@ Tier description strings from the same family of runs: Director, real host, saw 
 | Real host, Director-verified | 2026-10-02 | `opencode models --verbose`: 52 models, 33 with `variants`. Variant examples are in O6. ACP `effort` values for `ling-3.0-flash-fin-free`: `low`, `medium`, `high`, `default`. |
 | Real host, OpenCode lane | 2026-10-13 | OpenCode 1.18.35. `opencode models --verbose`: 44 models, 34 with `variants`. `opencode-go/deepseek-v4.1-flash` variants `low`, `high`, `max`; `opencode-go/grok-4.7` `low`, `medium`, `high`, `xhigh`; `opencode-go/kimi-k3` `max`; `opencode-go/gpt-6-luna` `none`, `low`, `medium`, `high`, `xhigh`, `max`; `opencode/big-pickle` none. ACP `effort` option: id `effort`, category `thought_level`, current `low`, values `low`, `high`, `max`, `default`. |
 | Isolated redirected home, impl-b | 2026-10-02 | `opencode models --verbose`: 8 Zen free models (`big-pickle`, `ling-3.0-flash-fin-free`, `longcat-2.5-preview-free`, `mimo-v2.6-flash-free`, `muse-spark-1.3-contributor-free`, `nemotron-3-ultra-free`, `nemotron-3.5-lightning-free`, `space-bunny-free`), reported cost 0. ACP `model` options on that home also listed `opencode/fledge-alpha-free` (9 values). This is not the real profile. |
+
+### OpenCode 2.0.28 facts (observed 14 Oct 2026, OpenCode 2.0.28)
+
+Observed 14 Oct 2026, OpenCode 2.0.28. These are not 1.18.34 results. This docs pass did not re-run them; they come from the owner's CLI observation.
+
+- `opencode --version` prints `opencode v2.0.28` (note the `v`). The runtime strips that label: `crates/bloblex-runtime/src/lib.rs:215`.
+- `opencode auth list` prints whitespace-aligned rows such as `OpenCode Console  Default  stored`. The status word `stored` means a credential is present; `crates/bloblex-runtime/src/lib.rs:414` maps it to authenticated. `auth list --format json` exists but may contain credential fields, so its shape is deliberately not documented.
+- `opencode models --verbose` is rejected (`Unrecognized flag: --verbose`). Plain `opencode models` prints one `provider/model` per line.
+- `opencode acp` accepts only `--login`. `acp --cwd <dir>` is rejected: the CLI prints help and never speaks ACP. The working directory comes from the process cwd and from `session/new`'s `cwd`.
+- ACP `session/new` returns `configOptions`: `model` (select, category `model`); `effort` (select, category `thought_level`, options `low`, `medium`, `high`, `default`, for the CURRENT model only); `mode` (select, `build` or `plan`).
+- Bloblex's ACP launch is described in [FIX3_OPENCODE2_ACP_LAUNCH_SPEC.md](FIX3_OPENCODE2_ACP_LAUNCH_SPEC.md). Auth parsing is in `crates/bloblex-runtime/src/lib.rs` (`auth_status` at line 265, `parse_opencode_auth_list` at line 387).
+
+Conflicts with the 1.18.34 statements above and with the code:
+
+- **Fixed in `v0.1.0-beta.24` (commit `a0347b5`):** the ACP launch no longer passes `acp --cwd` (it did at `crates/bloblex-adapter-acp/src/lib.rs` `spawn_process` and `catalog.rs` `fetch_config_options`). Verified live 14 Oct 2026: with the flag the CLI printed help and timed out; without it the catalog returned 115 models and the current model's effort levels in about 2 seconds. A real conversation end to end was not run.
+- The verbose catalog call (`crates/bloblex-adapter-acp/src/catalog.rs` `fetch_verbose_catalog`; `crates/bloblex-runtime/src/lib.rs` `auth_status`) uses `models --verbose`, which 2.0.28 rejects. The adapter falls back to the ACP `session/new` config options, and discovery falls back to plain `models`, which only reports an unknown sign-in (a listing is not proof of sign-in).
+- The statements above that name `--verbose` (the OpenCode environment-policy paragraph near the top, and O1) and `acp --cwd` (O7, Z2) describe 1.18.34 only.
+
+### Line citations in the adapter rows
+
+The `file:line` citations in the adapter tables (C6, C7, X7, O3, O5, O7 and the Z1 map) were written against an earlier revision and no longer match. Current locations, checked 14 Oct 2026: ACP spawn `crates/bloblex-adapter-acp/src/lib.rs:299-300`; ACP `initialize` and `initialized` at lines 451 and 455; ACP `session/new` at lines 550 and 981; `session/set_config_option` at line 686; `usage_update` handling at lines 402-408; `record_usage_update` in `crates/bloblex-adapter-acp/src/exec.rs:312`; Claude `total_cost_usd` at `crates/bloblex-adapter-claude/src/lib.rs:643`; Codex `thread/tokenUsage/updated` at `crates/bloblex-adapter-codex/src/lib.rs:420-423`. The conclusions in those rows were not re-tested by this pass.
 
 ## Z1. Setting-to-runtime map
 

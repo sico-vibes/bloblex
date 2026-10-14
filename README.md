@@ -2,7 +2,7 @@
 
 Local Windows desktop control plane for Claude Code, Codex, and OpenCode. A React/Tauri shell and a companion window share state from the `bloblexd` daemon. Each provider CLI keeps its own login.
 
-**Status: `v0.1.0-beta.7` release candidate.** The latest published release remains `v0.1.0-beta.6`. This candidate passes desktop and Rust workspace checks and has one accepted live Claude daemon session on an isolated database. The full native interaction and clean-machine install passes remain open. See [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and [docs/implementation-status.md](docs/implementation-status.md).
+**Status: `v0.1.0-beta.24`** (the version in `Cargo.toml` and `package.json`), published as a manual, unsigned NSIS installer. The signed updater feed stays at `v0.1.0-beta.6`. Full native acceptance and a clean-machine install remain open ([docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)). Release notes: [docs/releases/0.1.0-beta.23.md](docs/releases/0.1.0-beta.23.md). History and dated records: [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and [docs/implementation-status.md](docs/implementation-status.md). The hub for every document is [docs/README.md](docs/README.md).
 
 ## Continue this project
 
@@ -44,7 +44,7 @@ An opt-in provider smoke may use provider quota. A default test pass does not me
 npm run desktop:bundle
 ```
 
-This is the local NSIS/MSI path. A signed installer, clean-machine install, and updater are still open (Phase 7).
+This is the local NSIS path (`bundle.targets` is `nsis` only in `apps/desktop/src-tauri/tauri.conf.json`). A trusted signed installer and a clean-machine install are still open (Phase 7). The signed updater feed is at `v0.1.0-beta.6` ([docs/UPDATER.md](docs/UPDATER.md)).
 
 ## Source map
 
@@ -52,11 +52,11 @@ This is the local NSIS/MSI path. A signed installer, clean-machine install, and 
 | --- | --- |
 | `apps/desktop/src/` | Main and companion UI, analytics, approval and execution contracts |
 | `apps/desktop/src-tauri/` | Native windows, tray, authenticated daemon proxy, file actions |
-| `crates/bloblex-daemon/` | Sessions, permissions, budgets, analytics RPC |
+| `crates/bloblex-daemon/` | Sessions, permissions, usage analytics and quota RPCs. Budgets are retired: `budget.*` returns `unsupported` (`crates/bloblex-daemon/src/main.rs:992`) |
 | `crates/bloblex-adapter-*` | OpenCode ACP, Codex app-server, and Claude adapters |
 | `crates/bloblex-storage/` | SQLite, migrations, usage analytics |
 | `crates/bloblex-runtime/` | CLI discovery and launch specifications |
-| `crates/bloblex-usage/`, `bloblex-budget/`, `bloblex-wsl/` | Pricing helpers, budgets, WSL helpers |
+| `crates/bloblex-usage/`, `bloblex-budget/`, `bloblex-wsl/` | Usage helpers and the official price table (`crates/bloblex-usage/data/official-prices.json`); `bloblex-budget` is a workspace member that no crate depends on (budgets are retired); WSL helpers |
 | `tools/bloblex-hook/` | Bounded Claude hook helper |
 | `scripts/` | Windows dev, sidecar staging, and installer entry points |
 

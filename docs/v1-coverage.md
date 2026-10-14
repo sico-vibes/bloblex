@@ -1,5 +1,7 @@
 # V1 coverage audit
 
+> Status: historical snapshot of 1 October 2026. The rows for budgets (`Global and agent/session budgets`) and the budget line under Settings are retired (AGENTS.md, 12 October 2026 amendment), and the pricing and valuation rows describe the retired monetary model. Keep as a record of the 1 October audit; it is not current acceptance.
+
 Authority: the supplied plan, especially sections 3.1, 31, 35 and 37. The user's bottom-center, freely draggable bill overlay replaces top-edge notch placement. island interaction fidelity is required. The concept image supplies direction, not acceptance evidence. Computer Use testing is deferred until the final implementation stage.
 
 This is an in-progress audit, not a release verdict. A requirement closes only when its proof covers the entire behavior. Agent reports are not independent verification.

@@ -1,5 +1,7 @@
 # Phase 3 implementation spec: blob roster and editor
 
+> Status: historical spec. Files listed in the Phase 3 inventory that are no longer in `apps/desktop/src/ui/` include `agentRoster.ts`, `AgentRoster.tsx`, `AgentContextMenu.tsx` and `BlobUsage.tsx`. The roster was replaced by `TeamSidebar` ([SESSION_HANDOFF.md](../SESSION_HANDOFF.md), 10 October 2026).
+
 This is the implementation contract for Phase 3 of [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Phase 3 replaces the runtime-per-row sidebar with one row per blob, and adds the blob editor. It depends only on Phase 2a, as specified in [PHASE_2A_SPEC.md](PHASE_2A_SPEC.md). Execution fields may be displayed. They must not be described as working.
 
 Line citations are the source this spec was written against. Phase 2a may land beside this document; where this spec names a type, RPC, or event, implement that shape from PHASE_2A_SPEC.md rather than from an older TypeScript file. Do not edit Rust. Do not copy another product's layout, labels, or assets ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) line 13). The shell to extend is the one already in the repo: Midnight chat chrome in [apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) lines 1–4, with Bloblex's own circular faces.

@@ -1,6 +1,6 @@
 # Approval modes contract: ask, auto-approve and bypass
 
-User request (2 Oct 2026): Bloblex must offer auto-approve and bypass modes. The invariant "the daemon owns permission decisions" stays true: the daemon is the component that decides to approve automatically, records every automatic decision, and keeps the budgets and the kill switch in force.
+User request (2 Oct 2026): Bloblex must offer auto-approve and bypass modes. The invariant "the daemon owns permission decisions" stays true: the daemon is the component that decides to approve automatically, records every automatic decision, and keeps the kill switch in force. Budgets are retired (AGENTS.md, 12 October 2026 amendment); the budget clauses below are historical.
 
 ## Modes
 
@@ -22,7 +22,7 @@ User request (2 Oct 2026): Bloblex must offer auto-approve and bypass modes. The
 
 1. Default is `ask`. Nothing but an explicit user action changes a mode (no migration, discovery, import or provider output may).
 2. Everything is audited: each automatically resolved request is persisted as an event `permission.auto_resolved {permissionId, sessionId, turnId, agentId, mode, decision, category, summary}` (summary is a SAFE short description: tool kind and a path or command head, never file contents, env values or instruction text) and also stored with the permission row (`resolved_by = "policy:auto" | "policy:bypass"`). When a provider is launched in a no-prompt bypass mode and the daemon therefore cannot see individual actions, the daemon persists `permission.bypass_active {sessionId, agentId, providerMode}` at every session start and turn start.
-3. Budgets still apply: hard limits stop turns; `Pause all agents`, cancel and the tray controls always work and always override the mode.
+3. Budgets are retired, so no budget stops a turn (AGENTS.md, 12 October 2026 amendment; `budget.*` returns `unsupported`, `crates/bloblex-daemon/src/main.rs:992`). Unattended work brings its own caps (runtime limit, concurrency limit, global pause; never `bypass`). `Pause all agents`, cancel and the tray controls always work and always override the mode.
 4. Visible everywhere: a shield badge on the blob row (neutral for `auto`, warning colour for `bypass`), a pill in the chat header, the companion island, and a line in the Blob page; a bypass blob is never shown as ordinary.
 5. The mode and the effective provider launch mode are recorded in the Phase 2b execution snapshot (kind `request_shape` or `provider_echo` as available).
 6. The classifier fails closed: anything it cannot classify is asked about in `auto`.

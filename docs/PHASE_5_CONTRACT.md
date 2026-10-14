@@ -1,5 +1,7 @@
 # Phase 5 contract: cost and usage analytics (daemon RPC + UI)
 
+> Status: superseded in part. Monetary cost, API-rate estimates, subscription fees and the Cost, lower-bound and subscription sections below are retired: `pricing.*` and `subscription.*` return `unsupported` (`crates/bloblex-daemon/src/main.rs:1085`), and `budget.*` is retired (AGENTS.md, 12 October 2026 amendment). Current usage is reported-token analytics plus normalized account quota ([docs/implementation-status.md](implementation-status.md), "Current source scope"). The `failureClass` wire values below also differ from the code: `adapter_failure_class` emits `timeout`, `permission_denied`, `context`, `config_unsupported` and `provider_error` (`crates/bloblex-daemon/src/main.rs:114-126`).
+
 Shared contract so the daemon lane and the UI lane can build in parallel. Original design: no third-party layout, text or assets. Builds on Phase 2a (`agent_id` on sessions and usage events) and Phase 2b-1 (migration 3 columns: `usage_events.exec_snapshot_id`, `provider_update_id`, `usage_status`, `context_used`, `context_size`, `sessions.cumulative_cost_micros`). Where Phase 2b usage capture is not implemented yet, rows simply carry `usage_status='unreported'` and null buckets; analytics must handle that honestly.
 
 ## Definitions

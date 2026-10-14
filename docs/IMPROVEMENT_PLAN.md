@@ -1,6 +1,6 @@
 # Bloblex improvement plan v2: a BB-informed, companion-style roadmap
 
-Status: approved by the owner, 12 October 2026. **Phases 1-7 are implemented and merged into local `main` (from `integration/improvement-v2`) and verified only with fake peers and unit tests (replay fixtures are synthesised, not real captures).** See `SESSION_HANDOFF.md` for branches, gates, gaps and next steps. Baseline `17591b9` (beta.18). Supersedes the QA draft, kept as [IMPROVEMENT_PLAN_v1_qa-draft.md](IMPROVEMENT_PLAN_v1_qa-draft.md).
+Status: approved by the owner, 12 October 2026. **Phases 1-7 are implemented and shipped in `v0.1.0-beta.19` ([releases/0.1.0-beta.19.md](releases/0.1.0-beta.19.md)) and verified only with fake peers and unit tests (replay fixtures are synthesised, not real captures).** The "local `main`, not pushed" wording in `SESSION_HANDOFF.md` is from before that release. See `SESSION_HANDOFF.md` for branches, gates, gaps and next steps. Baseline `17591b9` (beta.18). Supersedes the QA draft, kept as [IMPROVEMENT_PLAN_v1_qa-draft.md](IMPROVEMENT_PLAN_v1_qa-draft.md).
 
 ## Context
 
@@ -14,7 +14,7 @@ Sources: BB read remotely (provider layer, ~25 feature plugins, dictation, deskt
 
 Per-model effort catalogs incl. Codex `ultra` and CLI-gated Claude `ultracode`; validated/fallback catalog gating; ask/auto/bypass modes (Codex bypass = `danger-full-access`); usage/quota/context meters; runtime health discovery; session resume; team delegation + side conversations over an app-owned MCP bridge (`bloblexd mcp-bridge`, `crates/bloblex-daemon/src/mcp_bridge.rs`, tools in `team.rs` ~L132); Claude and Codex native question cards in chat and island; per-blob `instructions`; tray, global shortcuts, notifications; on-device dictation; opt-in experiments framework; additive SQLite schema (v12).
 
-**Found while verifying:** budgets are retired (`main.rs:943`, so `AGENTS.md` still mentioning them is stale); the timeout path never calls `team::after_turn` (`main.rs` ~L2415-2440, so queued deliveries stall); the 45s/300s watchdog (`main.rs:2306`) does not pause for a pending permission or question; Codex's fresh-thread resume fallback is silent (only Claude emits `ContextReset`); no queue/steer, keep-awake, memory, scheduler or ask-user shim exists.
+**Found while verifying:** budgets are retired (`crates/bloblex-daemon/src/main.rs:992`; the budget clause in `AGENTS.md` line 57 predates the 12 October amendment and is superseded by it); the timeout path never calls `team::after_turn` (`main.rs` ~L2415-2440, so queued deliveries stall); the 45s/300s watchdog (`crates/bloblex-daemon/src/main.rs:2702-2703`) does not pause for a pending permission or question; Codex's fresh-thread resume fallback is silent (only Claude emits `ContextReset`); no queue/steer, keep-awake, memory, scheduler or ask-user shim exists.
 
 ## Not taking from BB
 
@@ -71,7 +71,7 @@ Account-pool proxy (credential custody), workflows (QuickJS fan-out), browser-au
 - Data: `automations(agent_id,name,prompt,cron,tz,once_at,mode,enabled,next_run_at,consecutive_failures,max_runtime_s,created_by)`, `automation_runs(...)` with a partial unique index for single-flight; `agents.notification_level` (all|input|muted).
 - `scheduler.rs` spawned in `run()` beside the deletion loop (~L2902); 1s tick for send-later, 10s sweep for automations; cron + IANA tz (`chrono-tz` present, add a cron crate). **Missed runs coalesce into one** (next run recomputed from now). Overlap = `skipped`. Failures retry at 30s/60s; 3 consecutive pause it visibly. Startup settles interrupted runs next to `recover_after_restart()` (~L2862).
 - **Safety (budgets no longer exist, so automations bring their own):** `max_runtime_s` default 30 min via `adapter.cancel`; `automations.maxConcurrent` default 1 under the existing cap of 4; global pause wired to tray "Pause all". Unattended runs pin `modelLock.approvalMode`, clamp bypass to auto, default to plan; an unclassified permission is auto-denied with an audit event. Run sessions carry `link.kind="automation"` and their MCP tool list drops `message_blob` and scheduling tools (recursion guard; make `team::tools()` take the link, generalize `is_team_tool_permission` ~L1132).
-- Presence: notifications honour per-blob level and `automation.run.finished` (`App.tsx` ~L520-546); opt-in `power.keepAwake` via `SetThreadExecutionState` on a parked thread in `src-tauri/lib.rs`, requested by a daemon `power.wanted` event. UI states plainly: "Runs only while Bloblex is running and awake; missed runs coalesce; lid-close/user sleep is not blocked."
+- Presence: notifications honour per-blob level and `automation.run.finished` (`App.tsx` ~L520-546); opt-in `power.keepAwake` via `SetThreadExecutionState` on a parked thread in `apps/desktop/src-tauri/src/power.rs` (registered in `apps/desktop/src-tauri/src/lib.rs`), requested by a daemon `power.wanted` event. UI states plainly: "Runs only while Bloblex is running and awake; missed runs coalesce; lid-close/user sleep is not blocked."
 - UI: per-blob "Schedule" tab with run history, island badge, Settings list.
 
 ### 5. Memory and persona, L

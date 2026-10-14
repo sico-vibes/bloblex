@@ -1,12 +1,14 @@
 # Phase 4 implementation spec: per-blob project and session tree
 
+> Status: historical spec. The roster, session tree and project chooser it describes were replaced by `TeamSidebar` (`apps/desktop/src/ui/TeamSidebar.tsx`; [SESSION_HANDOFF.md](../SESSION_HANDOFF.md), 10 October 2026). The UI files named as code spans here (`AgentRoster.tsx`, `AgentContextMenu.tsx`, `SessionTree.tsx`, `ProjectChooser.tsx`) are no longer in `apps/desktop/src/ui/`. Former links to them were converted to plain code spans.
+
 This is the implementation contract for Phase 4 of [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Phase 4 adds an expandable project and session tree under each blob row in the sidebar. It depends on Phase 2a and on the Phase 3 roster. It does not depend on Phase 2b. Line citations are the committed tree this spec was written against. Re-open a cited line before treating it as current if a later edit moves it.
 
 Do not edit Rust. Do not add a projects table, a session-list RPC, or an expanded-state RPC. Projects are groups derived from `snapshot.sessions`. Expanded state is `localStorage`. Claude Desktop is a behavioural reference only: folder-then-session grouping is the behaviour; the paint stays Bloblex Midnight ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) lines 13 and 194). Copy no third-party layout, label set, icon, or asset.
 
 ## 1. Scope and non-scope
 
-Phase 3 shipped one flat button per active agent ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 107–138), a header `<select>` for that agent's sessions ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 743), and a flat Sessions tab ([apps/desktop/src/ui/BlobSessions.tsx](../apps/desktop/src/ui/BlobSessions.tsx) lines 17–24). Phase 4 keeps those and adds the tree the plan describes ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) lines 189–200).
+Phase 3 shipped one flat button per active agent (`apps/desktop/src/ui/AgentRoster.tsx` lines 107–138), a header `<select>` for that agent's sessions ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 743), and a flat Sessions tab ([apps/desktop/src/ui/BlobSessions.tsx](../apps/desktop/src/ui/BlobSessions.tsx) lines 17–24). Phase 4 keeps those and adds the tree the plan describes ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) lines 189–200).
 
 In scope:
 
@@ -130,7 +132,7 @@ The authoritative daemon vocabulary is the list in [docs/ipc-contract.md](ipc-co
 
 ### Time
 
-Use `shortTime` ([apps/desktop/src/ui/rosterSelectors.ts](../apps/desktop/src/ui/rosterSelectors.ts) lines 93–100). A timestamp from today renders as a local time; any other valid timestamp renders as a short month and day; an invalid timestamp returns `''`. Omit the `<time>` element when `updatedAt` is missing or `shortTime` returns `''`. Do not add a "5 minutes ago" formatter. The blob row already uses `shortTime` ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) line 134), and the tree uses the same clock.
+Use `shortTime` ([apps/desktop/src/ui/rosterSelectors.ts](../apps/desktop/src/ui/rosterSelectors.ts) lines 93–100). A timestamp from today renders as a local time; any other valid timestamp renders as a short month and day; an invalid timestamp returns `''`. Omit the `<time>` element when `updatedAt` is missing or `shortTime` returns `''`. Do not add a "5 minutes ago" formatter. The blob row already uses `shortTime` (`apps/desktop/src/ui/AgentRoster.tsx` line 134), and the tree uses the same clock.
 
 ### Caps
 
@@ -144,23 +146,23 @@ No virtualisation library and no new dependency. The rail is a vertical scroller
 
 ## 3. Row and tree anatomy
 
-The aside keeps the brand row, the roster, and the footer ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 719–734). Search stays outside the tree ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 75–76). The list element is `<nav class="bot-list runtime-list" aria-label="Blobs" role="tree">`. Runtime headings stay non-focusable `.roster-group-label` elements ([apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) line 50) and stay outside the treeitem set. They render only when the visible blobs span more than one `runtimeId`, which is the current rule ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 30 and 77–80).
+The aside keeps the brand row, the roster, and the footer ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 719–734). Search stays outside the tree (`apps/desktop/src/ui/AgentRoster.tsx` lines 75–76). The list element is `<nav class="bot-list runtime-list" aria-label="Blobs" role="tree">`. Runtime headings stay non-focusable `.roster-group-label` elements ([apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) line 50) and stay outside the treeitem set. They render only when the visible blobs span more than one `runtimeId`, which is the current rule (`apps/desktop/src/ui/AgentRoster.tsx` lines 30 and 77–80).
 
 The sidebar column is 272px ([apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) lines 27–28). There is no new breakpoint and no sidebar resize. [DESIGN.md](../DESIGN.md) line 25's practical minimum still uses this rail. Rows use `min-width: 0` and single-line ellipsis, the same treatment as `.bot-row-top strong` ([apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) line 46).
 
 ### Blob row
 
-Keep `<button class="bot-row">` with `data-agent-id`, `aria-current="true"` on the selected agent, and the roving `tabIndex` from section 7 ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 107–114). Add `role="treeitem"`, `aria-level="1"`, `aria-expanded`, `aria-setsize`, `aria-posinset`, and `aria-selected="false"`. `aria-current` remains the roster's selected-blob signal so the existing mounted query `.bot-row` ([apps/desktop/src/ui/App.agent.mounted.test.tsx](../apps/desktop/src/ui/App.agent.mounted.test.tsx) lines 233–234) still means blob rows only. Project and session rows must not use the class `bot-row`. The button's `onClick` (line 115) and pointer `onContextMenu` (line 116) stay. Its `onKeyDown` (lines 117–130) loses every tree key; section 7's nav handler is the only owner.
+Keep `<button class="bot-row">` with `data-agent-id`, `aria-current="true"` on the selected agent, and the roving `tabIndex` from section 7 (`apps/desktop/src/ui/AgentRoster.tsx` lines 107–114). Add `role="treeitem"`, `aria-level="1"`, `aria-expanded`, `aria-setsize`, `aria-posinset`, and `aria-selected="false"`. `aria-current` remains the roster's selected-blob signal so the existing mounted query `.bot-row` ([apps/desktop/src/ui/App.agent.mounted.test.tsx](../apps/desktop/src/ui/App.agent.mounted.test.tsx) lines 233–234) still means blob rows only. Project and session rows must not use the class `bot-row`. The button's `onClick` (line 115) and pointer `onContextMenu` (line 116) stay. Its `onKeyDown` (lines 117–130) loses every tree key; section 7's nav handler is the only owner.
 
 Contents, left to right:
 
-1. The existing 42px `BlobCanvas` ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) line 132). `.blob-canvas` is `flex: 0 0 auto` ([apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) line 25).
+1. The existing 42px `BlobCanvas` (`apps/desktop/src/ui/AgentRoster.tsx` line 132). `.blob-canvas` is `flex: 0 0 auto` ([apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) line 25).
 2. The existing `.bot-row-copy` block: name, `shortTime`, preview, runtime meta (lines 133–136).
 3. A trailing chevron, `<span class="tree-chevron" aria-hidden="true">`, `flex: 0 0 28px`, 28×28, painted with the lucide `ChevronRight` when collapsed and `ChevronDown` when expanded. It is the last flex item. The face is the first. The copy column is `min-width: 0; flex: 1`. The chevron occupies its 28px even when invisible, so the face never moves and the glyph never covers the canvas.
 
 The chevron's opacity is 0 until any of these is true: the blob row is hovered, the blob row is `:focus-within`, `aria-expanded="true"`, or the media query `(hover: none)` matches. Touch and `(hover: none)` keep the glyph visible so it is discoverable without a pointer hover. Keyboard users see it when the row is focused, and `aria-expanded` is how a screen reader hears the state. Right arrow expands; the glyph is not a second tab stop.
 
-Pointer: a click on `.tree-chevron` toggles expansion and stops propagation so the button's select handler does not run. A click on the rest of the button runs today's select ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) line 115), which selects that agent and a session (section 6). Expansion and selection are separate.
+Pointer: a click on `.tree-chevron` toggles expansion and stops propagation so the button's select handler does not run. A click on the rest of the button runs today's select (`apps/desktop/src/ui/AgentRoster.tsx` line 115), which selects that agent and a session (section 6). Expansion and selection are separate.
 
 When the group is expanded, set `aria-owns` to the id of the sibling group element. The group is a sibling, not a child of the button, because the button cannot contain the project "+" buttons. Unmount the group when collapsed and remove `aria-owns`.
 
@@ -212,7 +214,7 @@ Every Bloblex-initiated create goes through `sessionNewParams` ([apps/desktop/sr
 
 Errors use `daemonCodeOf` plus `messageForDaemonCode(code, 'session.new')` ([apps/desktop/src/ui/agentForm.ts](../apps/desktop/src/ui/agentForm.ts) lines 119–124 and 126–149). Show that sentence, not the daemon's message text. The sentences Phase 4 needs are already there: `conflict` → "This blob is archived, so a new session cannot be started."; `not_found` → "That blob is no longer available. Refresh and try again."; `invalid_argument` → "Choose a project folder that exists on this device."; `unauthorized` → "Bloblex could not reach the local daemon. Reconnect and try again."; any other code → "The local daemon request failed."
 
-Enabled when the daemon is connected, `busy` is false, and `runtimeUsable` is true for that blob's runtime. That is the menu flag already computed in [apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 89–90 and `canStartSession` in [apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 694.
+Enabled when the daemon is connected, `busy` is false, and `runtimeUsable` is true for that blob's runtime. That is the menu flag already computed in `apps/desktop/src/ui/AgentRoster.tsx` lines 89–90 and `canStartSession` in [apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 694.
 
 ### Recent projects
 
@@ -222,7 +224,7 @@ When `agent.defaultProject` trims to a non-empty string, pin that path as the fi
 
 ### Who opens the chooser
 
-The blob context menu item "New session" ([apps/desktop/src/ui/AgentContextMenu.tsx](../apps/desktop/src/ui/AgentContextMenu.tsx) line 39), the header pill "Session" ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 746), the header more-menu "New session" (line 752), the empty-conversation button (`EmptyConversation` calls `onNewSession`, [apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 803–809), and the companion plus and its empty-chat "New session" ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 687 and 1606) all open the same chooser for that blob.
+The blob context menu item "New session" (`apps/desktop/src/ui/AgentContextMenu.tsx` line 39), the header pill "Session" ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 746), the header more-menu "New session" (line 752), the empty-conversation button (`EmptyConversation` calls `onNewSession`, [apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 803–809), and the companion plus and its empty-chat "New session" ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 687 and 1606) all open the same chooser for that blob.
 
 The chooser is a `role="menu"` using the existing `.runtime-context-menu` ([apps/desktop/src/ui/styles.css](../apps/desktop/src/ui/styles.css) lines 163–167). Focus the first enabled item. Arrow Up and Down, Home, and End move inside it. Escape and an outside pointer close it and return focus to the control that opened it. Entries are at most 8 path rows, with the default pinned first when it is set and not repeated, then "Choose folder...". Activating a path row calls `session.new` with `sessionNewParams(agent.id, path)`. Activating "Choose folder..." calls `openProjectFolder()` and returns with no RPC when the user cancels.
 
@@ -348,15 +350,15 @@ Clicking the pill for the agent that is already selected still runs `selectAgent
 
 ## 7. Accessibility and keyboard
 
-Use the ARIA tree pattern with roving tabindex on the treeitem elements themselves. Do not use `aria-activedescendant`. Phase 3 already moves DOM focus ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 53–64), and the mounted test asserts `document.activeElement` ([apps/desktop/src/ui/App.agent.mounted.test.tsx](../apps/desktop/src/ui/App.agent.mounted.test.tsx) lines 320–328). `aria-activedescendant` would throw that test away.
+Use the ARIA tree pattern with roving tabindex on the treeitem elements themselves. Do not use `aria-activedescendant`. Phase 3 already moves DOM focus (`apps/desktop/src/ui/AgentRoster.tsx` lines 53–64), and the mounted test asserts `document.activeElement` ([apps/desktop/src/ui/App.agent.mounted.test.tsx](../apps/desktop/src/ui/App.agent.mounted.test.tsx) lines 320–328). `aria-activedescendant` would throw that test away.
 
-One treeitem has `tabIndex={0}`. Every other treeitem, including project, session, Other, and show-more `div`s, has `tabIndex={-1}`. The `0` item is `focusId` when that id is visible, otherwise the selected blob when that row is visible, otherwise the first visible treeitem. Replace the blob-only `rowRefs` map ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) line 32) with `treeItemRefs`, a `Map` from a stable id to `HTMLElement`. Ids are `blob:${agentId}`, `project:${agentId}:${key}`, `other:${agentId}`, `session:${sessionId}`, and `more:${agentId}:${key}`. The nav handler calls `treeItemRefs.current.get(nextId)?.focus()` after it sets `focusId`. Tests that assert focus read `document.activeElement` and that element's `tabIndex` (`0` on the landed row, `-1` on the row that was left).
+One treeitem has `tabIndex={0}`. Every other treeitem, including project, session, Other, and show-more `div`s, has `tabIndex={-1}`. The `0` item is `focusId` when that id is visible, otherwise the selected blob when that row is visible, otherwise the first visible treeitem. Replace the blob-only `rowRefs` map (`apps/desktop/src/ui/AgentRoster.tsx` line 32) with `treeItemRefs`, a `Map` from a stable id to `HTMLElement`. Ids are `blob:${agentId}`, `project:${agentId}:${key}`, `other:${agentId}`, `session:${sessionId}`, and `more:${agentId}:${key}`. The nav handler calls `treeItemRefs.current.get(nextId)?.focus()` after it sets `focusId`. Tests that assert focus read `document.activeElement` and that element's `tabIndex` (`0` on the landed row, `-1` on the row that was left).
 
-Arrow, Home, End, Left, Right, Enter, Space, type-ahead, ContextMenu, and Shift+F10 have one owner: the `keydown` listener on the nav. Remove those branches from the blob button. Today the button handles ArrowDown, ArrowUp, Home, and End itself ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 117–130) by calling `move` (lines 53–64), and it does not stop propagation. A second listener on the nav would run for the same bubbling key and move two treeitems. Delete that arrow branch and `move`. The button keeps pointer `onClick` and pointer `onContextMenu`. The nav handler calls `preventDefault` for Enter and Space so the button's native activation does not also run `onSelect`.
+Arrow, Home, End, Left, Right, Enter, Space, type-ahead, ContextMenu, and Shift+F10 have one owner: the `keydown` listener on the nav. Remove those branches from the blob button. Today the button handles ArrowDown, ArrowUp, Home, and End itself (`apps/desktop/src/ui/AgentRoster.tsx` lines 117–130) by calling `move` (lines 53–64), and it does not stop propagation. A second listener on the nav would run for the same bubbling key and move two treeitems. Delete that arrow branch and `move`. The button keeps pointer `onClick` and pointer `onContextMenu`. The nav handler calls `preventDefault` for Enter and Space so the button's native activation does not also run `onSelect`.
 
 The existing Arrow Down test still passes for four reasons. Blobs start collapsed, so no project or session sits between blob buttons. `.bot-row` is still only those buttons, in roster order. `press` dispatches one bubbling `ArrowDown` on the first button ([apps/desktop/src/ui/App.agent.mounted.test.tsx](../apps/desktop/src/ui/App.agent.mounted.test.tsx) lines 320–328), and only the nav handles it, moving once to the next visible treeitem, which is the second blob. `aria-current` stays on the first blob until Enter. Enter is also handled once, so `aria-current` then moves to the second blob.
 
-Selection does not follow arrow focus. Arrows move the roving tabindex. Enter and Space activate. That is the Phase 3 contract in [apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 124–129, carried into the tree. The tree pattern supplies `aria-expanded`, levels, set size, and position. The blob's selected state stays `aria-current` because that is what the roster tests assert. The session's selected state is `aria-selected`. Project rows and blob rows set `aria-selected="false"`. A collapsed tree can have a selected session that is not mounted; the header `<select>` still exposes it.
+Selection does not follow arrow focus. Arrows move the roving tabindex. Enter and Space activate. That is the Phase 3 contract in `apps/desktop/src/ui/AgentRoster.tsx` lines 124–129, carried into the tree. The tree pattern supplies `aria-expanded`, levels, set size, and position. The blob's selected state stays `aria-current` because that is what the roster tests assert. The session's selected state is `aria-selected`. Project rows and blob rows set `aria-selected="false"`. A collapsed tree can have a selected session that is not mounted; the header `<select>` still exposes it.
 
 `aria-setsize` and `aria-posinset` are the sibling count at that level. Runtime headings are not treeitems and do not reset the count.
 
@@ -364,7 +366,7 @@ Selection does not follow arrow focus. Arrows move the roving tabindex. Enter an
 - Level 2, each project row, each "Show N more projects" row, and "Other sessions" when it is rendered: `aria-setsize` is how many of those rows are rendered under that blob, and `aria-posinset` is the position in that list.
 - Level 3, each session row and that group's "Show N more conversations" row when it is rendered: `aria-setsize` is how many of those rows are rendered in that group, and `aria-posinset` is the position in that group.
 
-The key handler is on the tree (`keydown` on the nav), not on `document`. If `event.target` is an `input`, `textarea`, or `select`, return without handling. The search field is outside the nav ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) line 75). The chat composer is a textarea in the conversation pane ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 776) and already consumes Enter to send. The companion composer does the same (line 1616). Typing in either must not move the tree. Do not register a window listener for arrows, letters, or Space.
+The key handler is on the tree (`keydown` on the nav), not on `document`. If `event.target` is an `input`, `textarea`, or `select`, return without handling. The search field is outside the nav (`apps/desktop/src/ui/AgentRoster.tsx` line 75). The chat composer is a textarea in the conversation pane ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 776) and already consumes Enter to send. The companion composer does the same (line 1616). Typing in either must not move the tree. Do not register a window listener for arrows, letters, or Space.
 
 Visible treeitems, in order: each blob, and when that blob is expanded (stored open or `forceOpen.blob`), its rendered project rows, each project's sessions when that project is expanded, show-more items, and "Other sessions" with its sessions when that node is expanded. Collapsed parents omit their children from this list.
 
@@ -382,13 +384,13 @@ Visible treeitems, in order: each blob, and when that blob is expanded (stored o
 | Type-ahead | A printable character with no Ctrl, Alt, or Meta appends to a prefix. After 700ms of quiet the prefix clears. Focus moves to the next visible treeitem, wrapping, whose primary label starts with the prefix under `toLocaleLowerCase('en')`. Primary labels are the agent name, the project label, "Other sessions", the session title, and the show-more sentence. Type-ahead does not change selection. |
 | Escape | Closes an open menu and returns focus to the treeitem. It does not collapse the tree. |
 
-Up and Down wrap across the visible treeitem list, the same wrap `move` uses today ([apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 57–59), reimplemented once in the nav handler. While every blob is collapsed, Arrow Down from the first blob still lands on the second blob, which is the existing test.
+Up and Down wrap across the visible treeitem list, the same wrap `move` uses today (`apps/desktop/src/ui/AgentRoster.tsx` lines 57–59), reimplemented once in the nav handler. While every blob is collapsed, Arrow Down from the first blob still lands on the second blob, which is the existing test.
 
-Context menus reuse `.runtime-context-menu` and the existing key pattern ([apps/desktop/src/ui/AgentContextMenu.tsx](../apps/desktop/src/ui/AgentContextMenu.tsx) lines 15–39): focus the first enabled item, arrows, Home, End, Escape, outside pointer.
+Context menus reuse `.runtime-context-menu` and the existing key pattern (`apps/desktop/src/ui/AgentContextMenu.tsx` lines 15–39): focus the first enabled item, arrows, Home, End, Escape, outside pointer.
 
 | Focused row | Menu items |
 |---|---|
-| Blob | Unchanged: New session, Edit blob, Duplicate, Archive ([apps/desktop/src/ui/AgentContextMenu.tsx](../apps/desktop/src/ui/AgentContextMenu.tsx) lines 39–42). New session opens the chooser (section 4). |
+| Blob | Unchanged: New session, Edit blob, Duplicate, Archive (`apps/desktop/src/ui/AgentContextMenu.tsx` lines 39–42). New session opens the chooser (section 4). |
 | Project | One item, "New session", enabled when that blob can create. It runs the project "+" path. The null-key project has no menu item. |
 | Other sessions | No menu. |
 | Session | "Resume conversation" and "Cancel turn". |
@@ -397,7 +399,7 @@ Resume is enabled when `session.resumable` is true, the daemon is connected, `bu
 
 Focus restoration:
 
-- Search hides the focused id: move focus to the first visible treeitem, or to Create blob when none remain. Generalise the effect at [apps/desktop/src/ui/AgentRoster.tsx](../apps/desktop/src/ui/AgentRoster.tsx) lines 42–51 from blob ids to visible treeitem ids.
+- Search hides the focused id: move focus to the first visible treeitem, or to Create blob when none remain. Generalise the effect at `apps/desktop/src/ui/AgentRoster.tsx` lines 42–51 from blob ids to visible treeitem ids.
 - After `session.new` succeeds: focus the new session row (section 4).
 - After archive: focus the next blob row, or Create blob (section 6).
 - After collapse: if the focused treeitem stays mounted, focus stays there. If the focused child unmounts because its parent collapsed, `treeItemRefs` focuses that parent, which then has `tabIndex={0}`.

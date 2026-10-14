@@ -100,8 +100,6 @@ async fn fetch_config_options(runtime: &RuntimeSpec, timeout: Duration) -> Optio
     command
         .args(&runtime.args)
         .arg("acp")
-        .arg("--cwd")
-        .arg(cwd.path())
         .current_dir(cwd.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

@@ -858,6 +858,113 @@ async fn config_options_fallback_uses_an_empty_bloblex_working_directory() {
 }
 
 #[tokio::test]
+async fn opencode2_session_and_catalog_spawn_without_the_removed_cwd_flag() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let session_record = temp.dir.join("session.json");
+    let exec = options(Some("opencode-go/model-007"), Some("high"), None);
+    let args = vec!["--record".into(), session_record.to_string_lossy().into_owned(), "--v2".into()];
+    let (handle, mut events) = open_session(&adapter, args, exec.clone()).await;
+    adapter
+        .prompt(
+            &handle,
+            PromptRequest { attachments: Vec::new(), turn_id: "turn-v2".into(), text: "hello".into(), exec_options: exec },
+        )
+        .await
+        .unwrap();
+    let mut completed = false;
+    while !completed {
+        match tokio::time::timeout(Duration::from_secs(10), events.recv()).await.unwrap() {
+            Some(AgentEvent::TurnCompleted) => completed = true,
+            Some(AgentEvent::Error { .. }) => panic!("v2-shaped session failed"),
+            Some(_) => {}
+            None => panic!("v2-shaped session closed early"),
+        }
+    }
+    adapter.close_session(&handle).await.unwrap();
+    let session_argv = read_record(&session_record)["argv"].clone();
+    let session_argv = session_argv.as_array().unwrap();
+    assert!(session_argv.iter().any(|arg| arg == "acp"), "the real session still launches acp: {session_argv:?}");
+    assert!(!session_argv.iter().any(|arg| arg == "--cwd"), "the removed flag must not be sent: {session_argv:?}");
+
+    let catalog_record = temp.dir.join("catalog.json");
+    let catalog_args = vec![
+        "--record".into(),
+        catalog_record.to_string_lossy().into_owned(),
+        "--v2".into(),
+        "--verbose-invalid".into(),
+    ];
+    let catalog = adapter.model_catalog(&runtime(catalog_args)).await.unwrap();
+    assert_eq!(catalog.source, "config_options");
+    let catalog_argv = read_record(&catalog_record)["argv"].clone();
+    let catalog_argv = catalog_argv.as_array().unwrap();
+    assert!(catalog_argv.iter().any(|arg| arg == "acp"));
+    assert!(!catalog_argv.iter().any(|arg| arg == "--cwd"), "the catalog must not send the removed flag: {catalog_argv:?}");
+}
+
+#[tokio::test]
+async fn opencode2_config_options_catalog_flags_the_current_model_and_its_efforts_only() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec![
+        "--record".into(),
+        temp.record().to_string_lossy().into(),
+        "--v2".into(),
+        "--verbose-invalid".into(),
+    ];
+    let catalog = adapter.model_catalog(&runtime(args)).await.unwrap();
+    assert_eq!(catalog.source, "config_options");
+    assert!(!catalog.validated);
+    assert!(!catalog.fallback);
+    assert_eq!(catalog.models.len(), 115, "the v2 session lists the whole gateway");
+    let flagged = catalog.models.iter().filter(|model| model.is_default == Some(true)).collect::<Vec<_>>();
+    assert_eq!(flagged.len(), 1, "exactly the current model is flagged");
+    assert_eq!(flagged[0].id, "opencode-go/model-007");
+    assert_eq!(flagged[0].supported_thinking, ["low", "medium", "high"], "the current model's three real levels, low to high");
+    assert!(!flagged[0].supported_thinking.iter().any(|level| level == "default"), "`default` is synthetic, not a level");
+    assert!(
+        catalog.models.iter().filter(|model| model.is_default != Some(true)).all(|model| model.supported_thinking.is_empty()),
+        "no other model invents levels",
+    );
+    let argv = read_record(&temp.record())["argv"].clone();
+    assert!(!argv.as_array().unwrap().iter().any(|arg| arg == "--cwd"));
+}
+
+#[tokio::test]
+async fn failing_verbose_listing_falls_through_quickly_without_lingering_children() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let pid_log = temp.dir.join("pids.log");
+    let args = vec![
+        "--record".into(),
+        temp.record().to_string_lossy().into(),
+        "--verbose-invalid".into(),
+        "--pid-log".into(),
+        pid_log.to_string_lossy().into(),
+    ];
+    let started = Instant::now();
+    let catalog = adapter.model_catalog(&runtime(args)).await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5), "a failed verbose listing must not hold up the config-options fallback");
+    assert_eq!(catalog.source, "config_options");
+    let log = std::fs::read_to_string(&pid_log).unwrap();
+    let pids = log
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            Some((parts.next()?.parse::<u32>().ok()?, parts.next()?.to_owned()))
+        })
+        .collect::<Vec<_>>();
+    assert!(pids.iter().any(|(_, role)| role == "verbose"), "the verbose listing ran: {log}");
+    for (pid, role) in pids {
+        // A process that already exited cannot be opened at all; if it is still
+        // openable, it must terminate promptly rather than linger.
+        if let Some(child) = ProcessSignal::open(pid) {
+            assert!(child.wait_signaled(PROCESS_EXIT_TIMEOUT).await, "{role} child {pid} must not linger");
+        }
+    }
+}
+
+#[tokio::test]
 async fn catalog_timeout_kills_the_child_and_failure_is_provider_unavailable() {
     let temp = Temp::new();
     let adapter = std::sync::Arc::new(AcpAdapter::with_catalog_timeout(Duration::from_millis(400)));

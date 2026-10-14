@@ -295,10 +295,11 @@ impl AcpAdapter {
     ) -> Result<Arc<SharedProcess>, AdapterError> {
         let mut cmd = Command::new(&runtime.executable);
         prepare_command(&mut cmd);
+        // OpenCode 1.x and 2.x both take the working directory from the process
+        // cwd and from `session/new`; `acp --cwd` only exists on 1.x and makes a
+        // 2.x CLI print help instead of answering JSON-RPC.
         cmd.args(&runtime.args)
             .arg("acp")
-            .arg("--cwd")
-            .arg(cwd)
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

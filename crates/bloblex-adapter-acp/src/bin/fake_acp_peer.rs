@@ -23,6 +23,23 @@ fn main() {
     }
     let args: Vec<String> = env::args().skip(1).collect();
     let flags = Flags::parse(&args);
+    if let Some(path) = &flags.pid_log {
+        let role = if args.iter().any(|arg| arg == "models") { "verbose" } else { "acp" };
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "{} {role}", std::process::id());
+        }
+    }
+    // OpenCode 2 removed `acp --cwd`. Reproduce it: the flag prints help on
+    // stdout and never answers JSON-RPC, so a caller that still passes it fails.
+    if args.iter().any(|arg| arg == "--cwd") {
+        write_record(&flags, &[], None);
+        println!("Usage: opencode acp [--login]");
+        let _ = std::io::stdout().flush();
+        std::process::exit(2);
+    }
     if args.iter().any(|arg| arg == "models") {
         catalog_main(&flags);
         return;
@@ -46,6 +63,8 @@ struct Flags {
     reject_effort: Option<String>,
     usage: String,
     permission: bool,
+    v2: bool,
+    pid_log: Option<PathBuf>,
 }
 
 impl Flags {
@@ -58,6 +77,8 @@ impl Flags {
         let mut reject_effort = None;
         let mut usage = "sequence".to_owned();
         let mut permission = false;
+        let mut v2 = false;
+        let mut pid_log = None;
         let mut index = 0;
         while index < args.len() {
             let arg = &args[index];
@@ -71,9 +92,11 @@ impl Flags {
                 "--reject-effort" => reject_effort = next.map(str::to_owned),
                 "--usage" => usage = next.unwrap_or("sequence").to_owned(),
                 "--permission-request" => permission = true,
+                "--v2" => v2 = true,
+                "--pid-log" => pid_log = next.map(PathBuf::from),
                 _ => {}
             }
-            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--usage") {
+            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--usage" | "--pid-log") {
                 2
             } else {
                 1
@@ -88,6 +111,8 @@ impl Flags {
             reject_effort,
             usage,
             permission,
+            v2,
+            pid_log,
         }
     }
 }
@@ -129,31 +154,51 @@ struct Session {
     prompt_id: Option<Value>,
     permission_pending: Option<(Value, Value)>,
     turns: u32,
+    v2: bool,
+}
+
+/// OpenCode 2's `session/new` lists every gateway model with a current choice
+/// and already publishes the current model's `thought_level` levels.
+fn v2_models() -> Vec<String> {
+    (1..=115).map(|index| format!("opencode-go/model-{index:03}")).collect()
+}
+
+fn v2_efforts() -> Vec<String> {
+    ["low", "medium", "high", "default"].into_iter().map(str::to_owned).collect()
 }
 
 impl Session {
     fn from_flags(flags: &Flags) -> Self {
-        let modes = mode_list();
+        let models = if flags.v2 { v2_models() } else { flags.models.clone() };
+        let variant_models = if flags.v2 { models.iter().cloned().collect() } else { flags.variant_models.clone() };
+        let model = if flags.v2 {
+            "opencode-go/model-007".to_owned()
+        } else {
+            flags.models.first().cloned().unwrap_or_else(|| "opencode/big-pickle".into())
+        };
+        let effort = if flags.v2 { Some("default".to_owned()) } else { None };
         Self {
-            model: flags.models.first().cloned().unwrap_or_else(|| "opencode/big-pickle".into()),
-            models: flags.models.clone(),
+            model,
+            models,
             mode: "build".into(),
-            modes,
-            effort: None,
-            efforts: flags.efforts.clone(),
+            modes: mode_list(),
+            effort,
+            efforts: if flags.v2 { v2_efforts() } else { flags.efforts.clone() },
             effort_id: flags.effort_id.clone(),
             reject_effort: flags.reject_effort.clone(),
-            variant_models: flags.variant_models.clone(),
+            variant_models,
             prompt_id: None,
             permission_pending: None,
             turns: 0,
+            v2: flags.v2,
         }
     }
 
     fn options(&self) -> Value {
         let mut options = vec![select("model", "model", &self.model, &self.models), select("mode", "mode", &self.mode, &self.modes)];
-        if self.effort.is_some() {
-            options.push(select(&self.effort_id, "thought_level", self.effort.as_deref().unwrap_or("low"), &self.efforts));
+        if self.v2 || self.effort.is_some() {
+            let current = self.effort.as_deref().unwrap_or("default");
+            options.push(select(&self.effort_id, "thought_level", current, &self.efforts));
         }
         Value::Array(options)
     }

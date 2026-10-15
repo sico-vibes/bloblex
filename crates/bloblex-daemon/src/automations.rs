@@ -153,7 +153,7 @@ async fn start_run(st: &AppState, automation: &Value, scheduled_for: &str, advan
     let agent = st.db.agent_get(&agent_id).map_err(automation_error)?;
     if agent["archived"] == true {
         st.db.automation_pause(&automation_id).map_err(automation_error)?;
-        return Err(derr("conflict", "The blob is archived, so its automations are paused.", StatusCode::CONFLICT));
+        return Err(derr("conflict", &format!("The {} is archived, so its automations are paused.", crate::team::entity_noun(st, false)), StatusCode::CONFLICT));
     }
     if advance {
         advance_next(st, automation).await?;
@@ -471,7 +471,7 @@ pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, Dispat
 /// mode and `created_by='agent'`; it can never enable or run itself.
 pub async fn schedule_task_tool(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
     let session = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.".to_string())?;
-    let agent_id = session["agentId"].as_str().ok_or("Only blob conversations can schedule tasks.")?.to_owned();
+    let agent_id = session["agentId"].as_str().ok_or_else(|| format!("Only {} conversations can schedule tasks.", crate::team::entity_noun(st, false)))?.to_owned();
     let name = args["name"].as_str().map(str::trim).filter(|name| !name.is_empty()).ok_or("name is required.")?;
     let prompt = args["prompt"].as_str().map(str::trim).filter(|prompt| !prompt.is_empty()).ok_or("prompt is required.")?;
     let when = &args["when"];
@@ -500,7 +500,7 @@ pub async fn schedule_task_tool(st: &AppState, session_id: &str, args: &Value) -
 /// MCP `list_my_schedules`: read-only view of the current blob's automations.
 pub async fn list_my_schedules_tool(st: &AppState, session_id: &str) -> Result<String, String> {
     let session = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.".to_string())?;
-    let agent_id = session["agentId"].as_str().ok_or("Only blob conversations have schedules.")?.to_owned();
+    let agent_id = session["agentId"].as_str().ok_or_else(|| format!("Only {} conversations have schedules.", crate::team::entity_noun(st, false)))?.to_owned();
     let schedules = st.db.automation_list(Some(&agent_id)).map_err(|error| error.to_string())?;
     if schedules.is_empty() {
         return Ok("You have no scheduled tasks. Use schedule_task to propose one; the user must approve it before it can run.".into());

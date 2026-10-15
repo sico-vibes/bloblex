@@ -2138,7 +2138,7 @@ fn handoff_draft(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         .as_deref()
         .and_then(|id| st.db.agent_get(id).ok())
         .and_then(|agent| agent["name"].as_str().map(str::to_owned))
-        .unwrap_or_else(|| "another blob".to_owned());
+        .unwrap_or_else(|| format!("another {}", crate::team::entity_noun(st, false)));
     let title = source["title"].as_str().unwrap_or("Conversation").to_owned();
     let messages = st.db.handoff_messages(from_session, HANDOFF_MESSAGE_LIMIT).map_err(agent_error)?;
     let (excerpt, carried, truncated) = handoff_excerpt(&messages, &source_name);
@@ -3831,7 +3831,7 @@ mod phase2a_tests {
         let main = opened["session"]["id"].as_str().unwrap().to_owned();
         assert_eq!(dispatch(&st, "agent.conversation", json!({"agentId":lead_id})).await.unwrap()["session"]["id"], main.as_str(), "one main conversation per blob");
         let lead_instructions = adapter.instructions.lock().unwrap()[&main].clone();
-        for expected in ["You are Lead", "Your role: CTO.", "What you are for: Plans the work.", "address them as the admin", "You are a casual blob", "You are the team leader", "message_blob"] {
+        for expected in ["You are Lead", "Your role: CTO.", "What you are for: Plans the work.", "address them as the admin", "You are a casual bot", "You are the team leader", "message_blob"] {
             assert!(lead_instructions.contains(expected), "missing {expected:?} in {lead_instructions}");
         }
 
@@ -3905,7 +3905,7 @@ mod phase2a_tests {
         // A chain that has already hopped too often refuses to go further.
         st.team.set_depth(&main, 6);
         let refused = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"again"})).await;
-        assert!(refused["content"][0]["text"].as_str().unwrap().contains("too many blobs"));
+        assert!(refused["content"][0]["text"].as_str().unwrap().contains("too many bots"));
         let _ = std::fs::remove_dir_all(data_dir);
     }
     #[tokio::test]
@@ -3979,7 +3979,7 @@ mod phase2a_tests {
         for tool in ["list_projects", "create_blob", "update_blob"] {
             let refused = call_tool(&st, "worker-create", tool, json!({"blob":"Boss","name":"Nope"})).await;
             assert_eq!(refused["isError"], true, "{tool} must be refused for a non-leader");
-            assert_eq!(refused["content"][0]["text"], "Only the team leader (Boss) can create blobs. Ask the user to tag @Boss.");
+            assert_eq!(refused["content"][0]["text"], "Only the team leader (Boss) can create bots. Ask the user to tag @Boss.");
         }
         // The leader sees all three.
         let boss_tools = tool_names(&team::mcp_rpc(&st, "boss-create", "mcp.tools.list", &json!({})).await.unwrap());
@@ -3998,7 +3998,7 @@ mod phase2a_tests {
         let created = call_tool(&st, "boss-create", "create_blob", json!({"name":"CTO Bot","role":"CTO","description":"Owns the plan.","instructions":"Be concise.","project":"Rocket"})).await;
         assert!(created.get("isError").is_none(), "{created}");
         let text = created["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Created blob CTO Bot (CTO) in Rocket on codex"), "{text}");
+        assert!(text.contains("Created bot CTO Bot (CTO) in Rocket on codex"), "{text}");
         let cto_id = st.db.agent_list(false, None).unwrap().iter().find(|a| a["name"] == "CTO Bot").unwrap()["id"].as_str().unwrap().to_owned();
         let cto = st.db.agent_get(&cto_id).unwrap();
         assert_eq!(cto["role"], "CTO");
@@ -4007,7 +4007,7 @@ mod phase2a_tests {
         assert_eq!(cto["effectiveApprovalMode"], "ask");
         // The creation is recorded as a team note in the leader's conversation.
         let notes = st.db.session_detail("boss-create").unwrap()["messages"].as_array().cloned().unwrap_or_default();
-        assert!(notes.iter().any(|m| m["role"] == "notice" && m["content"].as_str().unwrap_or("").contains("Created blob CTO Bot (CTO) in Rocket.")), "{notes:?}");
+        assert!(notes.iter().any(|m| m["role"] == "notice" && m["content"].as_str().unwrap_or("").contains("Created bot CTO Bot (CTO) in Rocket.")), "{notes:?}");
 
         // Duplicate names, unknown providers and oversized fields are refused.
         assert_eq!(call_tool(&st, "boss-create", "create_blob", json!({"name":"cto bot"})).await["isError"], true);
@@ -4023,13 +4023,13 @@ mod phase2a_tests {
         assert_eq!(cto["instructions"], "New style.");
         assert_eq!(cto["leader"], false);
 
-        // At most five blobs per turn.
+        // At most five bots per turn.
         for index in 0..4 { let r = call_tool(&st, "boss-create", "create_blob", json!({"name":format!("Bot {index}")})).await; assert!(r.get("isError").is_none(), "{r}"); }
         let sixth = call_tool(&st, "boss-create", "create_blob", json!({"name":"Bot six"})).await;
         assert_eq!(sixth["isError"], true);
-        assert!(sixth["content"][0]["text"].as_str().unwrap().contains("already created 5 blobs"), "{sixth}");
+        assert!(sixth["content"][0]["text"].as_str().unwrap().contains("already created 5 bots"), "{sixth}");
 
-        // At most twelve non-archived blobs in total.
+        // At most twelve non-archived bots in total.
         for index in 0..5 { st.db.agent_create(&json!({"name":format!("Filler {index}"),"runtimeId":runtime_id})).unwrap(); }
         st.db.create_session_for_agent("boss-create-2", runtime_id, "codex", ".", "Boss 2", Some(&lead_id)).unwrap();
         st.db.update_session_state("boss-create-2", "idle").unwrap();
@@ -4054,11 +4054,31 @@ mod phase2a_tests {
         st.db.agent_set_team(lead["id"].as_str().unwrap(), &json!({"leader":true})).unwrap();
         let lead = st.db.agent_get(lead["id"].as_str().unwrap()).unwrap();
         let as_leader = team::runtime_instructions(&st, &lead, &main, std::path::Path::new("."));
-        assert!(as_leader.contains("You are the only blob who can create teammates"), "{as_leader}");
-        assert!(!as_leader.contains("You cannot create or change blobs"), "{as_leader}");
+        assert!(as_leader.contains("You are the only bot who can create teammates"), "{as_leader}");
+        assert!(!as_leader.contains("You cannot create or change bots"), "{as_leader}");
         // Another blob is told to tag the leader by its real name.
         let named = team::runtime_instructions(&st, &mate, &main, std::path::Path::new("."));
         assert!(named.contains("tag the leader as @Boss so the user can ask them"), "{named}");
+    }
+    #[tokio::test]
+    async fn team_prose_follows_the_appearance_style() {
+        let (st, _) = state();
+        // Unset style is Bitbots, so the default word is "bot".
+        assert_eq!(team::entity_noun(&st, false), "bot");
+        assert_eq!(team::entity_noun(&st, true), "bots");
+        let agent = st.db.agent_create(&json!({"name":"Styling","runtimeId":"rt-test"})).unwrap().0;
+        let link = json!({});
+        let as_bitbots = team::runtime_instructions(&st, &agent, &link, std::path::Path::new("."));
+        assert!(as_bitbots.contains("a bot: one of the user's AI teammates"), "{as_bitbots}");
+        let tools = team::mcp_tools_for_test(&st);
+        assert!(tools.iter().any(|tool| tool["description"].as_str().is_some_and(|text| text.contains("Create a new bot"))), "tool descriptions follow the word too");
+
+        dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"blobots"})).await.unwrap();
+        assert_eq!(team::entity_noun(&st, false), "blob");
+        assert_eq!(team::entity_noun(&st, true), "blobs");
+        let as_blobots = team::runtime_instructions(&st, &agent, &link, std::path::Path::new("."));
+        assert!(as_blobots.contains("a blob: one of the user's AI teammates"), "{as_blobots}");
+        assert_ne!(as_bitbots, as_blobots);
     }
     #[tokio::test]
     async fn experimental_delete_can_be_undone_and_due_deletion_uses_the_existing_gate() {

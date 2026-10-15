@@ -57,7 +57,7 @@ describe('MemoryPage', () => {
     await mount()
     expect(host.textContent).toContain('stay unused until you approve them')
     expect(q('.memory-empty')?.textContent).toContain('No notes yet')
-    expect(q('[aria-label="Let blobs use memory"]')?.getAttribute('aria-checked')).toBe('false')
+    expect(q('[aria-label="Let bots use memory"]')?.getAttribute('aria-checked')).toBe('false')
   })
 
   it('puts agent-saved notes needing review first and approves through the daemon', async () => {
@@ -70,7 +70,7 @@ describe('MemoryPage', () => {
     const rows = all('.memory-row')
     expect(rows[0].textContent).toContain('Uses pnpm')
     expect(rows[0].textContent).toContain('Site')
-    expect(rows[0].textContent).toContain('Saved by a blob')
+    expect(rows[0].textContent).toContain('Saved by a bot')
     expect(rows[1].textContent).toContain('Prefers tabs')
     expect(rows[1].textContent).toContain('Written by you')
     await click(all('.memory-row button').find((button) => button.textContent?.includes('Approve')))
@@ -114,22 +114,22 @@ describe('MemoryPage', () => {
     await chooseOption(dialog, 'Who can use it', 'blob')
     await tick()
     const blobOptions = await (async () => {
-      const trigger = dialog.querySelector<HTMLElement>('.select-trigger[aria-label^="Blob"]')!
+      const trigger = dialog.querySelector<HTMLElement>('.select-trigger[aria-label^="Bot"]')!
       await act(async () => { trigger.click() })
       return [...trigger.parentElement!.querySelectorAll('[role="option"]')].map((option) => option.textContent)
     })()
     expect(blobOptions).toEqual(['Codex'])
-    await act(async () => { dialog.querySelector<HTMLElement>('.select-trigger[aria-label^="Blob"]')!.click() })
+    await act(async () => { dialog.querySelector<HTMLElement>('.select-trigger[aria-label^="Bot"]')!.click() })
     await click(create())
     expect(mocks.rpc).toHaveBeenCalledWith('memory.create', { scope: 'blob', scopeId: 'a1', kind: 'fact', title: 'Likes short answers', body: 'Keep replies brief.', pinned: false })
   })
 
   it('offers shared-note suggestions only while memory is on and saves the choice', async () => {
     const off = await mount()
-    expect(q('[aria-label="Let blobs suggest shared notes"]')).toBeNull()
+    expect(q('[aria-label="Let bots suggest shared notes"]')).toBeNull()
     act(() => root.unmount()); host.remove()
     const on = await mount({ enabled: true })
-    const toggle = q('[aria-label="Let blobs suggest shared notes"]')
+    const toggle = q('[aria-label="Let bots suggest shared notes"]')
     expect(toggle?.getAttribute('aria-checked')).toBe('false')
     await click(toggle)
     expect(on.onSharedWritesChange).toHaveBeenCalledWith(true)
@@ -158,7 +158,7 @@ describe('MemoryPage', () => {
     await type(area, 'x'.repeat(1501))
     expect((all('.memory-about button')[0] as HTMLButtonElement).disabled).toBe(true)
     expect(q('.memory-about small.over')?.textContent).toBe('1501/1500')
-    await click(q('[aria-label="Let blobs use memory"]'))
+    await click(q('[aria-label="Let bots use memory"]'))
     expect(props.onEnabledChange).toHaveBeenCalledWith(true)
   })
 })

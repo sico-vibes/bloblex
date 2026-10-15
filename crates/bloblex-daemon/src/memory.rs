@@ -223,7 +223,7 @@ pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, Dispat
 /// The session's blob and its project, for scope resolution and visibility.
 fn session_scope(st: &AppState, session_id: &str) -> Result<(String, Option<String>), String> {
     let row = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.".to_string())?;
-    let agent_id = row["agentId"].as_str().filter(|id| !id.is_empty()).ok_or("Only blob conversations have memory.")?.to_owned();
+    let agent_id = row["agentId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| format!("Only {} conversations have memory.", crate::team::entity_noun(st, false)))?.to_owned();
     let agent = st.db.agent_get(&agent_id).map_err(|error| error.to_string())?;
     let project_id = agent["projectId"].as_str().filter(|id| !id.is_empty()).map(str::to_owned);
     Ok((agent_id, project_id))
@@ -297,7 +297,7 @@ pub async fn tool_write(st: &AppState, session_id: &str, args: &Value) -> Result
     let scope = args["scope"].as_str().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("blob");
     // Unattended rail: an automation run may only ever write blob scope.
     let is_automation = st.db.session_detail(session_id).map(|row| row["link"]["kind"] == "automation").unwrap_or(false);
-    if is_automation && scope != "blob" { return Err("Automation runs may only save notes to their own blob.".into()); }
+    if is_automation && scope != "blob" { return Err(format!("Automation runs may only save notes to their own {}.", crate::team::entity_noun(st, false))); }
     let (scope, scope_id, reviewed) = match scope {
         "blob" => ("blob", Some(agent_id.clone()), true),
         "project" => {

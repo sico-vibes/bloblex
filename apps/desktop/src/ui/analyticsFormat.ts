@@ -1,4 +1,6 @@
 import type { AnalyticsBucket, AnalyticsLeaderboardRow, AnalyticsMetric, AnalyticsRangeDays, AnalyticsSeriesPoint, AnalyticsTokens, UsageAnalytics, UsageAnalyticsRequest } from '../analyticsTypes'
+import { entityNoun } from './vocabulary'
+import { themeStyle } from '../blob/bitbots'
 
 export function resolvedTimeZone(): string {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -237,7 +239,7 @@ export function chartRects(bars: readonly ChartBarModel[], width = 640, height =
 export function leaderboardName(row: { agentId: string | null; agentName: string | null }): string {
   if (row.agentId === null) return 'Unassigned sessions'
   const name = row.agentName?.trim()
-  return name ? name : 'Blob'
+  return name ? name : entityNoun(themeStyle(), { capital: true })
 }
 
 export function leaderboardFractions(costs: readonly (number | null)[]): Array<number | null> {
@@ -430,7 +432,7 @@ function leaderboardIdentity(key: string, group: readonly AnalyticsLeaderboardRo
   if (key === 'other') return { name: 'Other', kind: 'other', agentId: null }
   if (key === 'unassigned') return { name: 'Unassigned sessions', kind: 'unassigned', agentId: null }
   const agent = agents.find((item) => item.id === key)
-  const named = agent?.name?.trim() || group.find((row) => row.agentName?.trim())?.agentName?.trim() || 'Blob'
+  const named = agent?.name?.trim() || group.find((row) => row.agentName?.trim())?.agentName?.trim() || entityNoun(themeStyle(), { capital: true })
   return { name: named, kind: 'agent', agentId: key }
 }
 
@@ -516,7 +518,7 @@ export function rankOffenders(
     const board = leaderboard.find((row) => row.key === key)
     const runs = board ? board.runs : null
     const rate = runs !== null && runs >= OFFENDER_RATE_MIN_RUNS ? count / runs : null
-    const name = board?.name ?? (key === 'unassigned' ? 'Unassigned sessions' : key === 'other' ? 'Other' : 'Blob')
+    const name = board?.name ?? (key === 'unassigned' ? 'Unassigned sessions' : key === 'other' ? 'Other' : entityNoun(themeStyle(), { capital: true }))
     return { key, name, count, runs, rate }
   }).sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
 }
@@ -537,10 +539,10 @@ export function analyticsErrorText(reason: unknown): string {
   const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : ''
   const code = text.includes(': ') ? text.slice(0, text.indexOf(': ')) : ''
   if (code === 'invalid_argument') {
-    if (/projectPath|agentId/i.test(text)) return 'That project or blob filter cannot be loaded.'
+    if (/projectPath|agentId/i.test(text)) return `That project or ${entityNoun(themeStyle())} filter cannot be loaded.`
     return 'That date range cannot be loaded.'
   }
-  if (code === 'not_found') return 'That blob is no longer available.'
+  if (code === 'not_found') return `That ${entityNoun(themeStyle())} is no longer available.`
   if (code === 'internal') return 'Usage analytics could not be loaded.'
   if (text.trim()) return 'Usage analytics could not be loaded.'
   return 'Usage analytics could not be loaded.'

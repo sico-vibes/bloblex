@@ -9,6 +9,7 @@ import { BlobOverview } from './BlobOverview'
 import { BlobSessions } from './BlobSessions'
 import { BlobSettings } from './BlobSettings'
 import { useDialogAccessibility } from './dialogFocus'
+import { useEntityNoun } from './vocabulary'
 
 type MorphPairSnapshot = { rect: DOMRect; fontSize: number; ghost: HTMLElement }
 type MorphSnapshot = { surface: DOMRect; radius: string; shadow: string; pairs: Map<string, MorphPairSnapshot> }
@@ -44,9 +45,11 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
   onOpenSession: (session: Session) => void
 }) {
   const [discardOpen, setDiscardOpen] = useState(false)
+  const noun = useEntityNoun()
+  const Noun = useEntityNoun({ capital: true })
   const backRef = useRef<HTMLButtonElement>(null)
   useEffect(() => { backRef.current?.focus() }, [])
-  const title = mode === 'create' ? 'New blob' : agent?.name || draft.name || 'Blob'
+  const title = mode === 'create' ? `New ${noun}` : agent?.name || draft.name || Noun
   const badgeMode = visibleApprovalMode(draft.approvalMode, agent)
   const latestSessionId = [...sessions].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))[0]?.id ?? session?.id ?? null
   const blobActions = agent
@@ -66,7 +69,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
       <strong className="blob-page-heading">{title}</strong>
       <div className="blob-page-actions">
         {dirty && <button type="button" className="ghost-button small" onClick={requestCancel}>Cancel</button>}
-        <button type="button" className="primary-button small" disabled={!ready || saving || (mode === 'edit' && !dirty)} onClick={onSave}>{saving ? 'Saving…' : mode === 'create' ? 'Create blob' : 'Save'}</button>
+        <button type="button" className="primary-button small" disabled={!ready || saving || (mode === 'edit' && !dirty)} onClick={onSave}>{saving ? 'Saving…' : mode === 'create' ? `Create ${noun}` : 'Save'}</button>
       </div>
     </header>
     <div className="blob-page-scroll">
@@ -75,13 +78,13 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
         {error && <p className="blob-page-notice error" role="alert">{error}</p>}
         {remoteNotice && <p className="blob-page-notice" role="status">{remoteNotice}</p>}
         {fieldErrors.map((message) => <p className="blob-page-notice error" role="alert" key={message}>{message}</p>)}
-        {bypassLine && <p className="blob-page-notice warning" role="status">Bypass is active for this blob. New requests are approved without asking.</p>}
+        {bypassLine && <p className="blob-page-notice warning" role="status">Bypass is active for this {noun}. New requests are approved without asking.</p>}
         <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} />
         {mode === 'edit' && <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />}
         {mode === 'edit' && <section className="settings-group blob-group" aria-label="Archive">
           <div className="settings-card blob-archive-card">
             <span className="blob-archive-icon" aria-hidden="true"><Archive size={17} /></span>
-            <span className="blob-archive-copy"><strong>Archive {draft.name.trim() || 'this blob'}</strong><small>It leaves the sidebar and companion. Its conversations stay saved.</small></span>
+            <span className="blob-archive-copy"><strong>Archive {draft.name.trim() || `this ${noun}`}</strong><small>It leaves the sidebar and companion. Its conversations stay saved.</small></span>
             <button type="button" className="secondary-button small blob-archive-button" onClick={onArchive}>Archive</button>
           </div>
         </section>}

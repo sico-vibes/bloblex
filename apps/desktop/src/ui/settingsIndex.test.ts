@@ -9,7 +9,7 @@ describe('searchSettings', () => {
   })
 
   it('finds a setting by a keyword the label does not contain', () => {
-    expect(searchSettings('startup')[0]?.label).toBe('Start with Windows')
+    expect(searchSettings('autostart')[0]?.label).toBe('Start with Windows')
     expect(searchSettings('dark')[0]?.label).toBe('Theme')
   })
 

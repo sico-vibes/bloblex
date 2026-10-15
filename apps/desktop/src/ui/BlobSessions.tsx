@@ -4,6 +4,7 @@ import type { Agent, Session } from '../types'
 import { formatUnknownSafe } from '../types'
 import { projectFolderName, sessionDotClass, shortTime } from './rosterSelectors'
 import { rpc } from '../tauri'
+import { useEntityNoun } from './vocabulary'
 
 /** Recent conversations of one blob, as a group on the blob editor. */
 export function BlobSessions({ agent, sessions, legacyCount, canCreate, onOpenSession, onNewSession, limit = 6 }: {
@@ -16,6 +17,7 @@ export function BlobSessions({ agent, sessions, legacyCount, canCreate, onOpenSe
   limit?: number
 }) {
   const [showArchived, setShowArchived] = useState(false)
+  const noun = useEntityNoun()
   const [archived, setArchived] = useState<Session[]>([])
   const loadArchived = async () => {
     const result = await rpc<{ sessions?: Session[] }>('session.list', { includeArchived: true })
@@ -45,7 +47,7 @@ export function BlobSessions({ agent, sessions, legacyCount, canCreate, onOpenSe
         <span className="settings-row-copy"><strong>{formatUnknownSafe(session.title, 'New session')}</strong><small>{projectFolderName(session.projectPath)}</small></span>
         <span className="settings-row-control"><button type="button" className="ghost-button small" onClick={() => { void rpc('session.archive', { sessionId: session.id, archived: false }).then(() => setArchived((items) => items.filter((item) => item.id !== session.id))) }}>Restore</button></span>
       </div>)}
-      {legacyCount > 0 && <p className="settings-empty">Conversations not linked to a blob stay in the header list.</p>}
+      {legacyCount > 0 && <p className="settings-empty">Conversations not linked to a {noun} stay in the header list.</p>}
     </div>
   </section>
 }

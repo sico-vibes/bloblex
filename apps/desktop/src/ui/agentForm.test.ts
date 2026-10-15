@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent } from '../types'
-import { CLIENT_MESSAGES, createParams, draftFromAgent, duplicateParams, isAgentDirty, messageForDaemonCode, starterDraft, updateParams, validateAgentDraft, type DaemonFailureKind } from './agentForm'
+import { CLIENT_MESSAGES, createParams, draftFromAgent, duplicateParams, isAgentDirty, messageForDaemonCode, nameTakenMessage, starterDraft, updateParams, validateAgentDraft, type DaemonFailureKind } from './agentForm'
 
 function agent(partial: Partial<Agent> = {}): Agent {
   return {
@@ -23,21 +23,21 @@ describe('agent draft validation', () => {
     expect(validateAgentDraft({ ...baseline, instructions: 'keep\0out' }, [])).toMatchObject({ instructions: CLIENT_MESSAGES.instructionsNul })
     expect(validateAgentDraft({ ...baseline, color: 'red' }, [])).toMatchObject({ color: CLIENT_MESSAGES.color })
     expect(validateAgentDraft({ ...baseline, runtimeId: '' }, [])).toMatchObject({ runtimeId: CLIENT_MESSAGES.runtime })
-    expect(validateAgentDraft({ ...baseline, name: 'codex' }, ['Codex'])).toMatchObject({ name: CLIENT_MESSAGES.nameTaken })
+    expect(validateAgentDraft({ ...baseline, name: 'codex' }, ['Codex'])).toMatchObject({ name: nameTakenMessage() })
     expect(validateAgentDraft(baseline, ['Invoice helper'])).toEqual({})
   })
 
   it('maps every daemon code row to the stable sentence', () => {
     const cases: Array<[string, DaemonFailureKind, { archived?: boolean; sentName?: boolean } | undefined, string]> = [
-      ['conflict', 'agent.create', undefined, 'Another blob already uses this name.'],
-      ['conflict', 'agent.update', { sentName: true }, 'Another blob already uses this name.'],
-      ['conflict', 'agent.update', { archived: true, sentName: true }, 'This blob is archived and cannot be edited.'],
-      ['conflict', 'session.new', undefined, 'This blob is archived, so a new session cannot be started.'],
+      ['conflict', 'agent.create', undefined, 'Another bot already uses this name.'],
+      ['conflict', 'agent.update', { sentName: true }, 'Another bot already uses this name.'],
+      ['conflict', 'agent.update', { archived: true, sentName: true }, 'This bot is archived and cannot be edited.'],
+      ['conflict', 'session.new', undefined, 'This bot is archived, so a new session cannot be started.'],
       ['not_found', 'agent.create', undefined, 'That runtime is no longer available. Refresh and choose another.'],
-      ['not_found', 'agent.get', undefined, 'That blob is no longer available. Refresh and try again.'],
-      ['not_found', 'agent.update', undefined, 'That blob is no longer available. Refresh and try again.'],
-      ['not_found', 'agent.delete', undefined, 'That blob is no longer available. Refresh and try again.'],
-      ['not_found', 'session.new', undefined, 'That blob is no longer available. Refresh and try again.'],
+      ['not_found', 'agent.get', undefined, 'That bot is no longer available. Refresh and try again.'],
+      ['not_found', 'agent.update', undefined, 'That bot is no longer available. Refresh and try again.'],
+      ['not_found', 'agent.delete', undefined, 'That bot is no longer available. Refresh and try again.'],
+      ['not_found', 'session.new', undefined, 'That bot is no longer available. Refresh and try again.'],
       ['not_found', 'agent.reorder', undefined, 'That runtime is no longer available.'],
       ['invalid_argument', 'agent.create', undefined, 'Check the name, description, colour, and runtime, then try again.'],
       ['invalid_argument', 'agent.update', undefined, 'Check the name, description, colour, and runtime, then try again.'],

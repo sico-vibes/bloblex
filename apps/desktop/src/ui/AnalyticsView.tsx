@@ -39,6 +39,8 @@ import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
 import { quotaRows, resetIn, updatedAgo } from './quotaModel'
 import { ProviderLogo } from './providerBrand'
+import { entityNoun, useEntityNoun } from './vocabulary'
+import { themeStyle } from '../blob/bitbots'
 
 const RANGES: AnalyticsRangeDays[] = [7, 30, 90]
 const PANELS = ['overview', 'errors'] as const
@@ -155,6 +157,7 @@ function AnalyticsSkeleton() {
 }
 
 function ProviderWeeklyUsage({ quotas }: { quotas: Record<string, unknown>[] }) {
+  const noun = useEntityNoun()
   const parsed = quotaRows(quotas)
   const sectionRef = useRef<HTMLElement>(null)
   const [orbVisible, setOrbVisible] = useState(false)
@@ -181,7 +184,7 @@ function ProviderWeeklyUsage({ quotas }: { quotas: Record<string, unknown>[] }) 
   return <section ref={sectionRef} className="analytics-provider-usage" data-orb-visible={orbVisible} aria-labelledby="provider-weekly-heading">
     <div className="analytics-section-head">
       <h3 id="provider-weekly-heading">Plan limits</h3>
-      <p>Weekly usage of each signed-in account, across every conversation. Not filtered by date range, project or blob.</p>
+      <p>Weekly usage of each signed-in account, across every conversation. Not filtered by date range, project or {noun}.</p>
     </div>
     <div className="analytics-orbs">{rows.map((item) => {
       const provider = parsed.find((row) => row.provider === item.id)
@@ -246,6 +249,8 @@ function AnalyticsBody({ data, agents, quotas, metric, panel, updatedAt, onMetri
   onPanel: (panel: AnalyticsViewPrefs['panel']) => void
   onRefresh: () => void
 }) {
+  const nouns = useEntityNoun({ plural: true })
+  const Nouns = useEntityNoun({ plural: true, capital: true })
   const bars = chartBars(data.series, metric, data.range.bucket, data.range.tz)
   const rects = chartRects(bars)
   const summary = chartSummary(bars, metric, data.range.bucket)
@@ -274,7 +279,7 @@ function AnalyticsBody({ data, agents, quotas, metric, panel, updatedAt, onMetri
         <p role="img" className="sr-only">{summary}</p>
         {metricEmpty && <p className="blob-muted" role="status" data-analytics-empty="metric">No {metricNoun} data in this range.</p>}
         {rects.length === 0 ? <p className="blob-muted" role="status" data-analytics-empty="chart">No buckets in this range.</p> : <svg className="analytics-chart" viewBox="0 0 640 160" role="group" aria-label={summary}><line x1="0" y1="159" x2="640" y2="159" />{rects.map((rect) => <rect key={rect.bucketStart} x={rect.x} y={rect.y} width={rect.width} height={rect.height} rx="3" className={rect.gap ? 'analytics-gap' : rect.value === 0 ? 'analytics-zero' : 'analytics-bar'} tabIndex={0} focusable="true" role="img" aria-label={rect.name} data-value={rect.value === null ? 'null' : String(rect.value)} data-gap={rect.gap ? 'true' : 'false'} data-bucket-start={rect.bucketStart}><title>{rect.name}</title></rect>)}</svg>}
-        <div className="analytics-leader"><h3>Blobs</h3>{leaderboard.length === 0 ? <p className="blob-muted" role="status" data-analytics-empty="leaderboard">No blobs reported usage in this range.</p> : leaderboard.map((row, index) => {
+        <div className="analytics-leader"><h3>{Nouns}</h3>{leaderboard.length === 0 ? <p className="blob-muted" role="status" data-analytics-empty="leaderboard">No {nouns} reported usage in this range.</p> : leaderboard.map((row, index) => {
           const fraction = fractions[index] ?? null
           const agent = row.kind === 'agent' && row.agentId ? agents.find((item) => item.id === row.agentId) : undefined
           const color = agent ? agentColorHex(agent.color) : ''
@@ -296,6 +301,8 @@ function ErrorsPanel({ data, agents, leaderboard }: { data: UsageAnalytics; agen
   const turns = offenderKey === null ? data.errors : data.errors.filter((error) => analyticsAgentKey(error.agentId, agents) === offenderKey)
   const peak = offenders.reduce((max, offender) => Math.max(max, offender.count), 0)
   const total = mix.reduce((sum, segment) => sum + segment.count, 0)
+  const noun = useEntityNoun()
+  const Nouns = useEntityNoun({ plural: true, capital: true })
   if (data.errors.length === 0) return <p className="blob-muted" role="status" data-analytics-empty="errors">No failed runs in this range.</p>
   return <div className="analytics-errors-panel">
     <div className="analytics-mix-block">
@@ -309,7 +316,7 @@ function ErrorsPanel({ data, agents, leaderboard }: { data: UsageAnalytics; agen
       </ul>
     </div>
     <div className="analytics-offenders">
-      <h3>Blobs by failed runs</h3>
+      <h3>{Nouns} by failed runs</h3>
       <button type="button" aria-pressed={offenderKey === null} onClick={() => setOffenderKey(null)}>All failed turns</button>
       {offenders.map((offender) => {
         const rate = offenderRateLabel(offender)
@@ -322,7 +329,7 @@ function ErrorsPanel({ data, agents, leaderboard }: { data: UsageAnalytics; agen
     </div>
     <div className="analytics-drill" data-analytics-turns="true">
       <h3>Failed turns</h3>
-      {turns.length === 0 ? <p className="blob-muted" role="status">No failed turns for this blob.</p> : <ul className="analytics-errors">
+      {turns.length === 0 ? <p className="blob-muted" role="status">No failed turns for this {noun}.</p> : <ul className="analytics-errors">
         {turns.map((error) => <ErrorTurn key={error.turnId} error={error} agents={agents} timeZone={data.range.tz} />)}
       </ul>}
     </div>
@@ -333,7 +340,7 @@ function errorAgentName(agentId: string | null, agents: readonly Agent[]): strin
   const key = analyticsAgentKey(agentId, agents)
   if (key === 'unassigned') return 'Unassigned sessions'
   if (key === 'other') return 'Other'
-  return agents.find((agent) => agent.id === key)?.name?.trim() || 'Blob'
+  return agents.find((agent) => agent.id === key)?.name?.trim() || entityNoun(themeStyle())
 }
 
 function ErrorTurn({ error, agents, timeZone }: { error: AnalyticsErrorRow; agents: readonly Agent[]; timeZone: string }) {

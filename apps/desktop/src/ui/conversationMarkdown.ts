@@ -1,5 +1,7 @@
 import type { Session } from '../types'
 import { buildConversationItems } from './conversation'
+import { entityNoun } from './vocabulary'
+import { themeStyle } from '../blob/bitbots'
 
 export function conversationMarkdown(session: Session, blobName: string, exportedAt = new Date()): string {
   const projectPath = session.projectPath ?? ''
@@ -8,7 +10,7 @@ export function conversationMarkdown(session: Session, blobName: string, exporte
   const date = new Date(dateValue)
   const dateLabel = Number.isNaN(date.valueOf()) ? 'Unknown date' : date.toISOString().slice(0, 10)
   const title = safeTitle(session.title)
-  const lines = [`# ${title}`, '', `- Blob: ${safeTitle(blobName)}`, `- Project: ${safeTitle(projectName)}`, `- Date: ${dateLabel}`, '']
+  const lines = [`# ${title}`, '', `- ${entityNoun(themeStyle(), { capital: true })}: ${safeTitle(blobName)}`, `- Project: ${safeTitle(projectName)}`, `- Date: ${dateLabel}`, '']
   for (const item of buildConversationItems(session)) {
     if (item.kind === 'message') {
       const role = String(item.value?.role ?? item.value?.kind ?? 'agent').toLowerCase() === 'user' ? 'You' : safeTitle(blobName)

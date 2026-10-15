@@ -12,6 +12,7 @@ import { preferredConcreteModel } from './modelPreferences'
 import { LookPicker } from './LookPicker'
 import { LookPreview } from './LookPreview'
 import { setThemeStyle } from '../blob/bitbots'
+import { useEntityNoun } from './vocabulary'
 import type { ThemeStyle } from './appearance'
 
 const COLORS = ['#b7a7f4', '#e89191', '#82c9a5', '#e8b04b', '#77b9dc']
@@ -21,9 +22,8 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
   // -1 is the look step; the three steps after it keep their old numbers.
   const [step, setStep] = useState<number>(initialStep ?? -1)
   const [pickedLook, setPickedLook] = useState<ThemeStyle | null>(null)
-  // The product's vocabulary stays "blob" in every look until the copy pass is done.
-  const noun = 'blob'
-  const Noun = 'Blob'
+  const noun = useEntityNoun()
+  const Noun = useEntityNoun({ capital: true })
   const [name, setName] = useState('')
   const [agentName, setAgentName] = useState('')
   const [runtimeId, setRuntimeId] = useState('')

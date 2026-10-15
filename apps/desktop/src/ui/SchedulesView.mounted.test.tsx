@@ -106,7 +106,7 @@ describe('SchedulesView', () => {
 
   it('keeps blob proposals off until the user approves them', async () => {
     const handlers = view([automation({ id: 'p1', name: 'Dependency check', createdBy: 'agent', enabled: false, pauseReason: 'needs_approval', approvalMode: 'plan', nextRunAt: null })])
-    expect(q('[aria-label="Proposed by blobs"]')?.textContent).toContain('These stay off until you approve them.')
+    expect(q('[aria-label="Proposed by bots"]')?.textContent).toContain('These stay off until you approve them.')
     expect(q('.schedule-proposal')?.textContent).toContain('proposed this')
     expect(q('.schedule-card [role="switch"]')).toBeNull()
     await click(all('.schedule-card button').find((button) => button.textContent === 'Approve'))

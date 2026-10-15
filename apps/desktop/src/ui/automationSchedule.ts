@@ -2,6 +2,9 @@
 // expression plus an IANA zone, or a one-time instant; this file maps between
 // those and the handful of choices the editor offers.
 
+import { entityNoun } from './vocabulary'
+import { themeStyle } from '../blob/bitbots'
+
 export type SchedulePreset = 'daily' | 'weekdays' | 'weekly' | 'hours' | 'once' | 'custom'
 
 export interface ScheduleDraft {
@@ -140,7 +143,7 @@ export function runReasonText(reason: string | null | undefined): string {
   }
   switch (reason) {
     case 'still_running': return 'The previous run was still going.'
-    case 'busy': return 'The blob was busy for too long.'
+    case 'busy': return `The ${entityNoun(themeStyle())} was busy for too long.`
     default: return ''
   }
 }

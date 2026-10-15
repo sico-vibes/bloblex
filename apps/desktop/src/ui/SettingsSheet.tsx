@@ -26,6 +26,7 @@ import { searchSettings, type SettingsIndexEntry } from './settingsIndex'
 import { AccentPicker } from './AccentPicker'
 import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
+import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
 export type SettingsPageId = 'General' | 'Appearance' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
@@ -83,6 +84,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   onSpeechModelChange?: (modelId: string) => void
 }) {
   const { ref: dialogRef, close } = useDialogAccessibility(onClose)
+  const noun = useEntityNoun()
+  const nouns = useEntityNoun({ plural: true })
+  const Nouns = useEntityNoun({ plural: true, capital: true })
   const [page, setPage] = useState<SettingsPageId>(focusUpdates ? 'Updates' : initialPage)
   useEffect(() => { setPage(focusUpdates ? 'Updates' : initialPage) }, [initialPage, focusUpdates])
   const [loading, setLoading] = useState(false)
@@ -380,7 +384,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     const failure = await guarded(async () => {
       await rpc('settings.set', { key: 'permissions.default_mode', value: mode })
       setDefaultMode(mode)
-      setNotice(mode === 'auto' ? 'Blobs without their own setting now auto-approve low-risk actions.' : 'Blobs without their own setting now ask first.')
+      setNotice(mode === 'auto' ? `${Nouns} without their own setting now auto-approve low-risk actions.` : `${Nouns} without their own setting now ask first.`)
       onError(null)
     })
     if (failure) onError(failure)
@@ -490,7 +494,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label="Show companion">
                 <button type="button" className={`toggle ${companionVisible ? 'on' : ''}`} role="switch" aria-label="Show companion" aria-checked={companionVisible} onClick={() => void setCompanion(!companionVisible)} disabled={saving}><i /></button>
               </SettingsRow>
-              <SettingsRow label="Sounds" hint="Short cues when a blob finishes, fails or needs approval.">
+              <SettingsRow label="Sounds" hint={`Short cues when a ${noun} finishes, fails or needs approval.`}>
                 <button type="button" className={`toggle ${soundsEnabled ? 'on' : ''}`} role="switch" aria-label="Companion sounds" aria-checked={soundsEnabled} onClick={() => void setSounds(!soundsEnabled)} disabled={saving}><i /></button>
               </SettingsRow>
               <SettingsRow label="Sound volume" hint="Applies to every companion cue. 0% is silent.">
@@ -514,30 +518,30 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label={<span className="experimental-label">Usage bar<span className="experimental-tag">Experimental</span><HelpTip text="Shows each coding agent's plan limits (for example 5-hour and weekly usage) along the bottom of the main window, read from the sign-in each CLI already has. Turn it off if the numbers are not useful to you; the Usage page still has them." /></span>} hint="Plan limits for each coding agent, along the bottom of the window.">
                 <button type="button" className={`toggle ${usageBarEnabled ? 'on' : ''}`} role="switch" aria-label="Usage bar" aria-checked={usageBarEnabled} disabled={saving} onClick={() => { const next = !usageBarEnabled; void saveSetting('experimental.usageBar', next).then((failure) => { if (!failure) onUsageBarChange?.(next) }) }}><i /></button>
               </SettingsRow>
-              <SettingsRow label={<span className="experimental-label">Runtime logos<span className="experimental-tag">Experimental</span><HelpTip text="Shows the logo of the coding agent each blob runs on (Claude Code, Codex or OpenCode) just before its name, in the sidebar and the conversation header. Hover the logo to see which runtime it is." /></span>} hint="See at a glance which coding agent each blob uses.">
+              <SettingsRow label={<span className="experimental-label">Runtime logos<span className="experimental-tag">Experimental</span><HelpTip text={`Shows the logo of the coding agent each ${noun} runs on (Claude Code, Codex or OpenCode) just before its name, in the sidebar and the conversation header. Hover the logo to see which runtime it is.`} /></span>} hint={`See at a glance which coding agent each ${noun} uses.`}>
                 <button type="button" className={`toggle ${runtimeLogos ? 'on' : ''}`} role="switch" aria-label="Runtime logos" aria-checked={runtimeLogos} disabled={saving} onClick={() => { const next = !runtimeLogos; void saveSetting('experimental.runtimeLogos', next).then((failure) => { if (!failure) onRuntimeLogosChange?.(next) }) }}><i /></button>
               </SettingsRow>
-              <SettingsRow label={<span className="experimental-label">Agent activity<span className="experimental-tag">Experimental</span><HelpTip text="Shows what each coding agent did during a reply as one line under it, for example “Ran 3 commands · edited 1 file”. Open it to see every step, then open a step for the command and its output, the tool and its result, or the file and its diff. In the companion, the Activity tab shows the same steps. When it is off you only see that a blob is working." /></span>} hint="Commands, tools and file edits under each reply, in the app and the companion.">
+              <SettingsRow label={<span className="experimental-label">Agent activity<span className="experimental-tag">Experimental</span><HelpTip text={`Shows what each coding agent did during a reply as one line under it, for example “Ran 3 commands · edited 1 file”. Open it to see every step, then open a step for the command and its output, the tool and its result, or the file and its diff. In the companion, the Activity tab shows the same steps. When it is off you only see that a ${noun} is working.`} /></span>} hint="Commands, tools and file edits under each reply, in the app and the companion.">
                 <button type="button" className={`toggle ${activityDetails ? 'on' : ''}`} role="switch" aria-label="Agent activity" aria-checked={activityDetails} disabled={saving} onClick={() => { const next = !activityDetails; void saveSetting('experimental.activityDetails', next).then((failure) => { if (!failure) onActivityDetailsChange?.(next) }) }}><i /></button>
               </SettingsRow>
-              {EXPERIMENTS.map(({ name, label, hint, help }) => <SettingsRow key={name} label={<span className="experimental-label">{label}<span className="experimental-tag">Experimental</span><HelpTip text={help} /></span>} hint={hint}>
+              {EXPERIMENTS.map(({ name, label, hint, help }) => <SettingsRow key={name} label={<span className="experimental-label">{label}<span className="experimental-tag">Experimental</span><HelpTip text={help()} /></span>} hint={hint()}>
                 <button type="button" className={`toggle ${experiments[name] ? 'on' : ''}`} role="switch" aria-label={label} aria-checked={experiments[name]} disabled={saving} onClick={() => { const next = !experiments[name]; void saveSetting(`experimental.${name}`, next).then((failure) => { if (!failure) onExperimentChange?.(name, next) }) }}><i /></button>
               </SettingsRow>)}
               {experiments.autoRetry && <SettingsRow label="Longest wait for a rate limit" hint="Automatic retry gives up when the limit resets later than this.">
                 <Select ariaLabel="Longest wait for a rate limit" variant="muted" value={String(retryMaxWaitSecs)} disabled={saving} onChange={(value) => { const next = Number(value); void saveSetting('retry.maxWaitSecs', next).then((failure) => { if (!failure) setRetryMaxWaitSecs(next) }) }} options={[{ value: '0', label: 'Do not wait' }, { value: '3600', label: '1 hour' }, { value: '21600', label: '6 hours' }, { value: '86400', label: '24 hours' }]} />
               </SettingsRow>}
-              <SettingsRow label={<span className="experimental-label">Steer a running Codex turn<span className="experimental-tag">Experimental</span><HelpTip text="Adds Steer beside Queue while a Codex blob works, which adds your message to the turn that is running now. It uses Codex's turn/steer request and has not been verified against a live Codex turn. If the turn already ended, the message is queued instead. Claude Code and OpenCode only queue." /></span>} hint="Add a message to the turn that is running now.">
+              <SettingsRow label={<span className="experimental-label">Steer a running Codex turn<span className="experimental-tag">Experimental</span><HelpTip text={`Adds Steer beside Queue while a Codex ${noun} works, which adds your message to the turn that is running now. It uses Codex's turn/steer request and has not been verified against a live Codex turn. If the turn already ended, the message is queued instead. Claude Code and OpenCode only queue.`} /></span>} hint="Add a message to the turn that is running now.">
                 <button type="button" className={`toggle ${steerGate ? 'on' : ''}`} role="switch" aria-label="Steer a running Codex turn" aria-checked={steerGate} disabled={saving} onClick={() => { const next = !steerGate; void saveSetting('exec_gate.codex.steer', next).then((failure) => { if (!failure) setSteerGate(next) }) }}><i /></button>
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Power">
-              <SettingsRow label="Keep this computer awake while blobs work" hint="While a blob is working or a schedule is about to run, Bitbots asks Windows not to sleep on its own. It does not stop you closing the lid or choosing Sleep.">
-                <button type="button" className={`toggle ${keepAwake ? 'on' : ''}`} role="switch" aria-label="Keep this computer awake while blobs work" aria-checked={keepAwake} disabled={saving} onClick={() => { const next = !keepAwake; void saveSetting('power.keepAwake', next).then((failure) => { if (!failure) setKeepAwake(next) }) }}><i /></button>
+              <SettingsRow label={`Keep this computer awake while ${nouns} work`} hint={`While a ${noun} is working or a schedule is about to run, Bitbots asks Windows not to sleep on its own. It does not stop you closing the lid or choosing Sleep.`}>
+                <button type="button" className={`toggle ${keepAwake ? 'on' : ''}`} role="switch" aria-label={`Keep this computer awake while ${nouns} work`} aria-checked={keepAwake} disabled={saving} onClick={() => { const next = !keepAwake; void saveSetting('power.keepAwake', next).then((failure) => { if (!failure) setKeepAwake(next) }) }}><i /></button>
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Notifications">
-              <SettingsRow label="Notify when a blob finishes or needs approval">
-                <button type="button" className={`toggle ${notificationsEnabled ? 'on' : ''}`} role="switch" aria-label="Notify when a blob finishes or needs approval" aria-checked={notificationsEnabled} onClick={() => void setNotifications(!notificationsEnabled)} disabled={saving}><i /></button>
+              <SettingsRow label={`Notify when a ${noun} finishes or needs approval`}>
+                <button type="button" className={`toggle ${notificationsEnabled ? 'on' : ''}`} role="switch" aria-label={`Notify when a ${noun} finishes or needs approval`} aria-checked={notificationsEnabled} onClick={() => void setNotifications(!notificationsEnabled)} disabled={saving}><i /></button>
               </SettingsRow>
             </SettingsGroup>
           </>}
@@ -565,7 +569,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
           {!loading && page === 'Agents' && <>
             <p className="settings-intro">Bitbots runs the coding agents installed on this device. Sign in with each agent's own command line tool; Bitbots never handles your provider login.</p>
             <SettingsGroup title="Approvals">
-              <SettingsRow label="Default approval" hint="Ask waits for you. Auto-approve allows low-risk actions inside the project. Bypass can only be turned on for a single blob.">
+              <SettingsRow label="Default approval" hint={`Ask waits for you. Auto-approve allows low-risk actions inside the project. Bypass can only be turned on for a single ${noun}.`}>
                 {policyError
                   ? <span className="settings-unavailable"><span className="settings-value">Unavailable</span><Select ariaLabel="Default approval mode" variant="muted" value="ask" disabled onChange={() => undefined} options={[{ value: 'ask', label: 'Ask' }]} /></span>
                   : <Select ariaLabel="Default approval mode" variant="muted" value={defaultMode} disabled={saving} onChange={(value) => void saveDefaultMode(value)} options={[{ value: 'ask', label: 'Ask' }, { value: 'auto', label: 'Auto-approve' }]} />}
@@ -585,7 +589,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                   <button type="button" className="settings-row runtime-entry-head" aria-expanded={open} onClick={() => setOpenRuntimes((current) => ({ ...current, [runtime.id]: !open }))}>
                     <ProviderLogo provider={runtime.provider} />
                     <span className="settings-row-copy"><strong>{providerDisplayName(runtime.provider)}</strong><small>{[runtime.version, runtimeAuthSummary(runtime).label].filter(Boolean).join(' · ') || 'Details unavailable'}</small>{probe && <small className="runtime-probe-error">{probe.step}: {probe.message}</small>}</span>
-                    <span className="settings-value">{owned.length === 1 ? '1 blob' : `${owned.length} blobs`}</span>
+                    <span className="settings-value">{owned.length === 1 ? `1 ${noun}` : `${owned.length} ${nouns}`}</span>
                     {open ? <ChevronDown size={15} className="row-chevron" aria-hidden="true" /> : <ChevronRight size={15} className="row-chevron" aria-hidden="true" />}
                   </button>
                   {open && <div className="runtime-entry-body">
@@ -596,12 +600,12 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                       <div><dt>Executable</dt><dd className="mono">{runtime.executablePath ?? 'Unknown'}</dd></div>
                     </dl>
                     {probe && <p className="runtime-recovery-guidance" role="note">{runtime.probeStep === 'Sign-in check' ? <>Check this provider&apos;s CLI sign-in, then choose <strong>Scan again</strong> above. The protocol check passed.</> : <>Update or repair this CLI, then choose <strong>Scan again</strong> above.</>}</p>}
-                    {owned.length === 0 ? <p className="settings-empty">No blobs use this agent yet.</p> : owned.map((agent) => <BlobLink key={agent.id} agent={agent} mode={modeFor(agent)} onOpen={() => onOpenAgent(agent.id)} />)}
+                    {owned.length === 0 ? <p className="settings-empty">No {nouns} use this agent yet.</p> : owned.map((agent) => <BlobLink key={agent.id} agent={agent} mode={modeFor(agent)} onOpen={() => onOpenAgent(agent.id)} />)}
                   </div>}
                 </div>
               })}
               {orphanAgents.length > 0 && <div className="runtime-entry open">
-                <div className="settings-row"><span className="settings-row-copy"><strong>Blobs without a detected agent</strong><small>Their command line tool was not found on this device.</small></span></div>
+                <div className="settings-row"><span className="settings-row-copy"><strong>{Nouns} without a detected agent</strong><small>Their command line tool was not found on this device.</small></span></div>
                 <div className="runtime-entry-body">{orphanAgents.map((agent) => <BlobLink key={agent.id} agent={agent} mode={modeFor(agent)} onOpen={() => onOpenAgent(agent.id)} />)}</div>
               </div>}
             </SettingsGroup>

@@ -3,6 +3,7 @@ import { Shield } from 'lucide-react'
 import type { ApprovalMode, AutoResolvedAction } from '../approvalContract'
 import { newestFirst } from '../approvalContract'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
+import { useEntityNoun } from './vocabulary'
 
 export function ApprovalBadge({ mode }: { mode: ApprovalMode | null | undefined }) {
   if (mode !== 'auto' && mode !== 'bypass') return null
@@ -31,20 +32,22 @@ export function AutoApprovedList({ actions }: { actions: readonly AutoResolvedAc
 }
 
 export function BypassConfirmDialog({ blobName, onConfirm, onCancel }: { blobName: string; onConfirm: () => void; onCancel: () => void }) {
+  const noun = useEntityNoun()
+  const Noun = useEntityNoun({ capital: true })
   const { ref, close } = useDialogAccessibility(onCancel)
   const [typed, setTyped] = useState('')
   const matches = typed === blobName && blobName.length > 0
   const entered = useDialogEntered()
   return <div className={`sheet-backdrop blob-dialog-backdrop${entered ? ' is-entered' : ''}`}>
     <section ref={ref as RefObject<HTMLElement>} className="blob-dialog" role="dialog" aria-modal="true" aria-labelledby="bypass-dialog-title" aria-describedby="bypass-dialog-body">
-      <h2 id="bypass-dialog-title">Turn on bypass for {blobName || 'this blob'}?</h2>
+      <h2 id="bypass-dialog-title">Turn on bypass for {blobName || `this ${noun}`}?</h2>
       <div id="bypass-dialog-body">
         <p>Bypass approves every action without asking you. Where the provider allows it, Bitbots also starts that provider so it does not ask either.</p>
-        <p>Budgets, cancel, and Pause all still stop the work. This choice applies only to this blob, and it takes effect for new requests immediately. Launch flags change when the next turn starts.</p>
-        <p>Type the blob name to confirm.</p>
+        <p>Budgets, cancel, and Pause all still stop the work. This choice applies only to this {noun}, and it takes effect for new requests immediately. Launch flags change when the next turn starts.</p>
+        <p>Type the {noun} name to confirm.</p>
       </div>
-      <label className="blob-field">Blob name
-        <input aria-label="Type the blob name to confirm bypass" data-dialog-initial-focus value={typed} onChange={(event) => setTyped(event.target.value)} autoComplete="off" />
+      <label className="blob-field">{Noun} name
+        <input aria-label={`Type the ${noun} name to confirm bypass`} data-dialog-initial-focus value={typed} onChange={(event) => setTyped(event.target.value)} autoComplete="off" />
       </label>
       <div className="blob-dialog-actions">
         <button type="button" className="secondary-button" onClick={close}>Cancel</button>

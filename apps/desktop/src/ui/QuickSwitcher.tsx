@@ -2,8 +2,11 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Search } from 'lucide-react'
 import { useDialogAccessibility } from './dialogFocus'
 import { rankQuickSwitcherItems, type QuickSwitcherItem } from './quickSwitcherModel'
+import { useEntityNoun } from './vocabulary'
 
 export function QuickSwitcher({ items, onChoose, onClose }: { items: QuickSwitcherItem[]; onChoose: (item: QuickSwitcherItem) => void; onClose: () => void }) {
+  const Nouns = useEntityNoun({ plural: true, capital: true })
+  const nouns = useEntityNoun({ plural: true })
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -22,7 +25,7 @@ export function QuickSwitcher({ items, onChoose, onClose }: { items: QuickSwitch
     const activeOption = resultsRef.current?.querySelector<HTMLElement>(`[data-result-index="${activeIndex}"]`)
     activeOption?.scrollIntoView?.({ block: 'nearest' })
   }, [activeIndex, results])
-  const groupLabel = (kind: QuickSwitcherItem['kind']) => kind === 'blob' ? 'Blobs' : kind === 'conversation' ? 'Conversations' : kind === 'project' ? 'Projects' : 'Actions'
+  const groupLabel = (kind: QuickSwitcherItem['kind']) => kind === 'blob' ? Nouns : kind === 'conversation' ? 'Conversations' : kind === 'project' ? 'Projects' : 'Actions'
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
@@ -35,7 +38,7 @@ export function QuickSwitcher({ items, onChoose, onClose }: { items: QuickSwitch
   }
   return <div className="sheet-backdrop quick-switcher-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}>
     <section ref={ref} className="quick-switcher" role="dialog" aria-modal="true" aria-label="Quick switcher">
-      <label className="quick-switcher-search"><Search size={17} /><input ref={inputRef} data-dialog-initial-focus autoComplete="off" aria-label="Search blobs, conversations, projects, and actions" aria-autocomplete="list" aria-controls="quick-switcher-results" aria-activedescendant={results.length ? `quick-switcher-option-${activeIndex}` : undefined} placeholder="Search or run an action" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={handleKeyDown} /></label>
+      <label className="quick-switcher-search"><Search size={17} /><input ref={inputRef} data-dialog-initial-focus autoComplete="off" aria-label={`Search ${nouns}, conversations, projects, and actions`} aria-autocomplete="list" aria-controls="quick-switcher-results" aria-activedescendant={results.length ? `quick-switcher-option-${activeIndex}` : undefined} placeholder="Search or run an action" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={handleKeyDown} /></label>
       <div ref={resultsRef} id="quick-switcher-results" className="quick-switcher-results" role="listbox" aria-label="Quick switcher results">
         {results.map((item, index) => <Fragment key={`${item.kind}:${item.id}`}>
           {index === 0 || item.kind !== results[index - 1]?.kind ? <div className="quick-switcher-label">{groupLabel(item.kind)}</div> : null}

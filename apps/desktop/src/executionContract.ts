@@ -1,3 +1,5 @@
+import { themeStyle } from './blob/bitbots'
+import { entityNoun } from './ui/vocabulary'
 export type CapabilityState = 'supported' | 'disabled' | 'gated' | 'unknown'
 
 export interface CapabilitySetting {
@@ -247,7 +249,7 @@ export function instructionNote(provider: string, setting: CapabilitySetting | n
   if (state === 'gated') return settingReason(setting, state)
   const scope = (setting?.scope ?? '').toLowerCase()
   const codex = provider.toLowerCase().includes('codex')
-  let timing = 'Saved with this blob.'
+  let timing = 'Saved with this ' + entityNoun(themeStyle()) + '.'
   if (codex) timing = 'Sent with the next message, including in existing conversations.'
   else if (scope === 'thread' || scope === 'launch' || scope === 'spawn' || scope === 'resume' || scope === 'process') timing = 'Applies when the next conversation starts.'
   else if (scope === 'turn') timing = 'Applies on the next turn.'

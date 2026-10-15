@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chooseOption, selectOptions, selectTrigger } from './testSelect'
 import { EXPERIMENTS } from './experiments'
 import { SettingsSheet } from './SettingsSheet'
+import { setThemeStyle } from '../blob/bitbots'
 
 const mocks = vi.hoisted(() => ({ rpc: vi.fn(), invoke: vi.fn(), setCompanionMonitor: vi.fn(), setCompanionVisibility: vi.fn(), setCloseToTray: vi.fn() }))
 vi.mock('../tauri', () => ({
@@ -142,6 +143,20 @@ describe('General settings mounted controls', () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toBe('Ctrl+Alt+B is used by another app. The companion shortcut is off.')
     expect(host.querySelector('[aria-label="Show/hide with Ctrl+Alt+B"]')?.getAttribute('aria-checked')).toBe('false')
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'companion.hotkey', value: false })
+  })
+
+  it('follows the look in its copy without a restart', async () => {
+    mocks.invoke.mockResolvedValue(true)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
+    setThemeStyle('bitbots')
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(host.querySelector('[aria-label="Notify when a bot finishes or needs approval"]')).not.toBeNull()
+    act(() => setThemeStyle('blobots'))
+    expect(host.querySelector('[aria-label="Notify when a blob finishes or needs approval"]')).not.toBeNull()
+    expect(host.querySelector('[aria-label="Notify when a bot finishes or needs approval"]')).toBeNull()
+    act(() => setThemeStyle('bitbots'))
   })
 
   it('persists the companion launch preference and starts from the window visibility', async () => {

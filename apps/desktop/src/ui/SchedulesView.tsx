@@ -15,6 +15,7 @@ import {
   type DaemonSchedule, type ScheduleDraft, type SchedulePreset,
 } from './automationSchedule'
 import './schedules.css'
+import { useEntityNoun } from './vocabulary'
 
 export interface AutomationInput {
   agentId: string
@@ -106,6 +107,8 @@ function stamp(value: string | null | undefined) {
 
 export function SchedulesView(props: SchedulesViewProps) {
   const { automations, agents, connected, paused, nowMs, agentId, loadError, onBack, onSetPaused } = props
+  const noun = useEntityNoun()
+  const nouns = useEntityNoun({ plural: true })
   const [editing, setEditing] = useState<Automation | 'new' | null>(null)
   const [startFrom, setStartFrom] = useState<AutomationTemplate | null>(null)
   const [deleting, setDeleting] = useState<Automation | null>(null)
@@ -153,15 +156,15 @@ export function SchedulesView(props: SchedulesViewProps) {
       {connected && visible.length === 0 && <div className="schedules-empty">
         <CalendarClock size={22} aria-hidden="true" />
         <strong>No automations yet</strong>
-        <p>An automation is something a blob does by itself, on a schedule: check your email every morning, brief you on the news, run the tests overnight. Start from an idea or write your own.</p>
+        <p>An automation is something a {noun} does by itself, on a schedule: check your email every morning, brief you on the news, run the tests overnight. Start from an idea or write your own.</p>
         <ul className="schedules-templates" aria-label="Ideas to start from">{TEMPLATES.map((template) => <li key={template.id}>
           <button type="button" className="schedules-template" disabled={agents.filter((a) => !a.archived).length === 0} onClick={() => { setStartFrom(template); setEditing('new') }}>
             <template.icon size={16} aria-hidden="true" /><span><strong>{template.title}</strong><small>{template.hint}</small></span>
           </button>
         </li>)}</ul>
       </div>}
-      {proposals.length > 0 && <section aria-label="Proposed by blobs" className="schedules-group">
-        <h3>Proposed by your blobs</h3>
+      {proposals.length > 0 && <section aria-label={`Proposed by ${nouns}`} className="schedules-group">
+        <h3>Proposed by your {nouns}</h3>
         <p className="schedules-note">These stay off until you approve them.</p>
         <ul className="schedules-list">{proposals.map(card)}</ul>
       </section>}
@@ -201,6 +204,7 @@ function ScheduleCard({ automation, agent, nowMs, busy, onToggle, onRunNow, onEd
   onLoadRuns: (id: string) => Promise<AutomationRun[]>
   onOpenSession?: (sessionId: string) => void
 }) {
+  const noun = useEntityNoun()
   const [open, setOpen] = useState(false)
   const [runs, setRuns] = useState<AutomationRun[] | null>(null)
   const [runsError, setRunsError] = useState<string | null>(null)
@@ -226,7 +230,7 @@ function ScheduleCard({ automation, agent, nowMs, busy, onToggle, onRunNow, onEd
       <span className="schedule-face" aria-hidden="true">{agent && <BlobCanvas decorative color={agentColorHex(agent.color)} size={26} mood={automation.running ? 'working' : 'idle'} look={agentLook(agent)} label={agent.name} />}</span>
       <div className="schedule-main">
         <strong id={headingId} className="schedule-name">{automation.name}</strong>
-        <span className="schedule-sub">{agent?.name ?? 'Unknown blob'} · {describeSchedule(automation.schedule)}</span>
+        <span className="schedule-sub">{agent?.name ?? `Unknown ${noun}`} · {describeSchedule(automation.schedule)}</span>
         <span className="schedule-sub schedule-state" role="status">{state}{automation.approvalMode === 'plan' ? ' · read-only' : ''}</span>
       </div>
       <div className="schedule-actions">
@@ -239,7 +243,7 @@ function ScheduleCard({ automation, agent, nowMs, busy, onToggle, onRunNow, onEd
         <button type="button" className={`queue-icon schedule-expand${open ? ' open' : ''}`} aria-expanded={open} aria-label={`Run history for ${automation.name}`} title="Run history" onClick={() => setOpen((value) => !value)}><ChevronDown size={14} /></button>
       </div>
     </div>
-    {proposal && <p className="schedule-proposal">{agent?.name ?? 'A blob'} proposed this. It runs in read-only mode until you approve it.</p>}
+    {proposal && <p className="schedule-proposal">{agent?.name ?? `A ${noun}`} proposed this. It runs in read-only mode until you approve it.</p>}
     {last && !open && <p className="schedule-last"><i className={`run-dot ${statusDot(last.status)}`} aria-hidden="true" />Last run {stamp(last.startedAt)} · {RUN_STATUS_LABEL[last.status] ?? last.status}</p>}
     {open && <div className="schedule-history">
       <p className="schedule-prompt" title={automation.prompt}>{automation.prompt}</p>
@@ -266,6 +270,8 @@ function AutomationEditor({ existing, template, agents, defaultAgentId, onClose,
   onPreview: (schedule: DaemonSchedule) => Promise<string[]>
 }) {
   const entered = useDialogEntered()
+  const Noun = useEntityNoun({ capital: true })
+  const noun = useEntityNoun()
   const { ref, close } = useDialogAccessibility(onClose)
   const [name, setName] = useState(existing?.name ?? template?.name ?? '')
   const [agentId, setAgentId] = useState(existing?.agentId ?? defaultAgentId ?? agents[0]?.id ?? '')
@@ -311,8 +317,8 @@ function AutomationEditor({ existing, template, agents, defaultAgentId, onClose,
       <h2 id="schedule-dialog-title">{existing ? 'Edit automation' : 'New automation'}</h2>
       {!existing && <div className="schedule-ideas" role="group" aria-label="Start from an idea">{TEMPLATES.map((idea) => <button key={idea.id} type="button" className="schedule-idea" aria-pressed={name === idea.name && prompt === idea.prompt} onClick={() => { setName(idea.name); setPrompt(idea.prompt); set({ preset: idea.preset, time: idea.time }); setApprovalMode(idea.approvalMode) }}><idea.icon size={13} aria-hidden="true" />{idea.title}</button>)}</div>}
       <label className="blob-field"><span>Name</span><input data-dialog-initial-focus value={name} maxLength={80} placeholder="Morning summary" onChange={(event) => setName(event.target.value)} /></label>
-      <div className="blob-field"><span>Blob</span>
-        <Select ariaLabel="Blob" variant="field" value={agentId} onChange={setAgentId} options={agents.map((agent) => ({ value: agent.id, label: agent.name }))} />
+      <div className="blob-field"><span>{Noun}</span>
+        <Select ariaLabel={Noun} variant="field" value={agentId} onChange={setAgentId} options={agents.map((agent) => ({ value: agent.id, label: agent.name }))} />
       </div>
       <label className="blob-field"><span>What should it do?<small className={prompt.length > 8000 ? 'over' : ''}>{prompt.length}/8000</small></span>
         <textarea rows={4} value={prompt} placeholder="Summarise what changed in the repository since yesterday and list anything that needs my attention." onChange={(event) => setPrompt(event.target.value)} />
@@ -335,7 +341,7 @@ function AutomationEditor({ existing, template, agents, defaultAgentId, onClose,
       <fieldset className="schedule-modes">
         <legend>While it runs</legend>
         <label className="schedule-mode"><input type="radio" name="approval" checked={approvalMode === 'auto'} onChange={() => setApprovalMode('auto')} /><span><strong>Safe actions only</strong><small>Reads and edits inside the project run. Anything riskier is declined, because nobody is there to approve it.</small></span></label>
-        <label className="schedule-mode"><input type="radio" name="approval" checked={approvalMode === 'plan'} onChange={() => setApprovalMode('plan')} /><span><strong>Read-only</strong><small>The blob looks and reports. It does not change anything.</small></span></label>
+        <label className="schedule-mode"><input type="radio" name="approval" checked={approvalMode === 'plan'} onChange={() => setApprovalMode('plan')} /><span><strong>Read-only</strong><small>The {noun} looks and reports. It does not change anything.</small></span></label>
       </fieldset>
       <fieldset className="schedule-modes">
         <legend>Conversation</legend>

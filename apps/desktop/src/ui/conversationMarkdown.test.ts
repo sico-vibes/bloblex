@@ -12,7 +12,7 @@ describe('conversationMarkdown', () => {
       tools: [{ id: 't', title: 'Read file', command: 'secret command', status: 'completed', createdAt: '2026-10-01T10:30:03Z' }],
     }, 'Helper')
     expect(markdown).toContain('# Fix parser')
-    expect(markdown).toContain('- Blob: Helper')
+    expect(markdown).toContain('- Bot: Helper')
     expect(markdown).toContain('- Project: app')
     expect(markdown.indexOf('Please fix it')).toBeLessThan(markdown.indexOf('I will inspect'))
     expect(markdown).toContain('- Activity: Tool activity (completed)')

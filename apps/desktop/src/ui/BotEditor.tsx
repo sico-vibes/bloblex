@@ -6,6 +6,7 @@ import {
   resolveBot, type BlobLook, type BotShape, type BotStyle, type BotSwatch,
 } from '../blob/look'
 import { SwatchGrid } from './SwatchGrid'
+import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
 const CREDIT_URL = 'https://github.com/fayazara/robot-heads'
@@ -23,6 +24,8 @@ export function BotEditor({ look, color, colorHex, onLookChange, onColorChange }
   onColorChange: (color: string) => void
 }) {
   const resolved = resolveBot(look, colorHex)
+  const noun = useEntityNoun()
+  const Noun = useEntityNoun({ capital: true })
   const set = (patch: Partial<BotStyle>) => {
     const next: BotStyle = { ...(look.bot ?? {}), ...patch }
     for (const key of Object.keys(next) as Array<keyof BotStyle>) if (next[key] === undefined) delete next[key]
@@ -58,11 +61,11 @@ export function BotEditor({ look, color, colorHex, onLookChange, onColorChange }
       })}
     </div>
     <div className="bot-colours">
-      <ColourRow title="Shell" hint={look.bot?.shell ? undefined : 'Follows the blob colour'} swatches={SHELL_SWATCHES} value={resolved.shell} explicit={!!look.bot?.shell} onPick={(shell) => set({ shell })} onReset={look.bot?.shell ? () => set({ shell: undefined }) : undefined} />
+      <ColourRow title="Shell" hint={look.bot?.shell ? undefined : `Follows the ${noun} colour`} swatches={SHELL_SWATCHES} value={resolved.shell} explicit={!!look.bot?.shell} onPick={(shell) => set({ shell })} onReset={look.bot?.shell ? () => set({ shell: undefined }) : undefined} />
       <ColourRow title="Trim" swatches={TRIM_SWATCHES} value={resolved.trim} explicit={!!look.bot?.trim} fallback={DEFAULT_TRIM} onPick={(trim) => set({ trim })} onReset={look.bot?.trim ? () => set({ trim: undefined }) : undefined} />
       <ColourRow title="Screen" swatches={SCREEN_SWATCHES} value={resolved.screen} explicit={!!look.bot?.screen} fallback={DEFAULT_SCREEN} onPick={(screen) => set({ screen })} onReset={look.bot?.screen ? () => set({ screen: undefined }) : undefined} />
       <div className="bot-colour-row">
-        <header><strong>Blob colour</strong><span>Mentions and highlights</span></header>
+        <header><strong>{Noun} colour</strong><span>Mentions and highlights</span></header>
         <SwatchGrid value={color} onChange={onColorChange} />
       </div>
     </div>

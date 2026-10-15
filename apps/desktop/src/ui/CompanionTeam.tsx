@@ -13,6 +13,7 @@ import { activityTitle } from './ActivityDetails'
 import { buildConversationItems } from './conversation'
 import { MessageReactionBadges, ReplyContextStrip } from './MessageActions'
 import { conversationPreview, groupAgentsByProject, mainSessionFor, sessionIsBusy, sideSessionsFor, sideTitle, splitMentions } from './teamSelectors'
+import { useEntityNoun } from './vocabulary'
 
 export type BlobState = 'waiting' | 'working' | 'offline' | 'idle'
 
@@ -80,12 +81,13 @@ export function CompanionPeers({ agents, projects, sessions, runtimes, connected
   onPinnedChange: (ids: string[]) => void
 }) {
   const [picking, setPicking] = useState(false)
+  const nouns = useEntityNoun({ plural: true })
   const peers = pickPeers(agents, sessions, runtimes, connected, focusedId, pinned)
   const total = agents.filter((agent) => !agent.archived && agent.id !== focusedId).length
   if (picking) return <CompanionTeamPicker agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} connected={connected} focusedId={focusedId} pinned={pinned} onSelect={(agent) => { setPicking(false); onSelect(agent) }} onPinnedChange={onPinnedChange} onClose={() => setPicking(false)} />
   return <div className="island-card peers-card" data-companion-no-drag="">
     {peers.length === 0
-      ? <p className="companion-empty">No other blobs yet.</p>
+      ? <p className="companion-empty">No other {nouns} yet.</p>
       : <div className={`peer-grid count-${peers.length}`}>
         {peers.map((agent, index) => {
           const state = blobState(agent, sessions, runtimes, connected)
@@ -96,7 +98,7 @@ export function CompanionPeers({ agents, projects, sessions, runtimes, connected
           </button>
         })}
       </div>}
-    <button type="button" className="peers-all" aria-label={`All blobs (${total})`} title="All blobs" onClick={() => setPicking(true)}><LayoutGrid size={12} /><span>{total}</span></button>
+    <button type="button" className="peers-all" aria-label={`All ${nouns} (${total})`} title={`All ${nouns}`} onClick={() => setPicking(true)}><LayoutGrid size={12} /><span>{total}</span></button>
   </div>
 }
 
@@ -114,13 +116,14 @@ export function CompanionTeamPicker({ agents, projects, sessions, runtimes, conn
   onClose: () => void
 }) {
   const groups = groupAgentsByProject(agents, projects).filter((group) => group.agents.length > 0)
+  const nouns = useEntityNoun({ plural: true })
   const full = pinned.length >= MAX_COMPANION_PEERS
   const togglePin = (id: string) => onPinnedChange(pinned.includes(id) ? pinned.filter((item) => item !== id) : full ? [...pinned] : [...pinned, id])
-  return <div className="island-card team-picker" data-companion-no-drag="" role="dialog" aria-label="All blobs">
+  return <div className="island-card team-picker" data-companion-no-drag="" role="dialog" aria-label={`All ${nouns}`}>
     <div className="team-picker-head">
-      <strong>All blobs</strong>
+      <strong>All {nouns}</strong>
       <span>{pinned.length}/{MAX_COMPANION_PEERS} kept on the island</span>
-      <button type="button" className="team-picker-close" aria-label="Close all blobs" onClick={onClose}><X size={13} /></button>
+      <button type="button" className="team-picker-close" aria-label={`Close all ${nouns}`} onClick={onClose}><X size={13} /></button>
     </div>
     <div className="team-picker-scroll">
       {groups.map((group) => <div key={group.project?.id ?? 'casual'} className="team-picker-group">
@@ -134,7 +137,7 @@ export function CompanionTeamPicker({ agents, projects, sessions, runtimes, conn
               <span className="team-picker-name">{agent.name}{agent.role?.trim() && <small>{agent.role.trim()}</small>}</span>
               <span className={`team-picker-state state-${state}`}>{peerLine(agent, sessions, state)}</span>
             </button>
-            {agent.id !== focusedId && <button type="button" className={`team-picker-pin${isPinned ? ' on' : ''}`} aria-pressed={isPinned} disabled={!isPinned && full} aria-label={isPinned ? `Unpin ${agent.name} from the island` : `Keep ${agent.name} on the island`} title={isPinned ? 'Unpin from the island' : full ? `Up to ${MAX_COMPANION_PEERS} blobs` : 'Keep on the island'} onClick={() => togglePin(agent.id)}>{isPinned ? <PinOff size={12} /> : <Pin size={12} />}</button>}
+            {agent.id !== focusedId && <button type="button" className={`team-picker-pin${isPinned ? ' on' : ''}`} aria-pressed={isPinned} disabled={!isPinned && full} aria-label={isPinned ? `Unpin ${agent.name} from the island` : `Keep ${agent.name} on the island`} title={isPinned ? 'Unpin from the island' : full ? `Up to ${MAX_COMPANION_PEERS} ${nouns}` : 'Keep on the island'} onClick={() => togglePin(agent.id)}>{isPinned ? <PinOff size={12} /> : <Pin size={12} />}</button>}
           </div>
         })}
       </div>)}
@@ -160,6 +163,7 @@ export function CompanionTeammatesSetting({ agents, sessions, runtimes, connecte
   onPinnedChange: (ids: string[]) => void
 }) {
   const [choosing, setChoosing] = useState(false)
+  const nouns = useEntityNoun({ plural: true })
   const candidates = agents.filter((agent) => !agent.archived && agent.hidden !== true && agent.id !== focusedId)
   const manual = choosing || pinned.length > 0
   const onIsland = manual
@@ -183,7 +187,7 @@ export function CompanionTeammatesSetting({ agents, sessions, runtimes, connecte
       ? <ul className="cset-chips" aria-label="On the island now">
         {onIsland.map((agent) => <li key={agent.id} className="cset-chip" style={{ ['--chip' as string]: agentColorHex(agent.color) }}><Face agent={agent} size={16} /><span>{agent.name}</span></li>)}
       </ul>
-      : <p className="cset-note">{candidates.length === 0 ? 'No other blobs yet.' : 'None chosen yet. Until you pick some, the island picks for you.'}</p>}
+      : <p className="cset-note">{candidates.length === 0 ? `No other ${nouns} yet.` : 'None chosen yet. Until you pick some, the island picks for you.'}</p>}
     {manual && candidates.length > 0 && <ul className="cset-checklist" aria-label="Choose teammates" data-companion-no-drag="">
       {candidates.map((agent) => {
         const state = blobState(agent, sessions, runtimes, connected)

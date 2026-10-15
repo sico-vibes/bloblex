@@ -39,12 +39,12 @@ describe('conversation permission mode', () => {
     const host = mount(<PermissionModeControl session={session} agent={agent} disabled={false} onSessionUpdated={updated} onError={() => undefined} />)
     const trigger = host.querySelector<HTMLButtonElement>('.permission-pill')!
     expect(trigger.textContent).toContain('Ask first')
-    expect(trigger.getAttribute('aria-label')).toContain('blob default')
+    expect(trigger.getAttribute('aria-label')).toContain('bot default')
 
     await act(async () => { trigger.click() })
     const items = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
     expect(items.map((item) => item.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false'])
-    expect(items[0].textContent).toContain('Blob default')
+    expect(items[0].textContent).toContain('Bot default')
     await act(async () => { items[1].click() })
     await flush()
     expect(rpc).toHaveBeenLastCalledWith('session.model.update', { sessionId:'session', approvalMode:'auto' })

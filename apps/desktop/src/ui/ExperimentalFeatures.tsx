@@ -8,6 +8,7 @@ import { agentColorHex } from './agentColor'
 import { parseUnifiedDiff } from './diffParser'
 import { useDialogAccessibility } from './dialogFocus'
 import { shortcutRows } from './experiments'
+import { useEntityNoun } from './vocabulary'
 import './experiments.css'
 
 export function ChangeReview({ files, dismissed, onKeep, onRevert, onDiff }: { files: JsonRecord[]; dismissed: string[]; onKeep: (id: string) => void; onRevert: (file: JsonRecord) => void; onDiff: (path: string, content: string) => void }) {
@@ -31,6 +32,7 @@ export function highlightMatch(text: string, query: string): ReactNode {
   return <>{text.slice(0, index)}<mark>{text.slice(index, end)}</mark>{text.slice(end)}</>
 }
 export function MessageSearch({ agents, onChoose, onClose }: { agents: Agent[]; onChoose: (result: MessageSearchResult) => void; onClose: () => void }) {
+  const Noun = useEntityNoun({ capital: true })
   const { ref, close } = useDialogAccessibility(onClose)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<MessageSearchResult[]>([])
@@ -50,7 +52,7 @@ export function MessageSearch({ agents, onChoose, onClose }: { agents: Agent[]; 
     <label className="quick-switcher-search"><input data-dialog-initial-focus aria-label="Search message text" aria-controls="message-search-results" aria-activedescendant={results.length ? `message-search-${activeIndex}` : undefined} value={query} maxLength={200} placeholder="Search all conversations" onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && results.length) { e.preventDefault(); setActiveIndex((activeIndex + (e.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length) } if (e.key === 'Enter' && results[activeIndex]) { e.preventDefault(); onChoose(results[activeIndex]); close() } }} /><button type="button" className="icon-button" aria-label="Close search" onClick={close}><X size={16} /></button></label>
     <div id="message-search-results" className="quick-switcher-results" role="listbox" aria-label="Matching messages">{results.map((result, i) => {
       const agent = agents.find((a) => a.id === result.blobId) ?? result.blob
-      return <button type="button" role="option" aria-selected={activeIndex === i} id={`message-search-${i}`} key={result.messageId} className={`menu-item message-search-result ${activeIndex === i ? 'active' : ''}`} onMouseMove={() => setActiveIndex(i)} onClick={() => { onChoose(result); close() }}>{agent && <BlobCanvas decorative color={agentColorHex(agent.color)} size={28} mood="idle" look={agentLook(agent)} label={agent.name} />}<span className="quick-switcher-copy"><strong>{agent?.name ?? 'Blob'} · {result.title}</strong><small>{highlightMatch(result.snippet, query)}</small><time dateTime={result.createdAt}>{new Date(result.createdAt).toLocaleString()} · {result.role}</time></span></button>
+      return <button type="button" role="option" aria-selected={activeIndex === i} id={`message-search-${i}`} key={result.messageId} className={`menu-item message-search-result ${activeIndex === i ? 'active' : ''}`} onMouseMove={() => setActiveIndex(i)} onClick={() => { onChoose(result); close() }}>{agent && <BlobCanvas decorative color={agentColorHex(agent.color)} size={28} mood="idle" look={agentLook(agent)} label={agent.name} />}<span className="quick-switcher-copy"><strong>{agent?.name ?? Noun} · {result.title}</strong><small>{highlightMatch(result.snippet, query)}</small><time dateTime={result.createdAt}>{new Date(result.createdAt).toLocaleString()} · {result.role}</time></span></button>
     })}</div><p className="quick-switcher-empty" role="status">{error ?? (loading ? 'Searching…' : !query.trim() ? 'Search saved message text.' : !results.length ? 'No matching messages.' : `${results.length} matching messages`)}</p>
   </section></div>
 }

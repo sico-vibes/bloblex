@@ -8,6 +8,8 @@ import { normalizeAnalytics } from '../ui/analyticsFormat'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from '../executionContract'
 import type { UsageAnalyticsRequest } from '../analyticsTypes'
 import { parseUpdateChannel, type UpdateChannel, type UpdateInfo, type UpdateProgress, type UpdatesState } from '../updatesContract'
+import { entityNoun } from '../ui/vocabulary'
+import { themeStyle } from '../blob/bitbots'
 
 type Unlisten = () => void
 const noop: Unlisten = () => undefined
@@ -331,8 +333,8 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   }
   if (method === 'agent.restore') {
     const agent = agents.find((a) => a.id === params.agentId)
-    if (!agent) throw rpcError('not_found', 'Blob not found.')
-    if (agents.some((a) => !a.archived && a.id !== agent.id && a.name.toLowerCase() === agent.name.toLowerCase())) throw rpcError('conflict', 'Another blob uses this name.')
+    if (!agent) throw rpcError('not_found', `${entityNoun(themeStyle(), { capital: true })} not found.`)
+    if (agents.some((a) => !a.archived && a.id !== agent.id && a.name.toLowerCase() === agent.name.toLowerCase())) throw rpcError('conflict', `Another ${entityNoun(themeStyle())} uses this name.`)
     agent.archived = false
     notifyFixtureDaemon('agent.changed', { agent })
     return { agent: { ...agent } } as T
@@ -527,7 +529,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const lines = recent.map((message) => `${message.role === 'user' ? 'You' : owner?.name ?? 'Assistant'}: ${String(message.content ?? '').slice(0, 600)}`)
     const title = String(source.title || 'Conversation')
     const note = typeof params.note === 'string' && params.note.trim() ? `\n\n${params.note.trim()}` : ''
-    return { draft: `Continue from ${owner?.name ?? 'another blob'}'s conversation "${title}".${note}\n\n${lines.join('\n')}`.slice(0, 4200), carried: { messages: recent.length, truncated: false }, fromAgentId: source.agentId ?? null, title } as T
+    return { draft: `Continue from ${owner?.name ?? `another ${entityNoun(themeStyle())}`}'s conversation "${title}".${note}\n\n${lines.join('\n')}`.slice(0, 4200), carried: { messages: recent.length, truncated: false }, fromAgentId: source.agentId ?? null, title } as T
   }
   if (method === 'session.steer') {
     const session = sessions.find((item) => item.id === params.sessionId)
@@ -659,7 +661,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   }
   if (method === 'agent.get') {
     const agent = agents.find((item) => item.id === params.agentId)
-    if (!agent) throw rpcError('not_found', 'That blob is no longer available.')
+    if (!agent) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
     return { agent: { ...agent } } as T
   }
   if (method === 'agent.create') {
@@ -667,7 +669,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const runtimeId = typeof params.runtimeId === 'string' ? params.runtimeId : ''
     if (!name || !runtimeId) throw rpcError('invalid_argument', 'Check the name, description, colour, and runtime, then try again.')
     if (!baseRuntimes.some((runtime) => runtime.id === runtimeId)) throw rpcError('not_found', 'That runtime is no longer available.')
-    if (nameTaken(name)) throw rpcError('conflict', 'Another blob already uses this name.')
+    if (nameTaken(name)) throw rpcError('conflict', `Another ${entityNoun(themeStyle())} already uses this name.`)
     const sortOrder = agents.filter((agent) => agent.runtimeId === runtimeId && !agent.archived).reduce((max, agent) => Math.max(max, agent.sortOrder), -1) + 1
     const now = new Date().toISOString()
     const agent: Agent = {
@@ -696,9 +698,9 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   if (method === 'agent.update') {
     const agentId = typeof params.agentId === 'string' ? params.agentId : ''
     const existing = agents.find((agent) => agent.id === agentId)
-    if (!existing) throw rpcError('not_found', 'That blob is no longer available.')
-    if (existing.archived) throw rpcError('conflict', 'This blob is archived and cannot be edited.')
-    if (typeof params.name === 'string' && nameTaken(params.name, existing.id)) throw rpcError('conflict', 'Another blob already uses this name.')
+    if (!existing) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
+    if (existing.archived) throw rpcError('conflict', `This ${entityNoun(themeStyle())} is archived and cannot be edited.`)
+    if (typeof params.name === 'string' && nameTaken(params.name, existing.id)) throw rpcError('conflict', `Another ${entityNoun(themeStyle())} already uses this name.`)
     const nextRuntime = typeof params.runtimeId === 'string' ? params.runtimeId : existing.runtimeId
     if (!baseRuntimes.some((runtime) => runtime.id === nextRuntime)) throw rpcError('not_found', 'That runtime is no longer available.')
     const updated: Agent = {
@@ -718,7 +720,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   if (method === 'agent.delete') {
     const agentId = typeof params.agentId === 'string' ? params.agentId : ''
     const existing = agents.find((agent) => agent.id === agentId)
-    if (!existing) throw rpcError('not_found', 'That blob is no longer available.')
+    if (!existing) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
     const archived = { ...existing, archived: true, updatedAt: new Date().toISOString() }
     agents = sortAgents(agents.map((agent) => agent.id === archived.id ? archived : agent))
     sequence += 1
@@ -732,12 +734,12 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     let owner: string | null = null
     if (agentId) {
       const agent = agents.find((item) => item.id === agentId)
-      if (!agent) throw rpcError('not_found', 'That blob is no longer available.')
-      if (agent.archived) throw rpcError('conflict', 'This blob is archived, so a new session cannot be started.')
+      if (!agent) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
+      if (agent.archived) throw rpcError('conflict', `This ${entityNoun(themeStyle())} is archived, so a new session cannot be started.`)
       resolvedRuntime = agent.runtimeId
       owner = agent.id
     }
-    if (!resolvedRuntime || !baseRuntimes.some((runtime) => runtime.id === resolvedRuntime)) throw rpcError('not_found', 'That blob is no longer available.')
+    if (!resolvedRuntime || !baseRuntimes.some((runtime) => runtime.id === resolvedRuntime)) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
     if (typeof params.projectPath !== 'string' || !params.projectPath.trim()) throw rpcError('invalid_argument', 'Choose a project folder that exists on this device.')
     const title = typeof params.title === 'string' && params.title.trim() ? params.title : 'New chat'
     const agent = owner ? agents.find((item) => item.id === owner) : undefined
@@ -752,7 +754,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   }
   if (method === 'agent.conversation') {
     const agent = agents.find((item) => item.id === params.agentId && !item.archived)
-    if (!agent) throw rpcError('not_found', 'That blob is no longer available.')
+    if (!agent) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
     const existing = sessions.filter((session) => session.agentId === agent.id && !session.archived && !session.link).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0]
     if (existing) return { session: { ...existing }, created: false } as T
     const project = projects.find((item) => item.id === agent.projectId)
@@ -762,7 +764,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   }
   if (method === 'agent.team.update') {
     const agent = agents.find((item) => item.id === params.agentId)
-    if (!agent) throw rpcError('not_found', 'That blob is no longer available.')
+    if (!agent) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
     if (params.leader === true) agents = agents.map((item) => item.id === agent.id ? item : { ...item, leader: false })
     const patch: Partial<Agent> = {}
     if ('projectId' in params) patch.projectId = typeof params.projectId === 'string' ? params.projectId : null

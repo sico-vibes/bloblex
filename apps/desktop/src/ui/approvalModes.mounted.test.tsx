@@ -139,7 +139,7 @@ describe('settings modal', () => {
     await view.settle()
     const page = async (name: string) => { await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === name)?.click() }) }
     const nav = [...view.host.querySelectorAll('.settings-nav button')].map((button) => button.textContent)
-    expect(nav).toEqual(['General', 'Agents', 'Memory', 'Speech', 'Updates'])
+    expect(nav).toEqual(['General', 'Appearance', 'Agents', 'Memory', 'Speech', 'Updates'])
     expect(view.host.textContent).not.toMatch(/Add budget|pricing|subscription/i)
     const start = view.host.querySelector<HTMLButtonElement>('[aria-label="Start with Windows"]')!
     expect(start.disabled).toBe(false)
@@ -148,7 +148,7 @@ describe('settings modal', () => {
     await view.settle()
     expect(start.getAttribute('aria-checked')).toBe('true')
     expect(view.host.textContent).not.toContain('Not available yet')
-    const notifications = view.host.querySelector<HTMLButtonElement>('[aria-label="Notify when a blob finishes or needs approval"]')!
+    const notifications = view.host.querySelector<HTMLButtonElement>('[aria-label="Notify when a bot finishes or needs approval"]')!
     expect(notifications.getAttribute('aria-checked')).toBe('true')
     await act(async () => { notifications.click() })
     await view.settle()
@@ -169,12 +169,12 @@ describe('settings modal', () => {
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('settings.set', { key: 'permissions.default_mode', value: 'auto' })
     expect(rpc.mock.calls.some((call) => call[1]?.value === 'bypass')).toBe(false)
-    expect(view.host.textContent).toContain('Bypass can only be turned on for a single blob')
+    expect(view.host.textContent).toContain('Bypass can only be turned on for a single bot')
     const runtimeHead = view.host.querySelector<HTMLButtonElement>('.runtime-entry-head')!
     expect(runtimeHead.getAttribute('aria-expanded')).toBe('false')
     expect(runtimeHead.textContent).toContain('Codex')
     expect(runtimeHead.textContent).toContain('Signed in')
-    expect(runtimeHead.textContent).toContain('2 blobs')
+    expect(runtimeHead.textContent).toContain('2 bots')
     await act(async () => { runtimeHead.click() })
     expect(view.host.querySelector('.settings-facts')?.textContent).toContain('C:\\Tools\\codex.exe')
     expect(view.host.textContent).toContain('Bypass approvals')

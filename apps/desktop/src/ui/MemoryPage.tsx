@@ -9,6 +9,8 @@ import { rpc } from '../tauri'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { Select } from './Select'
 import { ConfirmDialog } from './BlobPage'
+import { entityNoun, useEntityNoun } from './vocabulary'
+import { themeStyle } from '../blob/bitbots'
 import './memory.css'
 
 export const ABOUT_LIMIT = 1500
@@ -25,7 +27,7 @@ const KINDS: Array<{ value: MemoryRecord['kind']; label: string }> = [
 
 export function scopeLabel(record: Pick<MemoryRecord, 'scope' | 'scopeId'>, agents: readonly Agent[], projects: readonly Project[]): string {
   if (record.scope === 'shared') return 'Everyone'
-  if (record.scope === 'blob') return agents.find((agent) => agent.id === record.scopeId)?.name ?? 'A blob'
+  if (record.scope === 'blob') return agents.find((agent) => agent.id === record.scopeId)?.name ?? `A ${entityNoun(themeStyle())}`
   return projects.find((project) => project.id === record.scopeId)?.name ?? 'A project'
 }
 
@@ -43,6 +45,9 @@ export interface MemoryPageProps {
 }
 
 export function MemoryPage({ agents, projects, enabled, sharedWrites, about, connected, onEnabledChange, onSharedWritesChange, onAboutSave }: MemoryPageProps) {
+  const noun = useEntityNoun()
+  const nouns = useEntityNoun({ plural: true })
+  const Nouns = useEntityNoun({ plural: true, capital: true })
   const [records, setRecords] = useState<MemoryRecord[] | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -84,7 +89,7 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
     <div className="memory-main">
       <strong className="memory-title">{record.pinned && <span className="memory-pin" title="Pinned">★</span>}{record.title}</strong>
       <span className="memory-meta">
-        {KINDS.find((kind) => kind.value === record.kind)?.label ?? record.kind} · {scopeLabel(record, agents, projects)} · {record.origin === 'agent' ? 'Saved by a blob' : 'Written by you'}
+        {KINDS.find((kind) => kind.value === record.kind)?.label ?? record.kind} · {scopeLabel(record, agents, projects)} · {record.origin === 'agent' ? `Saved by a ${noun}` : 'Written by you'}
       </span>
       <p className="memory-body">{record.body}</p>
     </div>
@@ -96,30 +101,30 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
   </li>
 
   return <div className="memory-page">
-    <p className="settings-intro">Memory lets blobs save short notes, like preferences and decisions, and recall them in later conversations. Notes a blob saves for a project or for everyone stay unused until you approve them. Don’t keep passwords or keys here.</p>
+    <p className="settings-intro">Memory lets {nouns} save short notes, like preferences and decisions, and recall them in later conversations. Notes a {noun} saves for a project or for everyone stay unused until you approve them. Don’t keep passwords or keys here.</p>
     <section className="settings-group" aria-label="Memory">
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Let blobs use memory</strong><small>Adds saved notes to what blobs see and lets them save new ones.</small></span>
+        <span className="settings-row-copy"><strong>Let {nouns} use memory</strong><small>Adds saved notes to what {nouns} see and lets them save new ones.</small></span>
         <span className="settings-row-control">
-          <button type="button" className={`toggle ${enabled ? 'on' : ''}`} role="switch" aria-label="Let blobs use memory" aria-checked={enabled} disabled={!connected || busy} onClick={() => void run(() => onEnabledChange(!enabled))}><i /></button>
+          <button type="button" className={`toggle ${enabled ? 'on' : ''}`} role="switch" aria-label={`Let ${nouns} use memory`} aria-checked={enabled} disabled={!connected || busy} onClick={() => void run(() => onEnabledChange(!enabled))}><i /></button>
         </span>
       </div>
     </section>
 
     {enabled && <section className="settings-group" aria-label="Shared notes">
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Let blobs suggest shared notes</strong><small>Blobs may propose notes for a project or for everyone. Each one waits for your approval before anyone uses it.</small></span>
+        <span className="settings-row-copy"><strong>Let {nouns} suggest shared notes</strong><small>{Nouns} may propose notes for a project or for everyone. Each one waits for your approval before anyone uses it.</small></span>
         <span className="settings-row-control">
-          <button type="button" className={`toggle ${sharedWrites ? 'on' : ''}`} role="switch" aria-label="Let blobs suggest shared notes" aria-checked={sharedWrites} disabled={!connected || busy} onClick={() => void run(() => onSharedWritesChange(!sharedWrites))}><i /></button>
+          <button type="button" className={`toggle ${sharedWrites ? 'on' : ''}`} role="switch" aria-label={`Let ${nouns} suggest shared notes`} aria-checked={sharedWrites} disabled={!connected || busy} onClick={() => void run(() => onSharedWritesChange(!sharedWrites))}><i /></button>
         </span>
       </div>
     </section>}
 
     <section className="memory-about" aria-label="About you">
       <label className="blob-field"><span>About you<small className={aboutOver ? 'over' : ''}>{aboutDraft.length}/{ABOUT_LIMIT}</small></span>
-        <textarea rows={4} value={aboutDraft} disabled={!connected} placeholder="How you like to work, what you are building, anything every blob should know." onChange={(event) => setAboutDraft(event.target.value)} />
+        <textarea rows={4} value={aboutDraft} disabled={!connected} placeholder={`How you like to work, what you are building, anything every ${noun} should know.`} onChange={(event) => setAboutDraft(event.target.value)} />
       </label>
-      <p className="memory-hint">Shared with every blob. Changing it starts new conversations with the updated text; a running Codex conversation keeps what it had.</p>
+      <p className="memory-hint">Shared with every {noun}. Changing it starts new conversations with the updated text; a running Codex conversation keeps what it had.</p>
       <div className="memory-about-actions">
         <button type="button" className="secondary-button small" disabled={!aboutDirty || aboutOver || aboutSaving || !connected} onClick={async () => {
           setAboutSaving(true)
@@ -136,7 +141,7 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
       </div>
       {problem && <p className="memory-problem" role="alert">{problem}</p>}
       {records === null && <p className="blob-muted">Loading…</p>}
-      {records !== null && records.length === 0 && !problem && <p className="memory-empty">No notes yet. Blobs save them as they work once memory is on, or you can add one.</p>}
+      {records !== null && records.length === 0 && !problem && <p className="memory-empty">No notes yet. {Nouns} save them as they work once memory is on, or you can add one.</p>}
       {review.length > 0 && <>
         <h3 className="memory-heading">Needs your review <b>{review.length}</b></h3>
         <ul className="memory-list">{review.map(row)}</ul>
@@ -160,7 +165,7 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
         setEditing(null)
         await load()
       }} />}
-    {deleting && <ConfirmDialog title={`Delete “${deleting.title}”?`} body="Blobs will no longer see this note." confirmLabel="Delete" cancelLabel="Keep" tone="danger" onCancel={() => setDeleting(null)} onConfirm={async () => {
+    {deleting && <ConfirmDialog title={`Delete “${deleting.title}”?`} body={`${Nouns} will no longer see this note.`} confirmLabel="Delete" cancelLabel="Keep" tone="danger" onCancel={() => setDeleting(null)} onConfirm={async () => {
       const target = deleting
       setDeleting(null)
       await run(() => rpc('memory.delete', { id: target.id }))
@@ -178,6 +183,9 @@ function NoteEditor({ existing, agents, projects, onClose, onSave }: {
   onSave: (draft: NoteDraft) => Promise<void>
 }) {
   const entered = useDialogEntered()
+  const noun = useEntityNoun()
+  const Noun = useEntityNoun({ capital: true })
+  const Nouns = useEntityNoun({ plural: true, capital: true })
   const { ref, close } = useDialogAccessibility(onClose)
   const [title, setTitle] = useState(existing?.title ?? '')
   const [body, setBody] = useState(existing?.body ?? '')
@@ -209,13 +217,13 @@ function NoteEditor({ existing, agents, projects, onClose, onSave }: {
     <section ref={ref} className="blob-dialog memory-dialog" role="dialog" aria-modal="true" aria-labelledby="memory-dialog-title" tabIndex={-1}>
       <h2 id="memory-dialog-title">{existing ? 'Edit note' : 'Add a note'}</h2>
       <label className="blob-field"><span>Title<small className={title.length > TITLE_LIMIT ? 'over' : ''}>{title.length}/{TITLE_LIMIT}</small></span><input data-dialog-initial-focus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Prefers tabs over spaces" /></label>
-      <label className="blob-field"><span>Note<small className={body.length > BODY_LIMIT ? 'over' : ''}>{body.length}/{BODY_LIMIT}</small></span><textarea rows={4} value={body} onChange={(event) => setBody(event.target.value)} placeholder="Short and specific. Blobs will rely on this." /></label>
+      <label className="blob-field"><span>Note<small className={body.length > BODY_LIMIT ? 'over' : ''}>{body.length}/{BODY_LIMIT}</small></span><textarea rows={4} value={body} onChange={(event) => setBody(event.target.value)} placeholder={`Short and specific. ${Nouns} will rely on this.`} /></label>
       <div className="memory-fields">
         <div className="blob-field"><span>Kind</span><Select ariaLabel="Kind" variant="field" value={kind} onChange={(value) => setKind(value as MemoryRecord['kind'])} options={KINDS} /></div>
         <div className="blob-field"><span>Who can use it</span>
-          <Select ariaLabel="Who can use it" variant="field" value={scope} disabled={!!existing} onChange={(value) => changeScope(value as NoteDraft['scope'])} options={[{ value: 'shared', label: 'Everyone' }, { value: 'project', label: 'One project' }, { value: 'blob', label: 'One blob' }]} />
+          <Select ariaLabel="Who can use it" variant="field" value={scope} disabled={!!existing} onChange={(value) => changeScope(value as NoteDraft['scope'])} options={[{ value: 'shared', label: 'Everyone' }, { value: 'project', label: 'One project' }, { value: 'blob', label: `One ${noun}` }]} />
         </div>
-        {needsTarget && <div className="blob-field"><span>{scope === 'project' ? 'Project' : 'Blob'}</span><Select ariaLabel={scope === 'project' ? 'Project' : 'Blob'} variant="field" value={scopeId} disabled={!!existing} onChange={setScopeId} options={targets} /></div>}
+        {needsTarget && <div className="blob-field"><span>{scope === 'project' ? 'Project' : Noun}</span><Select ariaLabel={scope === 'project' ? 'Project' : Noun} variant="field" value={scopeId} disabled={!!existing} onChange={setScopeId} options={targets} /></div>}
       </div>
       <label className="memory-pin-row"><input type="checkbox" checked={pinned} onChange={(event) => setPinned(event.target.checked)} /><span>Pin it so it always comes first</span></label>
       {failure && <p className="memory-problem" role="alert">{failure}</p>}

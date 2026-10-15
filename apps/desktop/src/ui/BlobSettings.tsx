@@ -22,6 +22,7 @@ import { draftLook } from '../blob/look'
 import { agentColorHex, previewHex } from './agentColor'
 import { labelizeEffort } from './effortLabels'
 import { preferredConcreteModel } from './modelPreferences'
+import { useEntityNoun } from './vocabulary'
 
 const NOTIFICATION_LEVEL_HELP: Record<'all' | 'input' | 'muted', string> = {
   all: 'Tells you when it finishes, fails or needs you.',
@@ -44,6 +45,9 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
   onExecutionGate?: (gate: ExecutionSendGate) => void
 }) {
   const descriptionCount = scalarLength(draft.description)
+  const noun = useEntityNoun()
+  const nouns = useEntityNoun({ plural: true })
+  const Noun = useEntityNoun({ capital: true })
   const runtime = runtimes.find((item) => item.id === draft.runtimeId) ?? null
   const provider = runtime?.provider ?? ''
   const described = (id: string, errorId?: string) => errorId ? `${id} ${errorId}` : id
@@ -172,7 +176,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
         look={draftLook(draft, agentId)}
         color={draft.color}
         colorHex={previewHex(draft.color, agentColorHex('mint'))}
-        name={draft.name.trim() || 'New blob'}
+        name={draft.name.trim() || `New ${noun}`}
         onLookChange={(look) => onDraftChange({ ...draft, look })}
         onColorChange={(color) => onDraftChange({ ...draft, color })}
       />
@@ -181,14 +185,14 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     <EditGroup title="Profile">
       <div className="blob-form">
         <label className="blob-field"><span>Name</span>
-          <input aria-label="Blob name" aria-invalid={!!errors.name} aria-describedby={errors.name ? 'blob-name-error' : undefined} value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} />
+          <input aria-label={`${Noun} name`} aria-invalid={!!errors.name} aria-describedby={errors.name ? 'blob-name-error' : undefined} value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} />
         </label>
         {errors.name && <p className="blob-error" id="blob-name-error">{errors.name}</p>}
         <label className="blob-field"><span>Description <small id="blob-description-count" className={descriptionCount > 255 ? 'over' : undefined}>{descriptionCount} / 255</small></span>
           <textarea aria-label="Description" rows={2} aria-invalid={!!errors.description} aria-describedby={described('blob-description-count', errors.description ? 'blob-description-error' : undefined)} value={draft.description} onChange={(event) => onDraftChange({ ...draft, description: event.target.value })} />
         </label>
         {errors.description && <p className="blob-error" id="blob-description-error">{errors.description}</p>}
-        <p className="blob-help">Teammates read this when deciding who to ask, and the blob reads it as part of its instructions.</p>
+        <p className="blob-help">Teammates read this when deciding who to ask, and the {noun} reads it as part of its instructions.</p>
       </div>
     </EditGroup>
 
@@ -198,11 +202,11 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
         <span className="settings-row-control"><input className="text-input role-input" aria-label="Role" maxLength={40} placeholder="No role" value={draft.role} onChange={(event) => onDraftChange({ ...draft, role: event.target.value })} /></span>
       </div>
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Project</strong><small>The blob works in the project's folder. Without one it is a casual blob for general requests.</small></span>
+        <span className="settings-row-copy"><strong>Project</strong><small>The {noun} works in the project's folder. Without one it is a casual {noun} for general requests.</small></span>
         <span className="settings-row-control"><Select ariaLabel="Project" variant="muted" value={draft.projectId ?? ''} onChange={(value) => onDraftChange({ ...draft, projectId: value || null })} options={[{ value: '', label: 'No project (casual)' }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} /></span>
       </div>
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Team leader</strong><small>The leader coordinates the other blobs, reports back, and is the only blob that can create new ones when you ask it to. Only one blob leads.</small></span>
+        <span className="settings-row-copy"><strong>Team leader</strong><small>The leader coordinates the other {nouns}, reports back, and is the only {noun} that can create new ones when you ask it to. Only one {noun} leads.</small></span>
         <span className="settings-row-control"><button type="button" role="switch" aria-checked={draft.leader} aria-label="Team leader" className={`toggle ${draft.leader ? 'on' : ''}`} onClick={() => onDraftChange({ ...draft, leader: !draft.leader })}><i /></button></span>
       </div>
     </EditGroup>
@@ -258,7 +262,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       </CapabilityField>}
       <div className="blob-form">
         <label className="blob-field"><span>Instructions</span>
-          <textarea aria-label="Instructions" rows={4} placeholder="How should this blob work? For example: keep answers short and run the tests before finishing." aria-invalid={!!errors.instructions} aria-describedby={described('blob-instructions-help', errors.instructions ? 'blob-instructions-error' : undefined)} value={draft.instructions} onChange={(event) => onDraftChange({ ...draft, instructions: event.target.value })} />
+          <textarea aria-label="Instructions" rows={4} placeholder={`How should this ${noun} work? For example: keep answers short and run the tests before finishing.`} aria-invalid={!!errors.instructions} aria-describedby={described('blob-instructions-help', errors.instructions ? 'blob-instructions-error' : undefined)} value={draft.instructions} onChange={(event) => onDraftChange({ ...draft, instructions: event.target.value })} />
         </label>
         <p id="blob-instructions-help" className="blob-help">{instructionHelp}</p>
         {errors.instructions && <p className="blob-error" id="blob-instructions-error">{errors.instructions}</p>}
@@ -301,8 +305,8 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     {onArchive && <section className="settings-group">
       <div className="settings-card">
         <div className="settings-row">
-          <span className="settings-row-copy"><strong>Archive blob</strong><small>It leaves the sidebar. Its conversations stay saved.</small></span>
-          <span className="settings-row-control"><button type="button" className="secondary-button small danger-button" onClick={onArchive}>Archive blob</button></span>
+          <span className="settings-row-copy"><strong>Archive {noun}</strong><small>It leaves the sidebar. Its conversations stay saved.</small></span>
+          <span className="settings-row-control"><button type="button" className="secondary-button small danger-button" onClick={onArchive}>Archive {noun}</button></span>
         </div>
       </div>
     </section>}

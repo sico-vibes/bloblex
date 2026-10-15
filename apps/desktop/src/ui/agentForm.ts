@@ -5,6 +5,8 @@ import { colorForRpc, colorsEquivalent, parseCustomHex, swatchForColor } from '.
 import { runtimeUsable, scalarLength } from './rosterSelectors'
 import { normalizeLook, sameLook, type BlobLook } from '../blob/look'
 import { providerBrand } from './providerBrand'
+import { entityNoun } from './vocabulary'
+import { themeStyle } from '../blob/bitbots'
 
 export interface AgentDraft {
   name: string
@@ -50,8 +52,12 @@ export const CLIENT_MESSAGES = {
   instructionsNul: 'Instructions cannot include a null character.',
   color: 'Enter a colour as #RRGGBB, or choose a swatch.',
   runtime: 'Choose a runtime.',
-  nameTaken: 'Another blob already uses this name.',
 } as const
+
+/** Copy that follows the look, so it is read at the moment of use. */
+export function nameTakenMessage(): string {
+  return `Another ${entityNoun(themeStyle())} already uses this name.`
+}
 
 export type AgentField = 'name' | 'description' | 'instructions' | 'color' | 'runtimeId'
 export type FieldErrors = Partial<Record<AgentField, string>>
@@ -131,7 +137,7 @@ export function validateAgentDraft(draft: AgentDraft, otherActiveNames: readonly
   const name = draft.name.trim()
   if (!name) errors.name = CLIENT_MESSAGES.nameEmpty
   else if (scalarLength(name) > 60) errors.name = CLIENT_MESSAGES.nameLong
-  else if (otherActiveNames.some((other) => other.trim().toLocaleLowerCase('en') === name.toLocaleLowerCase('en'))) errors.name = CLIENT_MESSAGES.nameTaken
+  else if (otherActiveNames.some((other) => other.trim().toLocaleLowerCase('en') === name.toLocaleLowerCase('en'))) errors.name = nameTakenMessage()
   if (scalarLength(draft.description) > 255) errors.description = CLIENT_MESSAGES.descriptionLong
   if (draft.instructions.includes('\0')) errors.instructions = CLIENT_MESSAGES.instructionsNul
   if (!swatchForColor(draft.color) && !parseCustomHex(draft.color)) errors.color = CLIENT_MESSAGES.color
@@ -207,15 +213,15 @@ export function daemonCodeOf(reason: unknown) {
 export function messageForDaemonCode(code: string, kind: DaemonFailureKind, options: { archived?: boolean; sentName?: boolean } = {}) {
   if (code === 'unauthorized') return 'Bitbots could not reach the local daemon. Reconnect and try again.'
   if (code === 'conflict') {
-    if (kind === 'session.new') return 'This blob is archived, so a new session cannot be started.'
-    if (kind === 'agent.update' && options.archived) return 'This blob is archived and cannot be edited.'
-    if (kind === 'agent.create' || (kind === 'agent.update' && options.sentName)) return 'Another blob already uses this name.'
+    if (kind === 'session.new') return `This ${entityNoun(themeStyle())} is archived, so a new session cannot be started.`
+    if (kind === 'agent.update' && options.archived) return `This ${entityNoun(themeStyle())} is archived and cannot be edited.`
+    if (kind === 'agent.create' || (kind === 'agent.update' && options.sentName)) return `Another ${entityNoun(themeStyle())} already uses this name.`
     return 'The local daemon request failed.'
   }
   if (code === 'not_found') {
     if (kind === 'agent.reorder') return 'That runtime is no longer available.'
     if (kind === 'agent.create') return 'That runtime is no longer available. Refresh and choose another.'
-    if (kind === 'agent.get' || kind === 'agent.update' || kind === 'agent.delete' || kind === 'session.new') return 'That blob is no longer available. Refresh and try again.'
+    if (kind === 'agent.get' || kind === 'agent.update' || kind === 'agent.delete' || kind === 'session.new') return `That ${entityNoun(themeStyle())} is no longer available. Refresh and try again.`
     return 'The local daemon request failed.'
   }
   if (code === 'invalid_argument') {

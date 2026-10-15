@@ -310,7 +310,7 @@ describe('blob roster and editor', () => {
     await view.settle()
     const nameField = view.host.querySelector<HTMLInputElement>('.onboarding-field input')
     await typeInto(nameField, 'Codex')
-    await click(buttonNamed(view.host, 'Create blob'))
+    await click(buttonNamed(view.host, 'Create bot'))
     await view.settle()
     const create = h.rpc.mock.calls.find(([method]) => method === 'agent.create')
     expect(create?.[1]).toMatchObject({ name: 'Codex', runtimeId: 'runtime-codex', color: '#B7A7F4', approvalMode: 'ask' })

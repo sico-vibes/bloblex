@@ -5,6 +5,7 @@ import { Check, ChevronDown, Hand, ImageIcon, LoaderCircle, Plus, ShieldCheck, X
 import type { Agent, ApprovalMode, Session } from '../types'
 import { rpc } from '../tauri'
 import { ConfirmDialog } from './BlobPage'
+import { useEntityNoun } from './vocabulary'
 
 /** Closes a popover on outside pointer, Escape or window blur and returns focus to its trigger. */
 export function usePopoverDismiss(open: boolean, rootRef: RefObject<HTMLElement | null>, close: (restoreFocus: boolean) => void) {
@@ -60,6 +61,8 @@ export function PermissionModeControl({ session, agent, disabled, onSessionUpdat
   onError: (reason: unknown) => void
 }) {
   const [open, setOpen] = useState(false)
+  const noun = useEntityNoun()
+  const Noun = useEntityNoun({ capital: true })
   const [saving, setSaving] = useState(false)
   const [confirmBypass, setConfirmBypass] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -87,7 +90,7 @@ export function PermissionModeControl({ session, agent, disabled, onSessionUpdat
   }
   const copy = APPROVAL_MODE_COPY[mode]
   return <div ref={rootRef} className="composer-popover-anchor">
-    <button ref={triggerRef} type="button" className={`composer-pill permission-pill mode-${mode}`} aria-haspopup="menu" aria-expanded={open} aria-label={`Permissions: ${copy.title}${pinned ? ', set for this conversation' : ', blob default'}`} title={copy.detail} disabled={disabled || saving} onClick={() => setOpen((value) => !value)}>
+    <button ref={triggerRef} type="button" className={`composer-pill permission-pill mode-${mode}`} aria-haspopup="menu" aria-expanded={open} aria-label={`Permissions: ${copy.title}${pinned ? ', set for this conversation' : `, ${noun} default`}`} title={copy.detail} disabled={disabled || saving} onClick={() => setOpen((value) => !value)}>
       {saving ? <LoaderCircle size={14} className="spinning" aria-hidden="true" /> : <ModeIcon mode={mode} />}
       <span>{copy.label}</span>
       <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
@@ -96,12 +99,12 @@ export function PermissionModeControl({ session, agent, disabled, onSessionUpdat
       <div className="composer-menu-heading">Permissions</div>
       {(['ask', 'auto', 'bypass'] as const).map((item) => <button key={item} type="button" role="menuitemradio" aria-checked={item === mode} className={`composer-menu-item rich mode-${item}`} onClick={() => choose(item)}>
         <span className="composer-menu-icon"><ModeIcon mode={item} size={15} /></span>
-        <span className="composer-menu-text"><strong>{APPROVAL_MODE_COPY[item].title}{item === blobMode && <small className="composer-menu-tag">Blob default</small>}</strong><small>{APPROVAL_MODE_COPY[item].detail}</small></span>
+        <span className="composer-menu-text"><strong>{APPROVAL_MODE_COPY[item].title}{item === blobMode && <small className="composer-menu-tag">{Noun} default</small>}</strong><small>{APPROVAL_MODE_COPY[item].detail}</small></span>
         {item === mode && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
       </button>)}
       <p className="composer-menu-note">Applies to this conversation only.</p>
     </div>}
-    {confirmBypass && <ConfirmDialog title="Give this conversation full access?" body="The agent will run commands and change files without asking you. Cancel and Pause all still stop it. The blob's own setting is unchanged." confirmLabel="Allow full access" cancelLabel="Keep asking" onConfirm={() => { setConfirmBypass(false); void apply(blobMode === 'bypass' ? null : 'bypass') }} onCancel={() => setConfirmBypass(false)} />}
+    {confirmBypass && <ConfirmDialog title="Give this conversation full access?" body={`The agent will run commands and change files without asking you. Cancel and Pause all still stop it. The ${noun}'s own setting is unchanged.`} confirmLabel="Allow full access" cancelLabel="Keep asking" onConfirm={() => { setConfirmBypass(false); void apply(blobMode === 'bypass' ? null : 'bypass') }} onCancel={() => setConfirmBypass(false)} />}
   </div>
 }
 

@@ -86,6 +86,8 @@ import { ConversationOutline, outlineItemsFromMessages } from './ConversationOut
 import { SafeMarkdown } from './SafeMarkdown'
 import { parseUnifiedDiff } from './diffParser'
 import type { QuickSwitcherItem } from './quickSwitcherModel'
+import { entityNoun, useEntityNoun } from './vocabulary'
+import { themeStyle } from '../blob/bitbots'
 import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeBlobExport, writeMarkdownExport } from '../tauri'
 
 type ContextTab = 'Details' | 'Runtime' | 'Files'
@@ -104,6 +106,9 @@ const STARTER_PROMPTS = ['Review this repository', 'Find and fix a failing test'
 
 export function App() {
   const companion = new URLSearchParams(location.search).has('companion')
+  const noun = useEntityNoun()
+  const nouns = useEntityNoun({ plural: true })
+  const Noun = useEntityNoun({ capital: true })
   useEffect(() => {
     document.documentElement.classList.toggle('companion-surface', companion)
     return () => document.documentElement.classList.remove('companion-surface')
@@ -310,7 +315,7 @@ export function App() {
         })
         const page = blobPageRef.current
         if (page?.mode === 'edit' && page.agentId === agent.id && !agent.archived) {
-          if (draftDirtyRef.current) setRemoteNotice('This blob changed elsewhere. Save will overwrite those fields, or cancel to load the latest.')
+          if (draftDirtyRef.current) setRemoteNotice(`This ${entityNoun(themeStyle())} changed elsewhere. Save will overwrite those fields, or cancel to load the latest.`)
           else {
             const next = draftFromAgent(agent)
             setDraft(next)
@@ -581,7 +586,7 @@ export function App() {
       if (!notification || mainAttention) continue
       const agent = agents.find((item) => item.id === session.agentId)
       if (!notificationAllowed(agent?.notificationLevel, notification.state)) continue
-      const name = agent?.name ?? labelize(session.provider, 'Blob')
+      const name = agent?.name ?? labelize(session.provider, entityNoun(themeStyle(), { capital: true }))
       const title = formatUnknownSafe(session.title, 'Conversation')
       if (notificationsEnabled) void sendDesktopNotification(name, notification.body(title)).catch(() => undefined)
       if (notification.state === 'approval') void flashMainWindow().catch(() => undefined)
@@ -1117,21 +1122,21 @@ export function App() {
           const prior = rosterOrderRef.current.some((agent) => agent.id === selectedAgentId)
             ? rosterOrderRef.current
             : activeAgents(list.map((agent) => agent.id === selectedAgentId ? { ...agent, archived: false } : agent))
-          const name = current?.name || prior.find((agent) => agent.id === selectedAgentId)?.name || 'Blob'
+          const name = current?.name || prior.find((agent) => agent.id === selectedAgentId)?.name || entityNoun(themeStyle(), { capital: true })
           const next = nextAgentAfterArchive(prior, selectedAgentId)
           const nextSession = next ? agentSessions(snapshot?.sessions ?? [], next.id)[0] ?? null : null
-          setRosterAnnouncement(next ? `Archived ${name}. Now showing ${next.name}.` : `Archived ${name}. No blobs left.`)
+          setRosterAnnouncement(next ? `Archived ${name}. Now showing ${next.name}.` : `Archived ${name}. No ${entityNoun(themeStyle(), { plural: true })} left.`)
           setSelectedAgentId(next?.id ?? null)
           setSelectedSessionId(nextSession?.id ?? null)
           if (next) setSelectedRuntimeId(next.runtimeId)
           focusTimer = window.setTimeout(() => {
             const node = next
               ? document.querySelector<HTMLElement>(`[data-agent-id="${CSS.escape(next.id)}"]`)
-              : document.querySelector<HTMLElement>('[aria-label="Create blob"]')
+              : document.querySelector<HTMLElement>('[data-testid="create-blob"]')
             node?.focus()
           }, 0)
           if (blobPage && blobPage.agentId === selectedAgentId) {
-            setArchiveNotice(`Archived “${name}”. Its conversations stay saved. Restoring a blob is not available yet.`)
+            setArchiveNotice(`Archived “${name}”. Its conversations stay saved. Restoring a ${entityNoun(themeStyle())} is not available yet.`)
             setBlobPage(null)
           }
         }
@@ -1140,7 +1145,7 @@ export function App() {
     if (editorId && editorId !== selectedAgentId) {
       const editor = list.find((agent) => agent.id === editorId)
       if (editor?.archived) {
-        setArchiveNotice(`Archived “${editor.name}”. Its conversations stay saved. Restoring a blob is not available yet.`)
+        setArchiveNotice(`Archived “${editor.name}”. Its conversations stay saved. Restoring a ${entityNoun(themeStyle())} is not available yet.`)
         setBlobPage(null)
       }
     }
@@ -1203,7 +1208,7 @@ export function App() {
   }
 
   const restoreMoreFocus = () => window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[aria-label="More options"]')?.focus())
-  const restoreCreateFocus = () => window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[aria-label="Create blob"]')?.focus())
+  const restoreCreateFocus = () => window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-testid="create-blob"]')?.focus())
 
   const exportConversation = async (copy: boolean) => {
     if (!selectedSession) return
@@ -1222,7 +1227,7 @@ export function App() {
 
   const exportBlob = async (agent: Agent) => {
     const runtime = runtimes.find((item) => item.id === agent.runtimeId)
-    if (!runtime) { setError('The coding agent for this blob is not available.'); return }
+    if (!runtime) { setError(`The coding agent for this ${entityNoun(themeStyle())} is not available.`); return }
     try {
       const selectionToken = await selectBlobExportPath(agent.name)
       if (!selectionToken) return
@@ -1281,7 +1286,7 @@ export function App() {
     setFormError(null)
     window.setTimeout(() => {
       const row = focusId ? document.querySelector<HTMLButtonElement>(`[data-agent-id="${CSS.escape(focusId)}"]`) : null
-      ;(row ?? document.querySelector<HTMLButtonElement>('[aria-label="Create blob"]'))?.focus()
+      ;(row ?? document.querySelector<HTMLButtonElement>('[data-testid="create-blob"]'))?.focus()
     }, 0)
   }
 
@@ -1901,12 +1906,12 @@ export function App() {
     ...visibleSessions.map((session) => {
       const owner = agents.find((agent) => agent.id === session.agentId)
       const title = sessionDisplayTitle(session)
-      const subtitle = owner?.name ?? labelize(session.provider, 'Blob')
+      const subtitle = owner?.name ?? labelize(session.provider, Noun)
       return { id: session.id, kind: 'conversation' as const, title, subtitle, searchText: `${title} ${subtitle} ${session.projectPath ?? ''}`, recentAt: session.updatedAt ?? session.createdAt ?? null }
     }),
     ...activeAgents(agents).flatMap((agent) => projectGroups(visibleSessions, agent.id).filter((project) => project.key !== null).map((project) => ({ id: `${agent.id}:${project.key}`, kind: 'project' as const, title: project.label, subtitle: agent.name, searchText: `${project.label} ${agent.name} ${project.path}` }))),
     ...(activeSelectedAgent ? [{ id: 'new-session', kind: 'action' as const, title: 'New session', subtitle: `For ${activeSelectedAgent.name}`, searchText: `New session ${activeSelectedAgent.name}` }] : []),
-    { id: 'new-blob', kind: 'action', title: 'New blob', subtitle: '', searchText: 'New blob' },
+    { id: 'new-blob', kind: 'action', title: `New ${noun}`, subtitle: '', searchText: `New ${noun}` },
     { id: 'usage', kind: 'action', title: 'Usage', subtitle: '', searchText: 'Usage limits' },
     { id: 'settings', kind: 'action', title: 'Settings', subtitle: '', searchText: 'Settings' },
     ...(experiments.search ? [{ id: 'search-messages', kind: 'action' as const, title: 'Search messages', subtitle: 'Across all conversations', searchText: 'Search messages text history' }] : []),
@@ -1982,10 +1987,10 @@ export function App() {
           <div className="brand-lockup"><img className="brand-logo" src={bloblexLogo} alt="Bitbots logo" /><strong>Bitbots</strong></div>
           <div className="sidebar-create-actions">
             <button type="button" className="icon-button" title="Quick switcher" aria-label="Open quick switcher" onClick={() => setQuickSwitcherOpen(true)}><Search size={16} /></button>
-            <button className="icon-button" title="Create blob" aria-label="Create blob" disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={() => openCreate()}><Plus size={17} /></button>
+            <button data-testid="create-blob" className="icon-button" title={`Create ${noun}`} aria-label={`Create ${noun}`} disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={() => openCreate()}><Plus size={17} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setCreateMenuOpen(false); restoreCreateFocus() } }}>
-              <button type="button" className="icon-button small" title="Import a blob setup" aria-label="Blob actions" aria-haspopup="menu" aria-expanded={createMenuOpen} disabled={connection !== 'connected' || busy} onClick={() => setCreateMenuOpen((open) => !open)}><ChevronDown size={14} /></button>
-              {createMenuOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" onClick={() => { setCreateMenuOpen(false); void createProject() }}><FolderPlus size={15} />New project…</button><button className="menu-item" role="menuitem" onClick={() => void importBlob()}><Import size={15} />Import blob…</button></div>}
+              <button type="button" className="icon-button small" title={`Import a ${noun} setup`} aria-label={`${Noun} actions`} aria-haspopup="menu" aria-expanded={createMenuOpen} disabled={connection !== 'connected' || busy} onClick={() => setCreateMenuOpen((open) => !open)}><ChevronDown size={14} /></button>
+              {createMenuOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" onClick={() => { setCreateMenuOpen(false); void createProject() }}><FolderPlus size={15} />New project…</button><button className="menu-item" role="menuitem" onClick={() => void importBlob()}><Import size={15} />Import {noun}…</button></div>}
             </div>
           </div>
         </div>
@@ -1998,7 +2003,7 @@ export function App() {
           onArchive: setArchiveTarget,
           onDuplicate: (agent) => void duplicateAgent(agent),
           onExportBlob: (agent) => void exportBlob(agent),
-          onRename: (agent) => setTextPrompt({ title: `Rename ${agent.name}`, label: 'Blob name', value: agent.name, confirmLabel: 'Rename', onSubmit: async (name) => { const result = await doRpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, name }, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.update', { sentName: true })); if (result.agent?.id) mergeAgent(result.agent) } }),
+          onRename: (agent) => setTextPrompt({ title: `Rename ${agent.name}`, label: `${Noun} name`, value: agent.name, confirmLabel: 'Rename', onSubmit: async (name) => { const result = await doRpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, name }, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.update', { sentName: true })); if (result.agent?.id) mergeAgent(result.agent) } }),
           onTogglePin: (agentId) => updatePins((current) => toggleFavorite(current, agentId)),
           onMove: (agent, projectId) => void teamUpdate(agent, { projectId }),
           onToggleLeader: (agent) => void teamUpdate(agent, { leader: !agent.leader }),
@@ -2012,7 +2017,7 @@ export function App() {
           onToggleProjectCollapsed: (project) => void projectAction('project.update', { projectId: project.id, collapsed: !project.collapsed }),
           onOpenRuntimeSettings: () => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) },
         }} />
-        <button type="button" role="switch" aria-label="Companion, keep your blob on screen while you work" aria-checked={companionVisible} className="companion-sidebar-card" onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={30} mini mood="idle" label="Companion" /><span><strong>Companion</strong><small>Keep your blob on screen while you work</small></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>
+        <button type="button" role="switch" aria-label={`Companion, keep your ${noun} on screen while you work`} aria-checked={companionVisible} className="companion-sidebar-card" onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={30} mini mood="idle" label="Companion" /><span><strong>Companion</strong><small>Keep your {noun} on screen while you work</small></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>
         <ProfileMenu
           connection={connection}
           onShortcuts={experiments.shortcuts ? () => setShortcutsOpen(true) : undefined}
@@ -2036,7 +2041,7 @@ export function App() {
             {sideSession
               ? <SideConversationHeader peer={sidePeer} peerName={sidePeer?.name ?? sideSession.link?.peerName ?? 'Teammate'} target={sideAgent} targetName={sideAgent?.name ?? 'Teammate'} topic={sideTopic(sideSession)} />
               : activeSelectedAgent
-                ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title="Blob settings" onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button><RuntimeProblemMarker runtime={selectedRuntime} onOpenSettings={() => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) }} />{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}{experiments.autoTitles && selectedSession?.title && selectedSession.title !== activeSelectedAgent.name && <span className="conversation-auto-title" title={selectedSession.title}>{selectedSession.title}</span>}</>
+                ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title={`${Noun} settings`} onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button><RuntimeProblemMarker runtime={selectedRuntime} onOpenSettings={() => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) }} />{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}{experiments.autoTitles && selectedSession?.title && selectedSession.title !== activeSelectedAgent.name && <span className="conversation-auto-title" title={selectedSession.title}>{selectedSession.title}</span>}</>
                 : hasActiveBlobs ? <strong className="chat-title-text">{agentName}</strong> : null}
             {!sideSession && activeSelectedAgent && <SideConversationMenu sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent.id} onOpen={openSideConversation} />}
           </div>
@@ -2046,7 +2051,7 @@ export function App() {
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setMoreOpen(false); restoreMoreFocus() } }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
-              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />Blob settings</button>}{selectedSession && !sideSession && agents.filter((item) => !item.archived && !item.hidden && item.id !== activeSelectedAgent?.id).length > 0 && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); setHandoffError(null); setHandoffOpen(true) }}><ArrowUpRight size={15} />Continue in another blob…</button>}<span className="menu-separator" /><button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bitbots</button></div>}
+              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />{Noun} settings</button>}{selectedSession && !sideSession && agents.filter((item) => !item.archived && !item.hidden && item.id !== activeSelectedAgent?.id).length > 0 && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); setHandoffError(null); setHandoffOpen(true) }}><ArrowUpRight size={15} />Continue in another {noun}…</button>}<span className="menu-separator" /><button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bitbots</button></div>}
             </div>
           </div>
         </header>
@@ -2213,7 +2218,7 @@ export function App() {
         }
       }} onCancel={() => setRevertTarget(null)} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
-      {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body={experiments.undo ? "It leaves the sidebar and companion. Its conversations stay saved. You can undo this for eight seconds." : "It leaves the sidebar and companion. Its conversations stay saved. Restoring a blob is not available yet."} confirmLabel="Archive blob" cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
+      {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body={experiments.undo ? "It leaves the sidebar and companion. Its conversations stay saved. You can undo this for eight seconds." : `It leaves the sidebar and companion. Its conversations stay saved. Restoring a ${noun} is not available yet.`} confirmLabel={`Archive ${noun}`} cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
       {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bitbots. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm successTitle="Conversation deleted" successBody={experiments.undo ? "Deletion is scheduled. Use Undo within eight seconds to keep the conversation." : "This conversation and its messages were removed from Bitbots."} onConfirm={async () => { if (experiments.undo) {
           const sessionId = sessionDeleteTarget.id
           const result = await rpc<{ deadline: number }>('session.delete.schedule', { sessionId })
@@ -2222,7 +2227,7 @@ export function App() {
           await refresh()
         } else await rpc('session.delete', { sessionId: sessionDeleteTarget.id }) }} onComplete={() => { setSessionDeleteTarget(null); focusSidebarBlob() }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
       {textPrompt && <TextPromptDialog {...textPrompt} onCancel={() => setTextPrompt(null)} onSubmit={async (value) => { try { await textPrompt.onSubmit(value); setTextPrompt(null) } catch (reason) { setError(messageOf(reason)) } }} />}
-      {projectDelete && <ConfirmDialog title={`Delete ${projectDelete.name}?`} body="The project is removed from Bitbots. Its blobs move to Unassigned and the folder on disk is not touched." confirmLabel="Delete project" cancelLabel="Keep it" tone="danger" onConfirm={() => { const project = projectDelete; setProjectDelete(null); void projectAction('project.delete', { projectId: project.id }) }} onCancel={() => setProjectDelete(null)} />}
+      {projectDelete && <ConfirmDialog title={`Delete ${projectDelete.name}?`} body={`The project is removed from Bitbots. Its ${nouns} move to Unassigned and the folder on disk is not touched.`} confirmLabel="Delete project" cancelLabel="Keep it" tone="danger" onConfirm={() => { const project = projectDelete; setProjectDelete(null); void projectAction('project.delete', { projectId: project.id }) }} onCancel={() => setProjectDelete(null)} />}
       {freshTarget && <ConfirmDialog title={`Start fresh with ${freshTarget.name}?`} body="The current conversation is archived and a new one begins in the same place. Use this when the context is full or you want a clean slate." confirmLabel="Start fresh" cancelLabel="Keep chatting" onConfirm={() => { const agent = freshTarget; setFreshTarget(null); void startFresh(agent) }} onCancel={() => setFreshTarget(null)} />}
       {pendingBlobImport && <ImportBlobDialog blob={pendingBlobImport} runtimes={runtimes} onCancel={() => { setPendingBlobImport(null); restoreCreateFocus() }} onCreate={(runtimeId) => createImportedBlob(pendingBlobImport, runtimeId)} />}
     </main>
@@ -2230,6 +2235,8 @@ export function App() {
 }
 
 function ImportBlobDialog({ blob, runtimes, onCancel, onCreate }: { blob: SharedBlob; runtimes: Runtime[]; onCancel: () => void; onCreate: (runtimeId: string) => void }) {
+  const noun = useEntityNoun()
+  const Noun = useEntityNoun({ capital: true })
   const { ref, close } = useDialogAccessibility(onCancel)
   const suggested = runtimes.find((runtime) => runtime.provider === blob.providerId)?.id ?? runtimes[0]?.id ?? ''
   const [runtimeId, setRuntimeId] = useState(suggested)
@@ -2248,7 +2255,7 @@ function ImportBlobDialog({ blob, runtimes, onCancel, onCreate }: { blob: Shared
     <header className="import-hero">
       <span className="import-hero-stage"><BlobCanvas color={blob.colour} size={92} mood="idle" look={blob.look} label={`${blob.name} preview`} /></span>
       <span className="import-hero-copy">
-        <span className="import-kicker">Blob file</span>
+        <span className="import-kicker">{Noun} file</span>
         <h2 id="import-blob-title">Import {blob.name}</h2>
         <p>{blob.description.trim() || 'No description in this file.'}</p>
       </span>
@@ -2256,7 +2263,7 @@ function ImportBlobDialog({ blob, runtimes, onCancel, onCreate }: { blob: Shared
     <dl className="import-facts">{facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>
     {runtimes.length === 0
       ? <p className="import-empty" role="alert">No coding agents are available. Scan again before importing.</p>
-      : <div className="import-runtimes" role="radiogroup" aria-label="Attach imported blob to coding agent">
+      : <div className="import-runtimes" role="radiogroup" aria-label={`Attach imported ${noun} to coding agent`}>
         <span className="import-section-label">Runs on</span>
         {runtimes.map((runtime, index) => {
           const selected = runtime.id === runtimeId
@@ -2272,17 +2279,18 @@ function ImportBlobDialog({ blob, runtimes, onCancel, onCreate }: { blob: Shared
           </button>
         })}
       </div>}
-    <p className="import-note">Continue opens a draft you can edit. Nothing is created until you choose Create blob.</p>
+    <p className="import-note">Continue opens a draft you can edit. Nothing is created until you choose Create {noun}.</p>
     <div className="blob-dialog-actions"><button type="button" className="secondary-button" data-dialog-initial-focus onClick={close}>Cancel</button><button type="button" className="primary-button" disabled={!runtimeId} onClick={() => onCreate(runtimeId)}>Continue</button></div>
   </section></div>
 }
 
 function EmptyConversation({ connected, hasRuntime, hasAgent, runtimeReady, runtimeStatus, accent, mood, agentName, look, onNewSession, onCreate, onRefresh }: { connected: boolean; hasRuntime: boolean; hasAgent: boolean; runtimeReady: boolean; runtimeStatus?: string; accent: string; mood: BlobMood; agentName: string; look: BlobLook | null; onNewSession: (anchor?: HTMLElement | null) => void; onCreate: () => void; onRefresh: () => void }) {
+  const noun = useEntityNoun()
   const canvas = hasAgent ? <BlobCanvas color={accent} size={128} mood={connected ? mood : 'offline'} effectOverscanTop={135} look={look} label={agentName} /> : <BlobCanvas color="#e6e9ee" size={128} mood={connected ? 'idle' : 'offline'} effectOverscanTop={135} label="Bitbots" />
   const needsRuntimeRecovery = hasAgent && !runtimeReady
-  const heading = !connected ? 'Connect to your local runtime' : needsRuntimeRecovery ? 'Coding agent needs attention' : hasAgent ? `Start a conversation with ${agentName}` : hasRuntime ? 'Create your first blob' : 'Find your coding agent'
-  const description = !connected ? 'Bitbots keeps its daemon and agent sessions on this device. Reconnect to load the latest state.' : needsRuntimeRecovery ? runtimeStatus === 'error' ? 'Update or repair this CLI in Settings → Coding agents, then scan again.' : 'This coding agent is offline. Open Settings → Coding agents and scan again before starting a conversation.' : hasAgent ? 'Choose a project folder. Your selected CLI starts a real session there.' : hasRuntime ? 'A blob is a teammate that runs on one of the coding agents installed here. Give it a name and a project, and it is ready to work.' : 'We only show agents installed on this device. Refresh to scan for Claude Code, Codex, or OpenCode.'
-  const label = !connected ? 'Try again' : needsRuntimeRecovery ? 'Scan again' : hasAgent ? 'Choose a project' : hasRuntime ? 'Create your first blob' : 'Scan for agents'
+  const heading = !connected ? 'Connect to your local runtime' : needsRuntimeRecovery ? 'Coding agent needs attention' : hasAgent ? `Start a conversation with ${agentName}` : hasRuntime ? `Create your first ${noun}` : 'Find your coding agent'
+  const description = !connected ? 'Bitbots keeps its daemon and agent sessions on this device. Reconnect to load the latest state.' : needsRuntimeRecovery ? runtimeStatus === 'error' ? 'Update or repair this CLI in Settings → Coding agents, then scan again.' : 'This coding agent is offline. Open Settings → Coding agents and scan again before starting a conversation.' : hasAgent ? 'Choose a project folder. Your selected CLI starts a real session there.' : hasRuntime ? `A ${noun} is a teammate that runs on one of the coding agents installed here. Give it a name and a project, and it is ready to work.` : 'We only show agents installed on this device. Refresh to scan for Claude Code, Codex, or OpenCode.'
+  const label = !connected ? 'Try again' : needsRuntimeRecovery ? 'Scan again' : hasAgent ? 'Choose a project' : hasRuntime ? `Create your first ${noun}` : 'Scan for agents'
   return <div className="empty-conversation"><PixelClouds className="empty-clouds" /><div className="empty-art">{canvas}</div><h1>{heading}</h1><p className="empty-description">{description}</p><button className="primary-button" onClick={(event) => { if (!connected || needsRuntimeRecovery || !hasAgent && !hasRuntime) onRefresh(); else if (hasAgent) onNewSession(event.currentTarget); else onCreate() }} disabled={!connected && !hasRuntime}>{!hasAgent && hasRuntime && connected ? <Plus size={15} /> : <FolderOpen size={15} />}{label}</button></div>
 }
 
@@ -2449,6 +2457,7 @@ function DetailRow({ label, value, mono = false }: { label: string; value: React
 }
 
 function DetailsPane({ session, model, usage, onUsage }: { session: Session | null; model: string | null; usage: Record<string, unknown> | null; onUsage: () => void }) {
+  const nouns = useEntityNoun({ plural: true })
   return <div className="context-scroll">
     <section className="context-section">
       <h3>Conversation</h3>
@@ -2460,7 +2469,7 @@ function DetailsPane({ session, model, usage, onUsage }: { session: Session | nu
       </div> : <p className="context-empty">No conversation selected.</p>}
     </section>
     <section className="context-section usage-section">
-      <h3>Usage <small className="usage-scope">All blobs, all time</small></h3>
+      <h3>Usage <small className="usage-scope">All {nouns}, all time</small></h3>
       <div className="detail-list">
         <DetailRow label="Input tokens" value={tokenValue(usage?.inputTokens)} />
         <DetailRow label="Output tokens" value={tokenValue(usage?.outputTokens)} />
@@ -2599,6 +2608,7 @@ function recordFrom(value: unknown): Record<string, unknown> { return value && t
 
 function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, queuedCount = 0, onLoadQueue }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void }) {
   const sessionModelLock = session?.modelLock
+  const nouns = useEntityNoun({ plural: true })
   const contextModel = sessionModelLock && Object.prototype.hasOwnProperty.call(sessionModelLock, 'model')
     ? sessionModelLock.model ?? null
     : agent?.model ?? null
@@ -3019,7 +3029,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
                 <div className="who"><span className="name">{name}</span><RuntimeProblemMarker runtime={runtime} onOpenSettings={onOpenSettings} />{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}{agent?.leader && <span className="companion-leader" title="Team leader" aria-label="Team leader">★</span>}<span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
                 <FocusTicker steps={focusSteps} current={statusLine} shimmering={shimmering} />
                 {focusTeam ? <button type="button" className="glance team-glance" onClick={() => onOpenSession?.(focusTeam.sessionId)} title="Open the side conversation in Bitbots">{focusTeam.peer && <BlobCanvas decorative color={agentColorHex(focusTeam.peer.color)} size={14} mini look={agentLook(focusTeam.peer)} label={focusTeam.peer.name} />}<span>{focusTeam.text}</span></button>
-                  : <div className="glance" title={`Reported tokens across all blobs. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}><span>All blobs: Tokens <b>{tokenGlance}</b></span></div>}
+                  : <div className="glance" title={`Reported tokens across all ${nouns}. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}><span>All {nouns}: Tokens <b>{tokenGlance}</b></span></div>}
               </div>
             </div>
             <CompanionPeers agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} connected={connected} focusedId={agent?.id ?? null} pinned={pinned} onSelect={selectTeamBlob} onPinnedChange={(ids) => { playCompanionCue('tick'); onPinnedChange?.(ids) }} />

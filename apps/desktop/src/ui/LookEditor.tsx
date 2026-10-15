@@ -10,6 +10,7 @@ import {
 } from '../blob/look'
 import { inDesktop } from '../tauri'
 import { SwatchGrid } from './SwatchGrid'
+import { useEntityNoun } from './vocabulary'
 
 type LookTab = 'style' | 'tune'
 
@@ -110,6 +111,7 @@ export function LookEditor({ look, color, colorHex, name, onLookChange, onColorC
 }
 
 function ShapeGrid({ look, colorHex, onChange }: { look: BlobLook; colorHex: string; onChange: (shape: BlobShape) => void }) {
+  const Noun = useEntityNoun({ capital: true })
   const move = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     const columns = 5
     const delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowDown' ? columns : event.key === 'ArrowUp' ? -columns : 0
@@ -120,7 +122,7 @@ function ShapeGrid({ look, colorHex, onChange }: { look: BlobLook; colorHex: str
     const grid = event.currentTarget.parentElement
     window.requestAnimationFrame(() => grid?.querySelector<HTMLButtonElement>(`[data-shape="${next}"]`)?.focus())
   }
-  return <div className="look-shapes" role="radiogroup" aria-label="Blob shape">
+  return <div className="look-shapes" role="radiogroup" aria-label={`${Noun} shape`}>
     {BLOB_SHAPES.map((shape, index) => {
       const selected = look.shape === shape
       return <button
@@ -142,6 +144,7 @@ function ShapeGrid({ look, colorHex, onChange }: { look: BlobLook; colorHex: str
 }
 
 function TuneControls({ look, onChange }: { look: BlobLook; onChange: (look: BlobLook) => void }) {
+  const noun = useEntityNoun()
   const groups = controlsFor(look.shape)
   const pinned = look.traits ?? {}
   const reset = () => onChange({ shape: look.shape, seed: look.seed })
@@ -151,7 +154,7 @@ function TuneControls({ look, onChange }: { look: BlobLook; onChange: (look: Blo
       {group.controls.map((control) => <TraitSlider key={controlKey(control)} look={look} control={control} pinned={keysOf(control).some((key) => key in pinned)} onChange={onChange} />)}
     </fieldset>)}
     <div className="look-tune-footer">
-      <span>Untouched sliders follow the blob's own seed. Shuffle to roll a new one.</span>
+      <span>Untouched sliders follow the {noun}'s own seed. Shuffle to roll a new one.</span>
       <button type="button" className="ghost-button small" disabled={Object.keys(pinned).length === 0} onClick={reset}><RotateCcw size={13} />Reset tweaks</button>
     </div>
   </div>

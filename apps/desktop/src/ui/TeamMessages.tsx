@@ -8,6 +8,7 @@ import { agentLook } from '../blob/look'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentColorHex } from './agentColor'
 import { sideTitle } from './teamSelectors'
+import { useEntityNoun } from './vocabulary'
 
 function MiniBlob({ agent, name, size = 18 }: { agent: Agent | null | undefined; name: string; size?: number }) {
   return agent
@@ -45,13 +46,14 @@ export function HandoffDialog({ agents, sourceAgentId, busy, error, onPick, onCl
   onClose: () => void
 }) {
   const entered = useDialogEntered()
+  const noun = useEntityNoun()
   const { ref, close } = useDialogAccessibility(onClose, () => !busy)
   const choices = agents.filter((agent) => !agent.archived && !agent.hidden && agent.id !== sourceAgentId)
   return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`}>
     <section ref={ref} className="blob-dialog handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title" tabIndex={-1}>
-      <h2 id="handoff-title">Continue in another blob</h2>
+      <h2 id="handoff-title">Continue in another {noun}</h2>
       <p>Pick who should pick this up. Bitbots puts a short summary and the latest messages in their composer. Nothing is sent until you send it.</p>
-      {choices.length === 0 && <p className="blob-muted">There is no other blob to hand this to.</p>}
+      {choices.length === 0 && <p className="blob-muted">There is no other {noun} to hand this to.</p>}
       <ul className="handoff-list">
         {choices.map((agent, index) => <li key={agent.id}>
           <button type="button" className="handoff-choice" data-dialog-initial-focus={index === 0 ? '' : undefined} disabled={busy} onClick={() => onPick(agent)}>
@@ -231,8 +233,9 @@ export function QuestionCard({ request, onAnswer, onDismiss }: { request: Permis
 /** Autocomplete for @mentions in the composer. */
 export function MentionPicker({ agents, query, activeIndex, onPick, onHover }: { agents: Agent[]; query: string; activeIndex: number; onPick: (agent: Agent) => void; onHover: (index: number) => void }) {
   const matches = useMemo(() => mentionMatches(agents, query), [agents, query])
+  const noun = useEntityNoun()
   if (!matches.length) return null
-  return <div className="mention-picker" role="listbox" aria-label="Mention a blob">
+  return <div className="mention-picker" role="listbox" aria-label={`Mention a ${noun}`}>
     {matches.map((agent, index) => <button key={agent.id} type="button" role="option" aria-selected={index === activeIndex} className={`mention-option ${index === activeIndex ? 'active' : ''}`} onMouseDown={(event) => { event.preventDefault(); onPick(agent) }} onMouseEnter={() => onHover(index)}>
       <MiniBlob agent={agent} name={agent.name} size={22} />
       <strong>{agent.name}</strong>

@@ -1,6 +1,8 @@
 import type { Agent } from '../types'
 import { agentColorHex } from './agentColor'
 import { agentLook, normalizeLook, type BlobLook } from '../blob/look'
+import { entityNoun } from './vocabulary'
+import { themeStyle } from '../blob/bitbots'
 
 export const BLOB_SHARE_FORMAT = 'bloblex.blob.v1'
 export const BLOB_SHARE_MAX_BYTES = 64 * 1024
@@ -38,21 +40,22 @@ export function serializeBlob(agent: Agent, providerId: string): string {
 }
 
 export function parseSharedBlob(text: string): SharedBlob {
-  if (new TextEncoder().encode(text).byteLength > BLOB_SHARE_MAX_BYTES) throw new Error('This blob file is too large.')
+  const noun = entityNoun(themeStyle())
+  if (new TextEncoder().encode(text).byteLength > BLOB_SHARE_MAX_BYTES) throw new Error(`This ${noun} file is too large.`)
   let parsed: unknown
-  try { parsed = JSON.parse(text) } catch { throw new Error('This blob file is not valid JSON.') }
-  if (!isRecord(parsed)) throw new Error('This blob file must contain an object.')
-  if (parsed.format !== BLOB_SHARE_FORMAT) throw new Error('This blob file uses an unsupported format version.')
+  try { parsed = JSON.parse(text) } catch { throw new Error(`This ${noun} file is not valid JSON.`) }
+  if (!isRecord(parsed)) throw new Error(`This ${noun} file must contain an object.`)
+  if (parsed.format !== BLOB_SHARE_FORMAT) throw new Error(`This ${noun} file uses an unsupported format version.`)
   const name = requiredText(parsed.name, 60, 'name')
   const description = optionalText(parsed.description, 255, 'description')
   const colour = typeof parsed.colour === 'string' && /^#[0-9a-fA-F]{6}$/.test(parsed.colour) ? parsed.colour.toLowerCase() : null
-  if (!colour) throw new Error('The blob colour must use #RRGGBB format.')
+  if (!colour) throw new Error(`The ${noun} colour must use #RRGGBB format.`)
   const instructions = optionalText(parsed.instructions, 20_000, 'instructions')
   const model = nullableText(parsed.model, 160, 'model')
   const thinking = nullableText(parsed.thinking, 80, 'thinking')
   const speed = nullableText(parsed.speed, 80, 'speed')
   const look = parsed.look === undefined ? { shape: 'round' as const, seed: name } : normalizeLook(parsed.look)
-  if (!look) throw new Error('The blob look is not valid.')
+  if (!look) throw new Error(`The ${noun} look is not valid.`)
   let providerId: string | undefined
   if (parsed.providerId !== undefined && parsed.providerId !== null) {
     providerId = optionalText(parsed.providerId, 100, 'provider').trim() || undefined

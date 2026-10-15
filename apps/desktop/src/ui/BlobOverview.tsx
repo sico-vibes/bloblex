@@ -8,6 +8,7 @@ import { agentColorHex, previewHex, resolvedAgentColor } from './agentColor'
 import { ApprovalPill } from './approvalUi'
 import { deriveCompanionStatus } from './companionStatus'
 import type { AgentDraft } from './agentForm'
+import { useEntityNoun } from './vocabulary'
 
 /** Top of the blob editor: the character, its name and one line of facts. */
 export function BlobOverview({ draft, runtime, session, connected, model, mode, approvalMode, agentId }: {
@@ -21,6 +22,8 @@ export function BlobOverview({ draft, runtime, session, connected, model, mode, 
   agentId?: string | null
 }) {
   const derived = deriveCompanionStatus({ connected, runtime, session: mode === 'create' ? null : session, now: Date.now() })
+  const noun = useEntityNoun()
+  const Noun = useEntityNoun({ capital: true })
   const mood = mode === 'create' ? (connected ? 'idle' : 'offline') : derived.mood
   const lastValid = useRef(resolvedAgentColor(draft.color) ?? agentColorHex('mint'))
   const resolved = resolvedAgentColor(draft.color)
@@ -32,10 +35,10 @@ export function BlobOverview({ draft, runtime, session, connected, model, mode, 
     model?.trim() ? model : 'Default model',
     mode === 'create' ? 'Not created yet' : derived.label,
   ]
-  return <section className="blob-hero" aria-label="Blob preview">
-    <BlobCanvas color={paint} size={104} mood={mood} look={draftLook(draft, agentId)} label={draft.name.trim() || 'New blob'} />
+  return <section className="blob-hero" aria-label={`${Noun} preview`}>
+    <BlobCanvas color={paint} size={104} mood={mood} look={draftLook(draft, agentId)} label={draft.name.trim() || `New ${noun}`} />
     <div className="blob-hero-name">
-      <h2>{draft.name.trim() || 'New blob'}</h2>
+      <h2>{draft.name.trim() || `New ${noun}`}</h2>
       <ApprovalPill mode={approvalMode} />
     </div>
     {draft.description.trim() && <p className="blob-hero-description">{draft.description}</p>}

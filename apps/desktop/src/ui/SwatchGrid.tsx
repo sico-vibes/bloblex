@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { Droplet } from 'lucide-react'
 import { AGENT_SWATCHES, parseCustomHex, swatchForColor, swatchLabel } from './agentColor'
 import { CLIENT_MESSAGES } from './agentForm'
+import { useEntityNoun } from './vocabulary'
 
 export function SwatchGrid({ value, onChange, disabled = false }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {
+  const Noun = useEntityNoun({ capital: true })
   const inputRef = useRef<HTMLInputElement>(null)
   const buttons = useRef<Array<HTMLButtonElement | null>>([])
   const [text, setText] = useState('')
@@ -72,7 +74,7 @@ export function SwatchGrid({ value, onChange, disabled = false }: { value: strin
   }
 
   return <div className="swatch-field">
-    <div className="swatch-grid" role="group" aria-label="Blob colour">
+    <div className="swatch-grid" role="group" aria-label={`${Noun} colour`}>
       {AGENT_SWATCHES.map((swatch, index) => {
         const pressed = selected === swatch.key
         const label = swatchLabel(swatch.key)

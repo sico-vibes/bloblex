@@ -265,8 +265,8 @@ describe('analytics formatting', () => {
     expect(turnFailureTitle('provider')).toBe('Turn failed')
     expect(turnFailureTitle(undefined)).toBe('Turn failed')
     expect(analyticsErrorText(new Error('invalid_argument: analytics range, bucket, or timezone is invalid'))).toBe('That date range cannot be loaded.')
-    expect(analyticsErrorText(new Error('invalid_argument: projectPath and agentId must be strings'))).toBe('That project or blob filter cannot be loaded.')
-    expect(analyticsErrorText(new Error('not_found: agent not found'))).toBe('That blob is no longer available.')
+    expect(analyticsErrorText(new Error('invalid_argument: projectPath and agentId must be strings'))).toBe('That project or bot filter cannot be loaded.')
+    expect(analyticsErrorText(new Error('not_found: agent not found'))).toBe('That bot is no longer available.')
   })
 
   it('normalises a daemon usage.analytics body field by field', () => {

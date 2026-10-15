@@ -306,7 +306,7 @@ describe('analytics view', () => {
     fetchUsageAnalytics.mockRejectedValueOnce(new Error('not_found: missing'))
     const view = mount(<AnalyticsView agentId="missing-agent" sessions={[]} agents={[]} connected now={now} />)
     await view.flush()
-    expect(view.host.querySelector('[role="alert"]')?.textContent).toContain('That blob is no longer available.')
+    expect(view.host.querySelector('[role="alert"]')?.textContent).toContain('That bot is no longer available.')
     expect(view.host.querySelector('[data-analytics-card="cost"]')).toBeNull()
     expect(view.host.textContent).not.toContain('$0')
     fetchUsageAnalytics.mockResolvedValueOnce(analyticsFixtures.empty)

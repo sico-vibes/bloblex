@@ -9,6 +9,7 @@ vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => <div aria-label="Bitbot
 const mocks = vi.hoisted(() => ({ rpc: vi.fn() }))
 vi.mock('../tauri', () => ({ rpc: mocks.rpc }))
 import { FirstRunOnboarding } from './FirstRunOnboarding'
+import { setThemeStyle } from '../blob/bitbots'
 
 const runtime = { id: 'runtime-codex', provider: 'codex', version: '1.2', authState: 'authenticated' } as Runtime
 let root: Root | null = null
@@ -94,8 +95,8 @@ describe('FirstRunOnboarding', () => {
     expect(mounted.textContent).toContain('1.2')
     expect(mounted.textContent).toContain('Signed in')
     await act(async () => { button('Continue').click(); await Promise.resolve(); await Promise.resolve() })
-    input('Helper', 'blob name')
-    await act(async () => { button('Create blob').click(); await Promise.resolve() })
+    input('Helper', 'bot name')
+    await act(async () => { button('Create bot').click(); await Promise.resolve() })
     expect(saveName).toHaveBeenCalledWith('Sam')
     expect(create).toHaveBeenCalledWith(runtime, 'Helper', '#b7a7f4', 'gpt-6-luna')
   })
@@ -108,5 +109,24 @@ describe('FirstRunOnboarding', () => {
     expect(codex?.querySelector('.onboarding-version-note')).not.toBeNull()
     expect(codex?.querySelector<HTMLAnchorElement>('.onboarding-doc-link')?.href).toBe(PROVIDER_GUIDES.codex.docsUrl)
     expect(codex?.querySelector('[aria-label="Copy Codex version command"]')).toBeNull()
+  })
+
+  it("labels the character with the chosen look's word and follows a look change", async () => {
+    mocks.rpc.mockResolvedValue({ runtimeId: 'runtime-codex', provider: 'codex', validated: true, fallback: false, models: [
+      { id: 'gpt-6-sol', displayName: 'GPT-6 Sol', supportedThinking: [], serviceTiers: [], isDefault: true },
+    ] })
+    setThemeStyle('bitbots')
+    const { host: mounted } = mount({ initialStep: 2, runtimes: [runtime] })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(mounted.textContent).toContain('Meet your first bot')
+    expect(mounted.textContent).toContain('Bot name')
+    expect(mounted.querySelector('[aria-label="Bot colour"]')).not.toBeNull()
+    expect(button('Create bot')).toBeTruthy()
+    act(() => setThemeStyle('blobots'))
+    expect(mounted.textContent).toContain('Meet your first blob')
+    expect(mounted.textContent).toContain('Blob name')
+    expect(mounted.querySelector('[aria-label="Blob colour"]')).not.toBeNull()
+    expect(button('Create blob')).toBeTruthy()
+    act(() => setThemeStyle('bitbots'))
   })
 })

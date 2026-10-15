@@ -11,6 +11,7 @@ import { deriveCompanionStatus } from './companionStatus'
 import { RuntimeProblemMarker, runtimeProblem } from './RuntimeProblemMarker'
 import { shortTime } from './rosterSelectors'
 import { conversationPreview, groupAgentsByProject, mainSessionFor, sessionIsBusy } from './teamSelectors'
+import { useEntityNoun } from './vocabulary'
 
 export type MenuItem = { label: string; icon?: ReactNode; onSelect?: () => void; disabled?: boolean; danger?: boolean; checked?: boolean; submenu?: MenuItem[] } | 'separator'
 
@@ -109,6 +110,9 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   onQueryChange: (query: string) => void
   actions: TeamSidebarActions
 }) {
+  const noun = useEntityNoun()
+  const nouns = useEntityNoun({ plural: true })
+  const Nouns = useEntityNoun({ plural: true, capital: true })
   const [showHidden, setShowHidden] = useState(false)
   const [menu, setMenu] = useState<{ kind: 'blob'; agent: Agent; x: number; y: number } | { kind: 'project'; project: Project; x: number; y: number } | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
@@ -135,11 +139,11 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       ] },
       { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? <MailOpen size={15} /> : <Mail size={15} />, disabled: !session, onSelect: () => actions.onToggleUnread(agent, session, !unread) },
       'separator',
-      { label: 'Rename blob', icon: <Pencil size={15} />, onSelect: () => actions.onRename(agent) },
+      { label: `Rename ${noun}`, icon: <Pencil size={15} />, onSelect: () => actions.onRename(agent) },
       { label: agent.leader ? 'Remove as leader' : 'Make team leader', icon: <Star size={15} />, onSelect: () => actions.onToggleLeader(agent) },
-      { label: 'Edit blob', icon: <Settings2 size={15} />, onSelect: () => actions.onEdit(agent) },
+      { label: `Edit ${noun}`, icon: <Settings2 size={15} />, onSelect: () => actions.onEdit(agent) },
       { label: 'Duplicate', icon: <Duplicate size={15} />, onSelect: () => actions.onDuplicate(agent) },
-      { label: 'Export blob…', icon: <Download size={15} />, onSelect: () => actions.onExportBlob(agent) },
+      { label: `Export ${noun}…`, icon: <Download size={15} />, onSelect: () => actions.onExportBlob(agent) },
       { label: 'Copy conversation ID', icon: <Copy size={15} />, disabled: !session, onSelect: () => actions.onCopyConversationId(agent, session) },
       'separator',
       { label: 'Delete conversation…', icon: <Trash2 size={15} />, danger: true, disabled: !session || sessionIsBusy(session), onSelect: () => { if (session) actions.onDeleteConversation(agent, session) } },
@@ -148,7 +152,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     ]
   }
   const projectMenu = (project: Project): MenuItem[] => [
-    { label: 'New blob here', icon: <Plus size={15} />, onSelect: () => actions.onCreate(project.id) },
+    { label: `New ${noun} here`, icon: <Plus size={15} />, onSelect: () => actions.onCreate(project.id) },
     { label: 'Rename project', icon: <Pencil size={15} />, onSelect: () => actions.onRenameProject(project) },
     { label: 'Change folder…', icon: <FolderOpen size={15} />, onSelect: () => actions.onChangeProjectFolder(project) },
     'separator',
@@ -214,11 +218,11 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   })
 
   return <div className="team-sidebar">
-    <label className="sidebar-search"><span className="sr-only">Search blobs</span>
+    <label className="sidebar-search"><span className="sr-only">Search {nouns}</span>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
-      <input value={query} placeholder="Search" aria-label="Search blobs" onChange={(event) => onQueryChange(event.target.value)} />
+      <input value={query} placeholder="Search" aria-label={`Search ${nouns}`} onChange={(event) => onQueryChange(event.target.value)} />
     </label>
-    <nav className="sidebar-scroll" aria-label="Blobs"><div role="tree" aria-label="Blobs by project">
+    <nav className="sidebar-scroll" aria-label={Nouns}><div role="tree" aria-label={`${Nouns} by project`}>
       {pinned.length > 0 && <section className="team-group" aria-label="Pinned">
         <div className="team-group-head static"><Pin size={13} aria-hidden="true" /><span>Pinned</span></div>
         <div className="team-group-rows">{pinned.map(renderRow)}</div>
@@ -236,19 +240,19 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
               <span title={project.path ?? undefined}>{project.name}</span>
             </button> : <span className="team-group-title"><FolderOpen size={13} aria-hidden="true" /><span>Unassigned</span></span>}
             <span className="team-group-actions">
-              <button type="button" className="icon-button tiny" aria-label={`New blob in ${project?.name ?? 'Unassigned'}`} title="New blob" onClick={() => actions.onCreate(project?.id ?? null)}><Plus size={14} /></button>
+              <button type="button" className="icon-button tiny" aria-label={`New ${noun} in ${project?.name ?? 'Unassigned'}`} title={`New ${noun}`} onClick={() => actions.onCreate(project?.id ?? null)}><Plus size={14} /></button>
               {project && <button type="button" className="icon-button tiny" aria-label={`${project.name} options`} title="Project options" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); menuTrigger.current = event.currentTarget; setMenu({ kind: 'project', project, x: rect.left, y: rect.bottom + 4 }) }}><MoreHorizontal size={14} /></button>}
             </span>
           </div>
           {!project?.collapsed && <div className="team-group-rows" role="group">
             {rows.map(renderRow)}
-            {rows.length === 0 && <p className="team-group-empty">{project ? 'Drag a blob here, or create one.' : 'Blobs without a project take general requests.'}</p>}
+            {rows.length === 0 && <p className="team-group-empty">{project ? `Drag a ${noun} here, or create one.` : `${Nouns} without a project take general requests.`}</p>}
           </div>}
         </section>
       })}
-      {agents.filter((agent) => !agent.archived).length === 0 && <p className="team-group-empty">No blobs yet. Create one to start chatting.</p>}
+      {agents.filter((agent) => !agent.archived).length === 0 && <p className="team-group-empty">No {nouns} yet. Create one to start chatting.</p>}
       </div>
-      {hiddenCount > 0 && <button type="button" className="team-hidden-toggle" onClick={() => setShowHidden((value) => !value)}>{showHidden ? <EyeOff size={13} /> : <Eye size={13} />}{showHidden ? 'Hide hidden blobs' : `Show ${hiddenCount} hidden blob${hiddenCount === 1 ? '' : 's'}`}</button>}
+      {hiddenCount > 0 && <button type="button" className="team-hidden-toggle" onClick={() => setShowHidden((value) => !value)}>{showHidden ? <EyeOff size={13} /> : <Eye size={13} />}{showHidden ? `Hide hidden ${nouns}` : `Show ${hiddenCount} hidden ${noun}${hiddenCount === 1 ? '' : 's'}`}</button>}
     </nav>
     {menu?.kind === 'blob' && <TeamMenu label={`${menu.agent.name} actions`} position={menu} items={blobMenu(menu.agent)} onClose={closeMenu} />}
     {menu?.kind === 'project' && <TeamMenu label={`${menu.project.name} actions`} position={menu} items={projectMenu(menu.project)} onClose={closeMenu} />}

@@ -42,7 +42,7 @@ describe('companion team overview', () => {
     expect(peers[0].getAttribute('aria-label')).toBe('Mate: Waiting for you')
     act(() => peers[0].click())
     expect(onSelect).toHaveBeenCalledWith(mate)
-    expect(host.querySelector('.peers-all')?.getAttribute('aria-label')).toBe('All blobs (5)')
+    expect(host.querySelector('.peers-all')?.getAttribute('aria-label')).toBe('All bots (5)')
   })
 
   it('lists every blob by project and pins up to four to the island', () => {
@@ -158,7 +158,7 @@ describe('companion settings: teammates on the island', () => {
   it('leaves out archived and hidden blobs and says when there is nobody else', () => {
     const { host } = setup([], { agents: [lead, agent('gone', 'Gone', { archived: true }), agent('quiet', 'Quiet', { hidden: true })] })
     expect(host.querySelector('.cset-chips')).toBeNull()
-    expect(host.textContent).toContain('No other blobs yet.')
+    expect(host.textContent).toContain('No other bots yet.')
     act(() => radio(host, 'Choose myself').click())
     expect(host.querySelector('.cset-checklist')).toBeNull()
   })

@@ -4,7 +4,7 @@ Owner: OpenCode lane (backend only). Reviewer: Director. **Do not touch `apps/de
 Scope: `crates/bloblex-adapter-acp` (OpenCode runs through it; `crates/bloblex-adapter-opencode/src/lib.rs` is a 5-line re-export), the OpenCode-related parts of `crates/bloblex-daemon/src/main.rs` (catalog, `runtime.capabilities`, session model lock), `crates/bloblex-agent-core` if types need a field, tests, `docs/runtime-capabilities.md`, `docs/evidence/`.
 
 ## Symptom (owner report)
-In a blob running OpenCode with `DeepSeek V4.1 Flash` (`opencode-go/deepseek-v4.1-flash`) the effort control is disabled and shows the tooltip "OpenCode doesn't let Bloblex pick an effort level yet, so it uses the model's own default." The owner wants an effort selector there, like Codex and Claude have. Today the daemon test (`main.rs` ~L5216) even builds this model with `supportedThinking: []`.
+In a blob running OpenCode with `DeepSeek V4.1 Flash` (`opencode-go/deepseek-v4.1-flash`) the effort control is disabled and shows the tooltip "OpenCode doesn't let Bitbots pick an effort level yet, so it uses the model's own default." The owner wants an effort selector there, like Codex and Claude have. Today the daemon test (`main.rs` ~L5216) even builds this model with `supportedThinking: []`.
 
 Facts already known (see `docs/runtime-capabilities.md` O1, O6): `opencode models --verbose` lists per-model `variants`; over ACP, after `session/set_config_option` for `model`, a config option `effort` (category `thought_level`) appears with values like `low|medium|high|default`; `opencode run --variant high` is the CLI-level equivalent. The daemon gates OpenCode effort behind `exec_gate.opencode.thinking` (default off) with evidence `none` (`main.rs` ~L1479 and ~L1499).
 

@@ -1,4 +1,4 @@
-# Bloblex E2E plan: configurable blobs, sessions tree, token analytics, provider quota, release
+# Bitbots E2E plan: configurable blobs, sessions tree, token analytics, provider quota, release
 
 > Status: plan with dated checkpoints (the status section below is 5-6 October 2026). Budget and monetary items are retired (AGENTS.md, 12 October 2026 amendment). Current release: `v0.1.0-beta.23`. Open items: [implementation-status.md](implementation-status.md).
 
@@ -141,7 +141,7 @@ Phase 2b may start after Phase 1.5, which is recorded in `docs/runtime-capabilit
 
 **Model catalog:**
 
-- **Bloblex design assumption:** add `runtime.models { runtimeId, refresh? }` RPC with a 60 s cache; the TTL is a local caching choice, not a verified CLI capability.
+- **Bitbots design assumption:** add `runtime.models { runtimeId, refresh? }` RPC with a 60 s cache; the TTL is a local caching choice, not a verified CLI capability.
   - Codex: prefer authenticated app-server `model/list`, including per-model effort choices/defaults and service tiers (efforts are per model and can include `ultra`); retain `codex debug models` only as a diagnostics fallback. The RPC exists in the installed schema but its response has not yet been live-compared with `debug models`.
   - Claude: headless stream-json `control_request` `list_models` works (Director-verified, no model call). Model counts and the `default` alias are host-dependent and must not be hard-coded: QA reported 12 models on the real profile with `default` resolving to `claude-sonnet-5-5` (not Director-verified); an isolated empty home returned 5 models with `default` resolving to `claude-opus-5-5`. If the control response fails, return a static catalog with `fallback: true`; keep custom IDs editable.
   - OpenCode: `opencode models --verbose`, including provider/model metadata and each model's optional variant keys. Real host, Director-verified, 2026-10-02: 52 models, 33 with variants. Hide the reasoning selector for models without variants. ACP selection is config option `effort` after that model is selected, including synthetic `default`; a successful turn that shows the effort was applied is gated below.

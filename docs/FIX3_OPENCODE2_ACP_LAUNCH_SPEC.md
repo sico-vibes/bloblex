@@ -4,14 +4,14 @@ Written 14 October 2026. Backend only (`crates/bloblex-adapter-acp`).
 
 ## 1. Symptom
 
-On a machine with OpenCode 2.0.28, Bloblex finds the CLI and (since beta.23)
+On a machine with OpenCode 2.0.28, Bitbots finds the CLI and (since beta.23)
 reads its version and sign-in, but the blob settings screen shows "The provider
 could not be reached." and "Model unavailable". The model catalog fails, and
 real OpenCode sessions very likely fail to start for the same reason.
 
 ## 2. Root cause (reproduced against the installed CLI)
 
-Bloblex starts ACP as `opencode acp --cwd <dir>` in two places:
+Bitbots starts ACP as `opencode acp --cwd <dir>` in two places:
 
 - `crates/bloblex-adapter-acp/src/lib.rs` ~line 300 (`spawn_process`, real sessions)
 - `crates/bloblex-adapter-acp/src/catalog.rs` ~line 103 (`fetch_config_options`)

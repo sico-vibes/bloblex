@@ -1,5 +1,5 @@
 // Fix 1A probe: does the ChatGPT transcription endpoint (the one
-// CloudTranscriber::transcribe calls) challenge a plain, honest Bloblex client?
+// CloudTranscriber::transcribe calls) challenge a plain, honest Bitbots client?
 //
 // Reads $CODEX_HOME/auth.json (default ~/.codex/auth.json) READ-ONLY, sends one
 // 1-second silent 16 kHz mono PCM16 WAV exactly the way the Rust client does,
@@ -9,7 +9,7 @@
 //   facts about the auth file (auth_mode, account-id presence, token expiry).
 // It never prints the token, any request header, or any response body.
 //
-// It identifies as Bloblex and does not imitate Codex, a browser, or any other
+// It identifies as Bitbots and does not imitate Codex, a browser, or any other
 // client. Like bb (get-bb/bb, provider-codex/src/ai/chatgpt-fetch.ts) it keeps the
 // Cloudflare cookies from a challenged response (names only are printed) and
 // sends the request once more carrying them. It uses Node's own fetch, so

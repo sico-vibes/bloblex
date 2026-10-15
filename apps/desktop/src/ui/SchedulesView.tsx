@@ -144,7 +144,7 @@ export function SchedulesView(props: SchedulesViewProps) {
       <section className="schedules-global" aria-label="Automation controls">
         <div>
           <strong>Pause all automations</strong>
-          <p>Automations run only while Bloblex is running and your computer is awake. If runs were missed, one run starts when you are back.</p>
+          <p>Automations run only while Bitbots is running and your computer is awake. If runs were missed, one run starts when you are back.</p>
         </div>
         <button type="button" className={`toggle ${paused ? 'on' : ''}`} role="switch" aria-label="Pause all automations" aria-checked={paused} disabled={!connected} onClick={() => void act('global', () => onSetPaused(!paused))}><i /></button>
       </section>

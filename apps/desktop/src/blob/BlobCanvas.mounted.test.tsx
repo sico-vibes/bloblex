@@ -3,6 +3,7 @@ import React, { StrictMode, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BlobCanvas } from './BlobCanvas'
+import { setBitbotsEnabled } from './bitbots'
 import * as soundCues from './soundCues'
 
 type FrameCallback = (timestamp: number) => void
@@ -73,6 +74,8 @@ function flushFrame(timestamp = clock) {
 function frameQueueSize() { return frames.size }
 
 beforeEach(() => {
+  // These cases exercise the classic blob renderer; Blobots is the style under test.
+  setBitbotsEnabled(false)
   clock = 10_000
   nextFrame = 1
   frames = new Map()

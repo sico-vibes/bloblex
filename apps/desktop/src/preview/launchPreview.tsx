@@ -33,8 +33,8 @@ function Preview() {
   const [mode, setMode] = useState<typeof launchFixtureModes[number]>(launchFixtureModes.includes(initial as typeof launchFixtureModes[number]) ? initial as typeof launchFixtureModes[number] : 'done')
   const [name, setName] = useState('')
   const fixture = launchFixtureData(mode)
-  const onboarding = mode.startsWith('onboarding-step-')
-  const initialStep = onboarding ? Number(mode.slice(-1)) - 1 as 0 | 1 | 2 : 0
+  const onboarding = mode.startsWith('onboarding-')
+  const initialStep = mode.startsWith('onboarding-step-') ? Number(mode.slice(-1)) - 1 as 0 | 1 | 2 : undefined
   return <>
     <nav className="launch-preview-switcher" aria-label="Preview fixtures">
       {launchFixtureModes.map((item) => <button key={item} className="secondary-button small" aria-pressed={item === mode} onClick={() => { setMode(item); history.replaceState(null, '', `?fixture=${item}`) }}>{item}</button>)}

@@ -1,0 +1,136 @@
+/* Look picker, look preview and accent picker.
+   The preview windows carry their own look (Bitbots or Blobots) whatever the
+   document is wearing, so rules that must beat the global Bitbots reset (square
+   corners, no shadows, stepped timing) are written with :root:root. */
+
+/* ── Look cards ────────────────────────────────────────────────────────── */
+.look-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.look-card {
+  position: relative; min-width: 0; padding: 30px 16px 16px; display: grid; justify-items: center; gap: 6px; text-align: center;
+  color: var(--text-1); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--surface-raised); cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, opacity 200ms ease;
+}
+.look-card:hover:not(:disabled) { border-color: var(--text-2); transform: translateY(-2px); }
+.look-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.look-card.selected { border-color: var(--user-accent, var(--text-1)); background: var(--surface-selected); }
+.look-card.dim { opacity: .62; }
+.look-card.dim:hover { opacity: 1; }
+.look-card strong { font-size: var(--fs-md, 15px); font-weight: 600; }
+.look-card small { max-width: 24ch; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.45; }
+.look-avatar { height: 76px; display: grid; place-items: end center; }
+.look-card[data-look="bitbots"] strong { font-family: "Doto", "DM Mono", ui-monospace, monospace; font-weight: 700; letter-spacing: .04em; }
+.look-tag {
+  position: absolute; top: 10px; left: 10px; padding: 2px 7px; font-size: var(--fs-2xs, 10px); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; border-radius: 999px;
+}
+.look-tag.primary { color: var(--user-accent-ink, var(--text-inverse)); background: var(--user-accent, var(--text-1)); }
+.look-tag.alternative { color: var(--text-2); border: 1px solid var(--line-strong); }
+.look-check { position: absolute; top: 9px; right: 9px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; color: var(--user-accent-ink, var(--text-inverse)); background: transparent; transition: background 160ms ease; }
+.look-card.selected .look-check { background: var(--user-accent, var(--text-1)); }
+.look-picker.compact { gap: 8px; }
+.look-picker.compact .look-card { padding: 26px 10px 10px; }
+.look-picker.compact .look-avatar { height: 48px; }
+.look-picker.compact .look-tag { top: 7px; left: 7px; font-size: 9px; padding: 1px 6px; }
+.look-picker.compact .look-check { top: 6px; right: 6px; width: 18px; height: 18px; }
+
+/* ── Preview window (opens when a look is chosen) ─────────────────────── */
+:root:root .look-preview {
+  display: grid; grid-template-rows: 0fr; opacity: 0; margin-top: 0;
+  transition: grid-template-rows 460ms cubic-bezier(.2, .8, .2, 1), opacity 320ms ease, margin-top 460ms cubic-bezier(.2, .8, .2, 1);
+  transition-timing-function: cubic-bezier(.2, .8, .2, 1);
+}
+:root:root .look-preview[data-open="true"] { grid-template-rows: 1fr; opacity: 1; margin-top: 6px; }
+.look-preview-inner { min-height: 0; overflow: hidden; padding: 4px 6px 10px; margin: -4px -6px -10px; }
+.look-preview-stage { position: relative; height: 252px; }
+
+.sp-window {
+  --sp-accent: var(--user-accent, var(--text-1));
+  --sp-accent-ink: var(--user-accent-ink, var(--text-inverse));
+  position: absolute; inset: 0; display: grid; grid-template-rows: 30px minmax(0, 1fr); overflow: hidden; font-size: 12px; color: var(--text-1);
+  background: var(--surface-app); pointer-events: none;
+}
+:root:root .sp-window {
+  opacity: 0; transform: translateY(10px) scale(.975);
+  transition: opacity 340ms ease, transform 420ms cubic-bezier(.2, .8, .2, 1);
+  transition-timing-function: cubic-bezier(.2, .8, .2, 1);
+}
+:root:root .sp-window[data-active="true"] { opacity: 1; transform: none; pointer-events: auto; }
+.sp-titlebar { display: flex; align-items: center; gap: 6px; padding: 0 12px; color: var(--text-2); border-bottom: 1px solid var(--line); background: var(--surface-panel); }
+.sp-titlebar i { width: 8px; height: 8px; background: var(--line-strong); }
+.sp-titlebar span { margin-left: 6px; font-size: 11px; font-weight: 600; }
+.sp-body { min-height: 0; display: grid; grid-template-columns: 148px minmax(0, 1fr); }
+.sp-side { padding: 10px 8px; display: grid; align-content: start; gap: 4px; border-right: 1px solid var(--line); background: var(--surface-sidebar); }
+.sp-label { padding: 0 6px 4px; color: var(--text-3); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.sp-row { min-width: 0; height: 32px; padding: 0 6px; display: flex; align-items: center; gap: 8px; color: var(--text-2); }
+.sp-row.on { color: var(--text-1); background: var(--surface-selected); }
+.sp-row-avatar { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; }
+.sp-main { min-width: 0; padding: 12px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; }
+.sp-bubble { max-width: 86%; padding: 8px 10px; line-height: 1.45; }
+.sp-bubble.user { justify-self: end; background: var(--surface-selected); }
+.sp-reply { display: flex; align-items: flex-end; gap: 8px; align-self: start; min-width: 0; }
+.sp-reply-avatar { width: 34px; height: 34px; display: grid; place-items: end center; flex: 0 0 auto; }
+.sp-bubble.bot { background: var(--surface-raised); border: 1px solid var(--line); }
+.sp-dots { display: inline-flex; gap: 4px; align-items: center; height: 14px; }
+.sp-dots b { width: 5px; height: 5px; background: var(--text-2); animation: sp-dot 1s infinite; }
+.sp-dots b:nth-child(2) { animation-delay: .15s; }
+.sp-dots b:nth-child(3) { animation-delay: .3s; }
+@keyframes sp-dot { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+.sp-composer { height: 36px; padding: 0 5px 0 12px; display: flex; align-items: center; justify-content: space-between; color: var(--text-3); border: 1px solid var(--line-strong); background: var(--surface-input); }
+.sp-send { width: 26px; height: 26px; display: grid; place-items: center; color: var(--sp-accent-ink); background: var(--sp-accent); }
+
+/* Bitbots window: square, dotted, hard shadow, pixel type. */
+:root:root .sp-window[data-look="bitbots"] { border: 2px dotted var(--line-strong); border-radius: 0; box-shadow: 4px 4px 0 var(--bb-shadow-colour, #000); background-image: radial-gradient(var(--line) 1px, transparent 1.2px); background-size: 6px 6px; }
+:root:root .sp-window[data-look="bitbots"] .sp-titlebar span,
+:root:root .sp-window[data-look="bitbots"] .sp-label { font-family: "Doto", "DM Mono", ui-monospace, monospace; font-weight: 700; letter-spacing: .08em; }
+:root:root .sp-window[data-look="bitbots"] * { border-radius: 0; font-family: "DM Mono", ui-monospace, Menlo, monospace; }
+:root:root .sp-window[data-look="bitbots"] .sp-titlebar span,
+:root:root .sp-window[data-look="bitbots"] .sp-label { font-family: "Doto", "DM Mono", ui-monospace, monospace; }
+:root:root .sp-window[data-look="bitbots"] .sp-bubble,
+:root:root .sp-window[data-look="bitbots"] .sp-composer { border: 2px solid var(--line-strong); }
+:root:root .sp-window[data-look="bitbots"] .sp-bubble.user { border-color: var(--line); }
+:root:root .sp-window[data-look="bitbots"] .sp-dots b { animation-timing-function: steps(2, end); }
+
+/* Blobots window: soft corners, calm shadow, system type. */
+:root:root .sp-window[data-look="blobots"] { border: 1px solid var(--line-strong); border-radius: 16px; box-shadow: 0 18px 44px rgba(0, 0, 0, .28); }
+:root:root .sp-window[data-look="blobots"] .sp-titlebar i { border-radius: 50%; }
+:root:root .sp-window[data-look="blobots"] .sp-row { border-radius: 10px; }
+:root:root .sp-window[data-look="blobots"] .sp-bubble { border-radius: 14px; }
+:root:root .sp-window[data-look="blobots"] .sp-bubble.user { border-bottom-right-radius: 5px; }
+:root:root .sp-window[data-look="blobots"] .sp-bubble.bot { border-bottom-left-radius: 5px; }
+:root:root .sp-window[data-look="blobots"] .sp-composer { border-radius: 999px; }
+:root:root .sp-window[data-look="blobots"] .sp-send { border-radius: 50%; }
+:root:root .sp-window[data-look="blobots"] .sp-dots b { border-radius: 50%; }
+:root:root .sp-window[data-look="blobots"] .sp-side { border-bottom-left-radius: 15px; }
+
+@media (max-width: 560px) {
+  .sp-body { grid-template-columns: 1fr; }
+  .sp-side { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:root .look-preview, :root:root .sp-window, .look-card { transition: none; }
+  .sp-dots b { animation: none; opacity: .7; }
+}
+
+/* ── Accent picker ─────────────────────────────────────────────────────── */
+.accent-picker { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.accent-swatch {
+  position: relative; width: 24px; height: 24px; padding: 0; display: grid; place-items: center; flex: 0 0 auto; cursor: pointer;
+  color: #fff; border: 0; border-radius: 50%; background: var(--swatch, var(--text-1)); box-shadow: inset 0 0 0 1px #00000040;
+  transition: transform 120ms ease;
+}
+.accent-swatch:hover:not(:disabled) { transform: scale(1.1); }
+.accent-swatch:focus-visible, .accent-swatch:focus-within { outline: 2px solid var(--text-1); outline-offset: 2px; }
+.accent-swatch.selected { outline: 2px solid var(--text-1); outline-offset: 2px; }
+.accent-swatch.neutral { background: linear-gradient(135deg, var(--text-1) 50%, var(--surface-app) 50%); box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--text-1); mix-blend-mode: normal; }
+.accent-swatch.neutral svg { color: var(--text-inverse); filter: drop-shadow(0 0 1px var(--text-1)); }
+.accent-swatch.custom { overflow: hidden; background: conic-gradient(#ef5b5b, #f0b84a, #3fb97f, #4c8dff, #8b7cf6, #ef5b5b); }
+.accent-swatch.custom[style] { background: var(--swatch); }
+.accent-swatch.custom input { position: absolute; inset: -6px; width: 40px; height: 40px; opacity: 0; cursor: pointer; }
+.accent-swatch.custom svg { position: relative; pointer-events: none; }
+
+/* ── Onboarding look step ──────────────────────────────────────────────── */
+.onboarding-content:has(.look-step) { width: min(720px, 100%); }
+.look-step { gap: 16px; }
+.look-step .onboarding-actions { justify-content: center; margin-top: 4px; }
+.onboarding-content:has(.look-step) .onboarding-progress { margin-top: 0; }
+@keyframes look-step-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.look-step { animation: look-step-in 320ms cubic-bezier(.2, .8, .2, 1) both; }

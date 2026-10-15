@@ -39,7 +39,7 @@ export function BypassConfirmDialog({ blobName, onConfirm, onCancel }: { blobNam
     <section ref={ref as RefObject<HTMLElement>} className="blob-dialog" role="dialog" aria-modal="true" aria-labelledby="bypass-dialog-title" aria-describedby="bypass-dialog-body">
       <h2 id="bypass-dialog-title">Turn on bypass for {blobName || 'this blob'}?</h2>
       <div id="bypass-dialog-body">
-        <p>Bypass approves every action without asking you. Where the provider allows it, Bloblex also starts that provider so it does not ask either.</p>
+        <p>Bypass approves every action without asking you. Where the provider allows it, Bitbots also starts that provider so it does not ask either.</p>
         <p>Budgets, cancel, and Pause all still stop the work. This choice applies only to this blob, and it takes effect for new requests immediately. Launch flags change when the next turn starts.</p>
         <p>Type the blob name to confirm.</p>
       </div>

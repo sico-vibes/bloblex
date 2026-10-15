@@ -1,6 +1,6 @@
-// Bloblex welcome greeting: timeline, pose equations, seeded particle
+// Bitbots welcome greeting: timeline, pose equations, seeded particle
 // rings/streaks, halo, hands and badge in a 640×150 reference space. The body is
-// always the round Bloblex mascot (its silhouette and superellipse eyes) in the
+// always the round Bitbots mascot (its silhouette and superellipse eyes) in the
 // agent colour; the notch collapse strip is omitted because the companion
 // window shell owns that transition.
 

@@ -169,7 +169,7 @@ fn update_info(update: &Update, channel: UpdateChannel) -> UpdateInfo {
 async fn read_preferences(app: &AppHandle) -> Result<Preferences, String> {
     let state = app
         .try_state::<AppState>()
-        .ok_or_else(|| "The local Bloblex daemon is unavailable.".to_string())?;
+        .ok_or_else(|| "The local Bitbots daemon is unavailable.".to_string())?;
     let conn = connection(&state)?;
     let settings = rpc_call(&conn, "settings.get", json!({})).await?;
     let settings = settings.get("settings").unwrap_or(&settings);
@@ -191,7 +191,7 @@ async fn read_preferences(app: &AppHandle) -> Result<Preferences, String> {
 async fn save_setting(app: &AppHandle, key: &str, value: Value) -> Result<(), String> {
     let state = app
         .try_state::<AppState>()
-        .ok_or_else(|| "The local Bloblex daemon is unavailable.".to_string())?;
+        .ok_or_else(|| "The local Bitbots daemon is unavailable.".to_string())?;
     let conn = connection(&state)?;
     rpc_call(&conn, "settings.set", json!({"key":key,"value":value})).await?;
     Ok(())

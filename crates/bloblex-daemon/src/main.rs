@@ -1049,7 +1049,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if k=="experimental.autoRetry"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","experimental.autoRetry requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="experimental.memory"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","experimental.memory requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="memory.sharedAgentWrites"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","memory.sharedAgentWrites requires a JSON boolean",StatusCode::BAD_REQUEST));}
+            if k=="appearance.style"&&!p["value"].as_str().is_some_and(|v|["bitbots","blobots"].contains(&v)){return Err(derr("invalid_argument","appearance.style must be bitbots or blobots",StatusCode::BAD_REQUEST));}
+            if k=="appearance.accent"&&!p["value"].as_str().is_some_and(|v|v.is_empty()||is_accent_hex(v)){return Err(derr("invalid_argument","appearance.accent must be empty or a #rrggbb hex colour",StatusCode::BAD_REQUEST));}
             let mut value = p["value"].clone();
+            if k=="appearance.accent"{ value = json!(p["value"].as_str().unwrap_or("").to_ascii_lowercase()); }
             if k=="profile.about"{
                 if !p["value"].is_string(){return Err(derr("invalid_argument","profile.about requires a string of at most 1500 characters",StatusCode::BAD_REQUEST));}
                 match memory::validate_about(&p["value"]) {
@@ -1073,7 +1076,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::BAD_REQUEST,
                 ));
             }
-            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs";
+            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent";
             let events=st.db.set_setting(k, &value).map_err(|e| {
                 derr(
                     if validation_key{"invalid_argument"}else{"internal"},
@@ -1091,6 +1094,11 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             StatusCode::NOT_FOUND,
         )),
     }
+}
+
+/// A `#rrggbb` colour, as accepted for `appearance.accent`.
+fn is_accent_hex(value: &str) -> bool {
+    value.len() == 7 && value.starts_with('#') && value[1..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn runtime_from(v: &Value) -> RuntimeSpec {
@@ -1209,7 +1217,7 @@ async fn resolve_session_model_lock(
     options.thinking = lock["thinking"].as_str().map(str::to_owned);
     (options, lock)
 }
-/// Bloblex's own MCP tools (list_blobs, list_conversations, message_blob) are app-owned and safe.
+/// Bitbots' own MCP tools (list_blobs, list_conversations, message_blob) are app-owned and safe.
 fn is_team_tool_permission(raw: &Value) -> bool {
     let text = raw.to_string();
     ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob", "bloblex_list_conversations", "bloblex__list_conversations", "bloblex_memory_", "bloblex__memory_", "bloblex_list_projects", "bloblex__list_projects", "bloblex_create_blob", "bloblex__create_blob", "bloblex_update_blob", "bloblex__update_blob"].iter().any(|needle| text.contains(needle))
@@ -1944,7 +1952,7 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         "sessionId": p["sessionId"],
         "resumed": !resume_fallback,
         "state": "idle",
-        "outcomeNote": resume_fallback.then_some(if can_resume_saved_provider { "The saved provider session expired. A new provider session was started; saved Bloblex messages remain available." } else { "A new provider context was started; saved Bloblex messages remain available." })
+        "outcomeNote": resume_fallback.then_some(if can_resume_saved_provider { "The saved provider session expired. A new provider session was started; saved Bitbots messages remain available." } else { "A new provider context was started; saved Bitbots messages remain available." })
     }))
 }
 
@@ -5254,7 +5262,7 @@ mod phase2a_tests {
         assert!(reset < changed, "the reset must be sequenced before the updated session snapshot");
         assert!(st.db.session_detail(sid).unwrap()["providerSessionId"].is_null());
         let resumed = resume_session(&st,json!({"sessionId":sid})).await.unwrap();
-        assert_eq!(resumed["outcomeNote"],"A new provider context was started; saved Bloblex messages remain available.");
+        assert_eq!(resumed["outcomeNote"],"A new provider context was started; saved Bitbots messages remain available.");
         assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst),1);
         assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst),0);
         assert_eq!(st.db.session_detail(sid).unwrap()["providerSessionId"],"fresh-locked-model-session");
@@ -6254,6 +6262,41 @@ mod phase2a_tests {
         dispatch(&st, "settings.set", json!({"key":"retry.maxWaitSecs","value":86400})).await.unwrap();
         dispatch(&st, "settings.set", json!({"key":"retry.maxWaitSecs","value":0})).await.unwrap();
         assert_eq!(st.db.settings().unwrap()["retry.maxWaitSecs"], 0);
+    }
+
+    #[tokio::test]
+    async fn appearance_settings_validate_persist_and_broadcast() {
+        let (st, mut events) = state();
+        let initial = st.db.settings().unwrap();
+        assert!(initial.get("appearance.style").is_none(), "style is unset until the user chooses");
+        assert!(initial.get("appearance.accent").is_none(), "accent is unset until the user chooses");
+
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"bots"})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.style","value":7})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":"blue"})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":"#12345"})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":"#12345g"})).await.unwrap_err().1.code, "invalid_argument");
+
+        dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"bitbots"})).await.unwrap();
+        let style = events.recv().await.unwrap();
+        assert_eq!(style.event_type, "settings.changed");
+        assert_eq!(style.payload, json!({"key":"appearance.style","value":"bitbots"}));
+
+        dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":"#E17A56"})).await.unwrap();
+        let accent = events.recv().await.unwrap();
+        assert_eq!(accent.event_type, "settings.changed");
+        assert_eq!(accent.payload, json!({"key":"appearance.accent","value":"#e17a56"}), "the hex colour is stored in lower case");
+
+        let saved = st.db.settings().unwrap();
+        assert_eq!(saved["appearance.style"], "bitbots");
+        assert_eq!(saved["appearance.accent"], "#e17a56");
+
+        dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":""})).await.unwrap();
+        assert_eq!(events.recv().await.unwrap().payload, json!({"key":"appearance.accent","value":""}));
+        assert_eq!(st.db.settings().unwrap()["appearance.accent"], "");
+
+        dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"bitbots"})).await.unwrap();
+        assert!(events.try_recv().is_err(), "an unchanged value does not re-broadcast");
     }
 
     // ── Phase 4A: scheduled automations ────────────────────────────────────

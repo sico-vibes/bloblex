@@ -39,7 +39,7 @@ async function waitFor(notes, pred, ms = 90000) {
 
 const report = { catalog: null, steps: [] }
 const s = start()
-const init = await s.call('initialize', { clientInfo: { name: 'BloblexLiveCheck', version: '0.0.1' }, capabilities: { experimentalApi: false } })
+const init = await s.call('initialize', { clientInfo: { name: 'BitbotsLiveCheck', version: '0.0.1' }, capabilities: { experimentalApi: false } })
 s.notify('initialized', {})
 report.initialize = init.error ? { error: init.error.message?.slice(0, 120) } : { ok: true, keys: Object.keys(init.result || {}) }
 
@@ -101,14 +101,14 @@ if (t.error) { report.threadStartError = (t.error.message || '').slice(0, 200) }
   s.child.kill()
   // T2: new process, resume WITHOUT developerInstructions: retained?
   const s2 = start(); Object.assign(s, s2)
-  await s.call('initialize', { clientInfo: { name: 'BloblexLiveCheck', version: '0.0.1' }, capabilities: { experimentalApi: false } }); s.notify('initialized', {})
+  await s.call('initialize', { clientInfo: { name: 'BitbotsLiveCheck', version: '0.0.1' }, capabilities: { experimentalApi: false } }); s.notify('initialized', {})
   const r2 = await s.call('thread/resume', { threadId, cwd: work, model })
   report.resumeNoInstr = r2.error ? { error: (r2.error.message || '').slice(0, 160) } : { ok: true, keys: Object.keys(r2.result || {}).sort() }
   if (!r2.error) await turn('T2 resume WITHOUT developerInstructions, turn effort=low', threadId, { effort: 'low' })
   s.child.kill()
   // T3: resume WITH changed developerInstructions
   const s3 = start(); Object.assign(s, s3)
-  await s.call('initialize', { clientInfo: { name: 'BloblexLiveCheck', version: '0.0.1' }, capabilities: { experimentalApi: false } }); s.notify('initialized', {})
+  await s.call('initialize', { clientInfo: { name: 'BitbotsLiveCheck', version: '0.0.1' }, capabilities: { experimentalApi: false } }); s.notify('initialized', {})
   const r3 = await s.call('thread/resume', { threadId, cwd: work, model, developerInstructions: instrB })
   report.resumeWithInstr = r3.error ? { error: (r3.error.message || '').slice(0, 160) } : { ok: true }
   if (!r3.error) {

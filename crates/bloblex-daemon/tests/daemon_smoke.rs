@@ -76,7 +76,7 @@ async fn daemon_starts_with_authenticated_loopback_rpc_and_real_discovery() {
             address,
             token,
             "session.new",
-            json!({"runtimeId":runtime["id"],"projectPath":project,"title":"Bloblex provider smoke"}),
+            json!({"runtimeId":runtime["id"],"projectPath":project,"title":"Bitbots provider smoke"}),
         )
         .await;
         assert_eq!(

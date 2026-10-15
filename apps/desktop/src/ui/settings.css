@@ -147,3 +147,7 @@
 
 .settings-scan-status { margin: 0; padding: 12px 16px; color: var(--text-2); font-size: var(--fs-sm); overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
 .settings-scan-status[data-failed="true"], .settings-row-copy .runtime-probe-error { color: var(--text-1); }
+
+.settings-row.stacked { flex-direction: column; align-items: stretch; gap: 10px; }
+.settings-row.stacked .settings-row-control { flex: 1 1 auto; display: block; }
+.settings-row.stacked .accent-picker { justify-content: flex-start; }

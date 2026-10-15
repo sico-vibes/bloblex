@@ -194,7 +194,7 @@ Method `thread/tokenUsage/updated`. Params: `threadId`, `turnId`, `tokenUsage.la
 
 ### X8
 
-Spawn (`lib.rs:46-48`): `app-server --listen stdio://`. Initialize (`lib.rs:232`): `initialize` with `clientInfo` Bloblex 0.1.0 and `capabilities.experimentalApi: false`, then `initialized`. `thread/start` (`lib.rs:278`):
+Spawn (`lib.rs:46-48`): `app-server --listen stdio://`. Initialize (`lib.rs:232`): `initialize` with `clientInfo` Bitbots 0.1.0 and `capabilities.experimentalApi: false`, then `initialized`. `thread/start` (`lib.rs:278`):
 
 ```json
 {"cwd":"<project>","approvalPolicy":"on-request","sandbox":"workspace-write"}
@@ -216,7 +216,7 @@ Spawn (`lib.rs:46-48`): `app-server --listen stdio://`. Initialize (`lib.rs:232`
 
 ### O1
 
-`opencode models --verbose` printed `provider/model` headers and a JSON object each. Shape: `id`, `providerID`, `name`, `api`, `status`, `cost` (`input`, `output`, `cache.read`, `cache.write`), `limit` (`context`, sometimes `input`, `output`), `capabilities` (including `reasoning`), `variants`. All eight were `providerID: opencode` and reported cost 0 (free catalog prices, not a Bloblex default). Variants:
+`opencode models --verbose` printed `provider/model` headers and a JSON object each. Shape: `id`, `providerID`, `name`, `api`, `status`, `cost` (`input`, `output`, `cache.read`, `cache.write`), `limit` (`context`, sometimes `input`, `output`), `capabilities` (including `reasoning`), `variants`. All eight were `providerID: opencode` and reported cost 0 (free catalog prices, not a Bitbots default). Variants:
 
 | id | variant keys |
 | --- | --- |
@@ -278,7 +278,7 @@ No model completion was used. The username field from the resolved config is omi
 
 `initialize` result: `protocolVersion: 1`, `agentInfo` OpenCode 1.18.34, `agentCapabilities.loadSession: true`, `sessionCapabilities` close/fork/list/resume, `promptCapabilities` embeddedContext and image. No model list on initialize.
 
-`session/new` params used by Bloblex (`cwd`, `mcpServers: []`) succeeded. Result keys were only `sessionId` and `configOptions` (no `models` / `availableModels` object on this response):
+`session/new` params used by Bitbots (`cwd`, `mcpServers: []`) succeeded. Result keys were only `sessionId` and `configOptions` (no `models` / `availableModels` object on this response):
 
 - `model` select, current `opencode/big-pickle`, 9 values. The extra id versus `models --verbose` was `opencode/fledge-alpha-free`.
 - `mode` select, current `build`, values `build` and `plan`.
@@ -287,7 +287,7 @@ No model completion was used. The username field from the resolved config is omi
 
 `session/set_model` requires `modelId` (string). `{"sessionId","modelId":"opencode/big-pickle"}` returned an empty result. `model` instead of `modelId` returned invalid params: `modelId` expected string, received undefined.
 
-The client notification `initialized` is rejected (`Method not found`). `session/new` still works if that notification is skipped. Bloblex sends it today (`bloblex-adapter-acp/src/lib.rs:357`).
+The client notification `initialized` is rejected (`Method not found`). `session/new` still works if that notification is skipped. Bitbots sends it today (`bloblex-adapter-acp/src/lib.rs:357`).
 
 ### O4
 
@@ -311,11 +311,11 @@ Verbose `variants` are above. Over ACP they show up as config option id `effort`
 
 ### O7
 
-`bloblex-adapter-opencode/src/lib.rs:1-5` re-exports `AcpAdapter`. Spawn (`bloblex-adapter-acp/src/lib.rs:44-48`): `executable` + runtime args + `acp --cwd <project>`. `new_session` (`lib.rs:350-362`): `initialize` (`protocolVersion: 1`, empty client capabilities, clientInfo Bloblex 0.1.0), notify `initialized`, then `session/new` with `cwd` and `mcpServers: []`. `prompt` (`lib.rs:435-438`): `session/prompt` with `prompt: [{type:text, text}]`. Probe capabilities set `usage: false` (`lib.rs:336`). No model, mode, effort, or config env is set today.
+`bloblex-adapter-opencode/src/lib.rs:1-5` re-exports `AcpAdapter`. Spawn (`bloblex-adapter-acp/src/lib.rs:44-48`): `executable` + runtime args + `acp --cwd <project>`. `new_session` (`lib.rs:350-362`): `initialize` (`protocolVersion: 1`, empty client capabilities, clientInfo Bitbots 0.1.0), notify `initialized`, then `session/new` with `cwd` and `mcpServers: []`. `prompt` (`lib.rs:435-438`): `session/prompt` with `prompt: [{type:text, text}]`. Probe capabilities set `usage: false` (`lib.rs:336`). No model, mode, effort, or config env is set today.
 
 ## Z1. Setting mechanisms
 
-Provider-side proof means a field the runtime itself returns, not Bloblex's snapshot of what it intended to send.
+Provider-side proof means a field the runtime itself returns, not Bitbots' snapshot of what it intended to send.
 
 | Runtime | Setting | Mechanism | Scope | Provider-side proof |
 | --- | --- | --- | --- | --- |
@@ -340,7 +340,7 @@ Provider-side proof means a field the runtime itself returns, not Bloblex's snap
 
 ## Z2. Custom-arg allowlists
 
-Allowlists only. Anything not listed is rejected. Paths in allowlisted file flags must be files Bloblex created, not a user-supplied path.
+Allowlists only. Anything not listed is rejected. Paths in allowlisted file flags must be files Bitbots created, not a user-supplied path.
 
 **Claude spawn allowlist:** `--model`, `--effort`, `--fallback-model`, `--append-system-prompt-file`, `--system-prompt-snapshot`.
 
@@ -354,7 +354,7 @@ Allowlists only. Anything not listed is rejected. Paths in allowlisted file flag
 
 **Never user-controlled for OpenCode argv:** `acp`, `--cwd`, `--port`, `--hostname`, `--auto`, `--pure`, `-m` / `--model` on the TUI entrypoint, `-c` / `--continue`, `-s` / `--session`, `--prompt`, `--agent`.
 
-**Env:** reject secret-looking keys the same way `settings.set` already does. Never log env values or instruction text. `OPENCODE_CONFIG_CONTENT` is Bloblex-owned, not a user-supplied env blob.
+**Env:** reject secret-looking keys the same way `settings.set` already does. Never log env values or instruction text. `OPENCODE_CONFIG_CONTENT` is Bitbots-owned, not a user-supplied env blob.
 
 ## Z3. Corrections `docs/E2E_PLAN_V2.md` needs
 

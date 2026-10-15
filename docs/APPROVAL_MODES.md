@@ -1,6 +1,6 @@
 # Approval modes contract: ask, auto-approve and bypass
 
-User request (2 Oct 2026): Bloblex must offer auto-approve and bypass modes. The invariant "the daemon owns permission decisions" stays true: the daemon is the component that decides to approve automatically, records every automatic decision, and keeps the kill switch in force. Budgets are retired (AGENTS.md, 12 October 2026 amendment); the budget clauses below are historical.
+User request (2 Oct 2026): Bitbots must offer auto-approve and bypass modes. The invariant "the daemon owns permission decisions" stays true: the daemon is the component that decides to approve automatically, records every automatic decision, and keeps the kill switch in force. Budgets are retired (AGENTS.md, 12 October 2026 amendment); the budget clauses below are historical.
 
 ## Modes
 

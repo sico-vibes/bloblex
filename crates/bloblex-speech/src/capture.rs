@@ -85,7 +85,7 @@ where
                     channels,
                 });
             },
-            |error| eprintln!("Bloblex audio capture: {error}"),
+            |error| eprintln!("Bitbots audio capture: {error}"),
             None,
         ) {
             Ok(stream) => stream,

@@ -8,7 +8,7 @@ const mounted: Array<{ root: Root; host: HTMLDivElement }> = []
 function mount(onConfirm: () => void | Promise<void>, onCancel = vi.fn(), onComplete: (() => void) | null = vi.fn(), copy?: { successTitle:string; successBody:string }) {
   const host = document.createElement('div'); document.body.append(host)
   const root = createRoot(host)
-  act(() => root.render(<ConfirmDialog title="Delete conversation?" body="The transcript in Bloblex will be removed." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm onConfirm={onConfirm} onCancel={onCancel} {...(onComplete ? { onComplete } : {})} {...copy} />))
+  act(() => root.render(<ConfirmDialog title="Delete conversation?" body="The transcript in Bitbots will be removed." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm onConfirm={onConfirm} onCancel={onCancel} {...(onComplete ? { onComplete } : {})} {...copy} />))
   mounted.push({ root, host })
   return host
 }

@@ -241,7 +241,7 @@ describe('updates settings', () => {
     await act(async () => { install.click() })
     await view.settle()
     const dialog = view.host.querySelector('[data-update-confirm]')
-    expect(dialog?.textContent).toContain('2 sessions are running or waiting for approval. They will end when Bloblex restarts.')
+    expect(dialog?.textContent).toContain('2 sessions are running or waiting for approval. They will end when Bitbots restarts.')
     expect(view.host.querySelector('.settings-sheet')).not.toBeNull()
     expect(document.activeElement).toBe(dialog?.querySelector('[data-dialog-initial-focus]'))
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
@@ -286,7 +286,7 @@ describe('updates settings', () => {
     expect(view.host.querySelector('[data-update-status]')?.textContent).toBe('Downloaded 512 B.')
 
     await act(async () => { onProgress({ phase: 'installing', downloadedBytes: 512, totalBytes: null }) })
-    expect(view.host.querySelector('[data-update-status]')?.textContent).toBe('Installing. Bloblex will restart.')
+    expect(view.host.querySelector('[data-update-status]')?.textContent).toBe('Installing. Bitbots will restart.')
 
     await act(async () => { failInstall({ code: 'manifest', message: 'parse SECRET_MANIFEST' }) })
     await view.settle()

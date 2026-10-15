@@ -2,7 +2,7 @@
 
 Updated 14 October 2026. Manual-only `v0.1.0-beta.28` is published and is the newest versioned GitHub release. The signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`; manual-only betas do not change that feed. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
 
-Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.28`. Cargo.lock entries for the 15 crates inheriting the workspace version are beta.28 in this checkout; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bloblex`. Identifier is `com.bloblex.desktop`.
+Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.28`. Cargo.lock entries for the 15 crates inheriting the workspace version are beta.28 in this checkout; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bitbots`. Identifier is `com.bloblex.desktop`.
 
 `docs/releases/0.1.0-beta.28.md` is the published note for the current manual-only beta. The signed release script is not used for unsigned manual releases. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
 
@@ -77,7 +77,7 @@ Status: **done for beta.8 manual install**. `Bloblex_0.1.0-beta.8_x64-setup.exe`
 3. Runs `node scripts/stage-daemon.mjs --release`, which copies the sidecars to `apps/desktop/src-tauri/binaries/` with the Tauri target-triple suffix.
 4. Runs `npm run desktop -- build`, which is `tauri build` for `@bloblex/desktop`.
 
-The release artifact is the NSIS installer only. An MSI is not a Bloblex release artifact: an MSI version cannot carry a `-beta.N` pre-release. `docs/UPDATER.md` sets the Windows bundle target to `nsis` only. The release script globs `<CARGO_TARGET_DIR>\release\bundle\nsis\*-setup.exe`, keeps the file whose name matches the release version, and requires the sibling `<installer>.sig`. It does not upload an MSI.
+The release artifact is the NSIS installer only. An MSI is not a Bitbots release artifact: an MSI version cannot carry a `-beta.N` pre-release. `docs/UPDATER.md` sets the Windows bundle target to `nsis` only. The release script globs `<CARGO_TARGET_DIR>\release\bundle\nsis\*-setup.exe`, keeps the file whose name matches the release version, and requires the sibling `<installer>.sig`. It does not upload an MSI.
 
 `apps/desktop/src-tauri/tauri.conf.json` has `bundle.targets: ["nsis"]`, `createUpdaterArtifacts: true`, the updater public key, and the stable endpoint in `plugins.updater.endpoints`. The beta endpoint is not in that file: `apps/desktop/src-tauri/src/updates.rs` (lines 19-21 and 231-234) sets the endpoint per channel. For beta.8 only, the build overrode `bundle.createUpdaterArtifacts` to `false` and passed `--no-sign`; this produced no `.sig` and no `latest.json`. The rolling beta channel was left unchanged.
 
@@ -95,7 +95,7 @@ Status: **done for beta.6**. The signed `latest.json` is attached to `v0.1.0-bet
 
 `{ "version", "notes", "pub_date", "platforms": { "windows-x86_64": { "signature", "url" } } }`
 
-Notes come from `docs/releases/<version>.md`. If that file is missing or blank, the note is the single line `Bloblex <version>`. The signature is the trimmed `.sig` file. The asset URL is `https://github.com/<repo>/releases/download/v<version>/<installer file name>`.
+Notes come from `docs/releases/<version>.md`. If that file is missing or blank, the note is the single line `Bitbots <version>`. The signature is the trimmed `.sig` file. The asset URL is `https://github.com/<repo>/releases/download/v<version>/<installer file name>`.
 
 | Channel | Gets | Manifest URL |
 | --- | --- | --- |

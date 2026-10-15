@@ -725,7 +725,7 @@ pub struct ExecOptions {
     /// Read-only planning turns: the agent proposes a plan instead of acting.
     #[serde(default)]
     pub plan_mode: bool,
-    /// App-owned MCP servers attached to the provider session (Bloblex team tools).
+    /// App-owned MCP servers attached to the provider session (Bitbots team tools).
     #[serde(default)]
     pub mcp_servers: Vec<McpServerSpec>,
 }

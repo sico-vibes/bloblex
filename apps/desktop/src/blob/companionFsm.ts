@@ -3,7 +3,7 @@ import { IslandStateMachine, type FsmState } from './engine/island/fsm'
 export type CompanionMode = FsmState
 
 /**
- * Thin Bloblex adapter around the island FSM. Its only behavior override
+ * Thin Bitbots adapter around the island FSM. Its only behavior override
  * is approval pinning; shell placement and floating visibility are handled by
  * the companion window adapter.
  */

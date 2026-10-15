@@ -1,4 +1,4 @@
-//! On-device dictation for Bloblex.
+//! On-device dictation for Bitbots.
 //!
 //! Mirrors the reference design used by Orca (MIT): a pinned model catalog,
 //! 16 kHz mono resampling before the native boundary, bounded offline chunking,

@@ -1,6 +1,6 @@
 //! Opt-in cloud dictation through the Codex CLI login.
 //!
-//! The owner approved a single, scoped exception to Bloblex's "no copied
+//! The owner approved a single, scoped exception to Bitbots' "no copied
 //! provider authentication" invariant: for dictation only, this module reads the
 //! Codex CLI's `auth.json` read-only to call ChatGPT transcription. The token,
 //! the audio and the transcript are never persisted or logged, the token lives

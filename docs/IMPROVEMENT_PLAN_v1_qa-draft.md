@@ -1,11 +1,11 @@
-# Bloblex improvement plan: CLI connectivity, reasoning effort, and dictation
+# Bitbots improvement plan: CLI connectivity, reasoning effort, and dictation
 
 > Status: superseded by [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) (the owner-approved v2, 12 October 2026, which says it supersedes this draft). Kept as the QA record; its budget and path references are not current.
 
 Status: proposal for review. Author: QA lane (OpenCode), for the Director.
 Date: 12 October 2026. Baseline source: `17591b9` (beta.18).
 
-This plan is grounded in a side-by-side read of the Bloblex sources and the
+This plan is grounded in a side-by-side read of the Bitbots sources and the
 `get-bb/bb` sources. It covers the two areas requested:
 
 1. **Connection to different coding-agent CLIs** (Claude Code, Codex, OpenCode
@@ -25,10 +25,10 @@ capability secrets or provider credentials are written to docs or logs.
 
 ### 1.1 CLI connectivity
 
-Bloblex already uses the right shape: one Rust adapter per CLI, spawned as the
+Bitbots already uses the right shape: one Rust adapter per CLI, spawned as the
 user's installed executable, using the user's own logged-in account.
 
-| CLI | Bloblex transport | Reference |
+| CLI | Bitbots transport | Reference |
 | --- | --- | --- |
 | Claude Code | `claude` CLI with typed flags (`--model`, `--effort`, `--settings`) | `crates/bloblex-adapter-claude/src/lib.rs` |
 | Codex | `codex app-server` JSON-RPC (`initialize`, `model/list`, `turn/start`) | `crates/bloblex-adapter-codex/src/lib.rs` |
@@ -40,7 +40,7 @@ not the core gap.
 
 ### 1.2 Reasoning/effort
 
-Bloblex calls the concept `thinking`:
+Bitbots calls the concept `thinking`:
 
 - `ModelInfo.supported_thinking` carries per-model effort ids
   (`crates/bloblex-agent-core/src/lib.rs:801`).
@@ -73,7 +73,7 @@ provider's *live* per-model effort list:
 
 ### 1.3 Dictation
 
-Bloblex is on-device only: `bloblex-speech` bundles sherpa-onnx + cpal and
+Bitbots is on-device only: `bloblex-speech` bundles sherpa-onnx + cpal and
 requires a model download (`crates/bloblex-speech/src/model_manager.rs`,
 `manifest.rs`).
 
@@ -121,7 +121,7 @@ run `codex login`: the Codex service answers from the user's ChatGPT session.
 **Non-goals**
 
 - Mobile apps, tunnels, remote access, and account systems (deferred).
-- Multi-session/thread orchestration. Bloblex stays single-session with
+- Multi-session/thread orchestration. Bitbots stays single-session with
   bot-to-bot communication.
 - Replacing the daemon's decision ownership or copying provider credentials.
 
@@ -274,7 +274,7 @@ engine should remain the private fallback.
 **C5. Privacy and consent.**
 - Because a remote provider sends audio off-device, surface an explicit,
   per-source consent and a clear indicator when remote transcription is used,
-  consistent with Bloblex's local-first posture.
+  consistent with Bitbots' local-first posture.
 
 ---
 
@@ -400,9 +400,9 @@ Each phase is independently reviewable and revertible.
   scope for the current UI.
 - **Automations (E):** decide the missed-run policy when the machine was off at
   the trigger time — skip, or catch up once on next start. BB only advances
-  `nextRunAt`, so a sleeping host silently misses runs; Bloblex should pick and
+  `nextRunAt`, so a sleeping host silently misses runs; Bitbots should pick and
   document one behavior.
-- **Automations (E):** decide whether Bloblex ever wants an always-on
+- **Automations (E):** decide whether Bitbots ever wants an always-on
   scheduler. Without a hosted daemon, "the computer must be on" is inherent;
   keep it out of scope unless the Director wants a hosted option.
 
@@ -414,7 +414,7 @@ Mobile is intentionally out of scope for this plan. For reference, BB's model
 is a thin native Expo shell around the same web UI, reaching the user's machine
 through an outbound tunnel (`@bb/tunnel-client` + the `apps/connect` relay),
 with QR pairing (`@bb/connect-client`), a desktop-session cookie gate, Expo
-push, and universal links. If Bloblex later wants a phone client, the
+push, and universal links. If Bitbots later wants a phone client, the
 proportionate path is to serve the existing UI over LAN as a PWA (gated by the
 existing capability system) with QR pairing, rather than a native app plus a
 hosted tunnel/account service. This is recorded here only so the decision is
@@ -424,7 +424,7 @@ not lost; it is not part of this plan.
 
 ## 12. Appendix — Account and hosted services (reference)
 
-Bloblex is deliberately account-less and local-first. This appendix records what
+Bitbots is deliberately account-less and local-first. This appendix records what
 BB's getbb.app account adds, so the Director can decide later whether any of it
 is worth an optional hosted tier.
 
@@ -443,8 +443,8 @@ is worth an optional hosted tier.
 
 **Implications for this plan.**
 - Workstreams A–D and E require **no** account; they rely on the user's existing
-  CLI logins, consistent with Bloblex's invariants.
-- If Bloblex ever wants phone access or hosted dictation without a CLI login,
+  CLI logins, consistent with Bitbots' invariants.
+- If Bitbots ever wants phone access or hosted dictation without a CLI login,
   that is the point at which an optional account + relay + quota would be
   needed. Keep it strictly optional and off by default; do not reintroduce
   copied provider credentials or a mandatory sign-in.

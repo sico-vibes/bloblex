@@ -18,7 +18,7 @@ export const inDesktop = isTauri()
 export const previewMode = false
 
 export async function rpc<T>(method: string, params: JsonRecord = {}): Promise<T> {
-  if (!inDesktop) throw new Error('The local Bloblex daemon is available only in the desktop app.')
+  if (!inDesktop) throw new Error('The local Bitbots daemon is available only in the desktop app.')
   return invoke<T>('daemon_rpc', { method, params })
 }
 

@@ -86,7 +86,7 @@ try {
     const fast = (catalog.models ?? []).filter((model) => (model.serviceTiers ?? []).some((tier) => /\bfast\b|priority/i.test(`${tier.id} ${tier.name}`)))
     verdict(provider, 'model catalog', (catalog.models ?? []).length > 0, `${catalog.models.length} models, ${fast.length} with fast mode`)
 
-    const session = await rpc('session.new', { runtimeId: runtime.id, projectPath: project, title: 'Bloblex composer live check' })
+    const session = await rpc('session.new', { runtimeId: runtime.id, projectPath: project, title: 'Bitbots composer live check' })
     const sessionId = session.id
     try {
       // Mode-only update: keeps model/effort, pins permission mode for this conversation.

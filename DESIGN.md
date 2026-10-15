@@ -1,4 +1,4 @@
-# Bloblex Design System
+# Bitbots Design System
 
 ## Scene and Register
 

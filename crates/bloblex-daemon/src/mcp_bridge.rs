@@ -34,7 +34,7 @@ async fn handle(address: &str, token: &str, message: &Value) -> Option<Value> {
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or(PROTOCOL_VERSION),
             "capabilities": {"tools": {"listChanged": false}},
             "serverInfo": {"name": "bloblex", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "Bloblex team tools: list your teammates and message them."
+            "instructions": "Bitbots team tools: list your teammates and message them."
         })),
         "ping" => Ok(json!({})),
         "tools/list" => daemon(address, token, "mcp.tools.list", json!({})).await,
@@ -49,7 +49,7 @@ async fn handle(address: &str, token: &str, message: &Value) -> Option<Value> {
 }
 
 async fn daemon(address: &str, token: &str, method: &str, params: Value) -> Result<Value, String> {
-    if address.is_empty() || token.is_empty() { return Err("Bloblex is not running.".into()); }
+    if address.is_empty() || token.is_empty() { return Err("Bitbots is not running.".into()); }
     let body = json!({"v":1,"id":"mcp","method":method,"params":params}).to_string();
     let request = format!("POST /v1/rpc HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let response = timeout(Duration::from_secs(60), async {
@@ -58,11 +58,11 @@ async fn daemon(address: &str, token: &str, method: &str, params: Value) -> Resu
         let mut bytes = Vec::new();
         stream.read_to_end(&mut bytes).await?;
         Ok::<_, std::io::Error>(bytes)
-    }).await.map_err(|_| "Bloblex did not answer in time.".to_string())?.map_err(|_| "Bloblex is not reachable.".to_string())?;
+    }).await.map_err(|_| "Bitbots did not answer in time.".to_string())?.map_err(|_| "Bitbots is not reachable.".to_string())?;
     let text = String::from_utf8_lossy(&response);
-    let (_, body) = text.split_once("\r\n\r\n").ok_or("Bloblex sent an unreadable answer.")?;
-    let value: Value = serde_json::from_str(body).map_err(|_| "Bloblex sent an unreadable answer.".to_string())?;
-    if value["ok"] == true { Ok(value["result"].clone()) } else { Err(value["error"]["message"].as_str().unwrap_or("Bloblex rejected the request.").to_owned()) }
+    let (_, body) = text.split_once("\r\n\r\n").ok_or("Bitbots sent an unreadable answer.")?;
+    let value: Value = serde_json::from_str(body).map_err(|_| "Bitbots sent an unreadable answer.".to_string())?;
+    if value["ok"] == true { Ok(value["result"].clone()) } else { Err(value["error"]["message"].as_str().unwrap_or("Bitbots rejected the request.").to_owned()) }
 }
 
 #[cfg(test)]

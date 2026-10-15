@@ -3,9 +3,9 @@
 Date: 13 October 2026. Worktree `Blolblex-wt-fix1-dictation`. Scope: `crates/bloblex-speech` (mainly `src/cloud.rs`), `apps/desktop/src-tauri/src/speech.rs`, `scripts/live-checks/live-cloud-dictation.mjs`.
 
 > **Corrected on 14 October 2026.** The root-cause attribution below is
-> superseded. That run concluded the challenge was about *who* Bloblex claims to
+> superseded. That run concluded the challenge was about *who* Bitbots claims to
 > be, and that it "cannot be fixed on our side". Both are now falsified by live
-> probes: requests that identify as Bloblex (`originator: bloblex`, our
+> probes: requests that identify as Bitbots (`originator: bloblex`, our
 > User-Agent) returned HTTP 200 with a transcript body, and the variable that
 > separates pass from challenge is the shape of the HTTP request the client
 > produces — not the identity, the audio container, the TLS library or the time.
@@ -20,7 +20,7 @@ Starting dictation with the ChatGPT engine showed "ChatGPT transcription is unav
 
 ## Task A: safe probe result (allowed fields only)
 
-Probe: `scripts/live-checks/live-cloud-dictation.mjs`. It reads `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) read-only, builds one 1-second silent 16 kHz mono PCM16 WAV in memory, and POSTs it to `https://chatgpt.com/backend-api/transcribe` exactly the way `CloudTranscriber::transcribe` does (same URL, multipart parts, `model=gpt-transcribe`, same headers), identifying as Bloblex.
+Probe: `scripts/live-checks/live-cloud-dictation.mjs`. It reads `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) read-only, builds one 1-second silent 16 kHz mono PCM16 WAV in memory, and POSTs it to `https://chatgpt.com/backend-api/transcribe` exactly the way `CloudTranscriber::transcribe` does (same URL, multipart parts, `model=gpt-transcribe`, same headers), identifying as Bitbots.
 
 | Field | Value |
 | --- | --- |
@@ -44,7 +44,7 @@ Result: **none suitable.** There is no plain transcription request (nothing that
 
 ## Confirmed root cause
 
-OpenAI's private ChatGPT transcription endpoint (`chatgpt.com/backend-api/transcribe`) answers this honest, non-browser client with a Cloudflare managed challenge (`403`, `cf-mitigated: challenge`, `server: cloudflare`, HTML body). The Codex login is valid (`auth_mode = chatgpt`, account id present, access token not expired), so this is **not** an authentication failure: it is OpenAI's anti-bot check blocking requests that do not come from its official clients. Cloudflare's managed challenge expects a browser to solve a JS challenge. We will not impersonate Codex, a browser or any other client, replay cookies, or solve/bypass the challenge. **[superseded]** The claim that followed — *"so this cannot be fixed on our side"* — was wrong: it assumed the challenge was an identity check. It is a client request-shape check, and Bloblex's own identity passes from a different HTTP client shape (see the correction above). The honest message plus the on-device fallback remains the shipped behaviour, not because the endpoint refuses third-party apps in general, but because the fix is a policy decision the owner has not yet made.
+OpenAI's private ChatGPT transcription endpoint (`chatgpt.com/backend-api/transcribe`) answers this honest, non-browser client with a Cloudflare managed challenge (`403`, `cf-mitigated: challenge`, `server: cloudflare`, HTML body). The Codex login is valid (`auth_mode = chatgpt`, account id present, access token not expired), so this is **not** an authentication failure: it is OpenAI's anti-bot check blocking requests that do not come from its official clients. Cloudflare's managed challenge expects a browser to solve a JS challenge. We will not impersonate Codex, a browser or any other client, replay cookies, or solve/bypass the challenge. **[superseded]** The claim that followed — *"so this cannot be fixed on our side"* — was wrong: it assumed the challenge was an identity check. It is a client request-shape check, and Bitbots' own identity passes from a different HTTP client shape (see the correction above). The honest message plus the on-device fallback remains the shipped behaviour, not because the endpoint refuses third-party apps in general, but because the fix is a policy decision the owner has not yet made.
 
 ## Ruled out
 
@@ -72,13 +72,13 @@ OpenAI's private ChatGPT transcription endpoint (`chatgpt.com/backend-api/transc
 
 ## Follow-up: bb's cookie-carrying retry (13 October 2026, later)
 
-bb (get-bb/bb, `plugins/provider-codex/src/ai/chatgpt-fetch.ts`) sends the same request and, on a `403` with `cf-mitigated: challenge`, keeps the Cloudflare cookies from that response (`__cf_bm`, `_cfuvid`, `cf_clearance`, `cf_chl_*` and a few more) in memory and retries once carrying them. Bloblex now does exactly that (`bloblex_speech::cloud`, in-memory jar, chatgpt.com mode only, one retry).
+bb (get-bb/bb, `plugins/provider-codex/src/ai/chatgpt-fetch.ts`) sends the same request and, on a `403` with `cf-mitigated: challenge`, keeps the Cloudflare cookies from that response (`__cf_bm`, `_cfuvid`, `cf_clearance`, `cf_chl_*` and a few more) in memory and retries once carrying them. Bitbots now does exactly that (`bloblex_speech::cloud`, in-memory jar, chatgpt.com mode only, one retry).
 
-Live results with Bloblex's own identity (`originator: bloblex`, our User-Agent), a valid Codex sign-in, 1.2 s of silence:
+Live results with Bitbots' own identity (`originator: bloblex`, our User-Agent), a valid Codex sign-in, 1.2 s of silence:
 
 | Stack | First request | Retry carrying the cookies |
 |---|---|---|
 | Rust (reqwest, rustls), `cargo run -p bloblex-speech --example cloud_probe` | 403 challenge, sets `__cf_bm` | 403 challenge |
 | Node `fetch` (undici), `scripts/live-checks/live-cloud-dictation.mjs` | 403 challenge, sets `__cf_bm` | 403 challenge |
 
-So the network stack and the missing cookies are not the difference. **[superseded]** This file originally concluded that the remaining difference was "the client identity bb sends (`originator: bb`, `User-Agent: bb-host-daemon`)". That is wrong. bb's identity is not privileged and there is no allow-list to join: requests carrying **Bloblex's** identity returned HTTP 200 from the same machine in the same minute, from `node:https` (OpenSSL) and from undici 7.29 in bb's Electron runtime, while undici 7.16 and `reqwest` were challenged. The variable is the HTTP request shape the client produces. bb's own tracker records the same challenge hitting bb users (get-bb/bb issues 1587 and 2159). See [cloud-dictation-client-shape-2026-10-14.md](cloud-dictation-client-shape-2026-10-14.md).
+So the network stack and the missing cookies are not the difference. **[superseded]** This file originally concluded that the remaining difference was "the client identity bb sends (`originator: bb`, `User-Agent: bb-host-daemon`)". That is wrong. bb's identity is not privileged and there is no allow-list to join: requests carrying **Bitbots'** identity returned HTTP 200 from the same machine in the same minute, from `node:https` (OpenSSL) and from undici 7.29 in bb's Electron runtime, while undici 7.16 and `reqwest` were challenged. The variable is the HTTP request shape the client produces. bb's own tracker records the same challenge hitting bb users (get-bb/bb issues 1587 and 2159). See [cloud-dictation-client-shape-2026-10-14.md](cloud-dictation-client-shape-2026-10-14.md).

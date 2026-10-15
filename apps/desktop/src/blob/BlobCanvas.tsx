@@ -7,6 +7,7 @@ import { playCompanionCue, unlockCompanionAudioFromGesture } from './soundCues'
 import type { BlobLook } from './look'
 import { BitbotCanvas } from './BitbotCanvas'
 import { useBitbots } from './bitbots'
+import type { ThemeStyle } from '../ui/appearance'
 
 export type { BlobMood } from './characterState'
 import type { BlobMood } from './characterState'
@@ -25,10 +26,12 @@ export interface BlobCanvasProps {
   /** Extra transparent canvas above the logical body, without enlarging its hit or layout box. */
   effectOverscanTop?: number
   decorative?: boolean
-  /** The blob's silhouette and face. Omitted, it is the round Bloblex mascot. */
+  /** The blob's silhouette and face. Omitted, it is the round Bitbots mascot. */
   look?: BlobLook | null
   /** Opt in only on the companion surface; main-window avatars stay silent. */
   soundCues?: boolean
+  /** Draw in this look whatever the document is wearing (onboarding and the look preview). */
+  style?: ThemeStyle
   onGreetingComplete?: () => void
   onDizzy?: () => void
   onDizzyRecovery?: () => void
@@ -76,7 +79,7 @@ const LOVE_HOVER_MS = 1900
 const LOVE_COOLDOWN_MS = 6000
 
 /**
- * Bloblex character. The same engine renders the companion and every chat
+ * Bitbots character. The same engine renders the companion and every chat
  * avatar, so a blob keeps one face language everywhere. With `greeting`, the
  * canvas plays the companion welcome scene instead.
  */
@@ -321,10 +324,11 @@ function ClassicBlobCanvas({ color, size = 52, mood = 'idle', className = '', la
 }
 
 /**
- * Bloblex character. In Bitbots mode every surface draws the pixel robot;
+ * Bitbots character. In Bitbots mode every surface draws the pixel robot;
  * otherwise the classic blob engine does. Both take the same props.
  */
 export function BlobCanvas(props: BlobCanvasProps) {
-  const bitbots = useBitbots()
+  const documentBitbots = useBitbots()
+  const bitbots = props.style ? props.style === 'bitbots' : documentBitbots
   return bitbots ? <BitbotCanvas {...props} /> : <ClassicBlobCanvas {...props} />
 }

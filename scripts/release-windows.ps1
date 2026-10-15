@@ -341,7 +341,7 @@ try {
         # Keep in sync with defaultNotes() in scripts/make-update-manifest.mjs.
         $notesPath = Join-Path $workDirectory 'release-notes.md'
         $utf8 = New-Object System.Text.UTF8Encoding $false
-        [System.IO.File]::WriteAllText($notesPath, "Bloblex $Version`n", $utf8)
+        [System.IO.File]::WriteAllText($notesPath, "Bitbots $Version`n", $utf8)
         Write-Host "Release notes docs/releases/$Version.md were not found. Using the default note."
     }
 
@@ -365,7 +365,7 @@ try {
         $bundle.Signature.FullName,
         $manifestPath,
         '--repo', $Repo,
-        '--title', "Bloblex $Version",
+        '--title', "Bitbots $Version",
         '--notes-file', $notesPath
     )
     if (Test-PreReleaseVersion $Version) {
@@ -379,8 +379,8 @@ try {
         '--target', 'main',
         '--prerelease',
         '--latest=false',
-        '--title', 'Bloblex beta channel',
-        '--notes', 'Rolling beta channel manifest. Replaced on every Bloblex release.'
+        '--title', 'Bitbots beta channel',
+        '--notes', 'Rolling beta channel manifest. Replaced on every Bitbots release.'
     )
     $channelUploadArgs = @(
         'release', 'upload', 'channel-beta', $manifestPath,

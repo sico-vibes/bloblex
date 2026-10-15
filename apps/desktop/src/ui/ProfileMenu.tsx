@@ -100,8 +100,8 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
 
   return <div className="sidebar-foot" ref={wrapRef}>
     {editing && <form className="profile-onboarding" aria-label="Your name" onSubmit={saveName}>
-      <strong>{name ? 'Edit your name' : 'Welcome to Bloblex'}</strong>
-      <p>{name ? 'This name is shown in the sidebar and stays on this device.' : 'What should Bloblex call you? It stays on this device.'}</p>
+      <strong>{name ? 'Edit your name' : 'Welcome to Bitbots'}</strong>
+      <p>{name ? 'This name is shown in the sidebar and stays on this device.' : 'What should Bitbots call you? It stays on this device.'}</p>
       <input className="text-input" aria-label="Your name" value={draft} maxLength={40} placeholder="Your name" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') dismissEditor() }} />
       <div className="profile-onboarding-actions">
         <button type="button" className="ghost-button small" onClick={dismissEditor}>{name ? 'Cancel' : 'Not now'}</button>
@@ -130,7 +130,7 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
       {onShortcuts && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onShortcuts)}><Keyboard size={15} />Keyboard shortcuts</button>}
       <span className="menu-separator" role="separator" />
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(() => { setDraft(name); setEditing(true) })}><Pencil size={15} />{name ? 'Edit name' : 'Add your name'}</button>
-      <button type="button" role="menuitem" className="menu-item danger" onClick={() => run(onQuit)}><LogOut size={15} />Quit Bloblex</button>
+      <button type="button" role="menuitem" className="menu-item danger" onClick={() => run(onQuit)}><LogOut size={15} />Quit Bitbots</button>
     </div>}
     </div>
   </div>

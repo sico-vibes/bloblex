@@ -91,12 +91,12 @@ describe('updates normalisers', () => {
     expect(describeUpdateProgress({ phase: 'downloading', downloadedBytes: 512, totalBytes: null })).toEqual({
       label: 'Downloaded 512 B.', percent: null,
     })
-    expect(describeUpdateProgress({ phase: 'installing', downloadedBytes: 2048, totalBytes: 2048 }).label).toBe('Installing. Bloblex will restart.')
+    expect(describeUpdateProgress({ phase: 'installing', downloadedBytes: 2048, totalBytes: 2048 }).label).toBe('Installing. Bitbots will restart.')
     expect(formatUpdateTimestamp(null)).toBeNull()
     expect(formatUpdateTimestamp('not-a-date')).toBeNull()
     expect(formatUpdateTimestamp('2026-10-01T15:04:00.000Z')).toContain('2026')
-    expect(installImpactCopy(1)).toBe('1 session is running or waiting for approval. They will end when Bloblex restarts.')
-    expect(installImpactCopy(2)).toBe('2 sessions are running or waiting for approval. They will end when Bloblex restarts.')
+    expect(installImpactCopy(1)).toBe('1 session is running or waiting for approval. They will end when Bitbots restarts.')
+    expect(installImpactCopy(2)).toBe('2 sessions are running or waiting for approval. They will end when Bitbots restarts.')
     expect(countInstallAffectedSessions([
       { id: 'run', state: 'working' },
       { id: 'wait', state: 'waiting_permission' },

@@ -1,4 +1,4 @@
-// Bloblex character engine: a blob body in one of the look silhouettes, tinted
+// Bitbots character engine: a blob body in one of the look silhouettes, tinted
 // with the agent colour, with superellipse eyes, a ring badge and a state table
 // (idle, online, listening, typing, tool, file stages, offline, budget).
 // Tween/lock system, blink cadence, squash/slap, roll, badge swap, particles,

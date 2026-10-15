@@ -128,7 +128,7 @@ export function SendLaterControl({ disabled, nowMs, onSchedule }: { disabled: bo
         {problem && <p className="send-later-problem" role="alert">{problem}</p>}
         <button type="button" className="secondary-button small" onClick={scheduleCustom}>Schedule</button>
       </div>
-      <p className="composer-menu-note">Sends only while Bloblex is running and the computer is awake.</p>
+      <p className="composer-menu-note">Sends only while Bitbots is running and the computer is awake.</p>
     </div>}
   </div>
 }

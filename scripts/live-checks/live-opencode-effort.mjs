@@ -37,7 +37,7 @@ const notify = (method, params) => child.stdin.write(JSON.stringify({ jsonrpc: '
 const opt = (res) => (res.result?.configOptions || []).map((o) => ({ id: o.id, cur: o.currentValue, values: (o.options || []).map((x) => x.value ?? x.id).slice(0, 8), n: (o.options || []).length }))
 
 const report = { model }
-const init = await call('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'BloblexLiveCheck', version: '0.0.1' } })
+const init = await call('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'BitbotsLiveCheck', version: '0.0.1' } })
 notify('initialized', {})
 report.initialize = init.error ? { error: init.error.message?.slice(0, 120) } : { agent: init.result?.agentInfo?.name, version: init.result?.agentInfo?.version, caps: Object.keys(init.result?.agentCapabilities || {}) }
 

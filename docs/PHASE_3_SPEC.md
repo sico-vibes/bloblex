@@ -4,7 +4,7 @@
 
 This is the implementation contract for Phase 3 of [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Phase 3 replaces the runtime-per-row sidebar with one row per blob, and adds the blob editor. It depends only on Phase 2a, as specified in [PHASE_2A_SPEC.md](PHASE_2A_SPEC.md). Execution fields may be displayed. They must not be described as working.
 
-Line citations are the source this spec was written against. Phase 2a may land beside this document; where this spec names a type, RPC, or event, implement that shape from PHASE_2A_SPEC.md rather than from an older TypeScript file. Do not edit Rust. Do not copy another product's layout, labels, or assets ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) line 13). The shell to extend is the one already in the repo: Midnight chat chrome in [apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) lines 1–4, with Bloblex's own circular faces.
+Line citations are the source this spec was written against. Phase 2a may land beside this document; where this spec names a type, RPC, or event, implement that shape from PHASE_2A_SPEC.md rather than from an older TypeScript file. Do not edit Rust. Do not copy another product's layout, labels, or assets ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) line 13). The shell to extend is the one already in the repo: Midnight chat chrome in [apps/desktop/src/ui/shell.css](../apps/desktop/src/ui/shell.css) lines 1–4, with Bitbots' own circular faces.
 
 ## 1. Scope and non-scope
 
@@ -133,7 +133,7 @@ One draft is shared by Overview and Settings. The header holds Back, the agent n
 - `BlobCanvas` at 96px, draft colour, mood from `deriveCompanionStatus` for the selected runtime and this agent's selected session (create mode: `idle` when connected, `offline` when not).
 - Name and description. Empty description renders the muted sentence "No description".
 - Runtime: provider label, status dot, status text.
-- Model: the label "Model" and the value "CLI default" when `model` is null, otherwise the stored string, plus the sentence "Bloblex does not send a model until a later update." Do not call this the applied snapshot. Phase 2a stores no execution snapshot ([PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 85).
+- Model: the label "Model" and the value "CLI default" when `model` is null, otherwise the stored string, plus the sentence "Bitbots does not send a model until a later update." Do not call this the applied snapshot. Phase 2a stores no execution snapshot ([PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 85).
 - Status: the `deriveCompanionStatus` label.
 - Quick usage: the label "Usage" and the value "Not available yet." Do not read `usage.summary`, do not show token counts, and do not show `$0` ([PRODUCT.md](../PRODUCT.md) line 32).
 - The 12-swatch grid from section 4, no shapes ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) line 164). Choosing a swatch updates the draft and marks it dirty. It does not save by itself. A swatch is a profile edit, and Phase 3 has one save path, so Overview and Settings cannot diverge.
@@ -157,7 +157,7 @@ A single card: heading "Usage", body "Usage for this blob is not available yet."
 | Colour | `SwatchGrid` plus a custom hex text field | Section 4. The grid and the field edit the same draft colour |
 | Name | Single-line text | Trimmed, 1–60 Unicode scalar values, unique among other non-archived agents ([PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 132). No `maxLength` attribute, because it counts UTF-16 code units. Show the error under the field when invalid. No `0/60` counter |
 | Description | Text area | 0–255 Unicode scalar values, empty allowed. Counter `{n} / 255` with spaces around the slash, `n` from `scalarLength` below. At `n <= 255` the counter uses `var(--ink-3)`. Above 255 it uses `var(--bad)` from [apps/desktop/src/ui/styles.css](../apps/desktop/src/ui/styles.css) line 18 |
-| Instructions | Text area | Empty allowed. No length cap in 2a. Reject a NUL (`U+0000`). Helper, exact: "Saved with this blob. Bloblex does not send instructions to the CLI until a later update." |
+| Instructions | Text area | Empty allowed. No length cap in 2a. Reject a NUL (`U+0000`). Helper, exact: "Saved with this blob. Bitbots does not send instructions to the CLI until a later update." |
 
 `scalarLength` is `Array.from(value).length`. That counts Unicode code points and matches Rust `chars().count()` for the well-formed text a browser puts in an input. Do not use `String.length`.
 
@@ -177,7 +177,7 @@ Helper under the card title, exact: "These options apply to new sessions in a la
 
 Default project is shown because the UI, not the adapter, passes it as `projectPath` (section 5). Custom args and env are hidden because 2a does not apply them and Phase 2b starts from empty user allowlists. Duplicate still copies the stored arrays so a later phase does not lose them.
 
-The chat header model pill is a status group, not a button. Today it is a button that opens runtime settings ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 459). Phase 3 removes that click so the pill is not a second editor. It shows the agent colour dot, the runtime label, and either "CLI default" or `session.model` when that string is non-empty. `title` on the group, exact: "Reported by the session. Bloblex does not choose the model until a later update." Do not say the model was applied.
+The chat header model pill is a status group, not a button. Today it is a button that opens runtime settings ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 459). Phase 3 removes that click so the pill is not a second editor. It shows the agent colour dot, the runtime label, and either "CLI default" or `session.model` when that string is non-empty. `title` on the group, exact: "Reported by the session. Bitbots does not choose the model until a later update." Do not say the model was applied.
 
 ### Save, cancel, dirty, validation
 
@@ -214,8 +214,8 @@ Daemon codes are mapped below. The desktop bridge currently throws `"${code}: ${
 | `invalid_argument` | `session.new` | Choose a project folder that exists on this device. |
 | `invalid_argument` | `agent.reorder` (Phase 3 does not call it; keep the sentence for the mapper) | The roster order is out of date. Refresh and try again. |
 | `not_found` | `agent.reorder` | That runtime is no longer available. |
-| `internal` | any `agent.*` save or archive | Bloblex could not save that change. Nothing was applied. |
-| `unauthorized` | any of the above | Bloblex could not reach the local daemon. Reconnect and try again. |
+| `internal` | any `agent.*` save or archive | Bitbots could not save that change. Nothing was applied. |
+| `unauthorized` | any of the above | Bitbots could not reach the local daemon. Reconnect and try again. |
 | any other code | any of the above | The local daemon request failed. |
 
 `agent.delete` does not use `conflict` for a second archive; the daemon returns the archived row ([PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 147). Treat that as success.
@@ -377,7 +377,7 @@ Keep the agent selected. Mood and status follow `deriveCompanionStatus`. Disable
 
 ### `session.new`
 
-Every Bloblex-initiated create uses `{ agentId, projectPath }` and omits `runtimeId`. Sending both is `invalid_argument` ([PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 162). Omit `title` so the daemon stores `New chat` ([PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 166).
+Every Bitbots-initiated create uses `{ agentId, projectPath }` and omits `runtimeId`. Sending both is `invalid_argument` ([PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 162). Omit `title` so the daemon stores `New chat` ([PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 166).
 
 Paths that change from `{ runtimeId, projectPath }` ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 329–335):
 
@@ -576,7 +576,7 @@ The live inspection database is `%LOCALAPPDATA%\Bloblex\bloblex.db`, or `%TEMP%\
 9. Drag the companion by its drag region. The island body stays opaque and rounded. The native window around it stays transparent (no rectangular plate). Release it somewhere other than the default and confirm it stays there.
 10. Create a second blob on the same runtime as Claude, name it "Pink sibling", colour pink, description "Second blob.". Save. Both rows show. Their faces differ if you set the original Claude blob back to coral first; if Claude was left on pink, give the sibling lemon instead so the two faces differ. Start a session on each with two different folders, or the same folder twice. Each blob's header session list shows its own session, not the other's.
 11. Archive "Pink sibling". Confirm the copy in section 2. The row disappears. Restart is next, so do not restore it; there is no restore control.
-12. Quit Bloblex from the header menu. The inspection app, if it was running, is still running.
+12. Quit Bitbots from the header menu. The inspection app, if it was running, is still running.
 13. Start `npm run desktop:dev` again in the same session so `BLOBLEX_DB_PATH` is unchanged. The edited name, the pink (or lemon) colour, the description, and the archived row's absence all survive. The archived blob's session is not offered as a new-session target.
 14. Record the temp database path, the git revision, and a pass/fail line per step in `SESSION_HANDOFF.md`. Delete the temp database only after that note exists. Do not copy it over the live database.
 

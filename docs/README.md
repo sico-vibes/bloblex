@@ -1,4 +1,4 @@
-# Bloblex documentation hub
+# Bitbots documentation hub
 
 One place for every Markdown file in the repository. Each entry gives a one-line purpose, a status, and how far this pass checked it. The audit of each file is in [DOCS_AUDIT.md](DOCS_AUDIT.md). Where this hub and a document disagree, the code wins, then [AGENTS.md](../AGENTS.md) for rules.
 
@@ -58,7 +58,7 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 | [IMPROVEMENT_PHASE_3A_SPEC.md](IMPROVEMENT_PHASE_3A_SPEC.md) | Phase 3A: automatic retry after overload and rate limits. | historical (delivered in beta.19) | 14 Oct 2026: header and links |
 | [IMPROVEMENT_PHASE_3B_SPEC.md](IMPROVEMENT_PHASE_3B_SPEC.md) | Phase 3B: recorded-wire replay tests. | historical (delivered in beta.19) | 14 Oct 2026: header and links |
 | [IMPROVEMENT_PHASE_4A_SPEC.md](IMPROVEMENT_PHASE_4A_SPEC.md) | Phase 4A: scheduled automations. | historical (delivered in beta.19) | 14 Oct 2026: header and links |
-| [IMPROVEMENT_PHASE_4B_SPEC.md](IMPROVEMENT_PHASE_4B_SPEC.md) | Phase 4B: keep-awake while Bloblex has work. | historical (delivered in beta.19) | 14 Oct 2026: header and links |
+| [IMPROVEMENT_PHASE_4B_SPEC.md](IMPROVEMENT_PHASE_4B_SPEC.md) | Phase 4B: keep-awake while Bitbots has work. | historical (delivered in beta.19) | 14 Oct 2026: header and links |
 | [IMPROVEMENT_PHASE_5A_SPEC.md](IMPROVEMENT_PHASE_5A_SPEC.md) | Phase 5A: memory and "about you". | historical (delivered in beta.19) | 14 Oct 2026: header and links |
 | [IMPROVEMENT_PHASE_6A_SPEC.md](IMPROVEMENT_PHASE_6A_SPEC.md) | Phase 6A: ask-the-user tool, hand-off draft, notification level. | historical (delivered in beta.19) | 14 Oct 2026: header and links |
 | [IMPROVEMENT_PHASE_7_SPEC.md](IMPROVEMENT_PHASE_7_SPEC.md) | Phase 7: opt-in cloud dictation through the Codex login. | historical; banner notes the missing evidence file it names and the 14 Oct amendment | 14 Oct 2026: claims checked against `crates/bloblex-speech/src/cloud.rs` |

@@ -13,11 +13,11 @@ installed and running, server on `127.0.0.1:38886`. System Node `v24.11.1`
 
 bb transcribes through the same endpoint (`chatgpt.com/backend-api/transcribe`)
 with the same model (`gpt-transcribe`) and the same Codex login, and succeeds on
-this machine while Bloblex is challenged. Which difference explains that?
+this machine while Bitbots is challenged. Which difference explains that?
 
 ## Method
 
-Every request below used **Bloblex's own identity** (`originator: bloblex`,
+Every request below used **Bitbots' own identity** (`originator: bloblex`,
 `User-Agent: bloblex-desktop/0.1.0-beta.21`), read `$CODEX_HOME/auth.json`
 read-only, sent the same multipart body (`file` + `model=gpt-transcribe`), and
 carried **1 second of silence** — no audio of the owner's voice was sent. No
@@ -51,7 +51,7 @@ same credentials, from the same process runtime, seconds apart.
 **The challenge is decided by the shape of the HTTP request our client
 produces, not by the identity it presents, the audio container, the TLS library
 or the time of day.** Runs 3–5 returned HTTP 200 with a JSON body containing a
-`text` key while identifying as Bloblex, so the endpoint serves a
+`text` key while identifying as Bitbots, so the endpoint serves a
 non-browser client that presents our own name.
 
 ### Falsified by this run
@@ -66,7 +66,7 @@ non-browser client that presents our own name.
   [#2159](https://github.com/get-bb/bb/issues/2159) (their fix, which classifies
   the challenge as transient and tells the user to retry or switch to an API
   key) record that bb is challenged too, on "some networks".
-- **"The audio container is the difference" (bb sends webm, Bloblex sends WAV).**
+- **"The audio container is the difference" (bb sends webm, Bitbots sends WAV).**
   Both containers were challenged from the same client (run 2 shape) on
   14 October; the earlier WAV control reproduced.
 - **"This cannot be fixed on our side."** The production client's request shape

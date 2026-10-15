@@ -29,7 +29,7 @@ export const SHAPE_LABELS: Record<BlobShape, string> = {
 }
 
 /**
- * The Bloblex mascot: the round silhouette with tall capsule eyes. It is the
+ * The Bitbots mascot: the round silhouette with tall capsule eyes. It is the
  * face of onboarding, the welcome wave and the companion's default look.
  */
 export const MASCOT_LOOK: BlobLook = {

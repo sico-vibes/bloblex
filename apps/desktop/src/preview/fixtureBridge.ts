@@ -126,7 +126,7 @@ sessions.push({
     { id: 'team-r1', sequence: 4, turnId: 'team-tB', role: 'user', content: '[Reply from Pololo]\nNothing pixel-exact exists as a package. Closest: a PostHog ReasoningLevelDropdown (MIT) and a model selector on 21st.dev with Effort, Context and Fast toggles.', createdAt: minutesAgo(12), meta: { kind: 'blob_reply', fromAgentId: 'agent-pololo', fromName: 'Pololo', sideSessionId: teamSideId } },
     { id: 'team-a2', sequence: 5, turnId: 'team-tB', role: 'assistant', content: 'Pololo found it — nothing is a pixel-exact drop-in, but these are the useful hits:\n\n- **PostHog ReasoningLevelDropdown** (MIT): Faster ↔ Smarter, notched snaps, a Default badge.\n- **AI Model Select** on 21st.dev: Effort, Context and Fast in one popover.\n\nMy take: fork the PostHog one. Want me to plan the port?', createdAt: minutesAgo(11) },
     { id: 'team-u2', sequence: 6, turnId: 'team-tC', role: 'user', content: 'Yes, plan it.', createdAt: minutesAgo(3) },
-    { id: 'team-p1', sequence: 7, turnId: 'team-tC', role: 'plan', content: '1. Vendor the ReasoningLevelDropdown into `src/ui/effort`.\n2. Replace its token colours with Bloblex theme tokens.\n3. Wire it to the session lock and add keyboard tests.', createdAt: minutesAgo(2), meta: { kind: 'plan' } },
+    { id: 'team-p1', sequence: 7, turnId: 'team-tC', role: 'plan', content: '1. Vendor the ReasoningLevelDropdown into `src/ui/effort`.\n2. Replace its token colours with Bitbots theme tokens.\n3. Wire it to the session lock and add keyboard tests.', createdAt: minutesAgo(2), meta: { kind: 'plan' } },
   ],
   tools: [
     { id: 'team-tool-1', turnId: 'team-tA', kind: 'mcpToolCall', title: 'bloblex · list_blobs', state: 'completed', startedAt: minutesAgo(29.5), detail: { tool: 'bloblex · list_blobs', result: 'Your team:\n- Codex (you) [leader] — CTO\n- Pololo — UI/UX Designer · available' } },
@@ -161,12 +161,12 @@ let sequence = 1
 let agentSerial = 6
 let fixtureAutostart = false
 export const fixtureNotifications: Array<{ title: string; body: string }> = []
-export const launchFixtureModes = ['in-progress', 'done', 'done-warning', 'service-down', 'onboarding-step-1', 'onboarding-step-2', 'onboarding-step-3'] as const
+export const launchFixtureModes = ['in-progress', 'done', 'done-warning', 'service-down', 'onboarding-look', 'onboarding-step-1', 'onboarding-step-2', 'onboarding-step-3'] as const
 export function launchFixtureData(mode: typeof launchFixtureModes[number]) {
   const warning = mode === 'done-warning'
   const progress = mode === 'in-progress'
   const checks = [
-    { id: 'service', label: 'Connecting to the Bloblex service', state: mode === 'service-down' ? 'failed' : progress ? 'ok' : 'ok', detail: mode === 'service-down' ? 'Service did not respond' : 'Connected and loaded the latest state' },
+    { id: 'service', label: 'Connecting to the Bitbots service', state: mode === 'service-down' ? 'failed' : progress ? 'ok' : 'ok', detail: mode === 'service-down' ? 'Service did not respond' : 'Connected and loaded the latest state' },
     { id: 'discovery', label: 'Finding coding agents', state: progress ? 'running' : 'ok', detail: progress ? 'In progress' : '3 coding agents found' },
     { id: 'auth:runtime-claude', label: 'Checking Claude Code sign-in', state: progress ? 'running' : 'ok', detail: progress ? 'In progress' : 'Signed in' },
     { id: 'models:runtime-codex', label: 'Loading Codex models', state: progress ? 'running' : 'ok', detail: progress ? 'In progress' : 'Loaded 12 models' },
@@ -284,7 +284,8 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().has('activity')) fixtureSettings['experimental.activityDetails'] = true
     if (flags().has('usage-bar')) fixtureSettings['experimental.usageBar'] = true
     if (flags().has('logos')) fixtureSettings['experimental.runtimeLogos'] = true
-    if (flags().has('bitbots')) fixtureSettings['experimental.bitbots'] = true
+    if (flags().get('style')) fixtureSettings['appearance.style'] = flags().get('style')
+    if (flags().get('accent')) fixtureSettings['appearance.accent'] = flags().get('accent')
     if (flags().get('chat')) fixtureSettings['companion.chatSize'] = flags().get('chat')
     return { settings: { ...fixtureSettings, ...(fixturePreset() === 'usage-tip-90' ? { 'experimental.usageTips': true } : {}) } } as T
   }

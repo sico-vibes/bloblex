@@ -88,7 +88,7 @@ fn env_key_allowed(key: &str) -> bool {
     !SECRET_MARKERS.iter().any(|marker| upper.contains(marker))
 }
 
-/// Bloblex-owned config document. The caller removes any inherited
+/// Bitbots-owned config document. The caller removes any inherited
 /// `OPENCODE_CONFIG_CONTENT` before placing this value in the child environment.
 pub(crate) const PLAN_MODE: &str = "plan";
 

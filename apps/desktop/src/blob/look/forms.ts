@@ -5,7 +5,7 @@
 // src/styles/blob.ts at a7fd546), MIT License, Copyright (c) 2026 Alain. See
 // THIRD_PARTY_NOTICES.md. The trait keys, ranges and silhouette parameters are
 // kept as published so a seed reads the same way; the outlines are sampled into
-// point lists instead of SVG path strings, because the Bloblex engine draws on
+// point lists instead of SVG path strings, because the Bitbots engine draws on
 // a canvas and morphs the outline (the mailbox state) point by point.
 
 import type { Traits } from './seed'

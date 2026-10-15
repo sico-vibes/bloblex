@@ -416,7 +416,7 @@ fn normalize_context_usage(response: &Value) -> (Option<u64>, Option<u64>, Optio
     (report["totalTokens"].as_u64(), report["rawMaxTokens"].as_u64().filter(|capacity| *capacity > 0), report["model"].as_str().map(str::to_owned))
 }
 
-/// Handles control requests Bloblex answers itself: app-owned tools run
+/// Handles control requests Bitbots answers itself: app-owned tools run
 /// without a prompt, plans become a plan card, and `AskUserQuestion` becomes
 /// a question card. Everything else falls through to the permission flow.
 async fn intercept_control_request(c: &Conn, v: &Value) -> bool {
@@ -432,7 +432,7 @@ async fn intercept_control_request(c: &Conn, v: &Value) -> bool {
         if let Some(markdown) = input["plan"].as_str().map(str::trim).filter(|plan| !plan.is_empty()) {
             let _ = c.events.send(AgentEvent::PlanProposed { markdown: markdown.to_owned() }).await;
         }
-        let _ = write_control(c, json!({"type":"control_response","response":{"subtype":"success","request_id":original_id,"response":{"behavior":"deny","message":"Bloblex showed your plan to the user. Stop here and wait for their approval or feedback in a later message."}}})).await;
+        let _ = write_control(c, json!({"type":"control_response","response":{"subtype":"success","request_id":original_id,"response":{"behavior":"deny","message":"Bitbots showed your plan to the user. Stop here and wait for their approval or feedback in a later message."}}})).await;
         return true;
     }
     if tool == "AskUserQuestion" {
@@ -450,7 +450,7 @@ async fn intercept_control_request(c: &Conn, v: &Value) -> bool {
 fn control_response(original_id: Value, input: Value, choice: &str) -> Result<Value, AdapterError> {
     let response = match choice {
         "allow" => json!({"behavior":"allow","updatedInput":input}),
-        "deny" => json!({"behavior":"deny","message":"Denied in Bloblex"}),
+        "deny" => json!({"behavior":"deny","message":"Denied in Bitbots"}),
         _ => {
             return Err(AdapterError::Unsupported(
                 "Claude permission choice must be allow or deny".into(),

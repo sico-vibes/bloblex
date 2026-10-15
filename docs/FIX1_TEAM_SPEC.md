@@ -1,4 +1,4 @@
-# Fix 1C spec: leader-only blob creation over the Bloblex MCP bridge, workflows default on, one reaction per message
+# Fix 1C spec: leader-only blob creation over the Bitbots MCP bridge, workflows default on, one reaction per message
 
 Owner: OpenCode lane (backend only). Reviewer: Director. **Do not touch `apps/desktop/src`** (Director builds the UI). Another lane edits `crates/bloblex-adapter-acp` and OpenCode catalog bits of `main.rs` in parallel: do not touch the adapter crates or `fetch_model_catalog`/`runtime_capabilities`.
 Scope: `crates/bloblex-daemon/src/team.rs`, `crates/bloblex-daemon/src/main.rs` (only the places named below), `crates/bloblex-storage/src/lib.rs` (reaction function only, plus anything blob creation needs), tests, `docs/`.

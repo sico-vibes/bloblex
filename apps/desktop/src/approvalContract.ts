@@ -61,8 +61,8 @@ export function visibleApprovalMode(draftMode: ApprovalMode | null | undefined, 
 }
 
 export function approvalDescription(mode: ApprovalMode | null) {
-  if (mode === 'auto') return 'Bloblex approves low-risk actions inside the project and asks about everything else. Budgets, cancel, and Pause all still apply.'
-  if (mode === 'bypass') return 'Bloblex approves every action without asking, and may launch the provider so it does not ask either. Budgets, cancel, and Pause all still stop the work.'
+  if (mode === 'auto') return 'Bitbots approves low-risk actions inside the project and asks about everything else. Budgets, cancel, and Pause all still apply.'
+  if (mode === 'bypass') return 'Bitbots approves every action without asking, and may launch the provider so it does not ask either. Budgets, cancel, and Pause all still stop the work.'
   if (mode === 'ask') return 'Every permission request waits for you.'
   return 'Use the global default. The default can be Ask or Auto-approve. Bypass is chosen on this blob only.'
 }

@@ -26,7 +26,7 @@ Observation: the backup directory also contains `-shm`/`-wal` sidecar files next
 | 6 Roster: one blob per runtime, colours coral / blue / violet, runtime label under each, real CLI versions | PASS | `01-main-native.png` |
 | 6b Companion compact bar shows the selected blob and peer minis | PASS | `02-companion-native.png` |
 | 7 Edit Claude, change colour to pink, save: sidebar row, chat header face, large face, companion island face, companion mini and companion focus card are pink; stored as `pink`; exactly one persisted `agent.changed` event | PASS | `03`, `04`, `15` |
-| 8 Tray menu (opened through UI Automation): Open Bloblex, **Active sessions**, **Pause all agents...**, Show / hide companion, Refresh runtimes, Settings, Quit Bloblex | PASS | text list (menu is a native popup) |
+| 8 Tray menu (opened through UI Automation): Open Bitbots, **Active sessions**, **Pause all agents...**, Show / hide companion, Refresh runtimes, Settings, Quit Bitbots | PASS | text list (menu is a native popup) |
 | 9 Companion window transparent around a rounded opaque island (wallpaper visible at all four corners) | PASS | `12-companion-on-desktop.png` |
 | 9 Free drag: window moved by exactly (+300, +250) when dragged from the top strip | PASS (partial, see N1) | `13-companion-after-drag.png` |
 | 9 Free drag from the face or the name/status text | **FAIL** (N1) | n/a |

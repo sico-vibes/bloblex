@@ -536,7 +536,7 @@ describe('companion settings panel', () => {
     expect(panel.querySelector('[role="switch"][aria-label="Companion sounds"]')).not.toBeNull()
     expect(panel.querySelector('[role="radiogroup"][aria-label="Chat height"]')).not.toBeNull()
     expect(panel.querySelector('.cset-footer')?.textContent).toContain('Drag the island to place it anywhere.')
-    expect([...panel.querySelectorAll('.cset-footer button')].map((button) => button.textContent)).toEqual(['Open Bloblex settings', 'Hide companion'])
+    expect([...panel.querySelectorAll('.cset-footer button')].map((button) => button.textContent)).toEqual(['Open Bitbots settings', 'Hide companion'])
     // The old loose "Choose" hop to the overview is gone: choosing happens in the panel.
     expect([...panel.querySelectorAll('button')].some((button) => button.textContent === 'Choose')).toBe(false)
   })

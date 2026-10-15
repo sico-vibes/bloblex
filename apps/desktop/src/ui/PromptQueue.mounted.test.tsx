@@ -114,7 +114,7 @@ describe('SendLaterControl', () => {
     const onSchedule = vi.fn()
     render(<SendLaterControl disabled={false} nowMs={NOW} onSchedule={onSchedule} />)
     click(q('[aria-label="Send later"]'))
-    expect(q('.send-later-menu')?.textContent).toContain('Sends only while Bloblex is running')
+    expect(q('.send-later-menu')?.textContent).toContain('Sends only while Bitbots is running')
     const labels = [...host.querySelectorAll('[role="menuitem"] strong')].map((node) => node.textContent)
     expect(labels).toEqual(['In 15 minutes', 'In 1 hour', 'In 3 hours', 'Tomorrow morning'])
     click(host.querySelectorAll('[role="menuitem"]')[1])

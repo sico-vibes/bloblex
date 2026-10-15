@@ -60,7 +60,7 @@ The daemon tests
 `stale_steer_falls_back_to_the_queue_at_position_zero`,
 `steer_is_unsupported_for_other_runtimes_and_side_conversations`, and
 `runtime_capabilities_report_steer_none_and_follow_the_gate` cover the RPC
-contract. This proves only that Bloblex sends a schema-shaped request to a fake
+contract. This proves only that Bitbots sends a schema-shaped request to a fake
 peer and routes the fake's accept/stale/reject replies.
 
 ## Not verified live

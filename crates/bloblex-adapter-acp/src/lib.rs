@@ -386,7 +386,7 @@ impl AcpAdapter {
                             let response = json!({
                                 "jsonrpc": "2.0",
                                 "id": id,
-                                "error": {"code": -32601, "message": "Method not supported by Bloblex ACP client"}
+                                "error": {"code": -32601, "message": "Method not supported by Bitbots ACP client"}
                             });
                             let mut bytes = serde_json::to_vec(&response).unwrap_or_default();
                             bytes.push(b'\n');

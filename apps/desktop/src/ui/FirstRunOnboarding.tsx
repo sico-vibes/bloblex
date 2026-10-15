@@ -9,12 +9,21 @@ import { runtimeAuthSummary } from './launchChecks'
 import { rpc } from '../tauri'
 import { parseModelCatalog, type CatalogModel } from '../executionContract'
 import { preferredConcreteModel } from './modelPreferences'
+import { LookPicker } from './LookPicker'
+import { LookPreview } from './LookPreview'
+import { setThemeStyle } from '../blob/bitbots'
+import type { ThemeStyle } from './appearance'
 
 const COLORS = ['#b7a7f4', '#e89191', '#82c9a5', '#e8b04b', '#77b9dc']
-export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate, onFinish, onSaveName, initialStep = 0 }: {
+export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate, onFinish, onSaveName, initialStep }: {
   runtimes: Runtime[]; scanning: boolean; error: string | null; onScan: () => void; onCreate: (runtime: Runtime, name: string, color: string, modelId: string) => Promise<Agent | null>; onFinish: () => void; onSaveName: (name: string) => void; initialStep?: 0 | 1 | 2
 }) {
-  const [step, setStep] = useState<number>(initialStep)
+  // -1 is the look step; the three steps after it keep their old numbers.
+  const [step, setStep] = useState<number>(initialStep ?? -1)
+  const [pickedLook, setPickedLook] = useState<ThemeStyle | null>(null)
+  // The product's vocabulary stays "blob" in every look until the copy pass is done.
+  const noun = 'blob'
+  const Noun = 'Blob'
   const [name, setName] = useState('')
   const [agentName, setAgentName] = useState('')
   const [runtimeId, setRuntimeId] = useState('')
@@ -30,6 +39,11 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
   const headingRef = useRef<HTMLHeadingElement>(null)
   const celebrationTimer = useRef<number | null>(null)
   useEffect(() => { if (step === 0) nameRef.current?.focus(); else headingRef.current?.focus() }, [step])
+  const chooseLook = (look: ThemeStyle) => {
+    setPickedLook(look)
+    setThemeStyle(look)
+    void Promise.resolve().then(() => rpc('settings.set', { key: 'appearance.style', value: look })).catch(() => undefined)
+  }
   useEffect(() => () => {
     if (celebrationTimer.current !== null) window.clearTimeout(celebrationTimer.current)
     celebrationTimer.current = null
@@ -75,12 +89,13 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
     try { await navigator.clipboard.writeText(value); setCopyNotice('Command copied.') }
     catch { setCopyNotice('Could not copy the command.') }
   }
-  const colors = <div className="onboarding-colors" role="group" aria-label="Blob colour">{COLORS.map((item) => <button key={item} type="button" aria-label={'Choose ' + item + ' colour'} aria-pressed={color === item} style={{ backgroundColor: item }} onClick={() => setColor(item)} />)}</div>
+  const colors = <div className="onboarding-colors" role="group" aria-label={Noun + ' colour'}>{COLORS.map((item) => <button key={item} type="button" aria-label={'Choose ' + item + ' colour'} aria-pressed={color === item} style={{ backgroundColor: item }} onClick={() => setColor(item)} />)}</div>
   return <main className="onboarding-screen" aria-labelledby="onboarding-title"><section className="onboarding-content">
-    <div className="onboarding-character"><BlobCanvas color={color} size={112} mood={step === 1 ? (scanning ? 'tool_activity' : 'thinking') : celebrated ? 'success' : 'idle'} label="Bloblex onboarding companion" /></div>
-    <div className="onboarding-progress" role="group" aria-label={'Step ' + (step + 1) + ' of 3'}>{[0, 1, 2].map((index) => <span key={index} className={index === step ? 'active' : index < step ? 'done' : ''} />)}</div>
-    {step === 0 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>What should we call you?</h1><p>This name stays on this device.</p><label className="onboarding-field">Your name<input ref={nameRef} className="text-input" value={name} maxLength={40} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && name.trim()) continueName() }} /></label><div className="onboarding-actions"><button className="ghost-button" onClick={() => continueName(true)}>Skip</button><button className="primary-button" disabled={!name.trim()} onClick={() => continueName()}>Continue</button></div></section>}
-    {step === 1 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>Coding agents</h1><p>Bloblex checks which coding agents are installed on this device.</p><div className="onboarding-runtimes" aria-live="polite">{(['claude', 'codex', 'opencode'] as const).map((provider) => {
+    {step >= 0 && <div className="onboarding-character"><BlobCanvas color={color} size={112} mood={step === 1 ? (scanning ? 'tool_activity' : 'thinking') : celebrated ? 'success' : 'idle'} label="Bitbots onboarding companion" /></div>}
+    <div className="onboarding-progress" role="group" aria-label={'Step ' + (step + 2) + ' of 4'}>{[-1, 0, 1, 2].map((index) => <span key={index} className={index === step ? 'active' : index < step ? 'done' : ''} />)}</div>
+    {step === -1 && <section className="onboarding-step look-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>Choose your look</h1><p>Pick how Bitbots looks and feels. You can switch any time in Settings.</p><LookPicker value={pickedLook} onChange={chooseLook} label="App look" /><LookPreview look={pickedLook} /><div className="onboarding-actions"><button className="primary-button" disabled={!pickedLook} onClick={() => setStep(0)}>Continue</button></div></section>}
+    {step === 0 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>What should we call you?</h1><p>This name stays on this device.</p><label className="onboarding-field">Your name<input ref={nameRef} className="text-input" value={name} maxLength={40} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && name.trim()) continueName() }} /></label><div className="onboarding-actions"><button className="ghost-button" onClick={() => setStep(-1)}>Back</button><button className="ghost-button" onClick={() => continueName(true)}>Skip</button><button className="primary-button" disabled={!name.trim()} onClick={() => continueName()}>Continue</button></div></section>}
+    {step === 1 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>Coding agents</h1><p>Bitbots checks which coding agents are installed on this device.</p><div className="onboarding-runtimes" aria-live="polite">{(['claude', 'codex', 'opencode'] as const).map((provider) => {
       const guide = PROVIDER_GUIDES[provider]
       const providerName = providerBrand(provider).name
       const matches = runtimes.filter((runtime) => runtime.provider.toLowerCase() === provider)
@@ -95,6 +110,6 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
               : <div className="onboarding-version-fallback"><small className="onboarding-version-note" role="note">Version check command not confirmed; see <a className="onboarding-doc-link" href={guide.docsUrl}>the official docs</a>.</small></div>}
           </article>
     })}</div>{copyNotice && <p role="status">{copyNotice}</p>}{error && <p role="alert">{error}</p>}<div className="onboarding-actions"><button className="ghost-button" onClick={() => setStep(0)}>Back</button><button className="secondary-button" onClick={onScan} disabled={scanning}><Search size={14} />{scanning ? 'Scanning…' : 'Scan again'}</button>{runtimes.length ? <button className="primary-button" onClick={() => setStep(2)}>Continue</button> : <button className="primary-button" onClick={finish}>Continue without an agent</button>}</div></section>}
-    {step === 2 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>Meet your first blob</h1><p>Give it a name and choose the model it will use.</p><label className="onboarding-field">Coding agent<Select ariaLabel="Coding agent" variant="field" value={runtimeId} onChange={(value) => setRuntimeId(value)} options={runtimes.map((runtime) => ({ value: runtime.id, label: providerBrand(runtime.provider).name, provider: runtime.provider }))} /></label><label className="onboarding-field">Model<Select ariaLabel="Model" variant="field" value={modelId} disabled={modelLoading || !!modelError || models.length === 0} onChange={setModelId} options={[{ value:'', label: modelLoading ? 'Loading models…' : 'Choose a model', disabled:true }, ...models.map((model) => ({ value:model.id, label:model.displayName, ...(model.group ? { group:model.group } : {}) }))]} /></label>{modelLoading && <p role="status">Loading verified models…</p>}{modelError && <p role="alert">{modelError}</p>}<label className="onboarding-field">Blob name<input className="text-input" value={agentName} maxLength={40} onChange={(event) => setAgentName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && agentName.trim() && selectedRuntime && modelId) { event.preventDefault(); void create() } }} /></label>{colors}{error && <p role="alert">{error}</p>}<div className="onboarding-actions"><button className="ghost-button" disabled={creating} onClick={() => setStep(1)}>Back</button><button className="primary-button" onClick={() => void create()} disabled={creating || !agentName.trim() || !selectedRuntime || !modelId || modelLoading || !!modelError}>{creating ? 'Creating…' : celebrated ? 'Ready' : 'Create blob'}</button></div></section>}
+    {step === 2 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>Meet your first {noun}</h1><p>Give it a name and choose the model it will use.</p><label className="onboarding-field">Coding agent<Select ariaLabel="Coding agent" variant="field" value={runtimeId} onChange={(value) => setRuntimeId(value)} options={runtimes.map((runtime) => ({ value: runtime.id, label: providerBrand(runtime.provider).name, provider: runtime.provider }))} /></label><label className="onboarding-field">Model<Select ariaLabel="Model" variant="field" value={modelId} disabled={modelLoading || !!modelError || models.length === 0} onChange={setModelId} options={[{ value:'', label: modelLoading ? 'Loading models…' : 'Choose a model', disabled:true }, ...models.map((model) => ({ value:model.id, label:model.displayName, ...(model.group ? { group:model.group } : {}) }))]} /></label>{modelLoading && <p role="status">Loading verified models…</p>}{modelError && <p role="alert">{modelError}</p>}<label className="onboarding-field">{Noun} name<input className="text-input" value={agentName} maxLength={40} onChange={(event) => setAgentName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && agentName.trim() && selectedRuntime && modelId) { event.preventDefault(); void create() } }} /></label>{colors}{error && <p role="alert">{error}</p>}<div className="onboarding-actions"><button className="ghost-button" disabled={creating} onClick={() => setStep(1)}>Back</button><button className="primary-button" onClick={() => void create()} disabled={creating || !agentName.trim() || !selectedRuntime || !modelId || modelLoading || !!modelError}>{creating ? 'Creating…' : celebrated ? 'Ready' : 'Create ' + noun}</button></div></section>}
   </section></main>
 }

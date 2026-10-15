@@ -31,7 +31,7 @@ describe('mounted conversation controls', () => {
     trigger.focus()
     const cancelled = vi.fn()
     const confirmed = vi.fn()
-    const view = mount(<ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bloblex. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" onConfirm={confirmed} onCancel={cancelled} />)
+    const view = mount(<ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bitbots. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" onConfirm={confirmed} onCancel={cancelled} />)
     views.push({ unmount: () => { view.unmount(); trigger.remove() } })
     expect(view.host.querySelector('[role="dialog"]')?.textContent).toContain('The coding agent\'s own history is not touched.')
     await act(async () => { [...view.host.querySelectorAll('button')].find((button) => button.textContent === 'Cancel')?.click() })

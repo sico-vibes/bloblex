@@ -467,7 +467,7 @@ pub async fn reconcile_restart(st: &AppState) {
         crate::team::note(
             st,
             session_id,
-            "Automatic retry skipped because Bloblex was not running.",
+            "Automatic retry skipped because Bitbots was not running.",
             json!({"kind":"auto_retry","status":"skipped","reason":"restart"}),
         )
         .await;

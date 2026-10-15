@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, Runtime } from '../types'
 import { PROVIDER_GUIDES } from './providerGuides'
 
-vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => <div aria-label="Bloblex onboarding companion" /> }))
+vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => <div aria-label="Bitbots onboarding companion" /> }))
 const mocks = vi.hoisted(() => ({ rpc: vi.fn() }))
 vi.mock('../tauri', () => ({ rpc: mocks.rpc }))
 import { FirstRunOnboarding } from './FirstRunOnboarding'
@@ -31,9 +31,28 @@ function input(value: string, label: string) {
 afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null; mocks.rpc.mockReset() })
 
 describe('FirstRunOnboarding', () => {
+  it('starts on the look step: Bitbots is tagged Primary, Blobots Alternative, and Continue waits for a choice', async () => {
+    const { host: mounted } = mount({ runtimes: [runtime] })
+    const cards = [...mounted.querySelectorAll<HTMLElement>('.look-card')]
+    expect(cards.map((card) => card.dataset.look)).toEqual(['bitbots', 'blobots'])
+    expect(cards[0].textContent).toContain('Primary')
+    expect(cards[1].textContent).toContain('Alternative')
+    expect(button('Continue').disabled).toBe(true)
+    expect(mounted.querySelector('.look-preview')?.getAttribute('data-open')).toBe('false')
+    await act(async () => { cards[1].click(); await Promise.resolve() })
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.style', value: 'blobots' })
+    expect(mounted.querySelector('.look-preview')?.getAttribute('data-open')).toBe('true')
+    expect(document.documentElement.dataset.style).toBe('blobots')
+    expect(button('Continue').disabled).toBe(false)
+    await act(async () => { cards[0].click(); await Promise.resolve() })
+    expect(document.documentElement.dataset.style).toBe('bitbots')
+    act(() => button('Continue').click())
+    expect(mounted.textContent).toContain('What should we call you?')
+  })
+
   it('saves a name and provides the no-agent path', () => {
     const saveName = vi.fn()
-    const { complete, host: mounted } = mount({ onSaveName: saveName })
+    const { complete, host: mounted } = mount({ initialStep: 0, onSaveName: saveName })
     act(() => button('Skip').click())
     expect(mounted.textContent).toContain('Not found')
     act(() => button('Continue without an agent').click())
@@ -69,7 +88,7 @@ describe('FirstRunOnboarding', () => {
     ] })
     const create = vi.fn(async () => ({ id: 'agent-1' } as Agent))
     const saveName = vi.fn()
-    const { host: mounted } = mount({ runtimes: [runtime], onCreate: create, onSaveName: saveName })
+    const { host: mounted } = mount({ initialStep: 0, runtimes: [runtime], onCreate: create, onSaveName: saveName })
     input('Sam', 'name')
     await act(async () => { button('Continue').click(); await Promise.resolve(); await Promise.resolve() })
     expect(mounted.textContent).toContain('1.2')
@@ -82,7 +101,7 @@ describe('FirstRunOnboarding', () => {
   })
 
   it('omits an unconfirmed version command and links to the official docs', () => {
-    const { host: mounted } = mount({ runtimes: [runtime] })
+    const { host: mounted } = mount({ initialStep: 0, runtimes: [runtime] })
     act(() => button('Skip').click())
     const codex = mounted.querySelector<HTMLElement>('[data-provider="codex"]')
     expect(codex?.textContent).toContain('Version check command not confirmed; see the official docs.')

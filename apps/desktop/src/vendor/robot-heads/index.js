@@ -1,5 +1,5 @@
-// robot-heads 0.3.0 (MIT, Copyright (c) 2026 Fayaz Ahmed), vendored by Bloblex.
-// Bloblex changes, both for cost: (1) the shared loop draws at most ~30 times a
+// robot-heads 0.3.0 (MIT, Copyright (c) 2026 Fayaz Ahmed), vendored by Bitbots.
+// Bitbots changes, both for cost: (1) the shared loop draws at most ~30 times a
 // second instead of at the display's refresh rate; (2) avatars of 80px or less
 // draw at up to 1.5x instead of 2x and update at ~15 fps. Nothing else is modified.
 import { jsx as Kt } from "react/jsx-runtime";
@@ -908,7 +908,7 @@ const ss = xn(function({
     }
     let acc = 0;
     return Wn((y) => {
-      // Bloblex: avatars of 80px or less update at ~15 fps; their motion is small.
+      // Bitbots: avatars of 80px or less update at ~15 fps; their motion is small.
       acc += y;
       if (Z.current.box <= 80 && acc < 1 / 15 - 0.004) return;
       y = acc, acc = 0;

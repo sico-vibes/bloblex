@@ -148,7 +148,7 @@ describe('General settings mounted controls', () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
     await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-    const launchSwitch = host.querySelector<HTMLButtonElement>('[aria-label="Open the companion when Bloblex starts"]')
+    const launchSwitch = host.querySelector<HTMLButtonElement>('[aria-label="Open the companion when Bitbots starts"]')
     expect(launchSwitch?.getAttribute('aria-checked')).toBe('false')
     await act(async () => launchSwitch?.click())
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'companion.openAtStartup', value: true })

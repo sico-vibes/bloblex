@@ -1,4 +1,4 @@
-# Bloblex collaboration instructions
+# Bitbots collaboration instructions
 
 # Amendment (12 October 2026): lanes, dictation exception, budgets
 

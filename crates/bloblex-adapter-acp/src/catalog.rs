@@ -478,7 +478,7 @@ impl CatalogWorkingDirectory {
 impl Drop for CatalogWorkingDirectory { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
 
 fn prepare_listing_environment(command: &mut Command) {
-    // Listing must use the user's provider/login configuration, never a Bloblex session profile.
+    // Listing must use the user's provider/login configuration, never a Bitbots session profile.
     command.env_remove("OPENCODE_CONFIG_CONTENT");
 }
 

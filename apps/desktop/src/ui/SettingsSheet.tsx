@@ -19,7 +19,9 @@ import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
 import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTime, type DiscoveryStatus } from './runtimeDiscovery'
 import { ConfirmDialog } from './BlobPage'
-import { setBitbotsEnabled, useBitbots } from '../blob/bitbots'
+import { setAccentColor, setThemeStyle, useAccentColor, useThemeStyle } from '../blob/bitbots'
+import { LookPicker } from './LookPicker'
+import { AccentPicker } from './AccentPicker'
 import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import './bitbotsUi.css'
@@ -276,7 +278,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
   const setCompanion = (visible: boolean) => guarded(async () => { await setCompanionVisibility(visible) })
   const saveSetting = (key: string, value: unknown) => guarded(async () => { await rpc('settings.set', { key, value }) })
-  const bitbots = useBitbots()
+  const themeStyleValue = useThemeStyle()
+  const accentValue = useAccentColor()
   const applySpeechEngine = async (engine: DictationEngineChoice, consent: boolean) => {
     const failure = await guarded(async () => {
       if (consent !== cloudConsent) {
@@ -441,7 +444,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label="Start with Windows">
                 <button type="button" className={`toggle ${startWithWindows ? 'on' : ''}`} role="switch" aria-label="Start with Windows" aria-checked={startWithWindows} onClick={() => void updateAutostart(!startWithWindows)} disabled={saving || !autostartLoaded}><i /></button>
               </SettingsRow>
-              <SettingsRow label="Close to tray" hint="Closing the window keeps Bloblex running in the tray.">
+              <SettingsRow label="Close to tray" hint="Closing the window keeps Bitbots running in the tray.">
                 <button type="button" className={`toggle ${closeToTray ? 'on' : ''}`} role="switch" aria-label="Close to tray" aria-checked={closeToTray} onClick={() => void updateCloseToTray(!closeToTray)} disabled={saving}><i /></button>
               </SettingsRow>
               <SettingsRow label="Companion display" hint="The companion starts at the bottom center of this display.">
@@ -449,8 +452,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Companion">
-              <SettingsRow label="Open the companion when Bloblex starts">
-                <button type="button" className={`toggle ${companionOpenAtStartup ? 'on' : ''}`} role="switch" aria-label="Open the companion when Bloblex starts" aria-checked={companionOpenAtStartup} onClick={() => void saveSetting('companion.openAtStartup', !companionOpenAtStartup).then((failure) => { if (!failure) setCompanionOpenAtStartup(!companionOpenAtStartup) })} disabled={saving}><i /></button>
+              <SettingsRow label="Open the companion when Bitbots starts">
+                <button type="button" className={`toggle ${companionOpenAtStartup ? 'on' : ''}`} role="switch" aria-label="Open the companion when Bitbots starts" aria-checked={companionOpenAtStartup} onClick={() => void saveSetting('companion.openAtStartup', !companionOpenAtStartup).then((failure) => { if (!failure) setCompanionOpenAtStartup(!companionOpenAtStartup) })} disabled={saving}><i /></button>
               </SettingsRow>
               <SettingsRow label="Start position">
                 <Select ariaLabel="Companion start position" variant="muted" value={startPosition} disabled={saving} onChange={setStartPositionChoice} options={[{ value: 'launch', label: 'Centre, near the bottom' }, { value: 'last', label: 'Where I left it' }]} />
@@ -472,6 +475,12 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label="Theme">
                 <Select ariaLabel="Theme" variant="muted" value={appearanceTheme} disabled={saving} onChange={(value) => { if (value === 'system' || value === 'dark' || value === 'light') void updateAppearance(value, textSize) }} options={[{ value: 'system', label: 'Follow system' }, { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} />
               </SettingsRow>
+              <SettingsRow label="Look" hint="Bitbots is the primary look. Blobots is the softer alternative." stacked>
+                <LookPicker value={themeStyleValue} compact disabled={saving} label="App look" onChange={(next) => { void saveSetting('appearance.style', next).then((failure) => { if (!failure) setThemeStyle(next) }) }} />
+              </SettingsRow>
+              <SettingsRow label="Accent colour" stacked hint="Used for buttons, selections and focus in both looks. Neutral follows the theme.">
+                <AccentPicker value={accentValue} disabled={saving} onChange={(next) => { void saveSetting('appearance.accent', next).then((failure) => { if (!failure) setAccentColor(next) }) }} />
+              </SettingsRow>
               <SettingsRow label="Text size">
                 <Select ariaLabel="Text size" variant="muted" value={textSize} disabled={saving} onChange={(value) => { if (['small', 'default', 'large', 'larger'].includes(value)) void updateAppearance(appearanceTheme, value as typeof textSize) }} options={[{ value: 'small', label: 'Small 13' }, { value: 'default', label: 'Default 14' }, { value: 'large', label: 'Large 15' }, { value: 'larger', label: 'Larger 16' }]} />
               </SettingsRow>
@@ -484,10 +493,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </form>
             </SettingsGroup>
             <SettingsGroup title="Experimental">
-              <SettingsRow label={<span className="experimental-label">Bitbots<span className="experimental-tag flashy">Experimental</span><HelpTip text="Turns every blob into a pixel LED robot and gives the whole app a pixel look: dot-matrix headings, square corners, dotted borders, a pixel companion and welcome. Robots show what they are doing on their own face, so the corner status badges go away. You can still pick each robot's outline (rectangle, square, circle or hexagon) and its shell, trim and screen colours. Robots by robot-heads (MIT)." /></span>} hint="Pixel robots instead of blobs, and a pixel look for the whole app.">
-                <button type="button" className={`toggle ${bitbots ? 'on' : ''}`} role="switch" aria-label="Bitbots" aria-checked={bitbots} disabled={saving} onClick={() => { const next = !bitbots; void saveSetting('experimental.bitbots', next).then((failure) => { if (!failure) setBitbotsEnabled(next) }) }}><i /></button>
-              </SettingsRow>
-              <SettingsRow label={<span className="experimental-label">Claude dynamic workflows and Ultracode<HelpTip text="On by default. New Claude Code sessions receive enableWorkflows:true as a session-local setting, which is also what makes the Ultracode effort level available. Bloblex does not edit Claude's config. Claude Code can still decline this when a managed policy forbids it. Turning it off keeps Claude's own default and hides Ultracode." /></span>} hint="Lets Claude run dynamic workflows and offers Ultracode in the effort selector. Existing conversations keep their launch settings.">
+              <SettingsRow label={<span className="experimental-label">Claude dynamic workflows and Ultracode<HelpTip text="On by default. New Claude Code sessions receive enableWorkflows:true as a session-local setting, which is also what makes the Ultracode effort level available. Bitbots does not edit Claude's config. Claude Code can still decline this when a managed policy forbids it. Turning it off keeps Claude's own default and hides Ultracode." /></span>} hint="Lets Claude run dynamic workflows and offers Ultracode in the effort selector. Existing conversations keep their launch settings.">
                 <button type="button" className={`toggle ${claudeWorkflowsEnabled ? 'on' : ''}`} role="switch" aria-label="Claude dynamic workflows" aria-checked={claudeWorkflowsEnabled} disabled={saving} onClick={() => { const next = !claudeWorkflowsEnabled; void saveSetting('claude.enableWorkflows', next).then((failure) => { if (!failure) onClaudeWorkflowsChange?.(next) }) }}><i /></button>
               </SettingsRow>
               <SettingsRow label={<span className="experimental-label">Usage tips<span className="experimental-tag">Experimental</span><HelpTip text="Shows a notice above the active composer when the selected CLI reports 75%, 90% or 100% use in a current quota window. It uses the reported window reset when available, can be dismissed per period, and includes no estimates or upgrade link." /></span>} hint="Accurate high-usage notices from the selected coding agent.">
@@ -513,7 +519,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Power">
-              <SettingsRow label="Keep this computer awake while blobs work" hint="While a blob is working or a schedule is about to run, Bloblex asks Windows not to sleep on its own. It does not stop you closing the lid or choosing Sleep.">
+              <SettingsRow label="Keep this computer awake while blobs work" hint="While a blob is working or a schedule is about to run, Bitbots asks Windows not to sleep on its own. It does not stop you closing the lid or choosing Sleep.">
                 <button type="button" className={`toggle ${keepAwake ? 'on' : ''}`} role="switch" aria-label="Keep this computer awake while blobs work" aria-checked={keepAwake} disabled={saving} onClick={() => { const next = !keepAwake; void saveSetting('power.keepAwake', next).then((failure) => { if (!failure) setKeepAwake(next) }) }}><i /></button>
               </SettingsRow>
             </SettingsGroup>
@@ -525,7 +531,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
           </>}
 
           {!loading && page === 'Agents' && <>
-            <p className="settings-intro">Bloblex runs the coding agents installed on this device. Sign in with each agent's own command line tool; Bloblex never handles your provider login.</p>
+            <p className="settings-intro">Bitbots runs the coding agents installed on this device. Sign in with each agent's own command line tool; Bitbots never handles your provider login.</p>
             <SettingsGroup title="Approvals">
               <SettingsRow label="Default approval" hint="Ask waits for you. Auto-approve allows low-risk actions inside the project. Bypass can only be turned on for a single blob.">
                 {policyError
@@ -642,7 +648,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             </SettingsGroup>
           </>}
 
-          {consentFor && <ConfirmDialog title="Use cloud dictation?" body="Each recording is sent to OpenAI's ChatGPT transcription service using your signed-in Codex account, which Bloblex reads from Codex's own file on this computer. Recordings, text and the sign-in are not stored or logged by Bloblex. If the cloud is unavailable, dictation uses the on-device model when it is installed. Choose On device in Settings to stop." confirmLabel="Allow cloud" cancelLabel="Keep on device" onCancel={() => setConsentFor(null)} onConfirm={async () => { const engine = consentFor; setConsentFor(null); await applySpeechEngine(engine, true) }} />}
+          {consentFor && <ConfirmDialog title="Use cloud dictation?" body="Each recording is sent to OpenAI's ChatGPT transcription service using your signed-in Codex account, which Bitbots reads from Codex's own file on this computer. Recordings, text and the sign-in are not stored or logged by Bitbots. If the cloud is unavailable, dictation uses the on-device model when it is installed. Choose On device in Settings to stop." confirmLabel="Allow cloud" cancelLabel="Keep on device" onCancel={() => setConsentFor(null)} onConfirm={async () => { const engine = consentFor; setConsentFor(null); await applySpeechEngine(engine, true) }} />}
           {!loading && page === 'Updates' && <>
             <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />
             <SettingsGroup title="About">
@@ -654,7 +660,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
         </div>
       </section>
-      {profileDeleteTarget && <ConfirmDialog title={`Remove ${profileDeleteTarget.name}?`} body="This removes the custom launcher profile from Bloblex. It does not uninstall the coding agent." confirmLabel="Remove" cancelLabel="Keep launcher" holdToConfirm successTitle="Launcher removed" successBody="The custom launcher profile was removed from Bloblex." onConfirm={async () => { await deleteProfile(profileDeleteTarget.id) }} onComplete={() => setProfileDeleteTarget(null)} onCancel={() => setProfileDeleteTarget(null)} />}
+      {profileDeleteTarget && <ConfirmDialog title={`Remove ${profileDeleteTarget.name}?`} body="This removes the custom launcher profile from Bitbots. It does not uninstall the coding agent." confirmLabel="Remove" cancelLabel="Keep launcher" holdToConfirm successTitle="Launcher removed" successBody="The custom launcher profile was removed from Bitbots." onConfirm={async () => { await deleteProfile(profileDeleteTarget.id) }} onComplete={() => setProfileDeleteTarget(null)} onCancel={() => setProfileDeleteTarget(null)} />}
     </div>
 }
 
@@ -665,8 +671,8 @@ function SettingsGroup({ title, action, children }: { title: string; action?: Re
   </section>
 }
 
-function SettingsRow({ label, hint, children }: { label: ReactNode; hint?: string; children?: ReactNode }) {
-  return <div className="settings-row">
+function SettingsRow({ label, hint, children, stacked = false }: { label: ReactNode; hint?: string; children?: ReactNode; stacked?: boolean }) {
+  return <div className={stacked ? "settings-row stacked" : "settings-row"}>
     <span className="settings-row-copy"><strong>{label}</strong>{hint && <small>{hint}</small>}</span>
     {children && <span className="settings-row-control">{children}</span>}
   </div>

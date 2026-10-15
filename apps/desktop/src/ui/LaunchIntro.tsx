@@ -17,7 +17,7 @@ const GREETING_SCALE = (STAGE_SIZE * 0.4) / GREETING_BODY.radius
 type Phase = 'scanning' | 'greeting' | 'ready'
 
 /**
- * Startup checks. The mascot works while Bloblex looks for coding agents,
+ * Startup checks. The mascot works while Bitbots looks for coding agents,
  * then waves hello once everything is ready; the checks scroll inside a fixed
  * window whose edges fade into the background.
  */
@@ -79,14 +79,14 @@ export function LaunchIntro({ checks, runtimes, agent = null, onComplete, onRetr
 
   const names = new Map(runtimes.map((runtime) => [runtime.id, runtime.provider]))
   const running = checks.find((check) => check.state === 'running')
-  const status = serviceDown ? 'Bloblex could not connect to its service.' : finished ? 'Ready for your next conversation.' : running?.label ?? 'Getting Bloblex ready…'
-  return <main className={`launch-intro${reducedMotion ? ' reduced-motion' : ''}`} data-phase={phase} aria-label="Bloblex launch checks" onPointerDown={() => { if (phase === 'greeting' && autoComplete) complete() }}>
+  const status = serviceDown ? 'Bitbots could not connect to its service.' : finished ? 'Ready for your next conversation.' : running?.label ?? 'Getting Bitbots ready…'
+  return <main className={`launch-intro${reducedMotion ? ' reduced-motion' : ''}`} data-phase={phase} aria-label="Bitbots launch checks" onPointerDown={() => { if (phase === 'greeting' && autoComplete) complete() }}>
     <PixelClouds className="launch-clouds" />
     <section className="launch-intro-content">
       {!reducedMotion && <div className="launch-blob-stage">
         {phase === 'greeting'
           ? bitbots ? <BitbotWelcome color={color} look={agent ? agentLook(agent) : null} onDone={greetingDone} /> : <LaunchGreeting color={color} onDone={greetingDone} />
-          : <BlobCanvas color={color} size={STAGE_SIZE} mood={serviceDown ? 'error' : phase === 'ready' ? 'idle' : 'working'} label={agent?.name ?? 'Bloblex'} />}
+          : <BlobCanvas color={color} size={STAGE_SIZE} mood={serviceDown ? 'error' : phase === 'ready' ? 'idle' : 'working'} label={agent?.name ?? 'Bitbots'} />}
       </div>}
       {bitbots && !reducedMotion && phase === 'scanning' && !serviceDown && <PixelScan />}
       <p className="launch-status" role="status" aria-live="polite">{status}</p>
@@ -135,7 +135,7 @@ function StateGlyph({ state }: { state: LaunchCheck['state'] }) {
   </svg>
 }
 
-/** Bitbots scan: a row of pixels lights in a short run while Bloblex looks for coding agents. */
+/** Bitbots scan: a row of pixels lights in a short run while Bitbots looks for coding agents. */
 function PixelScan() {
   return <div className="launch-pixel-scan" aria-hidden="true">{Array.from({ length: 14 }, (_, index) => <i key={index} style={{ ['--i' as string]: index }} />)}</div>
 }
@@ -150,7 +150,7 @@ function BitbotWelcome({ color, look, onDone }: { color: string; look: BlobLook 
     const end = window.setTimeout(() => doneRef.current(), 2300)
     return () => { window.clearTimeout(spin); window.clearTimeout(end) }
   }, [])
-  return <span ref={frame} className="launch-bitbot-welcome"><BlobCanvas color={color} size={STAGE_SIZE} mood="idle" look={look} label="Bloblex" /></span>
+  return <span ref={frame} className="launch-bitbot-welcome"><BlobCanvas color={color} size={STAGE_SIZE} mood="idle" look={look} label="Bitbots" /></span>
 }
 
 /** The companion's welcome wave, without its island card, continuing from the full-size mascot. */
@@ -182,7 +182,7 @@ function LaunchGreeting({ color, onDone }: { color: string; onDone: () => void }
     frame = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(frame)
   }, [color, width, height])
-  return <canvas ref={canvas} className="launch-greeting" aria-label="Bloblex waves hello" role="img" style={{
+  return <canvas ref={canvas} className="launch-greeting" aria-label="Bitbots waves hello" role="img" style={{
     width, height,
     left: `calc(50% - ${GREETING_BODY.x * GREETING_SCALE}px)`,
     top: `calc(50% - ${bodyTop}px)`,

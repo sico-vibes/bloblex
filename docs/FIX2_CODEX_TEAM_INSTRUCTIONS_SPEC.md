@@ -44,7 +44,7 @@ operational state the model must be able to rely on.
 ## 3. Goal
 
 After the team context (or any instruction text) changes, the **next turn** on an
-existing Codex thread runs under the new text, and Bloblex says so only when it
+existing Codex thread runs under the new text, and Bitbots says so only when it
 has evidence. A new thread behaves exactly as today.
 
 Non-goals: Claude and OpenCode (their paths are separate; do not touch them),

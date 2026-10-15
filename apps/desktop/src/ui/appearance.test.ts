@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { appearanceAttributes } from './appearance'
+import { appearanceAttributes, accentTokens, contrastRatio, isThemeStyle, normalizeAccent, THEME_STYLES } from './appearance'
 
 const themeCss = readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
 
@@ -85,5 +85,55 @@ describe('appearance token selection', () => {
       '--status-danger-text', '--surface-danger', '--status-working-text', '--surface-warning', '--focus-ring', '--line-focus', '--surface-primary-hover',
       '--shadow-pop', '--chart-bar', '--chart-bar-hover', '--chart-track', '--chart-provider', '--chart-permission', '--chart-timeout', '--chart-budget', '--chart-config', '--chart-context',
     ]) expect(companion.get(name), `companion ${name}`).toBe(dark.get(name))
+  })
+})
+
+describe('user accent colours', () => {
+  it('normalizes only #rrggbb colours, in lower case', () => {
+    expect(normalizeAccent('#E17A56')).toBe('#e17a56')
+    expect(normalizeAccent('#3b82f6')).toBe('#3b82f6')
+    expect(normalizeAccent('')).toBe('')
+    expect(normalizeAccent('  #3b82f6')).toBe('')
+    expect(normalizeAccent('#3b82f')).toBe('')
+    expect(normalizeAccent('#3b82f6f')).toBe('')
+    expect(normalizeAccent('3b82f6')).toBe('')
+    expect(normalizeAccent('rgb(59,130,246)')).toBe('')
+    expect(normalizeAccent(0x3b82f6)).toBe('')
+    expect(normalizeAccent(null)).toBe('')
+    expect(normalizeAccent(undefined)).toBe('')
+  })
+
+  it('recognizes exactly the two looks', () => {
+    expect(THEME_STYLES).toEqual(['bitbots', 'blobots'])
+    expect(isThemeStyle('bitbots')).toBe(true)
+    expect(isThemeStyle('blobots')).toBe(true)
+    expect(isThemeStyle('Blobots')).toBe(false)
+    expect(isThemeStyle('')).toBe(false)
+    expect(isThemeStyle(undefined)).toBe(false)
+  })
+
+  it('computes WCAG contrast for known pairs', () => {
+    expect(contrastRatio('#ffffff', '#000000')).toBeCloseTo(21, 5)
+    expect(contrastRatio('#000000', '#ffffff')).toBeCloseTo(21, 5)
+    expect(contrastRatio('#ffffff', '#ffffff')).toBeCloseTo(1, 5)
+    expect(contrastRatio('#3b82f6', '#ffffff')).toBeCloseTo(3.68, 1)
+    expect(contrastRatio('#0f0f10', '#ffffff')).toBeGreaterThan(19)
+  })
+
+  it('picks the ink that reaches AA on every tested accent', () => {
+    for (const accent of ['#ffffff', '#000000', '#e17a56', '#3b82f6', '#facc15']) {
+      const tokens = accentTokens(accent)
+      expect(tokens.accent).toBe(accent)
+      expect(contrastRatio(tokens.ink, accent), accent).toBeGreaterThanOrEqual(4.5)
+    }
+    expect(accentTokens('#ffffff').ink).toBe('#0f0f10')
+    expect(accentTokens('#000000').ink).toBe('#ffffff')
+    expect(accentTokens('#e17a56').ink).toBe('#0f0f10')
+    expect(accentTokens('#3b82f6').ink).toBe('#0f0f10')
+  })
+
+  it('derives the pressed, soft and ink tokens', () => {
+    expect(accentTokens('#3b82f6')).toEqual({ accent: '#3b82f6', pressed: '#3472d8', soft: 'rgba(59,130,246,.14)', ink: '#0f0f10' })
+    expect(accentTokens('nonsense')).toEqual({ accent: '', pressed: '', soft: '', ink: '#0f0f10' })
   })
 })

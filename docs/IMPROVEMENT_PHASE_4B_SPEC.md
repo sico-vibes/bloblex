@@ -1,4 +1,4 @@
-# Phase 4B spec: keep the computer awake while Bloblex has work (native)
+# Phase 4B spec: keep the computer awake while Bitbots has work (native)
 
 Owner: OpenCode lane (native Rust only). Reviewer: Director. The UI decides when it is wanted and calls these commands; do not touch `apps/desktop/src` or the daemon.
 Scope: new `apps/desktop/src-tauri/src/power.rs`, registration in `apps/desktop/src-tauri/src/lib.rs`. No new dependencies (declare the one Win32 function with an `extern "system"` block).

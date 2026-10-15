@@ -17,7 +17,7 @@ const t = theme === 'light' ? '&theme=light' : ''
 const SECTIONS: Section[] = [
   {
     id: 'launch', title: 'Launch', scale: 0.62,
-    description: 'Startup checks scroll inside a fixed window that fades into the background. The mascot works while Bloblex scans, then waves once everything is ready.',
+    description: 'Startup checks scroll inside a fixed window that fades into the background. The mascot works while Bitbots scans, then waves once everything is ready.',
     frames: [
       { label: 'Live: scan, then wave', src: `/launch-preview.html?fixture=live${t}`, width: 1100, height: 720, note: 'Replays from the start each time it finishes.' },
       { label: 'Scanning', src: `/launch-preview.html?fixture=in-progress${t}`, width: 1100, height: 720 },
@@ -111,7 +111,7 @@ function Gallery() {
       .gallery-viewport.desktop iframe { top: 24px; left: 24px; }
     `}</style>
     <header>
-      <div><h1>Bloblex preview gallery</h1><p>Fixture data, rendered in the browser. Nothing here talks to a daemon or a coding agent.</p></div>
+      <div><h1>Bitbots preview gallery</h1><p>Fixture data, rendered in the browser. Nothing here talks to a daemon or a coding agent.</p></div>
       <a href={theme === 'light' ? '?' : '?theme=light'} style={{ color: 'var(--text-2)', fontSize: 13 }}>{theme === 'light' ? 'Dark theme' : 'Light theme'}</a>
     </header>
     <nav aria-label="Sections">{SECTIONS.map((section) => <a key={section.id} href={`#${section.id}`}>{section.title}</a>)}</nav>

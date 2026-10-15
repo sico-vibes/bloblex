@@ -4,7 +4,7 @@
 
 This is the implementation contract for Phase 4 of [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Phase 4 adds an expandable project and session tree under each blob row in the sidebar. It depends on Phase 2a and on the Phase 3 roster. It does not depend on Phase 2b. Line citations are the committed tree this spec was written against. Re-open a cited line before treating it as current if a later edit moves it.
 
-Do not edit Rust. Do not add a projects table, a session-list RPC, or an expanded-state RPC. Projects are groups derived from `snapshot.sessions`. Expanded state is `localStorage`. Claude Desktop is a behavioural reference only: folder-then-session grouping is the behaviour; the paint stays Bloblex Midnight ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) lines 13 and 194). Copy no third-party layout, label set, icon, or asset.
+Do not edit Rust. Do not add a projects table, a session-list RPC, or an expanded-state RPC. Projects are groups derived from `snapshot.sessions`. Expanded state is `localStorage`. Claude Desktop is a behavioural reference only: folder-then-session grouping is the behaviour; the paint stays Bitbots Midnight ([E2E_PLAN_V2.md](E2E_PLAN_V2.md) lines 13 and 194). Copy no third-party layout, label set, icon, or asset.
 
 ## 1. Scope and non-scope
 
@@ -74,7 +74,7 @@ Worked keys:
 | `//server/share/site` | `\\server\share\site` |
 | `  ` or missing | `null` |
 
-Case-folding is a product choice for Bloblex on Windows ([PRODUCT.md](../PRODUCT.md) line 9 names the Windows audience; it does not define path keys). NTFS lookups are case-insensitive, and the daemon will have stored whatever string the picker or an older client sent. Two different folders that differ only by case on a case-sensitive volume would share a row. That risk is accepted. A `.` or `..` segment stays in the key, so `C:\work\site\.` and `C:\work\site\..\site` are different projects from `C:\work\site`. `C:` and `C:\` are different keys (`c:` and `c:\`). The stored string sent back to `session.new` keeps its original casing, slashes, and trailing slash.
+Case-folding is a product choice for Bitbots on Windows ([PRODUCT.md](../PRODUCT.md) line 9 names the Windows audience; it does not define path keys). NTFS lookups are case-insensitive, and the daemon will have stored whatever string the picker or an older client sent. Two different folders that differ only by case on a case-sensitive volume would share a row. That risk is accepted. A `.` or `..` segment stays in the key, so `C:\work\site\.` and `C:\work\site\..\site` are different projects from `C:\work\site`. `C:` and `C:\` are different keys (`c:` and `c:\`). The stored string sent back to `session.new` keeps its original casing, slashes, and trailing slash.
 
 ### Projects
 
@@ -208,11 +208,11 @@ At 272px the flex math is: 6px list padding each side, 10px row padding each sid
 
 ## 4. New session flows
 
-Every Bloblex-initiated create goes through `sessionNewParams` ([apps/desktop/src/ui/rosterSelectors.ts](../apps/desktop/src/ui/rosterSelectors.ts) lines 193–196), which returns exactly `{ agentId, projectPath }`. Omit `runtimeId` and omit `title`. Sending both ids is `invalid_argument` ([docs/PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 162, [docs/ipc-contract.md](ipc-contract.md) line 64). The daemon stores a blank title as `New chat` ([docs/PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 166). Phase 3's `newSession` already calls this helper ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 603–624).
+Every Bitbots-initiated create goes through `sessionNewParams` ([apps/desktop/src/ui/rosterSelectors.ts](../apps/desktop/src/ui/rosterSelectors.ts) lines 193–196), which returns exactly `{ agentId, projectPath }`. Omit `runtimeId` and omit `title`. Sending both ids is `invalid_argument` ([docs/PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 162, [docs/ipc-contract.md](ipc-contract.md) line 64). The daemon stores a blank title as `New chat` ([docs/PHASE_2A_SPEC.md](PHASE_2A_SPEC.md) line 166). Phase 3's `newSession` already calls this helper ([apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) lines 603–624).
 
 `openProjectFolder` is the existing picker ([apps/desktop/src/tauri.ts](../apps/desktop/src/tauri.ts) lines 12–14). A cancel returns null, and the caller returns without an RPC, which is what `newSession` does today (lines 612–614).
 
-Errors use `daemonCodeOf` plus `messageForDaemonCode(code, 'session.new')` ([apps/desktop/src/ui/agentForm.ts](../apps/desktop/src/ui/agentForm.ts) lines 119–124 and 126–149). Show that sentence, not the daemon's message text. The sentences Phase 4 needs are already there: `conflict` → "This blob is archived, so a new session cannot be started."; `not_found` → "That blob is no longer available. Refresh and try again."; `invalid_argument` → "Choose a project folder that exists on this device."; `unauthorized` → "Bloblex could not reach the local daemon. Reconnect and try again."; any other code → "The local daemon request failed."
+Errors use `daemonCodeOf` plus `messageForDaemonCode(code, 'session.new')` ([apps/desktop/src/ui/agentForm.ts](../apps/desktop/src/ui/agentForm.ts) lines 119–124 and 126–149). Show that sentence, not the daemon's message text. The sentences Phase 4 needs are already there: `conflict` → "This blob is archived, so a new session cannot be started."; `not_found` → "That blob is no longer available. Refresh and try again."; `invalid_argument` → "Choose a project folder that exists on this device."; `unauthorized` → "Bitbots could not reach the local daemon. Reconnect and try again."; any other code → "The local daemon request failed."
 
 Enabled when the daemon is connected, `busy` is false, and `runtimeUsable` is true for that blob's runtime. That is the menu flag already computed in `apps/desktop/src/ui/AgentRoster.tsx` lines 89–90 and `canStartSession` in [apps/desktop/src/ui/App.tsx](../apps/desktop/src/ui/App.tsx) line 694.
 

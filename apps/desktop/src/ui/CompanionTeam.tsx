@@ -272,7 +272,7 @@ export function CompanionChatItem({ message, agents, onOpenSide, currentSessionI
     const name = (meta.kind === 'delegation' ? meta.peerName : meta.fromName) ?? peer?.name ?? 'Teammate'
     const failed = meta.kind === 'delegation' && meta.direction === 'failed'
     return <div className="companion-team-chip-row">
-      <button type="button" className={`companion-team-chip${failed ? ' failed' : ''}`} style={peer ? { ['--chip-accent' as string]: agentColorHex(peer.color) } : undefined} onClick={() => onOpenSide(meta.sideSessionId)} aria-label={`${meta.kind === 'delegation' ? (failed ? 'Could not reach' : 'Messaged') : 'Message from'} ${name}. Open in Bloblex`}>
+      <button type="button" className={`companion-team-chip${failed ? ' failed' : ''}`} style={peer ? { ['--chip-accent' as string]: agentColorHex(peer.color) } : undefined} onClick={() => onOpenSide(meta.sideSessionId)} aria-label={`${meta.kind === 'delegation' ? (failed ? 'Could not reach' : 'Messaged') : 'Message from'} ${name}. Open in Bitbots`}>
         <span>{meta.kind === 'delegation' ? (failed ? 'Could not reach' : 'Messaged') : 'Message from'}</span>{peer && <Face agent={peer} size={14} />}<b>{name}</b>
       </button>
     </div>

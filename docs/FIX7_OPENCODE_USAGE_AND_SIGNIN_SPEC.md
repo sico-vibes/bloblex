@@ -27,7 +27,7 @@ connector_id, method_id, active, time_created, time_updated`.)
 `opencode auth list` with a 5-second timeout (`safe_status_output`). OpenCode 2
 runs commands against a background service; on this machine a warm `auth list`
 already takes about 1.8 s and a cold one (no service running yet, the normal case
-right after Bloblex starts) is slower, so the call times out and the fallbacks
+right after Bitbots starts) is slower, so the call times out and the fallbacks
 (`models --verbose` rejected, plain `models`) only yield a quiet "unknown".
 
 ## 3. Required behavior

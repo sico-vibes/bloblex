@@ -160,7 +160,7 @@ fn connection(state: &State<'_, AppState>) -> Result<DaemonConnection, String> {
         .lock()
         .map_err(|_| "Daemon state is unavailable.".to_string())?;
     let Some(daemon) = process.as_mut() else {
-        return Err("The local Bloblex daemon is not running.".to_string());
+        return Err("The local Bitbots daemon is not running.".to_string());
     };
     if daemon
         .child
@@ -171,7 +171,7 @@ fn connection(state: &State<'_, AppState>) -> Result<DaemonConnection, String> {
         let executable_copy = daemon.executable_copy.clone();
         *process = None;
         let _ = fs::remove_file(executable_copy);
-        return Err("The local Bloblex daemon stopped unexpectedly.".to_string());
+        return Err("The local Bitbots daemon stopped unexpectedly.".to_string());
     }
     Ok(process
         .as_ref()
@@ -241,7 +241,7 @@ fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
     let mut runtime_dir = app
         .path()
         .app_local_data_dir()
-        .map_err(|error| format!("Could not resolve Bloblex local data directory: {error}"))?;
+        .map_err(|error| format!("Could not resolve Bitbots local data directory: {error}"))?;
     runtime_dir.push("runtime-processes");
     fs::create_dir_all(&runtime_dir)
         .map_err(|error| format!("Could not prepare the local daemon folder: {error}"))?;
@@ -426,7 +426,7 @@ fn set_approval_badge(app: AppHandle, window: tauri::WebviewWindow, count: u32) 
     #[cfg(target_os = "windows")]
     window.set_overlay_icon(if count == 0 { None } else { Some(approval_overlay(count)) }).map_err(|_| "Could not update the taskbar badge.".to_string())?;
     if let Some(tray) = app.tray_by_id("bloblex-tray") {
-        let tooltip = if count == 0 { "Bloblex".to_owned() } else { format!("Bloblex: {count} waiting") };
+        let tooltip = if count == 0 { "Bitbots".to_owned() } else { format!("Bitbots: {count} waiting") };
         tray.set_tooltip(Some(tooltip)).map_err(|_| "Could not update the tray tooltip.".to_string())?;
     }
     Ok(())
@@ -756,7 +756,7 @@ fn read_blob_import(state: State<'_, AppState>, selection_token: String) -> Resu
 const MAX_STAGED_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const STAGED_ATTACHMENT_RETENTION: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
 
-/// Writes a pasted or picked image to Bloblex's local attachment folder so the
+/// Writes a pasted or picked image to Bitbots' local attachment folder so the
 /// daemon can hand the provider a file path. The body is the raw image bytes;
 /// the extension comes from the file signature, not from the caller.
 #[tauri::command]
@@ -821,7 +821,7 @@ fn inspect_local_file(path: String) -> Result<LocalFileInspection, String> {
     }
     // Open only to verify access; file contents are never read here.
     let _access = fs::File::open(&canonical).map_err(|_| {
-        "Bloblex cannot read this file path with the current Windows account.".to_string()
+        "Bitbots cannot read this file path with the current Windows account.".to_string()
     })?;
     let metadata =
         fs::metadata(&canonical).map_err(|_| "File metadata is unavailable.".to_string())?;
@@ -1114,7 +1114,7 @@ fn set_companion_mode(
             if let Err(error) =
                 window.set_size(tauri::PhysicalSize::new(width as u32, height as u32))
             {
-                eprintln!("Bloblex companion resize: {error}");
+                eprintln!("Bitbots companion resize: {error}");
                 break;
             }
             let next_position = PhysicalPosition::new(
@@ -1123,7 +1123,7 @@ fn set_companion_mode(
             );
             let next_position=clamp_companion_position(next_position,width,height,&work_areas,initial_center);
             if let Err(error) = window.set_position(next_position) {
-                eprintln!("Bloblex companion anchor: {error}");
+                eprintln!("Bitbots companion anchor: {error}");
                 break;
             }
             last_width = width;
@@ -1753,7 +1753,7 @@ fn make_companion(app: &AppHandle, start_at_last_position: bool) -> tauri::Resul
         "companion",
         WebviewUrl::App("index.html?companion=1".into()),
     )
-    .title("Bloblex Companion")
+    .title("Bitbots Companion")
     .inner_size(344.0, 62.0)
     .position(400.0, 400.0)
     .decorations(false)
@@ -1861,7 +1861,7 @@ fn make_dictation(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         "dictation",
         WebviewUrl::App("index.html?dictation=1".into()),
     )
-    .title("Bloblex Dictation")
+    .title("Bitbots Dictation")
     .inner_size(DICTATION_COMPACT.0, DICTATION_COMPACT.1)
     .position(500.0, 500.0)
     .decorations(false)
@@ -1901,7 +1901,7 @@ fn make_dictation(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 }
 
 fn build_tray_menu(app: &AppHandle, sessions: &[Value]) -> tauri::Result<Menu<tauri::Wry>> {
-    let open = MenuItem::with_id(app, "open", "Open Bloblex", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Bitbots", true, None::<&str>)?;
     let companion = MenuItem::with_id(
         app,
         "companion",
@@ -1962,7 +1962,7 @@ fn build_tray_menu(app: &AppHandle, sessions: &[Value]) -> tauri::Result<Menu<ta
     )?;
     let pause_all = MenuItem::with_id(app, "pause-all", "Pause all agents…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Bloblex", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Bitbots", true, None::<&str>)?;
     Menu::with_items(
         app,
         &[
@@ -2041,7 +2041,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let (width, height) = decoded.dimensions();
     let icon = tauri::image::Image::new_owned(decoded.into_raw(), width, height);
     TrayIconBuilder::with_id("bloblex-tray")
-        .tooltip("Bloblex")
+        .tooltip("Bitbots")
         .icon(icon)
         .menu(&menu)
         .on_menu_event(|app, event| {
@@ -2139,7 +2139,7 @@ pub fn run() {
             let mut hotkey_enabled = true;
             if let Some(state) = app.try_state::<AppState>() {
                 if let Err(error) = start_daemon(app.handle(), &state) {
-                    eprintln!("Bloblex daemon startup: {error}");
+                    eprintln!("Bitbots daemon startup: {error}");
                 }
                 if let Ok(conn) = connection(&state) {
                     if let Ok(settings) =
@@ -2164,7 +2164,7 @@ pub fn run() {
                 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
                 let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
                 if let Err(error) = app.global_shortcut().register(shortcut) {
-                    eprintln!("Bloblex companion shortcut unavailable: {error}");
+                    eprintln!("Bitbots companion shortcut unavailable: {error}");
                 }
             }
             // Ctrl+E is registered by the main window once it knows dictation is
@@ -2252,7 +2252,7 @@ pub fn run() {
             power::keep_awake_state
         ])
         .build(tauri::generate_context!())
-        .expect("Bloblex desktop application failed to start")
+        .expect("Bitbots desktop application failed to start")
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 updates::stop_background_checker(app);

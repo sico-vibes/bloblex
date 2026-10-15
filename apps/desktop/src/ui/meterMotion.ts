@@ -1,5 +1,5 @@
 // Motion equations ported from the reference selectors. Provider labels and the
-// catalog's dynamic range remain owned by Bloblex.
+// catalog's dynamic range remain owned by Bitbots.
 export const CLAUDE_SPRING = { stiffness: 920, damping: 40, maxFrameSeconds: 0.032 } as const
 export const OUTLINE_SPRING = { stiffness: 845, damping: 58.5, maxStep: 1 / 120, sigma: 1.12 } as const
 export const CODEX_SNAP_DURATION = 380

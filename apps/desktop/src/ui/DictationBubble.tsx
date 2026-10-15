@@ -15,7 +15,7 @@ const TAP_MAX_MOVEMENT_PX = 6
 /**
  * The floating dictation bubble, in its own always-on-top window, shown by the
  * backend while dictation runs and the companion is hidden. It shows the words
- * as they arrive and grows to fit them. Tap to open Bloblex; hold to move it.
+ * as they arrive and grows to fit them. Tap to open Bitbots; hold to move it.
  */
 export function DictationBubble() {
   const [phase, setPhase] = useState<Phase>('idle')

@@ -120,7 +120,7 @@ export function settingReason(setting: CapabilitySetting | null, state: Capabili
   if (setting?.reason?.trim()) return setting.reason.trim()
   if (state === 'gated') return 'This setting is off until its execution check passes.'
   if (state === 'disabled') return 'This runtime does not support this setting.'
-  if (state === 'unknown') return 'Bloblex has not reported whether this setting is available.'
+  if (state === 'unknown') return 'Bitbots has not reported whether this setting is available.'
   return ''
 }
 
@@ -242,7 +242,7 @@ export function evidencePlain(kind: string) {
 
 export function instructionNote(provider: string, setting: CapabilitySetting | null) {
   const state = capabilityState(setting)
-  if (state === 'unknown') return 'Bloblex has not reported whether instructions are sent for this runtime.'
+  if (state === 'unknown') return 'Bitbots has not reported whether instructions are sent for this runtime.'
   if (state === 'disabled') return settingReason(setting, state)
   if (state === 'gated') return settingReason(setting, state)
   const scope = (setting?.scope ?? '').toLowerCase()
@@ -253,7 +253,7 @@ export function instructionNote(provider: string, setting: CapabilitySetting | n
   else if (scope === 'turn') timing = 'Applies on the next turn.'
   const evidence = evidencePlain(setting?.evidence ?? '')
   if (!setting?.evidence || setting.evidence === 'none' || setting.evidence === 'request_shape') {
-    return `${timing} Bloblex has not confirmed that the provider applies them (${evidence}).`
+    return `${timing} Bitbots has not confirmed that the provider applies them (${evidence}).`
   }
   return `${timing} Recorded evidence: ${evidence}.`
 }

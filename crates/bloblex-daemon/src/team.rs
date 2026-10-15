@@ -1,5 +1,5 @@
 //! Team engine. Blobs belong to projects, carry a role, and one of them can lead.
-//! Each provider session gets Bloblex's runtime instructions and an app-owned
+//! Each provider session gets Bitbots' runtime instructions and an app-owned
 //! MCP server (`bloblexd mcp-bridge`) with `list_blobs`, `list_conversations`
 //! and `message_blob`. `message_blob` opens a side conversation with the
 //! teammate, titled by its topic, or continues an earlier one; when the
@@ -94,10 +94,10 @@ pub fn workspace_for(st: &AppState, agent: &Value) -> PathBuf {
     dir
 }
 
-/// Bloblex context appended to every blob session's system instructions.
+/// Bitbots context appended to every blob session's system instructions.
 pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspace: &std::path::Path) -> String {
     let name = agent_name(agent);
-    let mut lines = vec![format!("You are {name}, a blob: one of the user's AI teammates in Bloblex, a desktop app where several coding agents work side by side on the user's computer.")];
+    let mut lines = vec![format!("You are {name}, a blob: one of the user's AI teammates in Bitbots, a desktop app where several coding agents work side by side on the user's computer.")];
     if let Some(role) = agent["role"].as_str().map(str::trim).filter(|role| !role.is_empty()) { lines.push(format!("Your role: {role}.")); }
     if let Some(description) = agent["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) { lines.push(format!("What you are for: {description}")); }
     lines.push(match user_name(st) {
@@ -166,10 +166,10 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_leader: b
         return json!(memory);
     }
     let mut list: Vec<Value> = vec![
-        json!({"name":"list_blobs","description":"List your teammates in Bloblex: name, role, what each is for, project, whether they are busy, and which one is the leader.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
+        json!({"name":"list_blobs","description":"List your teammates in Bitbots: name, role, what each is for, project, whether they are busy, and which one is the leader.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
         json!({"name":"list_conversations","description":"List your side conversations with teammates, newest first: id, topic, teammate, who started it, size and the latest reply. Use it to find a conversation to continue.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"Only conversations with this teammate (optional)."}},"additionalProperties":false}}),
         json!({"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}}),
-        json!({"name":"schedule_task","description":"Propose a scheduled task for your blob. It is created disabled and will never run until the user approves it in Bloblex. Use this only when the user asks for something recurring or at a set time.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}}),
+        json!({"name":"schedule_task","description":"Propose a scheduled task for your blob. It is created disabled and will never run until the user approves it in Bitbots. Use this only when the user asks for something recurring or at a set time.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}}),
         json!({"name":"list_my_schedules","description":"List this blob's scheduled tasks, whether each is enabled, and when it next runs.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
     ];
     // Only the team leader may create or change blobs.
@@ -298,7 +298,7 @@ fn non_leader_create_error(st: &AppState) -> String {
 /// Leader-only: projects a blob can be attached to.
 async fn list_projects(st: &AppState) -> Result<String, String> {
     let projects = st.db.project_list().map_err(|error| error.to_string())?;
-    if projects.is_empty() { return Ok("No projects exist yet. Create one in Bloblex, or create a casual blob with no project.".into()); }
+    if projects.is_empty() { return Ok("No projects exist yet. Create one in Bitbots, or create a casual blob with no project.".into()); }
     let rows = projects.iter().map(|project| {
         let name = project["name"].as_str().unwrap_or("Project");
         let id = project["id"].as_str().unwrap_or("");
@@ -321,7 +321,7 @@ async fn create_blob(st: &AppState, session_id: &str, args: &Value) -> Result<St
     let description = bounded_text(args, "description", 255)?;
     let instructions = bounded_text(args, "instructions", 4000)?;
     let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
-    if agents.len() >= 12 { return Err(format!("The team already has {} blobs; Bloblex allows at most 12. Archive one before creating another.", agents.len())); }
+    if agents.len() >= 12 { return Err(format!("The team already has {} blobs; Bitbots allows at most 12. Archive one before creating another.", agents.len())); }
     if st.team.creations(session_id) >= 5 { return Err("You have already created 5 blobs this turn. Ask the user before creating more.".into()); }
     if agents.iter().any(|agent| agent["name"].as_str().map(str::trim).map(str::to_lowercase).is_some_and(|existing| existing == name.to_lowercase())) {
         return Err(format!("A blob named {name} already exists. Choose a different name."));

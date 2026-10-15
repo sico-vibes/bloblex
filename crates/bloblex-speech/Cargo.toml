@@ -3,7 +3,7 @@ name = "bloblex-speech"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "On-device dictation engine for Bloblex (sherpa-onnx + cpal)."
+description = "On-device dictation engine for Bitbots (sherpa-onnx + cpal)."
 
 [features]
 default = []

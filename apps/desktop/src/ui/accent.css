@@ -1,0 +1,23 @@
+/* User accent colour.
+   The setting sets --user-accent and friends on <html> (see blob/bitbots.ts) and
+   data-accent="custom". Bitbots reads them through its own --bb-accent tokens in
+   bitbots.css, so this file covers the Blobots look and the few shared pieces.
+   With no accent chosen nothing here applies and the app stays monochrome. */
+
+:root[data-accent="custom"] {
+  --accent: var(--user-accent);
+  --focus-ring: 0 0 0 2px var(--user-accent);
+  --line-focus: var(--user-accent);
+  --surface-primary-hover: var(--user-accent-pressed);
+}
+
+:root[data-accent="custom"]:not([data-bitbots="on"]) .primary-button { color: var(--user-accent-ink); background: var(--user-accent); }
+:root[data-accent="custom"]:not([data-bitbots="on"]) .primary-button:hover:not(:disabled) { background: var(--user-accent-pressed); }
+:root[data-accent="custom"]:not([data-bitbots="on"]) .send-button:not(:disabled):not(.cancel) { color: var(--user-accent-ink); background: var(--user-accent); }
+:root[data-accent="custom"]:not([data-bitbots="on"]) .toggle.on { background: var(--user-accent); }
+:root[data-accent="custom"]:not([data-bitbots="on"]) .toggle.on i { background: var(--user-accent-ink); }
+:root[data-accent="custom"]:not([data-bitbots="on"]) .switch.on { background: var(--user-accent); }
+:root[data-accent="custom"]:not([data-bitbots="on"]) .segmented button.on,
+:root[data-accent="custom"]:not([data-bitbots="on"]) .usage-density button.active { color: var(--user-accent-ink); background: var(--user-accent); }
+:root[data-accent="custom"]:not([data-bitbots="on"]) .onboarding-progress span.active { background: var(--user-accent); }
+:root[data-accent="custom"]:not([data-bitbots="on"]) ::selection { color: var(--user-accent-ink); background: var(--user-accent); }

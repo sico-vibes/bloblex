@@ -1366,7 +1366,7 @@ impl Storage {
         Ok(c.query_row("SELECT content FROM messages WHERE session_id=?1 AND role='assistant' AND trim(content)<>'' ORDER BY sequence DESC LIMIT 1", [session], |r| r.get(0)).optional()?)
     }
     /// A blob's main conversation: its newest open session that is neither a
-    /// side conversation, an automation run, nor a hand-off draft. Bloblex keeps
+    /// side conversation, an automation run, nor a hand-off draft. Bitbots keeps
     /// exactly one main conversation per blob, so none of those may replace it.
     pub fn main_session(&self, agent_id: &str) -> Result<Option<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -3174,6 +3174,8 @@ impl Storage {
         if k=="experimental.usageTipDismissals" && !valid_usage_tip_dismissals(v){return Err(StorageError::InvalidAgent)}
         if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+        if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
+        if k=="appearance.accent" && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()==7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit()))){return Err(StorageError::InvalidAgent)}
         if k=="profile.about" && !v.as_str().is_some_and(|text| text.trim().chars().count()<=1500){return Err(StorageError::InvalidAgent)}
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -3184,7 +3186,7 @@ impl Storage {
             let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same { events.push(push_settings_event(&tx,k,enabled)?); }
-        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("memory.") {
+        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("memory.") || k.starts_with("appearance.") {
             // Window-level preferences: the main window and the companion both follow them live.
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same {

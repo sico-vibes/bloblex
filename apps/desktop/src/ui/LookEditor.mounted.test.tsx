@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BlobLook } from '../blob/look'
+import { setBitbotsEnabled } from '../blob/bitbots'
 import { LookEditor } from './LookEditor'
 
 vi.mock('../blob/BlobCanvas', () => ({
@@ -22,7 +23,7 @@ function mount(look: BlobLook) {
 }
 const click = (element: Element | null | undefined) => act(() => { (element as HTMLElement).click() })
 
-beforeEach(() => { vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true) })
+beforeEach(() => { setBitbotsEnabled(false); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true) })
 afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } vi.unstubAllGlobals() })
 
 describe('look editor', () => {

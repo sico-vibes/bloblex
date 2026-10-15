@@ -1,4 +1,4 @@
-//! Keeps Windows awake while Bloblex has work, without fighting the user.
+//! Keeps Windows awake while Bitbots has work, without fighting the user.
 //!
 //! The UI decides when a keep-awake request is wanted and calls
 //! [`set_keep_awake`]; this module owns the native request. The Windows
@@ -7,7 +7,7 @@
 //! released; the display is deliberately left free to sleep. Nothing here stops
 //! the user from putting the computer to sleep themselves (closing the lid,
 //! Start menu, power button): it only asks the idle sleep timer not to fire
-//! while Bloblex is working.
+//! while Bitbots is working.
 
 use std::sync::{Arc, Mutex};
 
@@ -102,7 +102,7 @@ pub fn set_keep_awake(state: State<'_, PowerState>, enabled: bool) -> Result<boo
     state.set(enabled)
 }
 
-/// Reports whether Bloblex currently holds a keep-awake request.
+/// Reports whether Bitbots currently holds a keep-awake request.
 #[tauri::command]
 pub fn keep_awake_state(state: State<'_, PowerState>) -> bool {
     state.is_enabled()

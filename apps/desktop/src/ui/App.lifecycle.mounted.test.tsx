@@ -245,7 +245,7 @@ describe('App mounted lifecycle', () => {
     await view.settle()
     const logo = view.host.querySelector<HTMLImageElement>('.brand-lockup img')
     expect(logo).not.toBeNull()
-    expect(logo?.getAttribute('alt')).toBe('Bloblex logo')
+    expect(logo?.getAttribute('alt')).toBe('Bitbots logo')
     const logoUrl = logo?.getAttribute('src') ?? ''
     expect(logoUrl.length).toBeGreaterThan(0)
     expect(logoUrl.endsWith('.png')).toBe(true)

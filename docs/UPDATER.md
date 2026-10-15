@@ -1,6 +1,6 @@
 # Auto-update and release contract
 
-Goal: any release published to the Bloblex repository (stable or beta) can be found, downloaded and installed from inside the app.
+Goal: any release published to the Bitbots repository (stable or beta) can be found, downloaded and installed from inside the app.
 
 ## Decisions
 

@@ -1,5 +1,5 @@
 //! Pinned model catalog. File names, sizes, and SHA-256 hashes are copied from
-//! Orca's `model-download-catalog.ts` (MIT) so a Bloblex download is equivalent
+//! Orca's `model-download-catalog.ts` (MIT) so a Bitbots download is equivalent
 //! to a pinned archive: immutable HuggingFace revision plus per-file hashes.
 
 use std::sync::OnceLock;

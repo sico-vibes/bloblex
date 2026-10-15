@@ -43,8 +43,8 @@ describe('agent draft validation', () => {
       ['invalid_argument', 'agent.update', undefined, 'Check the name, description, colour, and runtime, then try again.'],
       ['invalid_argument', 'session.new', undefined, 'Choose a project folder that exists on this device.'],
       ['invalid_argument', 'agent.reorder', undefined, 'The roster order is out of date. Refresh and try again.'],
-      ['internal', 'agent.update', undefined, 'Bloblex could not save that change. Nothing was applied.'],
-      ['unauthorized', 'agent.delete', undefined, 'Bloblex could not reach the local daemon. Reconnect and try again.'],
+      ['internal', 'agent.update', undefined, 'Bitbots could not save that change. Nothing was applied.'],
+      ['unauthorized', 'agent.delete', undefined, 'Bitbots could not reach the local daemon. Reconnect and try again.'],
       ['mystery', 'agent.create', undefined, 'The local daemon request failed.'],
     ]
     for (const [code, kind, options, message] of cases) {

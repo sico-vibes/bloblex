@@ -80,6 +80,7 @@ vi.mock('../blob/BlobCanvas', async () => {
 })
 
 import { App } from './App'
+import { setBitbotsEnabled } from '../blob/bitbots'
 import type { Agent, DaemonEvent, Runtime, Session, Snapshot } from '../types'
 
 const stamp = '2026-10-01T00:00:00.000Z'
@@ -236,6 +237,8 @@ beforeEach(() => {
   h.updateError = null
   h.sessionError = null
   for (const mock of Object.values(h)) if (typeof mock === 'function' && 'mockReset' in mock) (mock as ReturnType<typeof vi.fn>).mockReset()
+  // The blob look editor is the classic (Blobots) one here; Bitbots is tested elsewhere.
+  setBitbotsEnabled(false)
   configure()
 })
 
@@ -298,7 +301,9 @@ describe('blob roster and editor', () => {
     configure(snapshot({ runtimes: [codexRuntime], agents: [], sessions: [] }))
     const view = startApp()
     await view.settle()
-    await click(view.host.querySelector('.onboarding-step button.ghost-button'))
+    await click(view.host.querySelector('.look-card[data-look="bitbots"]'))
+    await click(buttonNamed(view.host, 'Continue'))
+    await click(buttonNamed(view.host, 'Skip'))
     expect(view.host.querySelector('[data-provider="codex"]')).not.toBeNull()
     await click(buttonNamed(view.host, 'Continue'))
     await view.settle()
@@ -403,8 +408,8 @@ describe('blob roster and editor', () => {
     const cases: Array<[string, string]> = [
       ['conflict: taken', 'Another blob already uses this name.'],
       ['invalid_argument: bad', 'Check the name, description, colour, and runtime, then try again.'],
-      ['internal: boom', 'Bloblex could not save that change. Nothing was applied.'],
-      ['unauthorized: no', 'Bloblex could not reach the local daemon. Reconnect and try again.'],
+      ['internal: boom', 'Bitbots could not save that change. Nothing was applied.'],
+      ['unauthorized: no', 'Bitbots could not reach the local daemon. Reconnect and try again.'],
       ['mystery: no', 'The local daemon request failed.'],
     ]
     for (const [error, message] of cases) {

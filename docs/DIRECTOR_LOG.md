@@ -30,7 +30,7 @@
 
 ## 2026-10-02 - Task 5 (Phase 3 UI spec, impl-b) review
 - `docs/PHASE_3_SPEC.md` (607 lines, 155 cited lines) written by `impl-b` (Cursor grok-4.7-high). Director re-computed all 12 swatch contrast ratios against the `#111111` sidebar token: they match to two decimals. The four existing provider colours are kept as coral/blue/violet/mint so migrated default agents look unchanged.
-- Decisions accepted: confirmed (not optimistic) saves; no restore control because Phase 2a has no restore RPC; roster ordered by runtime then `sortOrder`; execution fields shown disabled until 2b; every Bloblex `session.new` sends `agentId`.
+- Decisions accepted: confirmed (not optimistic) saves; no restore control because Phase 2a has no restore RPC; roster ordered by runtime then `sortOrder`; execution fields shown disabled until 2b; every Bitbots `session.new` sends `agentId`.
 - Open product question for the user (not a blocker): Phase 2a creates default agents only at migration time, so a runtime discovered later (for example a newly installed CLI) has no agent until the user creates one through "Create blob". Decide whether the daemon should auto-create a default agent when a new runtime is first discovered.
 - Dependency note: the spec parses daemon error codes from the Tauri bridge string `"${code}: ${message}"` (`apps/desktop/src-tauri/src/lib.rs`); if the Phase 2a diff changes that string, the Phase 3 error parser must follow.
 

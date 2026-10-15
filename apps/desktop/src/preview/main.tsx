@@ -18,7 +18,7 @@ function LookSheet() {
   const [mood, setMood] = useState<BlobMood>((query.get('mood') as BlobMood | null) ?? 'idle')
   const size = Number(query.get('size')) || 88
   return <main style={{ padding: 24, color: 'var(--text-1)', background: 'var(--bg-1)', minHeight: '100vh' }}>
-    <p style={{ margin: '0 0 4px', color: 'var(--text-3)', fontSize: 'var(--fs-xs)' }}>Bloblex · look renderer</p>
+    <p style={{ margin: '0 0 4px', color: 'var(--text-3)', fontSize: 'var(--fs-xs)' }}>Bitbots · look renderer</p>
     <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 600 }}>Blob shapes</h1>
     <div style={{ display: 'flex', gap: 6, margin: '12px 0 20px', flexWrap: 'wrap' }}>
       {moods.map((item) => <button key={item} type="button" className={`ghost-button small${item === mood ? ' active' : ''}`} aria-pressed={item === mood} onClick={() => setMood(item)}>{item}</button>)}

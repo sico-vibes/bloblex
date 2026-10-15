@@ -49,4 +49,4 @@ For the current work-package checklist and safe resume instructions, read [imple
 
 ## Current runnable snapshot
 
-On 1 October 2026, root QA rebuilt the daemon, staged it, rebuilt the production frontend (301.34 kB JavaScript, 30.31 kB CSS), corrected three small native monitor-selection compile errors, built the native app successfully and launched it for user inspection. Process checks confirmed the Bloblex window and its daemon. This is a runnable inspection snapshot, not acceptance of the open requirements above.
+On 1 October 2026, root QA rebuilt the daemon, staged it, rebuilt the production frontend (301.34 kB JavaScript, 30.31 kB CSS), corrected three small native monitor-selection compile errors, built the native app successfully and launched it for user inspection. Process checks confirmed the Bitbots window and its daemon. This is a runnable inspection snapshot, not acceptance of the open requirements above.

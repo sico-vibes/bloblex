@@ -1,16 +1,16 @@
-# Bloblex improvement plan v2: a BB-informed, companion-style roadmap
+# Bitbots improvement plan v2: a BB-informed, companion-style roadmap
 
 Status: approved by the owner, 12 October 2026. **Phases 1-7 are implemented and shipped in `v0.1.0-beta.19` ([releases/0.1.0-beta.19.md](releases/0.1.0-beta.19.md)) and verified only with fake peers and unit tests (replay fixtures are synthesised, not real captures).** The "local `main`, not pushed" wording in `SESSION_HANDOFF.md` is from before that release. See `SESSION_HANDOFF.md` for branches, gates, gaps and next steps. Baseline `17591b9` (beta.18). Supersedes the QA draft, kept as [IMPROVEMENT_PLAN_v1_qa-draft.md](IMPROVEMENT_PLAN_v1_qa-draft.md).
 
 ## Context
 
-The owner wants Bloblex to be a Grok-Bot-style companion that reuses the coding-agent CLIs already installed and logged in on the user's PC (Claude Code, Codex, OpenCode). The owner asked me to read `get-bb/bb` (MIT, "the agent IDE that builds itself", ~40 plugins) and borrow what fits, then produce an improved plan. This replaces the QA lane's `docs/IMPROVEMENT_PLAN.md` (v1), which was ~1/3 stale against HEAD (`17591b9`, beta.18) and framed everything as "match BB".
+The owner wants Bitbots to be a Grok-Bot-style companion that reuses the coding-agent CLIs already installed and logged in on the user's PC (Claude Code, Codex, OpenCode). The owner asked me to read `get-bb/bb` (MIT, "the agent IDE that builds itself", ~40 plugins) and borrow what fits, then produce an improved plan. This replaces the QA lane's `docs/IMPROVEMENT_PLAN.md` (v1), which was ~1/3 stale against HEAD (`17591b9`, beta.18) and framed everything as "match BB".
 
 Owner decisions: (1) lead with ALL four themes: proactive companion, memory and persona, reliability, interaction polish; (2) ChatGPT transcription via the Codex login is approved as an exception to the "no copied provider authentication" invariant, but **opt-in, on-device stays default**, with consent and automatic fallback.
 
-Sources: BB read remotely (provider layer, ~25 feature plugins, dictation, desktop UX, Windows notes) and Bloblex code verified by grep/read. BB claims are from reading its source; none were run.
+Sources: BB read remotely (provider layer, ~25 feature plugins, dictation, desktop UX, Windows notes) and Bitbots code verified by grep/read. BB claims are from reading its source; none were run.
 
-## What Bloblex already has (do not re-plan)
+## What Bitbots already has (do not re-plan)
 
 Per-model effort catalogs incl. Codex `ultra` and CLI-gated Claude `ultracode`; validated/fallback catalog gating; ask/auto/bypass modes (Codex bypass = `danger-full-access`); usage/quota/context meters; runtime health discovery; session resume; team delegation + side conversations over an app-owned MCP bridge (`bloblexd mcp-bridge`, `crates/bloblex-daemon/src/mcp_bridge.rs`, tools in `team.rs` ~L132); Claude and Codex native question cards in chat and island; per-blob `instructions`; tray, global shortcuts, notifications; on-device dictation; opt-in experiments framework; additive SQLite schema (v12).
 
@@ -18,7 +18,7 @@ Per-model effort catalogs incl. Codex `ultra` and CLI-gated Claude `ultracode`; 
 
 ## Not taking from BB
 
-Account-pool proxy (credential custody), workflows (QuickJS fan-out), browser-automation, GitHub panel, editors, worktree/sandbox environments, connect/tunnel/mobile, Claude Agent SDK (TypeScript; Bloblex already speaks stream-json). Credential-free profile rotation (alternate `CLAUDE_CONFIG_DIR`/`CODEX_HOME`) is deferred. v1 items already done are dropped: A1, A3, B4, D1, D2, D4.
+Account-pool proxy (credential custody), workflows (QuickJS fan-out), browser-automation, GitHub panel, editors, worktree/sandbox environments, connect/tunnel/mobile, Claude Agent SDK (TypeScript; Bitbots already speaks stream-json). Credential-free profile rotation (alternate `CLAUDE_CONFIG_DIR`/`CODEX_HOME`) is deferred. v1 items already done are dropped: A1, A3, B4, D1, D2, D4.
 
 ## Execution model (owner directive: delegation pipeline)
 
@@ -71,7 +71,7 @@ Account-pool proxy (credential custody), workflows (QuickJS fan-out), browser-au
 - Data: `automations(agent_id,name,prompt,cron,tz,once_at,mode,enabled,next_run_at,consecutive_failures,max_runtime_s,created_by)`, `automation_runs(...)` with a partial unique index for single-flight; `agents.notification_level` (all|input|muted).
 - `scheduler.rs` spawned in `run()` beside the deletion loop (~L2902); 1s tick for send-later, 10s sweep for automations; cron + IANA tz (`chrono-tz` present, add a cron crate). **Missed runs coalesce into one** (next run recomputed from now). Overlap = `skipped`. Failures retry at 30s/60s; 3 consecutive pause it visibly. Startup settles interrupted runs next to `recover_after_restart()` (~L2862).
 - **Safety (budgets no longer exist, so automations bring their own):** `max_runtime_s` default 30 min via `adapter.cancel`; `automations.maxConcurrent` default 1 under the existing cap of 4; global pause wired to tray "Pause all". Unattended runs pin `modelLock.approvalMode`, clamp bypass to auto, default to plan; an unclassified permission is auto-denied with an audit event. Run sessions carry `link.kind="automation"` and their MCP tool list drops `message_blob` and scheduling tools (recursion guard; make `team::tools()` take the link, generalize `is_team_tool_permission` ~L1132).
-- Presence: notifications honour per-blob level and `automation.run.finished` (`App.tsx` ~L520-546); opt-in `power.keepAwake` via `SetThreadExecutionState` on a parked thread in `apps/desktop/src-tauri/src/power.rs` (registered in `apps/desktop/src-tauri/src/lib.rs`), requested by a daemon `power.wanted` event. UI states plainly: "Runs only while Bloblex is running and awake; missed runs coalesce; lid-close/user sleep is not blocked."
+- Presence: notifications honour per-blob level and `automation.run.finished` (`App.tsx` ~L520-546); opt-in `power.keepAwake` via `SetThreadExecutionState` on a parked thread in `apps/desktop/src-tauri/src/power.rs` (registered in `apps/desktop/src-tauri/src/lib.rs`), requested by a daemon `power.wanted` event. UI states plainly: "Runs only while Bitbots is running and awake; missed runs coalesce; lid-close/user sleep is not blocked."
 - UI: per-blob "Schedule" tab with run history, island badge, Settings list.
 
 ### 5. Memory and persona, L

@@ -41,7 +41,7 @@ struct Conn {
     /// Whether the last turn ran in plan collaboration mode; the mode is sticky
     /// on the thread, so leaving plan mode must be sent explicitly.
     plan_active: AtomicBool,
-    /// Bloblex session id, so notification handling can advance the shared
+    /// Bitbots session id, so notification handling can advance the shared
     /// per-session instruction hash map below.
     session_id: String,
     instruction_hashes: Arc<Mutex<HashMap<String, Option<String>>>>,
@@ -891,7 +891,7 @@ fn elicitation_response(p: &Value, accept: bool, for_session: bool) -> Value {
     response
 }
 
-/// Approval requests for Bloblex's own team tools are accepted without asking.
+/// Approval requests for Bitbots' own team tools are accepted without asking.
 fn is_app_tool_request(p: &Value) -> bool {
     ["server", "serverName"].iter().any(|key| p[*key].as_str() == Some("bloblex"))
         || p["item"]["server"].as_str() == Some("bloblex")
@@ -1692,7 +1692,7 @@ impl AgentAdapter for CodexAdapter {
         };
         let thread_id = thread_id.ok_or_else(|| AdapterError::Process("Codex session has no provider thread".into()))?;
         // `expectedTurnId` is the provider's own active turn id; the daemon's
-        // `q.turn_id` only names the turn in Bloblex and is not sent.
+        // `q.turn_id` only names the turn in Bitbots and is not sent.
         let expected_turn = provider_turn.ok_or_else(|| AdapterError::Unsupported("there is no active Codex turn".into()))?;
         let params = json!({
             "threadId": thread_id,

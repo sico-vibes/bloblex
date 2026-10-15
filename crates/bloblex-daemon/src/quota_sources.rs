@@ -109,7 +109,7 @@ struct OpenCodeKeyValue {
 }
 
 /// The OAuth access token of an OpenCode 2 Console credential, when it has not
-/// expired. Bloblex never refreshes a token: an expired one is treated as no
+/// expired. Bitbots never refreshes a token: an expired one is treated as no
 /// credential, and the CLI refreshes its own sign-in the next time it runs.
 fn oauth_access_token(value: &mut OpenCodeKeyValue, now_ms: f64) -> Option<String> {
     value.key.zeroize();
@@ -527,7 +527,7 @@ mod tests {
         // The OpenCode 2 Console sign-in is OAuth: the access token is used, the refresh token never read.
         write(&format!(r#"{{"type":"oauth","methodID":"console","refresh":"refresh-token","access":"access-token","expires":{future},"metadata":{{"server":"https://example.test"}}}}"#));
         assert_eq!(key_from_credential_db(&db).as_deref(), Some("access-token"));
-        // An expired token is not a credential; Bloblex does not refresh it.
+        // An expired token is not a credential; Bitbots does not refresh it.
         write(&format!(r#"{{"type":"oauth","methodID":"console","refresh":"refresh-token","access":"access-token","expires":{past}}}"#));
         assert_eq!(key_from_credential_db(&db), None);
         // An OAuth row with no access token is nothing.

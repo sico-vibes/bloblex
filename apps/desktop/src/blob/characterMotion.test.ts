@@ -18,8 +18,8 @@ function step(engine: BlobEngine, ms: number, frame = 16) {
   }
 }
 
-describe('Bloblex character engine', () => {
-  it('maps every Bloblex mood to an engine state', () => {
+describe('Bitbots character engine', () => {
+  it('maps every Bitbots mood to an engine state', () => {
     const moods: BlobMood[] = ['idle', 'online', 'thinking', 'working', 'tool_activity', 'file_activity', 'file_drop', 'file_preparing', 'file_ready', 'file_sending', 'file_error', 'permission', 'success', 'error', 'offline', 'listening', 'rate_limited', 'sleeping']
     for (const mood of moods) expect(ENGINE_STATES[engineStateFor(mood)]).toBeDefined()
     expect(engineStateFor('permission')).toBe('approval')

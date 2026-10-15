@@ -69,7 +69,7 @@ export class RuntimeDiscovery {
       } catch (error) {
         if (!current()) throw error
         const timedOut = controller.signal.aborted && controller.signal.reason instanceof Error && controller.signal.reason.message === 'Finding coding agents timed out.'
-        const failure = { step: error instanceof ProbeFailure ? error.step : 'Finding coding agents', message: error instanceof ProbeFailure ? error.message : timedOut ? 'Finding coding agents timed out.' : 'Could not complete the scan. Check the Bloblex service and try again.', at: Date.now() }
+        const failure = { step: error instanceof ProbeFailure ? error.step : 'Finding coding agents', message: error instanceof ProbeFailure ? error.message : timedOut ? 'Finding coding agents timed out.' : 'Could not complete the scan. Check the Bitbots service and try again.', at: Date.now() }
         const retrying = attempt < DISCOVERY_BACKOFF.length
         this.publish({ scanning: false, retrying, failure, completedAt: Date.now() })
         if (retrying) this.timer = window.setTimeout(() => { if (current()) void this.scan(attempt + 1).catch(() => undefined) }, DISCOVERY_BACKOFF[attempt])

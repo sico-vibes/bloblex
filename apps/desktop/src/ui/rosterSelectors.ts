@@ -190,7 +190,7 @@ export function sessionForSelection(sessions: readonly Session[], agent: Agent, 
   return agentSessions(sessions, agent.id)[0] ?? null
 }
 
-/** Bloblex-initiated creates. Exactly `agentId` and `projectPath` — never `runtimeId`. */
+/** Bitbots-initiated creates. Exactly `agentId` and `projectPath` — never `runtimeId`. */
 export function sessionNewParams(agentId: string, projectPath: string) {
   return { agentId, projectPath }
 }

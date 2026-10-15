@@ -492,7 +492,7 @@ pub async fn schedule_task_tool(st: &AppState, session_id: &str, args: &Value) -
     let automation = st.db.automation_create(&input).map_err(|error| error.to_string())?;
     emit_changed(st, &automation).await;
     Ok(format!(
-        "Proposed scheduled task \"{name}\" (automation {}). It is disabled and will not run until the user approves it in Bloblex.",
+        "Proposed scheduled task \"{name}\" (automation {}). It is disabled and will not run until the user approves it in Bitbots.",
         automation["id"].as_str().unwrap_or("")
     ))
 }

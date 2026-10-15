@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LaunchIntro } from './LaunchIntro'
+import { setBitbotsEnabled } from '../blob/bitbots'
 import type { LaunchCheck } from './launchChecks'
 
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: { size: number }) => <canvas className="blob-canvas" width={props.size} height={props.size} /> }))
@@ -16,11 +17,13 @@ function mount(checks: LaunchCheck[], serviceDown = false) {
   return { complete, retry, offline, host, update: (nextChecks: LaunchCheck[], nextServiceDown: boolean) => act(() => root!.render(render(nextChecks, nextServiceDown))) }
 }
 afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null })
+// These cases exercise the classic launch greeting; Blobots is the style under test.
+beforeEach(() => { setBitbotsEnabled(false) })
 
 describe('LaunchIntro', () => {
   it('shows ordered checks and permits warning states to complete', () => {
     const { host: mounted } = mount([
-      { id: 'service', label: 'Connecting to the Bloblex service', state: 'ok', detail: 'Connected' },
+      { id: 'service', label: 'Connecting to the Bitbots service', state: 'ok', detail: 'Connected' },
       { id: 'agents', label: 'Finding coding agents', state: 'warning', detail: 'No coding agents found' },
     ])
     expect(mounted.querySelectorAll('.launch-checklist li')).toHaveLength(2)
@@ -28,7 +31,7 @@ describe('LaunchIntro', () => {
   })
 
   it('offers retry and continue offline when the service is unavailable', () => {
-    const { host: mounted, retry, offline } = mount([{ id: 'service', label: 'Connecting to the Bloblex service', state: 'failed', detail: 'Timed out' }], true)
+    const { host: mounted, retry, offline } = mount([{ id: 'service', label: 'Connecting to the Bitbots service', state: 'failed', detail: 'Timed out' }], true)
     act(() => [...mounted.querySelectorAll('button')].find((item) => item.textContent === 'Retry')?.click())
     act(() => [...mounted.querySelectorAll('button')].find((item) => item.textContent === 'Continue offline')?.click())
     expect(retry).toHaveBeenCalledOnce()

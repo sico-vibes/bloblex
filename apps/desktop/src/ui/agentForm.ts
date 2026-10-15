@@ -205,7 +205,7 @@ export function daemonCodeOf(reason: unknown) {
 }
 
 export function messageForDaemonCode(code: string, kind: DaemonFailureKind, options: { archived?: boolean; sentName?: boolean } = {}) {
-  if (code === 'unauthorized') return 'Bloblex could not reach the local daemon. Reconnect and try again.'
+  if (code === 'unauthorized') return 'Bitbots could not reach the local daemon. Reconnect and try again.'
   if (code === 'conflict') {
     if (kind === 'session.new') return 'This blob is archived, so a new session cannot be started.'
     if (kind === 'agent.update' && options.archived) return 'This blob is archived and cannot be edited.'
@@ -225,7 +225,7 @@ export function messageForDaemonCode(code: string, kind: DaemonFailureKind, opti
     return 'The local daemon request failed.'
   }
   if (code === 'internal' && (kind === 'agent.create' || kind === 'agent.update' || kind === 'agent.delete')) {
-    return 'Bloblex could not save that change. Nothing was applied.'
+    return 'Bitbots could not save that change. Nothing was applied.'
   }
   return 'The local daemon request failed.'
 }

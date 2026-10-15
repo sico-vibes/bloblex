@@ -1,4 +1,6 @@
-# Bloblex
+# Bitbots
+
+Bitbots (formerly Bloblex)
 
 Local Windows desktop control plane for Claude Code, Codex, and OpenCode. A React/Tauri shell and a companion window share state from the `bloblexd` daemon. Each provider CLI keeps its own login.
 

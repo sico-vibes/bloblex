@@ -29,6 +29,7 @@ mod updates;
 mod speech;
 mod power;
 mod migrate;
+mod snap;
 
 #[cfg(test)]
 mod file_inspection_tests;
@@ -1695,6 +1696,42 @@ fn companion_launch_spot(
     clamp_physical_position(x, y, width, height, area_x, area_y, area_width, area_height)
 }
 
+/// After the window has stopped moving for a moment, snaps it to a nearby work-area edge or
+/// corner. Each move bumps a generation so only the last quiet one acts; our own corrective
+/// move produces another Moved event whose snap is a no-op.
+fn schedule_companion_snap(window: &WebviewWindow, generation: &Arc<AtomicU64>, resizing: &Arc<AtomicBool>) {
+    let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let window = window.clone();
+    let generation = Arc::clone(generation);
+    let resizing = Arc::clone(resizing);
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(380));
+        if generation.load(Ordering::SeqCst) != mine || resizing.load(Ordering::SeqCst) {
+            return;
+        }
+        let Ok(position) = window.outer_position() else { return };
+        let Ok(size) = window.outer_size() else { return };
+        let center = (position.x + size.width as i32 / 2, position.y + size.height as i32 / 2);
+        let monitors = window.available_monitors().unwrap_or_default();
+        let Some(monitor) = monitors.iter().find(|monitor| {
+            let area = monitor.work_area();
+            center.0 >= area.position.x
+                && center.0 < area.position.x + area.size.width as i32
+                && center.1 >= area.position.y
+                && center.1 < area.position.y + area.size.height as i32
+        }) else { return };
+        let area = monitor.work_area();
+        let (x, y) = snap::snap_position(
+            position.x, position.y, size.width as i32, size.height as i32,
+            (area.position.x, area.position.y, area.size.width as i32, area.size.height as i32),
+            monitor.scale_factor(),
+        );
+        if (x, y) != (position.x, position.y) {
+            let _ = window.set_position(PhysicalPosition::new(x, y));
+        }
+    });
+}
+
 fn persist_companion_position(app: &AppHandle, window: &WebviewWindow) {
     let Ok(position) = window.outer_position() else {
         return;
@@ -1805,10 +1842,13 @@ fn make_companion(app: &AppHandle, start_at_last_position: bool) -> tauri::Resul
     let app_handle = app.clone();
     let resize_flag = Arc::clone(&app.state::<AppState>().companion_resize_in_progress);
     let window_for_event = window.clone();
+    let snap_generation = Arc::new(AtomicU64::new(0));
+    let snap_resize_flag = Arc::clone(&resize_flag);
     window.on_window_event(move |event| {
         if let WindowEvent::Moved(_) = event {
             if !resize_flag.load(Ordering::SeqCst) {
                 persist_companion_position(&app_handle, &window_for_event);
+                schedule_companion_snap(&window_for_event, &snap_generation, &snap_resize_flag);
             }
         }
         if let WindowEvent::CloseRequested { api, .. } = event {

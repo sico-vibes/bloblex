@@ -51,3 +51,15 @@ Verified: desktop typecheck and the full desktop suite (see the commit for the c
 browser preview of Settings > Remote, the phone shell (connect, bots, switcher, asleep host,
 chat) at 390 px, the bot page rail and save bar. Not verified: native companion window
 behaviour, real pointer drag in WebView2, installer migration, anything networked.
+
+## Wave 3 (15 October 2026, completes the approved plan)
+
+| Area | Change | Where |
+|---|---|---|
+| Companion | Completion peek and Focus mode; activity summary without the experiment flag; "Load earlier", per-message copy and a "New messages" pill; drop-zone debounce and chips; Remote presence row; Reset position; **edge snap wired in the native window** (380 ms after a drag goes quiet) | FIX21, `src-tauri/src/snap.rs` |
+| Bot page | Live preview pane; instructions editor with counter, presets and history on this device; Team project vs Working folder wording and recent folders; permissions in plain words; memory and activity on the page; technical details collapsed; create wizard with seven templates | `BotPreviewPane.tsx`, `BotWizard.tsx`, FIX22 |
+| Remote | Sidebar chip, profile-menu entry and a sixth tour step (skipped when remote is unavailable); independent review applied to the docs; policy hardening (wire codes, quiet hours as hard read-only, redactors for every read, event allowlist) | FIX23 to FIX25, `docs/remote/REVIEW_NOTES.md`, `SEQUENCES.md` |
+
+Verified: desktop typecheck and suite (875 tests), daemon (157) and storage (92) tests, workspace
+clippy, `cargo test -p bloblex-desktop snap::` (8). Not verified: the snap on a real window (needs
+a native run), the installer migration, any networked behaviour, the Remote gateway (design only).

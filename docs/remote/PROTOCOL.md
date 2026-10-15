@@ -289,7 +289,83 @@ runtime profile writes, session deletion, daemon shutdown, hooks, and the retire
 `pricing.*`, `subscription.*` and `budget.*` families
 (`docs/FIX18_REMOTE_TIERS_SPEC.md:33-39`).
 
-<!-- TIER-TABLE -->
+<!-- Generated from apps/desktop/src/remote/remoteTiers.ts (renderTierTableMarkdown). The parity test keeps it equal to the daemon dispatch. -->
+
+| Method | Class | Minimum tier | Why |
+| --- | --- | --- | --- |
+| `app.snapshot` | read | viewer | The authoritative state every remote view is built from; it is redacted before it leaves the host. |
+| `events.replay` | read | viewer | Replays retained events after a cursor so a reconnecting device can catch up. |
+| `daemon.health` | read | viewer | Daemon version, uptime and heartbeat; it carries no user data. |
+| `session.list` | read | viewer | Lists conversations so the device can show what is running. |
+| `session.get` | read | viewer | Reads one conversation and its history. |
+| `runtime.list` | read | viewer | Lists the coding agents installed on the host. |
+| `runtime.capabilities` | read | viewer | Describes which execution settings a runtime supports. |
+| `runtime.models` | read | viewer | Lists the models a runtime offers so the device can show the choices. |
+| `exec.snapshot.*` | read | viewer | Reads recorded execution snapshots, which already exclude instruction text and environment values. |
+| `usage.*` | read | viewer | Reads token and cost summaries. |
+| `quota.list` | read | viewer | Reads the provider quota windows the host has recorded. |
+| `search.messages` | read | viewer | Searches conversation text on the host. |
+| `memory.list` | read | viewer | Lists memory records the person can review. |
+| `memory.get` | read | viewer | Reads a single memory record for review. |
+| `automation.list` | read | viewer | Lists scheduled automations. |
+| `automation.get` | read | viewer | Reads one scheduled automation. |
+| `automation.runs` | read | viewer | Lists an automation run history. |
+| `automation.preview` | read | viewer | Previews the next run times of a schedule; it changes nothing. |
+| `agent.list` | read | viewer | Lists blobs so a device can pick one. |
+| `agent.get` | read | viewer | Reads one blob's settings. |
+| `project.list` | read | viewer | Lists known projects so a device can pick one. |
+| `permissions.policy.get` | read | viewer | Reads the approval policy. |
+| `settings.get` | read | viewer | Reads local preferences; the response is filtered before it leaves the host. |
+| `runtime.profile.list` | read | viewer | Lists saved runtime profiles. |
+| `agent.conversation` | read | viewer | Reads a blob's conversation for viewing. |
+| `session.prompt` | chat | chat | Starts a turn in an existing conversation. |
+| `session.steer` | chat | chat | Sends guidance into a running turn. |
+| `session.cancel` | chat | chat | Stops a running turn. |
+| `session.queue.*` | chat | chat | Manages the queued prompts of a conversation. |
+| `session.rename` | chat | chat | Renames a conversation. |
+| `session.archive` | chat | chat | Hides or restores a conversation. |
+| `message.reaction.toggle` | chat | chat | Adds or removes an emoji reaction. |
+| `turn.retry.cancel` | chat | chat | Cancels a pending automatic retry. |
+| `session.resume` | chat | chat | Resumes a resumable conversation. |
+| `session.close` | chat | chat | Closes a managed adapter process. |
+| `permission.reply` | approve | operator | Answers a pending approval; only when the host allows approvals from remote. |
+| `settings.set` | never | — | A remote device must not change the host's preferences. |
+| `agent.create` | never | — | A remote device must not create blobs. |
+| `agent.update` | never | — | A remote device must not edit blobs. |
+| `agent.delete` | never | — | A remote device must not archive blobs. |
+| `agent.restore` | never | — | A remote device must not restore blobs. |
+| `agent.reorder` | never | — | A remote device must not reorder blobs. |
+| `agent.team.update` | never | — | A remote device must not change blob teams. |
+| `project.create` | never | — | A remote device must not create projects. |
+| `project.update` | never | — | A remote device must not edit projects. |
+| `project.delete` | never | — | A remote device must not delete projects. |
+| `runtime.profile.save` | never | — | A remote device must not save runtime profiles. |
+| `runtime.profile.delete` | never | — | A remote device must not delete runtime profiles. |
+| `runtime.refresh` | never | — | A remote device must not trigger a coding agent scan on the host. |
+| `session.new` | never | — | A remote client picks an existing blob and project through a higher-level call, not a session with an arbitrary path. |
+| `session.delete` | never | — | A remote device must not permanently delete a conversation. |
+| `session.delete.*` | never | — | A remote device must not schedule or cancel a conversation deletion. |
+| `file.revert` | never | — | A remote device must not revert files in the host's project. |
+| `automation.create` | never | — | A remote device must not create scheduled automations. |
+| `automation.update` | never | — | A remote device must not edit scheduled automations. |
+| `automation.pause` | never | — | A remote device must not pause a scheduled automation. |
+| `automation.resume` | never | — | A remote device must not resume a scheduled automation. |
+| `automation.delete` | never | — | A remote device must not delete a scheduled automation. |
+| `automation.run_now` | never | — | A remote device must not start an unattended run on the host. |
+| `memory.create` | never | — | A remote device must not write memory records. |
+| `memory.update` | never | — | A remote device must not edit memory records. |
+| `memory.approve` | never | — | A remote device must not approve agent-written memory. |
+| `memory.delete` | never | — | A remote device must not delete memory records. |
+| `memory.restore` | never | — | A remote device must not restore memory records. |
+| `daemon.shutdown` | never | — | A remote device must not stop the host daemon. |
+| `hook.event` | never | — | Hook events come from local coding agents, not from a paired device. |
+| `mcp.*` | never | — | The MCP bridge is the local agent tool surface, not a remote device surface. |
+| `session.handoff.draft` | never | — | A remote device must not draft a handoff between conversations. |
+| `session.model.update` | never | — | A remote device must not change a conversation's model, effort or approval mode. |
+| `pricing.*` | never | — | Monetary valuation controls are retired and never remote. |
+| `subscription.*` | never | — | Subscription controls are retired and never remote. |
+| `budget.*` | never | — | Budget controls are retired and never remote. |
+| `quota.refresh` | never | — | A remote device must not trigger a provider quota poll on the host; it only needs to read quota.list. |
 
 The Director fills the table above from FIX18's `renderTierTableMarkdown()`. Do not hand-edit
 it; regenerate it so it cannot drift from `METHOD_RULES`.

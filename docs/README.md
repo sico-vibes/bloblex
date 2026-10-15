@@ -41,6 +41,19 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 | [runtime-capabilities.md](runtime-capabilities.md) | Evidence record of what each CLI build was observed to do. Includes a labelled OpenCode 2.0.28 block (14 Oct 2026). | current as an evidence record for 1-13 Oct builds; 2.0.28 block labelled | 14 Oct 2026: read in full; line citations re-checked and corrected |
 | [PHASE_5_CONTRACT.md](PHASE_5_CONTRACT.md) | Usage analytics RPC and UI contract. | superseded in part (monetary cost and subscription sections retired; `failureClass` values differ from code) | 14 Oct 2026: read in full (first 68 lines, whole file) |
 
+### Remote mode (design, with a browser mock; not implemented in the daemon)
+
+| Document | Purpose | Status | Last verified |
+| --- | --- | --- | --- |
+| [remote/REMOTE_MODE.md](remote/REMOTE_MODE.md) | Product spec: goals, non-goals, rules, screens. | design | 15 Oct 2026 |
+| [remote/ARCHITECTURE.md](remote/ARCHITECTURE.md) | Gateway, relay, client, pairing, resume, multi-computer. | design | 15 Oct 2026 |
+| [remote/THREAT_MODEL.md](remote/THREAT_MODEL.md) | Assets, actors, abuse cases, mitigations, review checklist. | design | 15 Oct 2026 |
+| [remote/PROTOCOL.md](remote/PROTOCOL.md) | Wire contract and the generated method-tier table. | design | 15 Oct 2026 |
+| [remote/UX_FLOWS.md](remote/UX_FLOWS.md) | Every host and device state, with preview flags. | design, mock built | 15 Oct 2026 |
+| [remote/PHASES.md](remote/PHASES.md) | P0 to P3 with exit criteria. | plan | 15 Oct 2026 |
+| [remote/AGENTS_AMENDMENT_DRAFT.md](remote/AGENTS_AMENDMENT_DRAFT.md) | Proposed AGENTS.md exception, awaiting owner approval. | draft, not in force | 15 Oct 2026 |
+| [UI_POLISH_WAVE.md](UI_POLISH_WAVE.md) | What the 15 October polish wave changed and what is unverified. | current | 15 Oct 2026 |
+
 ## Specs
 
 | Document | Purpose | Status | Last verified |

@@ -1,8 +1,8 @@
 import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { emit, listen } from '@tauri-apps/api/event'
-import { invoke } from '@tauri-apps/api/core'
 import { Bot, Brain, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone } from 'lucide-react'
+import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
+import { usePlatform } from '../transport/platform'
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
@@ -90,6 +90,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   onSpeechModelChange?: (modelId: string) => void
 }) {
   const { ref: dialogRef, close } = useDialogAccessibility(onClose)
+  const platform = usePlatform()
   const noun = useEntityNoun()
   const nouns = useEntityNoun({ plural: true })
   const Nouns = useEntityNoun({ plural: true, capital: true })
@@ -164,7 +165,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       if (typeof settings['companion.hotkey'] === 'boolean') setCompanionHotkey(settings['companion.hotkey'])
       if (settings['companion.hotkey'] !== false) {
         try {
-          const registered = await invoke<boolean>('companion_hotkey_registered')
+          const registered = await invokeNative<boolean>('companion_hotkey_registered')
           setCompanionHotkey(registered)
           if (!registered) {
             await rpc('settings.set', { key: 'companion.hotkey', value: false }).catch(() => undefined)
@@ -216,14 +217,14 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     let active = true
     let unlisten: (() => void) | undefined
     if (inDesktop) {
-      void listen<boolean>('bloblex-companion-visible-changed', ({ payload }) => {
+      void listenNative<boolean>('bloblex-companion-visible-changed', (payload) => {
         companionVisibilityRevision.current += 1
         setCompanionVisible(payload)
       }).then((stop) => {
         if (!active) { stop(); return }
         unlisten = stop
         const revisionAtRead = companionVisibilityRevision.current
-        void invoke<boolean>('companion_visible').then((visible) => {
+        void invokeNative<boolean>('companion_visible').then((visible) => {
           if (active && companionVisibilityRevision.current === revisionAtRead) setCompanionVisible(visible)
         }).catch(() => undefined)
       })
@@ -245,10 +246,10 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     }
     if (!inDesktop) return
     try {
-      const models = await invoke<SpeechModelRow[]>('speech_models')
+      const models = await invokeNative<SpeechModelRow[]>('speech_models')
       setSpeechModels(models)
       const entries = await Promise.all(models.map(async (model) => {
-        try { return [model.id, (await invoke<{ ready: boolean }>('speech_model_status', { modelId: model.id })).ready] as const }
+        try { return [model.id, (await invokeNative<{ ready: boolean }>('speech_model_status', { modelId: model.id })).ready] as const }
         catch { return [model.id, false] as const }
       }))
       setSpeechReady(Object.fromEntries(entries))
@@ -262,11 +263,11 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     setSpeechProgress((current) => ({ ...current, [modelId]: 0 }))
     let unlisten: (() => void) | undefined
     try {
-      unlisten = await listen<{ modelId: string; completed: number; total: number }>('bloblex-speech-download', ({ payload }) => {
+      unlisten = await listenNative<{ modelId: string; completed: number; total: number }>('bloblex-speech-download', (payload) => {
         if (payload.modelId !== modelId) return
         setSpeechProgress((current) => ({ ...current, [modelId]: payload.total ? payload.completed / payload.total : 0 }))
       })
-      await invoke('speech_model_download', { modelId })
+      await invokeNative('speech_model_download', { modelId })
       const firstReady = !Object.values(speechReady).some(Boolean)
       setSpeechReady((current) => ({ ...current, [modelId]: true }))
       // The first model you download becomes the one dictation uses.
@@ -325,12 +326,12 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const setHotkey = async (enabled: boolean) => {
     setNotice(null)
     const failure = await guarded(async () => {
-      await invoke('set_companion_hotkey', { enabled })
+      await invokeNative('set_companion_hotkey', { enabled })
       await rpc('settings.set', { key: 'companion.hotkey', value: enabled })
       setCompanionHotkey(enabled)
     })
     if (failure) {
-      try { setCompanionHotkey(await invoke<boolean>('companion_hotkey_registered')) } catch { setCompanionHotkey(false) }
+      try { setCompanionHotkey(await invokeNative<boolean>('companion_hotkey_registered')) } catch { setCompanionHotkey(false) }
       setFormError(enabled && failure.includes('already in use')
         ? 'Ctrl+Alt+B is used by another app. The companion shortcut is off.'
         : failure)
@@ -354,7 +355,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const setNotifications = (enabled: boolean) => guarded(async () => {
     await rpc('settings.set', { key: 'notifications.enabled', value: enabled })
     setNotificationsEnabled(enabled)
-    try { await emit('bloblex-notifications-enabled-changed', enabled) } catch { /* The main window refreshes the saved preference on reconnect. */ }
+    try { await emitNative('bloblex-notifications-enabled-changed', enabled) } catch { /* The main window refreshes the saved preference on reconnect. */ }
   })
   const updateCompanionMonitor = (monitorName: string) => guarded(async () => {
     await setCompanionMonitor(monitorName)
@@ -483,17 +484,17 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label="Run setup again" hint="Review the welcome steps and coding agent sign-in status.">
                 <button type="button" className="secondary-button small" onClick={onRunSetup}>Run setup</button>
               </SettingsRow>
-              <SettingsRow label="Start with Windows">
+              {platform.autostart && <SettingsRow label="Start with Windows">
                 <button type="button" className={`toggle ${startWithWindows ? 'on' : ''}`} role="switch" aria-label="Start with Windows" aria-checked={startWithWindows} onClick={() => void updateAutostart(!startWithWindows)} disabled={saving || !autostartLoaded}><i /></button>
-              </SettingsRow>
-              <SettingsRow label="Close to tray" hint="Closing the window keeps Bitbots running in the tray.">
+              </SettingsRow>}
+              {platform.tray && <SettingsRow label="Close to tray" hint="Closing the window keeps Bitbots running in the tray.">
                 <button type="button" className={`toggle ${closeToTray ? 'on' : ''}`} role="switch" aria-label="Close to tray" aria-checked={closeToTray} onClick={() => void updateCloseToTray(!closeToTray)} disabled={saving}><i /></button>
-              </SettingsRow>
-              <SettingsRow label="Companion display" hint="The companion starts at the bottom center of this display.">
+              </SettingsRow>}
+              {platform.companion && <SettingsRow label="Companion display" hint="The companion starts at the bottom center of this display.">
                 <Select ariaLabel="Companion monitor" variant="muted" value={companionMonitor ?? ''} disabled={saving || monitors.length === 0} placeholder="No displays reported" onChange={(value) => void updateCompanionMonitor(value)} options={monitors.map((monitor) => ({ value: monitor, label: monitorLabel(monitor) }))} />
-              </SettingsRow>
+              </SettingsRow>}
             </SettingsGroup>
-            <SettingsGroup title="Companion">
+            {platform.companion && <SettingsGroup title="Companion">
               <SettingsRow label="Open the companion when Bitbots starts">
                 <button type="button" className={`toggle ${companionOpenAtStartup ? 'on' : ''}`} role="switch" aria-label="Open the companion when Bitbots starts" aria-checked={companionOpenAtStartup} onClick={() => void saveSetting('companion.openAtStartup', !companionOpenAtStartup).then((failure) => { if (!failure) setCompanionOpenAtStartup(!companionOpenAtStartup) })} disabled={saving}><i /></button>
               </SettingsRow>
@@ -512,14 +513,14 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label="Sound volume" hint="Applies to every companion cue. 0% is silent.">
                 <SoundVolumeSlider value={soundVolume} onChange={setSoundVolume} onCommit={(volume) => void saveSoundVolume(volume)} onPlaySample={() => void playSoundSample()} label="Companion sound volume" />
               </SettingsRow>
-            </SettingsGroup>
-            <SettingsGroup title="Editor">
+            </SettingsGroup>}
+            {platform.editor && <SettingsGroup title="Editor">
               <form className="settings-form" onSubmit={(event) => void saveEditor(event)}>
                 <label className="settings-field"><span>Editor executable</span><input className="text-input" aria-label="Editor executable" value={editorExecutable} onChange={(event) => setEditorExecutable(event.target.value)} placeholder="Notepad is used when this is empty" /></label>
                 <label className="settings-field"><span>Arguments <small>JSON array, {'{file}'} and {'{project}'} are replaced</small></span><input className="text-input mono" aria-label="Editor arguments" value={editorArgs} onChange={(event) => setEditorArgs(event.target.value)} spellCheck={false} /></label>
                 <div className="settings-form-actions"><button className="primary-button small" disabled={saving}>Save editor</button></div>
               </form>
-            </SettingsGroup>
+            </SettingsGroup>}
             <SettingsGroup title="Experimental">
               <SettingsRow label={<span className="experimental-label">Claude dynamic workflows and Ultracode<HelpTip text="On by default. New Claude Code sessions receive enableWorkflows:true as a session-local setting, which is also what makes the Ultracode effort level available. Bitbots does not edit Claude's config. Claude Code can still decline this when a managed policy forbids it. Turning it off keeps Claude's own default and hides Ultracode." /></span>} hint="Lets Claude run dynamic workflows and offers Ultracode in the effort selector. Existing conversations keep their launch settings.">
                 <button type="button" className={`toggle ${claudeWorkflowsEnabled ? 'on' : ''}`} role="switch" aria-label="Claude dynamic workflows" aria-checked={claudeWorkflowsEnabled} disabled={saving} onClick={() => { const next = !claudeWorkflowsEnabled; void saveSetting('claude.enableWorkflows', next).then((failure) => { if (!failure) onClaudeWorkflowsChange?.(next) }) }}><i /></button>
@@ -703,7 +704,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
           {consentFor && <ConfirmDialog title="Use cloud dictation?" body="Each recording is sent to OpenAI's ChatGPT transcription service using your signed-in Codex account, which Bitbots reads from Codex's own file on this computer. Recordings, text and the sign-in are not stored or logged by Bitbots. If the cloud is unavailable, dictation uses the on-device model when it is installed. Choose On device in Settings to stop." confirmLabel="Allow cloud" cancelLabel="Keep on device" onCancel={() => setConsentFor(null)} onConfirm={async () => { const engine = consentFor; setConsentFor(null); await applySpeechEngine(engine, true) }} />}
           {!loading && page === 'Updates' && <>
-            <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />
+            {platform.updater && <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />}
             <SettingsGroup title="About">
               <div data-settings-about>
                 <SettingsRow label="Code signing" hint="Windows may warn the first time you run a new installer."><span className="settings-value">Not configured</span></SettingsRow>

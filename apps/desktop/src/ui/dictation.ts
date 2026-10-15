@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { invoke, isTauri } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { currentWebviewWindow, invokeNative, isNative, listenNative } from '../transport/nativeBridge'
 
 export type DictationPhase = 'idle' | 'starting' | 'downloading' | 'listening'
+
+type Unlisten = () => void
 
 /**
  * What the owner chooses: on this device, or the cloud (ChatGPT, falling back to the device
@@ -37,7 +37,7 @@ export interface SpeechModelInfo { id: string; label: string; sizeBytes: number 
 /** What the download prompt needs: the model's name and size, or just its id when the list is unavailable. */
 export async function speechModelInfo(modelId: string): Promise<SpeechModelInfo> {
   try {
-    const rows = await invoke<Array<{ id: string; label?: string; sizeBytes?: number }>>('speech_models')
+    const rows = await invokeNative<Array<{ id: string; label?: string; sizeBytes?: number }>>('speech_models')
     const row = rows.find((item) => item.id === modelId)
     if (row) return { id: row.id, label: row.label ?? row.id, sizeBytes: typeof row.sizeBytes === 'number' ? row.sizeBytes : null }
   } catch { /* the prompt still works without a size */ }
@@ -54,8 +54,8 @@ export function cloudAuthUsable(status: CloudAuthStatus | null | undefined): boo
 }
 
 export async function cloudDictationStatus(): Promise<CloudAuthStatus | null> {
-  if (!isTauri()) return null
-  try { return await invoke<CloudAuthStatus>('speech_cloud_status') } catch { return null }
+  if (!isNative()) return null
+  try { return await invokeNative<CloudAuthStatus>('speech_cloud_status') } catch { return null }
 }
 
 /** Plain words for the machine reason the native layer gives when it fell back or could not transcribe. */
@@ -123,16 +123,16 @@ export const DEFAULT_SPEECH_MODEL_ID = 'parakeet-tdt-0.6b-v3-int8'
  * outside the desktop app.
  */
 export async function configureDictation(enabled: boolean, modelId: string): Promise<void> {
-  if (!isTauri()) return
-  await invoke('set_dictation_shortcut', { enabled }).catch(() => undefined)
-  if (enabled) await invoke('dictation_warm', { modelId }).catch(() => undefined)
-  else await invoke('dictation_release').catch(() => undefined)
+  if (!isNative()) return
+  await invokeNative('set_dictation_shortcut', { enabled }).catch(() => undefined)
+  if (enabled) await invokeNative('dictation_warm', { modelId }).catch(() => undefined)
+  else await invokeNative('dictation_release').catch(() => undefined)
 }
 
 /**
- * Drives one dictation session for a composer. Uses the Tauri API directly so
- * that component tests, which mock `../tauri`, never touch this path: outside a
- * Tauri host `isTauri()` is false and the hook is inert.
+ * Drives one dictation session for a composer. Uses the native bridge directly
+ * so that component tests, which mock `../tauri`, never touch this path:
+ * outside a Tauri host `isNative()` is false and the hook is inert.
  *
  * The microphone opens at once; while the model loads (`warming`) audio is
  * queued natively and transcribed as soon as it is ready. If the chosen model
@@ -162,14 +162,13 @@ export function useDictation({
   onFinalRef.current = onFinal
   onPartialRef.current = onPartial
 
-  const supported = isTauri()
+  const supported = isNative()
 
   useEffect(() => {
     if (!supported) return
     let disposed = false
-    let unlisten: UnlistenFn | undefined
-    void listen<DictationEvent>('bloblex-dictation', (event) => {
-      const payload = event.payload
+    let unlisten: Unlisten | undefined
+    void listenNative<DictationEvent>('bloblex-dictation', (payload) => {
       if (payload.owner && payload.owner !== owner) return
       if (payload.type === 'ready') {
         setPhase('listening')
@@ -211,22 +210,22 @@ export function useDictation({
   }, [owner, supported])
 
   const begin = useCallback(async () => {
-    await invoke('dictation_start', { modelId, owner, engine: enginePrefs.engine, cloudConsent: enginePrefs.consent })
+    await invokeNative('dictation_start', { modelId, owner, engine: enginePrefs.engine, cloudConsent: enginePrefs.consent })
   }, [modelId, owner])
 
   /** Downloads the on-device model, reporting progress; the caller starts dictation after. */
   const download = useCallback(async () => {
     setPhase('downloading')
-    let unlisten: UnlistenFn | undefined
+    let unlisten: Unlisten | undefined
     try {
-      unlisten = await listen<{ modelId: string; completed: number; total: number }>(
+      unlisten = await listenNative<{ modelId: string; completed: number; total: number }>(
         'bloblex-speech-download',
-        (event) => {
-          if (event.payload.modelId !== modelId) return
-          setProgress(event.payload.total ? event.payload.completed / event.payload.total : 0)
+        (payload) => {
+          if (payload.modelId !== modelId) return
+          setProgress(payload.total ? payload.completed / payload.total : 0)
         },
       )
-      await invoke('speech_model_download', { modelId })
+      await invokeNative('speech_model_download', { modelId })
     } finally {
       unlisten?.()
       setProgress(0)
@@ -239,7 +238,7 @@ export function useDictation({
       setError(null)
       setPhase('starting')
       try {
-        const status = await invoke<{ ready: boolean }>('speech_model_status', { modelId })
+        const status = await invokeNative<{ ready: boolean }>('speech_model_status', { modelId })
         const cloud = enginePrefs.engine !== 'local' && enginePrefs.consent
         // The cloud engine needs no download. Only on-device dictation does, and the owner
         // is asked first, with the size, instead of a download starting by itself.
@@ -259,7 +258,7 @@ export function useDictation({
       setPhase('idle')
       setWarming(false)
       try {
-        await invoke('dictation_stop', { owner })
+        await invokeNative('dictation_stop', { owner })
       } catch {
         // The session may already be winding down; the stopped event is authoritative.
       }
@@ -286,10 +285,10 @@ export function useDictation({
   useEffect(() => {
     if (!supported) return
     let disposed = false
-    let unlisten: UnlistenFn | undefined
+    let unlisten: Unlisten | undefined
     // Scoped to this window: Ctrl+E is sent to the companion while it is on
     // screen and to the main window otherwise, never to both.
-    void getCurrentWebviewWindow().listen('bloblex-dictation-toggle', () => {
+    void currentWebviewWindow().listen('bloblex-dictation-toggle', () => {
       void toggle()
     })
       .then((fn) => {

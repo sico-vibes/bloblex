@@ -1,4 +1,5 @@
 import { rpc } from '../tauri'
+import { usePlatform } from '../transport/platform'
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
 import { CalendarClock, ChevronsUpDown, Compass, Gauge, LogOut, Pencil, Settings2, Keyboard } from 'lucide-react'
 import { startTour } from './tour/startTour'
@@ -52,6 +53,7 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(name)
+  const platform = usePlatform()
   const wrapRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const ownTrigger = useRef<HTMLButtonElement>(null)
@@ -133,7 +135,7 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(startTour)}><Compass size={15} />Take the tour</button>
       <span className="menu-separator" role="separator" />
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(() => { setDraft(name); setEditing(true) })}><Pencil size={15} />{name ? 'Edit name' : 'Add your name'}</button>
-      <button type="button" role="menuitem" className="menu-item danger" onClick={() => run(onQuit)}><LogOut size={15} />Quit Bitbots</button>
+      {platform.tray && <button type="button" role="menuitem" className="menu-item danger" onClick={() => run(onQuit)}><LogOut size={15} />Quit Bitbots</button>}
     </div>}
     </div>
   </div>

@@ -4,7 +4,7 @@
 // in one small store per window, is persisted under one key pair, and every
 // change is broadcast so the other window follows.
 
-import { emit } from '@tauri-apps/api/event'
+import { emitNative } from '../transport/nativeBridge'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { rpc } from '../tauri'
 
@@ -66,7 +66,7 @@ export function resetSoundPrefs(): SoundPrefs {
 export async function saveSoundsEnabled(enabled: boolean): Promise<void> {
   await rpc('settings.set', { key: SOUNDS_ENABLED_KEY, value: enabled })
   applySoundPrefs({ soundsEnabled: enabled })
-  try { await emit(SOUNDS_CHANGED_EVENT, enabled) } catch { /* The other window hydrates the saved value on its next connection. */ }
+  try { await emitNative(SOUNDS_CHANGED_EVENT, enabled) } catch { /* The other window hydrates the saved value on its next connection. */ }
 }
 
 /** Save the volume, update the store and tell the other window. */
@@ -74,10 +74,10 @@ export async function saveSoundVolume(volume: number, preview = false): Promise<
   const value = normalizeSoundVolume(volume)
   await rpc('settings.set', { key: SOUND_VOLUME_KEY, value })
   applySoundPrefs({ soundVolume: value })
-  try { await emit(SOUND_VOLUME_CHANGED_EVENT, preview ? { volume: value, preview: true } : { volume: value }) } catch { /* The other window hydrates the saved value on its next connection. */ }
+  try { await emitNative(SOUND_VOLUME_CHANGED_EVENT, preview ? { volume: value, preview: true } : { volume: value }) } catch { /* The other window hydrates the saved value on its next connection. */ }
 }
 
 /** Ask the window that owns audio for one cue at the volume, without saving. */
 export async function previewSoundVolume(volume: number): Promise<void> {
-  try { await emit(SOUND_VOLUME_CHANGED_EVENT, { volume: normalizeSoundVolume(volume), preview: true }) } catch { /* The companion hydrates the saved value on its next connection. */ }
+  try { await emitNative(SOUND_VOLUME_CHANGED_EVENT, { volume: normalizeSoundVolume(volume), preview: true }) } catch { /* The companion hydrates the saved value on its next connection. */ }
 }

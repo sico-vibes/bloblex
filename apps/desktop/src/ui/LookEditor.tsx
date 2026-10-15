@@ -1,6 +1,6 @@
 import { useId, useState, type KeyboardEvent } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { Dices, RotateCcw, Shuffle } from 'lucide-react'
+import { invokeNative } from '../transport/nativeBridge'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { useBitbots } from '../blob/bitbots'
 import { BotEditor } from './BotEditor'
@@ -32,7 +32,7 @@ const CREDIT_URL = 'https://blobatar.dev'
 
 function openCredit() {
   if (!inDesktop) { window.open(CREDIT_URL, '_blank', 'noopener,noreferrer'); return }
-  void invoke('plugin:opener|open_url', { url: CREDIT_URL }).catch(() => undefined)
+  void invokeNative('plugin:opener|open_url', { url: CREDIT_URL }).catch(() => undefined)
 }
 
 /**

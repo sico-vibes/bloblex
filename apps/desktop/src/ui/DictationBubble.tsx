@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { currentWindow, invokeNative, listenNative } from '../transport/nativeBridge'
 import { playDictationCue } from './dictationSound'
 import { DictationIsland, type IslandPhase } from './DictationIsland'
 import type { DictationEngineInfo } from './dictation'
 
 type Phase = 'idle' | IslandPhase
+type Unlisten = () => void
 type DictationEvent = { type: string; owner?: string; text?: string }
 
 const HOLD_TO_DRAG_MS = 140
@@ -34,18 +33,18 @@ export function DictationBubble() {
 
   useEffect(() => {
     let disposed = false
-    const unsubs: UnlistenFn[] = []
-    const add = (unlisten: UnlistenFn) => {
+    const unsubs: Unlisten[] = []
+    const add = (unlisten: Unlisten) => {
       if (disposed) unlisten()
       else unsubs.push(unlisten)
     }
     void (async () => {
-      add(await listen<{ surface: string }>('bloblex-dictation-surface', (event) => {
-        responsible.current = event.payload.surface === 'bubble'
+      add(await listenNative<{ surface: string }>('bloblex-dictation-surface', (payload) => {
+        responsible.current = payload.surface === 'bubble'
       }))
-      add(await listen<DictationEvent>('bloblex-dictation', (event) => {
+      add(await listenNative<DictationEvent>('bloblex-dictation', (payload) => {
         if (!responsible.current) return
-        const { type, text } = event.payload
+        const { type, text } = payload
         if (type === 'ready') {
           heard.current = false
           setEngine(null)
@@ -80,10 +79,10 @@ export function DictationBubble() {
           playDictationCue('error')
         }
       }))
-      add(await listen<{ level: number }>('bloblex-dictation-level', (event) => setLevel(event.payload.level)))
-      add(await listen<{ engine: DictationEngineInfo['engine']; fallback?: boolean; reason?: string | null }>('bloblex-dictation-engine', (event) => {
+      add(await listenNative<{ level: number }>('bloblex-dictation-level', (payload) => setLevel(payload.level)))
+      add(await listenNative<{ engine: DictationEngineInfo['engine']; fallback?: boolean; reason?: string | null }>('bloblex-dictation-engine', (payload) => {
         if (!responsible.current) return
-        setEngine({ engine: event.payload.engine, fallback: event.payload.fallback === true, reason: event.payload.reason ?? null })
+        setEngine({ engine: payload.engine, fallback: payload.fallback === true, reason: payload.reason ?? null })
       }))
     })().catch(() => undefined)
     return () => {
@@ -95,7 +94,7 @@ export function DictationBubble() {
   const text = `${finals}${finals && partial ? ' ' : ''}${partial}`
   const expanded = (phase === 'listening' || phase === 'processing') ? text.trim().length > 0 : phase === 'error'
   useEffect(() => {
-    void invoke('set_dictation_bubble_size', { expanded }).catch(() => undefined)
+    void invokeNative('set_dictation_bubble_size', { expanded }).catch(() => undefined)
   }, [expanded])
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -103,7 +102,7 @@ export function DictationBubble() {
     pressStart.current = { x: event.clientX, y: event.clientY, time: Date.now() }
     if (dragTimer.current) window.clearTimeout(dragTimer.current)
     dragTimer.current = window.setTimeout(() => {
-      void getCurrentWindow().startDragging()
+      void currentWindow().startDragging()
     }, HOLD_TO_DRAG_MS)
   }
 
@@ -117,7 +116,7 @@ export function DictationBubble() {
     if (!start) return
     const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y)
     if (Date.now() - start.time < HOLD_TO_DRAG_MS && moved <= TAP_MAX_MOVEMENT_PX) {
-      void invoke('show_main_window', { sessionId: null }).catch(() => undefined)
+      void invokeNative('show_main_window', { sessionId: null }).catch(() => undefined)
     }
   }
 

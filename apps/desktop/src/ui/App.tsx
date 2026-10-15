@@ -1,8 +1,4 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { getCurrentWindow } from '@tauri-apps/api/window'
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { invoke, isTauri } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import {
   Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, Copy, CornerDownRight, FileDown, FileText, FolderOpen, FolderPlus, Hash, Import,
   Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelRight, Paperclip, Plus,
@@ -61,6 +57,8 @@ import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { initialiseSeen, isUnread, markSeen, unreadNeedsApproval, type SeenSessions } from './sessionSeen'
 import { notificationAllowed, notificationForTransition } from './notificationTransitions'
 import { flashMainWindow, sendDesktopNotification } from '../desktopIntegrations'
+import { currentWindow, currentWebviewWindow, invokeNative, isNative, listenNative } from '../transport/nativeBridge'
+import { usePlatform } from '../transport/platform'
 import { stampCompanionDragRegions } from './companionDrag'
 import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, waitingBlobCount, type ExperimentName } from './experiments'
 import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, type MessageSearchResult } from './ExperimentalFeatures'
@@ -107,7 +105,7 @@ async function openSafeLink(url: string) {
   try {
     const parsed = new URL(url)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return
-    await invoke('plugin:opener|open_url', { url: parsed.href })
+    await invokeNative('plugin:opener|open_url', { url: parsed.href })
   } catch { /* An unavailable opener leaves the link inert. */ }
 }
 
@@ -119,6 +117,7 @@ export function App() {
   const noun = useEntityNoun()
   const nouns = useEntityNoun({ plural: true })
   const Noun = useEntityNoun({ capital: true })
+  const platform = usePlatform()
   useEffect(() => {
     document.documentElement.classList.toggle('companion-surface', companion)
     return () => document.documentElement.classList.remove('companion-surface')
@@ -437,14 +436,14 @@ export function App() {
     if (!inDesktop || companion) return
     let cancelled = false
     let unlisten: (() => void) | undefined
-    void listen<boolean>('bloblex-companion-visible-changed', ({ payload }) => {
+    void listenNative<boolean>('bloblex-companion-visible-changed', (payload) => {
       companionVisibilityRevision.current += 1
       setCompanionVisibleState(payload)
     }).then((stop) => {
       if (cancelled) { stop(); return }
       unlisten = stop
       const revisionAtRead = companionVisibilityRevision.current
-      void invoke<boolean>('companion_visible').then((visible) => {
+      void invokeNative<boolean>('companion_visible').then((visible) => {
         if (!cancelled && companionVisibilityRevision.current === revisionAtRead) setCompanionVisibleState(visible)
       }).catch(() => undefined)
     })
@@ -478,7 +477,7 @@ export function App() {
       setNotificationSettingLoaded(true)
     }).catch(() => { if (active) setNotificationSettingLoaded(true) })
     let unlisten: (() => void) | undefined
-    void listen<boolean>('bloblex-notifications-enabled-changed', ({ payload }) => setNotificationsEnabled(payload)).then((stop) => { unlisten = stop })
+    void listenNative<boolean>('bloblex-notifications-enabled-changed', (payload) => setNotificationsEnabled(payload)).then((stop) => { unlisten = stop })
     return () => { active = false; unlisten?.() }
   }, [companion])
 
@@ -917,8 +916,8 @@ export function App() {
     let cancelled = false
     let unlistenPause: (() => void) | undefined
     let unlistenNotice: (() => void) | undefined
-    void listen<string>('bloblex-tray-notice', (event) => setError(event.payload)).then((stop) => { if (cancelled) stop(); else unlistenNotice = stop })
-    void listen('bloblex-pause-all-requested', () => {
+    void listenNative<string>('bloblex-tray-notice', (payload) => setError(payload)).then((stop) => { if (cancelled) stop(); else unlistenNotice = stop })
+    void listenNative('bloblex-pause-all-requested', () => {
       if (!window.confirm('Pause all agents? Bitbots will send a cancellation request for every active session. A cancelled turn may not be resumable. Scheduled runs are paused too until you turn them back on in Schedules.')) return
       void (async () => {
         try {
@@ -1691,9 +1690,9 @@ export function App() {
   )
   useEffect(() => {
     if (!inDesktop || companion) return
-    void invoke('set_keep_awake', { enabled: keepAwakeWanted }).catch(() => undefined)
+    void invokeNative('set_keep_awake', { enabled: keepAwakeWanted }).catch(() => undefined)
   }, [keepAwakeWanted, companion])
-  useEffect(() => () => { if (inDesktop) void invoke('set_keep_awake', { enabled: false }).catch(() => undefined) }, [])
+  useEffect(() => () => { if (inDesktop) void invokeNative('set_keep_awake', { enabled: false }).catch(() => undefined) }, [])
 
 
   const answerPermission = async (permission: PermissionRequest, choice: string): Promise<boolean> => {
@@ -2146,7 +2145,7 @@ export function App() {
           onOpenRuntimeSettings: () => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) },
         }} />
         <SidebarUsage quotas={snapshot?.quotas ?? []} onOpen={() => void showUsage()} />
-        <button type="button" role="switch" aria-label={`Companion, keep your ${noun} on screen while you work`} aria-checked={companionVisible} data-tour="companion" className="companion-sidebar-card" onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={30} mini mood="idle" label="Companion" /><span><strong>Companion</strong><small>Keep your {noun} on screen while you work</small></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>
+        {platform.companion && <button type="button" role="switch" aria-label={`Companion, keep your ${noun} on screen while you work`} aria-checked={companionVisible} data-tour="companion" className="companion-sidebar-card" onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={30} mini mood="idle" label="Companion" /><span><strong>Companion</strong><small>Keep your {noun} on screen while you work</small></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>}
         <ProfileMenu
           connection={connection}
           onShortcuts={experiments.shortcuts ? () => setShortcutsOpen(true) : undefined}
@@ -2161,7 +2160,7 @@ export function App() {
       </aside>
 
       <section className="conversation-pane">
-        {updateOffer.version && <UpdateAvailableBanner version={updateOffer.version} onView={() => { setSettingsInitialPage('General'); setSettingsFocus('updates'); setSettingsSheet(true) }} onLater={updateOffer.dismiss} />}
+        {platform.updater && updateOffer.version && <UpdateAvailableBanner version={updateOffer.version} onView={() => { setSettingsInitialPage('General'); setSettingsFocus('updates'); setSettingsSheet(true) }} onLater={updateOffer.dismiss} />}
         {(launchWarnings.length > 0 || discoveryStatus.retrying) && !agentWarningDismissed && <LaunchWarnings warnings={launchWarnings} retrying={discoveryStatus.retrying} onSettings={() => { setSettingsInitialPage('Agents'); setSettingsSheet(true) }} onDismiss={() => setAgentWarningDismissed(true)} />}
         {discoveryConfirmation && <aside className="launch-scan-confirmation" role="status">{discoveryConfirmation}</aside>}
         {schedulesOpen ? <SchedulesView automations={snapshot?.automations ?? []} agents={agents} connected={connection === 'connected'} paused={schedulesPaused} nowMs={schedulesNowMs} agentId={schedulesAgentId} loadError={schedulesError} onBack={() => setSchedulesOpen(false)} onCreate={createAutomation} onUpdate={updateAutomation} onSetEnabled={setAutomationEnabled} onRunNow={runAutomationNow} onDelete={deleteAutomation} onLoadRuns={loadAutomationRuns} onPreview={previewAutomation} onSetPaused={setAutomationsPaused} onOpenSession={openAutomationSession} /> : analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} quotas={snapshot?.quotas ?? []} connected={connection === 'connected'} onRefreshQuota={refreshQuota} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} changes={draft && baseline ? changedFields(draft, baseline) : []} onDuplicate={editingAgent ? () => void duplicateAgent(editingAgent) : undefined} onExport={editingAgent ? () => void exportBlob(editingAgent) : undefined} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} projects={projects} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
@@ -2180,7 +2179,7 @@ export function App() {
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setMoreOpen(false); restoreMoreFocus() } }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
-              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />{Noun} settings</button>}{selectedSession && !sideSession && agents.filter((item) => !item.archived && !item.hidden && item.id !== activeSelectedAgent?.id).length > 0 && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); setHandoffError(null); setHandoffOpen(true) }}><ArrowUpRight size={15} />Continue in another {noun}…</button>}<span className="menu-separator" /><button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bitbots</button></div>}
+              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />{Noun} settings</button>}{selectedSession && !sideSession && agents.filter((item) => !item.archived && !item.hidden && item.id !== activeSelectedAgent?.id).length > 0 && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); setHandoffError(null); setHandoffOpen(true) }}><ArrowUpRight size={15} />Continue in another {noun}…</button>}<span className="menu-separator" />{platform.tray && <button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bitbots</button>}</div>}
             </div>
           </div>
         </header>
@@ -2264,7 +2263,7 @@ export function App() {
                 <div className="composer-controls-end">
                   {selectedSession && activeSelectedAgent && <SessionExecutionControls session={selectedSession} agent={activeSelectedAgent} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} />}
                   <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} contextModel={selectedSession.contextModel} contextEstimated={selectedSession.contextEstimated} model={contextModel} isNewConversation={(selectedSession.messages ?? []).length === 0} quota={sessionQuota} onOpenUsage={() => void showUsage()} />
-                  {speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
+                  {platform.nativeSpeech && speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
                   {turnLive && steerAvailable && !!composer.trim() && attachments.length === 0 && <button type="button" className="composer-icon-button steer-button" onClick={() => void steerPrompt()} disabled={busy || connection !== 'connected'} aria-label="Steer now" title="Steer: add this to the turn that is running now"><CornerDownRight size={16} aria-hidden="true" /></button>}
                   {turnLive && <button className="send-button cancel" onClick={() => void cancelTurn()} disabled={busy} aria-label="Cancel turn" title="Stop"><Square size={12} fill="currentColor" /></button>}
                   <button className="send-button" onClick={() => void sendPrompt()} disabled={connection !== 'connected' || busy || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? 'Queue message' : 'Send message'} title={connection !== 'connected' ? 'Waiting for the connection' : sessionBusy ? 'Add to the queue. It sends when this turn ends.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : <ArrowUp size={17} />}</button>
@@ -2638,6 +2637,7 @@ function RuntimePane({ runtime, connected, refreshing, onRefresh }: { runtime: R
 }
 
 function FilesPane({ session, onOpen, onReveal, onCopy, onDiff }: { session: Session | null; onOpen: (path: string) => void; onReveal: (path: string) => void; onCopy: (path: string) => void; onDiff: (path: string, content: string) => void }) {
+  const platform = usePlatform()
   const files = session?.files ?? []
   if (files.length === 0) return <div className="context-scroll"><div className="files-empty"><FileText size={20} /><strong>No files yet</strong><span>Files the agent edits in this conversation appear here.</span></div></div>
   const turns = session?.turns ?? []
@@ -2673,8 +2673,10 @@ function FilesPane({ session, onOpen, onReveal, onCopy, onDiff }: { session: Ses
       {added !== null && <em>+{added}</em>}
       {removed !== null && <i>−{removed}</i>}
       <span className="file-actions">
-        <button title="Open in editor" aria-label={`Open ${path} in editor`} disabled={unknown} onClick={() => onOpen(path)}><Code2 size={13} /></button>
-        <button title="Reveal in File Explorer" aria-label={`Reveal ${path} in File Explorer`} disabled={unknown} onClick={() => onReveal(path)}><FolderOpen size={13} /></button>
+        {platform.editor && <>
+          <button title="Open in editor" aria-label={`Open ${path} in editor`} disabled={unknown} onClick={() => onOpen(path)}><Code2 size={13} /></button>
+          <button title="Reveal in File Explorer" aria-label={`Reveal ${path} in File Explorer`} disabled={unknown} onClick={() => onReveal(path)}><FolderOpen size={13} /></button>
+        </>}
         <button title="Copy path" aria-label={`Copy ${path}`} disabled={unknown} onClick={() => onCopy(path)}><Copy size={13} /></button>
         <button title={diff ? 'View diff' : 'No diff reported'} aria-label={`View diff for ${path}`} disabled={!diff} onClick={() => diff && onDiff(path, diff)}><FileText size={13} /></button>
       </span>
@@ -2741,6 +2743,7 @@ function recordFrom(value: unknown): Record<string, unknown> { return value && t
 function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void }) {
   const sessionModelLock = session?.modelLock
   const nouns = useEntityNoun({ plural: true })
+  const platform = usePlatform()
   const contextModel = sessionModelLock && Object.prototype.hasOwnProperty.call(sessionModelLock, 'model')
     ? sessionModelLock.model ?? null
     : agent?.model ?? null
@@ -2819,7 +2822,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     let cancelled = false
     let unlisten: (() => void) | undefined
     let timer = 0
-    void listen<boolean>('bloblex-companion-visible-changed', ({ payload }) => {
+    void listenNative<boolean>('bloblex-companion-visible-changed', (payload) => {
       if (!payload) return
       setPopIn(true)
       window.clearTimeout(timer)
@@ -2888,7 +2891,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     if (!inDesktop) return
     let unlisten: (() => void) | undefined
     let cancelled = false
-    void getCurrentWindow().onDragDropEvent(({ payload }) => {
+    void currentWindow().onDragDropEvent(({ payload }) => {
       if (payload.type === 'enter') {
         viewBeforeDrop.current = viewRef.current
         setDropError(null)
@@ -2960,10 +2963,10 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const openViewRef = useRef(openView)
   openViewRef.current = openView
   useEffect(() => {
-    if (!isTauri() || !speechEnabled) return
+    if (!isNative() || !speechEnabled) return
     let unlisten: (() => void) | undefined
     let cancelled = false
-    void getCurrentWebviewWindow().listen('bloblex-dictation-toggle', () => {
+    void currentWebviewWindow().listen('bloblex-dictation-toggle', () => {
       if (chatOpenRef.current) return
       openViewRef.current('chat')
       setDictateOnOpen(true)
@@ -3054,18 +3057,18 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     let receivedVolumeUpdate = false
     let unlisten: (() => void) | undefined
     let unlistenVolume: (() => void) | undefined
-    void listen<{ volume?: unknown; preview?: boolean }>(SOUND_VOLUME_CHANGED_EVENT, (event) => {
+    void listenNative<{ volume?: unknown; preview?: boolean }>(SOUND_VOLUME_CHANGED_EVENT, (payload) => {
       receivedVolumeUpdate = true
-      const volume = normalizeSoundVolume(event.payload?.volume)
+      const volume = normalizeSoundVolume(payload?.volume)
       applySoundPrefs({ soundVolume: volume })
       savedSoundVolume.current = volume
       setSoundVolume(volume)
       setCompanionSoundVolume(volume)
-      if (event.payload?.preview === true) previewVolume()
+      if (payload?.preview === true) previewVolume()
     }).then((stop) => { if (cancelled) stop(); else unlistenVolume = stop })
-    void listen<boolean>(SOUNDS_CHANGED_EVENT, (event) => {
+    void listenNative<boolean>(SOUNDS_CHANGED_EVENT, (payload) => {
       receivedSoundUpdate = true
-      const enabled = event.payload === true
+      const enabled = payload === true
       applySoundPrefs({ soundsEnabled: enabled })
       setSoundsEnabled(enabled)
       setCompanionSoundsEnabled(enabled)
@@ -3086,8 +3089,8 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     const unsubs: Array<() => void> = []
     const add = (unlisten: () => void) => { if (disposed) unlisten(); else unsubs.push(unlisten) }
     void (async () => {
-      add(await listen<{ surface: string }>('bloblex-dictation-surface', (event) => {
-        const isCompanion = event.payload.surface === 'companion'
+      add(await listenNative<{ surface: string }>('bloblex-dictation-surface', (payload) => {
+        const isCompanion = payload.surface === 'companion'
         setDictationSurface(isCompanion ? 'companion' : 'none')
         if (isCompanion) {
           dictationHeard.current = false
@@ -3097,9 +3100,9 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
           playDictationCue('record-start')
         }
       }))
-      add(await listen<{ type: string; text?: string }>('bloblex-dictation', (event) => {
+      add(await listenNative<{ type: string; text?: string }>('bloblex-dictation', (payload) => {
         if (dictationSurfaceRef.current !== 'companion') return
-        const { type, text } = event.payload
+        const { type, text } = payload
         if (type === 'loading') setDictationWarming(true)
         else if (type === 'loaded') setDictationWarming(false)
         else if (type === 'partial') { if (text) dictationHeard.current = true }
@@ -3117,10 +3120,10 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
           window.setTimeout(() => { setDictationPhase('idle'); setDictationSurface('none') }, 2400)
         }
       }))
-      add(await listen<{ level: number }>('bloblex-dictation-level', (event) => setDictationLevel(event.payload.level)))
-      add(await listen<{ engine: DictationEngineInfo['engine']; fallback?: boolean; reason?: string | null }>('bloblex-dictation-engine', (event) => {
+      add(await listenNative<{ level: number }>('bloblex-dictation-level', (payload) => setDictationLevel(payload.level)))
+      add(await listenNative<{ engine: DictationEngineInfo['engine']; fallback?: boolean; reason?: string | null }>('bloblex-dictation-engine', (payload) => {
         if (dictationSurfaceRef.current !== 'companion') return
-        setDictationEngine({ engine: event.payload.engine, fallback: event.payload.fallback === true, reason: event.payload.reason ?? null })
+        setDictationEngine({ engine: payload.engine, fallback: payload.fallback === true, reason: payload.reason ?? null })
       }))
     })().catch(() => undefined)
     return () => { disposed = true; unsubs.forEach((unlisten) => unlisten()) }
@@ -3249,7 +3252,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
                 {session && <ContextWindowIndicator used={session.contextUsed} size={session.contextSize} contextModel={session.contextModel} contextEstimated={session.contextEstimated} model={contextModel} isNewConversation={(session.messages ?? []).length === 0} quota={contextQuota} />}
                 <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !runtimeUsable(runtime) || !session || preparingFile}><Paperclip size={13} /></button>
                 <textarea ref={draftRef} className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} rows={1} />
-                {speechEnabled && <DictationButton owner="companion" modelId={speechModel} autoStart={dictateOnOpen} onAutoStarted={() => setDictateOnOpen(false)} onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} />}
+                {platform.nativeSpeech && speechEnabled && <DictationButton owner="companion" modelId={speechModel} autoStart={dictateOnOpen} onAutoStarted={() => setDictateOnOpen(false)} onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} />}
                 <button className="send-btn" type={stopsTurn ? 'button' : 'submit'} disabled={!session || sending || !runtimeUsable(runtime) || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={stopsTurn ? cancelCompanionTurn : undefined} aria-label={queuesPrompt ? 'Queue message' : sessionBusy ? 'Cancel turn' : 'Send message'} title={queuesPrompt ? 'Add to the queue. It sends when this turn ends.' : undefined}>{sending ? <LoaderCircle size={13} className="spinning" /> : stopsTurn ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
               </form>
             </div>

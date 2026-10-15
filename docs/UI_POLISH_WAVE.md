@@ -37,3 +37,17 @@ dim and arrow), hints, Appearance page, accent, both looks, light mode.
 - Native windows (companion, tray, dictation).
 - Pointer drag on the roster in WebView2 (tested with synthetic events only).
 - Companion needs-you count badge: not built.
+
+## Wave 2 (15 October 2026, same day, unreleased)
+
+| Area | Change | Where |
+|---|---|---|
+| Companion | "N need you" badge that jumps to the next waiting bot; approval queue "1 of 3" with Previous, Next and Later (5 min); approvals use the taller island; accessible peer summary | `CompanionAttention.tsx`, `App.tsx` companion |
+| Companion access | Focus ring on every control, real button for the name area, Ctrl+1..4 and N shortcuts, offline banner with Retry, dismissible errors, mood labels, one sound store | FIX20, `soundPrefs.ts` |
+| Bot page | Section rail with change dots, save bar with change summary and Ctrl+S, discard dialog that lists what is lost, "Saved" confirmation, focus on the first invalid field, Manage group (duplicate, export, archive), name focused on create | `BlobPage.tsx`, `BotPageChrome.tsx`, `agentForm.ts` |
+| Remote | Design docs, contract, method-tier policy and parity test, simulator, Settings > Remote, phone client shell, transport seam | `docs/remote/`, FIX16 to FIX19 |
+
+Verified: desktop typecheck and the full desktop suite (see the commit for the count);
+browser preview of Settings > Remote, the phone shell (connect, bots, switcher, asleep host,
+chat) at 390 px, the bot page rail and save bar. Not verified: native companion window
+behaviour, real pointer drag in WebView2, installer migration, anything networked.

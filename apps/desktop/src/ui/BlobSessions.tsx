@@ -25,7 +25,7 @@ export function BlobSessions({ agent, sessions, legacyCount, canCreate, onOpenSe
     setArchived((result.sessions ?? []).filter((session) => session.archived && session.agentId === agent?.id))
   }
   const recent = [...sessions].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? ''))).slice(0, limit)
-  return <section className="settings-group blob-group" aria-label="Conversations">
+  return <section id="bot-section-conversations" className="settings-group blob-group" aria-label="Conversations">
     <div className="settings-group-head">
       <h3>Conversations</h3>
       <span className="settings-group-actions">

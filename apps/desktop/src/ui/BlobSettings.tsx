@@ -171,7 +171,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
   }
 
   return <>
-    <EditGroup title="Look" label="Appearance">
+    <EditGroup id="look" title="Look" label="Appearance">
       <LookEditor
         look={draftLook(draft, agentId)}
         color={draft.color}
@@ -182,7 +182,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       />
     </EditGroup>
 
-    <EditGroup title="Profile">
+    <EditGroup id="profile" title="Profile">
       <div className="blob-form">
         <label className="blob-field"><span>Name</span>
           <input aria-label={`${Noun} name`} aria-invalid={!!errors.name} aria-describedby={errors.name ? 'blob-name-error' : undefined} value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} />
@@ -196,7 +196,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       </div>
     </EditGroup>
 
-    <EditGroup title="Team">
+    <EditGroup id="team" title="Team">
       <div className="settings-row">
         <span className="settings-row-copy"><strong>Role</strong><small>A short label shown next to the name, like CTO or Researcher.</small></span>
         <span className="settings-row-control"><input className="text-input role-input" aria-label="Role" maxLength={40} placeholder="No role" value={draft.role} onChange={(event) => onDraftChange({ ...draft, role: event.target.value })} /></span>
@@ -211,7 +211,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       </div>
     </EditGroup>
 
-    <EditGroup title="Model" label="Execution" action={<span className="catalog-refresh-action">{catalog?.fetchedAt && <small>Updated {formatCatalogTime(catalog.fetchedAt)}</small>}<button type="button" className="ghost-button small" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}><RefreshCw size={13} className={loading ? 'spinning' : ''} />Refresh models</button></span>}>
+    <EditGroup id="model" title="Model" label="Execution" action={<span className="catalog-refresh-action">{catalog?.fetchedAt && <small>Updated {formatCatalogTime(catalog.fetchedAt)}</small>}<button type="button" className="ghost-button small" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}><RefreshCw size={13} className={loading ? 'spinning' : ''} />Refresh models</button></span>}>
       <div className="settings-row">
         <span className="settings-row-copy"><strong>Coding agent</strong><small>New conversations use it. Existing ones keep theirs.</small></span>
         <span className="settings-row-control">
@@ -273,7 +273,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       </div>
     </EditGroup>
 
-    <EditGroup title="Permissions">
+    <EditGroup id="permissions" title="Permissions">
       <div className="settings-row">
         <span className="settings-row-copy"><strong>Approval mode</strong><small>{approvalDescription(draft.approvalMode)}</small></span>
         <span className="settings-row-control">
@@ -283,7 +283,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       {autoApprovals && <div className="blob-form"><AutoApprovedList actions={autoApprovals} /></div>}
     </EditGroup>
 
-    <EditGroup title="Notifications">
+    <EditGroup id="notifications" title="Notifications">
       <div className="settings-row">
         <span className="settings-row-copy"><strong>Notify me</strong><small>{NOTIFICATION_LEVEL_HELP[draft.notificationLevel ?? 'all']}</small></span>
         <span className="settings-row-control">
@@ -292,7 +292,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       </div>
     </EditGroup>
 
-    <EditGroup title="Details">
+    <EditGroup id="details" title="Technical details">
       <div className="settings-row"><span className="settings-row-copy"><strong>Concurrency</strong></span><span className="settings-value">{concurrencyText(capabilities, execution.maxConcurrency)}</span></div>
       <div className="blob-form" aria-label="Last applied snapshot">
         <span className="blob-field-label">Last applied settings</span>
@@ -321,8 +321,8 @@ function formatCatalogTime(value: string) {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
-function EditGroup({ title, label, action, children }: { title: string; label?: string; action?: ReactNode; children: ReactNode }) {
-  return <section className="settings-group blob-group" aria-label={label ?? title}>
+function EditGroup({ id, title, label, action, children }: { id?: string; title: string; label?: string; action?: ReactNode; children: ReactNode }) {
+  return <section id={id ? `bot-section-${id}` : undefined} className="settings-group blob-group" aria-label={label ?? title}>
     <div className="settings-group-head"><h3>{title}</h3>{action}</div>
     <div className="settings-card">{children}</div>
   </section>

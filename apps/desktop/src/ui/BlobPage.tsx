@@ -4,7 +4,9 @@ import { visibleApprovalMode } from '../approvalContract'
 import type { Agent, Project, Runtime, Session } from '../types'
 import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
 import type { ExecutionSendGate } from '../executionContract'
-import { Archive, Check, ChevronLeft, Trash2 } from 'lucide-react'
+import { Archive, Check, ChevronLeft, Copy, Download, Trash2 } from 'lucide-react'
+import { BotRail, BotSaveBar, railSections, sectionDomId } from './BotPageChrome'
+import { summarizeChanges, type ChangedField } from './agentForm'
 import { BlobOverview } from './BlobOverview'
 import { BlobSessions } from './BlobSessions'
 import { BlobSettings } from './BlobSettings'
@@ -14,7 +16,7 @@ import { useEntityNoun } from './vocabulary'
 type MorphPairSnapshot = { rect: DOMRect; fontSize: number; ghost: HTMLElement }
 type MorphSnapshot = { surface: DOMRect; radius: string; shadow: string; pairs: Map<string, MorphPairSnapshot> }
 
-export function BlobPage({ mode, agent, draft, runtime, session, runtimes, projects = [], sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onNewSession, onOpenSession }: {
+export function BlobPage({ mode, agent, draft, runtime, session, runtimes, projects = [], sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onDuplicate, onExport, changes = [], onNewSession, onOpenSession }: {
   mode: 'create' | 'edit'
   agent: Agent | null
   draft: AgentDraft
@@ -41,10 +43,12 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
   onSave: () => void
   onCancel: () => void
   onArchive: () => void
+  onDuplicate?: () => void
+  onExport?: () => void
+  changes?: readonly ChangedField[]
   onNewSession: () => void
   onOpenSession: (session: Session) => void
 }) {
-  const [discardOpen, setDiscardOpen] = useState(false)
   const noun = useEntityNoun()
   const Noun = useEntityNoun({ capital: true })
   const backRef = useRef<HTMLButtonElement>(null)
@@ -56,41 +60,97 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
     ? autoApprovals.filter((action) => action.agentId === agent.id || (!action.agentId && !!latestSessionId && action.sessionId === latestSessionId))
     : []
   const bypassLine = bypassNotices.some((notice) => agent && (notice.agentId === agent.id || (latestSessionId && notice.sessionId === latestSessionId)))
-  const leave = () => { setDiscardOpen(false); onBack() }
-  const requestBack = () => { if (dirty) setDiscardOpen(true); else onBack() }
-  const requestCancel = () => {
-    if (mode === 'create') { if (dirty) setDiscardOpen(true); else onBack(); return }
-    if (dirty) onCancel()
+  const [discard, setDiscard] = useState<null | 'leave' | 'revert'>(null)
+  const [localNotice, setLocalNotice] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const wasSaving = useRef(false)
+  const invalid = Object.values(errors).filter((message): message is string => !!message)
+  const requestBack = () => { if (dirty) setDiscard('leave'); else onBack() }
+  const requestDiscard = () => {
+    if (mode === 'create') { if (dirty) setDiscard('leave'); else onBack(); return }
+    if (dirty) setDiscard('revert')
   }
-  const fieldErrors = Object.values(errors).filter((message): message is string => !!message)
+  const confirmDiscard = () => {
+    const kind = discard
+    setDiscard(null)
+    if (kind === 'leave') onBack()
+    else onCancel()
+  }
+  // A visible "Saved" after a successful save: saving ended, nothing left to save, no error.
+  useEffect(() => {
+    if (wasSaving.current && !saving && !dirty && !error && mode === 'edit') {
+      setSaved(true)
+      const timer = window.setTimeout(() => setSaved(false), 2200)
+      wasSaving.current = saving
+      return () => window.clearTimeout(timer)
+    }
+    wasSaving.current = saving
+  }, [saving, dirty, error, mode])
+  useEffect(() => { if (dirty) setSaved(false) }, [dirty])
+  const focusFirstInvalid = () => {
+    const target = scrollRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')
+    if (target) { target.scrollIntoView({ block: 'center' }); target.focus({ preventScroll: true }); setLocalNotice(null); return }
+    setLocalNotice('Choose a coding agent and a model before saving.')
+  }
+  const trySave = () => {
+    if (saving) return
+    if (mode === 'edit' && !dirty) return
+    if (!ready) { focusFirstInvalid(); return }
+    setLocalNotice(null)
+    onSave()
+  }
+  const trySaveRef = useRef(trySave)
+  trySaveRef.current = trySave
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        trySaveRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  // A new bot opens with the cursor in its name; an existing one keeps Back first so keyboard users can leave.
+  useEffect(() => {
+    if (mode !== 'create') return
+    const field = scrollRef.current?.querySelector<HTMLInputElement>('input[aria-label$=" name"]')
+    field?.focus()
+  }, [mode])
+  const sections = railSections(mode)
+  const discardBody = mode === 'edit' && discard === 'revert' && changes.length
+    ? 'These changes will be lost: ' + summarizeChanges(changes, 8) + '.'
+    : discard === 'leave' && changes.length ? 'Unsaved changes: ' + summarizeChanges(changes, 8) + '.' : undefined
   return <div className="blob-page">
     <header className="blob-page-header">
       <button ref={backRef} type="button" className="icon-button" aria-label="Back" title="Back" onClick={requestBack}><ChevronLeft size={18} aria-hidden="true" /></button>
-      <strong className="blob-page-heading">{title}</strong>
-      <div className="blob-page-actions">
-        {dirty && <button type="button" className="ghost-button small" onClick={requestCancel}>Cancel</button>}
-        <button type="button" className="primary-button small" disabled={!ready || saving || (mode === 'edit' && !dirty)} onClick={onSave}>{saving ? 'Saving…' : mode === 'create' ? `Create ${noun}` : 'Save'}</button>
-      </div>
+      <h1 className="blob-page-heading">{title}</h1>
     </header>
-    <div className="blob-page-scroll">
-      <div className="blob-page-column">
-        <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} approvalMode={badgeMode} agentId={agent?.id ?? null} />
-        {error && <p className="blob-page-notice error" role="alert">{error}</p>}
-        {remoteNotice && <p className="blob-page-notice" role="status">{remoteNotice}</p>}
-        {fieldErrors.map((message) => <p className="blob-page-notice error" role="alert" key={message}>{message}</p>)}
-        {bypassLine && <p className="blob-page-notice warning" role="status">Bypass is active for this {noun}. New requests are approved without asking.</p>}
-        <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} />
-        {mode === 'edit' && <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />}
-        {mode === 'edit' && <section className="settings-group blob-group" aria-label="Archive">
-          <div className="settings-card blob-archive-card">
-            <span className="blob-archive-icon" aria-hidden="true"><Archive size={17} /></span>
-            <span className="blob-archive-copy"><strong>Archive {draft.name.trim() || `this ${noun}`}</strong><small>It leaves the sidebar and companion. Its conversations stay saved.</small></span>
-            <button type="button" className="secondary-button small blob-archive-button" onClick={onArchive}>Archive</button>
-          </div>
-        </section>}
+    <div className="blob-page-scroll" ref={scrollRef}>
+      <div className="blob-page-layout">
+        <BotRail sections={sections} changes={changes} scrollRoot={scrollRef} />
+        <div className="blob-page-column">
+          <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} approvalMode={badgeMode} agentId={agent?.id ?? null} />
+          {error && <p className="blob-page-notice error" role="alert">{error}</p>}
+          {remoteNotice && <p className="blob-page-notice" role="status">{remoteNotice}</p>}
+          {localNotice && <p className="blob-page-notice error" role="alert">{localNotice}</p>}
+          {bypassLine && <p className="blob-page-notice warning" role="status">Bypass is active for this {noun}. New requests are approved without asking.</p>}
+          <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} />
+          {mode === 'edit' && <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />}
+          {mode === 'edit' && <section id={sectionDomId('manage')} className="settings-group blob-group" aria-label="Manage">
+            <div className="settings-group-head"><h3>Manage</h3></div>
+            <div className="settings-card">
+              {onDuplicate && <button type="button" className="blob-manage-row" onClick={onDuplicate}><Copy size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Duplicate</strong><small>Make a copy with the same look, model and instructions.</small></span></button>}
+              {onExport && <button type="button" className="blob-manage-row" onClick={onExport}><Download size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Export</strong><small>Save this {noun} as a file you can share or import later.</small></span></button>}
+              <button type="button" className="blob-manage-row danger" onClick={onArchive}><Archive size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Archive {draft.name.trim() || `this ${noun}`}</strong><small>It leaves the sidebar and companion. Its conversations stay saved.</small></span></button>
+            </div>
+          </section>}
+        </div>
       </div>
     </div>
-    {discardOpen && <ConfirmDialog title="Discard unsaved changes?" confirmLabel="Discard" cancelLabel="Keep editing" onConfirm={leave} onCancel={() => setDiscardOpen(false)} />}
+    <BotSaveBar mode={mode} noun={noun} dirty={dirty} saving={saving} changes={changes} invalidCount={invalid.length} saved={saved} canSubmit onSave={trySave} onDiscard={requestDiscard} />
+    {discard && <ConfirmDialog title={discard === 'revert' ? 'Discard these changes?' : 'Discard unsaved changes?'} body={discardBody} confirmLabel="Discard" cancelLabel="Keep editing" onConfirm={confirmDiscard} onCancel={() => setDiscard(null)} />}
   </div>
 }
 

@@ -251,3 +251,42 @@ export function executionFromAgent(agent: Agent | null): StoredExecution {
     maxConcurrency: agent?.maxConcurrency ?? 1,
   }
 }
+
+/** The editor's sections, in the order the rail lists them. */
+export type BotSection = 'look' | 'profile' | 'team' | 'model' | 'permissions' | 'notifications'
+
+export interface ChangedField { field: string; label: string; section: BotSection }
+
+/**
+ * Which fields differ from the saved bot, with a plain label and the section
+ * each belongs to. Drives the save bar summary, the rail's change dots and the
+ * discard dialog. Uses the same comparisons as `isAgentDirty`.
+ */
+export function changedFields(draft: AgentDraft, baseline: AgentDraft): ChangedField[] {
+  const out: ChangedField[] = []
+  const add = (field: string, label: string, section: BotSection) => out.push({ field, label, section })
+  if (!colorsEquivalent(draft.color, baseline.color)) add('color', 'Colour', 'look')
+  if (!lookEquals(draft.look, baseline.look)) add('look', 'Look', 'look')
+  if (draft.name !== baseline.name) add('name', 'Name', 'profile')
+  if (draft.description !== baseline.description) add('description', 'Description', 'profile')
+  if (draft.role.trim() !== baseline.role.trim()) add('role', 'Role', 'team')
+  if (draft.projectId !== baseline.projectId) add('projectId', 'Project', 'team')
+  if (draft.leader !== baseline.leader) add('leader', 'Team leader', 'team')
+  if (draft.runtimeId !== baseline.runtimeId) add('runtimeId', 'Coding agent', 'model')
+  if (nullableText(draft.model) !== nullableText(baseline.model)) add('model', 'Model', 'model')
+  if (nullableText(draft.thinking) !== nullableText(baseline.thinking)) add('thinking', 'Effort', 'model')
+  if (nullableText(draft.serviceTier) !== nullableText(baseline.serviceTier)) add('serviceTier', 'Speed', 'model')
+  if (draft.instructions !== baseline.instructions) add('instructions', 'Instructions', 'model')
+  if (normalizeProject(draft.defaultProject) !== normalizeProject(baseline.defaultProject)) add('defaultProject', 'Working folder', 'model')
+  if ((draft.approvalMode ?? null) !== (baseline.approvalMode ?? null)) add('approvalMode', 'Approvals', 'permissions')
+  if ((draft.notificationLevel ?? 'all') !== (baseline.notificationLevel ?? 'all')) add('notificationLevel', 'Notifications', 'notifications')
+  return out
+}
+
+/** "Name, Model and Effort" / "Name" / "Name, Model, Effort and 2 more". */
+export function summarizeChanges(changes: readonly ChangedField[], limit = 3): string {
+  const labels = changes.map((item) => item.label)
+  if (labels.length <= 1) return labels.join('')
+  if (labels.length <= limit) return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`
+  return `${labels.slice(0, limit).join(', ')} and ${labels.length - limit} more`
+}

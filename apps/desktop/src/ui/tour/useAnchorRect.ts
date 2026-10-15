@@ -3,7 +3,8 @@ import { rectsEqual, type Rect } from './placement'
 
 /** The element a tour step or hint points at. Components opt in with `data-tour="name"`. */
 export function anchorSelector(name: string) {
-  return `[data-tour="${name}"]`
+  // A raw CSS selector (starting with . or [) is used as is; otherwise a data-tour name.
+  return name.startsWith(".") || name.startsWith("[") ? name : `[data-tour="${name}"]`
 }
 
 function visibleRect(element: Element | null): Rect | null {

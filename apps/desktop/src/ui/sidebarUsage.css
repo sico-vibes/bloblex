@@ -1,5 +1,5 @@
 .sidebar-usage {
-  width: 100%; margin: 0; padding: 8px 10px; display: flex; align-items: center; gap: 9px; text-align: left; cursor: pointer;
+  width: calc(100% - 16px); margin: 0 8px 8px; padding: 8px 10px; display: flex; align-items: center; gap: 9px; text-align: left; cursor: pointer;
   color: var(--text-2); border: 1px solid var(--line); border-radius: var(--radius-md); background: transparent;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }

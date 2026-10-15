@@ -81,6 +81,7 @@ import { ContextWindowIndicator } from './ContextWindowIndicator'
 import { QuotaBar } from './QuotaBar'
 import { SidebarUsage } from './SidebarUsage'
 import { TourHost } from './tour/TourHost'
+import { ContextualHints } from './tour/ContextualHints'
 import { startTour } from './tour/startTour'
 import { quotaRows, quotaTone, resetIn, updatedAgo } from './quotaModel'
 import { QueueBanner } from './PromptQueue'
@@ -2169,6 +2170,7 @@ export function App() {
         </div>
       </aside>
 
+      {!companion && <ContextualHints enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet} />}
       {!companion && <TourHost enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet} justOnboarded={onboardingCompleteThisRun} agentColor={activeSelectedAgent?.color ?? '#b7a7f4'} />}
       {!companion && usageBarEnabled && <QuotaBar quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={() => void showUsage()} />}
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} quotas={snapshot?.quotas ?? []} loading={busy && usageSummary === null} quotaRefreshing={quotaRefreshing} onRefreshQuota={refreshQuota} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onOpenHistory={() => { setUsageSheet(false); setAnalyticsOpen(true) }} onClose={() => setUsageSheet(false)} />}

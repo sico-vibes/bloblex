@@ -76,7 +76,7 @@ export function ApprovalCard({ permission, onReply, focusOnMount = true, variant
       replyFromShortcut(shortcuts.deny)
     }
   }
-  return <section ref={cardRef} tabIndex={-1} data-permission-card="" className={`permission-card ${variant === 'companion' ? 'companion-approval-card' : ''}`} onKeyDown={onKeyDown} aria-label="Approval requested">
+  return <section ref={cardRef} tabIndex={-1} data-permission-card="" data-tour={variant === "main" ? "approval" : undefined} className={`permission-card ${variant === 'companion' ? 'companion-approval-card' : ''}`} onKeyDown={onKeyDown} aria-label="Approval requested">
     <div className="permission-icon"><ShieldAlert size={17} /></div><div className="permission-copy">
       <div className="permission-head">
         <strong>{formatUnknownSafe(permission.title, 'Approval requested')}</strong>

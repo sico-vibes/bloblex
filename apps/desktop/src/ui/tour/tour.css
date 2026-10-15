@@ -4,16 +4,16 @@
    :root:root so the same markup is right in both looks. */
 
 .coach { position: fixed; inset: 0; z-index: 130; pointer-events: none; }
-.coach.modal .coach-shield { position: fixed; pointer-events: auto; background: transparent; }
+.coach.modal .coach-shield { position: fixed; pointer-events: auto; background: rgba(0, 0, 0, .5); -webkit-backdrop-filter: blur(1.5px); backdrop-filter: blur(1.5px); }
+:root[data-theme="light"] .coach.modal .coach-shield { background: rgba(10, 10, 10, .34); }
 
 /* The spotlight: a ring on the target and a dim over everything else. */
 :root:root .coach-spot {
   position: fixed; pointer-events: none; border: 2px solid var(--user-accent, var(--text-1)); border-radius: var(--radius-md);
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, .56);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--user-accent, var(--text-1)) 22%, transparent);
   transition: left 380ms cubic-bezier(.2, .8, .2, 1), top 380ms cubic-bezier(.2, .8, .2, 1), width 380ms cubic-bezier(.2, .8, .2, 1), height 380ms cubic-bezier(.2, .8, .2, 1);
   transition-timing-function: cubic-bezier(.2, .8, .2, 1);
 }
-:root[data-theme="light"] .coach-spot { box-shadow: 0 0 0 9999px rgba(10, 10, 10, .42); }
 
 /* The card. */
 :root:root .coach-card {

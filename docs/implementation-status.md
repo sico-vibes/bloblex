@@ -1,6 +1,6 @@
 # Implementation status
 
-> Status: current through `v0.1.0-beta.22` (14 October entry below). The newest release is `v0.1.0-beta.28` ([releases/0.1.0-beta.28.md](releases/0.1.0-beta.28.md)). The "Phase status" and "Work after the plan phases" tables describe the 1-12 October worktree and are historical; the "Still open" list is the current gap list.
+> Status: current through `v0.1.0-beta.22` (14 October entry below). The newest release is `v0.1.0-beta.29` ([releases/0.1.0-beta.29.md](releases/0.1.0-beta.29.md)). The "Phase status" and "Work after the plan phases" tables describe the 1-12 October worktree and are historical; the "Still open" list is the current gap list.
 
 Current as of 14 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
 

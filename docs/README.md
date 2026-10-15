@@ -14,7 +14,7 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 
 - **AI agents:** read [AGENTS.md](../AGENTS.md) first. It is the owner directive, with dated amendments newest first. Then [OPERATING_MODEL.md](OPERATING_MODEL.md) (the rules in effect today, derived from AGENTS.md). Then [implementation-status.md](implementation-status.md) for open gaps and [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for release state.
 - **New contributors:** [README.md](../README.md), then [windows-development.md](windows-development.md), [PRODUCT.md](../PRODUCT.md), [DESIGN.md](../DESIGN.md), [ipc-contract.md](ipc-contract.md) and [runtime-capabilities.md](runtime-capabilities.md).
-- **Release state today:** `v0.1.0-beta.28` ([releases/0.1.0-beta.28.md](releases/0.1.0-beta.28.md)). The signed updater feed is still at `v0.1.0-beta.6` ([UPDATER.md](UPDATER.md)).
+- **Release state today:** `v0.1.0-beta.29` ([releases/0.1.0-beta.29.md](releases/0.1.0-beta.29.md)). The signed updater feed is still at `v0.1.0-beta.6` ([UPDATER.md](UPDATER.md)).
 
 ## Rules and ownership
 
@@ -125,7 +125,7 @@ Immutable records. Only broken links were repaired. Their wording and conclusion
 
 ## Release notes
 
-Immutable records. The newest is [0.1.0-beta.28](releases/0.1.0-beta.28.md). Earlier notes are historical.
+Immutable records. The newest is [0.1.0-beta.29](releases/0.1.0-beta.29.md). Earlier notes are historical.
 
 | Document | Status | Last verified |
 | --- | --- | --- |
@@ -156,7 +156,8 @@ Immutable records. The newest is [0.1.0-beta.28](releases/0.1.0-beta.28.md). Ear
 | [releases/0.1.0-beta.25.md](releases/0.1.0-beta.25.md) | historical | 14 Oct 2026: written with the release |
 | [releases/0.1.0-beta.26.md](releases/0.1.0-beta.26.md) | historical | 14 Oct 2026: written with the release |
 | [releases/0.1.0-beta.27.md](releases/0.1.0-beta.27.md) | historical | 14 Oct 2026: written with the release |
-| [releases/0.1.0-beta.28.md](releases/0.1.0-beta.28.md) | historical (newest manual-only release) | 14 Oct 2026: written with the release |
+| [releases/0.1.0-beta.28.md](releases/0.1.0-beta.28.md) | historical | 14 Oct 2026: written with the release |
+| [releases/0.1.0-beta.29.md](releases/0.1.0-beta.29.md) | historical (newest manual-only release) | 15 Oct 2026: written with the release |
 
 ## Handoff and history
 

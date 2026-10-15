@@ -8,6 +8,7 @@ import react from '@vitejs/plugin-react'
 const fixture = (file: string) => fileURLToPath(new URL(`./src/preview/${file}`, import.meta.url))
 
 export default defineConfig({
+  server: { watch: { ignored: ['**/src-tauri/**', '**/target/**'] } },
   plugins: [react()],
   clearScreen: false,
   resolve: {

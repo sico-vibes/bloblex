@@ -116,18 +116,21 @@ describe('General settings mounted controls', () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { 'appearance.theme': 'system', 'appearance.textSize': 'default' } } : {})
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Appearance" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(await selectOptions(host, 'Theme')).toEqual(expect.arrayContaining([
       expect.objectContaining({ value: 'system', label: 'Follow system' }),
       expect.objectContaining({ value: 'light', label: 'Light' }),
     ]))
     expect((await selectOptions(host, 'Text size')).map((item) => item.value)).toEqual(['small', 'default', 'large', 'larger'])
-    expect(selectTrigger(host, 'Companion start position')).not.toBeNull()
-    expect(host.querySelector('[aria-label="Show/hide with Ctrl+Alt+B"]')).not.toBeNull()
     await chooseOption(host, 'Theme', 'light')
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.theme', value: 'light' })
     expect(document.documentElement.dataset.theme).toBe('light')
+    // Companion placement and the hotkey stay on General.
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(selectTrigger(host, 'Companion start position')).not.toBeNull()
+    expect(host.querySelector('[aria-label="Show/hide with Ctrl+Alt+B"]')).not.toBeNull()
   })
 
   it('shows a startup hotkey conflict in the error banner and turns the switch off', async () => {

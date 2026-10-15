@@ -2,7 +2,7 @@ import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { emit, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { Bot, Brain, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X } from 'lucide-react'
+import { Bot, Brain, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search } from 'lucide-react'
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
@@ -21,15 +21,18 @@ import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTi
 import { ConfirmDialog } from './BlobPage'
 import { setAccentColor, setThemeStyle, useAccentColor, useThemeStyle } from '../blob/bitbots'
 import { LookPicker } from './LookPicker'
+import { LookPreview } from './LookPreview'
+import { searchSettings, type SettingsIndexEntry } from './settingsIndex'
 import { AccentPicker } from './AccentPicker'
 import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import './bitbotsUi.css'
 
-export type SettingsPageId = 'General' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
+export type SettingsPageId = 'General' | 'Appearance' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
+  { id: 'Appearance', label: 'Appearance', icon: Palette },
   { id: 'Agents', label: 'Agents', icon: Bot },
   { id: 'Memory', label: 'Memory', icon: Brain },
   { id: 'Speech', label: 'Speech', icon: Mic },
@@ -426,6 +429,20 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const orphanAgents = agents.filter((agent) => !runtimes.some((runtime) => runtime.id === agent.runtimeId))
   const modeFor = (agent: Agent) => policy?.perAgent.find((row) => row.agentId === agent.id)?.effectiveMode ?? effectiveApprovalMode(agent) ?? defaultMode
   const switchPage = (next: SettingsPageId) => { setPage(next); setFormError(null); setNotice(null) }
+  const [settingsQuery, setSettingsQuery] = useState('')
+  const searchResults = searchSettings(settingsQuery)
+  const openSearchResult = (entry: SettingsIndexEntry) => {
+    switchPage(entry.page as SettingsPageId)
+    setSettingsQuery('')
+    window.setTimeout(() => {
+      const heading = [...document.querySelectorAll('.settings-content .settings-group-head h3')].find((node) => node.textContent === entry.group)
+      const section = heading?.closest('.settings-group')
+      if (!section) return
+      section.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      section.classList.add('settings-flash')
+      window.setTimeout(() => section.classList.remove('settings-flash'), 1400)
+    }, 80)
+  }
 
   return <div className="sheet-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}>
     <section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-label="Settings" tabIndex={-1}>
@@ -434,7 +451,11 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
         <button type="button" className="icon-button" data-dialog-initial-focus aria-label="Close settings" onClick={close}><X size={17} aria-hidden="true" /></button>
       </header>
       <nav className="settings-nav" aria-label="Settings pages">
-        {PAGES.map((item) => <button type="button" className={page === item.id ? 'selected' : ''} key={item.id} aria-current={page === item.id ? 'page' : undefined} onClick={() => switchPage(item.id)}><item.icon size={16} aria-hidden="true" />{item.label}</button>)}
+        <label className="settings-search"><Search size={14} aria-hidden="true" /><input type="search" aria-label="Search settings" placeholder="Search settings" value={settingsQuery} onChange={(event) => setSettingsQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && settingsQuery) { event.preventDefault(); event.stopPropagation(); setSettingsQuery('') } else if (event.key === 'Enter' && searchResults[0]) { event.preventDefault(); openSearchResult(searchResults[0]) } }} /></label>
+        {settingsQuery.trim() ? <div className="settings-search-results" role="listbox" aria-label="Settings search results">
+          {searchResults.map((entry) => <button type="button" role="option" aria-selected="false" key={entry.page + entry.group + entry.label} onClick={() => openSearchResult(entry)}><span>{entry.label}</span><small>{entry.page} · {entry.group}</small></button>)}
+          {!searchResults.length && <p className="settings-search-empty">No settings match.</p>}
+        </div> : PAGES.map((item) => <button type="button" className={page === item.id ? 'selected' : ''} key={item.id} aria-current={page === item.id ? 'page' : undefined} onClick={() => switchPage(item.id)}><item.icon size={16} aria-hidden="true" />{item.label}</button>)}
       </nav>
         <div className="settings-content">
           {formError && <div className="settings-banner error" role="alert"><ShieldAlert size={15} /><span>{formError}</span></div>}
@@ -474,20 +495,6 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </SettingsRow>
               <SettingsRow label="Sound volume" hint="Applies to every companion cue. 0% is silent.">
                 <SoundVolumeSlider value={soundVolume} onChange={setSoundVolume} onCommit={(volume) => void saveSoundVolume(volume)} onPlaySample={() => void playSoundSample()} label="Companion sound volume" />
-              </SettingsRow>
-            </SettingsGroup>
-            <SettingsGroup title="Appearance">
-              <SettingsRow label="Theme">
-                <Select ariaLabel="Theme" variant="muted" value={appearanceTheme} disabled={saving} onChange={(value) => { if (value === 'system' || value === 'dark' || value === 'light') void updateAppearance(value, textSize) }} options={[{ value: 'system', label: 'Follow system' }, { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} />
-              </SettingsRow>
-              <SettingsRow label="Look" hint="Bitbots is the primary look. Blobots is the softer alternative." stacked>
-                <LookPicker value={themeStyleValue} compact disabled={saving} label="App look" onChange={(next) => { void saveSetting('appearance.style', next).then((failure) => { if (!failure) setThemeStyle(next) }) }} />
-              </SettingsRow>
-              <SettingsRow label="Accent colour" stacked hint="Used for buttons, selections and focus in both looks. Neutral follows the theme.">
-                <AccentPicker value={accentValue} disabled={saving} onChange={(next) => { void saveSetting('appearance.accent', next).then((failure) => { if (!failure) setAccentColor(next) }) }} />
-              </SettingsRow>
-              <SettingsRow label="Text size">
-                <Select ariaLabel="Text size" variant="muted" value={textSize} disabled={saving} onChange={(value) => { if (['small', 'default', 'large', 'larger'].includes(value)) void updateAppearance(appearanceTheme, value as typeof textSize) }} options={[{ value: 'small', label: 'Small 13' }, { value: 'default', label: 'Default 14' }, { value: 'large', label: 'Large 15' }, { value: 'larger', label: 'Larger 16' }]} />
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Editor">
@@ -531,6 +538,26 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             <SettingsGroup title="Notifications">
               <SettingsRow label="Notify when a blob finishes or needs approval">
                 <button type="button" className={`toggle ${notificationsEnabled ? 'on' : ''}`} role="switch" aria-label="Notify when a blob finishes or needs approval" aria-checked={notificationsEnabled} onClick={() => void setNotifications(!notificationsEnabled)} disabled={saving}><i /></button>
+              </SettingsRow>
+            </SettingsGroup>
+          </>}
+
+          {!loading && page === 'Appearance' && <>
+            <div className="appearance-preview"><LookPreview look={themeStyleValue} /></div>
+            <SettingsGroup title="Look and colour">
+              <SettingsRow label="Look" hint="Bitbots is the primary look. Blobots is the softer alternative." stacked>
+                <LookPicker value={themeStyleValue} disabled={saving} label="App look" onChange={(next) => { void saveSetting('appearance.style', next).then((failure) => { if (!failure) setThemeStyle(next) }) }} />
+              </SettingsRow>
+              <SettingsRow label="Accent colour" stacked hint="Used for buttons, selections and focus in both looks. Neutral follows the theme.">
+                <AccentPicker value={accentValue} disabled={saving} onChange={(next) => { void saveSetting('appearance.accent', next).then((failure) => { if (!failure) setAccentColor(next) }) }} />
+              </SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup title="Display">
+              <SettingsRow label="Theme">
+                <Select ariaLabel="Theme" variant="muted" value={appearanceTheme} disabled={saving} onChange={(value) => { if (value === 'system' || value === 'dark' || value === 'light') void updateAppearance(value, textSize) }} options={[{ value: 'system', label: 'Follow system' }, { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} />
+              </SettingsRow>
+              <SettingsRow label="Text size">
+                <Select ariaLabel="Text size" variant="muted" value={textSize} disabled={saving} onChange={(value) => { if (['small', 'default', 'large', 'larger'].includes(value)) void updateAppearance(appearanceTheme, value as typeof textSize) }} options={[{ value: 'small', label: 'Small 13' }, { value: 'default', label: 'Default 14' }, { value: 'large', label: 'Large 15' }, { value: 'larger', label: 'Larger 16' }]} />
               </SettingsRow>
             </SettingsGroup>
           </>}

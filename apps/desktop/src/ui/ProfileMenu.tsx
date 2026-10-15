@@ -1,6 +1,7 @@
 import { rpc } from '../tauri'
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
-import { CalendarClock, ChevronsUpDown, Gauge, LogOut, Pencil, Settings2, Keyboard } from 'lucide-react'
+import { CalendarClock, ChevronsUpDown, Compass, Gauge, LogOut, Pencil, Settings2, Keyboard } from 'lucide-react'
+import { startTour } from './tour/startTour'
 import type { ConnectionState } from '../types'
 
 const NAME_KEY = 'bloblex.profile.name'
@@ -129,6 +130,7 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
       {onSchedules && <button type="button" role="menuitem" className="menu-item" aria-current={schedulesActive ? "page" : undefined} disabled={!connected} onClick={() => run(onSchedules)}><CalendarClock size={15} />Automations</button>}
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(onSettings)}><Settings2 size={15} />Settings</button>
       {onShortcuts && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onShortcuts)}><Keyboard size={15} />Keyboard shortcuts</button>}
+      <button type="button" role="menuitem" className="menu-item" onClick={() => run(startTour)}><Compass size={15} />Take the tour</button>
       <span className="menu-separator" role="separator" />
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(() => { setDraft(name); setEditing(true) })}><Pencil size={15} />{name ? 'Edit name' : 'Add your name'}</button>
       <button type="button" role="menuitem" className="menu-item danger" onClick={() => run(onQuit)}><LogOut size={15} />Quit Bitbots</button>

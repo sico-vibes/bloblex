@@ -151,3 +151,19 @@
 .settings-row.stacked { flex-direction: column; align-items: stretch; gap: 10px; }
 .settings-row.stacked .settings-row-control { flex: 1 1 auto; display: block; }
 .settings-row.stacked .accent-picker { justify-content: flex-start; }
+
+/* Settings search (top of the page list) and the Appearance preview. */
+.settings-search { margin: 0 2px 10px; padding: 0 10px; height: 34px; display: flex; align-items: center; gap: 8px; color: var(--text-3); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-input); transition: border-color 140ms ease; }
+.settings-search:focus-within { border-color: var(--user-accent, var(--line-strong)); }
+.settings-search input { min-width: 0; flex: 1; height: 100%; color: var(--text-1); border: 0; outline: 0; background: transparent; font-size: var(--fs-xs); }
+.settings-search input::placeholder { color: var(--text-3); }
+.settings-search input::-webkit-search-cancel-button { display: none; }
+.settings-nav .settings-search-results { display: grid; gap: 2px; }
+.settings-nav .settings-search-results button { height: auto; min-height: 44px; padding: 7px 12px; display: grid; align-items: start; gap: 2px; text-align: left; }
+.settings-search-results button span { color: var(--text-1); font-size: var(--fs-sm); }
+.settings-search-results button small { color: var(--text-3); font-size: var(--fs-2xs); }
+.settings-search-empty { margin: 6px 12px; color: var(--text-3); font-size: var(--fs-xs); }
+.settings-group.settings-flash .settings-card { animation: settings-flash 1.2s ease-out; }
+@keyframes settings-flash { 0%, 30% { box-shadow: 0 0 0 2px var(--user-accent, var(--text-2)); } 100% { box-shadow: 0 0 0 2px transparent; } }
+.appearance-preview { padding: 2px 0 6px; }
+@media (prefers-reduced-motion: reduce) { .settings-group.settings-flash .settings-card { animation: none; } }

@@ -1,6 +1,20 @@
 import type { BlobMood } from '../blob/BlobCanvas'
 import type { Runtime, Session } from '../types'
 
+/** Short labels for the compact bar, one per resting/attention mood. The full
+ *  status line stays descriptive; the island bar keeps to these words. */
+export const COMPANION_COMPACT_MOOD_LABELS: Partial<Record<BlobMood, string>> = {
+  sleeping: 'Sleeping',
+  rate_limited: 'Rate limited',
+  error: 'Something failed',
+  offline: 'Offline',
+}
+
+/** The compact bar's short label for a mood, or null when the status line should speak. */
+export function compactMoodLabel(mood: BlobMood): string | null {
+  return COMPANION_COMPACT_MOOD_LABELS[mood] ?? null
+}
+
 /** A finished turn shows the happy face this long, then the blob relaxes. */
 export const SUCCESS_HOLD_MS = 6_000
 /** A blob reads as online for this long after its last activity. */

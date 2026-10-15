@@ -92,7 +92,7 @@ export function CompanionPeers({ agents, projects, sessions, runtimes, connected
         {peers.map((agent, index) => {
           const state = blobState(agent, sessions, runtimes, connected)
           const line = peerLine(agent, sessions, state)
-          return <button key={agent.id} type="button" className={`peer state-${state}`} style={{ ['--peer' as string]: agentColorHex(agent.color), animationDelay: `${index * 45}ms` }} aria-label={`${agent.name}${agent.leader ? ', team leader' : ''}: ${line}`} title={`${agent.name}: ${line}`} onClick={() => onSelect(agent)}>
+          return <button key={agent.id} type="button" className={`peer state-${state}`} style={{ ['--peer' as string]: agentColorHex(agent.color), animationDelay: `${index * 45}ms` }} aria-keyshortcuts={`Control+${index + 1}${state === 'waiting' ? ' N' : ''}`} aria-label={`${agent.name}${agent.leader ? ', team leader' : ''}: ${line}`} title={`${agent.name}: ${line}`} onClick={() => onSelect(agent)}>
             <span className="peer-face"><Face agent={agent} size={22} mood={state === 'offline' ? 'offline' : 'idle'} />{agent.leader && <i className="peer-leader" aria-hidden="true">★</i>}</span>
             <span className="peer-copy"><b>{agent.name}</b><span className={`peer-line${state === 'working' ? ' shimmer' : ''}`}>{line}</span></span>
           </button>

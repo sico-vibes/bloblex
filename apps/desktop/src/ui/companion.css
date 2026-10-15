@@ -354,3 +354,37 @@
 .island-actions .approval-pill { margin-right: 4px; }
 @media (prefers-reduced-motion: reduce) { .island-card.focus, .peer, .focus-ticker-row, .team-picker, .island-card.focus.is-working .card-bot .focus-glow { animation: none; } }
 .companion-queue-note { margin: 0 4px 4px; color: var(--c-dim-3); font: 400 var(--fs-2xs)/1.3 var(--c-font); }
+
+/* ── C5: keyboard focus ──────────────────────────────────────────────── */
+/* One ring for every control, the same token the rest of the app uses. */
+.island-header .tab:focus-visible,
+.peer:focus-visible,
+.compact-bot:focus-visible,
+.compact-copy:focus-visible,
+.island-actions > button:focus-visible,
+.companion-collapse:focus-visible,
+.btn:focus-visible,
+.link-btn:focus-visible,
+.icon-btn:focus-visible,
+.switch:focus-visible,
+.team-picker-pin:focus-visible,
+.team-picker-select:focus-visible,
+.team-picker-close:focus-visible,
+.peers-all:focus-visible,
+.team-pill:focus-visible,
+.cset-check:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* The name area is a real button now: keep the flat, unbuttoned look. */
+button.compact-copy { width: auto; appearance: none; -webkit-appearance: none; font: inherit; }
+button.compact-copy:active { transform: none; }
+
+/* ── C6: daemon banner and a dismissible error line ──────────────────── */
+.companion-root .connection-banner { width: auto; margin: 2px 10px 0; padding: 5px 8px; gap: 7px; border-radius: 10px; font-size: var(--fs-xs); }
+.companion-root .connection-banner > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.companion-root .connection-banner .spinning { flex: 0 0 auto; }
+.companion-root .connection-banner .btn { flex: 0 0 auto; }
+.companion-drop-error { display: flex; align-items: center; gap: 6px; }
+.companion-drop-error > span { min-width: 0; flex: 1; }
+.companion-drop-error .icon-btn { flex: 0 0 auto; }

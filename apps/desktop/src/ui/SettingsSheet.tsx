@@ -29,7 +29,8 @@ import { searchSettings, type SettingsIndexEntry } from './settingsIndex'
 import { AccentPicker } from './AccentPicker'
 import { DensityControl } from './DensityControl'
 import { SoundVolumeSlider } from './SoundVolumeSlider'
-import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
+import { DEFAULT_SOUND_VOLUME } from '../blob/soundVolume'
+import { applySoundPrefs, previewSoundVolume, saveSoundsEnabled, saveSoundVolume as persistSoundVolume, soundPrefsFromSettings, subscribeSoundPrefs } from './soundPrefs'
 import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
@@ -154,9 +155,11 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       const settings = recordFrom(preferences.settings ?? preferences)
       if (typeof settings['companion.openAtStartup'] === 'boolean') setCompanionOpenAtStartup(settings['companion.openAtStartup'])
       if (typeof settings.closeToTray === 'boolean') setCloseToTrayValue(settings.closeToTray)
-      if (typeof settings['companion.soundsEnabled'] === 'boolean') setSoundsEnabled(settings['companion.soundsEnabled'])
-      savedSoundVolume.current = normalizeSoundVolume(settings['companion.soundVolume'])
-      setSoundVolume(savedSoundVolume.current)
+      const soundPrefs = soundPrefsFromSettings(settings)
+      applySoundPrefs(soundPrefs)
+      setSoundsEnabled(soundPrefs.soundsEnabled)
+      savedSoundVolume.current = soundPrefs.soundVolume
+      setSoundVolume(soundPrefs.soundVolume)
       if (settings['companion.startPosition'] === 'last') setStartPosition('last')
       if (typeof settings['companion.hotkey'] === 'boolean') setCompanionHotkey(settings['companion.hotkey'])
       if (settings['companion.hotkey'] !== false) {
@@ -202,6 +205,12 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => subscribeSoundPrefs((prefs) => {
+    setSoundsEnabled(prefs.soundsEnabled)
+    savedSoundVolume.current = prefs.soundVolume
+    setSoundVolume(prefs.soundVolume)
+  }), [])
 
   useEffect(() => {
     let active = true
@@ -356,8 +365,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const setSounds = async (enabled: boolean) => {
     setSoundsEnabled(enabled)
     const failure = await guarded(async () => {
-      await rpc('settings.set', { key: 'companion.soundsEnabled', value: enabled })
-      try { await emit('bloblex-sounds-changed', enabled) } catch { /* the companion hydrates the saved value on its next connection */ }
+      await saveSoundsEnabled(enabled)
       setNotice(enabled ? 'Companion sounds enabled.' : 'Companion sounds muted.')
     })
     if (failure) { setSoundsEnabled(!enabled); onError(failure) }
@@ -369,9 +377,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     const previous = savedSoundVolume.current
     setSoundVolume(volume)
     try {
-      await rpc('settings.set', { key: 'companion.soundVolume', value: volume })
+      await persistSoundVolume(volume, true)
       savedSoundVolume.current = volume
-      try { await emit('bloblex-sound-volume-changed', { volume, preview: true }) } catch { /* the companion hydrates the saved value on its next connection */ }
     } catch (reason) {
       setSoundVolume(previous)
       onError(messageOf(reason))
@@ -380,7 +387,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
   /** The Play sample button: same preview path, without saving the volume again. */
   const playSoundSample = async () => {
-    try { await emit('bloblex-sound-volume-changed', { volume: soundVolume, preview: true }) } catch { /* the companion hydrates the saved value on its next connection */ }
+    await previewSoundVolume(soundVolume)
   }
 
   const saveDefaultMode = async (value: string) => {

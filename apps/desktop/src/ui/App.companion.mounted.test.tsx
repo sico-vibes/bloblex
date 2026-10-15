@@ -293,9 +293,11 @@ describe('companion drag and usage labels', () => {
     const name = view.host.querySelector('.compact-copy strong')
     const status = view.host.querySelector('.compact-copy [role="status"]')
     expect(resolvesToDrag(face), 'compact face').toBe(true)
-    expect(resolvesToDrag(name), 'compact name').toBe(true)
-    expect(resolvesToDrag(status), 'compact status').toBe(true)
-    expect(view.host.querySelector('.compact-copy')?.hasAttribute(DRAG), 'compact-copy').toBe(true)
+    // The name area is a real button now (C5), so it never starts a drag.
+    expect(view.host.querySelector('.compact-copy')?.tagName).toBe('BUTTON')
+    expect(resolvesToDrag(name), 'compact name').toBe(false)
+    expect(resolvesToDrag(status), 'compact status').toBe(false)
+    expect(view.host.querySelector('.compact-copy')?.hasAttribute(DRAG), 'compact-copy').toBe(false)
     expect(view.host.querySelector('.compact-bot')?.hasAttribute(DRAG), 'open button').toBe(false)
     const minis = [...view.host.querySelectorAll('.mini-grid canvas.blob-canvas')]
     expect(minis.length).toBeGreaterThan(0)

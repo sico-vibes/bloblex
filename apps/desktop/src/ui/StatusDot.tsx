@@ -20,7 +20,7 @@ const WORDS: Record<BotStatus, string> = {
 export function StatusDot({ status, showIdle = false, label, className = '' }: { status: BotStatus; showIdle?: boolean; label?: string; className?: string }) {
   if (status === 'idle' && !showIdle) return null
   const text = label ?? WORDS[status]
-  return <span className={`status-dot status-${status} ${className}`} role="img" aria-label={text} title={text} />
+  return <span className={`bot-status bot-status-${status} ${className}`} role="img" aria-label={text} title={text} />
 }
 
 export function statusWord(status: BotStatus) { return WORDS[status] }

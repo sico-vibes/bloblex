@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { StatusDot } from './StatusDot'
 import { Plus } from 'lucide-react'
 import type { Agent, Session } from '../types'
 import { formatUnknownSafe } from '../types'
@@ -38,7 +39,7 @@ export function BlobSessions({ agent, sessions, legacyCount, canCreate, onOpenSe
         const dot = sessionDotClass(session.state)
         return <button type="button" className="settings-row blob-session-row" key={session.id} onClick={() => onOpenSession(session)}>
           <span className="settings-row-copy"><strong>{formatUnknownSafe(session.title, 'New session')}</strong><small>{projectFolderName(session.projectPath)}</small></span>
-          {dot !== 'good' && dot !== 'muted' && <i className={`status-dot ${dot}`} aria-hidden="true" />}
+          {dot === 'busy' && <StatusDot status="working" />}{dot === 'bad' && <StatusDot status="failed" />}
           <span className="settings-value">{session.updatedAt ? shortTime(session.updatedAt) : ''}</span>
         </button>
       })}

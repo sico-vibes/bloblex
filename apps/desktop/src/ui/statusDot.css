@@ -1,12 +1,12 @@
 /* An 8px mark. The shape differs per state so colour is never the only signal:
    working pulses (round), waiting is a ring, attention a diamond, failed a
    square, offline a short dash. */
-.status-dot { width: 8px; height: 8px; flex: 0 0 auto; display: inline-block; background: var(--text-3); border-radius: 50%; }
-.status-working { background: var(--status-working); animation: status-pulse 1.6s ease-in-out infinite; }
-.status-waiting { background: transparent; border: 2px solid var(--status-working); }
-.status-attention { background: var(--status-working); border-radius: 1px; transform: rotate(45deg) scale(.86); }
-.status-failed { background: var(--status-danger); border-radius: 1px; }
-.status-offline { height: 2px; margin: 3px 0; background: var(--text-3); border-radius: 1px; }
-.status-idle { background: var(--text-3); opacity: .5; }
-@keyframes status-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
-@media (prefers-reduced-motion: reduce) { .status-working { animation: none; } }
+.bot-status { width: 8px; height: 8px; flex: 0 0 auto; display: inline-block; background: var(--text-3); border-radius: 50%; }
+.bot-status-working { background: var(--status-working); animation: bot-status-pulse 1.6s ease-in-out infinite; }
+.bot-status-waiting { background: transparent; border: 2px solid var(--status-working); }
+.bot-status-attention { background: var(--status-working); border-radius: 1px; transform: rotate(45deg) scale(.86); }
+.bot-status-failed { background: var(--status-danger); border-radius: 1px; }
+.bot-status-offline { height: 2px; margin: 3px 0; background: var(--text-3); border-radius: 1px; }
+.bot-status-idle { background: var(--text-3); opacity: .5; }
+@keyframes bot-status-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .bot-status-working { animation: none; } }

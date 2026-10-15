@@ -79,6 +79,9 @@ import { SessionExecutionControls } from './SessionExecutionControls'
 import { composerMaxHeight, useAutosizeTextarea } from './useAutosize'
 import { ContextWindowIndicator } from './ContextWindowIndicator'
 import { QuotaBar } from './QuotaBar'
+import { SidebarUsage } from './SidebarUsage'
+import { TourHost } from './tour/TourHost'
+import { startTour } from './tour/startTour'
 import { quotaRows, quotaTone, resetIn, updatedAgo } from './quotaModel'
 import { QueueBanner } from './PromptQueue'
 import { AttachButton, AttachmentTray, MAX_COMPOSER_ATTACHMENTS, MessageAttachments, PermissionModeControl, prepareImageBytes, sessionApprovalMode, type ComposerAttachment } from './ComposerControls'
@@ -1916,6 +1919,9 @@ export function App() {
     { id: 'settings', kind: 'action', title: 'Settings', subtitle: '', searchText: 'Settings' },
     ...(experiments.search ? [{ id: 'search-messages', kind: 'action' as const, title: 'Search messages', subtitle: 'Across all conversations', searchText: 'Search messages text history' }] : []),
     { id: 'find-agents', kind: 'action', title: 'Find coding agents', subtitle: '', searchText: 'Find coding agents runtime' },
+    { id: 'change-look', kind: 'action', title: 'Change look', subtitle: 'Bitbots or Blobots', searchText: 'Change look appearance theme style bitbots blobots accent colour' },
+    { id: 'take-tour', kind: 'action', title: 'Take the tour', subtitle: 'Five quick stops', searchText: 'Take the tour guide onboarding help' },
+    { id: 'shortcuts', kind: 'action', title: 'Keyboard shortcuts', subtitle: 'Ctrl+/', searchText: 'Keyboard shortcuts keys hotkeys' },
     { id: 'toggle-details', kind: 'action', title: 'Toggle details panel', subtitle: '', searchText: 'Toggle details panel inspector' },
   ]
   const chooseQuickSwitcherItem = (item: QuickSwitcherItem) => {
@@ -1942,6 +1948,9 @@ export function App() {
       else if (item.id === 'settings') { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }
       else if (item.id === 'find-agents') { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true); void refreshRuntimes() }
       else if (item.id === 'toggle-details') toggleInspector()
+      else if (item.id === 'change-look') { setSettingsInitialPage('Appearance'); setSettingsFocus(null); setSettingsSheet(true) }
+      else if (item.id === 'take-tour') startTour()
+      else if (item.id === 'shortcuts') setShortcutsOpen(true)
     }
   }
   const launchWarnings = launchWarningsFor(launchChecks.filter((check) => check.id !== 'discovery'), runtimes)
@@ -2017,7 +2026,8 @@ export function App() {
           onToggleProjectCollapsed: (project) => void projectAction('project.update', { projectId: project.id, collapsed: !project.collapsed }),
           onOpenRuntimeSettings: () => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) },
         }} />
-        <button type="button" role="switch" aria-label={`Companion, keep your ${noun} on screen while you work`} aria-checked={companionVisible} className="companion-sidebar-card" onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={30} mini mood="idle" label="Companion" /><span><strong>Companion</strong><small>Keep your {noun} on screen while you work</small></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>
+        <SidebarUsage quotas={snapshot?.quotas ?? []} onOpen={() => void showUsage()} />
+        <button type="button" role="switch" aria-label={`Companion, keep your ${noun} on screen while you work`} aria-checked={companionVisible} data-tour="companion" className="companion-sidebar-card" onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={30} mini mood="idle" label="Companion" /><span><strong>Companion</strong><small>Keep your {noun} on screen while you work</small></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>
         <ProfileMenu
           connection={connection}
           onShortcuts={experiments.shortcuts ? () => setShortcutsOpen(true) : undefined}
@@ -2105,7 +2115,7 @@ export function App() {
             {usageTip && <UsageTip tip={usageTip} onDismiss={() => dismissUsageTip(usageTip)} onViewUsage={() => void showUsage()} />}
             {dictationPartial && <div className="dictation-partial" role="status" aria-label={`Listening: ${dictationPartial}`}><span className="dictation-partial-dot" aria-hidden="true" />{dictationPartial}</div>}
             {promptQueue && promptQueue.items.length > 0 && <QueueBanner items={promptQueue.items} paused={promptQueue.paused} sessionBusy={sessionBusy} nowMs={queueNowMs} disabled={connection !== 'connected'} onSendNow={sendQueuedNow} onDelete={deleteQueued} onUpdate={updateQueued} onReorder={reorderQueued} onResume={resumeQueue} onCancelRetry={cancelAutoRetry} />}
-            <div className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
+            <div data-tour="composer" className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
               {replyTarget && <ReplyContextStrip target={replyTarget} onCancel={() => { replyTargetRef.current = null; setReplyTarget(null) }} />}
               <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
               {hashRef && !mention && <ConversationPicker sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent?.id} query={hashRef.query} activeIndex={hashRef.index} onPick={pickConversation} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
@@ -2123,10 +2133,10 @@ export function App() {
                 }
                 if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() }
               }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
-              <div className="composer-control-strip">
+              <div className="composer-control-strip" data-tour="controls">
                 <div className="composer-controls-start">
                   <AttachButton supported={imagesSupported} disabled={connection !== 'connected' || busy || !runtimeReady} count={attachments.length} onFiles={addAttachments} />
-                  <button type="button" className={`composer-pill plan-pill ${planOn ? 'on' : ''}`} aria-pressed={planOn} aria-label="Plan mode" title={planOn ? 'Plan mode: the agent proposes a plan before changing anything' : 'Turn on plan mode'} disabled={connection !== 'connected' || sessionBusy} onClick={() => void setPlanMode(!planOn)}><ClipboardList size={14} aria-hidden="true" /><span>Plan</span></button>
+                  <button type="button" data-tour="plan" className={`composer-pill plan-pill ${planOn ? 'on' : ''}`} aria-pressed={planOn} aria-label="Plan mode" title={planOn ? 'Plan mode: the agent proposes a plan before changing anything' : 'Turn on plan mode'} disabled={connection !== 'connected' || sessionBusy} onClick={() => void setPlanMode(!planOn)}><ClipboardList size={14} aria-hidden="true" /><span>Plan</span></button>
                   <PermissionModeControl session={selectedSession} agent={activeSelectedAgent} disabled={connection !== 'connected' || sessionBusy} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} />
                 </div>
                 <div className="composer-controls-end">
@@ -2159,6 +2169,7 @@ export function App() {
         </div>
       </aside>
 
+      {!companion && <TourHost enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet} justOnboarded={onboardingCompleteThisRun} agentColor={activeSelectedAgent?.color ?? '#b7a7f4'} />}
       {!companion && usageBarEnabled && <QuotaBar quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={() => void showUsage()} />}
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} quotas={snapshot?.quotas ?? []} loading={busy && usageSummary === null} quotaRefreshing={quotaRefreshing} onRefreshQuota={refreshQuota} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onOpenHistory={() => { setUsageSheet(false); setAnalyticsOpen(true) }} onClose={() => setUsageSheet(false)} />}
       {quickSwitcherOpen && <QuickSwitcher items={quickSwitcherItems} onChoose={chooseQuickSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />}

@@ -222,7 +222,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
       <input value={query} placeholder="Search" aria-label={`Search ${nouns}`} onChange={(event) => onQueryChange(event.target.value)} />
     </label>
-    <nav className="sidebar-scroll" aria-label={Nouns}><div role="tree" aria-label={`${Nouns} by project`}>
+    <nav className="sidebar-scroll" aria-label={Nouns} data-tour="roster"><div role="tree" aria-label={`${Nouns} by project`}>
       {pinned.length > 0 && <section className="team-group" aria-label="Pinned">
         <div className="team-group-head static"><Pin size={13} aria-hidden="true" /><span>Pinned</span></div>
         <div className="team-group-rows">{pinned.map(renderRow)}</div>

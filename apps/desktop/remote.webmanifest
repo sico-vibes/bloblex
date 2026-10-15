@@ -1,0 +1,14 @@
+{
+  "name": "Bitbots Remote",
+  "short_name": "Bitbots",
+  "description": "Chat with the bots on your computer from any device.",
+  "start_url": "/remote.html",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e0e0e",
+  "theme_color": "#0e0e0e",
+  "icons": [
+    { "src": "/src/assets/bloblex-128.png", "sizes": "128x128", "type": "image/png", "purpose": "any" }
+  ]
+}

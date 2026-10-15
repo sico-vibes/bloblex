@@ -61,7 +61,7 @@ The loopback listener, its capability and the Tauri shell path do not change.
 ### 2.2 Relay
 
 A small stateless service. It accepts two kinds of outbound WebSocket (hosts and devices),
-authenticates each by a signed hello that proves a registered public key, and forwards
+authenticates each by a signed hello that proves possession of a public key (the relay therefore sees public keys, identifiers, frame types, sizes, addresses and timing, never content), and forwards
 opaque frames between a device id and a host id. It stores nothing, has no accounts and
 cannot read content. It rate-limits and can drop a host or device id. It is replaceable: the
 address is part of the pairing payload, so a user can point at their own relay.
@@ -137,3 +137,24 @@ not invisible.
 | Clock skew | Pairing codes use a host-side expiry; the device never evaluates it. |
 | Lost phone | Remove the device on the computer; its key is dead at once. |
 | Stolen paired laptop | Same, and set tiers to View only until removed. |
+
+## 8. Review corrections (15 October 2026)
+
+Findings from [REVIEW_NOTES.md](REVIEW_NOTES.md) that change this design:
+
+- **Enforcement is not built.** `daemon_rpc` in the Tauri shell is still a pass-through. The
+  tier policy is an executable specification (`remoteTiers.ts`); the gateway must call it, and
+  it must also call the redactors for results and the event allowlist for pushes. Until then
+  nothing is enforced and Remote must not ship.
+- **Relay identity without accounts.** A host registers by proving possession of its public
+  key; the relay refuses a second registration of the same `hostId` with a different key
+  until the first is released by the host. Squatting a `hostId` therefore needs the host's key.
+  This is open question 1 in the review and is still a decision for the owner (see
+  [PHASES.md](PHASES.md)).
+- **Relay metadata** (stable ids, addresses, sizes, timing) is accepted and documented, and
+  per-connection routing tokens with frame padding are a P2 hardening item.
+- **Browser clients** need the ticket-and-subprotocol flow in PROTOCOL.md "Review corrections",
+  an Origin allowlist and a PWA content security policy (`connect-src` limited to the relay
+  and `self`, `frame-ancestors 'none'`); none exists yet.
+- **Revocation** closes the gateway session before notifying the relay, and covers the direct
+  listener.

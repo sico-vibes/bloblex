@@ -26,7 +26,8 @@ choice.
 4. **No account.** Pairing uses a one-time code and a device key. There is nothing to sign up
    for and no Bitbots-held list of a person's computers.
 5. **Private by construction.** Messages are sealed between the device and the host. A relay
-   moves bytes it cannot read, and it stores nothing.
+   moves bytes it cannot read and stores no content; it does see device and host identifiers,
+   addresses, frame sizes and timing.
 6. **Revocable and visible.** Every device has a name, a last-seen time and a Remove button.
    Remote activity is listed (without message text).
 

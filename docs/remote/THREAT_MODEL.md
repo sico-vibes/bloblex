@@ -86,3 +86,43 @@ Every control below exists because of that sentence, and the product says it in 
 - [ ] Pairing code attempts limited per host and per relay id.
 - [ ] Activity entries tested for content-free templates.
 - [ ] Independent review of the Noise integration and key storage.
+
+## 9. Additions from the independent review (15 October 2026)
+
+Source: [REVIEW_NOTES.md](REVIEW_NOTES.md). These rows continue the table in section 5.
+
+| # | Abuse | Mitigation | Residual risk |
+|---|---|---|---|
+| T16 | Two devices race for one pairing code | Host-issued pairing nonce in the handshake prologue; the offer is spent atomically by the first completed handshake; the owner confirms name and key fingerprint before the record is committed | A watcher who reads the code and wins the race is caught by the owner's confirmation |
+| T17 | Relay correlates devices and hosts over time | Stable ids are accepted; per-connection routing tokens and frame padding are P2 hardening | Long-term traffic analysis |
+| T18 | Cloned device key (wrapped key where non-extractable keys do not exist) | One live session per device id; a concurrent second session closes both and logs; Remote may refuse to pair browsers without a non-extractable key (owner decision) | A clone used while the original is offline |
+| T19 | Push counts reveal activity | Push payload is "check in" only, no counts; counts stay on the secure channel | Existence of a push is itself a signal |
+| T20 | Staged attachment ids guessed or reused, decompression bombs | Random single-use ids bound to device and session with a TTL; per-device staged-bytes cap; image decoding limits | Image parser bugs |
+| T21 | Event payloads carry secrets (message bodies, tool output) | Event allowlist and per-event scrubbing; tool detail off by default; message text is the conversation and is shown | A secret pasted into a chat is visible to the owner's own devices by design |
+| T22 | Snapshot fields outside the redactor (paths, args, attachments) | The redactor's field policy in `remoteTiers.ts`; results of other reads go through `redactResultForRemote`; tests cover each path | New fields added later must be added to the policy and its test |
+| T23 | Browser WebSocket cannot carry headers | Short-lived single-use ticket in a subprotocol, never in the URL; Origin allowlist | Ticket theft inside its 60 s life |
+| T24 | CSRF or framing of the PWA | `frame-ancestors 'none'`, `connect-src` limited to the relay and self, Origin checks, approvals require a user gesture inside the PWA | Browser bugs |
+| T25 | Quiet hours bypassed through cancel, archive or queue send | Quiet hours are a hard read-only override applied before dispatch | None expected |
+| T26 | Revocation fails when the relay is unreachable or the path is direct | The gateway closes the session itself; telling the relay is best effort | A device already holding a direct socket is closed on the next frame at the latest |
+| T27 | Viewer forces provider polling or reads host config | `runtime.models refresh` refused remotely; executable paths and arguments redacted | None expected |
+
+### Corrections to earlier rows
+
+- **T5:** the tier table is an executable specification and a parity test of method **names**.
+  Enforcement does not exist until the gateway calls it. The risk stays open until then.
+- **T9:** the content security policy is a requirement, not a present fact.
+- **T14:** a unit test over every activity-entry template is a requirement for P1; none exists.
+- **Idle expiry:** the "Never" option removes the only automatic containment for a forgotten
+  device; the UI keeps 30 days as the default and warns on "Never".
+- **Redaction is not defence in depth.** It is the only layer between the host and a device for
+  fields the daemon keeps.
+
+## 10. Checklist additions for P1
+
+- [ ] The gateway calls `authorizeRemoteCall`, `redactResultForRemote` and the event allowlist;
+      a test proves no code path returns raw daemon output to a device.
+- [ ] Pairing offer spent atomically; second handshake rejected; owner confirmation implemented.
+- [ ] Ticket and subprotocol flow implemented and Origin allowlist tested.
+- [ ] PWA content security policy written and tested.
+- [ ] One live session per device id enforced.
+- [ ] Activity entry templates covered by a test.

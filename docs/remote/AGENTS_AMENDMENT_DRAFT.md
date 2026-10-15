@@ -26,7 +26,7 @@ Three standing statements conflict with Remote mode as designed:
 >   `127.0.0.1`, protected by the capability, and the Tauri shell path is unchanged.
 > - **The gateway is the only remote entry.** It is off by default, compiled into the daemon,
 >   and never exposes the capability. It calls internal dispatch and applies the method-tier
->   policy in `apps/desktop/src/remote/remoteTiers.ts` (mirrored in the daemon), which is
+>   policy in `apps/desktop/src/remote/remoteTiers.ts` (to be implemented in the daemon gateway; today the table and a parity test of method names exist only on the TypeScript side), which is
 >   enforced by a parity test against the dispatch table.
 > - **Authorisation is per device.** Each device has its own key, tier and revocation. The
 >   default tier is Chat. Approvals from remote are off by default and require an explicit

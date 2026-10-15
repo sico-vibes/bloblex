@@ -30,7 +30,8 @@ are plans. Written 15 October 2026.
    cannot send; an approval from a non-operator is refused with `approvals_disabled`.
 6. Quiet hours and idle expiry enforced on the host.
 7. The owner-approved AGENTS.md amendment is merged ([AGENTS_AMENDMENT_DRAFT.md](AGENTS_AMENDMENT_DRAFT.md)).
-8. Threat-model review items checked off.
+8. Threat-model review items checked off, including the additions in THREAT_MODEL.md sections 9 and 10.
+9. Open questions 1, 3, 4, 5, 7 and 10 in REVIEW_NOTES.md answered by the owner.
 
 ## P2 exit criteria
 

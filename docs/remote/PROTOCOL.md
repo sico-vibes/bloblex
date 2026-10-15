@@ -184,7 +184,7 @@ payload.
 | `frameType` | `hello`, `data`, `ping` or `wake` |
 | `len` | Length in bytes of the opaque payload that follows |
 
-Nothing else is visible to the relay. `data` frames carry secure-channel records only.
+Besides those fields the relay also sees the public keys in the signed `hello` it verifies, network addresses and timing. It cannot read `data` frames, which carry secure-channel records only. (Corrected after the review in REVIEW_NOTES.md section 1.)
 
 Relay behaviour:
 
@@ -254,14 +254,14 @@ and resumes. No partial in-memory state is trusted across the gap.
 `app.snapshot` is redacted before it reaches a device. The host applies
 `redactSnapshotForRemote(snapshot)` (`docs/FIX18_REMOTE_TIERS_SPEC.md:50-55`):
 
-- `customEnv` values are removed (key names only).
+- `customEnv` is replaced by `{}`: values and key names are both removed (the code and its test do exactly this).
 - An `instructions` string of any length is replaced by `{ "hasInstructions": true }`.
 - Absolute filesystem paths in `projectPath` fields are reduced to their last two segments.
 - Any key whose name matches `/token|secret|password|credential|capability/i` is removed.
 
 The daemon itself never sends raw provider login credentials (`docs/ipc-contract.md:266`), and
 the capability token is memory-only and never leaves the native shell
-(`docs/ipc-contract.md:21`). Redaction is defense in depth for fields the daemon does keep,
+(`docs/ipc-contract.md:21`). Redaction is the only layer between the host and a device for fields the daemon does keep,
 such as agent `customEnv` and `instructions` (`docs/ipc-contract.md:208`).
 
 The gateway applies the same redaction to redacted fields inside other read results
@@ -478,3 +478,37 @@ daemon is never asked to evaluate remote policy; the gateway denies before dispa
    approvals off and tiers down? Where is that enforced — host, relay, or device?
 5. **Staging lifetime.** How long does a `stagedId` live, and when is staged data removed if a
    prompt never references it?
+
+## Review corrections (15 October 2026)
+
+These rules supersede earlier wording in this document. They answer
+[REVIEW_NOTES.md](REVIEW_NOTES.md) and are implemented as executable policy in
+`apps/desktop/src/remote/remoteTiers.ts`; the gateway that must call it does not exist yet.
+
+1. **Pairing nonce.** The host issues a random 128-bit nonce with each offer. The handshake
+   prologue binds `H(code || nonce || hostId || relay)`, not a device-chosen id. The offer is
+   spent atomically by the first handshake that completes; a second handshake on the same offer
+   is rejected. The owner sees the new device's name and a short key fingerprint and must
+   confirm before the record is committed.
+2. **Browser authentication.** A browser cannot set headers on a WebSocket. The client first
+   obtains a short-lived (60 s), single-use ticket from the relay by presenting its signed hello
+   over HTTPS, then opens the WebSocket with the ticket in a `Sec-WebSocket-Protocol` value
+   (never in the URL). The relay and a direct listener check `Origin` against an allowlist.
+3. **Wire codes.** `forbidden_remote`, `tier_required`, `approvals_disabled`, `quiet_hours`
+   and `invalid_params` are produced by `authorizeRemoteCall`; the gateway returns them
+   unchanged.
+4. **Quiet hours** are a hard read-only override applied before dispatch: every `chat` and
+   `approve` method is refused, including cancel, archive, rename, queue and resume.
+5. **Events are allowlisted.** Only event types on the allowlist in `remoteTiers.ts`
+   (`EVENT_POLICY`) leave the host, and each is scrubbed: no `raw` or provider payloads, no tool
+   detail by default, paths reduced. A new daemon event type fails the build until classified.
+6. **Reads are redacted, not just the snapshot.** `session.get`, `session.list`, `agent.get`,
+   `agent.list`, `runtime.list`, `runtime.profile.list`, `search.messages` and `settings.get`
+   (an allowlist of keys) pass through `redactResultForRemote`.
+7. **Provider-touching reads.** `runtime.models` with `refresh: true` is refused remotely.
+8. **Staged attachments** use random, single-use ids bound to the device and session, with a
+   time to live and a per-device staged-bytes cap.
+9. **Revocation order.** The gateway closes the device's session first and treats telling the
+   relay as best effort; the direct listener path closes the same way.
+10. **One live session per device id.** A second concurrent session with the same device key
+    closes both and raises an activity line, which limits the value of a cloned key.

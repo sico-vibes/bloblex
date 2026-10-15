@@ -1,9 +1,9 @@
 import { organizeModels, presentedModelName } from './modelPresentation'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { Project, Runtime } from '../types'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import type { Project, Runtime, Session } from '../types'
 import { labelize } from '../types'
-import { rpc } from '../tauri'
-import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
+import { openProjectFolder, rpc } from '../tauri'
+import type { AgentDraft, BotSection, FieldErrors, StoredExecution } from './agentForm'
 import { runtimeOptionLabel, scalarLength } from './rosterSelectors'
 import { approvalDescription } from '../approvalContract'
 import type { ApprovalMode, AutoResolvedAction } from '../approvalContract'
@@ -16,13 +16,20 @@ import {
 import { Select } from './Select'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { AutoApprovedList, BypassConfirmDialog } from './approvalUi'
-import { RefreshCw } from 'lucide-react'
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { LookEditor } from './LookEditor'
 import { draftLook } from '../blob/look'
 import { agentColorHex, previewHex } from './agentColor'
 import { labelizeEffort } from './effortLabels'
 import { preferredConcreteModel } from './modelPreferences'
 import { useEntityNoun } from './vocabulary'
+import { useAutosizeTextarea } from './useAutosize'
+import { useHintSeen } from './uiPrefs'
+import { instructionCounts, instructionVersions, thousands, type InstructionVersion } from './instructionHistory'
+import { instructionPresets, type BotTemplate } from './botTemplates'
+import { recentFolders, rememberFolder } from './folderRecents'
+import { useDetailsOpen } from './botPrefs'
+import { BotMemoryGroup } from './BotMemoryGroup'
 
 const NOTIFICATION_LEVEL_HELP: Record<'all' | 'input' | 'muted', string> = {
   all: 'Tells you when it finishes, fails or needs you.',
@@ -30,7 +37,16 @@ const NOTIFICATION_LEVEL_HELP: Record<'all' | 'input' | 'muted', string> = {
   muted: 'Stays quiet. You can still see it in the app.',
 }
 
-export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, sessionId, autoApprovals, onDraftChange, onArchive, onExecutionGate }: {
+/** Plain-language permissions (FIX22 B8). The values are unchanged. */
+const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; name: string; sentence: string }> = [
+  { value: 'ask', name: 'Ask first', sentence: 'nothing changes until you approve each action' },
+  { value: 'auto', name: 'Auto-approve', sentence: 'safe actions go through, risky ones still ask' },
+  { value: 'bypass', name: 'Bypass', sentence: 'nothing asks; use only on a computer and project you trust' },
+]
+
+const INSTRUCTIONS_HELP_ID = 'bot.instructions.help'
+
+export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, sessionId, autoApprovals, sections, sessions, memoryEnabled, onOpenMemory, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
   runtimes: Runtime[]
   projects?: Project[]
@@ -40,6 +56,14 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
   sessionId?: string | null
   /** Shown under the approval mode for saved blobs. */
   autoApprovals?: readonly AutoResolvedAction[]
+  /** When given, only these groups render (used by the create wizard). Default: all. */
+  sections?: readonly BotSection[]
+  /** This bot's conversations, for the one-line activity summary. */
+  sessions?: readonly Session[]
+  /** Overrides the `experimental.memory` setting read from the daemon. */
+  memoryEnabled?: boolean
+  /** Opens Settings › Memory. Rendered only when given. */
+  onOpenMemory?: () => void
   onDraftChange: (draft: AgentDraft) => void
   onArchive?: () => void
   onExecutionGate?: (gate: ExecutionSendGate) => void
@@ -51,6 +75,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
   const runtime = runtimes.find((item) => item.id === draft.runtimeId) ?? null
   const provider = runtime?.provider ?? ''
   const described = (id: string, errorId?: string) => errorId ? `${id} ${errorId}` : id
+  const show = (id: BotSection) => !sections || sections.includes(id)
   const [capabilities, setCapabilities] = useState<RuntimeCapabilities | null>(null)
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
   const [catalogError, setCatalogError] = useState<string | null>(null)
@@ -60,6 +85,9 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
   const [snapshotNote, setSnapshotNote] = useState('No conversation yet, so there is no applied snapshot.')
   const [custom, setCustom] = useState(false)
   const [bypassOpen, setBypassOpen] = useState(false)
+  const [recents, setRecents] = useState<string[]>(() => recentFolders())
+  const [memoryOn, setMemoryOn] = useState(memoryEnabled ?? false)
+  const [detailsOpen, setDetailsOpen] = useDetailsOpen()
 
   useEffect(() => {
     if (!draft.runtimeId) {
@@ -128,6 +156,18 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     return () => { cancelled = true }
   }, [sessionId])
 
+  // Memory is experimental: the group only renders when the daemon says it is on.
+  useEffect(() => {
+    if (memoryEnabled !== undefined) { setMemoryOn(memoryEnabled); return }
+    if (!agentId) { setMemoryOn(false); return }
+    let cancelled = false
+    rpc<{ settings?: Record<string, unknown> }>('settings.get').then((result) => {
+      if (cancelled) return
+      setMemoryOn(result?.settings?.['experimental.memory'] === true)
+    }).catch(() => { if (!cancelled) setMemoryOn(false) })
+    return () => { cancelled = true }
+  }, [memoryEnabled, agentId])
+
   const selected = catalogModel(catalog, custom ? null : draft.model)
   const gate = useMemo(() => sendGateFor(capabilities, custom), [capabilities, custom])
   useEffect(() => { onExecutionGate?.(gate) }, [gate, onExecutionGate])
@@ -156,6 +196,18 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     onDraftChange({ ...draft, model: next.model, thinking: next.thinking, serviceTier: next.serviceTier })
   }
 
+  const chooseFolder = (path: string) => {
+    const trimmed = path.trim()
+    if (!trimmed) return
+    onDraftChange({ ...draft, defaultProject: trimmed })
+    rememberFolder(trimmed)
+    setRecents(recentFolders())
+  }
+  const browseFolder = async () => {
+    const path = await openProjectFolder().catch(() => null)
+    if (path) chooseFolder(path)
+  }
+
   const modelState = capabilityState(capabilities?.settings.model ?? null)
   const modelInteractive = modelState === 'supported' && !loading
   const thinkingVisible = showThinkingControl(capabilities, selected, custom)
@@ -165,13 +217,13 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
   const instructionHelp = instructionNote(provider, capabilities?.settings.instructions ?? null)
 
   const onApproval = (value: string) => {
-    if (value === 'bypass') { setBypassOpen(true); return }
+    if (value === 'bypass') { if (draft.approvalMode !== 'bypass') setBypassOpen(true); return }
     const mode = value === 'ask' || value === 'auto' ? value : null
     onDraftChange({ ...draft, approvalMode: mode })
   }
 
   return <>
-    <EditGroup id="look" title="Look" label="Appearance">
+    {show('look') && <EditGroup id="look" title="Look" label="Appearance">
       <LookEditor
         look={draftLook(draft, agentId)}
         color={draft.color}
@@ -180,9 +232,9 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
         onLookChange={(look) => onDraftChange({ ...draft, look })}
         onColorChange={(color) => onDraftChange({ ...draft, color })}
       />
-    </EditGroup>
+    </EditGroup>}
 
-    <EditGroup id="profile" title="Profile">
+    {show('profile') && <EditGroup id="profile" title="Profile">
       <div className="blob-form">
         <label className="blob-field"><span>Name</span>
           <input aria-label={`${Noun} name`} aria-invalid={!!errors.name} aria-describedby={errors.name ? 'blob-name-error' : undefined} value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} />
@@ -194,24 +246,24 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
         {errors.description && <p className="blob-error" id="blob-description-error">{errors.description}</p>}
         <p className="blob-help">Teammates read this when deciding who to ask, and the {noun} reads it as part of its instructions.</p>
       </div>
-    </EditGroup>
+    </EditGroup>}
 
-    <EditGroup id="team" title="Team">
+    {show('team') && <EditGroup id="team" title="Team">
       <div className="settings-row">
         <span className="settings-row-copy"><strong>Role</strong><small>A short label shown next to the name, like CTO or Researcher.</small></span>
         <span className="settings-row-control"><input className="text-input role-input" aria-label="Role" maxLength={40} placeholder="No role" value={draft.role} onChange={(event) => onDraftChange({ ...draft, role: event.target.value })} /></span>
       </div>
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Project</strong><small>The {noun} works in the project's folder. Without one it is a casual {noun} for general requests.</small></span>
-        <span className="settings-row-control"><Select ariaLabel="Project" variant="muted" value={draft.projectId ?? ''} onChange={(value) => onDraftChange({ ...draft, projectId: value || null })} options={[{ value: '', label: 'No project (casual)' }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} /></span>
+        <span className="settings-row-copy"><strong>Team project</strong><small>Which project this {noun} belongs to on the team.</small></span>
+        <span className="settings-row-control"><Select ariaLabel="Team project" variant="muted" value={draft.projectId ?? ''} onChange={(value) => onDraftChange({ ...draft, projectId: value || null })} options={[{ value: '', label: 'No team project (casual)' }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} /></span>
       </div>
       <div className="settings-row">
         <span className="settings-row-copy"><strong>Team leader</strong><small>The leader coordinates the other {nouns}, reports back, and is the only {noun} that can create new ones when you ask it to. Only one {noun} leads.</small></span>
         <span className="settings-row-control"><button type="button" role="switch" aria-checked={draft.leader} aria-label="Team leader" className={`toggle ${draft.leader ? 'on' : ''}`} onClick={() => onDraftChange({ ...draft, leader: !draft.leader })}><i /></button></span>
       </div>
-    </EditGroup>
+    </EditGroup>}
 
-    <EditGroup id="model" title="Model" label="Execution" action={<span className="catalog-refresh-action">{catalog?.fetchedAt && <small>Updated {formatCatalogTime(catalog.fetchedAt)}</small>}<button type="button" className="ghost-button small" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}><RefreshCw size={13} className={loading ? 'spinning' : ''} />Refresh models</button></span>}>
+    {show('model') && <EditGroup id="model" title="Model" label="Execution" action={<span className="catalog-refresh-action">{catalog?.fetchedAt && <small>Updated {formatCatalogTime(catalog.fetchedAt)}</small>}<button type="button" className="ghost-button small" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}><RefreshCw size={13} className={loading ? 'spinning' : ''} />Refresh models</button></span>}>
       <div className="settings-row">
         <span className="settings-row-copy"><strong>Coding agent</strong><small>New conversations use it. Existing ones keep theirs.</small></span>
         <span className="settings-row-control">
@@ -260,47 +312,76 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       {tierVisible && <CapabilityField label="Speed" state={tierState} setting={capabilities?.settings.serviceTier ?? null}>
         <Select ariaLabel="Speed" variant="muted" value={draft.serviceTier ?? ''} disabled={!tierInteractive} onChange={(value) => onDraftChange({ ...draft, serviceTier: value || null })} options={[{ value: '', label: 'Default' }, ...(selected?.serviceTiers ?? []).map((tier) => ({ value: tier.id, label: tier.name }))]} />
       </CapabilityField>}
+
+      <InstructionsSection draft={draft} agentId={agentId ?? null} error={errors.instructions} help={instructionHelp} noun={noun} onDraftChange={onDraftChange} />
+
       <div className="blob-form">
-        <label className="blob-field"><span>Instructions</span>
-          <textarea aria-label="Instructions" rows={4} placeholder={`How should this ${noun} work? For example: keep answers short and run the tests before finishing.`} aria-invalid={!!errors.instructions} aria-describedby={described('blob-instructions-help', errors.instructions ? 'blob-instructions-error' : undefined)} value={draft.instructions} onChange={(event) => onDraftChange({ ...draft, instructions: event.target.value })} />
+        <label className="blob-field"><span>Working folder</span>
+          <input aria-label="Working folder" aria-describedby="blob-working-folder-help" placeholder="C:\path\to\folder" value={draft.defaultProject ?? ''} onChange={(event) => onDraftChange({ ...draft, defaultProject: event.target.value })} />
         </label>
-        <p id="blob-instructions-help" className="blob-help">{instructionHelp}</p>
-        {errors.instructions && <p className="blob-error" id="blob-instructions-error">{errors.instructions}</p>}
-        <label className="blob-field"><span>Default project</span>
-          <input aria-label="Default project" aria-describedby="blob-project-help" placeholder="C:\path\to\project" value={draft.defaultProject ?? ''} onChange={(event) => onDraftChange({ ...draft, defaultProject: event.target.value })} />
-        </label>
-        <p id="blob-project-help" className="blob-help">Offered first when you start a conversation. Leave empty to pick from recent folders.</p>
+        <div className="working-folder-actions">
+          {recents.length > 0 && <Select ariaLabel="Recent folders" variant="field" value="" placeholder="Recent folders" onChange={(value) => chooseFolder(value)} options={recents.map((folder) => ({ value: folder, label: folder }))} />}
+          <button type="button" className="secondary-button small" onClick={() => void browseFolder()}>Browse…</button>
+        </div>
+        <p id="blob-working-folder-help" className="blob-help">Where this {noun} works when you start a conversation. Leave empty to pick a folder each time.</p>
       </div>
-    </EditGroup>
+    </EditGroup>}
 
-    <EditGroup id="permissions" title="Permissions">
-      <div className="settings-row">
-        <span className="settings-row-copy"><strong>Approval mode</strong><small>{approvalDescription(draft.approvalMode)}</small></span>
-        <span className="settings-row-control">
-          <Select ariaLabel="Approval mode" variant="muted" value={draft.approvalMode ?? ''} onChange={onApproval} options={[{ value: '', label: 'Use default' }, { value: 'ask', label: 'Ask' }, { value: 'auto', label: 'Auto-approve' }, { value: 'bypass', label: 'Bypass' }]} />
-        </span>
+    {show('permissions') && <EditGroup id="permissions" title="Permissions">
+      <div className="blob-form">
+        <div className="approval-choices" role="radiogroup" aria-label="Approval mode">
+          {APPROVAL_CHOICES.map((choice) => <button
+            key={choice.value}
+            type="button"
+            role="radio"
+            aria-checked={draft.approvalMode === choice.value}
+            data-mode={choice.value}
+            className={`approval-choice${draft.approvalMode === choice.value ? ' on' : ''}${choice.value === 'bypass' ? ' warning' : ''}`}
+            onClick={() => onApproval(choice.value)}
+          >
+            <span className="approval-choice-name">{choice.name}</span>
+            <span className="approval-choice-sentence">{choice.sentence}</span>
+          </button>)}
+        </div>
+        <div className="approval-default">
+          {draft.approvalMode
+            ? <button type="button" className="ghost-button small" onClick={() => onDraftChange({ ...draft, approvalMode: null })}>Use the team default</button>
+            : <span className="blob-help">{approvalDescription(null)}</span>}
+        </div>
+        {autoApprovals && <div className="auto-approvals-summary">
+          <button type="button" className="link-button" onClick={() => document.getElementById('bot-auto-approvals-list')?.scrollIntoView?.({ block: 'nearest' })}>Approved without asking recently: {autoApprovals.length} {autoApprovals.length === 1 ? 'action' : 'actions'}</button>
+          <div id="bot-auto-approvals-list"><AutoApprovedList actions={autoApprovals} /></div>
+        </div>}
       </div>
-      {autoApprovals && <div className="blob-form"><AutoApprovedList actions={autoApprovals} /></div>}
-    </EditGroup>
+    </EditGroup>}
 
-    <EditGroup id="notifications" title="Notifications">
+    {show('notifications') && <EditGroup id="notifications" title="Notifications">
       <div className="settings-row">
         <span className="settings-row-copy"><strong>Notify me</strong><small>{NOTIFICATION_LEVEL_HELP[draft.notificationLevel ?? 'all']}</small></span>
         <span className="settings-row-control">
           <Select ariaLabel="Notify me" variant="muted" value={draft.notificationLevel ?? 'all'} onChange={(value) => onDraftChange({ ...draft, notificationLevel: value === 'input' || value === 'muted' ? value : 'all' })} options={[{ value: 'all', label: 'About everything' }, { value: 'input', label: 'Only when it needs me' }, { value: 'muted', label: 'Never' }]} />
         </span>
       </div>
-    </EditGroup>
+    </EditGroup>}
 
-    <EditGroup id="details" title="Technical details">
-      <div className="settings-row"><span className="settings-row-copy"><strong>Concurrency</strong></span><span className="settings-value">{concurrencyText(capabilities, execution.maxConcurrency)}</span></div>
-      <div className="blob-form" aria-label="Last applied snapshot">
-        <span className="blob-field-label">Last applied settings</span>
-        {snapshot ? <ul className="snapshot-outcomes">{snapshot.outcomes.map((outcome) => <li key={outcome.setting} data-outcome={outcome.label}><span>{outcome.setting === 'approvalMode' ? 'Approval mode' : outcome.setting === 'serviceTier' ? 'Speed' : labelize(outcome.setting)}</span><strong>{outcomeText(outcome)}</strong></li>)}</ul> : <p className="blob-help">{snapshotNote}</p>}
-        {capabilities?.settings.customEnv && <p className="blob-help">{envNote(capabilities.settings.customEnv)}</p>}
-        <p className="blob-help">Custom arguments are not accepted.</p>
+    {show('details') && <section id="bot-section-details" className="settings-group blob-group" aria-label="Technical details">
+      <div className="settings-group-head">
+        <h3><button type="button" className="details-toggle" aria-expanded={detailsOpen} aria-controls="bot-details-content" onClick={() => setDetailsOpen(!detailsOpen)}>
+          {detailsOpen ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}Technical details
+        </button></h3>
       </div>
-    </EditGroup>
+      <div className="settings-card" id="bot-details-content" hidden={!detailsOpen}>
+        <div className="settings-row"><span className="settings-row-copy"><strong>Concurrency</strong></span><span className="settings-value">{concurrencyText(capabilities, execution.maxConcurrency)}</span></div>
+        <div className="blob-form" aria-label="Last applied snapshot">
+          <span className="blob-field-label">Last applied settings</span>
+          {snapshot ? <ul className="snapshot-outcomes">{snapshot.outcomes.map((outcome) => <li key={outcome.setting} data-outcome={outcome.label}><span>{outcome.setting === 'approvalMode' ? 'Approval mode' : outcome.setting === 'serviceTier' ? 'Speed' : labelize(outcome.setting)}</span><strong>{outcomeText(outcome)}</strong></li>)}</ul> : <p className="blob-help">{snapshotNote}</p>}
+          {capabilities?.settings.customEnv && <p className="blob-help">{envNote(capabilities.settings.customEnv)}</p>}
+          <p className="blob-help">Custom arguments are not accepted.</p>
+        </div>
+      </div>
+    </section>}
+
+    {show('memory') && agentId && <BotMemoryGroup agentId={agentId} enabled={memoryOn} sessions={sessions} onOpenMemory={onOpenMemory} />}
 
     {onArchive && <section className="settings-group">
       <div className="settings-card">
@@ -312,6 +393,115 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     </section>}
     {bypassOpen && <BypassConfirmDialog blobName={draft.name} onCancel={() => setBypassOpen(false)} onConfirm={() => { setBypassOpen(false); onDraftChange({ ...draft, approvalMode: 'bypass' satisfies ApprovalMode }) }} />}
   </>
+}
+
+/**
+ * The instructions field, its live counter, the one-time plain-language helper,
+ * the preset chips and the on-device version history (FIX22 B3).
+ */
+function InstructionsSection({ draft, agentId, error, help, noun, onDraftChange }: {
+  draft: AgentDraft
+  agentId: string | null
+  error?: string
+  help: string
+  noun: string
+  onDraftChange: (draft: AgentDraft) => void
+}) {
+  const counts = instructionCounts(draft.instructions)
+  const [helpSeen, markHelpSeen] = useHintSeen(INSTRUCTIONS_HELP_ID)
+  const [helpOpen, setHelpOpen] = useState(!helpSeen)
+  const [pending, setPending] = useState<BotTemplate | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const historyRef = useRef<HTMLDivElement>(null)
+  const maxHeight = () => {
+    const element = textareaRef.current
+    const line = element ? Number.parseFloat(getComputedStyle(element).lineHeight) : Number.NaN
+    return (Number.isFinite(line) && line > 0 ? line : 20) * 20
+  }
+  useAutosizeTextarea(textareaRef, draft.instructions, maxHeight)
+
+  useEffect(() => {
+    if (!historyOpen) return
+    const close = (event: PointerEvent) => {
+      if (historyRef.current && !historyRef.current.contains(event.target as Node)) setHistoryOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setHistoryOpen(false) }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', onKey) }
+  }, [historyOpen])
+
+  const versions = historyOpen && agentId ? instructionVersions(agentId) : []
+
+  const applyPreset = (template: BotTemplate) => {
+    if (!draft.instructions.trim()) { onDraftChange({ ...draft, instructions: template.instructions }); return }
+    setPending(template)
+  }
+  const applyPending = (mode: 'replace' | 'append') => {
+    const template = pending
+    if (!template) return
+    const next = mode === 'replace' ? template.instructions : `${draft.instructions.replace(/\s+$/, '')}\n\n${template.instructions}`
+    setPending(null)
+    onDraftChange({ ...draft, instructions: next })
+  }
+  const restore = (version: InstructionVersion) => {
+    setHistoryOpen(false)
+    onDraftChange({ ...draft, instructions: version.text })
+  }
+
+  return <div className="blob-form instructions-section" id="bot-instructions">
+    <div className="instructions-head">
+      <span className="blob-field-label">Instructions</span>
+      <span className="instructions-head-trail">
+        <small id="blob-instructions-count" className="instructions-count">{thousands(counts.characters)} characters, about {thousands(counts.tokens)} tokens</small>
+        {agentId && <div className="instructions-history" ref={historyRef}>
+          <button type="button" className="ghost-button small" aria-expanded={historyOpen} aria-haspopup="dialog" onClick={() => setHistoryOpen((open) => !open)}>History</button>
+          {historyOpen && <div className="menu-surface instructions-history-menu" role="dialog" aria-label="Instructions history">
+            <p className="blob-help instructions-history-note">Saved versions are kept on this device.</p>
+            {versions.length === 0
+              ? <p className="blob-muted">No saved versions yet.</p>
+              : <ul className="instructions-history-list">{versions.map((version, index) => <li key={`${version.at}:${index}`}>
+                  <span className="instructions-history-time">{formatVersionTime(version.at)}</span>
+                  <span className="instructions-history-preview">{firstLine(version.text)}</span>
+                  <button type="button" className="ghost-button small" onClick={() => restore(version)}>Restore</button>
+                </li>)}</ul>}
+          </div>}
+        </div>}
+      </span>
+    </div>
+    <button type="button" className="link-button instructions-help-toggle" aria-expanded={helpOpen} onClick={() => { if (helpOpen) markHelpSeen(); setHelpOpen(!helpOpen) }}>What are Role, Description and Instructions?</button>
+    {helpOpen && <p className="blob-help instructions-help">Role is the label next to the name. Description is what teammates read to decide whom to ask. Instructions are the {noun}’s standing brief, read on every request.</p>}
+    <div className="instructions-presets" role="group" aria-label="Preset instructions">
+      <span className="blob-field-label">Start from a preset</span>
+      <div className="instructions-preset-row">
+        {instructionPresets().map((template) => <button key={template.id} type="button" className="preset-chip" title={template.tagline} onClick={() => applyPreset(template)}>{template.name}</button>)}
+      </div>
+    </div>
+    {pending && <div className="instructions-choice" role="group" aria-label={`Apply ${pending.name} instructions`}>
+      <span className="instructions-choice-copy">Instructions already has text. Replace it or add the preset to the end?</span>
+      <span className="instructions-choice-actions">
+        <button type="button" className="secondary-button small" onClick={() => applyPending('replace')}>Replace</button>
+        <button type="button" className="secondary-button small" onClick={() => applyPending('append')}>Add to the end</button>
+        <button type="button" className="ghost-button small" onClick={() => setPending(null)}>Cancel</button>
+      </span>
+    </div>}
+    <label className="blob-field">
+      <textarea ref={textareaRef} className="instructions-textarea" aria-label="Instructions" rows={10} placeholder={`How should this ${noun} work? For example: keep answers short and run the tests before finishing.`} aria-invalid={!!error} aria-describedby={`blob-instructions-help${error ? ' blob-instructions-error' : ''}`} value={draft.instructions} onChange={(event) => onDraftChange({ ...draft, instructions: event.target.value })} />
+    </label>
+    <p id="blob-instructions-help" className="blob-help">{help}</p>
+    {error && <p className="blob-error" id="blob-instructions-error">{error}</p>}
+  </div>
+}
+
+function formatVersionTime(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
+function firstLine(text: string) {
+  const line = text.split('\n').map((part) => part.trim()).find((part) => part.length > 0) ?? '(empty)'
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line
 }
 
 function providerLabel(provider: string) { return providerBrand(provider).name || 'this agent' }

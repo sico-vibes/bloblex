@@ -78,6 +78,7 @@ import { LAUNCH_OVERALL_TIMEOUT_REASON, LAUNCH_TIMEOUTS, launchWarningsFor, runL
 import { providerBrand } from './providerBrand'
 import { applyAppearance, applySurfaceAppearance, isThemeStyle, normalizeAccent, type TextSizeChoice, type ThemeChoice } from './appearance'
 import { hydrateDensity, hydrateHints, hydrateTour, useHintSeen } from './uiPrefs'
+import { recordInstructionVersion } from './instructionHistory'
 import { SessionExecutionControls } from './SessionExecutionControls'
 import { composerMaxHeight, useAutosizeTextarea } from './useAutosize'
 import { ContextWindowIndicator } from './ContextWindowIndicator'
@@ -1344,6 +1345,7 @@ export function App() {
           if (team.leader === true) setSnapshot((current) => current ? { ...current, agents: (current.agents ?? []).map((item) => item.id !== agent!.id && item.leader ? { ...item, leader: false } : item) } : current)
         }
         mergeAgent(agent)
+        if (draft.instructions !== baseline.instructions) recordInstructionVersion(agent.id, draft.instructions)
         const next = draftFromAgent(agent)
         setDraft(next)
         setBaseline(next)
@@ -1369,6 +1371,7 @@ export function App() {
       }
       if (!agent?.id) return
       mergeAgent(agent)
+      if (draft.instructions !== baseline.instructions) recordInstructionVersion(agent.id, draft.instructions)
       const next = draftFromAgent(agent)
       setDraft(next)
       setBaseline(next)

@@ -253,7 +253,7 @@ export function executionFromAgent(agent: Agent | null): StoredExecution {
 }
 
 /** The editor's sections, in the order the rail lists them. */
-export type BotSection = 'look' | 'profile' | 'team' | 'model' | 'permissions' | 'notifications'
+export type BotSection = 'look' | 'profile' | 'team' | 'model' | 'permissions' | 'notifications' | 'details' | 'memory'
 
 export interface ChangedField { field: string; label: string; section: BotSection }
 
@@ -270,7 +270,7 @@ export function changedFields(draft: AgentDraft, baseline: AgentDraft): ChangedF
   if (draft.name !== baseline.name) add('name', 'Name', 'profile')
   if (draft.description !== baseline.description) add('description', 'Description', 'profile')
   if (draft.role.trim() !== baseline.role.trim()) add('role', 'Role', 'team')
-  if (draft.projectId !== baseline.projectId) add('projectId', 'Project', 'team')
+  if (draft.projectId !== baseline.projectId) add('projectId', 'Team project', 'team')
   if (draft.leader !== baseline.leader) add('leader', 'Team leader', 'team')
   if (draft.runtimeId !== baseline.runtimeId) add('runtimeId', 'Coding agent', 'model')
   if (nullableText(draft.model) !== nullableText(baseline.model)) add('model', 'Model', 'model')

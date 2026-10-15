@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { chooseOption, selectOptions, selectTrigger, selectValue } from './testSelect'
+import { chooseOption, selectOptions, selectTrigger } from './testSelect'
 import { act, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -67,8 +67,14 @@ describe('approval mode UI', () => {
     const view = mount(<PermissionsHarness />)
     views.push(view)
     await view.settle()
-    const select = selectTrigger(view.host, 'Approval mode')!
-    await chooseOption(view.host, 'Approval mode', 'bypass')
+    expect(view.host.textContent).toContain('Ask first')
+    expect(view.host.textContent).toContain('nothing changes until you approve each action')
+    expect(view.host.textContent).toContain('safe actions go through, risky ones still ask')
+    expect(view.host.textContent).toContain('nothing asks; use only on a computer and project you trust')
+    const bypass = view.host.querySelector<HTMLButtonElement>('[role="radio"][data-mode="bypass"]')!
+    expect(bypass.classList.contains('warning')).toBe(true)
+    bypass.focus()
+    await act(async () => { bypass.click() })
     await view.settle()
     const dialog = view.host.querySelector('[role="dialog"]')!
     expect(dialog.textContent).toContain('approves every action without asking')
@@ -87,8 +93,8 @@ describe('approval mode UI', () => {
     expect(confirm.disabled).toBe(false)
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
     expect(view.host.querySelector('#bypass-dialog-title')).toBeNull()
-    expect(selectValue(view.host, 'Approval mode')).toBe('')
-    expect(document.activeElement).toBe(select)
+    expect(bypass.getAttribute('aria-checked')).toBe('false')
+    expect(document.activeElement).toBe(bypass)
   })
 
   it('shows shield badges only for auto and bypass', () => {

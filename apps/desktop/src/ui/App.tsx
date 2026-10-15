@@ -84,6 +84,7 @@ import { ContextWindowIndicator } from './ContextWindowIndicator'
 import { QuotaBar } from './QuotaBar'
 import { planProgress, planSteps } from './planProgress'
 import { SidebarUsage } from './SidebarUsage'
+import { RemoteChip } from './RemoteChip'
 import { TourHost } from './tour/TourHost'
 import { ContextualHints } from './tour/ContextualHints'
 import { startTour } from './tour/startTour'
@@ -2036,6 +2037,7 @@ export function App() {
     ...(experiments.search ? [{ id: 'search-messages', kind: 'action' as const, title: 'Search messages', subtitle: 'Across all conversations', searchText: 'Search messages text history' }] : []),
     { id: 'find-agents', kind: 'action', title: 'Find coding agents', subtitle: '', searchText: 'Find coding agents runtime' },
     { id: 'change-look', kind: 'action', title: 'Change look', subtitle: 'Bitbots or Blobots', searchText: 'Change look appearance theme style bitbots blobots accent colour' },
+    { id: 'remote-devices', kind: 'action', title: 'Remote devices', subtitle: 'Reach your bots from a phone', searchText: 'Remote devices phone tablet browser pair relay mobile settings' },
     { id: 'take-tour', kind: 'action', title: 'Take the tour', subtitle: 'Five quick stops', searchText: 'Take the tour guide onboarding help' },
     { id: 'shortcuts', kind: 'action', title: 'Keyboard shortcuts', subtitle: 'Ctrl+/', searchText: 'Keyboard shortcuts keys hotkeys' },
     { id: 'toggle-details', kind: 'action', title: 'Toggle details panel', subtitle: '', searchText: 'Toggle details panel inspector' },
@@ -2065,6 +2067,7 @@ export function App() {
       else if (item.id === 'find-agents') { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true); void refreshRuntimes() }
       else if (item.id === 'toggle-details') toggleInspector()
       else if (item.id === 'change-look') { setSettingsInitialPage('Appearance'); setSettingsFocus(null); setSettingsSheet(true) }
+      else if (item.id === 'remote-devices') { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }
       else if (item.id === 'take-tour') startTour()
       else if (item.id === 'shortcuts') setShortcutsOpen(true)
     }
@@ -2144,6 +2147,7 @@ export function App() {
           onToggleProjectCollapsed: (project) => void projectAction('project.update', { projectId: project.id, collapsed: !project.collapsed }),
           onOpenRuntimeSettings: () => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) },
         }} />
+        <RemoteChip onOpen={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} />
         <SidebarUsage quotas={snapshot?.quotas ?? []} onOpen={() => void showUsage()} />
         {platform.companion && <button type="button" role="switch" aria-label={`Companion, keep your ${noun} on screen while you work`} aria-checked={companionVisible} data-tour="companion" className="companion-sidebar-card" onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={30} mini mood="idle" label="Companion" /><span><strong>Companion</strong><small>Keep your {noun} on screen while you work</small></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>}
         <ProfileMenu
@@ -2153,6 +2157,7 @@ export function App() {
           triggerRef={usageLinkRef}
           onUsage={() => { setSchedulesOpen(false); setAnalyticsOpen(true) }}
           onSchedules={() => { setAnalyticsOpen(false); setSchedulesAgentId(null); setSchedulesOpen(true) }}
+          onRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }}
           schedulesActive={schedulesOpen}
           onSettings={() => { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }}
           onQuit={() => void quitBloblex()}

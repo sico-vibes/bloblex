@@ -30,6 +30,19 @@ afterEach(() => {
 })
 
 describe('GuidedTour', () => {
+  it('has six stops, with the remote stop last', () => {
+    expect(steps).toHaveLength(6)
+    expect(steps[5]).toMatchObject({ id: 'remote', anchor: 'remote', placement: 'right' })
+  })
+
+  it('ends the tour when the sixth remote anchor never appears', async () => {
+    vi.useFakeTimers()
+    const onFinish = vi.fn()
+    mount(<GuidedTour steps={steps} step={5} onStep={vi.fn()} onFinish={onFinish} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    expect(onFinish).toHaveBeenCalledWith('done')
+  })
+
   it('shows the current step, moves with Next and Back and finishes with Done', async () => {
     for (const [index, step] of steps.entries()) anchor(step.anchor, { x: 20, y: 40 + index * 60, width: 200, height: 40 })
     const onStep = vi.fn()
@@ -38,15 +51,15 @@ describe('GuidedTour', () => {
     await flush()
     const card = document.querySelector('.coach-card')!
     expect(card.textContent).toContain('Your bots live here')
-    expect(card.textContent).toContain('1 of 5')
+    expect(card.textContent).toContain('1 of 6')
     expect(card.textContent).not.toContain('Back')
     await act(async () => { [...card.querySelectorAll('button')].find((button) => button.textContent === 'Next')!.click() })
     expect(onStep).toHaveBeenCalledWith(1)
     act(() => root?.unmount()); host?.remove()
-    mount(<GuidedTour steps={steps} step={4} onStep={onStep} onFinish={onFinish} />)
+    mount(<GuidedTour steps={steps} step={5} onStep={onStep} onFinish={onFinish} />)
     await flush()
     const lastCard = document.querySelector('.coach-card')!
-    expect(lastCard.textContent).toContain('5 of 5')
+    expect(lastCard.textContent).toContain('6 of 6')
     await act(async () => { [...lastCard.querySelectorAll('button')].find((button) => button.textContent === 'Done')!.click() })
     expect(onFinish).toHaveBeenCalledWith('done')
   })

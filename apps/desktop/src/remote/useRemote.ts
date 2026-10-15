@@ -10,6 +10,12 @@ import {
   type RemoteTier,
 } from './remoteContract'
 
+export interface RemoteAvailability {
+  /** null while loading; false when this build has no remote support. */
+  available: boolean | null
+  status: RemoteStatus | null
+}
+
 export interface RemoteState {
   /** null while loading; false when this build has no remote support. */
   available: boolean | null
@@ -101,4 +107,47 @@ export function useRemote(enabled = true) {
     simulatePairing: () => run(async () => { await rpc('remote.preview.pair') }),
     dismissPaired: () => setState((current) => ({ ...current, justPaired: null })),
   }
+}
+
+/**
+ * The cheap slice of Remote state a sidebar chip or a menu row needs: whether
+ * this build answers `remote.*` at all, and the current `remote.status`
+ * reading. Unlike `useRemote` it never fetches devices, security or activity,
+ * and it re-reads the status whenever any `remote.*` event arrives.
+ */
+export function useRemoteStatus(enabled = true): RemoteAvailability {
+  const [state, setState] = useState<RemoteAvailability>({ available: null, status: null })
+  const alive = useRef(true)
+  const reloadTimer = useRef<number | null>(null)
+
+  useEffect(() => {
+    alive.current = true
+    if (!enabled) return
+    const load = async () => {
+      try {
+        const status = await rpc<RemoteStatus>('remote.status')
+        if (!alive.current) return
+        if (status && typeof status === 'object') setState({ available: true, status })
+        else setState({ available: false, status: null })
+      } catch {
+        if (alive.current) setState({ available: false, status: null })
+      }
+    }
+    void load()
+    let unlisten: (() => void) | null = null
+    try {
+      void listenForDaemonEvents((event) => {
+        if (!event.type.startsWith('remote.')) return
+        if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current)
+        reloadTimer.current = window.setTimeout(() => { reloadTimer.current = null; void load() }, 40)
+      }).then((stop) => { unlisten = stop }).catch(() => undefined)
+    } catch { /* This build has no daemon event stream. */ }
+    return () => {
+      alive.current = false
+      if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current)
+      unlisten?.()
+    }
+  }, [enabled])
+
+  return state
 }

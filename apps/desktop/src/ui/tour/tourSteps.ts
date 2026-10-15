@@ -12,9 +12,10 @@ export interface TourStep {
 }
 
 /**
- * The five stops of the first-run tour. Copy is a function of the look's
+ * The six stops of the first-run tour. Copy is a function of the look's
  * noun so Bitbots says "bot" and Blobots says "blob". Steps whose anchor is
- * not on screen (a panel closed, a narrow window) are skipped by the tour.
+ * not on screen (a panel closed, a narrow window, a build with no remote
+ * support) are skipped by the tour.
  */
 export function tourSteps(noun: string, plural: string): TourStep[] {
   return [
@@ -45,6 +46,12 @@ export function tourSteps(noun: string, plural: string): TourStep[] {
       title: `Keep a ${noun} on your desktop`,
       body: `The companion floats above your other windows and shows when a ${noun} needs you. Ctrl+Alt+B shows or hides it.`,
       tip: 'Change the look and accent colour any time in Settings > Appearance.',
+    },
+    {
+      id: 'remote', anchor: 'remote', placement: 'right',
+      title: `Reach your ${plural} from anywhere`,
+      body: `Turn on Remote in Settings to chat with your ${plural} from a phone or another browser. You choose which devices, and what they may do.`,
+      tip: 'Off by default. Nothing connects until you say so.',
     },
   ]
 }

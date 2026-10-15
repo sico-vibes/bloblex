@@ -1,8 +1,9 @@
 import { rpc } from '../tauri'
 import { usePlatform } from '../transport/platform'
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
-import { CalendarClock, ChevronsUpDown, Compass, Gauge, LogOut, Pencil, Settings2, Keyboard } from 'lucide-react'
+import { CalendarClock, ChevronsUpDown, Compass, Gauge, LogOut, Pencil, Settings2, Keyboard, Smartphone } from 'lucide-react'
 import { startTour } from './tour/startTour'
+import { useRemoteStatus } from '../remote/useRemote'
 import type { ConnectionState } from '../types'
 
 const NAME_KEY = 'bloblex.profile.name'
@@ -38,18 +39,20 @@ export function profileInitials(name: string) {
  * (usage, settings, quit) lives in its menu, like a chat app's
  * profile menu. The name is local to this device.
  */
-export function ProfileMenu({ connection, usageActive, schedulesActive = false, triggerRef, onUsage, onSchedules, onSettings, onQuit, onShortcuts }: {
+export function ProfileMenu({ connection, usageActive, schedulesActive = false, triggerRef, onUsage, onSchedules, onRemote, onSettings, onQuit, onShortcuts }: {
   connection: ConnectionState
   usageActive: boolean
   schedulesActive?: boolean
   onSchedules?: () => void
   triggerRef?: RefObject<HTMLButtonElement | null>
   onUsage: () => void
+  onRemote?: () => void
   onShortcuts?: () => void
   onSettings: () => void
   onQuit: () => void
 }) {
   const [name, setName] = useState(readProfileName)
+  const { available: remoteAvailable } = useRemoteStatus()
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(name)
@@ -130,6 +133,7 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
     {open && <div ref={menuRef} className="menu-surface profile-menu" role="menu" aria-label="Account" onKeyDown={onMenuKeyDown}>
       <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onUsage)}><Gauge size={15} />Usage</button>
       {onSchedules && <button type="button" role="menuitem" className="menu-item" aria-current={schedulesActive ? "page" : undefined} disabled={!connected} onClick={() => run(onSchedules)}><CalendarClock size={15} />Automations</button>}
+      {remoteAvailable === true && onRemote && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onRemote)}><Smartphone size={15} />Remote</button>}
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(onSettings)}><Settings2 size={15} />Settings</button>
       {onShortcuts && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onShortcuts)}><Keyboard size={15} />Keyboard shortcuts</button>}
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(startTour)}><Compass size={15} />Take the tour</button>

@@ -23,6 +23,15 @@ describe('searchSettings', () => {
     expect(searchSettings('e', SETTINGS_INDEX, 3).length).toBe(3)
   })
 
+  it('finds the Remote page by phone or mobile, with Devices and Recent activity listed', () => {
+    expect(searchSettings('phone').some((entry) => entry.page === 'Remote')).toBe(true)
+    expect(searchSettings('mobile')[0]?.page).toBe('Remote')
+    const remote = SETTINGS_INDEX.filter((entry) => entry.page === 'Remote')
+    expect(remote.some((entry) => entry.group === 'Devices' && entry.label === 'Devices')).toBe(true)
+    expect(remote.some((entry) => entry.group === 'Recent activity')).toBe(true)
+    expect(remote.map((entry) => entry.group)).toEqual(expect.arrayContaining(['Remote access', 'Add a device', 'Safety']))
+  })
+
   it('points every entry at a known page', () => {
     const pages = new Set(['General', 'Appearance', 'Remote', 'Agents', 'Memory', 'Speech', 'Updates'])
     for (const entry of SETTINGS_INDEX) expect(pages.has(entry.page)).toBe(true)

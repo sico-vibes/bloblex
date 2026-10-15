@@ -32,6 +32,7 @@ import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
 import { AutoRetryNotice, ContextResetDivider, ConversationPicker, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, CompanionTeammatesSetting, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
+import { NeedsYouBadge, PermissionQueueBar, nextWaitingAgent, waitingAgentsOf } from './CompanionAttention'
 import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
@@ -621,7 +622,24 @@ export function App() {
     agentName,
   )
   const accent = sideAgent ? agentColorHex(sideAgent.color) : activeSelectedAgent ? agentColorHex(activeSelectedAgent.color) : ''
-  const companionPermission = activePermission ?? undefined
+  // The companion's approval queue: every live approval across bots, with the ones the person set aside hidden for a while.
+  const [companionPick, setCompanionPick] = useState<string | null>(null)
+  const [snoozedPermissions, setSnoozedPermissions] = useState<Record<string, number>>({})
+  const [, bumpSnooze] = useState(0)
+  useEffect(() => {
+    const until = Object.values(snoozedPermissions).filter((value) => value > Date.now())
+    if (!until.length) return
+    const timer = window.setTimeout(() => bumpSnooze((value) => value + 1), Math.max(250, Math.min(...until) - Date.now() + 50))
+    return () => window.clearTimeout(timer)
+  }, [snoozedPermissions])
+  const isSnoozed = (id: string) => (snoozedPermissions[id] ?? 0) > Date.now()
+  const companionQueue = (snapshot?.permissions ?? []).filter((item) => item.kind !== 'question' && isPendingPermissionLive(item, permissionClock) && !isSnoozed(item.id))
+  const snoozeCompanionPermission = (id: string) => {
+    setSnoozedPermissions((current) => ({ ...current, [id]: Date.now() + 5 * 60_000 }))
+    setCompanionPick((current) => (current === id ? null : current))
+  }
+  const companionPermission = companionQueue.find((item) => item.id === companionPick)
+    ?? (activePermission && !isSnoozed(activePermission.id) ? activePermission : companionQueue[0] ?? undefined)
   const companionSessionRecord = sessions.find((session) => session.id === companionPermission?.sessionId)
     ?? selectedSession
   const companionSession = companionSessionRecord
@@ -1932,7 +1950,7 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => {
+      <Companion permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => {
         // A live turn queues the message in the daemon instead of failing with a conflict.
         const live = ['working', 'starting', 'waiting_permission'].includes(sessions.find((item) => item.id === sessionId)?.state ?? '')
         return doRpc(live ? 'session.queue.add' : 'session.prompt', { sessionId, text }).then(() => { if (live) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
@@ -2719,7 +2737,7 @@ function shortDate(value: unknown) {
 
 function recordFrom(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
 
-function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, queuedCount = 0, onLoadQueue }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void }) {
+function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void }) {
   const sessionModelLock = session?.modelLock
   const nouns = useEntityNoun({ plural: true })
   const contextModel = sessionModelLock && Object.prototype.hasOwnProperty.call(sessionModelLock, 'model')
@@ -2783,7 +2801,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const [dragHintSeen, markDragHintSeen] = useHintSeen('companion.drag')
   if (!fsmRef.current) fsmRef.current = new CompanionFsm()
   // Chat, activity, settings and inline questions use the taller island; approvals keep the overview size.
-  const tall = mode === 'home' && (permission ? permission.kind === 'question' : (view === 'chat' || view === 'activity' || view === 'settings'))
+  const tall = mode === 'home' && (permission ? true : (view === 'chat' || view === 'activity' || view === 'settings'))
   const presentation = mode === 'home' && tall ? 'home-chat' : mode
   useEffect(() => {
     const fsm = fsmRef.current!
@@ -3078,6 +3096,9 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const color = agent ? agentColorHex(agent.color) : ''
   const name = agent?.name ?? (runtime ? labelize(runtime.provider) : 'Bitbots')
   const peers = activeAgents(agents).filter((item) => item.id !== agent?.id).slice(0, 4)
+  const waitingAgents = waitingAgentsOf(activeAgents(agents), sessions, runtimes, connected)
+  const openNextWaiting = () => { const next = nextWaitingAgent(waitingAgents, agent?.id); if (next) { playCompanionCue('blip'); onSelectAgent(next); setView('overview') } }
+  const peerSummary = `${peers.length} teammate${peers.length === 1 ? '' : 's'}${waitingAgents.length ? ', ' + waitingAgents.length + ' waiting' : ''}`
   const canStart = !!agent && connected && runtimeUsable(runtime)
   const statusLine = confused ? 'A little dizzy… back to normal shortly' : appError ?? fileError ?? dropError ?? (preparingFile ? 'Checking local file access…' : activity)
   const shimmering = ['working', 'thinking', 'tool_activity', 'file_activity'].includes(displayMood)
@@ -3098,8 +3119,9 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
       {mode === 'petit' ? <div className="companion-compact" data-tauri-drag-region>
         <button className="compact-bot" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}>{focusBlob(40)}</button>
         <div className="compact-copy" onClick={() => fsmRef.current?.click()}><span className="compact-name"><strong>{name}</strong>{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}<ApprovalPill mode={approvalMode} compact /></span><span role="status" aria-live="polite" className={`compact-status ${shimmering ? 'shimmer' : ''}`}>{statusLine}</span></div>
+        <NeedsYouBadge count={waitingAgents.length} compact onOpen={openNextWaiting} />
         {permission && <ShieldAlert className="companion-alert" size={15} aria-label="Approval required" />}
-        {peers.length > 0 && <div className="mini-grid" aria-hidden="true" data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} look={agentLook(item)} label={item.name} /> })}</div>}
+        {peers.length > 0 && <div className="mini-grid" role="img" aria-label={peerSummary} data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} look={agentLook(item)} label={item.name} /> })}</div>}
         <button className="companion-collapse" aria-label="Expand companion" onClick={() => fsmRef.current?.click()}><ChevronUp size={14} /></button>
       </div> : <>
         <header className="island-header" data-tauri-drag-region>
@@ -3111,6 +3133,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
           </nav>
           <span className="island-drag" data-tauri-drag-region title="Drag companion" aria-hidden="true" />
           <div className="island-actions">
+            <NeedsYouBadge count={waitingAgents.length} onOpen={openNextWaiting} />
             <ApprovalPill mode={approvalMode} compact />
             <button className={view === 'settings' ? 'on' : ''} aria-label="Settings" title="Settings" onClick={() => openView('settings')}><Settings2 size={14} /></button>
             <button className={soundsEnabled ? 'on' : ''} aria-label={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} aria-pressed={soundsEnabled} title={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} onClick={toggleSounds}>{soundsEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}</button>
@@ -3123,6 +3146,11 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
           {permission ? <div className="island-card wash amber">
             <span className="card-bot">{focusBlob(56)}</span>
             <div className="card-stack">
+              {permission.kind !== 'question' && <PermissionQueueBar
+                index={Math.max(0, permissionQueue.findIndex((item) => item.id === permission.id))} total={Math.max(1, permissionQueue.length)}
+                onPrev={() => { const at = Math.max(0, permissionQueue.findIndex((item) => item.id === permission.id)); onPickPermission?.(permissionQueue[(at - 1 + permissionQueue.length) % permissionQueue.length]?.id ?? permission.id) }}
+                onNext={() => { const at = Math.max(0, permissionQueue.findIndex((item) => item.id === permission.id)); onPickPermission?.(permissionQueue[(at + 1) % permissionQueue.length]?.id ?? permission.id) }}
+                onLater={() => { playCompanionCue('tick'); onSnoozePermission?.(permission.id) }} />}
               {permission.kind === 'question'
                 ? <QuestionCard request={permission} onAnswer={(answers) => { playCompanionCue('approve'); return onAnswerQuestion?.(permission, answers) }} onDismiss={() => void onAnswerQuestion?.(permission, null)} />
                 : <ApprovalCard permission={permission} variant="companion" onReply={(choice) => replyToPermission(permission, choice)} />}

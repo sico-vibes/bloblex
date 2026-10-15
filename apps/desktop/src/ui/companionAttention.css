@@ -1,0 +1,22 @@
+/* "Needs you" badge and the approval queue bar in the companion. */
+.needs-you {
+  height: 24px; padding: 0 9px 0 8px; display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; cursor: pointer;
+  color: var(--companion-text-bright, var(--text-1)); font-size: 11px; font-weight: 600; white-space: nowrap;
+  border: 1px solid color-mix(in srgb, var(--companion-status-alert, #f5a524) 55%, transparent);
+  border-radius: 999px; background: color-mix(in srgb, var(--companion-status-alert, #f5a524) 14%, transparent);
+  transition: background 140ms ease, border-color 140ms ease, transform 90ms ease;
+}
+.needs-you:hover { background: color-mix(in srgb, var(--companion-status-alert, #f5a524) 24%, transparent); }
+.needs-you:active { transform: scale(.97); }
+.needs-you:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.needs-you .bot-status-waiting { border-color: var(--companion-status-alert, #f5a524); }
+.needs-you.compact { height: 22px; padding: 0 8px 0 7px; }
+
+.queue-bar { display: flex; align-items: center; gap: 4px; margin: 0 0 6px; min-height: 26px; }
+.queue-count { min-width: 44px; text-align: center; color: var(--companion-text-muted, var(--text-2)); font-size: 11px; font-variant-numeric: tabular-nums; }
+.queue-step { width: 24px; height: 24px; display: grid; place-items: center; color: var(--companion-text-muted, var(--text-2)); border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+.queue-step:hover { color: var(--companion-text-bright, var(--text-1)); background: var(--companion-alpha-10, rgba(255, 255, 255, .1)); }
+.queue-step:focus-visible, .queue-later:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.queue-later { margin-left: auto; height: 24px; padding: 0 10px; color: var(--companion-text-muted, var(--text-2)); font-size: 11px; border: 1px solid var(--companion-alpha-18, rgba(255, 255, 255, .18)); border-radius: 999px; background: transparent; cursor: pointer; }
+.queue-later:hover { color: var(--companion-text-bright, var(--text-1)); }
+@media (prefers-reduced-motion: reduce) { .needs-you { transition: none; } }

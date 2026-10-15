@@ -2,7 +2,7 @@
 // group heading on that page, which the sheet scrolls to and flashes. Keep the
 // `group` strings equal to the `SettingsGroup title` values in SettingsSheet.
 
-export type SettingsPageName = 'General' | 'Appearance' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
+export type SettingsPageName = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
 
 export interface SettingsIndexEntry {
   page: SettingsPageName
@@ -26,6 +26,9 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'Appearance', group: 'Display', label: 'Theme', keywords: 'dark light system mode' },
   { page: 'Appearance', group: 'Display', label: 'Text size', keywords: 'font larger smaller zoom' },
   { page: 'Appearance', group: 'Display', label: 'Density', keywords: 'compact roomy spacing rows' },
+  { page: 'Remote', group: 'Remote access', label: 'Allow remote devices', keywords: 'phone browser pwa relay outside away mobile android iphone' },
+  { page: 'Remote', group: 'Add a device', label: 'Pair a device', keywords: 'qr code scan phone tablet connect' },
+  { page: 'Remote', group: 'Safety', label: 'Approve requests from remote devices', keywords: 'permission approval remote security' },
   { page: 'General', group: 'Editor', label: 'Editor executable', keywords: 'open files vscode notepad' },
   { page: 'General', group: 'Experimental', label: 'Claude dynamic workflows and Ultracode', keywords: 'effort claude workflow' },
   { page: 'General', group: 'Experimental', label: 'Usage tips', keywords: 'quota limit notice' },

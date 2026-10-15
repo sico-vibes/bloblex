@@ -1,8 +1,8 @@
 import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { emit, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { Bot, Brain, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search } from 'lucide-react'
+import { Bot, Brain, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone } from 'lucide-react'
 import type { Agent, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
@@ -22,6 +22,8 @@ import { ScanRecovery } from './ScanRecovery'
 import { ConfirmDialog } from './BlobPage'
 import { setAccentColor, setThemeStyle, useAccentColor, useThemeStyle } from '../blob/bitbots'
 import { LookPicker } from './LookPicker'
+import { SettingsGroup, SettingsRow } from './SettingsParts'
+import { RemoteSettings } from './RemoteSettings'
 import { LookPreview } from './LookPreview'
 import { searchSettings, type SettingsIndexEntry } from './settingsIndex'
 import { AccentPicker } from './AccentPicker'
@@ -31,11 +33,12 @@ import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
-export type SettingsPageId = 'General' | 'Appearance' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
+export type SettingsPageId = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
   { id: 'Appearance', label: 'Appearance', icon: Palette },
+  { id: 'Remote', label: 'Remote', icon: Smartphone },
   { id: 'Agents', label: 'Agents', icon: Bot },
   { id: 'Memory', label: 'Memory', icon: Brain },
   { id: 'Speech', label: 'Speech', icon: Mic },
@@ -571,6 +574,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             </SettingsGroup>
           </>}
 
+          {!loading && page === 'Remote' && <RemoteSettings onOpenPower={() => switchPage('General')} />}
+
           {!loading && page === 'Agents' && <>
             <p className="settings-intro">Bitbots runs the coding agents installed on this device. Sign in with each agent's own command line tool; Bitbots never handles your provider login.</p>
             <SettingsGroup title="Approvals">
@@ -703,20 +708,6 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       </section>
       {profileDeleteTarget && <ConfirmDialog title={`Remove ${profileDeleteTarget.name}?`} body="This removes the custom launcher profile from Bitbots. It does not uninstall the coding agent." confirmLabel="Remove" cancelLabel="Keep launcher" holdToConfirm successTitle="Launcher removed" successBody="The custom launcher profile was removed from Bitbots." onConfirm={async () => { await deleteProfile(profileDeleteTarget.id) }} onComplete={() => setProfileDeleteTarget(null)} onCancel={() => setProfileDeleteTarget(null)} />}
     </div>
-}
-
-function SettingsGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
-  return <section className="settings-group">
-    <div className="settings-group-head"><h3>{title}</h3>{action}</div>
-    <div className="settings-card">{children}</div>
-  </section>
-}
-
-function SettingsRow({ label, hint, children, stacked = false }: { label: ReactNode; hint?: string; children?: ReactNode; stacked?: boolean }) {
-  return <div className={stacked ? "settings-row stacked" : "settings-row"}>
-    <span className="settings-row-copy"><strong>{label}</strong>{hint && <small>{hint}</small>}</span>
-    {children && <span className="settings-row-control">{children}</span>}
-  </div>
 }
 
 /** A "?" that explains a setting on hover or focus. */

@@ -292,6 +292,11 @@ function fixtureCatalog(runtimeId: string) {
 export const inDesktop = true
 export const previewMode = true
 export async function rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  if (method === 'remote.preview.pair') {
+    // Preview only: act as the phone finishing pairing with the live code.
+    ensureRemoteFixture()
+    return remoteSimulator.simulatePairingCompleted() as T
+  }
   if ((REMOTE_METHODS as readonly string[]).includes(method)) {
     ensureRemoteFixture()
     return remoteSimulator.call(method as RemoteMethod, params) as Promise<T>

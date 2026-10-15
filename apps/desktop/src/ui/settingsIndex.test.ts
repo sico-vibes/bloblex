@@ -24,7 +24,7 @@ describe('searchSettings', () => {
   })
 
   it('points every entry at a known page', () => {
-    const pages = new Set(['General', 'Appearance', 'Agents', 'Memory', 'Speech', 'Updates'])
+    const pages = new Set(['General', 'Appearance', 'Remote', 'Agents', 'Memory', 'Speech', 'Updates'])
     for (const entry of SETTINGS_INDEX) expect(pages.has(entry.page)).toBe(true)
   })
 })

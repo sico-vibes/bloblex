@@ -1,0 +1,47 @@
+/* Settings > Remote */
+.remote-preview-note { margin: 0 0 14px; padding: 8px 12px; color: var(--text-2); font-size: var(--fs-xs); border: 1px dashed var(--line-strong); border-radius: var(--radius-md); }
+.remote-hero { margin: 0 0 20px; padding: 18px; display: flex; gap: 16px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-raised); }
+.remote-hero h3 { margin: 0 0 6px; font-size: var(--fs-md); font-weight: 600; }
+.remote-hero p { margin: 0; color: var(--text-2); font-size: var(--fs-sm); line-height: 1.55; text-wrap: pretty; }
+.remote-hero-art { flex: 0 0 auto; width: 74px; height: 56px; display: grid; grid-template-columns: 1fr 14px auto; align-items: end; gap: 0; color: var(--text-1); }
+.remote-hero-art i { height: 2px; margin-bottom: 14px; background: repeating-linear-gradient(90deg, var(--text-3) 0 3px, transparent 3px 6px); animation: remote-link 1.6s linear infinite; }
+@keyframes remote-link { to { background-position-x: 6px; } }
+
+.remote-status { margin: 0; padding: 12px 16px; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--line); }
+.remote-status strong { display: block; font-size: var(--fs-sm); font-weight: 500; }
+.remote-status small { color: var(--text-3); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+
+.remote-pair { padding: 16px; display: flex; gap: 20px; align-items: center; }
+.qr-glyph { flex: 0 0 auto; color: #111; padding: 8px; background: #fff; border-radius: 10px; }
+.remote-pair-copy { min-width: 0; display: grid; gap: 6px; }
+.remote-pair-copy small { color: var(--text-3); font-size: var(--fs-2xs); letter-spacing: .08em; text-transform: uppercase; }
+.remote-pair-copy p { margin: 0; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; }
+.remote-code { display: block; font: 600 26px/1.1 var(--font-mono); letter-spacing: .12em; color: var(--text-1); font-variant-numeric: tabular-nums; }
+.remote-pair-actions { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 6px; }
+.remote-simulate { color: var(--text-3); }
+.remote-simulate svg { margin-right: 4px; }
+
+.remote-paired { padding: 14px 16px; display: flex; align-items: center; gap: 12px; background: color-mix(in srgb, var(--status-success) 10%, transparent); animation: remote-pop 260ms cubic-bezier(.2, .8, .2, 1) both; }
+.remote-paired-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; color: var(--status-success); background: color-mix(in srgb, var(--status-success) 16%, transparent); }
+.remote-paired > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.remote-paired strong { font-size: var(--fs-sm); font-weight: 600; }
+.remote-paired small { color: var(--text-2); font-size: var(--fs-xs); }
+@keyframes remote-pop { from { opacity: 0; transform: translateY(4px) scale(.99); } to { opacity: 1; transform: none; } }
+
+.remote-device { padding: 12px 16px; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--line); }
+.remote-device:first-of-type { border-top: 0; }
+.remote-device-icon { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border-radius: var(--radius-md); background: var(--surface-selected); }
+.remote-device-copy { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.remote-device-copy strong { overflow: hidden; font-size: var(--fs-sm); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.remote-device-copy small { color: var(--text-3); font-size: var(--fs-xs); }
+.remote-online { display: inline-flex; align-items: center; gap: 5px; color: var(--status-success); }
+.remote-online i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.remote-tier-hint { margin: 0; padding: 10px 16px 14px; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.5; border-top: 1px solid var(--line); }
+
+.remote-activity { margin: 0; padding: 4px 16px 8px; list-style: none; display: grid; }
+.remote-activity li { padding: 8px 0; display: flex; justify-content: space-between; gap: 12px; color: var(--text-2); font-size: var(--fs-xs); border-top: 1px solid var(--line); }
+.remote-activity li:first-child { border-top: 0; }
+.remote-activity time { flex: 0 0 auto; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 640px) { .remote-pair { flex-direction: column; align-items: flex-start; } }
+@media (prefers-reduced-motion: reduce) { .remote-hero-art i { animation: none; } .remote-paired { animation: none; } }

@@ -1064,6 +1064,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if k=="claude.enableWorkflows"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","claude.enableWorkflows requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="permissions.default_mode"&&!p["value"].as_str().is_some_and(|v|["ask","auto"].contains(&v)){return Err(derr("invalid_argument","permissions.default_mode must be ask or auto",StatusCode::BAD_REQUEST));}
             if k=="automations.paused"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","automations.paused requires a JSON boolean",StatusCode::BAD_REQUEST));}
+            if k=="companion.focusMode"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","companion.focusMode requires a JSON boolean",StatusCode::BAD_REQUEST));}
+            if k=="companion.positions"&&!valid_companion_positions(&p["value"]){return Err(derr("invalid_argument","companion.positions must map at most 8 display names to {x,y} numbers",StatusCode::BAD_REQUEST));}
             if k=="questions.expirySecs"&&!p["value"].as_i64().is_some_and(|secs|(1_800..=604_800).contains(&secs)){return Err(derr("invalid_argument","questions.expirySecs requires an integer between 1800 and 604800",StatusCode::BAD_REQUEST));}
             if k=="automations.maxConcurrent"&&!p["value"].as_u64().is_some_and(|count|(1..=3).contains(&count)){return Err(derr("invalid_argument","automations.maxConcurrent requires an integer between 1 and 3",StatusCode::BAD_REQUEST));}
             if k.to_ascii_lowercase().contains("token")
@@ -1076,7 +1078,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::BAD_REQUEST,
                 ));
             }
-            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="hints.seen"||k=="onboarding.tour";
+            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions";
             let events=st.db.set_setting(k, &value).map_err(|e| {
                 derr(
                     if validation_key{"invalid_argument"}else{"internal"},
@@ -1099,6 +1101,18 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
 /// A `#rrggbb` colour, as accepted for `appearance.accent`.
 fn is_accent_hex(value: &str) -> bool {
     value.len() == 7 && value.starts_with('#') && value[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// `companion.positions`: at most 8 display-name keys, each `{ x: number, y: number }`.
+fn valid_companion_positions(value: &Value) -> bool {
+    let Some(object) = value.as_object() else { return false; };
+    if object.len() > 8 { return false; }
+    object.iter().all(|(name, point)| {
+        !name.is_empty()
+            && name.len() <= 200
+            && point.get("x").and_then(Value::as_f64).is_some()
+            && point.get("y").and_then(Value::as_f64).is_some()
+    })
 }
 
 fn runtime_from(v: &Value) -> RuntimeSpec {
@@ -6317,6 +6331,25 @@ mod phase2a_tests {
 
         dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"bitbots"})).await.unwrap();
         assert!(events.try_recv().is_err(), "an unchanged value does not re-broadcast");
+    }
+
+    #[tokio::test]
+    async fn companion_preferences_validate_types_and_bounds() {
+        let (st, mut events) = state();
+        // Focus mode is a plain boolean.
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"companion.focusMode","value":"true"})).await.unwrap_err().1.code, "invalid_argument");
+        dispatch(&st, "settings.set", json!({"key":"companion.focusMode","value":true})).await.unwrap();
+        assert_eq!(events.recv().await.unwrap().payload, json!({"key":"companion.focusMode","value":true}));
+        assert_eq!(st.db.settings().unwrap()["companion.focusMode"], true);
+        // Positions are at most eight display names mapped to {x,y} numbers.
+        let positions = json!({"\\\\.\\DISPLAY1":{"x":120,"y":900}});
+        dispatch(&st, "settings.set", json!({"key":"companion.positions","value":positions})).await.unwrap();
+        assert_eq!(events.recv().await.unwrap().payload["value"], positions);
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"companion.positions","value":{"M":{"x":1}}})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"companion.positions","value":{"M":{"x":"1","y":2}}})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"companion.positions","value":{"":{"x":1,"y":2}}})).await.unwrap_err().1.code, "invalid_argument");
+        let extra: serde_json::Map<String, Value> = (0..9).map(|index| (format!("M{index}"), json!({"x":index,"y":index}))).collect();
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"companion.positions","value":Value::Object(extra)})).await.unwrap_err().1.code, "invalid_argument");
     }
 
     // ── Phase 4A: scheduled automations ────────────────────────────────────

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SETTINGS_INDEX, searchSettings } from './settingsIndex'
+import { searchSettings, settingsPageFromEvent, SETTINGS_INDEX, SETTINGS_PAGE_NAMES } from './settingsIndex'
 
 describe('searchSettings', () => {
   it('finds a setting by its label, ranking label hits first', () => {
@@ -33,7 +33,16 @@ describe('searchSettings', () => {
   })
 
   it('points every entry at a known page', () => {
-    const pages = new Set(['General', 'Appearance', 'Remote', 'Agents', 'Memory', 'Speech', 'Updates'])
+    const pages = new Set(SETTINGS_PAGE_NAMES)
     for (const entry of SETTINGS_INDEX) expect(pages.has(entry.page)).toBe(true)
+  })
+})
+
+describe('settingsPageFromEvent', () => {
+  it('accepts only a known page name', () => {
+    expect(settingsPageFromEvent('Remote')).toBe('Remote')
+    expect(settingsPageFromEvent('Nope')).toBeNull()
+    expect(settingsPageFromEvent(null)).toBeNull()
+    expect(settingsPageFromEvent({ page: 'Remote' })).toBeNull()
   })
 })

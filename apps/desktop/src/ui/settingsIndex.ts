@@ -4,6 +4,18 @@
 
 export type SettingsPageName = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
 
+/** The page list, for anything that has to validate an incoming page name. */
+export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Remote', 'Agents', 'Memory', 'Speech', 'Updates']
+
+/**
+ * The page out of an open-settings event payload (C13): a known page name, or
+ * null when the payload carries none, so an unknown or absent value just opens
+ * the sheet on its current page.
+ */
+export function settingsPageFromEvent(payload: unknown): SettingsPageName | null {
+  return typeof payload === 'string' && (SETTINGS_PAGE_NAMES as readonly string[]).includes(payload) ? payload as SettingsPageName : null
+}
+
 export interface SettingsIndexEntry {
   page: SettingsPageName
   group: string
@@ -21,6 +33,8 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'General', group: 'Companion', label: 'Companion start position', keywords: 'place corner bottom centre' },
   { page: 'General', group: 'Companion', label: 'Show or hide shortcut', keywords: 'hotkey keyboard ctrl alt' },
   { page: 'General', group: 'Companion', label: 'Sounds and volume', keywords: 'audio cues mute quiet' },
+  { page: 'General', group: 'Companion', label: 'Focus mode', keywords: 'quiet peek interrupt concentrate' },
+  { page: 'General', group: 'Companion', label: 'Reset companion position', keywords: 'move place edge corner screen' },
   { page: 'Appearance', group: 'Look and colour', label: 'Look', keywords: 'bitbots blobots theme style robots blobs' },
   { page: 'Appearance', group: 'Look and colour', label: 'Accent colour', keywords: 'color highlight primary brand' },
   { page: 'Appearance', group: 'Display', label: 'Theme', keywords: 'dark light system mode' },

@@ -31,6 +31,8 @@ import { DensityControl } from './DensityControl'
 import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME } from '../blob/soundVolume'
 import { applySoundPrefs, previewSoundVolume, saveSoundsEnabled, saveSoundVolume as persistSoundVolume, soundPrefsFromSettings, subscribeSoundPrefs } from './soundPrefs'
+import { focusModeFromSettings, saveFocusMode, subscribeFocusMode } from './companionPrefs'
+import { clearCompanionPosition } from './companionPositions'
 import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
@@ -109,6 +111,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [companionMonitor, setCompanionMonitorValue] = useState<string | null>(null)
   const [soundsEnabled, setSoundsEnabled] = useState(false)
   const [soundVolume, setSoundVolume] = useState(DEFAULT_SOUND_VOLUME)
+  const [focusMode, setFocusMode] = useState(false)
   const savedSoundVolume = useRef(DEFAULT_SOUND_VOLUME)
   const [startPosition, setStartPosition] = useState<'launch' | 'last'>('launch')
   const [companionHotkey, setCompanionHotkey] = useState(true)
@@ -161,6 +164,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       setSoundsEnabled(soundPrefs.soundsEnabled)
       savedSoundVolume.current = soundPrefs.soundVolume
       setSoundVolume(soundPrefs.soundVolume)
+      setFocusMode(focusModeFromSettings(settings))
       if (settings['companion.startPosition'] === 'last') setStartPosition('last')
       if (typeof settings['companion.hotkey'] === 'boolean') setCompanionHotkey(settings['companion.hotkey'])
       if (settings['companion.hotkey'] !== false) {
@@ -212,6 +216,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     savedSoundVolume.current = prefs.soundVolume
     setSoundVolume(prefs.soundVolume)
   }), [])
+
+  useEffect(() => subscribeFocusMode(setFocusMode), [])
 
   useEffect(() => {
     let active = true
@@ -372,6 +378,22 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     if (failure) { setSoundsEnabled(!enabled); onError(failure) }
   }
 
+  const setFocus = async (enabled: boolean) => {
+    setFocusMode(enabled)
+    const failure = await guarded(async () => {
+      await saveFocusMode(enabled)
+      setNotice(enabled ? 'Focus mode on. Completion peeks are quiet.' : 'Focus mode off.')
+    })
+    if (failure) { setFocusMode(!enabled); onError(failure) }
+  }
+
+  const resetCompanionPosition = () => guarded(async () => {
+    const monitor = await currentCompanionMonitor()
+    await clearCompanionPosition(monitor)
+    if (startPosition !== 'last' && monitor) await setCompanionMonitor(monitor)
+    setNotice('Companion position reset.')
+  })
+
   // The slider moves the shown value freely; the daemon setting is written once
   // on release, and the companion (which owns the audio) applies it and plays one cue.
   const saveSoundVolume = async (volume: number) => {
@@ -512,6 +534,12 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </SettingsRow>
               <SettingsRow label="Sound volume" hint="Applies to every companion cue. 0% is silent.">
                 <SoundVolumeSlider value={soundVolume} onChange={setSoundVolume} onCommit={(volume) => void saveSoundVolume(volume)} onPlaySample={() => void playSoundSample()} label="Companion sound volume" />
+              </SettingsRow>
+              <SettingsRow label="Focus mode" hint="No completion peeks or cues while you concentrate. Approvals and questions still show.">
+                <button type="button" className={`toggle ${focusMode ? 'on' : ''}`} role="switch" aria-label="Focus mode" aria-checked={focusMode} onClick={() => void setFocus(!focusMode)} disabled={saving}><i /></button>
+              </SettingsRow>
+              <SettingsRow label="Reset companion position" hint="Returns the companion to your start position and forgets where this display left it.">
+                <button type="button" className="secondary-button small" onClick={() => void resetCompanionPosition()} disabled={saving}>Reset position</button>
               </SettingsRow>
             </SettingsGroup>}
             {platform.editor && <SettingsGroup title="Editor">

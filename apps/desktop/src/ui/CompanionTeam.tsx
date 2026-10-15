@@ -2,8 +2,8 @@
 // focus with its live steps, and up to four teammates in sight, each reduced
 // to a face and the line it is working on. Same projects, roles, leader and
 // side conversations as the main window.
-import { useState, type ReactNode } from 'react'
-import { ArrowLeftRight, Check, ClipboardList, LayoutGrid, Pin, PinOff, Terminal, X } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeftRight, Check, ClipboardList, Copy, LayoutGrid, Pin, PinOff, Terminal, X } from 'lucide-react'
 import type { Agent, ChatMessage, Project, Runtime, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -254,6 +254,21 @@ function plain(text: string) {
   return text.replace(/```[\s\S]*?```/g, ' ').replace(/[*_`#>]/g, '').replace(/\s+/g, ' ').trim()
 }
 
+/** Copy one companion message, with the same 1.2 s "Copied" state the main chat uses. */
+export function CompanionCopyButton({ text, label = 'Copy message text' }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<number | null>(null)
+  useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current) }, [])
+  const copy = () => {
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true)
+      if (timer.current) window.clearTimeout(timer.current)
+      timer.current = window.setTimeout(() => setCopied(false), 1200)
+    }).catch(() => undefined)
+  }
+  return <button type="button" className={`companion-copy${copied ? ' copied' : ''}`} aria-label={copied ? 'Copied' : label} title={copied ? 'Copied' : 'Copy'} disabled={!text} onClick={(event) => { event.stopPropagation(); copy() }}>{copied ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}</button>
+}
+
 /** A conversation item in the companion chat, with the same team semantics as the main window. */
 export function CompanionChatItem({ message, agents, onOpenSide, currentSessionId, availableMessageIds = new Set() }: { message: ChatMessage; agents: readonly Agent[]; onOpenSide: (sessionId: string | undefined) => void; currentSessionId?: string; availableMessageIds?: ReadonlySet<string> }): ReactNode {
   const role = String(message.role ?? '')
@@ -291,9 +306,9 @@ export function CompanionChatItem({ message, agents, onOpenSide, currentSessionI
     return <div className="companion-plan"><ClipboardList size={12} aria-hidden="true" /><span><b>Proposed plan</b> {plain(text)}</span></div>
   }
   const quotedContext = reply && <ReplyContextStrip target={reply} compact available={reply.sourceSessionId === currentSessionId && availableMessageIds.has(reply.messageId)} onJump={jump} />
-  if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}<div className="bubble"><CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div></div>
+  if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}<div className="bubble"><CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div><CompanionCopyButton text={text} /></div>
   const replyText = plain(text)
-  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply message-bubble">{replyText}<MessageReactionBadges reactions={message.reactions} /></div></div> : null
+  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply message-bubble">{replyText}<MessageReactionBadges reactions={message.reactions} /></div><CompanionCopyButton text={replyText} /></div> : null
 }
 
 /** Side conversations the focused blob took part in, newest first. */

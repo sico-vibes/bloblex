@@ -329,9 +329,9 @@ describe('companion drag and usage labels', () => {
 
     await press(view.host, 'Activity')
     await view.settle()
-    // With Agent activity off, the tab explains where to turn it on; the hint is not interactive.
-    expect(view.host.querySelector('.companion-activity-view')?.textContent).toContain('Settings → Experimental')
-    expect(resolvesToDrag(view.host.querySelector('.companion-activity-view .companion-empty')), 'activity hint').toBe(true)
+    // C9: the Activity tab is a live summary; the experimental flag is not needed.
+    expect(view.host.querySelector('.companion-activity-view')?.textContent).toContain('Nothing is running.')
+    expect(resolvesToDrag(view.host.querySelector('.companion-activity-view .companion-empty')), 'activity empty line').toBe(true)
     expect(view.host.querySelector('.link-btn')?.hasAttribute(DRAG), 'activity link').toBe(false)
     assertIsland(view.host, 'activity')
 
@@ -537,7 +537,7 @@ describe('companion settings panel', () => {
   it('groups the rows under labelled sections with the actions in a footer', async () => {
     const { view } = await openSettings()
     const panel = view.host.querySelector('.companion-settings-view')!
-    expect([...panel.querySelectorAll('.cset-section > h3')].map((heading) => heading.textContent)).toEqual(['Sound', 'Chat', 'Teammates on the island'])
+    expect([...panel.querySelectorAll('.cset-section > h3')].map((heading) => heading.textContent)).toEqual(['Sound', 'Chat', 'Placement', 'Teammates on the island', 'Remote'])
     expect(panel.querySelector('[role="switch"][aria-label="Companion sounds"]')).not.toBeNull()
     expect(panel.querySelector('[role="radiogroup"][aria-label="Chat height"]')).not.toBeNull()
     expect(panel.querySelector('.cset-footer')?.textContent).toContain('Drag the island to place it anywhere.')

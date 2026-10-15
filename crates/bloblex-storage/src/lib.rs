@@ -3179,6 +3179,8 @@ impl Storage {
         if k=="appearance.density" && !v.as_str().is_some_and(|s| ["compact","default","roomy"].contains(&s)){return Err(StorageError::InvalidAgent)}
         if k=="hints.seen" && !valid_hints_seen(v){return Err(StorageError::InvalidAgent)}
         if k=="onboarding.tour" && !valid_tour_state(v){return Err(StorageError::InvalidAgent)}
+        if k=="companion.focusMode" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+        if k=="companion.positions" && !valid_companion_positions(v){return Err(StorageError::InvalidAgent)}
         if k=="profile.about" && !v.as_str().is_some_and(|text| text.trim().chars().count()<=1500){return Err(StorageError::InvalidAgent)}
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -3616,6 +3618,18 @@ fn valid_tour_state(value: &Value) -> bool {
     matches!(object.get("version").and_then(Value::as_u64), Some(version) if version <= 999)
         && object.get("done").is_some_and(Value::is_boolean)
         && matches!(object.get("step").and_then(Value::as_u64), Some(step) if step <= 20)
+}
+
+/// `companion.positions`: at most 8 display-name keys, each `{ x: number, y: number }`.
+fn valid_companion_positions(value: &Value) -> bool {
+    let Some(object) = value.as_object() else { return false; };
+    if object.len() > 8 { return false; }
+    object.iter().all(|(name, point)| {
+        !name.is_empty()
+            && name.len() <= 200
+            && point.get("x").and_then(Value::as_f64).is_some()
+            && point.get("y").and_then(Value::as_f64).is_some()
+    })
 }
 
 fn valid_usage_tip_dismissals(value: &Value) -> bool {
@@ -5406,6 +5420,19 @@ mod tests {
         assert_eq!(db.set_setting("experimental.usageTipDismissals", &dismissal).unwrap()[0]["payload"]["value"], dismissal);
         assert!(db.set_setting("experimental.usageTipDismissals", &json!((0..25).map(|index| json!({"provider":"codex","windowKey":format!("weekly-{index}"),"resetAt":null,"threshold":75})).collect::<Vec<_>>())).is_err());
         assert!(db.set_setting("experimental.usageTipDismissals", &json!([{"provider":"codex","windowKey":"bad key","resetAt":null,"threshold":75}])).is_err());
+        // C7/C8 companion preferences: a boolean Focus mode and a small map of
+        // per-display positions.
+        assert_eq!(db.set_setting("companion.focusMode", &json!(true)).unwrap()[0]["payload"], json!({"key":"companion.focusMode","value":true}));
+        assert!(db.set_setting("companion.focusMode", &json!("true")).is_err());
+        assert!(db.set_setting("companion.focusMode", &json!(1)).is_err());
+        let positions = json!({"\\\\.\\DISPLAY1":{"x":120,"y":900},"\\\\.\\DISPLAY2":{"x":-40,"y":12}});
+        assert_eq!(db.set_setting("companion.positions", &positions).unwrap()[0]["payload"]["value"], positions);
+        assert!(db.set_setting("companion.positions", &json!({"M":{"x":1}})).is_err());
+        assert!(db.set_setting("companion.positions", &json!({"M":{"x":"1","y":2}})).is_err());
+        assert!(db.set_setting("companion.positions", &json!({"":{"x":1,"y":2}})).is_err());
+        let mut too_many_positions = serde_json::Map::new();
+        for index in 0..9 { too_many_positions.insert(format!("M{index}"), json!({"x":index,"y":index})); }
+        assert!(db.set_setting("companion.positions", &Value::Object(too_many_positions)).is_err());
         assert!(db.set_setting("profile.name", &json!("Sam")).unwrap().is_empty());
     }
 

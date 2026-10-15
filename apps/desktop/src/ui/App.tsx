@@ -29,6 +29,12 @@ import { RuntimeProblemMarker } from './RuntimeProblemMarker'
 import { AutoRetryNotice, ContextResetDivider, ConversationPicker, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, CompanionTeammatesSetting, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { NeedsYouBadge, PermissionQueueBar, nextWaitingAgent, waitingAgentsOf } from './CompanionAttention'
+import { CompanionActivitySummary, CompanionRemoteRow, useWorkingSince } from './CompanionPanels'
+import { detectFinished, nextPeek, peekText, PEEK_VISIBLE_MS, type Peek, type PeekSessionState } from './companionPeek'
+import { applyFocusMode, focusModeFromSettings, FOCUS_MODE_CHANGED_EVENT, saveFocusMode, subscribeFocusMode, DEFAULT_FOCUS_MODE } from './companionPrefs'
+import { advanceDropZone, dropChips, dropZoneActive, DROP_LEAVE_GRACE_MS, type DropPhase } from './companionDrop'
+import { clearCompanionPosition } from './companionPositions'
+import { earlierWindow, isNearBottom, metricsOf } from './chatScroll'
 import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { applySoundPrefs, saveSoundsEnabled, saveSoundVolume, soundPrefsFromSettings, subscribeSoundPrefs, SOUNDS_CHANGED_EVENT, SOUND_VOLUME_CHANGED_EVENT } from './soundPrefs'
@@ -98,7 +104,7 @@ import { parseUnifiedDiff } from './diffParser'
 import type { QuickSwitcherItem } from './quickSwitcherModel'
 import { entityNoun, useEntityNoun } from './vocabulary'
 import { themeStyle } from '../blob/bitbots'
-import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeBlobExport, writeMarkdownExport } from '../tauri'
+import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeBlobExport, writeMarkdownExport, currentCompanionMonitor } from '../tauri'
 
 type ContextTab = 'Details' | 'Runtime' | 'Files'
 type AppliedModelState = { sessionId: string; model: string | null; hasSnapshot: boolean; loading: boolean }
@@ -1046,7 +1052,7 @@ export function App() {
     if (!inDesktop) return
     let unlisten: (() => void) | undefined
     let cancelled = false
-    void listenForOpenSettings(() => setSettingsSheet(true)).then((stop) => { if (cancelled) stop(); else unlisten = stop })
+    void listenForOpenSettings((page) => { if (page) setSettingsInitialPage(page); setSettingsSheet(true) }).then((stop) => { if (cancelled) stop(); else unlisten = stop })
     return () => { cancelled = true; unlisten?.() }
   }, [])
 
@@ -1954,7 +1960,7 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={() => void showMainSettings(companionSession?.id)} onSendPrompt={(sessionId, text) => {
+      <Companion permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={(page) => void showMainSettings(companionSession?.id, page)} onSendPrompt={(sessionId, text) => {
         // A live turn queues the message in the daemon instead of failing with a conflict.
         const live = ['working', 'starting', 'waiting_permission'].includes(sessions.find((item) => item.id === sessionId)?.state ?? '')
         return doRpc(live ? 'session.queue.add' : 'session.prompt', { sessionId, text }).then(() => { if (live) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
@@ -2748,7 +2754,7 @@ function shortDate(value: unknown) {
 
 function recordFrom(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
 
-function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: () => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void }) {
+function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void }) {
   const sessionModelLock = session?.modelLock
   const nouns = useEntityNoun({ plural: true })
   const platform = usePlatform()
@@ -2768,7 +2774,15 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const [dictationPartial, setDictationPartial] = useState('')
   const [sending, setSending] = useState(false)
   const [confused, setConfused] = useState(false)
-  const [dropActive, setDropActive] = useState(false)
+  const [dropPhase, setDropPhase] = useState<DropPhase>('idle')
+  const dropActive = dropZoneActive(dropPhase)
+  const [dragPath, setDragPath] = useState<string | null>(null)
+  const [dragSize, setDragSize] = useState<number | null>(null)
+  const [focusMode, setFocusMode] = useState(DEFAULT_FOCUS_MODE)
+  const [peek, setPeek] = useState<Peek | null>(null)
+  const [chatWindow, setChatWindow] = useState(8)
+  const [showNewMessages, setShowNewMessages] = useState(false)
+  const [startPosition, setStartPosition] = useState<'launch' | 'last'>('launch')
   const [droppedFile, setDroppedFile] = useState<string | null>(null)
   const [fileInfo, setFileInfo] = useState<{ path: string; fileName: string; sizeBytes: number } | null>(null)
   const [preparingFile, setPreparingFile] = useState(false)
@@ -2792,11 +2806,18 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const fileRequest = useRef(0)
   const viewBeforeConfused = useRef<typeof view>('overview')
   const viewBeforeDrop = useRef<typeof view>('overview')
+  const dropLeaveTimer = useRef<number | null>(null)
+  const dragPathRef = useRef<string | null>(null)
+  const previousPeekStates = useRef<PeekSessionState[]>([])
+  const chatAnchor = useRef<{ id: string; delta: number } | null>(null)
+  const stickToBottom = useRef(true)
+  const dropPhaseRef = useRef(dropPhase)
   const viewRef = useRef(view)
   const droppedFileRef = useRef(droppedFile)
   const permissionRef = useRef(permission)
   const sessionRef = useRef(session)
   const dictationSurfaceRef = useRef<'bubble' | 'companion' | 'none'>('none')
+  dropPhaseRef.current = dropPhase
   viewRef.current = view
   droppedFileRef.current = droppedFile
   permissionRef.current = permission
@@ -2847,6 +2868,41 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     previousMode.current = mode
   }, [mode])
   useEffect(() => { if (popIn) playCompanionCue('peek') }, [popIn])
+  // C7: completion peek. Watch each bot's main conversation for a busy -> idle
+  // edge; the focused bot and failed turns are excluded by the pure helper.
+  const peekStates: PeekSessionState[] = agents.map((item) => ({ id: item.id, state: mainSessionFor(sessions, item.id)?.state }))
+  const peekKey = peekStates.map((item) => `${item.id}:${item.state ?? ''}`).join('|')
+  useEffect(() => {
+    const finished = detectFinished(previousPeekStates.current, peekStates, agent?.id)
+    previousPeekStates.current = peekStates
+    if (!finished.length || focusMode || mode !== 'petit') return
+    setPeek((current) => nextPeek(current, finished, Date.now()))
+  }, [peekKey, focusMode, mode, agent?.id])
+  // The peek plays the soft cue once and returns to the status line after 4 s.
+  useEffect(() => {
+    if (!peek) return
+    playCompanionCue('blip')
+    const timer = window.setTimeout(() => setPeek((current) => (current === peek ? null : current)), PEEK_VISIBLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [peek?.ids.join(','), peek?.at])
+  // C7: Focus mode is one shared value across the island and the Settings sheet.
+  useEffect(() => {
+    const unsubscribe = subscribeFocusMode(setFocusMode)
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    let received = false
+    void listenNative<boolean>(FOCUS_MODE_CHANGED_EVENT, (payload) => { received = true; applyFocusMode(payload === true) }).then((stop) => {
+      if (cancelled) { stop(); return }
+      unlisten = stop
+      return rpc<Record<string, unknown>>('settings.get').then((result) => {
+        const value = focusModeFromSettings(result)
+        applyFocusMode(value)
+        if (!cancelled && !received) setFocusMode(value)
+      }).catch(() => undefined)
+    })
+    return () => { cancelled = true; unsubscribe(); unlisten?.() }
+  }, [])
+  useEffect(() => { if (focusMode) setPeek(null) }, [focusMode])
   const lastMessage = session?.messages?.at(-1)
   const lastMessageKey = lastMessage ? `${session?.id}:${String(lastMessage.id ?? session?.messages?.length)}` : ''
   const previousMessageKey = useRef(lastMessageKey)
@@ -2899,28 +2955,47 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     if (!inDesktop) return
     let unlisten: (() => void) | undefined
     let cancelled = false
+    const openForDrop = () => { if (!permissionRef.current) { setView('chat'); fsmRef.current?.forceHome() } }
+    const collapseForLeave = () => {
+      setDropPhase('idle')
+      setDragPath(null)
+      dragPathRef.current = null
+      setDragSize(null)
+      if (!droppedFileRef.current && !permissionRef.current) {
+        setDropError(null)
+        setView(viewBeforeDrop.current)
+        fsmRef.current?.forcePetit()
+      }
+    }
     void currentWindow().onDragDropEvent(({ payload }) => {
       if (payload.type === 'enter') {
-        viewBeforeDrop.current = viewRef.current
+        const path = payload.paths?.[0] ?? null
+        dragPathRef.current = path
+        setDragPath(path)
+        setDragSize(null)
+        // C12: a drag that dips out and back in within the grace period must not
+        // collapse and re-expand, so cancel any pending collapse.
+        if (dropLeaveTimer.current) { window.clearTimeout(dropLeaveTimer.current); dropLeaveTimer.current = null }
         setDropError(null)
         setFileError(null)
-        setDropActive(true)
-        if (!permissionRef.current) {
-          setView('chat')
-          fsmRef.current?.forceHome()
-        }
+        const wasIdle = dropPhaseRef.current === 'idle'
+        if (wasIdle) viewBeforeDrop.current = viewRef.current
+        setDropPhase((phase) => advanceDropZone(phase, 'enter'))
+        if (wasIdle) openForDrop()
+        if (path) void inspectLocalFile(path).then((info) => { if (dragPathRef.current === path) setDragSize(info.sizeBytes) }).catch(() => undefined)
       } else if (payload.type === 'over') {
-        setDropActive(true)
+        setDropPhase((phase) => advanceDropZone(phase, 'enter'))
       } else if (payload.type === 'leave') {
-        setDropActive(false)
-        if (!droppedFileRef.current && !permissionRef.current) {
-          setDropError(null)
-          setView(viewBeforeDrop.current)
-          if (!permissionRef.current) fsmRef.current?.forcePetit()
-        }
+        setDropPhase((phase) => advanceDropZone(phase, 'leave'))
+        if (dropLeaveTimer.current) window.clearTimeout(dropLeaveTimer.current)
+        dropLeaveTimer.current = window.setTimeout(() => { dropLeaveTimer.current = null; collapseForLeave() }, DROP_LEAVE_GRACE_MS)
       } else if (payload.type === 'drop') {
-        setDropActive(false)
-        const path = payload.paths[0]
+        if (dropLeaveTimer.current) { window.clearTimeout(dropLeaveTimer.current); dropLeaveTimer.current = null }
+        setDropPhase('idle')
+        const path = payload.paths?.[0] ?? dragPathRef.current
+        dragPathRef.current = null
+        setDragPath(null)
+        setDragSize(null)
         if (!path) setFileError('Windows did not report a file path. Choose a local file again.')
         else if (!sessionRef.current) setDropError('Open or create a session before attaching a local file. The dropped path was not inspected.')
         else if (permissionRef.current) setDropError('Resolve the pending approval before attaching a local file.')
@@ -2931,7 +3006,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
         }
       }
     }).then((stop) => { if (cancelled) stop(); else unlisten = stop }).catch((reason) => setFileError(messageOf(reason)))
-    return () => { cancelled = true; unlisten?.() }
+    return () => { cancelled = true; if (dropLeaveTimer.current) window.clearTimeout(dropLeaveTimer.current); unlisten?.() }
   }, [])
   useEffect(() => {
     const fsm = fsmRef.current!
@@ -2953,10 +3028,30 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     const timer = window.setTimeout(() => { delete element.dataset.entering }, 30)
     return () => window.clearTimeout(timer)
   }, [presentation])
+  const chatSessionRef = useRef(session?.id)
   useLayoutEffect(() => {
     const log = chatLogRef.current
-    if (log) log.scrollTop = log.scrollHeight
+    if (!log) return
+    if (chatSessionRef.current !== session?.id) {
+      chatSessionRef.current = session?.id
+      stickToBottom.current = true
+      setShowNewMessages(false)
+      setChatWindow(8)
+    }
+    // C10: follow new content only while the person is at the bottom; otherwise
+    // keep their place and offer the "New messages" pill.
+    if (stickToBottom.current) { log.scrollTop = log.scrollHeight }
+    else if (view === 'chat') setShowNewMessages(true)
   }, [view, session?.id, session?.messages?.length, session?.state])
+  // C10: revealing earlier messages keeps the first visible one in place.
+  useLayoutEffect(() => {
+    const log = chatLogRef.current
+    const anchor = chatAnchor.current
+    if (!log || !anchor) return
+    chatAnchor.current = null
+    const node = [...log.querySelectorAll<HTMLElement>('[data-companion-message-id]')].find((item) => item.getAttribute('data-companion-message-id') === anchor.id)
+    if (node) log.scrollTop = node.offsetTop - anchor.delta
+  }, [chatWindow])
   useLayoutEffect(() => {
     const root = capsuleRef.current
     if (root) stampCompanionDragRegions(root)
@@ -3051,6 +3146,50 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
       .then(() => { savedSoundVolume.current = volume; setSoundError(null) })
       .catch((reason) => { changeSoundVolume(savedSoundVolume.current); setSoundError(messageOf(reason)) })
   }
+  // C7: Focus mode silences the peeks; approvals and questions always show.
+  const toggleFocusMode = () => {
+    const enabled = !focusMode
+    setFocusMode(enabled)
+    if (enabled) setPeek(null)
+    void saveFocusMode(enabled).catch((reason) => { setFocusMode(!enabled); setSoundError(messageOf(reason)) })
+  }
+  // C8: Reset position clears the remembered spot for this display and applies
+  // the start position the person chose (centre near the bottom, unless they
+  // chose "where I left it"). setCompanionMonitor already does that move.
+  const resetPosition = () => {
+    void (async () => {
+      try {
+        const monitor = await currentCompanionMonitor()
+        await clearCompanionPosition(monitor)
+        if (startPosition !== 'last' && monitor) await setCompanionMonitor(monitor)
+      } catch (reason) { setSoundError(messageOf(reason)) }
+    })()
+  }
+  // C7: Open on the peek selects the finished bot and expands the island.
+  const openPeek = () => {
+    const target = agents.find((item) => item.id === peek?.ids[0])
+    setPeek(null)
+    if (target) onSelectAgent(target)
+    if (mode !== 'home') fsmRef.current?.forceHome()
+  }
+  // C10: follow the bottom only when the person is there; otherwise offer the pill.
+  const onChatScroll = () => {
+    stickToBottom.current = isNearBottom(metricsOf(chatLogRef.current))
+    if (stickToBottom.current) setShowNewMessages(false)
+  }
+  const scrollChatToBottom = () => {
+    const log = chatLogRef.current
+    if (log) log.scrollTop = log.scrollHeight
+    stickToBottom.current = true
+    setShowNewMessages(false)
+  }
+  // C10: reveal eight earlier messages, remembering the first one on screen.
+  const loadEarlier = () => {
+    const log = chatLogRef.current
+    const first = log?.querySelector<HTMLElement>('[data-companion-message-id]')
+    chatAnchor.current = log && first ? { id: first.getAttribute('data-companion-message-id') ?? '', delta: first.offsetTop - log.scrollTop } : null
+    setChatWindow((current) => current + 8)
+  }
 
   useEffect(() => {
     const unsubscribe = subscribeSoundPrefs((prefs) => {
@@ -3084,10 +3223,12 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
       if (cancelled) { stop(); return }
       unlisten = stop
       return rpc<Record<string, unknown>>('settings.get').then((result) => {
-        const prefs = soundPrefsFromSettings(recordFrom(result.settings ?? result))
+        const settings = recordFrom(result.settings ?? result)
+        const prefs = soundPrefsFromSettings(settings)
         applySoundPrefs(prefs)
         if (!cancelled && !receivedSoundUpdate) { setSoundsEnabled(prefs.soundsEnabled); setCompanionSoundsEnabled(prefs.soundsEnabled) }
         if (!cancelled && !receivedVolumeUpdate) { savedSoundVolume.current = prefs.soundVolume; setSoundVolume(prefs.soundVolume); setCompanionSoundVolume(prefs.soundVolume) }
+        if (!cancelled) { setStartPosition(settings['companion.startPosition'] === 'last' ? 'last' : 'launch') }
       }).catch(() => undefined)
     })
     return () => { cancelled = true; unsubscribe(); unlisten?.(); unlistenVolume?.() }
@@ -3141,9 +3282,15 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const inputTokens = typeof usage?.inputTokens === 'number' ? usage.inputTokens : null
   const outputTokens = typeof usage?.outputTokens === 'number' ? usage.outputTokens : null
   const tokenGlance = inputTokens !== null && outputTokens !== null ? formatCount(inputTokens + outputTokens) : inputTokens !== null ? `${formatCount(inputTokens)} in · out ?` : outputTokens !== null ? `in ? · ${formatCount(outputTokens)} out` : 'Unknown'
-  const recentMessages = (session?.messages ?? []).filter((message) => message.role !== 'thinking').slice(-8)
+  const recentMessages = (session?.messages ?? []).filter((message) => message.role !== 'thinking')
   const sessionMessageIds = new Set(recentMessages.map((message) => message.id).filter((id): id is string => typeof id === 'string'))
+  // C10: the chat shows the last eight, plus eight more per "Load earlier".
+  const chatWindowInfo = earlierWindow(chatWindow, recentMessages.length)
+  const visibleMessages = recentMessages.slice(Math.max(0, recentMessages.length - chatWindowInfo.shown))
   const recentSteps = session ? buildConversationItems(session).filter((item) => item.kind === 'activity' && item.activityKind !== 'turn').slice(-12) : []
+  const workingSince = useWorkingSince(agents, sessions, runtimes, connected, clock)
+  const peekNames = (peek?.ids ?? []).map((id) => agents.find((item) => item.id === id)?.name).filter((value): value is string => !!value)
+  const dragChips = dragPath ? dropChips(dragPath, dragSize) : null
   const color = agent ? agentColorHex(agent.color) : ''
   const name = agent?.name ?? (runtime ? labelize(runtime.provider) : 'Bitbots')
   const peers = activeAgents(agents).filter((item) => item.id !== agent?.id).slice(0, 4)
@@ -3183,7 +3330,9 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     <div ref={capsuleRef} className={`companion-capsule island ${mode}`} data-tauri-drag-region>
       {mode === 'petit' ? <div className="companion-compact" data-tauri-drag-region>
         <button className="compact-bot" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}>{focusBlob(40)}</button>
-        <button type="button" className="compact-copy" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}><span className="compact-name"><strong>{name}</strong>{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}<ApprovalPill mode={approvalMode} compact /></span><span role="status" aria-live="polite" className={`compact-status ${shimmering ? 'shimmer' : ''}`}>{statusLine}</span></button>
+        {peekNames.length > 0
+          ? <button type="button" className="companion-peek" aria-live="polite" aria-label={`${peekText(peekNames, nouns)} Open`} onClick={openPeek}><span className="companion-peek-text">{peekText(peekNames, nouns)}</span><span className="companion-peek-open">Open</span></button>
+          : <button type="button" className="compact-copy" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}><span className="compact-name"><strong>{name}</strong>{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}<ApprovalPill mode={approvalMode} compact /></span><span role="status" aria-live="polite" className={`compact-status ${shimmering ? 'shimmer' : ''}`}>{statusLine}</span></button>}
         <NeedsYouBadge count={waitingAgents.length} compact onOpen={openNextWaiting} />
         {permission && <ShieldAlert className="companion-alert" size={15} aria-label="Approval required" />}
         {peers.length > 0 && <div className="mini-grid" role="img" aria-label={peerSummary} data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} look={agentLook(item)} label={item.name} /> })}</div>}
@@ -3227,7 +3376,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
             <div className="card-stack"><div className="title">Too many hits at once.</div><div className="sub">Give me a sec — back to work in three seconds.</div></div>
           </div> : dropActive ? <div className="island-card drop-card over">
             <span className="card-bot">{focusBlob(58)}</span>
-            <div className="card-stack"><div className="title">Drop to hand this file to {name}</div><div className="drop-tags"><span>Name</span><span>Size</span><span>Access</span></div><div className="sub">Bitbots checks the path only. It never reads file contents.</div></div>
+            <div className="card-stack"><div className="title">Drop to hand this file to {name}</div><div className="drop-tags">{dragChips ? <><span>{dragChips.name}</span><span>{dragChips.type}</span><span>{dragChips.size}</span></> : <><span>Name</span><span>Type</span><span>Size</span></>}</div><div className="sub">Bitbots checks the path only. It never reads file contents.</div></div>
           </div> : view === 'overview' ? <div className="island-overview">
             <div key={agent?.id ?? 'none'} className={`island-card focus ${wash ? `wash ${wash}` : ''}${shimmering ? ' is-working' : ''}`} style={color ? { ['--focus-glow' as string]: color } : undefined}>
               <span className="card-bot"><span className="focus-glow" aria-hidden="true" />{focusBlob(58)}</span>
@@ -3243,12 +3392,14 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
           </div> : view === 'chat' ? <div className="island-card chat-card companion-chat-view">
             <span className="card-bot small">{focusBlob(44)}</span>
             <div className="chat-body">
-              <div className="chat-log" ref={chatLogRef} data-companion-no-drag="">
+              <div className="chat-log" ref={chatLogRef} data-companion-no-drag="" onScroll={onChatScroll}>
+                {chatWindowInfo.canLoad && <button type="button" className="link-btn companion-load-earlier" onClick={loadEarlier}>Load earlier</button>}
                 {!session && <p className="companion-empty companion-no-session">Open or create a session to chat here. <button type="button" disabled={!canStart} onClick={(event) => onNewSession(event.currentTarget)}>New session</button></p>}
-                {recentMessages.map((message, index) => <CompanionChatItem key={String(message.id ?? index)} message={message} agents={agents} currentSessionId={session?.id} availableMessageIds={sessionMessageIds} onOpenSide={(sessionId) => { if (sessionId) onOpenSession?.(sessionId) }} />)}
-                {session && recentMessages.length === 0 && <p className="companion-empty">No messages in this conversation yet.</p>}
+                {visibleMessages.map((message, index) => <CompanionChatItem key={String(message.id ?? index)} message={message} agents={agents} currentSessionId={session?.id} availableMessageIds={sessionMessageIds} onOpenSide={(sessionId) => { if (sessionId) onOpenSession?.(sessionId) }} />)}
+                {session && visibleMessages.length === 0 && <p className="companion-empty">No messages in this conversation yet.</p>}
                 {sessionBusy && session?.state !== 'waiting_permission' && <div className="typing" aria-label={`${name} is working`}><i /><i /><i /></div>}
               </div>
+              {showNewMessages && <button type="button" className="companion-new-messages" onClick={scrollChatToBottom}>New messages</button>}
               {droppedFile && fileInfo && <div className="chip settled companion-file-ready"><Paperclip size={11} /><span><strong>{fileInfo.fileName}</strong> · {formatBytes(fileInfo.sizeBytes)} · path only</span><button aria-label="Remove local file reference" onClick={() => { fileRequest.current++; setDroppedFile(null); setFileInfo(null); setPreparingFile(false); setFileError(null) }}><X size={11} /></button></div>}
               {preparingFile && <p className="companion-file-note" role="status">Checking the selected path is a readable file… <button type="button" onClick={() => { fileRequest.current++; setPreparingFile(false); setFileInfo(null); setDroppedFile(null) }}>Cancel</button></p>}
               {visibleError && <p className="companion-drop-error" role="alert" tabIndex={-1} onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); dismissError() } }}><span>{visibleError}</span><button type="button" className="icon-btn" aria-label="Dismiss error" onClick={dismissError}><X size={10} /></button></p>}
@@ -3265,11 +3416,10 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
               </form>
             </div>
           </div> : view === 'activity' ? <div className="island-card list-card companion-activity-view">
-            <div className="list-head"><strong>Recent activity</strong><button className="link-btn" onClick={onOpenMain}>View conversation</button></div>
+            <div className="list-head"><strong>Activity</strong><button className="link-btn" onClick={onOpenMain}>View conversation</button></div>
+            <CompanionActivitySummary agents={agents} sessions={sessions} runtimes={runtimes} connected={connected} workingSince={workingSince} now={clock} onOpen={(sessionId) => { if (sessionId) onOpenSession?.(sessionId) }} />
             <CompanionTeamActivity agent={agent} agents={agents} sessions={sessions} onOpen={(sessionId) => onOpenSession?.(sessionId)} />
-            {activityDetails
-              ? recentSteps.length ? <ActivitySteps items={recentSteps} /> : <p className="companion-empty">No commands, tools or file changes reported for this conversation.</p>
-              : <p className="companion-empty">Turn on Agent activity in Settings → Experimental to see each command, tool and file change here.</p>}
+            {activityDetails && (recentSteps.length ? <ActivitySteps items={recentSteps} /> : <p className="companion-empty">No commands, tools or file changes reported for this conversation.</p>)}
           </div> : <div className="island-card companion-settings-view">
             <div className="cset-body">
               <div className="cset-col" data-companion-no-drag="">
@@ -3283,6 +3433,10 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
                     <span className="cset-copy"><strong>Volume</strong></span>
                     <SoundVolumeSlider value={soundVolume} onChange={changeSoundVolume} onCommit={commitSoundVolume} />
                   </div>
+                  <div className="cset-row">
+                    <span className="cset-copy"><strong>Focus mode</strong><small>No completion peeks or cues. Approvals and questions still show.</small></span>
+                    <button type="button" className={`switch ${focusMode ? 'on' : ''}`} role="switch" aria-checked={focusMode} aria-label="Focus mode" onClick={toggleFocusMode} />
+                  </div>
                 </section>
                 <section className="cset-section" aria-labelledby="cset-chat">
                   <h3 id="cset-chat">Chat</h3>
@@ -3291,14 +3445,27 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
                     <div className="segmented" role="radiogroup" aria-label="Chat height">{(Object.keys(COMPANION_CHAT_SIZES) as CompanionChatSize[]).map((size) => <button key={size} type="button" role="radio" aria-checked={chatSize === size} className={chatSize === size ? 'on' : undefined} onClick={() => { playCompanionCue('tick'); onChatSizeChange?.(size) }}>{COMPANION_CHAT_SIZE_LABELS[size]}</button>)}</div>
                   </div>
                 </section>
+                <section className="cset-section" aria-labelledby="cset-place">
+                  <h3 id="cset-place">Placement</h3>
+                  <div className="cset-row">
+                    <span className="cset-copy"><strong>Reset position</strong><small>{startPosition === 'last' ? 'Forgets where this display last left the island.' : 'Returns to the bottom centre of this display.'}</small></span>
+                    <button type="button" className="btn small secondary" aria-label="Reset companion position" onClick={resetPosition}>Reset</button>
+                  </div>
+                </section>
               </div>
-              <section className="cset-col cset-section" aria-labelledby="cset-team" data-companion-no-drag="">
-                <h3 id="cset-team">Teammates on the island</h3>
-                <CompanionTeammatesSetting agents={agents} sessions={sessions} runtimes={runtimes} connected={connected} focusedId={agent?.id ?? null} pinned={pinned} onPinnedChange={(ids) => { playCompanionCue('tick'); onPinnedChange?.(ids) }} />
-              </section>
+              <div className="cset-col" data-companion-no-drag="">
+                <section className="cset-section" aria-labelledby="cset-team">
+                  <h3 id="cset-team">Teammates on the island</h3>
+                  <CompanionTeammatesSetting agents={agents} sessions={sessions} runtimes={runtimes} connected={connected} focusedId={agent?.id ?? null} pinned={pinned} onPinnedChange={(ids) => { playCompanionCue('tick'); onPinnedChange?.(ids) }} />
+                </section>
+                <section className="cset-section" aria-labelledby="cset-remote">
+                  <h3 id="cset-remote">Remote</h3>
+                  <CompanionRemoteRow onOpenSettings={onOpenSettings} />
+                </section>
+              </div>
             </div>
             {soundError && <p className="companion-drop-error cset-error" role="alert">{soundError}</p>}
-            <div className="cset-footer"><button type="button" className="btn primary" onClick={onOpenSettings}>Open Bitbots settings</button><button type="button" className="btn secondary" onClick={() => void setCompanionVisibility(false)}>Hide companion</button><p className="cset-note cset-position">Drag the island to place it anywhere.</p></div>
+            <div className="cset-footer"><button type="button" className="btn primary" onClick={() => onOpenSettings()}>Open Bitbots settings</button><button type="button" className="btn secondary" onClick={() => void setCompanionVisibility(false)}>Hide companion</button><p className="cset-note cset-position">Drag the island to place it anywhere.</p></div>
           </div>}
         </section>
       </>}

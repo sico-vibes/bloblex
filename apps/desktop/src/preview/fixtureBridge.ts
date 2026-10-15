@@ -327,6 +327,8 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().has('seen-hints')) fixtureSettings['hints.seen'] = ['companion.drag']
     if (flags().has('tour')) fixtureSettings['onboarding.tour'] = { version: 1, done: false, step: 2 }
     if (flags().get('chat')) fixtureSettings['companion.chatSize'] = flags().get('chat')
+    if (flags().has('focus')) fixtureSettings['companion.focusMode'] = true
+    if (flags().has('positions')) fixtureSettings['companion.positions'] = { [String(flags().get('positions') ?? 'display')]: { x: 120, y: 900 } }
     return { settings: { ...fixtureSettings, ...(fixturePreset() === 'usage-tip-90' ? { 'experimental.usageTips': true } : {}) } } as T
   }
   if (method === 'settings.set') { fixtureSettings[String(params.key)] = params.value; return { saved: true } as T }
@@ -890,7 +892,7 @@ export async function openInEditor() {}
 export async function revealInExplorer() {}
 export async function resolveProjectFile(path: string) { return path }
 export async function showMainWindow() {}
-export async function showMainSettings() {}
+export async function showMainSettings(_sessionId?: string | null, _page?: string) {}
 export async function setActiveSession() {}
 export async function getActiveSession() { return composerPreviewSessionId }
 export async function setActiveRuntime() {}
@@ -916,7 +918,7 @@ export async function permissionsPolicyGet() {
 }
 export async function listenForActiveSession(): Promise<Unlisten> { return noop }
 export async function listenForActiveRuntime(): Promise<Unlisten> { return noop }
-export async function listenForOpenSettings(): Promise<Unlisten> { return noop }
+export async function listenForOpenSettings(_handler?: (page: string | null) => void): Promise<Unlisten> { return noop }
 export async function listenForDaemonEvents(handler: (event: DaemonEvent) => void): Promise<Unlisten> { daemonListeners.add(handler); return () => daemonListeners.delete(handler) }
 function notifyFixtureDaemon(type: string, payload: Record<string, unknown>) {
   const event = { sequence: ++sequence, type, payload } as DaemonEvent

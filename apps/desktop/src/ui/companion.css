@@ -388,3 +388,40 @@ button.compact-copy:active { transform: none; }
 .companion-drop-error { display: flex; align-items: center; gap: 6px; }
 .companion-drop-error > span { min-width: 0; flex: 1; }
 .companion-drop-error .icon-btn { flex: 0 0 auto; }
+
+/* ── C7: completion peek ─────────────────────────────────────────────── */
+/* A short banner in the compact bar; the "Open" pill selects the finished bot. */
+.companion-peek { min-width: 0; height: 100%; flex: 1; padding: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: inherit; text-align: left; border: 0; background: transparent; font: inherit; animation: peek-in 0.24s ease-out both; }
+.companion-peek-text { min-width: 0; overflow: hidden; color: var(--c-ink); font: 600 var(--fs-sm) var(--c-font); text-overflow: ellipsis; white-space: nowrap; }
+.companion-peek-open { flex: 0 0 auto; padding: 3px 10px; color: var(--text-inverse); border-radius: 999px; background: var(--c-ink); font: 600 var(--fs-2xs) var(--c-font); }
+@keyframes peek-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .companion-peek { animation: none; } }
+
+/* ── C8: the drop card's dashed border breathes while a file is held ──── */
+.drop-card.over::before { border-style: dashed; animation: drop-march 1.4s ease-in-out infinite; }
+@keyframes drop-march { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .drop-card.over::before { animation: none; } }
+
+/* ── C9: live activity summary ───────────────────────────────────────── */
+.companion-working-list { display: contents; }
+.companion-activity-row.working { width: 100%; color: inherit; border: 0; background: var(--companion-alpha-04); text-align: left; }
+.companion-activity-row.working:hover { background: var(--companion-alpha-07); }
+.companion-activity-row.working > span { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.companion-activity-row.working strong, .companion-activity-row.working small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.companion-activity-row.working strong { color: var(--companion-text-activity); font: 500 var(--fs-xs) var(--c-font); }
+.companion-activity-row.working small { color: var(--c-dim-3); font: 400 var(--fs-2xs) var(--c-font); }
+.companion-elapsed { flex: 0 0 auto; color: var(--c-dim-3); font: 500 var(--fs-2xs) var(--c-font); font-style: normal; font-variant-numeric: tabular-nums; }
+
+/* ── C10: chat copy, Load earlier and the New messages pill ───────────── */
+.chat-row { align-items: flex-end; gap: 4px; }
+.companion-copy { width: 20px; height: 20px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; color: var(--c-dim-3); border: 0; border-radius: 50%; background: transparent; opacity: 0; transition: opacity 120ms ease, color 120ms ease; }
+.chat-row:hover .companion-copy, .chat-row:focus-within .companion-copy, .companion-copy:focus-visible, .companion-copy.copied { opacity: 1; }
+.companion-copy:hover { color: var(--c-ink); }
+.companion-copy.copied { color: var(--companion-status-success); }
+.companion-copy:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.companion-load-earlier { align-self: center; margin: 2px 0 4px; }
+.companion-new-messages { position: absolute; z-index: 3; left: 50%; bottom: 10px; transform: translateX(-50%); padding: 4px 12px; color: var(--text-inverse); border: 0; border-radius: 999px; background: var(--c-ink); font: 600 var(--fs-2xs) var(--c-font); box-shadow: 0 4px 12px var(--companion-transparent-black); animation: peek-in 0.2s ease-out both; }
+
+/* ── C13: the Remote settings row ────────────────────────────────────── */
+.companion-remote-copy { display: inline-flex; align-items: center; gap: 6px; }
+.companion-remote-copy .bot-status { flex: 0 0 auto; }

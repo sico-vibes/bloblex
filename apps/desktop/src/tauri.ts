@@ -1,10 +1,11 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { UsageAnalyticsRequest } from './analyticsTypes'
 import { parsePermissionsPolicy, type PermissionsPolicy } from './approvalContract'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from './executionContract'
 import type { DaemonEvent, JsonRecord, Snapshot } from './types'
 import { normalizeAnalytics } from './ui/analyticsFormat'
+import { settingsPageFromEvent, type SettingsPageName } from './ui/settingsIndex'
 import {
   knownUpdateError, parseUpdateCheck, parseUpdateInfo, parseUpdatePreferences, parseUpdateProgress, parseUpdatesState, safeUpdateFailureMessage, updateFailureCode,
   type UpdateCheckResult, type UpdateInfo, type UpdatePreferences, type UpdateProgress, type UpdatesState,
@@ -92,8 +93,12 @@ export async function showMainWindow(sessionId?: string | null): Promise<void> {
   await invoke('show_main_window', { sessionId: sessionId ?? await getActiveSession() })
 }
 
-export async function showMainSettings(sessionId?: string | null): Promise<void> {
-  if (inDesktop) await invoke('show_main_settings', { sessionId: sessionId ?? await getActiveSession() })
+export async function showMainSettings(sessionId?: string | null, page?: SettingsPageName): Promise<void> {
+  if (!inDesktop) return
+  await invoke('show_main_settings', { sessionId: sessionId ?? await getActiveSession() })
+  // The native command shows the window and opens the sheet on its current page;
+  // a requested page rides on a second, global event the sheet listens for.
+  if (page) await emit('bloblex-open-settings', page)
 }
 
 export async function setActiveSession(sessionId: string | null): Promise<void> {
@@ -166,9 +171,9 @@ export async function listenForActiveRuntime(handler: (runtimeId: string | null)
   return listen<string | null>('active-runtime', (event) => handler(event.payload))
 }
 
-export async function listenForOpenSettings(handler: () => void): Promise<UnlistenFn> {
+export async function listenForOpenSettings(handler: (page: SettingsPageName | null) => void): Promise<UnlistenFn> {
   if (!inDesktop) return () => undefined
-  return listen('bloblex-open-settings', () => handler())
+  return listen('bloblex-open-settings', (event) => handler(settingsPageFromEvent(event.payload)))
 }
 
 export async function listenForDaemonEvents(handler: (event: DaemonEvent) => void): Promise<UnlistenFn> {

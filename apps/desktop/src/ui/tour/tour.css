@@ -1,0 +1,72 @@
+/* Guided tour, one-time hints and the tour invitation.
+   Everything here sits above the app (z 130). Rules that must beat the global
+   Bitbots reset (no radius, no shadow, stepped timing) are written with
+   :root:root so the same markup is right in both looks. */
+
+.coach { position: fixed; inset: 0; z-index: 130; pointer-events: none; }
+.coach.modal .coach-shield { position: fixed; pointer-events: auto; background: transparent; }
+
+/* The spotlight: a ring on the target and a dim over everything else. */
+:root:root .coach-spot {
+  position: fixed; pointer-events: none; border: 2px solid var(--user-accent, var(--text-1)); border-radius: var(--radius-md);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, .56);
+  transition: left 380ms cubic-bezier(.2, .8, .2, 1), top 380ms cubic-bezier(.2, .8, .2, 1), width 380ms cubic-bezier(.2, .8, .2, 1), height 380ms cubic-bezier(.2, .8, .2, 1);
+  transition-timing-function: cubic-bezier(.2, .8, .2, 1);
+}
+:root[data-theme="light"] .coach-spot { box-shadow: 0 0 0 9999px rgba(10, 10, 10, .42); }
+
+/* The card. */
+:root:root .coach-card {
+  position: fixed; left: 0; top: 0; padding: 14px 16px 12px; display: grid; gap: 8px; pointer-events: auto;
+  color: var(--text-1); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--surface-overlay);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .38);
+  transition: transform 380ms cubic-bezier(.2, .8, .2, 1), opacity 180ms ease;
+  transition-timing-function: cubic-bezier(.2, .8, .2, 1);
+  animation: coach-in 240ms ease-out both;
+}
+:root[data-bitbots="on"]:root .coach-card { border: 2px solid var(--line-strong); box-shadow: var(--bb-shadow); }
+@keyframes coach-in { from { opacity: 0; } to { opacity: 1; } }
+
+.coach-arrow { position: absolute; width: 12px; height: 12px; background: var(--surface-overlay); border: inherit; transform: rotate(45deg); }
+.coach-card[data-placement="bottom"] .coach-arrow { top: -7px; left: calc(var(--arrow) - 6px); border-right: 0; border-bottom: 0; }
+.coach-card[data-placement="top"] .coach-arrow { bottom: -7px; left: calc(var(--arrow) - 6px); border-left: 0; border-top: 0; }
+.coach-card[data-placement="right"] .coach-arrow { left: -7px; top: calc(var(--arrow) - 6px); border-right: 0; border-top: 0; }
+.coach-card[data-placement="left"] .coach-arrow { right: -7px; top: calc(var(--arrow) - 6px); border-left: 0; border-bottom: 0; }
+
+.coach-head { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.coach-avatar { width: 30px; height: 30px; display: grid; place-items: end center; flex: 0 0 auto; }
+.coach-count { color: var(--text-3); font-size: var(--fs-2xs, 11px); letter-spacing: .06em; text-transform: uppercase; }
+.coach-skip { margin-left: auto; padding: 2px 4px; color: var(--text-3); font-size: var(--fs-xs, 12px); background: transparent; border: 0; cursor: pointer; }
+.coach-skip:hover { color: var(--text-1); }
+.coach-skip:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.coach-title { margin: 0; font-size: var(--fs-md, 15px); font-weight: 600; line-height: 1.3; }
+.coach-body { margin: 0; color: var(--text-2); font-size: var(--fs-sm, 13px); line-height: 1.5; }
+.coach-tip { margin: 0; padding-top: 6px; color: var(--text-3); font-size: var(--fs-xs, 12px); line-height: 1.45; border-top: 1px solid var(--line); }
+.coach-foot { margin-top: 4px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.coach-actions { display: inline-flex; align-items: center; gap: 6px; }
+.coach-actions .small { display: inline-flex; align-items: center; gap: 5px; }
+.coach-dots { display: inline-flex; gap: 6px; }
+.coach-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--surface-disabled); transition: background 160ms ease, transform 160ms ease; }
+.coach-dots i.past { background: var(--text-3); }
+.coach-dots i.on { background: var(--user-accent, var(--text-1)); transform: scale(1.25); }
+
+/* Hints are quieter than tour steps: no dim, no shield, a lighter shadow. */
+:root:root .coach.hint .coach-card { box-shadow: 0 10px 28px rgba(0, 0, 0, .3); }
+
+/* The invitation for people who already use the app. */
+:root:root .tour-invite {
+  position: fixed; right: 20px; bottom: 20px; z-index: 125; width: min(320px, calc(100vw - 40px)); padding: 14px 16px; display: grid; gap: 8px;
+  color: var(--text-1); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--surface-overlay);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .38); animation: tour-invite-in 320ms cubic-bezier(.2, .8, .2, 1) both;
+}
+:root[data-bitbots="on"]:root .tour-invite { border: 2px solid var(--line-strong); box-shadow: var(--bb-shadow); }
+.tour-invite h2 { margin: 0; font-size: var(--fs-md, 15px); font-weight: 600; }
+.tour-invite p { margin: 0; color: var(--text-2); font-size: var(--fs-sm, 13px); line-height: 1.5; }
+.tour-invite .coach-actions { justify-content: flex-end; margin-top: 4px; }
+@keyframes tour-invite-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  :root:root .coach-spot, :root:root .coach-card { transition: none; animation: none; }
+  :root:root .tour-invite { animation: none; }
+  .coach-dots i { transition: none; }
+}

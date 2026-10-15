@@ -1,0 +1,47 @@
+/* Polish layer. Loaded last. Nothing here changes layout or tokens; it adds the
+   small things that make an interface feel finished: press feedback, eased
+   popovers, a clear selected-row marker, a composer that answers focus, and
+   numbers that do not jitter. Every motion is off under reduced motion. */
+
+/* ── Press feedback ────────────────────────────────────────────────────── */
+.primary-button:active:not(:disabled),
+.secondary-button:active:not(:disabled),
+.ghost-button:active:not(:disabled),
+.icon-button:active:not(:disabled) { transform: translateY(1px) scale(.985); }
+.primary-button, .secondary-button, .ghost-button, .icon-button { transition: background 120ms ease, border-color 120ms ease, color 120ms ease, transform 90ms ease; }
+
+/* ── Popovers and dialogs arrive, they do not appear ───────────────────── */
+@keyframes surface-pop { from { opacity: 0; transform: translateY(4px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes sheet-rise { from { opacity: 0; transform: translateY(10px) scale(.99); } to { opacity: 1; transform: none; } }
+.select-menu, .menu-surface, .composer-menu, .side-menu, .mention-picker, .usage-popover, .session-effort-popover { animation: surface-pop 140ms cubic-bezier(.2, .8, .2, 1) both; transform-origin: top center; }
+.settings-sheet, .blob-dialog, .quick-switcher, .usage-sheet { animation: sheet-rise 200ms cubic-bezier(.2, .8, .2, 1) both; }
+.sheet-backdrop, .blob-dialog-backdrop, .settings-backdrop { animation: backdrop-in 180ms ease-out both; }
+@keyframes backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ── The selected row says so with a mark, not only a tint ─────────────── */
+:root:root .bot-row.selected { box-shadow: inset 2px 0 0 var(--user-accent, var(--text-2)); }
+
+/* ── The composer answers focus ────────────────────────────────────────── */
+.composer-box { transition: border-color 140ms ease, box-shadow 160ms ease, background 140ms ease; }
+.composer-box:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--user-accent, var(--text-1)) 14%, transparent); }
+:root[data-bitbots="on"] .composer-box:focus-within { box-shadow: none; }
+
+/* ── Numbers and headings ──────────────────────────────────────────────── */
+.quota-chip, .sidebar-usage-line, .permission-deadline, .context-window-indicator, .message-time, time { font-variant-numeric: tabular-nums; }
+.session-first-state h1, .onboarding-step h1, .empty-conversation h1 { text-wrap: balance; }
+.session-first-state p, .onboarding-step > p { text-wrap: pretty; }
+
+/* ── Selection and links follow the accent when one is chosen ──────────── */
+:root[data-accent="custom"] a:not(.onboarding-doc-link) { text-decoration-color: color-mix(in srgb, var(--user-accent) 55%, transparent); }
+:root[data-accent="custom"] input[type="range"] { accent-color: var(--user-accent); }
+:root[data-accent="custom"] input[type="checkbox"], :root[data-accent="custom"] input[type="radio"] { accent-color: var(--user-accent); }
+
+/* ── Quieter scrollbars (Blobots; Bitbots styles its own) ──────────────── */
+:root:not([data-bitbots="on"]) * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .select-menu, .menu-surface, .composer-menu, .side-menu, .mention-picker, .usage-popover, .session-effort-popover,
+  .settings-sheet, .blob-dialog, .quick-switcher, .usage-sheet, .sheet-backdrop, .blob-dialog-backdrop, .settings-backdrop { animation: none; }
+  .primary-button, .secondary-button, .ghost-button, .icon-button, .composer-box { transition: none; }
+  .primary-button:active:not(:disabled), .secondary-button:active:not(:disabled), .ghost-button:active:not(:disabled), .icon-button:active:not(:disabled) { transform: none; }
+}

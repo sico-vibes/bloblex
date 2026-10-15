@@ -1,5 +1,6 @@
 import type { AutoResolvedAction, BypassNotice } from './approvalContract'
 import type { BlobLook } from './blob/look'
+import type { RemoteStatus } from './remote/remoteContract'
 import { parseAutoResolved, parseBypassActive } from './approvalContract'
 
 export type { AutoResolvedAction, BypassNotice } from './approvalContract'
@@ -28,6 +29,8 @@ export interface Snapshot extends JsonRecord {
   queues?: Record<string, PromptQueueState>
   /** Scheduled automations, kept current by `automation.*` events. */
   automations?: Automation[]
+  /** Remote-mode host status. Populated by the web preview fixture today; the daemon will own it later. */
+  remote?: RemoteStatus
 }
 
 /** A note blobs can recall. Agent-written notes for a project or everyone stay unused until approved. */

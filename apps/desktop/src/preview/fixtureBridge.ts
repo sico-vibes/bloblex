@@ -10,6 +10,10 @@ import type { UsageAnalyticsRequest } from '../analyticsTypes'
 import { parseUpdateChannel, type UpdateChannel, type UpdateInfo, type UpdateProgress, type UpdatesState } from '../updatesContract'
 import { entityNoun } from '../ui/vocabulary'
 import { themeStyle } from '../blob/bitbots'
+import { REMOTE_METHODS } from '../remote/remoteContract'
+import type { RemoteMethod, RemoteStatus } from '../remote/remoteContract'
+import { createRemoteSimulator } from './remoteFixture'
+import type { RemoteSeed } from './remoteFixture'
 
 type Unlisten = () => void
 const noop: Unlisten = () => undefined
@@ -23,6 +27,28 @@ const fixturePreset = () => flags().get('preset')
 const setPreviewSelection = (agentId: string) => {
   try { localStorage.setItem('bloblex.selectedAgentId', agentId) } catch { /* Preview selection is optional. */ }
 }
+
+// Remote mode preview: one shared simulator, seeded once from the URL. Flags are
+// `?remote=on|off`, `?devices=0|1|3` and `?host=offline`; the default is off with
+// no devices so the empty state is what people see first.
+const remoteSimulator = createRemoteSimulator()
+let remoteFixtureSeeded = false
+const remoteFixtureSeed = (): RemoteSeed => {
+  const search = flags()
+  const devicesParam = search.get('devices')
+  return {
+    enabled: search.get('remote') === 'on',
+    devices: devicesParam === '1' ? 1 : devicesParam === '3' ? 3 : 0,
+    host: search.get('host') === 'offline' ? 'offline' : 'online',
+    hosts: 3,
+  }
+}
+function ensureRemoteFixture() {
+  if (remoteFixtureSeeded) return
+  remoteFixtureSeeded = true
+  remoteSimulator.reset(remoteFixtureSeed())
+}
+remoteSimulator.subscribe((event) => { notifyFixtureDaemon(event.type, event.payload as Record<string, unknown>) })
 
 const baseRuntimes: Runtime[] = [
   { id: 'runtime-codex', provider: 'codex', status: 'online', protocolFamily: 'codex_app_server', version: 'codex-cli 0.159.3', authState: 'signed_in' },
@@ -266,6 +292,10 @@ function fixtureCatalog(runtimeId: string) {
 export const inDesktop = true
 export const previewMode = true
 export async function rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  if ((REMOTE_METHODS as readonly string[]).includes(method)) {
+    ensureRemoteFixture()
+    return remoteSimulator.call(method as RemoteMethod, params) as Promise<T>
+  }
   if (method === 'runtime.refresh') {
     discoveryAttempts += 1
     // ?discovery-timeout-once exercises timeout, background recovery and confirmation.
@@ -816,6 +846,7 @@ function seedExperimentalFixtures() {
 }
 
 export async function fetchSnapshot() {
+  ensureRemoteFixture()
   seedExperimentalFixtures()
   if (fixturePreset() === 'opencode-runtime-error') setPreviewSelection('agent-opencode')
   else if (fixturePreset() === 'claude-context') setPreviewSelection('agent-claude')
@@ -823,7 +854,9 @@ export async function fetchSnapshot() {
     setPreviewSelection('agent-invoice')
     for (const session of sessions.filter((item) => item.agentId === 'agent-invoice')) session.state = 'idle'
   }
-  return currentSnapshot()
+  const snapshot = currentSnapshot()
+  snapshot.remote = await remoteSimulator.call('remote.status', {}) as RemoteStatus
+  return snapshot
 }
 export async function ensureDaemon() {}
 export async function startDaemonEventStream() {}

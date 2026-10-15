@@ -319,7 +319,7 @@ function ClassicBlobCanvas({ color, size = 52, mood = 'idle', className = '', la
 
   const { width, height, canvasHeight, overscanTop } = blobCanvasGeometry(size, greeting, effectOverscanTop)
   return <span ref={frame} className={`blob-canvas-frame ${className}`} style={{ width, height, position: 'relative', display: 'inline-block', flex: '0 0 auto', verticalAlign: 'top', overflow: 'visible' }} data-tauri-drag-region={dragRegion ? '' : undefined}>
-    <canvas ref={canvas} className="blob-canvas" width={width} height={canvasHeight} style={{ width, height: canvasHeight, position: 'absolute', left: 0, bottom: 0, pointerEvents: 'none' }} role={decorative ? undefined : 'img'} aria-hidden={decorative || undefined} aria-label={decorative ? undefined : `${label} ${effectiveMood}`} data-effect-overscan-top={overscanTop || undefined} />
+    <canvas ref={canvas} className="blob-canvas" width={width} height={canvasHeight} style={{ width, height: canvasHeight, position: 'absolute', left: 0, bottom: 0, pointerEvents: 'none' }} role={decorative ? undefined : 'img'} aria-hidden={decorative || undefined} aria-label={decorative ? undefined : `${label}, ${effectiveMood}`} data-effect-overscan-top={overscanTop || undefined} />
   </span>
 }
 

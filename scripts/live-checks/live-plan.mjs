@@ -3,14 +3,14 @@
 // back through `permission.reply`, and the resulting proposed plan.
 // Isolated database and temp workspace; prints verdicts only.
 //
-//   node scripts/live-checks/live-plan.mjs [path-to-bloblexd.exe]   env: PROVIDER=codex|claude|opencode
+//   node scripts/live-checks/live-plan.mjs [path-to-bitbotsd.exe]   env: PROVIDER=codex|claude|opencode
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 
-const daemonExe = process.argv[2] || process.env.BLOBLEXD_EXE || 'C:/dev/bloblex-target/debug/bloblexd.exe'
+const daemonExe = process.argv[2] || process.env.BLOBLEXD_EXE || 'C:/dev/bloblex-target/debug/bitbotsd.exe'
 const provider = process.env.PROVIDER || 'codex'
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'bloblex-live-plan-'))
 const project = path.join(work, 'project')

@@ -28,6 +28,7 @@ use uuid::Uuid;
 mod updates;
 mod speech;
 mod power;
+mod migrate;
 
 #[cfg(test)]
 mod file_inspection_tests;
@@ -183,26 +184,26 @@ fn connection(state: &State<'_, AppState>) -> Result<DaemonConnection, String> {
 fn candidate_daemon_paths(app: &AppHandle) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(path) = app.path().resolve(
-        "binaries/bloblexd-x86_64-pc-windows-msvc.exe",
+        "binaries/bitbotsd-x86_64-pc-windows-msvc.exe",
         tauri::path::BaseDirectory::Resource,
     ) {
         candidates.push(path);
     }
     if let Ok(path) = app
         .path()
-        .resolve("bloblexd.exe", tauri::path::BaseDirectory::Resource)
+        .resolve("bitbotsd.exe", tauri::path::BaseDirectory::Resource)
     {
         candidates.push(path);
     }
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    candidates.push(manifest.join("binaries/bloblexd-x86_64-pc-windows-msvc.exe"));
+    candidates.push(manifest.join("binaries/bitbotsd-x86_64-pc-windows-msvc.exe"));
     if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
         let target_dir = PathBuf::from(target_dir);
-        candidates.push(target_dir.join("debug/bloblexd.exe"));
-        candidates.push(target_dir.join("release/bloblexd.exe"));
+        candidates.push(target_dir.join("debug/bitbotsd.exe"));
+        candidates.push(target_dir.join("release/bitbotsd.exe"));
     }
-    candidates.push(manifest.join("../../../target/debug/bloblexd.exe"));
-    candidates.push(manifest.join("../../../target/release/bloblexd.exe"));
+    candidates.push(manifest.join("../../../target/debug/bitbotsd.exe"));
+    candidates.push(manifest.join("../../../target/release/bitbotsd.exe"));
     candidates
 }
 
@@ -234,7 +235,7 @@ fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
         .into_iter()
         .find(|path| path.is_file())
         .ok_or_else(|| {
-            "bloblexd.exe is missing. Build the workspace daemon first (npm run build:daemon)."
+            "bitbotsd.exe is missing. Build the workspace daemon first (npm run build:daemon)."
                 .to_string()
         })?;
 
@@ -246,7 +247,7 @@ fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
     fs::create_dir_all(&runtime_dir)
         .map_err(|error| format!("Could not prepare the local daemon folder: {error}"))?;
     let executable_copy = runtime_dir.join(format!(
-        "bloblexd-{}-{}.exe",
+        "bitbotsd-{}-{}.exe",
         std::process::id(),
         Uuid::new_v4()
     ));
@@ -263,7 +264,7 @@ fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     let mut child = command.spawn().map_err(|error| {
         let _ = fs::remove_file(&executable_copy);
-        format!("Could not start bloblexd.exe: {error}")
+        format!("Could not start bitbotsd.exe: {error}")
     })?;
 
     let stdout = child
@@ -2107,6 +2108,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
+    // Move any Bloblex-era data to the Bitbots identity *before* the Tauri
+    // builder creates the WebView2 profile under the new identifier.
+    migrate::migrate_before_start();
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| {
             if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {

@@ -2,7 +2,7 @@
 
 Updated 14 October 2026. Manual-only `v0.1.0-beta.28` is published and is the newest versioned GitHub release. The signed updater manifest on rolling `channel-beta` remains at `v0.1.0-beta.6`; manual-only betas do not change that feed. No clean-machine install has been recorded. Status values are `done`, `needs user`, or `blocked`.
 
-Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.28`. Cargo.lock entries for the 15 crates inheriting the workspace version are beta.28 in this checkout; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bitbots`. Identifier is `com.bloblex.desktop`.
+Versions read from this worktree: root `package.json`, `package-lock.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and the workspace `Cargo.toml` `[workspace.package].version` are all `0.1.0-beta.28`. Cargo.lock entries for the 15 crates inheriting the workspace version are beta.28 in this checkout; the internal `bloblex-agent-core` and `bloblex-protocol` libraries remain independently versioned at `0.1.0`. The desktop crate `bloblex-desktop` uses `version.workspace = true`. Product name is `Bitbots`, `mainBinaryName` is `Bitbots` (so the executable is `Bitbots.exe`), and the identifier is `com.bitbots.desktop` (development builds use `com.bitbots.desktop.dev`).
 
 `docs/releases/0.1.0-beta.28.md` is the published note for the current manual-only beta. The signed release script is not used for unsigned manual releases. For a future signed release, `scripts/release-windows.ps1` refuses to publish until the four version fields above equal the `-Version` argument.
 
@@ -73,15 +73,19 @@ Status: **done for beta.8 manual install**. `Bloblex_0.1.0-beta.8_x64-setup.exe`
 `npm run desktop:bundle` runs `scripts/bundle-windows.ps1`, which:
 
 1. Sets `CARGO_TARGET_DIR` to `target\desktop-release` when the variable is unset.
-2. Runs `cargo build -p bloblex-daemon --bin bloblexd -p bloblex-hook --bin bloblex-hook --release`.
+2. Runs `cargo build -p bloblex-daemon --bin bitbotsd -p bloblex-hook --bin bitbots-hook --release`.
 3. Runs `node scripts/stage-daemon.mjs --release`, which copies the sidecars to `apps/desktop/src-tauri/binaries/` with the Tauri target-triple suffix.
 4. Runs `npm run desktop -- build`, which is `tauri build` for `@bloblex/desktop`.
+
+The bundled installer is `Bitbots_<version>_x64-setup.exe`: its name follows `bundle > productName` (`Bitbots`), and the packaged executable is `Bitbots.exe` (the `mainBinaryName`). A generated NSIS script derives the per-user install directory `%LOCALAPPDATA%\Bitbots` and the uninstall key `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Bitbots` from `productName`.
+
+`bundle.windows.nsis.installerHooks` points at `apps/desktop/src-tauri/installer-hooks.nsh`. Its `NSIS_HOOK_PREINSTALL` macro removes an older per-user "Bloblex" install (registered under `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Bloblex`) before the Bitbots files are copied: it stops `Bloblex.exe`, `bloblexd.exe` and `bloblex-hook.exe`, then runs the old uninstaller silently. That keeps app data: NSIS only deletes the app data folder when the user ticks "Delete app data", and a silent uninstall never does. The step is best effort; a failure does not abort the install.
 
 The release artifact is the NSIS installer only. An MSI is not a Bitbots release artifact: an MSI version cannot carry a `-beta.N` pre-release. `docs/UPDATER.md` sets the Windows bundle target to `nsis` only. The release script globs `<CARGO_TARGET_DIR>\release\bundle\nsis\*-setup.exe`, keeps the file whose name matches the release version, and requires the sibling `<installer>.sig`. It does not upload an MSI.
 
 `apps/desktop/src-tauri/tauri.conf.json` has `bundle.targets: ["nsis"]`, `createUpdaterArtifacts: true`, the updater public key, and the stable endpoint in `plugins.updater.endpoints`. The beta endpoint is not in that file: `apps/desktop/src-tauri/src/updates.rs` (lines 19-21 and 231-234) sets the endpoint per channel. For beta.8 only, the build overrode `bundle.createUpdaterArtifacts` to `false` and passed `--no-sign`; this produced no `.sig` and no `latest.json`. The rolling beta channel was left unchanged.
 
-The beta.6 bundle run staged both `bloblexd-x86_64-pc-windows-msvc.exe` and `bloblex-hook-x86_64-pc-windows-msvc.exe` in `apps/desktop/src-tauri/binaries/` for packaging. These are local bundle outputs, not source changes.
+The beta.6 bundle run staged both `bitbotsd-x86_64-pc-windows-msvc.exe` and `bitbots-hook-x86_64-pc-windows-msvc.exe` in `apps/desktop/src-tauri/binaries/` for packaging. These are local bundle outputs, not source changes. (Before FIX11 these sidecars were named `bloblexd-*` and `bloblex-hook-*`.)
 
 Configured bundle icons exist on disk: `assets/icon/bloblex.ico` and `assets/icon/bloblex-master.png` (the paths in `bundle.icon`). `assets/icon/tray.png` is also present; the tray image is embedded from Rust, which this note does not change.
 

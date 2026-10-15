@@ -5,7 +5,7 @@
 // sends two trivial prompts with a 64x64 solid-colour PNG, and prints verdicts
 // only (never raw provider payloads or credentials).
 //
-//   node scripts/live-checks/live-composer.mjs [path-to-bloblexd.exe]
+//   node scripts/live-checks/live-composer.mjs [path-to-bitbotsd.exe]
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -13,7 +13,7 @@ import path from 'node:path'
 import readline from 'node:readline'
 import zlib from 'node:zlib'
 
-const daemonExe = process.argv[2] || process.env.BLOBLEXD_EXE || 'C:/dev/bloblex-target/debug/bloblexd.exe'
+const daemonExe = process.argv[2] || process.env.BLOBLEXD_EXE || 'C:/dev/bloblex-target/debug/bitbotsd.exe'
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'bloblex-live-composer-'))
 const project = path.join(work, 'project')
 fs.mkdirSync(project)

@@ -75,6 +75,7 @@ vi.mock('../blob/BlobCanvas', async () => {
       'data-testid': 'blob-canvas',
       'data-color': props.color,
       'data-label': props.label,
+      'aria-label': props.decorative ? undefined : `${String(props.label ?? 'Agent')}, ${String(props.mood ?? 'idle')}`,
     }, props.greeting ? ReactModule.createElement('button', { type: 'button', 'aria-label': 'Complete greeting fixture', onClick: props.onGreetingComplete }, 'finish') : null),
   }
 })
@@ -598,6 +599,31 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.session-first-state')?.textContent).not.toContain('Ready when you are')
     expect(view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')?.disabled).toBe(true)
     expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.disabled).toBe(true)
+  })
+
+  it('fills the composer from a starter chip without sending, then hides the chips', async () => {
+    configure()
+    const view = startApp()
+    await view.settle()
+    const starters = view.host.querySelector('.session-starters')!
+    expect([...starters.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
+      'Review this repository', 'Find and fix a failing test', 'Explain how this project is organised',
+    ])
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')!
+    await click([...starters.querySelectorAll('button')][1]!)
+    await view.settle()
+    expect(textarea.value).toBe('Find and fix a failing test')
+    expect(document.activeElement).toBe(textarea)
+    expect(view.host.querySelector('.session-starters')).toBeNull()
+    expect(h.rpc.mock.calls.some(([method]) => method === 'session.prompt')).toBe(false)
+  })
+
+  it('announces each roster avatar with its name and state', async () => {
+    h.fetchSnapshot.mockResolvedValue(snapshot({ runtimes: [{ ...claudeRuntime, status: 'offline' }, codexRuntime, opencodeRuntime] }))
+    const view = startApp()
+    await view.settle()
+    const row = rows(view.host).find((item) => item.querySelector('strong')?.textContent === 'Claude')!
+    expect(row.querySelector('.team-row-avatar [data-testid="blob-canvas"]')?.getAttribute('aria-label')).toBe('Claude, offline')
   })
 
   it('keeps a dirty edit when Escape is pressed on the discard dialog', async () => {

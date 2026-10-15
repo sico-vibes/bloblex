@@ -118,7 +118,7 @@ export function BitbotCanvas({ color, size = 52, mood = 'idle', className = '', 
       interactive={!greeting}
       seed={seedFraction(look?.seed)}
       // Spread conditionally: an explicit undefined would override the library's own role and label.
-      {...(decorative ? { 'aria-hidden': true, role: 'presentation' } : { 'aria-label': `${label} ${effectiveMood}` })}
+      {...(decorative ? { 'aria-hidden': true, role: 'presentation' } : { 'aria-label': `${label}, ${effectiveMood}` })}
       style={{ pointerEvents: dragRegion ? 'none' : undefined }}
     />
   </span>

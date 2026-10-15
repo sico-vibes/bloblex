@@ -1,8 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Bitbots",
+  "mainBinaryName": "Bitbots",
   "version": "0.1.0-beta.28",
-  "identifier": "com.bloblex.desktop",
+  "identifier": "com.bitbots.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -42,11 +43,11 @@
       "../../../assets/icon/bloblex-master.png"
     ],
     "resources": [],
-    "externalBin": ["binaries/bloblexd", "binaries/bloblex-hook"],
+    "externalBin": ["binaries/bitbotsd", "binaries/bitbots-hook"],
     "targets": ["nsis"],
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
-      "nsis": { "installMode": "currentUser" }
+      "nsis": { "installMode": "currentUser", "installerHooks": "installer-hooks.nsh" }
     }
   },
   "plugins": {

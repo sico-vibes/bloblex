@@ -172,6 +172,7 @@
 .session-first-state h2 { margin: 0 0 6px; font-size: var(--fs-xl); font-weight: 600; }
 .session-first-state p { max-width: 420px; margin: 0; color: var(--text-2); font-size: var(--fs-md); line-height: 1.6; }
 .session-first-state code { color: var(--text-1); font: var(--fs-xs) var(--font-mono); }
+.session-starters { margin-top: 18px; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 
 .message-row { margin: 0 0 6px; display: flex; animation: msg-in 180ms cubic-bezier(0.22, 1, 0.36, 1); }
 .message-row.group-start, .message-row.user { margin-top: 14px; }
@@ -255,7 +256,7 @@
 @keyframes dictation-warm { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--text-1) 0%, transparent); } 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-1) 22%, transparent); } }
 .dictation-progress { width: 16px; height: 16px; border-radius: 50%; background: conic-gradient(var(--text-1) var(--progress, 0deg), color-mix(in srgb, var(--text-1) 18%, transparent) 0); -webkit-mask: radial-gradient(circle, transparent 4.5px, #000 5px); mask: radial-gradient(circle, transparent 4.5px, #000 5px); }
 @keyframes dictation-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(120, 120, 120, 0.35); } 50% { box-shadow: 0 0 0 5px rgba(120, 120, 120, 0); } }
-@media (prefers-reduced-motion: reduce) { .dictation-button.active { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .dictation-button.active, .dictation-button.warming, .typing i { animation: none; } }
 .dictation-partial { margin: 0 4px 7px; padding: 6px 10px; display: flex; align-items: baseline; gap: 8px; color: var(--text-2); border-radius: var(--radius-sm); background: var(--surface-subtle); font-size: var(--fs-xs); line-height: 1.4; }
 .dictation-partial-dot { width: 7px; height: 7px; flex: 0 0 auto; align-self: center; border-radius: 50%; background: #ff453a; box-shadow: 0 0 0 3px rgba(255, 69, 58, 0.18); }
 /* Dictation island (DictationIsland.tsx): a dark rounded surface, a red

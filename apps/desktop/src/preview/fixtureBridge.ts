@@ -286,6 +286,9 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().has('logos')) fixtureSettings['experimental.runtimeLogos'] = true
     if (flags().get('style')) fixtureSettings['appearance.style'] = flags().get('style')
     if (flags().get('accent')) fixtureSettings['appearance.accent'] = flags().get('accent')
+    if (flags().get('density')) fixtureSettings['appearance.density'] = flags().get('density')
+    if (flags().has('seen-hints')) fixtureSettings['hints.seen'] = ['companion.drag']
+    if (flags().has('tour')) fixtureSettings['onboarding.tour'] = { version: 1, done: false, step: 2 }
     if (flags().get('chat')) fixtureSettings['companion.chatSize'] = flags().get('chat')
     return { settings: { ...fixtureSettings, ...(fixturePreset() === 'usage-tip-90' ? { 'experimental.usageTips': true } : {}) } } as T
   }

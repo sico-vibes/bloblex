@@ -1,6 +1,6 @@
 //! Team engine. Blobs belong to projects, carry a role, and one of them can lead.
 //! Each provider session gets Bitbots' runtime instructions and an app-owned
-//! MCP server (`bloblexd mcp-bridge`) with `list_blobs`, `list_conversations`
+//! MCP server (`bitbotsd mcp-bridge`) with `list_blobs`, `list_conversations`
 //! and `message_blob`. `message_blob` opens a side conversation with the
 //! teammate, titled by its topic, or continues an earlier one; when the
 //! teammate's turn ends, its reply is relayed back into the sender's
@@ -184,7 +184,7 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_leader: b
     json!(list)
 }
 
-/// MCP calls from `bloblexd mcp-bridge`, authorized by a per-session token.
+/// MCP calls from `bitbotsd mcp-bridge`, authorized by a per-session token.
 pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Value) -> Result<Value, DispatchError> {
     // Recursion guard: a session linked to an automation run can neither use
     // team/scheduling tools nor reach any automation write RPC. Memory tools

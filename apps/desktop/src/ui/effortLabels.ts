@@ -14,3 +14,17 @@ export function labelizeEffort(value: string, provider = '') {
   if (key === 'ultracode') return 'Ultracode'
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
+
+/**
+ * One short, plain-language line for an effort level, shown under its name in
+ * the effort menu. Ultracode (and any unknown level) returns '' and keeps its
+ * own wording elsewhere.
+ */
+export function effortDescription(value: string): string {
+  const key = value.trim().toLowerCase()
+  if (key === 'low') return 'Fast, light reasoning'
+  if (key === 'medium') return 'Balanced'
+  if (key === 'high') return 'Slower, more thorough'
+  if (key === 'xhigh' || key === 'max') return 'Slowest, deepest'
+  return ''
+}

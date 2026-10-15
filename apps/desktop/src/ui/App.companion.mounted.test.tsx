@@ -65,7 +65,7 @@ vi.mock('../blob/BlobCanvas', async () => {
       {
         className: 'blob-canvas',
         role: 'img',
-        'aria-label': `${String(props.label ?? 'Agent')} ${String(props.mood ?? 'idle')}`,
+        'aria-label': `${String(props.label ?? 'Agent')}, ${String(props.mood ?? 'idle')}`,
         'data-shape': String((props.look as { shape?: string } | null | undefined)?.shape ?? 'mascot'),
         'data-seed': String((props.look as { seed?: string } | null | undefined)?.seed ?? ''),
         width: typeof props.size === 'number' ? props.size : 52,
@@ -77,6 +77,7 @@ vi.mock('../blob/BlobCanvas', async () => {
 })
 
 import { App } from './App'
+import { hydrateHints } from './uiPrefs'
 import type { Agent, Runtime, Session, Snapshot } from '../types'
 import { playCompanionCue, setCompanionSoundVolume, unlockCompanionAudioFromGesture } from '../blob/soundCues'
 
@@ -614,5 +615,23 @@ describe('companion settings panel', () => {
     await view.settle()
     await act(async () => { radio(view.host, 'Picked for you').click(); await settleMicrotasks() })
     expect(pinSaves().at(-1)).toEqual([])
+  })
+})
+
+describe('companion first-run drag hint', () => {
+  it('shows the drag hint once and forgets it after Got it', async () => {
+    hydrateHints([])
+    const view = startApp('?companion=1')
+    await view.settle()
+    await press(view.host, 'Open companion home')
+    await view.settle()
+    const hint = view.host.querySelector('.companion-hint')!
+    expect(hint.textContent).toContain('Drag me anywhere. Ctrl+Alt+B shows or hides me.')
+    await act(async () => { [...hint.querySelectorAll('button')].find((button) => button.textContent === 'Got it')!.click(); await settleMicrotasks() })
+    expect(view.host.querySelector('.companion-hint')).toBeNull()
+    // A second mount in the same window does not bring it back.
+    await press(view.host, 'Home')
+    await view.settle()
+    expect(view.host.querySelector('.companion-hint')).toBeNull()
   })
 })

@@ -26,7 +26,7 @@ if (rustc.status !== 0) throw new Error('rustc is required to resolve the extern
 const targetTriple = rustc.stdout.match(/^host: (.+)$/m)?.[1]
 if (!targetTriple) throw new Error('rustc did not report a host target triple.')
 
-const binaries = ['bloblexd', 'bloblex-hook']
+const binaries = ['bitbotsd', 'bitbots-hook']
 const sourceDirectory = resolve(targetDirectory, profile)
 const destinationDirectory = resolve(root, process.env.BLOBLEX_STAGE_DESTINATION || 'apps/desktop/src-tauri/binaries')
 const sources = binaries.map((binary) => ({
@@ -40,7 +40,7 @@ for (const { binary, source } of sources) {
     await access(source)
   } catch {
     const buildMode = profile === 'release' ? ' --release' : ''
-    throw new Error(`Missing ${binary} at ${source}. Build it first with: cargo build -p bloblex-daemon --bin bloblexd -p bloblex-hook --bin bloblex-hook${buildMode}`)
+    throw new Error(`Missing ${binary} at ${source}. Build it first with: cargo build -p bloblex-daemon --bin bitbotsd -p bloblex-hook --bin bitbots-hook${buildMode}`)
   }
 }
 

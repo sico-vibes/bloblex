@@ -74,6 +74,7 @@ import { FirstRunOnboarding } from './FirstRunOnboarding'
 import { LAUNCH_OVERALL_TIMEOUT_REASON, LAUNCH_TIMEOUTS, launchWarningsFor, runLaunchChecks, runtimeAuthSummary, throwIfLaunchAborted, type LaunchCheck } from './launchChecks'
 import { providerBrand } from './providerBrand'
 import { applyAppearance, applySurfaceAppearance, isThemeStyle, normalizeAccent, type TextSizeChoice, type ThemeChoice } from './appearance'
+import { hydrateDensity, hydrateHints, hydrateTour, useHintSeen } from './uiPrefs'
 import { SessionExecutionControls } from './SessionExecutionControls'
 import { composerMaxHeight, useAutosizeTextarea } from './useAutosize'
 import { ContextWindowIndicator } from './ContextWindowIndicator'
@@ -97,6 +98,10 @@ async function openSafeLink(url: string) {
     await invoke('plugin:opener|open_url', { url: parsed.href })
   } catch { /* An unavailable opener leaves the link inert. */ }
 }
+
+/** Empty-conversation starters: up to three ghost buttons that only fill the composer. */
+const STARTER_PROMPTS = ['Review this repository', 'Find and fix a failing test', 'Explain how this project is organised'] as const
+
 export function App() {
   const companion = new URLSearchParams(location.search).has('companion')
   useEffect(() => {
@@ -168,6 +173,9 @@ export function App() {
     else if (key === 'experimental.runtimeLogos') setRuntimeLogos(value === true)
     else if (key === 'appearance.style') { if (isThemeStyle(value)) { styleExplicit.current = true; setThemeStyle(value) } }
     else if (key === 'appearance.accent') setAccentColor(normalizeAccent(value))
+    else if (key === 'appearance.density') hydrateDensity(value)
+    else if (key === 'hints.seen') hydrateHints(value)
+    else if (key === 'onboarding.tour') hydrateTour(value)
     // Legacy fallback: only while the daemon has never sent `appearance.style`.
     else if (key === 'experimental.bitbots') { if (!styleExplicit.current && typeof value === 'boolean') setBitbotsEnabled(value) }
   }, [])
@@ -322,6 +330,11 @@ export function App() {
   const updatePins = (change: (current: SidebarPins) => SidebarPins) => setPins((current) => { const next = change(current); writePins(next); return next })
   const composerRef = useRef<HTMLTextAreaElement>(null)
   useAutosizeTextarea(composerRef, composer, composerMaxHeight)
+  /** Empty-conversation starters only fill the composer; nothing is sent. */
+  const fillFromStarter = useCallback((text: string) => {
+    setComposer(text)
+    requestAnimationFrame(() => composerRef.current?.focus())
+  }, [])
   const messageListRef = useRef<HTMLElement>(null)
   /** The outline only appears once the conversation is long enough to scroll. */
   const [conversationScrollable, setConversationScrollable] = useState(false)
@@ -429,7 +442,7 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['appearance.style', 'appearance.accent', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
+      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
       setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }
@@ -2047,7 +2060,7 @@ export function App() {
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
             <div className="conversation-layout">
               <div className="chat-column">
-              {groupedConversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} effectOverscanTop={118} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} label={activeSelectedAgent?.name ?? agentName} /><h2>{runtimeReady ? 'Ready when you are.' : 'This bot needs attention.'}</h2><p>{runtimeReady ? <>Ask {agentName} to explore <code>{currentProjectName ?? 'the project'}</code> or make a change.</> : selectedRuntime?.status === 'error' ? 'Open Settings → Coding agents. Update or repair this CLI, then choose Scan again.' : 'Open Settings → Coding agents and scan again before starting a conversation.'}</p></div> : groupedConversationItems.map((item, index) => {
+              {groupedConversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} effectOverscanTop={118} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} label={activeSelectedAgent?.name ?? agentName} /><h2>{runtimeReady ? 'Ready when you are.' : 'This bot needs attention.'}</h2><p>{runtimeReady ? <>Ask {agentName} to explore <code>{currentProjectName ?? 'the project'}</code> or make a change.</> : selectedRuntime?.status === 'error' ? 'Open Settings → Coding agents. Update or repair this CLI, then choose Scan again.' : 'Open Settings → Coding agents and scan again before starting a conversation.'}</p>{runtimeReady && composer.trim() === '' && <div className="session-starters">{STARTER_PROMPTS.map((prompt) => <button key={prompt} type="button" className="ghost-button small" onClick={() => fillFromStarter(prompt)}>{prompt}</button>)}</div>}</div> : groupedConversationItems.map((item, index) => {
                 const team = item.kind === 'message' ? teamItem(item.value!, item.id) : null
                 const content = item.kind === 'activity-group'
                   ? <ActivitySummaryLine group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
@@ -2643,6 +2656,8 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const chatLogRef = useRef<HTMLDivElement>(null)
   const [mode, setMode] = useState<CompanionMode>('petit')
   const [popIn, setPopIn] = useState(false)
+  /** One-time drag hint, shown the first time the companion is expanded. */
+  const [dragHintSeen, markDragHintSeen] = useHintSeen('companion.drag')
   if (!fsmRef.current) fsmRef.current = new CompanionFsm()
   // Chat, activity, settings and inline questions use the taller island; approvals keep the overview size.
   const tall = mode === 'home' && (permission ? permission.kind === 'question' : (view === 'chat' || view === 'activity' || view === 'settings'))
@@ -2979,6 +2994,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
             <button className="companion-collapse" aria-label="Collapse companion" title="Collapse" disabled={!!permission} onClick={toggleExpanded}><ChevronDown size={14} /></button>
           </div>
         </header>
+        {!dragHintSeen && <div className="companion-hint" data-companion-no-drag=""><span>Drag me anywhere. Ctrl+Alt+B shows or hides me.</span><button type="button" className="btn small ghost" onClick={markDragHintSeen}>Got it</button></div>}
         {confused && <span className="sr-only" role="status" aria-live="polite">A little dizzy. Returning to normal shortly.</span>}
         <section className="island-views companion-content" aria-hidden={mode !== 'home'} inert={mode !== 'home'}>
           {permission ? <div className="island-card wash amber">

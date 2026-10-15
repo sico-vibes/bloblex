@@ -4,7 +4,7 @@
 
 The desktop updater commands and events are defined in [UPDATER.md](UPDATER.md). They run in the Tauri shell and persist preferences through the daemon settings store; they are separate from the daemon's v1 IPC methods below.
 
-This is the integration contract between `bloblexd.exe` and the desktop shell. The daemon is authoritative; UI state is reconstructed from `app.snapshot` and subsequent ordered events.
+This is the integration contract between `bitbotsd.exe` and the desktop shell. The daemon is authoritative; UI state is reconstructed from `app.snapshot` and subsequent ordered events.
 
 The desktop shell also exposes local Tauri commands for user-selected file flows. Native save/open dialogs retain their selected paths in process-local state and return only opaque single-use selection tokens to the webview. `write_selected_export_text` consumes a save token to write UTF-8 text, and `read_blob_import` consumes an open token to read UTF-8 JSON with a 64 KiB limit. A webview-supplied path is never accepted by these commands, and they do not access the daemon database.
 

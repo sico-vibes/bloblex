@@ -11,7 +11,7 @@
     "typecheck": "npm run typecheck --workspace @bloblex/desktop",
     "test": "npm run test --workspace @bloblex/desktop",
     "desktop": "npm run tauri --workspace @bloblex/desktop",
-    "build:daemon": "cargo build -p bloblex-daemon --bin bloblexd",
+    "build:daemon": "cargo build -p bloblex-daemon --bin bitbotsd",
     "stage:daemon": "node scripts/stage-daemon.mjs",
     "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-windows.ps1",
     "desktop:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bundle-windows.ps1"

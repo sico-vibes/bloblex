@@ -30,7 +30,7 @@ async function writePair(targetDirectory, profile, contents = {}) {
   const profileDirectory = join(targetDirectory, profile)
   await mkdir(profileDirectory, { recursive: true })
   const result = {}
-  for (const binary of ['bloblexd', 'bloblex-hook']) {
+  for (const binary of ['bitbotsd', 'bitbots-hook']) {
     if (contents[binary] === null) continue
     const bytes = contents[binary] ?? randomBytes(97)
     const source = join(profileDirectory, `${binary}.exe`)
@@ -65,27 +65,27 @@ for (const profile of ['debug', 'release']) {
     const result = runStage(current, profile === 'release' ? ['--release'] : [])
 
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
-    for (const binary of ['bloblexd', 'bloblex-hook']) {
+    for (const binary of ['bitbotsd', 'bitbots-hook']) {
       const destination = join(current.destination, `${binary}-${hostTriple}.exe`)
       assert.equal(sha256(await readFile(destination)), sha256(sources[binary].bytes))
       assert.ok(result.stdout.includes(sources[binary].source), `stdout should report staged source ${sources[binary].source}`)
       assert.ok(result.stdout.includes(destination), `stdout should report staged destination ${destination}`)
     }
-    assert.equal(await readFile(sources.bloblexd.source).then(sha256), sha256(sources.bloblexd.bytes))
-    assert.equal(await readFile(sources['bloblex-hook'].source).then(sha256), sha256(sources['bloblex-hook'].bytes))
+    assert.equal(await readFile(sources.bitbotsd.source).then(sha256), sha256(sources.bitbotsd.bytes))
+    assert.equal(await readFile(sources['bitbots-hook'].source).then(sha256), sha256(sources['bitbots-hook'].bytes))
   })
 }
 
 test('fails before copying when either required binary is missing', async (t) => {
   const current = await fixture()
   t.after(() => current.dispose())
-  const sources = await writePair(current.cargoTarget, 'debug', { 'bloblex-hook': null })
+  const sources = await writePair(current.cargoTarget, 'debug', { 'bitbots-hook': null })
 
   const result = runStage(current)
 
   assert.notEqual(result.status, 0)
-  assert.match(`${result.stdout}\n${result.stderr}`, /bloblex-hook\.exe/)
+  assert.match(`${result.stdout}\n${result.stderr}`, /bitbots-hook\.exe/)
   assert.match(`${result.stdout}\n${result.stderr}`, /cargo build/i)
-  assert.equal(await readFile(join(current.destination, `bloblexd-${hostTriple}.exe`)).catch(() => null), null)
-  assert.equal(await readFile(sources.bloblexd.source).then(sha256), sha256(sources.bloblexd.bytes))
+  assert.equal(await readFile(join(current.destination, `bitbotsd-${hostTriple}.exe`)).catch(() => null), null)
+  assert.equal(await readFile(sources.bitbotsd.source).then(sha256), sha256(sources.bitbotsd.bytes))
 })

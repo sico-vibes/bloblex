@@ -38,7 +38,7 @@ describe('reported context indicator', () => {
     const { host } = mount(0, 100_000)
     expect(host.querySelector('[role="progressbar"]')?.getAttribute('aria-valuetext')).toBe('0% full')
     expect(host.querySelector('.context-window-center')).toBeNull()
-    expect(host.querySelector('[aria-label*="0 of 100,000 tokens used, 0%"]')).not.toBeNull()
+    expect(host.querySelector('[aria-label*="0% of the context window used"]')).not.toBeNull()
     const partial = mount(0, null).host
     expect(partial.querySelector('[role="progressbar"]')).toBeNull()
     expect(partial.querySelector('.context-window-indicator')?.classList.contains('tone-unknown')).toBe(true)
@@ -52,10 +52,29 @@ describe('reported context indicator', () => {
     expect(host.querySelector('.context-window-popover')).toBeNull()
     await act(async () => { render(5000, 20_000) })
     expect(host.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('25')
-    expect(host.querySelector('[aria-label]')?.getAttribute('aria-label')).toContain('5,000 of 20,000 tokens used, 25%')
+    expect(host.querySelector('[aria-label]')?.getAttribute('aria-label')).toContain('25% of the context window used')
     await act(async () => { render(-2, 0) })
     expect(host.querySelector('[role="progressbar"]')).toBeNull()
     expect(host.querySelector('[aria-label]')?.getAttribute('aria-label')).toContain('Context usage unavailable')
+  })
+
+  it('reads the percent of the context window used and warns from 75%', async () => {
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    const render = (used: number) => root.render(<ContextWindowIndicator used={used} size={100} />)
+    act(() => render(40))
+    mounted.push({ root, host })
+    const button = () => host.querySelector<HTMLButtonElement>('.context-window-indicator')!
+    expect(button().getAttribute('aria-label')).toBe('40% of the context window used.')
+    expect(button().classList.contains('tone-normal')).toBe(true)
+    await act(async () => { render(75) })
+    expect(button().getAttribute('aria-label')).toBe('75% of the context window used. Consider starting a new conversation.')
+    expect(button().classList.contains('tone-warning')).toBe(true)
+    await act(async () => { render(95) })
+    expect(button().classList.contains('tone-warning')).toBe(true)
+    expect(button().querySelector('.context-window-ring-value')).not.toBeNull()
+    await act(async () => { button().click() })
+    expect(host.querySelector('.context-popover-note')?.textContent).toBe('Consider starting a new conversation')
   })
 
   it('opens details by click and dismisses on Escape or outside pointer', async () => {

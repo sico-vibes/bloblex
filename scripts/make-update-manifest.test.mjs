@@ -14,7 +14,7 @@ import {
 } from './make-update-manifest.mjs'
 
 const scriptPath = fileURLToPath(new URL('./make-update-manifest.mjs', import.meta.url))
-const sampleUrl = 'https://github.com/sico-vibes/bloblex/releases/download/v0.1.0-beta.1/Bloblex_0.1.0-beta.1_x64-setup.exe'
+const sampleUrl = 'https://github.com/sico-vibes/bloblex/releases/download/v0.1.0-beta.1/Bitbots_0.1.0-beta.1_x64-setup.exe'
 const sampleDate = '2026-10-02T15:00:00.000Z'
 
 function base(overrides = {}) {
@@ -103,7 +103,7 @@ test('defaults pub_date to ISO 8601 UTC and platform to windows-x86_64', () => {
   const manifest = buildManifest({
     version: '0.1.0-beta.2',
     signature: 'sig',
-    url: 'https://example.com/Bloblex_0.1.0-beta.2_x64-setup.exe',
+    url: 'https://example.com/Bitbots_0.1.0-beta.2_x64-setup.exe',
   })
   assert.equal(manifest.platforms['windows-x86_64'].signature, 'sig')
   assert.match(manifest.pub_date, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)

@@ -77,6 +77,16 @@ describe('General settings: companion sound volume', () => {
     expect(slider().value).toBe('25')
   })
 
+  it('plays a sample at the current volume without saving again', async () => {
+    await openGeneral({ 'companion.soundVolume': 0.45 })
+    const button = [...host.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === 'Play sample')!
+    expect(button).not.toBeNull()
+    await act(async () => { button.click() })
+    await tick()
+    expect(mocks.emit).toHaveBeenCalledExactlyOnceWith('bloblex-sound-volume-changed', { volume: 0.45, preview: true })
+    expect(saves()).toHaveLength(0)
+  })
+
   it('does not touch the sounds-enabled setting when the volume goes to 0', async () => {
     await openGeneral({ 'companion.soundsEnabled': true })
     drag(0)

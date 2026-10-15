@@ -165,7 +165,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-10-01T12:00:00.000Z'))
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  vi.stubGlobal('localStorage', { getItem: vi.fn(() => null), setItem: vi.fn(), removeItem: vi.fn(), clear: vi.fn() })
+  vi.stubGlobal('localStorage', { getItem: vi.fn((key: string) => key === 'bloblex.profile.name' ? 'Ada' : null), setItem: vi.fn(), removeItem: vi.fn(), clear: vi.fn() })
   vi.spyOn(window, 'matchMedia').mockImplementation(() => ({
     matches: true, media: '(prefers-reduced-motion: reduce)', onchange: null,
     addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(() => true),

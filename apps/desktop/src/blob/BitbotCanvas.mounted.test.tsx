@@ -28,7 +28,7 @@ describe('BlobCanvas in Bitbots mode', () => {
     const element = mount(<BlobCanvas color="#2b49a3" size={60} mood="thinking" label="Vex" look={{ shape: 'round', seed: 's', bot: { shape: 'hexagon' } }} />)
     const frame = element.querySelector('.bitbot-frame')!
     expect(frame.getAttribute('data-bitbot-shape')).toBe('hexagon')
-    expect(frame.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Vex thinking')
+    expect(frame.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Vex, thinking')
     // Only the robot's own canvas: no classic blob canvas and no corner glyph elements.
     expect(element.querySelectorAll('canvas')).toHaveLength(1)
     expect(element.querySelector('.blob-canvas')).toBeNull()

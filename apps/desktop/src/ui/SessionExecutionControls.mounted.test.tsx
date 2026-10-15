@@ -250,7 +250,7 @@ describe('session execution controls', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(host.querySelector('.session-effort-trigger')?.textContent).toContain('High')
     await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
-    const option = [...host.querySelectorAll<HTMLButtonElement>('.session-effort-labels button')].find((button) => button.textContent === 'Extra High')!
+    const option = [...host.querySelectorAll<HTMLButtonElement>('.session-effort-labels button')].find((button) => button.childNodes[0]?.textContent === 'Extra High')!
     await act(async () => { option.click(); await Promise.resolve(); await Promise.resolve() })
     expect(rpc).toHaveBeenCalledWith('session.model.update', expect.objectContaining({ sessionId:'session', model:'alpha', thinking:'xhigh', confirmModelChange:false }))
   })
@@ -301,9 +301,45 @@ describe('session execution controls', () => {
     const nextSession: Session = { ...session, id:'session-2', modelLock:{ model:'alpha', thinking:'high' } }
     await act(async () => { render(nextSession); await Promise.resolve(); await Promise.resolve() })
     await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
-    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.session-effort-labels button')].find((button) => button.textContent === 'Low')!.click(); await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.session-effort-labels button')].find((button) => button.childNodes[0]?.textContent === 'Low')!.click(); await Promise.resolve(); await Promise.resolve() })
     expect(onSessionUpdated).toHaveBeenCalledWith(expect.objectContaining({ id:'session-2' }))
     expect(rpc.mock.calls.filter(([method]) => method === 'session.model.update').at(-1)?.[1]).toMatchObject({ sessionId:'session-2' })
+  })
+})
+
+describe('session execution labels', () => {
+  it('shows Pick a model and the effort placeholder until a model is chosen', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? catalog : {})
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={{ ...session, modelLock: { model: null } }} agent={agent} onSessionUpdated={() => undefined} onError={() => undefined} />))
+    mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const model = host.querySelector<HTMLButtonElement>('.model-pill')!
+    expect(model.textContent).toContain('Pick a model')
+    expect(model.getAttribute('title')).toBe('Choose which model this conversation uses')
+    const effort = host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
+    expect(effort.textContent).toBe('Effort')
+    expect(effort.getAttribute('aria-disabled')).toBe('true')
+    expect(host.querySelector('.tip-bubble')?.textContent).toBe('Available after you pick a model')
+  })
+
+  it('shows one plain-language line under each effort level, echoed in aria-description', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? { ...catalog, models: [{ ...catalog.models[0], supportedThinking: ['low', 'medium', 'high', 'xhigh', 'max'] }] } : {})
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={{ ...session, modelLock: { model: 'alpha', thinking: 'high' } }} agent={agent} onSessionUpdated={() => undefined} onError={() => undefined} />))
+    mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
+    const levels = [...host.querySelectorAll<HTMLButtonElement>('.session-effort-labels button')].map((button) => ({ name: button.childNodes[0]?.textContent, line: button.querySelector('.session-effort-level-note')?.textContent ?? '', description: button.getAttribute('aria-description') }))
+    expect(levels).toEqual([
+      { name: 'Low', line: 'Fast, light reasoning', description: 'Fast, light reasoning' },
+      { name: 'Medium', line: 'Balanced', description: 'Balanced' },
+      { name: 'High', line: 'Slower, more thorough', description: 'Slower, more thorough' },
+      { name: 'Extra high', line: 'Slowest, deepest', description: 'Slowest, deepest' },
+      { name: 'Max', line: 'Slowest, deepest', description: 'Slowest, deepest' },
+    ])
   })
 })
 

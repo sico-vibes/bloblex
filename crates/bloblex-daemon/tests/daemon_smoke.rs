@@ -29,7 +29,7 @@ async fn daemon_starts_with_authenticated_loopback_rpc_and_real_discovery() {
     let db: PathBuf =
         std::env::temp_dir().join(format!("bloblex-daemon-smoke-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&db);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_bloblexd"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bitbotsd"))
         .env("BLOBLEX_DB_PATH", &db)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

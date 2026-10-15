@@ -11,9 +11,9 @@ npm install
 npm run desktop:dev
 ```
 
-The development script builds both `bloblexd.exe` and `bloblex-hook.exe`, stages them as Tauri's target-triple-suffixed sidecars, then starts the native app with Vite. It defaults to the isolated `target/desktop-dev` Cargo folder, honoring an explicitly supplied `CARGO_TARGET_DIR`. The renderer never connects directly to the daemon process; Tauri holds its short-lived IPC capability and forwards authenticated calls.
+The development script builds both `bitbotsd.exe` and `bitbots-hook.exe`, stages them as Tauri's target-triple-suffixed sidecars, then starts the native app with Vite. It defaults to the isolated `target/desktop-dev` Cargo folder, honoring an explicitly supplied `CARGO_TARGET_DIR`. The renderer never connects directly to the daemon process; Tauri holds its short-lived IPC capability and forwards authenticated calls.
 
-Current launcher source selects a free loopback development port from 1420–1435 and passes that same port to Vite, Tauri and the development CSP. It writes a generated configuration under the selected Cargo target and uses the development identifier `com.bloblex.desktop.dev` to separate development app/WebView data. This does not itself isolate the daemon database: startup verification explicitly supplies a fresh `BLOBLEX_DB_PATH`. The verified startup/rebuild result is recorded below.
+Current launcher source selects a free loopback development port from 1420–1435 and passes that same port to Vite, Tauri and the development CSP. It writes a generated configuration under the selected Cargo target and uses the development identifier `com.bitbots.desktop.dev` to separate development app/WebView data. This does not itself isolate the daemon database: startup verification explicitly supplies a fresh `BLOBLEX_DB_PATH`. The verified startup/rebuild result is recorded below.
 
 ## Build an unsigned local installer
 
@@ -34,7 +34,7 @@ The updater remains disabled until a signing key and signed update endpoint are 
 
 ## While the inspection app is open
 
-The earlier `target/debug/bloblex-desktop.exe` embeds older production assets. Rebuilding a Vite bundle does not update an already running production process. At the 18:59 checkpoint that desktop process was absent, but its earlier daemon processes were still running. Revalidate processes before acting; do not overwrite the user's live database as a side effect of a check.
+The earlier `target/debug/Bitbots.exe` embeds older production assets. Rebuilding a Vite bundle does not update an already running production process. At the 18:59 checkpoint that desktop process was absent, but its earlier daemon processes were still running. Revalidate processes before acting; do not overwrite the user's live database as a side effect of a check.
 
 Use a separate Rust target for compile/test work:
 
@@ -43,13 +43,13 @@ $env:CARGO_TARGET_DIR = 'target/qa-desktop'
 cargo check -p bloblex-desktop --lib
 ```
 
-Backend tests use their own target and a fresh `BLOBLEX_DB_PATH`; the default database is `%LOCALAPPDATA%\Bloblex\bloblex.db`. Coordinate shared sidecar staging with the desktop lane. The revised `scripts/stage-daemon.mjs` resolves Cargo's actual target directory through `cargo metadata`, including `CARGO_TARGET_DIR`, and checks that both binaries exist before copying either. `BLOBLEX_STAGE_DESTINATION` allows staging regression tests into a private directory; a real Tauri build must point at the staged files it will bundle.
+Backend tests use their own target and a fresh `BLOBLEX_DB_PATH`; the default database is `%LOCALAPPDATA%\Bitbots\bloblex.db`. Coordinate shared sidecar staging with the desktop lane. The revised `scripts/stage-daemon.mjs` resolves Cargo's actual target directory through `cargo metadata`, including `CARGO_TARGET_DIR`, and checks that both binaries exist before copying either. `BLOBLEX_STAGE_DESTINATION` allows staging regression tests into a private directory; a real Tauri build must point at the staged files it will bundle.
 
 The 1 October checkpoint below (55 frontend tests, one isolated `desktop:dev` launch, and the rebuild-while-live hash check) is historical. Current phase status, test commands, and the still-open native pass are in [SESSION_HANDOFF.md](../SESSION_HANDOFF.md) and [implementation-status.md](implementation-status.md).
 
 ## Running-executable lock repair, 1 October
 
-The user reported `failed to remove target\debug\bloblexd.exe: Access is denied (os error 5)` from `npm run desktop:dev`. Root read-only process checks confirmed two earlier daemons executing that exact compiler output. Windows keeps running executables locked; the build attempted to replace one.
+The user reported `failed to remove target\debug\bitbotsd.exe: Access is denied (os error 5)` from `npm run desktop:dev`. Root read-only process checks confirmed two earlier daemons executing that exact compiler output. Windows keeps running executables locked; the build attempted to replace one.
 
 The desktop lane changed development/release targets and native startup: the shell now copies the staged daemon to a unique app-local `runtime-processes` executable before launching it, and retains that exact path for owned cleanup. This separates future daemon runtime handles from Cargo and staging outputs. Existing old daemon processes were preserved.
 

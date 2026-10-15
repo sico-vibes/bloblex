@@ -366,6 +366,11 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     }
   }
 
+  /** The Play sample button: same preview path, without saving the volume again. */
+  const playSoundSample = async () => {
+    try { await emit('bloblex-sound-volume-changed', { volume: soundVolume, preview: true }) } catch { /* the companion hydrates the saved value on its next connection */ }
+  }
+
   const saveDefaultMode = async (value: string) => {
     const mode = parseGlobalMode(value)
     if (value !== 'ask' && value !== 'auto') return
@@ -468,7 +473,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                 <button type="button" className={`toggle ${soundsEnabled ? 'on' : ''}`} role="switch" aria-label="Companion sounds" aria-checked={soundsEnabled} onClick={() => void setSounds(!soundsEnabled)} disabled={saving}><i /></button>
               </SettingsRow>
               <SettingsRow label="Sound volume" hint="Applies to every companion cue. 0% is silent.">
-                <SoundVolumeSlider value={soundVolume} onChange={setSoundVolume} onCommit={(volume) => void saveSoundVolume(volume)} label="Companion sound volume" />
+                <SoundVolumeSlider value={soundVolume} onChange={setSoundVolume} onCommit={(volume) => void saveSoundVolume(volume)} onPlaySample={() => void playSoundSample()} label="Companion sound volume" />
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Appearance">

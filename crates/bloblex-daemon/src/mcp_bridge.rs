@@ -1,4 +1,4 @@
-//! `bloblexd mcp-bridge`: a stdio MCP server launched by a provider CLI. It
+//! `bitbotsd mcp-bridge`: a stdio MCP server launched by a provider CLI. It
 //! forwards tool listing and calls to the running daemon, authorized by the
 //! per-session token in `BLOBLEX_MCP_TOKEN`. Messages are newline-delimited
 //! JSON-RPC; nothing but protocol output is written to stdout.

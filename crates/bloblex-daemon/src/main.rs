@@ -1076,7 +1076,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::BAD_REQUEST,
                 ));
             }
-            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent";
+            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="hints.seen"||k=="onboarding.tour";
             let events=st.db.set_setting(k, &value).map_err(|e| {
                 derr(
                     if validation_key{"invalid_argument"}else{"internal"},
@@ -3331,7 +3331,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let local = std::env::var_os("LOCALAPPDATA")
                 .map(PathBuf::from)
                 .unwrap_or_else(std::env::temp_dir);
-            local.join("Bloblex/bloblex.db")
+            local.join("Bitbots/bloblex.db")
         });
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?
@@ -3439,7 +3439,7 @@ async fn main() {
         .with_writer(std::io::stderr)
         .init();
     if let Err(e) = run().await {
-        eprintln!("bloblexd failed: {e}");
+        eprintln!("bitbotsd failed: {e}");
         std::process::exit(1)
     }
 }

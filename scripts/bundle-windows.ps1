@@ -4,7 +4,7 @@ if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $repoRoot 't
 $env:CARGO_TARGET_DIR = [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
 New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
 Write-Host "Using isolated Cargo target: $env:CARGO_TARGET_DIR"
-cargo build -p bloblex-daemon --bin bloblexd -p bloblex-hook --bin bloblex-hook --release
+cargo build -p bloblex-daemon --bin bitbotsd -p bloblex-hook --bin bitbots-hook --release
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node scripts/stage-daemon.mjs --release
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -38,7 +38,9 @@ export function ContextWindowIndicator({ used, size, contextModel, contextEstima
       : hasSize
         ? `${isNewConversation ? 'New conversation · ' : ''}${contextTokenCount(size)} token capacity · used tokens unavailable`
         : 'Context usage unavailable'
-  const label = `Context window: ${contextEstimated ? 'Estimated context. ' : ''}${detail}`
+  const label = percentage !== null
+    ? `${contextEstimated ? 'Estimated context. ' : ''}${percentage}% of the context window used.${percentage >= 75 ? ' Consider starting a new conversation.' : ''}`
+    : `Context window: ${contextEstimated ? 'Estimated context. ' : ''}${detail}`
   const percentDetail = modelMismatch ? 'Context measurement is for another model' : modelAttributionUnknown ? 'Context measurement model is unknown' : percentage === null ? 'Percentage unavailable' : `${percentage}% full`
   const compactDetail = modelMismatch
     ? `Measured for ${contextModel}; selected ${model}`
@@ -81,7 +83,8 @@ export function ContextWindowIndicator({ used, size, contextModel, contextEstima
 
   const ring = 2 * Math.PI * 7
   const clampedPercent = percentage === null ? null : Math.max(0, Math.min(100, percentage))
-  const tone = clampedPercent === null ? 'unknown' : quotaTone(clampedPercent)
+  const highUsage = clampedPercent !== null && clampedPercent >= 75
+  const tone = clampedPercent === null ? 'unknown' : highUsage ? 'warning' : 'normal'
   return <div ref={rootRef} className="context-window-wrap" onMouseEnter={() => { if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current); hoverTimer.current = null; setHovered(true); setDismissed(false) }} onMouseLeave={() => { if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current); hoverTimer.current = window.setTimeout(() => { hoverTimer.current = null; setHovered(false) }, 160) }}>
     <button ref={buttonRef} type="button" className={`context-window-indicator tone-${tone}`} aria-label={label} aria-expanded={open} aria-controls={open ? detailsId : undefined} onClick={() => { setDismissed(false); setPinned((value) => !value) }} onFocus={() => { setFocused(true); setDismissed(false) }} onBlur={(event) => { if (!rootRef.current?.contains(event.relatedTarget as Node | null)) { setFocused(false); setPinned(false); setDismissed(false) } }}>
       <svg viewBox="0 0 18 18" aria-hidden="true" className="context-window-ring">
@@ -95,7 +98,7 @@ export function ContextWindowIndicator({ used, size, contextModel, contextEstima
       <div className="context-popover-row"><strong>{contextEstimated ? 'Estimated context' : 'Context window'}</strong><span className="context-popover-value">{percentage !== null ? `${contextCompactCount(used!)} / ${contextCompactCount(size!)} (${percentage}%)` : compactDetail}</span></div>
       <span className="sr-only">{compactDetail}</span>
       <i className={`context-popover-bar tone-${tone}`} aria-hidden="true"><b style={{ width: `${clampedPercent ?? 0}%` }} /></i>
-      {percentage === null ? <span className="context-popover-note">{percentDetail}</span> : <span className="sr-only">{percentDetail}</span>}
+      {percentage === null ? <span className="context-popover-note">{percentDetail}</span> : <>{highUsage && <span className="context-popover-note">Consider starting a new conversation</span>}<span className="sr-only">{percentDetail}</span></>}
       {provider && provider.windows.length > 0 && <div className="context-popover-section">
         <span className="context-popover-section-title">Plan usage limits · {provider.name}{provider.stale && <em> · last reading</em>}</span>
         {provider.windows.slice(0, 3).map((window) => {

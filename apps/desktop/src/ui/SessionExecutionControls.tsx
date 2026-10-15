@@ -8,7 +8,7 @@ import { moveMenuFocus, usePopoverDismiss } from './ComposerControls'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { positionFromPointer, SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
 import { Tip } from './Tip'
-import { labelizeEffort } from './effortLabels'
+import { labelizeEffort, effortDescription } from './effortLabels'
 import { concreteModelForSelection } from './modelPreferences'
 import { organizeModels, presentedModelName } from './modelPresentation'
 export { labelizeEffort } from './effortLabels'
@@ -16,6 +16,10 @@ export { labelizeEffort } from './effortLabels'
 type Lock = SessionModelLock
 type PendingModel = { sessionId: string; model: string | null }
 type EffortDraft = { sessionId: string; model: string | null; value: string | null }
+
+/** The label and greying reason while the conversation has no model yet. */
+export const MODEL_FIRST_REASON = 'Available after you pick a model'
+export const PICK_MODEL_LABEL = 'Pick a model'
 
 export function SessionExecutionControls({ session, agent, onSessionUpdated, onError }: {
   session: Session
@@ -113,7 +117,7 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   const providerStyle = resolveProviderStyle(catalog?.provider ?? '', selectedModel?.providerId, selectedModel?.id ?? model, selectedModel?.displayName)
   const pendingForSession = pendingModel?.sessionId === session.id ? pendingModel : null
   const catalogProvider = catalog?.provider ?? ''
-  const modelLabel = model ? presentedModelName(catalogProvider, selectedModel ?? { id: model, displayName: model }) : 'Choose a model'
+  const modelLabel = model ? presentedModelName(catalogProvider, selectedModel ?? { id: model, displayName: model }) : PICK_MODEL_LABEL
   const modelAriaLabel = modelLabel
   const fastTier = fastTierFor(selectedModel)
   const fastOn = !!fastTier && serviceTier === fastTier.id
@@ -145,7 +149,7 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
       efforts={efforts}
       defaultThinking={selectedModel?.defaultThinking ?? null}
       unavailableReason={catalogUnavailable ? 'Runtime model capabilities are unavailable. Bitbots cannot verify or change effort levels without a validated catalog.' : selectedModel ? null : catalog ? 'The selected model is not in the validated runtime catalog. Bitbots cannot verify selectable effort levels.' : 'Runtime model capabilities are still unavailable.'}
-      lockedReason={!model && catalog?.validated ? 'Choose a model before selecting effort.' : thinkingLocked === 'no-levels' ? `${selectedModel?.displayName ?? 'This model'} has no effort levels, so it always runs at its own default.` : thinkingLocked ? `${providerBrand(catalog?.provider ?? "").name || "This runtime"} doesn't let Bitbots pick an effort level yet, so it uses the model's own default.` : null}
+      lockedReason={!model ? MODEL_FIRST_REASON : thinkingLocked === 'no-levels' ? `${selectedModel?.displayName ?? 'This model'} has no effort levels, so it always runs at its own default.` : thinkingLocked ? `${providerBrand(catalog?.provider ?? "").name || "This runtime"} doesn't let Bitbots pick an effort level yet, so it uses the model's own default.` : null}
       workflowEnabled={rawSessionLock.enableWorkflows === true}
       value={thinking}
       draftValue={activeDraft}
@@ -308,7 +312,8 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
     else { clearSettle(); setMode('rest'); setPosition(restIndex); positionRef.current = restIndex; setOpen(true) }
   }
 
-  const triggerLabel = value && efforts.includes(value) ? labelizeEffort(value, provider) : unlistedValue ? labelizeEffort(unlistedValue, provider) : defaultThinking ? labelizeEffort(defaultThinking, provider) : 'Model default'
+  const triggerLabel = lockedReason === MODEL_FIRST_REASON ? 'Effort'
+    : value && efforts.includes(value) ? labelizeEffort(value, provider) : unlistedValue ? labelizeEffort(unlistedValue, provider) : defaultThinking ? labelizeEffort(defaultThinking, provider) : 'Model default'
   const savedTop = efforts.length > 1 && value === efforts[efforts.length - 1]
   const trigger = <button type="button" className={`composer-pill session-effort-trigger ${savedTop ? 'highest' : ''} ${isTopTierEffort(value) ? 'max-tier' : ''} ${lockedReason ? 'locked' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={lockedReason ? `Effort: ${triggerLabel}. ${lockedReason}` : `Effort: ${triggerLabel}`} aria-disabled={lockedReason ? true : undefined} disabled={disabled && !lockedReason} onClick={toggle}>
     <span>{triggerLabel}</span>
@@ -326,7 +331,7 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
         <div className="session-effort-meter-frame">
           <div className="session-effort-caption"><span>Faster</span><span>Smarter</span></div>
           <SessionEffortMeter trackRef={trackRef} style={providerStyle} count={efforts.length} position={displayedPosition} recommendedIndex={-1} top={atTop} dragging={mode === 'drag'} settling={mode === 'settle'} valueText={mode === 'rest' && visibleIndex < 0 ? visibleLabel : labelizeEffort(efforts[stop] ?? '', provider)} disabled={disabled} onPointerDown={beginPointer} onPointerMove={movePointer} onPointerUp={finishPointer} onPointerCancel={abandonPointer} onLostPointerCapture={abandonPointer} onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} />
-          <div className="session-effort-labels" role="group" aria-label="Effort levels">{efforts.map((effort, index) => <button type="button" key={`${effort}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${isTopTierEffort(effort) ? 'ultra' : ''}`} aria-pressed={visibleIndex === index} disabled={disabled} onClick={() => choose(effort)}>{labelizeEffort(effort, provider)}</button>)}</div>
+          <div className="session-effort-labels" role="group" aria-label="Effort levels">{efforts.map((effort, index) => { const description = effortDescription(effort); return <button type="button" key={`${effort}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${isTopTierEffort(effort) ? 'ultra' : ''}`} aria-pressed={visibleIndex === index} aria-description={description || undefined} disabled={disabled} onClick={() => choose(effort)}>{labelizeEffort(effort, provider)}{description && <small className="session-effort-level-note">{description}</small>}</button> })}</div>
         </div>
         {provider.toLowerCase() === 'claude' && !efforts.includes('ultracode') && <p className="session-effort-note">{workflowEnabled ? 'Claude Code did not report Ultracode for this model. The model needs catalog-reported Extra high support; managed policy may also keep it unavailable.' : 'Ultracode needs a model with catalog-reported Extra high and Claude dynamic workflows. Bitbots did not enable workflows for this conversation; its setting applies to new conversations. Claude config or managed policy may still provide it. Max remains separate.'}</p>}
         {lastIsUltra && atTop && <p className="session-effort-note">{providerStyle === 'claude' ? 'Claude Code reported Ultracode for this model. It runs at Extra high with dynamic workflows enabled for this session. Standard Max remains separate.' : 'Ultra is a separate catalog effort, distinct from Max.'}</p>}
@@ -375,7 +380,7 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
   const brand = providerBrand(provider).name
   const ordered = useMemo(() => organizeModels(provider, models), [provider, models])
   return <div ref={rootRef} className="composer-popover-anchor">
-    <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''}`} aria-haspopup="menu" aria-expanded={open} aria-label={`Conversation model: ${ariaLabel}${fastOn ? ', fast mode on' : ''}`} disabled={disabled || (saving && !open)} onClick={() => setOpen((value) => !value)}>
+    <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''}`} title="Choose which model this conversation uses" aria-haspopup="menu" aria-expanded={open} aria-label={`Conversation model: ${ariaLabel}${fastOn ? ', fast mode on' : ''}`} disabled={disabled || (saving && !open)} onClick={() => setOpen((value) => !value)}>
       {saving ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : fastOn ? <Zap size={13} aria-hidden="true" className="model-pill-fast" /> : null}
       <ProviderLogo provider={provider} size={14} />
       <i className="model-pill-divider" aria-hidden="true" />

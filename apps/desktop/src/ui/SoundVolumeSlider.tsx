@@ -11,11 +11,13 @@ const SETTLE_MS = 450
  * key up, blur, or a short pause after a keyboard step) so the caller can save
  * the value and play one preview cue instead of one per pixel of drag.
  */
-export function SoundVolumeSlider({ value, onChange, onCommit, label = 'Companion sound volume', disabled = false }: {
+export function SoundVolumeSlider({ value, onChange, onCommit, onPlaySample, label = 'Companion sound volume', disabled = false }: {
   /** The volume as a 0 to 1 fraction. */
   value: number
   onChange: (volume: number) => void
   onCommit: (volume: number) => void
+  /** Play one cue at the current volume; the button only renders when given. */
+  onPlaySample?: () => void
   label?: string
   disabled?: boolean
 }) {
@@ -63,5 +65,6 @@ export function SoundVolumeSlider({ value, onChange, onCommit, label = 'Companio
       onBlur={() => { dragging.current = false; commit() }}
     />
     <output className="volume-value" aria-hidden="true">{percent}%</output>
+    {onPlaySample && <button type="button" className="ghost-button small" onClick={onPlaySample} disabled={disabled}>Play sample</button>}
   </span>
 }

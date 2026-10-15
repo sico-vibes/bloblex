@@ -1,14 +1,14 @@
 node_modules/
 apps/desktop/dist/
 apps/desktop/src-tauri/target/
-apps/desktop/src-tauri/binaries/bloblexd-*.exe
+apps/desktop/src-tauri/binaries/bitbotsd-*.exe
 target/
 *.log
 *.tsbuildinfo
 
 # Local-only references and notes (never committed)
 /.local/
-apps/desktop/src-tauri/binaries/bloblex-hook-*.exe
+apps/desktop/src-tauri/binaries/bitbots-hook-*.exe
 
 # Local Claude Code session config
 /.claude/

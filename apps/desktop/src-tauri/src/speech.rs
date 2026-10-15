@@ -96,7 +96,7 @@ fn resolve_cache_root(app: &AppHandle) -> PathBuf {
         .ok()
         .map(|root| {
             PathBuf::from(root)
-                .join("Bloblex")
+                .join("Bitbots")
                 .join("speech-models")
                 .join(short)
         })

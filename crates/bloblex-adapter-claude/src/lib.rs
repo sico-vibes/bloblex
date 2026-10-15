@@ -47,7 +47,7 @@ async fn capture_stderr_tail(
 #[derive(Debug,Clone)]
 struct PrivateInstructionFile { path:PathBuf, lock_path:PathBuf }
 fn private_tmp_dir(override_dir:Option<&std::path::Path>)->PathBuf {
-    override_dir.map(PathBuf::from).or_else(||std::env::var_os("BLOBLEX_PRIVATE_TMP").map(PathBuf::from)).or_else(||std::env::var_os("LOCALAPPDATA").map(PathBuf::from).map(|p|p.join("Bloblex").join("private-tmp"))).unwrap_or_else(||std::env::temp_dir().join("Bloblex").join("private-tmp"))
+    override_dir.map(PathBuf::from).or_else(||std::env::var_os("BLOBLEX_PRIVATE_TMP").map(PathBuf::from)).or_else(||std::env::var_os("LOCALAPPDATA").map(PathBuf::from).map(|p|p.join("Bitbots").join("private-tmp"))).unwrap_or_else(||std::env::temp_dir().join("Bitbots").join("private-tmp"))
 }
 fn icacls(path:&std::path::Path,directory:bool,system_root_override:Option<&std::path::Path>)->std::io::Result<()> {
     #[cfg(windows)] {

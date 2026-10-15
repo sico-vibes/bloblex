@@ -4,7 +4,7 @@
 // wake the leader, who reports to the user. Isolated database and temp
 // workspace; prints verdicts only.
 //
-//   node scripts/live-checks/live-team.mjs [path-to-bloblexd.exe]
+//   node scripts/live-checks/live-team.mjs [path-to-bitbotsd.exe]
 //   env: LEADER=codex|claude|opencode (default codex), TEAMMATE=opencode|codex|claude (default opencode)
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 
-const daemonExe = process.argv[2] || process.env.BLOBLEXD_EXE || 'C:/dev/bloblex-target/debug/bloblexd.exe'
+const daemonExe = process.argv[2] || process.env.BLOBLEXD_EXE || 'C:/dev/bloblex-target/debug/bitbotsd.exe'
 const leaderProvider = process.env.LEADER || 'codex'
 const teammateProvider = process.env.TEAMMATE || 'opencode'
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'bloblex-live-team-'))

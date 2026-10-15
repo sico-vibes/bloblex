@@ -96,7 +96,8 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
   }
 
   const initials = profileInitials(name)
-  const statusText = connected ? 'On this device' : connection === 'connecting' ? 'Connecting…' : 'Offline'
+  const hasName = name.trim().length > 0
+  const statusText = hasName ? (connected ? 'On this device' : connection === 'connecting' ? 'Connecting…' : 'Offline') : 'Set your name'
 
   return <div className="sidebar-foot" ref={wrapRef}>
     {editing && <form className="profile-onboarding" aria-label="Your name" onSubmit={saveName}>
@@ -113,11 +114,11 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
       ref={trigger}
       type="button"
       className={`profile-button ${open ? 'open' : ''}`}
-      aria-label="Account and settings"
-      aria-haspopup="menu"
-      aria-expanded={open}
+      aria-label={hasName ? 'Account and settings' : 'Set your name'}
+      aria-haspopup={hasName ? 'menu' : undefined}
+      aria-expanded={hasName ? open : undefined}
       aria-current={usageActive ? 'page' : undefined}
-      onClick={() => setOpen((current) => !current)}
+      onClick={() => { if (!hasName) { setDraft(name); setEditing(true); return } setOpen((current) => !current) }}
     >
       <span className={`profile-avatar ${initials ? '' : 'empty'}`} aria-hidden="true">{initials || '?'}<i className={`presence ${connection}`} /></span>
       <span className="profile-copy"><strong>{name || 'Your profile'}</strong><small>{statusText}</small></span>

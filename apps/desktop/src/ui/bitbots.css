@@ -98,6 +98,16 @@
   animation-timing-function: steps(4, end);
 }
 
+/* Panels, dialogs, menus and the preview glide with an ease-out: the stepped
+   timing is kept only for small chrome (hover, toggles, chips). */
+:root[data-bitbots="on"] .settings-sheet,
+:root[data-bitbots="on"] .blob-dialog,
+:root[data-bitbots="on"] .menu-surface,
+:root[data-bitbots="on"] .select-menu,
+:root[data-bitbots="on"] .quick-switcher,
+:root[data-bitbots="on"] .look-preview,
+:root[data-bitbots="on"] .sp-window { transition-timing-function: ease-out; }
+
 :root[data-bitbots="on"] :focus-visible {
   outline: 2px dotted var(--bb-accent);
   outline-offset: 2px;
@@ -200,6 +210,27 @@
 :root[data-bitbots="on"] .activity-step-block > span,
 :root[data-bitbots="on"] .team-card-label,
 :root[data-bitbots="on"] .team-picker-label { letter-spacing: .12em; text-transform: uppercase; font-weight: 700; }
+
+/* Light mode: the small display cuts (11-15 px) are drawn in Doto 900 so they do
+   not look pale on the light surface; the 18 px page headings keep 700. No colour
+   token changes, so --text-1 on --surface-app contrast is unchanged. */
+:root[data-theme="light"][data-bitbots="on"] h3,
+:root[data-theme="light"][data-bitbots="on"] h4,
+:root[data-theme="light"][data-bitbots="on"] .chat-title-text,
+:root[data-theme="light"][data-bitbots="on"] .settings-group-head h3,
+:root[data-theme="light"][data-bitbots="on"] .setup-eyebrow,
+:root[data-theme="light"][data-bitbots="on"] .roster-section-label,
+:root[data-theme="light"][data-bitbots="on"] .blob-page-heading,
+:root[data-theme="light"][data-bitbots="on"] .activity-heading strong,
+:root[data-theme="light"][data-bitbots="on"] .eyebrow,
+:root[data-theme="light"][data-bitbots="on"] .import-section-label,
+:root[data-theme="light"][data-bitbots="on"] .look-section-label,
+:root[data-theme="light"][data-bitbots="on"] .team-card-label,
+:root[data-theme="light"][data-bitbots="on"] .team-picker-label,
+:root[data-theme="light"][data-bitbots="on"] .safe-markdown h2,
+:root[data-theme="light"][data-bitbots="on"] .safe-markdown h3,
+:root[data-theme="light"][data-bitbots="on"] .context-head h2,
+:root[data-theme="light"][data-bitbots="on"] .context-section h3 { font-weight: 900; }
 
 /* ── 2b. Reusable pieces the Director's TSX relies on ─────────────────────── */
 .bb-pixel-box {

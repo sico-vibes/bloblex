@@ -56,6 +56,9 @@
 
 /* ── Views and cards ─────────────────────────────────────────────────── */
 .island-views { position: relative; min-height: 0; flex: 1; animation: view-in 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both; }
+.companion-hint { flex: 0 0 auto; margin: 6px 0 0; padding: 5px 6px 5px 10px; display: flex; align-items: center; gap: 8px; color: var(--c-ink); border: 1px solid var(--c-hairline); border-radius: 12px; background: var(--c-card-flat); font: 400 var(--fs-xs) var(--c-font); }
+.companion-hint span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.companion-hint button { flex: 0 0 auto; }
 @keyframes view-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
 .island-card { position: relative; height: 100%; overflow: hidden; border: 1px solid var(--c-hairline); border-radius: 20px; background: var(--c-card); }
 .island-card.wash::after { content: ""; position: absolute; inset: 0; background: radial-gradient(280px 280px at 50% 130%, var(--wash) 0%, var(--companion-transparent-black) 70%); pointer-events: none; }
@@ -284,7 +287,7 @@
 .companion-activity-row.team:hover { background: var(--companion-alpha-07); }
 .companion-side-faces { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; color: var(--c-dim-3); }
 .companion-side-faces .blob-canvas { pointer-events: none; }
-@media (prefers-reduced-motion: reduce) { .team-pill, .team-pill.state-working .team-pill-dot { transition: none; animation: none; } }
+@media (prefers-reduced-motion: reduce) { .team-pill, .team-pill.state-working .team-pill-dot, .shimmer { transition: none; animation: none; } }
 .island-card .question-card { width: 100%; margin: 0; padding: 10px 12px; gap: 8px; border-radius: 14px; box-shadow: none; font-size: var(--fs-xs); }
 .island-card:has(.question-card) .card-stack { padding-top: 8px; padding-bottom: 8px; justify-content: flex-start; overflow-y: auto; }
 

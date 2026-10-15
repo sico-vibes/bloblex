@@ -262,20 +262,20 @@ describe('BlobCanvas mounted lifecycle', () => {
   it('renders each local reference stage and preserves approval/offline/error barriers', () => {
     const view = mount(<BlobCanvas color="#e67f72" label="Agent" mood="success" fileStage="drop" />)
     const canvas = view.host.querySelector('canvas')!
-    expect(canvas.getAttribute('aria-label')).toBe('Agent file_drop')
+    expect(canvas.getAttribute('aria-label')).toBe('Agent, file_drop')
     flushFrame(clock)
 
     view.rerender(<BlobCanvas color="#e67f72" label="Agent" mood="success" fileStage="preparing" />)
-    expect(canvas.getAttribute('aria-label')).toBe('Agent file_preparing')
+    expect(canvas.getAttribute('aria-label')).toBe('Agent, file_preparing')
     flushFrame(clock + 16)
     view.rerender(<BlobCanvas color="#e67f72" label="Agent" mood="success" fileStage="ready" />)
-    expect(canvas.getAttribute('aria-label')).toBe('Agent file_ready')
+    expect(canvas.getAttribute('aria-label')).toBe('Agent, file_ready')
     flushFrame(clock + 16)
     expect(context.quadraticCurveTo).toHaveBeenCalled()
     view.rerender(<BlobCanvas color="#e67f72" label="Agent" mood="success" fileStage="sending" />)
-    expect(canvas.getAttribute('aria-label')).toBe('Agent file_sending')
+    expect(canvas.getAttribute('aria-label')).toBe('Agent, file_sending')
     view.rerender(<BlobCanvas color="#e67f72" label="Agent" mood="success" fileStage="error" />)
-    expect(canvas.getAttribute('aria-label')).toBe('Agent file_error')
+    expect(canvas.getAttribute('aria-label')).toBe('Agent, file_error')
     // The badge returns once the mailbox morph from the drop stages has
     // relaxed and the previous badge has shrunk away (100 ms swap).
     flushFrame(clock + 16)
@@ -284,11 +284,11 @@ describe('BlobCanvas mounted lifecycle', () => {
     expect(context.fillText.mock.calls.some(([text]) => text === '!')).toBe(true)
 
     view.rerender(<BlobCanvas color="#e67f72" label="Agent" mood="permission" fileStage="ready" />)
-    expect(canvas.getAttribute('aria-label')).toBe('Agent permission')
+    expect(canvas.getAttribute('aria-label')).toBe('Agent, permission')
     view.rerender(<BlobCanvas color="#e67f72" label="Agent" mood="offline" fileStage="drop" />)
-    expect(canvas.getAttribute('aria-label')).toBe('Agent offline')
+    expect(canvas.getAttribute('aria-label')).toBe('Agent, offline')
     view.rerender(<BlobCanvas color="#e67f72" label="Agent" mood="error" fileStage="ready" />)
-    expect(canvas.getAttribute('aria-label')).toBe('Agent error')
+    expect(canvas.getAttribute('aria-label')).toBe('Agent, error')
     view.unmount()
   })
 })

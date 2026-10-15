@@ -3176,6 +3176,9 @@ impl Storage {
         if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
         if k=="appearance.accent" && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()==7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit()))){return Err(StorageError::InvalidAgent)}
+        if k=="appearance.density" && !v.as_str().is_some_and(|s| ["compact","default","roomy"].contains(&s)){return Err(StorageError::InvalidAgent)}
+        if k=="hints.seen" && !valid_hints_seen(v){return Err(StorageError::InvalidAgent)}
+        if k=="onboarding.tour" && !valid_tour_state(v){return Err(StorageError::InvalidAgent)}
         if k=="profile.about" && !v.as_str().is_some_and(|text| text.trim().chars().count()<=1500){return Err(StorageError::InvalidAgent)}
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -3186,7 +3189,7 @@ impl Storage {
             let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same { events.push(push_settings_event(&tx,k,enabled)?); }
-        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("memory.") || k.starts_with("appearance.") {
+        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("memory.") || k.starts_with("appearance.") || k.starts_with("hints.") || k.starts_with("onboarding.") {
             // Window-level preferences: the main window and the companion both follow them live.
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same {
@@ -3593,6 +3596,26 @@ impl Storage {
         })))?.collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
+}
+
+/// Hint ids: `[a-z0-9._-]{1,48}`, at most 64 kept, oldest dropped by the caller.
+fn valid_hints_seen(value: &Value) -> bool {
+    let Some(items) = value.as_array() else { return false; };
+    if items.len() > 64 { return false; }
+    items.iter().all(|item| item.as_str().is_some_and(valid_hint_id))
+}
+
+fn valid_hint_id(id: &str) -> bool {
+    (1..=48).contains(&id.len())
+        && id.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte))
+}
+
+/// `onboarding.tour`: `{ version: 0..=999, done: boolean, step: 0..=20 }`, all fields present.
+fn valid_tour_state(value: &Value) -> bool {
+    let Some(object) = value.as_object() else { return false; };
+    matches!(object.get("version").and_then(Value::as_u64), Some(version) if version <= 999)
+        && object.get("done").is_some_and(Value::is_boolean)
+        && matches!(object.get("step").and_then(Value::as_u64), Some(step) if step <= 20)
 }
 
 fn valid_usage_tip_dismissals(value: &Value) -> bool {
@@ -5335,6 +5358,38 @@ mod tests {
             assert_eq!(db.session_detail("s-upgrade").unwrap()["messages"][0]["reactions"], json!(["🎉"]));
         }
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ui_preference_settings_validate_default_and_announce_their_changes() {
+        let db = Storage::open_in_memory().unwrap();
+        // Unset: the daemon stores nothing until the user changes a value.
+        let initial = db.settings().unwrap();
+        assert!(initial.get("appearance.density").is_none());
+        assert!(initial.get("hints.seen").is_none());
+        assert!(initial.get("onboarding.tour").is_none());
+        // Valid: each key is stored and broadcast as settings.changed.
+        assert_eq!(db.set_setting("appearance.density", &json!("compact")).unwrap()[0]["payload"], json!({"key":"appearance.density","value":"compact"}));
+        assert!(db.set_setting("appearance.density", &json!("compact")).unwrap().is_empty(), "an unchanged value is not announced");
+        assert_eq!(db.set_setting("hints.seen", &json!(["companion.drag"])).unwrap()[0]["payload"], json!({"key":"hints.seen","value":["companion.drag"]}));
+        let tour = json!({"version":1,"done":false,"step":2});
+        assert_eq!(db.set_setting("onboarding.tour", &tour).unwrap()[0]["payload"], json!({"key":"onboarding.tour","value":tour}));
+        let saved = db.settings().unwrap();
+        assert_eq!(saved["appearance.density"], "compact");
+        assert_eq!(saved["hints.seen"], json!(["companion.drag"]));
+        assert_eq!(saved["onboarding.tour"], tour);
+        // Invalid: density, hint ids and the tour shape are all rejected.
+        assert!(db.set_setting("appearance.density", &json!("tiny")).is_err());
+        assert!(db.set_setting("appearance.density", &json!(2)).is_err());
+        assert!(db.set_setting("hints.seen", &json!("companion.drag")).is_err());
+        assert!(db.set_setting("hints.seen", &json!(["Companion drag"])).is_err());
+        assert!(db.set_setting("hints.seen", &json!(["ok", "x".repeat(49)])).is_err());
+        let too_many: Vec<String> = (0..65).map(|index| format!("hint-{index}")).collect();
+        assert!(db.set_setting("hints.seen", &json!(too_many)).is_err());
+        assert!(db.set_setting("onboarding.tour", &json!({"version":1,"done":false})).is_err());
+        assert!(db.set_setting("onboarding.tour", &json!({"version":1000,"done":false,"step":0})).is_err());
+        assert!(db.set_setting("onboarding.tour", &json!({"version":0,"done":"yes","step":0})).is_err());
+        assert!(db.set_setting("onboarding.tour", &json!({"version":0,"done":true,"step":21})).is_err());
     }
 
     #[test]

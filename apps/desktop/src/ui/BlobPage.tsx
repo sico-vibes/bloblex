@@ -6,6 +6,7 @@ import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
 import type { ExecutionSendGate } from '../executionContract'
 import { Archive, Check, ChevronLeft, Copy, Download, Trash2 } from 'lucide-react'
 import { BotRail, BotSaveBar, railSections, sectionDomId } from './BotPageChrome'
+import { BotPreviewPane } from './BotPreviewPane'
 import { summarizeChanges, type ChangedField } from './agentForm'
 import { BlobOverview } from './BlobOverview'
 import { BlobSessions } from './BlobSessions'
@@ -128,7 +129,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
       <h1 className="blob-page-heading">{title}</h1>
     </header>
     <div className="blob-page-scroll" ref={scrollRef}>
-      <div className="blob-page-layout">
+      <div className="blob-page-layout with-preview">
         <BotRail sections={sections} changes={changes} scrollRoot={scrollRef} />
         <div className="blob-page-column">
           <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} approvalMode={badgeMode} agentId={agent?.id ?? null} />
@@ -147,6 +148,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
             </div>
           </section>}
         </div>
+        <BotPreviewPane draft={draft} agentId={agent?.id ?? null} connected={connected} />
       </div>
     </div>
     <BotSaveBar mode={mode} noun={noun} dirty={dirty} saving={saving} changes={changes} invalidCount={invalid.length} saved={saved} canSubmit onSave={trySave} onDiscard={requestDiscard} />

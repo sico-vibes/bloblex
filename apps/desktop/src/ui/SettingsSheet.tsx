@@ -25,6 +25,7 @@ import { LookPicker } from './LookPicker'
 import { LookPreview } from './LookPreview'
 import { searchSettings, type SettingsIndexEntry } from './settingsIndex'
 import { AccentPicker } from './AccentPicker'
+import { DensityControl } from './DensityControl'
 import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { useEntityNoun } from './vocabulary'
@@ -563,6 +564,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </SettingsRow>
               <SettingsRow label="Text size">
                 <Select ariaLabel="Text size" variant="muted" value={textSize} disabled={saving} onChange={(value) => { if (['small', 'default', 'large', 'larger'].includes(value)) void updateAppearance(appearanceTheme, value as typeof textSize) }} options={[{ value: 'small', label: 'Small 13' }, { value: 'default', label: 'Default 14' }, { value: 'large', label: 'Large 15' }, { value: 'larger', label: 'Larger 16' }]} />
+              </SettingsRow>
+              <SettingsRow label="Density" hint="How much room rows and messages take. Applies everywhere.">
+                <DensityControl />
               </SettingsRow>
             </SettingsGroup>
           </>}

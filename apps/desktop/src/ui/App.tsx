@@ -82,6 +82,7 @@ import { SessionExecutionControls } from './SessionExecutionControls'
 import { composerMaxHeight, useAutosizeTextarea } from './useAutosize'
 import { ContextWindowIndicator } from './ContextWindowIndicator'
 import { QuotaBar } from './QuotaBar'
+import { planProgress, planSteps } from './planProgress'
 import { SidebarUsage } from './SidebarUsage'
 import { TourHost } from './tour/TourHost'
 import { ContextualHints } from './tour/ContextualHints'
@@ -1460,7 +1461,10 @@ export function App() {
       </article>
     }
     if (role === 'plan') {
-      return <PlanCard key={key} text={text} renderText={renderText} canApprove={!sideSession && planOn && !sessionBusy && message.id === latestPlanId} onApprove={() => void approvePlan()} onRevise={() => composerRef.current?.focus()} />
+      const planStepList = planSteps(text)
+      const planIndex = (selectedSession?.messages ?? []).findIndex((item) => item.id === message.id)
+      const laterAssistant = planIndex < 0 ? [] : (selectedSession?.messages ?? []).slice(planIndex + 1).filter((item) => item.role === 'assistant').map((item) => String(item.content ?? ''))
+      return <PlanCard key={key} steps={planStepList} progress={planProgress(planStepList, laterAssistant)} text={text} renderText={renderText} canApprove={!sideSession && planOn && !sessionBusy && message.id === latestPlanId} onApprove={() => void approvePlan()} onRevise={() => composerRef.current?.focus()} />
     }
     if (role === 'notice' && meta?.kind === 'auto_retry') {
       const retryMeta = message.meta as { status?: unknown; itemId?: unknown }

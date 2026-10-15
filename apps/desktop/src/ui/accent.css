@@ -21,3 +21,4 @@
 :root[data-accent="custom"]:not([data-bitbots="on"]) .usage-density button.active { color: var(--user-accent-ink); background: var(--user-accent); }
 :root[data-accent="custom"]:not([data-bitbots="on"]) .onboarding-progress span.active { background: var(--user-accent); }
 :root[data-accent="custom"]:not([data-bitbots="on"]) ::selection { color: var(--user-accent-ink); background: var(--user-accent); }
+:root[data-accent="custom"] .density-control button.active { color: var(--user-accent-ink); background: var(--user-accent); }

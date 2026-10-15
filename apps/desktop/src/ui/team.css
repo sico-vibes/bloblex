@@ -169,3 +169,15 @@
 .chat-title .role-chip { height: 20px; margin-left: 6px; padding: 0 7px; display: inline-flex; align-items: center; line-height: 1; }
 .chat-title .conversation-auto-title { flex: 0 1 auto; height: 16px; margin-left: 10px; padding-left: 10px; display: inline-flex; align-items: center; border-left: 1px solid var(--line-strong); line-height: 1; }
 .chat-title > .side-menu-wrap { margin-left: 8px; display: inline-flex; align-items: center; }
+
+/* Plan card as a checklist once steps have been carried out. */
+.plan-card-count { margin-left: auto; color: var(--text-3); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; }
+.plan-card-meter { height: 3px; margin: 0 14px; display: block; overflow: hidden; border-radius: 2px; background: color-mix(in srgb, var(--text-1) 12%, transparent); }
+.plan-card-meter > b { height: 100%; display: block; border-radius: inherit; background: var(--user-accent, var(--text-2)); transition: width 280ms ease; }
+.plan-card-steps { margin: 0; padding: 10px 14px 12px; list-style: none; display: grid; gap: 8px; }
+.plan-card-steps li { display: flex; align-items: flex-start; gap: 10px; color: var(--text-1); font-size: var(--fs-sm); line-height: 1.45; }
+.plan-card-steps li.done { color: var(--text-3); }
+.plan-card-steps li.done > span:nth-of-type(2) { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-3) 60%, transparent); }
+.plan-card-tick { width: 16px; height: 16px; margin-top: 2px; flex: 0 0 auto; display: grid; place-items: center; color: var(--user-accent-ink, var(--text-inverse)); border: 1px solid var(--line-strong); border-radius: 50%; }
+.plan-card-steps li.done .plan-card-tick { border-color: transparent; background: var(--user-accent, var(--text-2)); }
+@media (prefers-reduced-motion: reduce) { .plan-card-meter > b { transition: none; } }

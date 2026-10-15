@@ -208,10 +208,16 @@ export function conversationMatches(sessions: readonly Session[], agents: readon
   return sessions.filter((session) => !needle || sideTitle(session, agents).toLowerCase().includes(needle)).slice(0, 6)
 }
 
-export function PlanCard({ text, renderText, canApprove, onApprove, onRevise }: { text: string; renderText: (text: string) => ReactNode; canApprove: boolean; onApprove: () => void; onRevise: () => void }) {
+export function PlanCard({ text, renderText, canApprove, onApprove, onRevise, steps = [], progress = [] }: { text: string; renderText: (text: string) => ReactNode; canApprove: boolean; onApprove: () => void; onRevise: () => void; steps?: readonly string[]; progress?: readonly number[] }) {
+  const done = progress.filter(Boolean).length
+  // Once the bot has carried out some steps the plan reads as a checklist.
+  const checklist = steps.length > 0 && done > 0
   return <article className="plan-card" aria-label="Proposed plan">
-    <header><ClipboardList size={15} aria-hidden="true" /><strong>Proposed plan</strong></header>
-    <div className="plan-card-body">{renderText(text)}</div>
+    <header><ClipboardList size={15} aria-hidden="true" /><strong>Proposed plan</strong>{checklist && <span className="plan-card-count" aria-label={done + ' of ' + steps.length + ' steps done'}>{done} / {steps.length}</span>}</header>
+    {checklist && <i className="plan-card-meter" aria-hidden="true"><b style={{ width: Math.round((done / steps.length) * 100) + '%' }} /></i>}
+    {checklist
+      ? <ol className="plan-card-steps">{steps.map((step, index) => <li key={index} className={progress[index] ? 'done' : ''}><span className="plan-card-tick" aria-hidden="true">{progress[index] ? <Check size={11} /> : null}</span><span>{step}</span><span className="sr-only">{progress[index] ? ', done' : ', not done yet'}</span></li>)}</ol>
+      : <div className="plan-card-body">{renderText(text)}</div>}
     {canApprove && <footer>
       <button type="button" className="secondary-button small" onClick={onRevise}>Keep planning</button>
       <button type="button" className="primary-button small" onClick={onApprove}><Check size={14} aria-hidden="true" />Approve &amp; build</button>

@@ -18,6 +18,7 @@ import { applyAppearance } from './appearance'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
 import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTime, type DiscoveryStatus } from './runtimeDiscovery'
+import { ScanRecovery } from './ScanRecovery'
 import { ConfirmDialog } from './BlobPage'
 import { setAccentColor, setThemeStyle, useAccentColor, useThemeStyle } from '../blob/bitbots'
 import { LookPicker } from './LookPicker'
@@ -580,7 +581,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                 {scanStatus.scanning && <span>Scanning…{scanStatus.failure ? ' ' : ''}</span>}
                 {scanStatus.failure ? <span>{scanStatus.failure.step}: {scanStatus.failure.message} <time dateTime={new Date(scanStatus.failure.at).toISOString()} title={new Date(scanStatus.failure.at).toLocaleString()}>{scanTime(scanStatus.failure.at)}</time>{scanStatus.retrying ? ' · Retrying automatically' : ''}</span> : !scanStatus.scanning && <span>{discoveryResultText(scanStatus)} · <time dateTime={new Date(scanStatus.completedAt!).toISOString()} title={new Date(scanStatus.completedAt!).toLocaleString()}>{scanTime(scanStatus.completedAt!)}</time></span>}
               </p>}
-              {runtimes.length === 0 && !scanStatus.scanning && !scanStatus.failure && <p className="settings-empty">No coding agents found on this device.</p>}
+              {runtimes.length === 0 && !scanStatus.scanning && <ScanRecovery runtimes={runtimes} scanning={scanStatus.scanning} error={scanStatus.failure ? scanStatus.failure.message : null} onScan={() => void onRefresh()} />}
               {runtimes.map((runtime) => {
                 const open = openRuntimes[runtime.id] === true
                 const probe = runtimeProbeDetail(runtime)

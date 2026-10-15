@@ -39,7 +39,7 @@ import { hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, side
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
-import { turnFailureTitle } from './analyticsFormat'
+import { friendlyError } from './errorCopy'
 import { createDraft, createParams, daemonCodeOf, draftFromAgent, teamParams, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, starterDraft, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
 import { activeAgents, agentSessions, agentsForRuntime, duplicateAgentName, legacySessions, nextAgentAfterArchive, projectGroups, runtimeUsable, sessionDisplayTitle, sessionSelectionTarget } from './rosterSelectors'
 import { conversationMarkdown } from './conversationMarkdown'
@@ -61,7 +61,9 @@ import { notificationAllowed, notificationForTransition } from './notificationTr
 import { flashMainWindow, sendDesktopNotification } from '../desktopIntegrations'
 import { stampCompanionDragRegions } from './companionDrag'
 import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, waitingBlobCount, type ExperimentName } from './experiments'
-import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, type MessageSearchResult, type UndoToast } from './ExperimentalFeatures'
+import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, type MessageSearchResult } from './ExperimentalFeatures'
+import { ConnectionBanner } from './ConnectionBanner'
+import { removeUndoToast, useUndoToasts, useUndoable } from './undo'
 import { messageExcerpt, MessageActions, MessageContextMenu, MessageReactionBadges, originalMessageText, ReplyContextStrip, type ReplyTarget } from './MessageActions'
 import { UsageTip } from './UsageTip'
 import { appendUsageTipDismissal, parseUsageTipDismissals, selectUsageTip, type UsageTip as UsageTipModel, type UsageTipDismissal } from './usageTips'
@@ -146,8 +148,7 @@ export function App() {
   const [searchTarget, setSearchTarget] = useState<MessageSearchResult | null>(null)
   const [reviewDismissals, setReviewDismissals] = useState<Record<string, string[]>>({})
   const [revertTarget, setRevertTarget] = useState<{ sessionId: string; file: Record<string, unknown> } | null>(null)
-  const [undoToasts, setUndoToasts] = useState<UndoToast[]>([])
-  const removeUndoToast = useCallback((id: string) => setUndoToasts((current) => current.filter((toast) => toast.id !== id)), [])
+  const undoToasts = useUndoToasts()
   const changeExperiment = useCallback((name: ExperimentName, enabled: boolean) => setExperiments((current) => ({ ...current, [name]: enabled })), [])
   useEffect(() => {
     if (!experiments.shortcuts || companion) return
@@ -215,6 +216,7 @@ export function App() {
   const [pendingCompanionStartup, setPendingCompanionStartup] = useState(false)
   const reducedLaunchFade = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const [connection, setConnection] = useState<ConnectionState>(inDesktop ? 'connecting' : 'disconnected')
+  const [reconnectAttempts, setReconnectAttempts] = useState(0)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [selectedRuntimeId, setSelectedRuntimeId] = useState<string | null>(null)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
@@ -920,8 +922,12 @@ export function App() {
   }, [companion, refresh])
 
   useEffect(() => {
-    if (!inDesktop || connection !== 'disconnected') return
-    const timer = window.setInterval(() => { if (!refreshing) void refresh() }, 3000)
+    if (connection === 'connected') { setReconnectAttempts((current) => current === 0 ? current : 0); return }
+    if (!inDesktop) return
+    const timer = window.setInterval(() => {
+      setReconnectAttempts((current) => current + 1)
+      if (!refreshing) void refresh()
+    }, 3000)
     return () => window.clearInterval(timer)
   }, [connection, refresh, refreshing])
 
@@ -1374,13 +1380,8 @@ export function App() {
     if (!agent) return
     setArchiveTarget(null)
     try {
-      const result = await doRpc<{ agent?: Agent }>('agent.delete', { agentId: agent.id }, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.delete'))
-      if (result.agent?.id) mergeAgent(result.agent)
-      else mergeAgent({ ...agent, archived: true })
-      if (experiments.undo) setUndoToasts((current) => [...current, {
-        id: `archive:${agent.id}:${Date.now()}`, text: `Archived ${agent.name}`, deadline: Date.now() + 8000,
-        undo: async () => { const result = await rpc<{ agent: Agent }>('agent.restore', { agentId: agent.id }); mergeAgent(result.agent); await refresh() },
-      }])
+      if (experiments.undo) await archiveBlob(agent)
+      else await deleteAgent(agent)
     } catch (reason) {
       setError(messageForDaemonCode(daemonCodeOf(reason), 'agent.delete'))
     }
@@ -1811,6 +1812,61 @@ export function App() {
       return result.project ?? null
     } catch { return null }
   }
+
+  // --- Uniform undo -----------------------------------------------------------------
+  const deleteAgent = async (agent: Agent) => {
+    const result = await doRpc<{ agent?: Agent }>('agent.delete', { agentId: agent.id }, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.delete'))
+    if (result.agent?.id) mergeAgent(result.agent)
+    else mergeAgent({ ...agent, archived: true })
+  }
+  const restoreAgent = async (agent: Agent) => { const result = await rpc<{ agent: Agent }>('agent.restore', { agentId: agent.id }); mergeAgent(result.agent); await refresh() }
+  const archiveBlob = useUndoable<[Agent]>(deleteAgent, restoreAgent, (agent) => `Archived '${agent.name}'.`)
+
+  const renameAgent = async (agent: Agent, name: string) => {
+    const result = await doRpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, name }, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.update', { sentName: true }))
+    if (result.agent?.id) mergeAgent(result.agent)
+  }
+  const renameBlob = useUndoable<[Agent, string, string]>(
+    async (agent, name) => { await renameAgent(agent, name) },
+    async (agent, _name, previous) => { await renameAgent(agent, previous) },
+    (agent, name) => `Renamed '${agent.name}' to '${name}'.`,
+  )
+
+  const moveAgent = async (agent: Agent, projectId: string | null) => { await teamUpdate(agent, { projectId }) }
+  const projectLabel = (projectId: string | null) => projectId ? (projects.find((project) => project.id === projectId)?.name ?? 'the project') : 'Unassigned'
+  const moveBlob = useUndoable<[Agent, string | null, string | null]>(
+    async (agent, projectId) => { await moveAgent(agent, projectId) },
+    async (agent, _projectId, previous) => { await moveAgent(agent, previous) },
+    (agent, projectId) => `Moved '${agent.name}' to ${projectLabel(projectId)}.`,
+  )
+
+  const deleteProject = async (project: Project) => { await projectAction('project.delete', { projectId: project.id }) }
+  const restoreProject = async (project: Project, memberIds: string[]) => {
+    const created = await projectAction('project.create', { name: project.name, path: project.path ?? null })
+    if (created?.id) {
+      for (const id of memberIds) await rpc('agent.team.update', { agentId: id, projectId: created.id }).catch(() => undefined)
+      await refresh()
+    }
+  }
+  const removeProject = useUndoable<[Project, string[]]>(
+    async (project) => { await deleteProject(project) },
+    async (project, memberIds) => { await restoreProject(project, memberIds) },
+    (project) => `Deleted project '${project.name}'.`,
+  )
+
+  const scheduleConversationDelete = async (session: Session) => {
+    await rpc<{ deadline: number }>('session.delete.schedule', { sessionId: session.id })
+    setSelectedSessionId((current) => current === session.id ? null : current)
+    await refresh()
+  }
+  const cancelConversationDelete = async (session: Session) => { await rpc('session.delete.cancel', { sessionId: session.id }); await refresh() }
+  const deleteConversation = useUndoable<[Session]>(
+    scheduleConversationDelete,
+    cancelConversationDelete,
+    (session) => `Deleted '${session.title?.trim() || 'Conversation'}'.`,
+  )
+  const reconnectFailed = connection !== 'connected' && reconnectAttempts >= 3 && error !== null
+  const retryConnection = () => { setReconnectAttempts(0); void refresh() }
   const createProject = async () => {
     const path = await openProjectFolder()
     if (!path) return
@@ -2013,9 +2069,9 @@ export function App() {
           onArchive: setArchiveTarget,
           onDuplicate: (agent) => void duplicateAgent(agent),
           onExportBlob: (agent) => void exportBlob(agent),
-          onRename: (agent) => setTextPrompt({ title: `Rename ${agent.name}`, label: `${Noun} name`, value: agent.name, confirmLabel: 'Rename', onSubmit: async (name) => { const result = await doRpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, name }, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.update', { sentName: true })); if (result.agent?.id) mergeAgent(result.agent) } }),
+          onRename: (agent) => setTextPrompt({ title: `Rename ${agent.name}`, label: `${Noun} name`, value: agent.name, confirmLabel: 'Rename', onSubmit: async (name) => { if (experiments.undo) await renameBlob(agent, name, agent.name); else await renameAgent(agent, name) } }),
           onTogglePin: (agentId) => updatePins((current) => toggleFavorite(current, agentId)),
-          onMove: (agent, projectId) => void teamUpdate(agent, { projectId }),
+          onMove: (agent, projectId) => { if (experiments.undo) void moveBlob(agent, projectId, agent.projectId ?? null); else void moveAgent(agent, projectId) },
           onToggleLeader: (agent) => void teamUpdate(agent, { leader: !agent.leader }),
           onSetHidden: (agent, hidden) => void teamUpdate(agent, { hidden }),
           onToggleUnread: (_agent, session, unread) => { if (session) setSeenSessions((current) => markSeen(current, session.id, unread ? new Date(0).toISOString() : new Date().toISOString())) },
@@ -2066,6 +2122,8 @@ export function App() {
             </div>
           </div>
         </header>
+
+        <ConnectionBanner state={connection} attempts={reconnectAttempts} failed={reconnectFailed} onRetry={retryConnection} />
 
         {error && <div className="inline-error" role="alert"><ShieldAlert size={16} /><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError(null)}><X size={15} /></button></div>}
         {archiveNotice && <div className="inline-error" role="status"><span>{archiveNotice}</span><button aria-label="Dismiss notice" onClick={() => setArchiveNotice(null)}><X size={15} /></button></div>}
@@ -2133,7 +2191,7 @@ export function App() {
                   if (event.key === 'Escape') { event.preventDefault(); setHashRef(null); return }
                 }
                 if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() }
-              }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
+              }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
               <div className="composer-control-strip" data-tour="controls">
                 <div className="composer-controls-start">
                   <AttachButton supported={imagesSupported} disabled={connection !== 'connected' || busy || !runtimeReady} count={attachments.length} onFiles={addAttachments} />
@@ -2146,7 +2204,7 @@ export function App() {
                   {speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
                   {turnLive && steerAvailable && !!composer.trim() && attachments.length === 0 && <button type="button" className="composer-icon-button steer-button" onClick={() => void steerPrompt()} disabled={busy || connection !== 'connected'} aria-label="Steer now" title="Steer: add this to the turn that is running now"><CornerDownRight size={16} aria-hidden="true" /></button>}
                   {turnLive && <button className="send-button cancel" onClick={() => void cancelTurn()} disabled={busy} aria-label="Cancel turn" title="Stop"><Square size={12} fill="currentColor" /></button>}
-                  <button className="send-button" onClick={() => void sendPrompt()} disabled={busy || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? 'Queue message' : 'Send message'} title={sessionBusy ? 'Add to the queue. It sends when this turn ends.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : <ArrowUp size={17} />}</button>
+                  <button className="send-button" onClick={() => void sendPrompt()} disabled={connection !== 'connected' || busy || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? 'Queue message' : 'Send message'} title={connection !== 'connected' ? 'Waiting for the connection' : sessionBusy ? 'Add to the queue. It sends when this turn ends.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : <ArrowUp size={17} />}</button>
                 </div>
               </div>
             </div>
@@ -2231,16 +2289,10 @@ export function App() {
         }
       }} onCancel={() => setRevertTarget(null)} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
-      {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body={experiments.undo ? "It leaves the sidebar and companion. Its conversations stay saved. You can undo this for eight seconds." : `It leaves the sidebar and companion. Its conversations stay saved. Restoring a ${noun} is not available yet.`} confirmLabel={`Archive ${noun}`} cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
-      {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bitbots. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm successTitle="Conversation deleted" successBody={experiments.undo ? "Deletion is scheduled. Use Undo within eight seconds to keep the conversation." : "This conversation and its messages were removed from Bitbots."} onConfirm={async () => { if (experiments.undo) {
-          const sessionId = sessionDeleteTarget.id
-          const result = await rpc<{ deadline: number }>('session.delete.schedule', { sessionId })
-          setUndoToasts((current) => [...current, { id: `delete:${sessionId}`, text: 'Deleted conversation', deadline: result.deadline, undo: async () => { await rpc('session.delete.cancel', { sessionId }); await refresh() } }])
-          setSelectedSessionId(null)
-          await refresh()
-        } else await rpc('session.delete', { sessionId: sessionDeleteTarget.id }) }} onComplete={() => { setSessionDeleteTarget(null); focusSidebarBlob() }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
+      {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body={experiments.undo ? "It leaves the sidebar and companion. Its conversations stay saved. You can undo this for eight seconds." : "It leaves the sidebar and companion. Its conversations stay saved. Restoring a " + noun + " is not available yet."} confirmLabel={`Archive ${noun}`} cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
+      {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bitbots. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm successTitle="Conversation deleted" successBody={experiments.undo ? "Deletion is scheduled. Use Undo within eight seconds to keep the conversation." : "This conversation and its messages were removed from Bitbots."} onConfirm={async () => { if (experiments.undo) await deleteConversation(sessionDeleteTarget); else await rpc('session.delete', { sessionId: sessionDeleteTarget.id }) }} onComplete={() => { setSessionDeleteTarget(null); focusSidebarBlob() }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
       {textPrompt && <TextPromptDialog {...textPrompt} onCancel={() => setTextPrompt(null)} onSubmit={async (value) => { try { await textPrompt.onSubmit(value); setTextPrompt(null) } catch (reason) { setError(messageOf(reason)) } }} />}
-      {projectDelete && <ConfirmDialog title={`Delete ${projectDelete.name}?`} body={`The project is removed from Bitbots. Its ${nouns} move to Unassigned and the folder on disk is not touched.`} confirmLabel="Delete project" cancelLabel="Keep it" tone="danger" onConfirm={() => { const project = projectDelete; setProjectDelete(null); void projectAction('project.delete', { projectId: project.id }) }} onCancel={() => setProjectDelete(null)} />}
+      {projectDelete && <ConfirmDialog title={`Delete ${projectDelete.name}?`} body={`The project is removed from Bitbots. Its ${nouns} move to Unassigned and the folder on disk is not touched.`} confirmLabel="Delete project" cancelLabel="Keep it" tone="danger" onConfirm={() => { const project = projectDelete; setProjectDelete(null); const memberIds = agents.filter((agent) => agent.projectId === project.id).map((agent) => agent.id); if (experiments.undo) void removeProject(project, memberIds); else void projectAction('project.delete', { projectId: project.id }) }} onCancel={() => setProjectDelete(null)} />}
       {freshTarget && <ConfirmDialog title={`Start fresh with ${freshTarget.name}?`} body="The current conversation is archived and a new one begins in the same place. Use this when the context is full or you want a clean slate." confirmLabel="Start fresh" cancelLabel="Keep chatting" onConfirm={() => { const agent = freshTarget; setFreshTarget(null); void startFresh(agent) }} onCancel={() => setFreshTarget(null)} />}
       {pendingBlobImport && <ImportBlobDialog blob={pendingBlobImport} runtimes={runtimes} onCancel={() => { setPendingBlobImport(null); restoreCreateFocus() }} onCreate={(runtimeId) => createImportedBlob(pendingBlobImport, runtimeId)} />}
     </main>
@@ -2448,16 +2500,20 @@ function ActivityItem({ item, onDiff }: { item: ConversationItem; onDiff?: (path
   const activity = item.activity ?? {}
   const file = item.activityKind === 'file'
   const failed = ['error', 'failed', 'rejected'].includes(String(activity.state ?? activity.status ?? '').toLowerCase()) || item.activityKind === 'turn'
-  const title = item.activityKind === 'turn' ? turnFailureTitle(activity.failureClass) : file ? labelize(activity.operation, 'File change') : formatUnknownSafe(activity.title, formatUnknownSafe(activity.kind, 'Agent activity'))
-  const detail = file ? String(activity.path ?? 'Changed file') : String(activity.command ?? activity.summary ?? activity.detail ?? activity.output ?? '')
+  const rawTurnDetail = String(activity.summary ?? activity.detail ?? activity.output ?? activity.command ?? '')
+  const friendly = item.activityKind === 'turn' ? friendlyError({ ...(typeof activity.failureClass === 'string' ? { code: activity.failureClass } : {}), message: rawTurnDetail }) : null
+  const title = friendly ? friendly.title : file ? labelize(activity.operation, 'File change') : formatUnknownSafe(activity.title, formatUnknownSafe(activity.kind, 'Agent activity'))
+  const detail = friendly ? '' : file ? String(activity.path ?? 'Changed file') : String(activity.command ?? activity.summary ?? activity.detail ?? activity.output ?? '')
   const timeValue = activity.completedAt ?? activity.startedAt ?? activity.createdAt
   const time = typeof timeValue === 'string' ? new Date(timeValue) : null
   return <article className={`activity-card timeline-activity ${failed ? 'error' : ''}`}>
     <div className="activity-heading">{file ? <FileText size={15} /> : <Terminal size={15} />}<strong>{title}</strong><span>{labelize(activity.state ?? activity.status, file ? 'Reported' : 'Activity')}</span>{time && !Number.isNaN(time.valueOf()) && <time>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>}</div>
+    {friendly?.detail && <p>{friendly.detail}</p>}
     {detail && <p>{detail}</p>}
     {typeof activity.exitCode === 'number' && <small>Exit code {activity.exitCode}</small>}
     {typeof activity.diff === 'string' && <button type="button" className="ghost-button small activity-diff-button" onClick={() => onDiff?.(String(activity.path ?? activity.filePath ?? activity.title ?? 'Reported change'), activity.diff as string)}>View reported diff</button>}
     {typeof activity.output === 'string' && activity.output !== detail && <details className="activity-detail"><summary>Output</summary><pre>{activity.output}</pre></details>}
+    {item.activityKind === 'turn' && rawTurnDetail && rawTurnDetail !== friendly?.detail && <details className="activity-detail"><summary>Details</summary><pre>{rawTurnDetail}</pre></details>}
   </article>
 }
 

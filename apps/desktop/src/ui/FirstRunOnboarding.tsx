@@ -6,6 +6,8 @@ import { Select } from './Select'
 import { PROVIDER_GUIDES } from './providerGuides'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
+import { CheckAgainButton } from './ScanRecovery'
+import { friendlyError } from './errorCopy'
 import { rpc } from '../tauri'
 import { parseModelCatalog, type CatalogModel } from '../executionContract'
 import { preferredConcreteModel } from './modelPreferences'
@@ -90,6 +92,7 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
     catch { setCopyNotice('Could not copy the command.') }
   }
   const colors = <div className="onboarding-colors" role="group" aria-label={Noun + ' colour'}>{COLORS.map((item) => <button key={item} type="button" aria-label={'Choose ' + item + ' colour'} aria-pressed={color === item} style={{ backgroundColor: item }} onClick={() => setColor(item)} />)}</div>
+  const friendlyScanError = error ? friendlyError(error) : null
   return <main className="onboarding-screen" aria-labelledby="onboarding-title"><section className="onboarding-content">
     {step >= 0 && <div className="onboarding-character"><BlobCanvas color={color} size={112} mood={step === 1 ? (scanning ? 'tool_activity' : 'thinking') : celebrated ? 'success' : 'idle'} label="Bitbots onboarding companion" /></div>}
     <div className="onboarding-progress" role="group" aria-label={'Step ' + (step + 2) + ' of 4'}>{[-1, 0, 1, 2].map((index) => <span key={index} className={index === step ? 'active' : index < step ? 'done' : ''} />)}</div>
@@ -108,8 +111,9 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
             {guide.versionCheckCommand
               ? <div className="onboarding-command onboarding-version"><span>Check version</span><code>{guide.versionCheckCommand}</code><button type="button" className="secondary-button small" aria-label={'Copy ' + providerName + ' version command'} onClick={() => void copy(guide.versionCheckCommand!)}><Copy size={13} />Copy</button><a className="onboarding-doc-link" href={guide.versionDocsUrl ?? guide.docsUrl}>Version docs</a></div>
               : <div className="onboarding-version-fallback"><small className="onboarding-version-note" role="note">Version check command not confirmed; see <a className="onboarding-doc-link" href={guide.docsUrl}>the official docs</a>.</small></div>}
+            <CheckAgainButton name={providerName} found={matches.length > 0} scanning={scanning} onScan={onScan} />
           </article>
-    })}</div>{copyNotice && <p role="status">{copyNotice}</p>}{error && <p role="alert">{error}</p>}<div className="onboarding-actions"><button className="ghost-button" onClick={() => setStep(0)}>Back</button><button className="secondary-button" onClick={onScan} disabled={scanning}><Search size={14} />{scanning ? 'Scanning…' : 'Scan again'}</button>{runtimes.length ? <button className="primary-button" onClick={() => setStep(2)}>Continue</button> : <button className="primary-button" onClick={finish}>Continue without an agent</button>}</div></section>}
+    })}</div>{copyNotice && <p role="status">{copyNotice}</p>}{friendlyScanError && <p role="alert">{friendlyScanError.title}{friendlyScanError.detail ? ' ' + friendlyScanError.detail : ''}</p>}<div className="onboarding-actions"><button className="ghost-button" onClick={() => setStep(0)}>Back</button><button className="secondary-button" onClick={onScan} disabled={scanning}><Search size={14} />{scanning ? 'Scanning…' : 'Scan again'}</button>{runtimes.length ? <button className="primary-button" onClick={() => setStep(2)}>Continue</button> : <button className="primary-button" onClick={finish}>Continue without an agent</button>}</div></section>}
     {step === 2 && <section className="onboarding-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>Meet your first {noun}</h1><p>Give it a name and choose the model it will use.</p><label className="onboarding-field">Coding agent<Select ariaLabel="Coding agent" variant="field" value={runtimeId} onChange={(value) => setRuntimeId(value)} options={runtimes.map((runtime) => ({ value: runtime.id, label: providerBrand(runtime.provider).name, provider: runtime.provider }))} /></label><label className="onboarding-field">Model<Select ariaLabel="Model" variant="field" value={modelId} disabled={modelLoading || !!modelError || models.length === 0} onChange={setModelId} options={[{ value:'', label: modelLoading ? 'Loading models…' : 'Choose a model', disabled:true }, ...models.map((model) => ({ value:model.id, label:model.displayName, ...(model.group ? { group:model.group } : {}) }))]} /></label>{modelLoading && <p role="status">Loading verified models…</p>}{modelError && <p role="alert">{modelError}</p>}<label className="onboarding-field">{Noun} name<input className="text-input" value={agentName} maxLength={40} onChange={(event) => setAgentName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && agentName.trim() && selectedRuntime && modelId) { event.preventDefault(); void create() } }} /></label>{colors}{error && <p role="alert">{error}</p>}<div className="onboarding-actions"><button className="ghost-button" disabled={creating} onClick={() => setStep(1)}>Back</button><button className="primary-button" onClick={() => void create()} disabled={creating || !agentName.trim() || !selectedRuntime || !modelId || modelLoading || !!modelError}>{creating ? 'Creating…' : celebrated ? 'Ready' : 'Create ' + noun}</button></div></section>}
   </section></main>
 }

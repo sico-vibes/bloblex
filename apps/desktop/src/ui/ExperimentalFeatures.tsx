@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -7,6 +7,7 @@ import { rpc } from '../tauri'
 import { agentColorHex } from './agentColor'
 import { parseUnifiedDiff } from './diffParser'
 import { useDialogAccessibility } from './dialogFocus'
+import { friendlyErrorText } from './errorCopy'
 import { shortcutRows } from './experiments'
 import { useEntityNoun } from './vocabulary'
 import './experiments.css'
@@ -65,13 +66,40 @@ export function ShortcutSheet({ speechEnabled, onClose }: { speechEnabled: boole
 export type UndoToast = { id: string; text: string; deadline: number; undo: () => Promise<void> }
 export function UndoToasts({ toasts, onRemove, onError }: { toasts: UndoToast[]; onRemove: (id: string) => void; onError: (error: string) => void }) {
   const [pending, setPending] = useState<string[]>([])
+  const [paused, setPaused] = useState<string[]>([])
+  const pauseAt = useRef<Record<string, number>>({})
+  const pausedFor = useRef<Record<string, number>>({})
+  /** A paused toast keeps its remaining time instead of expiring underneath you. */
+  const effectiveDeadline = (toast: UndoToast) => toast.deadline + (pausedFor.current[toast.id] ?? 0)
+  const pause = (id: string) => {
+    if (pauseAt.current[id] !== undefined) return
+    pauseAt.current[id] = Date.now()
+    setPaused((current) => current.includes(id) ? current : [...current, id])
+  }
+  const resume = (id: string) => {
+    const at = pauseAt.current[id]
+    if (at === undefined) return
+    pausedFor.current[id] = (pausedFor.current[id] ?? 0) + (Date.now() - at)
+    delete pauseAt.current[id]
+    setPaused((current) => current.filter((item) => item !== id))
+  }
+  const dismiss = (id: string) => { delete pauseAt.current[id]; delete pausedFor.current[id]; onRemove(id) }
   useEffect(() => {
-    if (!toasts.length) return
-    const timer = window.setTimeout(() => { for (const toast of toasts) if (toast.deadline <= Date.now()) onRemove(toast.id) }, Math.max(0, Math.min(...toasts.map((toast) => toast.deadline)) - Date.now()))
+    const active = toasts.filter((toast) => pauseAt.current[toast.id] === undefined)
+    if (!active.length) return
+    const timer = window.setTimeout(() => {
+      for (const toast of toasts) if (pauseAt.current[toast.id] === undefined && effectiveDeadline(toast) <= Date.now()) onRemove(toast.id)
+    }, Math.max(0, Math.min(...active.map(effectiveDeadline)) - Date.now()))
     return () => window.clearTimeout(timer)
-  }, [toasts, onRemove])
-  return <div className="undo-toasts" aria-label="Recent actions">{toasts.map((toast) => <div className="undo-toast" role="status" key={toast.id}><span>{toast.text}</span><button type="button" className="ghost-button small" disabled={pending.includes(toast.id)} onClick={() => {
-    setPending((p) => [...p, toast.id])
-    void toast.undo().then(() => onRemove(toast.id)).catch(() => onError('Could not undo this action. The Undo period may have ended.')).finally(() => setPending((p) => p.filter((id) => id !== toast.id)))
-  }}>Undo</button></div>)}</div>
+  }, [toasts, paused, onRemove])
+  return <div className="undo-toasts" aria-label="Recent actions">{toasts.map((toast) => <div className="undo-toast" role="status" key={toast.id} tabIndex={0}
+    onMouseEnter={() => pause(toast.id)} onMouseLeave={() => resume(toast.id)}
+    onFocus={() => pause(toast.id)} onBlur={() => resume(toast.id)}
+    onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); dismiss(toast.id) } }}>
+    <span>{toast.text}</span><button type="button" className="ghost-button small" disabled={pending.includes(toast.id)} onClick={() => {
+      setPending((p) => [...p, toast.id])
+      void Promise.resolve().then(() => toast.undo()).then(() => onRemove(toast.id))
+        .catch((reason) => onError(friendlyErrorText(reason instanceof Error ? reason.message : reason)))
+        .finally(() => setPending((p) => p.filter((id) => id !== toast.id)))
+    }}>Undo</button></div>)}</div>
 }

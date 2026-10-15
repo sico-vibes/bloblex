@@ -520,3 +520,12 @@
 /* Stop and send sit side by side; only the first one takes the auto margin. */
 .send-button + .send-button { margin-left: 0; }
 .send-button.cancel { color: var(--text-1); background: var(--surface-selected-strong, var(--surface-hover)); }
+
+/* Connection banner: one slim line under the header while the daemon is down. */
+.connection-banner { margin: 8px auto 0; width: min(760px, calc(100% - 48px)); padding: 7px 12px; display: flex; align-items: center; gap: 9px; color: var(--text-2); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); font-size: var(--fs-sm); }
+.connection-banner[data-state="failed"] { color: var(--text-1); border-color: var(--warning-line); }
+.connection-banner > span { flex: 1; }
+.connection-banner .connection-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--status-success); }
+.runtime-problem-details { margin-top: 3px; }
+.runtime-problem-details > summary { cursor: pointer; color: var(--text-3); }
+.runtime-problem-details pre { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }

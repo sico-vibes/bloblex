@@ -3,6 +3,7 @@ import { AlertCircle } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import type { Runtime } from '../types'
 import { runtimeProbeDetail } from './runtimeDiscovery'
+import { friendlyError } from './errorCopy'
 
 /** A failed local CLI check affects only blobs attached to that runtime. */
 export function runtimeProblem(runtime: Runtime | null | undefined) {
@@ -42,15 +43,17 @@ export function RuntimeProblemMarker({ runtime, onOpenSettings, inline = false, 
     return () => { window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true) }
   }, [open, problem?.label, problem?.reason, problem?.recovery])
   if (!problem) return null
+  const friendly = friendlyError({ message: problem.reason, provider: runtime!.provider })
   const tooltipId = `runtime-problem-${runtime!.id}${idSuffix ? `-${idSuffix}` : ''}`
   return <span className="runtime-problem-anchor">
     {inline
       ? <span ref={inlineAnchorRef} className="runtime-problem-marker" aria-hidden="true"><AlertCircle size={14} /></span>
-      : <button ref={buttonAnchorRef} type="button" className="runtime-problem-marker" aria-label={`${problem.label}: ${problem.reason} ${problem.recovery}`} aria-describedby={tooltipId} onPointerEnter={() => setLocalOpen(true)} onPointerLeave={() => setLocalOpen(false)} onFocus={() => setLocalOpen(true)} onBlur={() => setLocalOpen(false)} onClick={onOpenSettings}>
+      : <button ref={buttonAnchorRef} type="button" className="runtime-problem-marker" aria-label={`${problem.label}: ${friendly.title} ${problem.recovery}`} aria-describedby={tooltipId} onPointerEnter={() => setLocalOpen(true)} onPointerLeave={() => setLocalOpen(false)} onFocus={() => setLocalOpen(true)} onBlur={() => setLocalOpen(false)} onClick={onOpenSettings}>
         <AlertCircle size={14} aria-hidden="true" />
       </button>}
     {open && createPortal(<span ref={tooltipRef} className="runtime-problem-tooltip" id={tooltipId} role="tooltip" style={position}>
-      <strong>{problem.label}</strong><span>{problem.reason}</span><span>{problem.recovery}</span>
+      <strong>{problem.label}</strong><span>{friendly.title}{friendly.detail ? ` ${friendly.detail}` : ''}</span><span>{problem.recovery}</span>
+      <details className="runtime-problem-details"><summary>Details</summary><span>{problem.reason}</span></details>
     </span>, document.body)}
   </span>
 }

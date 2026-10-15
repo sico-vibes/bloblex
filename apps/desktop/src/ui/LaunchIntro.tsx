@@ -6,6 +6,7 @@ import { agentColorHex } from './agentColor'
 import { agentLook, type BlobLook } from '../blob/look'
 import type { Agent, Runtime } from '../types'
 import { type LaunchCheck } from './launchChecks'
+import { friendlyError } from './errorCopy'
 import { ProviderLogo } from './providerBrand'
 import { PixelClouds } from './PixelClouds'
 import { useBitbots } from '../blob/bitbots'
@@ -191,5 +192,14 @@ function LaunchGreeting({ color, onDone }: { color: string; onDone: () => void }
 
 export function LaunchWarnings({ warnings, retrying = false, onSettings, onDismiss }: { warnings: string[]; retrying?: boolean; onSettings: () => void; onDismiss: () => void }) {
   if (!warnings.length && !retrying) return null
-  return <aside className="launch-warning-notice" role="status"><span>{retrying ? 'Finding coding agents again…' : 'Startup checks need attention: ' + warnings.map((warning) => warning.replace(/[.\s]+$/, '')).join('; ') + '.'}</span><button className="secondary-button small" onClick={onSettings}>Agents settings</button><button className="icon-button small" aria-label="Dismiss agent notice" onClick={onDismiss}>×</button></aside>
+  const summary = warnings.map((warning) => friendlyError({ message: warning, provider: providerFromWarning(warning) }).title.replace(/[.\s]+$/, '')).join('; ')
+  return <aside className="launch-warning-notice" role="status"><span>{retrying ? 'Finding coding agents again…' : 'Startup checks need attention: ' + summary + '.'}</span><button className="secondary-button small" onClick={onSettings}>Agents settings</button><button className="icon-button small" aria-label="Dismiss agent notice" onClick={onDismiss}>×</button></aside>
+}
+
+function providerFromWarning(warning: string) {
+  const lower = warning.trim().toLowerCase()
+  if (lower.startsWith('claude code:')) return 'claude'
+  if (lower.startsWith('codex:')) return 'codex'
+  if (lower.startsWith('opencode:')) return 'opencode'
+  return undefined
 }

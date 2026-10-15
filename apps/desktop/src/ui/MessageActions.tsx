@@ -33,13 +33,15 @@ export function messageExcerpt(value: string, limit = 160) {
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat
 }
 
-export function MessageActions({ text, time, reactions = [], canReply = true, onReply, onToggleReaction, onError }: {
+export function MessageActions({ text, time, reactions = [], canReply = true, onReply, onRetry, onToggleReaction, onError }: {
   text: string
   /** Local time of the message, shown beside the buttons on hover. */
   time?: string
   reactions?: string[]
   canReply?: boolean
   onReply: () => void
+  /** Provided only for the latest turn's assistant messages; the slot is always reserved. */
+  onRetry?: () => void
   onToggleReaction: (emoji: string) => Promise<unknown> | void
   onError: (error: string) => void
 }) {
@@ -51,7 +53,7 @@ export function MessageActions({ text, time, reactions = [], canReply = true, on
     void navigator.clipboard.writeText(text).then(() => {
       setCopied(true)
       if (copiedTimer.current) window.clearTimeout(copiedTimer.current)
-      copiedTimer.current = window.setTimeout(() => setCopied(false), 1500)
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 1200)
     }).catch(() => onError('Could not copy this message.'))
   }
   const rootRef = useRef<HTMLDivElement>(null)
@@ -116,6 +118,11 @@ export function MessageActions({ text, time, reactions = [], canReply = true, on
     buttons[next]?.focus()
   }
   return <div ref={rootRef} className={`message-actions${open ? ' open' : ''}`} role="toolbar" aria-label="Message actions">
+    <button type="button" className={`message-action-button${copied ? ' copied' : ''}`} aria-label={copied ? 'Copied' : 'Copy message text'} title={copied ? 'Copied' : 'Copy'} disabled={!text} onClick={copy}>{copied ? <Check size={15} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}</button>
+    <button type="button" className="message-action-button" aria-label={canReply ? 'Quote message' : 'This message cannot be quoted'} title={canReply ? 'Quote' : 'Message text is unavailable'} disabled={!canReply} onClick={onReply}><CornerUpLeft size={15} aria-hidden="true" /></button>
+    {onRetry
+      ? <button type="button" className="message-action-button" aria-label="Retry this turn" title="Retry" onClick={onRetry}><RotateCcw size={14} aria-hidden="true" /></button>
+      : <span className="message-action-slot" aria-hidden="true" />}
     <div className="message-reaction-anchor">
       <button ref={triggerRef} type="button" className="message-action-button" aria-label="React to message" title="React" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         <SmilePlus size={15} aria-hidden="true" />
@@ -127,8 +134,6 @@ export function MessageActions({ text, time, reactions = [], canReply = true, on
         })}
       </div>, document.body)}
     </div>
-    <button type="button" className="message-action-button" aria-label={canReply ? 'Reply to message' : 'This message cannot be quoted'} title={canReply ? 'Reply' : 'Message text is unavailable'} disabled={!canReply} onClick={onReply}><CornerUpLeft size={15} aria-hidden="true" /></button>
-    <button type="button" className={`message-action-button${copied ? ' copied' : ''}`} aria-label={copied ? 'Copied' : 'Copy message text'} title={copied ? 'Copied' : 'Copy'} disabled={!text} onClick={copy}>{copied ? <Check size={15} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}</button>
     {time && <span className="message-action-time" aria-hidden="true">{time}</span>}
     <span className="sr-only" role="status" aria-live="polite">{copied ? 'Copied to clipboard' : ''}</span>
   </div>

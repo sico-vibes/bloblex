@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Session } from '../types'
-import { activeAgents, analyticsProjectChoices, duplicateAgentName, garbageCollectExpanded, nextAgentAfterArchive, parseExpandedState, projectGroups, projectKey, recentProjects, rosterGroups, rosterRows, scalarLength, sessionDotClass, sessionNewParams, sessionSelectionTarget, treeModel } from './rosterSelectors'
+import { activeAgents, analyticsProjectChoices, duplicateAgentName, garbageCollectExpanded, moveWithin, nextAgentAfterArchive, parseExpandedState, placeAgentOrder, projectGroups, projectKey, projectMemberIds, recentProjects, reorderAgentInProject, rosterGroups, rosterRows, runtimeRosterIds, scalarLength, sessionDotClass, sessionNewParams, sessionSelectionTarget, treeModel } from './rosterSelectors'
 
 function agent(partial: Pick<Agent, 'id' | 'name' | 'runtimeId' | 'sortOrder'> & Partial<Agent>): Agent {
   return {
@@ -212,5 +212,47 @@ describe('phase 4 project tree selectors', () => {
     const ghost = session({ id: 'ghost', runtimeId: 'runtime-ghost', agentId: null, title: 'Nowhere' })
     expect(sessionSelectionTarget(agents, claude, ghost)).toBeNull()
     expect(sessionSelectionTarget(agents, claude, session({ id: 'blank', runtimeId: 'runtime-claude', agentId: '', title: 'Blank' }))).toBeNull()
+  })
+})
+
+describe('roster reordering selectors', () => {
+  const roster = [
+    agent({ id: 'a', name: 'A', runtimeId: 'rt', sortOrder: 0, projectId: 'p1' }),
+    agent({ id: 'b', name: 'B', runtimeId: 'rt', sortOrder: 1, projectId: 'p1' }),
+    agent({ id: 'c', name: 'C', runtimeId: 'rt', sortOrder: 2, projectId: 'p2' }),
+    agent({ id: 'd', name: 'D', runtimeId: 'rt', sortOrder: 3, projectId: 'p1' }),
+    agent({ id: 'z', name: 'Z', runtimeId: 'other', sortOrder: 0, projectId: 'p1' }),
+  ]
+
+  it('lists runtime ids and project members in roster order', () => {
+    expect(runtimeRosterIds(roster, 'rt')).toEqual(['a', 'b', 'c', 'd'])
+    expect(projectMemberIds(roster, 'p1')).toEqual(['z', 'a', 'b', 'd'])
+    expect(projectMemberIds(roster, 'p2')).toEqual(['c'])
+    expect(projectMemberIds(roster, null)).toEqual([])
+  })
+
+  it('swaps a neighbour in place and stops at the edges', () => {
+    expect(moveWithin(['a', 'b', 'c'], 'b', 1)).toEqual(['a', 'c', 'b'])
+    expect(moveWithin(['a', 'b', 'c'], 'b', -1)).toEqual(['b', 'a', 'c'])
+    expect(moveWithin(['a', 'b'], 'a', -1)).toBeNull()
+    expect(moveWithin(['a', 'b'], 'b', 1)).toBeNull()
+    expect(moveWithin(['a', 'b'], 'missing', 1)).toBeNull()
+  })
+
+  it('moves a blob inside its own project and leaves the rest untouched', () => {
+    expect(reorderAgentInProject(roster, 'b', -1)).toEqual(['b', 'a', 'c', 'd'])
+    expect(reorderAgentInProject(roster, 'b', 1)).toEqual(['a', 'd', 'c', 'b'])
+    expect(reorderAgentInProject(roster, 'c', -1)).toBeNull()
+    expect(reorderAgentInProject(roster, 'a', -1)).toBeNull()
+    expect(reorderAgentInProject(roster, 'missing', 1)).toBeNull()
+    expect(reorderAgentInProject(null, 'a', 1)).toBeNull()
+  })
+
+  it('places a blob before or after another of the same runtime', () => {
+    expect(placeAgentOrder(roster, 'd', 'a', 'before')).toEqual(['d', 'a', 'b', 'c'])
+    expect(placeAgentOrder(roster, 'c', 'b', 'after')).toEqual(['a', 'b', 'c', 'd'])
+    expect(placeAgentOrder(roster, 'a', 'a', 'after')).toBeNull()
+    expect(placeAgentOrder(roster, 'a', 'z', 'after')).toBeNull()
+    expect(placeAgentOrder(roster, 'missing', 'a', 'after')).toBeNull()
   })
 })

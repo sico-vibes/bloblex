@@ -31,7 +31,7 @@ describe('message toolbar copy feedback', () => {
     await act(async () => { host!.querySelector<HTMLButtonElement>('[aria-label="Copy message text"]')!.click(); await Promise.resolve() })
     expect(host.querySelector<HTMLButtonElement>('[aria-label="Copied"]')?.classList.contains('copied')).toBe(true)
     expect(host.querySelector('[role="status"]')?.textContent).toBe('Copied to clipboard')
-    await act(async () => { vi.advanceTimersByTime(1600) })
+    await act(async () => { vi.advanceTimersByTime(1300) })
     expect(host.querySelector('[aria-label="Copy message text"]')).not.toBeNull()
   })
 })

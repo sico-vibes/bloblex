@@ -12,7 +12,8 @@
 .message-action-shell.user .message-action-time { left: auto; right: 100%; margin: 0 6px 0 0; }
 .message-action-shell:hover .message-actions, .message-action-shell:focus-within .message-actions { opacity: 1; }
 .message-action-shell .message-actions.open { opacity: 1; }
-.message-action-button { width: 26px; height: 26px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 8px; background: transparent; cursor: pointer; transition: color 120ms ease; }
+.message-action-button { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 8px; background: transparent; cursor: pointer; transition: color 120ms ease; }
+.message-action-slot { width: 32px; height: 32px; flex: 0 0 auto; }
 .message-action-button:hover:not(:disabled), .message-action-button[aria-expanded="true"], .message-action-button.copied { color: var(--text-1); }
 .message-action-button:focus-visible, .message-reaction-option:focus-visible, .reply-context-cancel:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .message-action-button:disabled { color: var(--text-3); cursor: default; }
@@ -66,5 +67,5 @@ button.message-reaction-badge:focus-visible { outline: none; box-shadow: var(--f
 .undo-toasts { position: fixed; bottom: 24px; right: 24px; z-index: 120; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 48px)); }
 .undo-toast { display: flex; align-items: center; gap: 20px; justify-content: space-between; background: var(--surface-overlay); color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 16px; }
 @media (hover: none) { .message-actions { opacity: 1; } }
-@media (max-width: 620px) { .message-action-shell > .message-row { max-width: calc(100% - 92px); } .message-action-button { width: 24px; height: 24px; } .usage-tip { width: 100%; } }
+@media (max-width: 620px) { .message-action-shell > .message-row { max-width: calc(100% - 92px); } .usage-tip { width: 100%; } }
 @media (prefers-reduced-motion: reduce) { .message-actions, .message-action-button, button.message-reaction-badge { transition: none; } }

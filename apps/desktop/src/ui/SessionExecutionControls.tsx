@@ -11,6 +11,7 @@ import { Tip } from './Tip'
 import { labelizeEffort, effortDescription } from './effortLabels'
 import { concreteModelForSelection } from './modelPreferences'
 import { organizeModels, presentedModelName } from './modelPresentation'
+import { Skeleton } from './Skeleton'
 export { labelizeEffort } from './effortLabels'
 
 type Lock = SessionModelLock
@@ -140,7 +141,9 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
       ? <ModelMenu provider={catalog.provider} models={catalog.models} model={model ?? null} label={modelLabel} ariaLabel={modelAriaLabel} fastTier={fastTier} fastOn={fastOn} disabled={sessionBusy} saving={saving} onSelect={(next) => {
         if (next !== model) { setEffortDraft(null); setPendingModel({ sessionId:session.id, model:next }) }
       }} onFast={(enabled) => void setFast(enabled)} />
-      : <button type="button" className="composer-pill model-pill unavailable" aria-label={`Conversation model, ${modelLabel}; model catalog unavailable`} title="Model choices are unavailable until the runtime reports a catalog." disabled><span>{modelLabel}</span></button>}
+      : catalogUnavailable
+        ? <button type="button" className="composer-pill model-pill unavailable" aria-label={`Conversation model, ${modelLabel}; model catalog unavailable`} title="Model choices are unavailable until the runtime reports a catalog." disabled><span>{modelLabel}</span></button>
+        : <span className="model-pill-loading" role="status" aria-busy="true" aria-label="Loading models"><Skeleton variant="pill" /><span className="sr-only">Loading models…</span></span>}
     <EffortControl
       provider={catalog?.provider ?? ''}
       key={`${session.id}:${model ?? 'unselected'}:${pendingForSession?.model ?? 'no-pending-model'}`}

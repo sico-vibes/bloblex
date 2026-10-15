@@ -1,0 +1,23 @@
+/* Loading skeletons. Layout only; the shimmer stops under reduced motion. */
+
+.skeleton { display: grid; gap: 8px; width: 100%; }
+.skeleton-row { gap: 6px; }
+.skeleton-block { display: block; width: 100%; border-radius: 8px; background: var(--surface-subtle); animation: skeleton-shimmer 1.4s ease-in-out infinite; }
+.skeleton-text .skeleton-block { height: 12px; border-radius: 6px; }
+.skeleton-text .skeleton-block:last-child { width: 62%; }
+.skeleton-row .skeleton-block { height: 34px; border-radius: 10px; }
+.skeleton-pill { width: auto; }
+.skeleton-pill .skeleton-block { width: 96px; height: 26px; border-radius: var(--radius-pill); }
+
+/* Call sites that wrap a skeleton where a control or list normally sits. */
+.model-pill-loading { display: inline-flex; align-items: center; }
+.onboarding-model-loading { width: 100%; }
+
+@keyframes skeleton-shimmer {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block { animation: none; opacity: 1; }
+}

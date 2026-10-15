@@ -17,6 +17,7 @@
 .team-group-empty { margin: 2px 10px 6px; color: var(--text-3); font-size: var(--fs-2xs); line-height: 1.4; }
 .team-row { width: 100%; min-height: 58px; padding-block: 4px; padding-left: 6px; gap: 8px; }
 .team-row.hidden-blob { opacity: .55; }
+.team-row.dragging { opacity: .6; }
 .team-row-avatar { position: relative; flex: 0 0 auto; display: grid; place-items: center; }
 .leader-badge { position: absolute; right: 1px; bottom: 2px; width: 15px; height: 15px; display: grid; place-items: center; color: #fff; border: 2px solid var(--surface-sidebar); border-radius: 50%; background: linear-gradient(160deg, #ffad42, #f27a1a); box-shadow: 0 1px 2px #0000004d; }
 .team-row-name { min-width: 0; flex: 1; display: flex; align-items: center; gap: 6px; }
@@ -48,6 +49,16 @@
 .team-chip.failed { color: var(--danger-ink); }
 .team-chip-dot { width: 18px; height: 18px; display: inline-grid; place-items: center; color: var(--text-1); border-radius: 50%; background: var(--surface-selected-strong); font-size: 10px; font-weight: 700; }
 .team-chip .blob-canvas { pointer-events: none; }
+.team-chip-caret { color: var(--text-3); transition: transform 120ms ease; }
+.team-chip-block { display: grid; justify-items: center; gap: 6px; max-width: min(620px, 100%); }
+.team-chip-block.open .team-chip-caret { transform: rotate(180deg); }
+.team-chip-panel { width: 100%; padding: 10px 12px; display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); }
+.team-chip-text { margin: 0; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.team-chip-text.clamped { display: -webkit-box; -webkit-line-clamp: 6; line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+.team-chip-more, .team-chip-link { justify-self: start; padding: 0; color: var(--text-1); border: 0; background: transparent; font-size: var(--fs-xs); cursor: pointer; }
+.team-chip-more { color: var(--text-3); }
+.team-chip-more:hover, .team-chip-link:hover { text-decoration: underline; }
+.team-chip-more:focus-visible, .team-chip-link:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .team-notice { padding: 4px 10px; color: var(--text-3); border-radius: var(--radius-pill); background: var(--surface-subtle); font-size: var(--fs-xs); }
 
 /* Where the provider's context changed. Quiet by default; amber only when the agent lost earlier turns. */

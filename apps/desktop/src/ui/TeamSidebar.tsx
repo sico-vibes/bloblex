@@ -15,6 +15,9 @@ import { useEntityNoun } from './vocabulary'
 
 export type MenuItem = { label: string; icon?: ReactNode; onSelect?: () => void; disabled?: boolean; danger?: boolean; checked?: boolean; submenu?: MenuItem[] } | 'separator'
 
+/** Where a pointer drag would land: on a row edge, or on a project area. */
+export type DropHint = { kind: 'row'; agentId: string; edge: 'before' | 'after' } | { kind: 'project'; projectId: string | null }
+
 export function TeamMenu({ items, position, label, onClose }: { items: MenuItem[]; position: { x: number; y: number }; label: string; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState<number | null>(null)
@@ -81,6 +84,10 @@ export type TeamSidebarActions = {
   onRename: (agent: Agent) => void
   onTogglePin: (agentId: string) => void
   onMove: (agent: Agent, projectId: string | null) => void
+  /** Keyboard move one step inside the blob's own project. */
+  onReorder: (agent: Agent, direction: -1 | 1) => void
+  /** Pointer drop: place the blob before or after another blob (same or another project). */
+  onPlace: (agent: Agent, target: Agent, edge: 'before' | 'after') => void
   onToggleLeader: (agent: Agent) => void
   onSetHidden: (agent: Agent, hidden: boolean) => void
   onToggleUnread: (agent: Agent, session: Session | null, unread: boolean) => void
@@ -114,8 +121,14 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   const nouns = useEntityNoun({ plural: true })
   const Nouns = useEntityNoun({ plural: true, capital: true })
   const [showHidden, setShowHidden] = useState(false)
-  const [menu, setMenu] = useState<{ kind: 'blob'; agent: Agent; x: number; y: number } | { kind: 'project'; project: Project; x: number; y: number } | null>(null)
-  const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [menu, setMenu] = useState<{ kind: 'blob'; agent: Agent; x: number; y: number } | { kind: 'project'; project: Project; x: number; y: number } | { kind: 'move'; agent: Agent; x: number; y: number } | null>(null)
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dropHint, setDropHint] = useState<DropHint | null>(null)
+  const [announcement, setAnnouncement] = useState('')
+  const drag = useRef<{ id: string; pointerId: number; fromX: number; fromY: number; moved: boolean } | null>(null)
+  const dropHintRef = useRef<DropHint | null>(null)
+  dropHintRef.current = dropHint
+  const suppressClick = useRef(false)
   const [runtimeTooltipAgentId, setRuntimeTooltipAgentId] = useState<string | null>(null)
   const menuTrigger = useRef<HTMLElement | null>(null)
   const groups = useMemo(() => groupAgentsByProject(agents, projects, query, showHidden), [agents, projects, query, showHidden])
@@ -158,6 +171,36 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     'separator',
     { label: 'Delete project', icon: <Trash2 size={15} />, danger: true, onSelect: () => actions.onDeleteProject(project) },
   ]
+  /** The projects a blob can be moved to, for the keyboard "Move to project" menu. */
+  const moveMenu = (agent: Agent): MenuItem[] => [
+    ...projects.map((project) => ({ label: project.name, icon: <Folder size={15} />, checked: agent.projectId === project.id, onSelect: () => { actions.onMove(agent, project.id); setAnnouncement(`Moved ${agent.name} to ${project.name}.`) } })),
+    { label: 'Unassigned', icon: <FolderOpen size={15} />, checked: !agent.projectId, onSelect: () => { actions.onMove(agent, null); setAnnouncement(`Moved ${agent.name} to Unassigned.`) } },
+  ]
+  /** What sits under the pointer during a drag: a row edge, a project area, or nothing. */
+  const hintFromPoint = (x: number, y: number, selfId: string): DropHint | null => {
+    const hit = typeof document.elementFromPoint === 'function' ? document.elementFromPoint(x, y) as HTMLElement | null : null
+    const row = hit?.closest?.('.team-row[data-agent-id]') as HTMLElement | null
+    const targetId = row?.dataset.agentId
+    if (row && targetId && targetId !== selfId) {
+      const rect = row.getBoundingClientRect()
+      return { kind: 'row', agentId: targetId, edge: y < rect.top + rect.height / 2 ? 'before' : 'after' }
+    }
+    const group = hit?.closest?.('.team-group[data-project-id]') as HTMLElement | null
+    if (group) return { kind: 'project', projectId: group.dataset.projectId === 'unassigned' ? null : group.dataset.projectId ?? null }
+    return null
+  }
+  const finishDrag = (agent: Agent) => {
+    const hint = dropHintRef.current
+    setDragId(null)
+    setDropHint(null)
+    if (hint?.kind === 'row') {
+      const target = agents.find((item) => item.id === hint.agentId)
+      if (target) { actions.onPlace(agent, target, hint.edge); setAnnouncement(`${agent.name} moved next to ${target.name}.`) }
+    } else if (hint?.kind === 'project') {
+      actions.onMove(agent, hint.projectId)
+      setAnnouncement(`Moved ${agent.name} to ${projects.find((item) => item.id === hint.projectId)?.name ?? 'Unassigned'}.`)
+    }
+  }
 
   const renderRow = (agent: Agent) => {
     const session = mainSessionFor(sessions, agent.id)
@@ -170,17 +213,56 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     const working = sessionIsBusy(session) && !waiting
     const preview = !connected ? 'Offline' : (status.mood === 'offline' || status.mood === 'error') ? status.label : waiting ? 'Waiting for you' : working ? status.label : conversationPreview(session) ?? (agent.description?.trim() || 'Say hi to get started')
     const runtimeIssue = runtimeProblem(runtime)
-    return <button key={agent.id} type="button" role="treeitem" draggable data-agent-id={agent.id} aria-current={selected ? 'true' : undefined} aria-selected={selected} aria-describedby={runtimeIssue ? `runtime-problem-${runtime!.id}-${agent.id}` : undefined}
+    return <button key={agent.id} type="button" role="treeitem" data-agent-id={agent.id} aria-current={selected ? 'true' : undefined} aria-selected={selected} aria-describedby={runtimeIssue ? `runtime-problem-${runtime!.id}-${agent.id}` : undefined}
       aria-label={`${agent.name}${agent.role ? `, ${agent.role}` : ''}${agent.leader ? ', team leader' : ''}${approval ? ', needs approval' : unread ? ', unread' : ''}`}
       tabIndex={selected || (!selectedAgentId && rowOrder[0]?.id === agent.id) ? 0 : -1}
-      className={`bot-row team-row ${selected ? 'selected' : ''} ${agent.hidden ? 'hidden-blob' : ''}`}
+      className={`bot-row team-row ${selected ? 'selected' : ''} ${agent.hidden ? 'hidden-blob' : ''} ${dragId === agent.id ? 'dragging' : ''} ${dropHint?.kind === 'row' && dropHint.agentId === agent.id ? `drop-${dropHint.edge}` : ''}`}
       onMouseEnter={() => { if (runtimeIssue) setRuntimeTooltipAgentId(agent.id) }}
       onMouseLeave={() => setRuntimeTooltipAgentId((current) => current === agent.id ? null : current)}
       onFocus={() => { if (runtimeIssue) setRuntimeTooltipAgentId(agent.id) }}
       onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setRuntimeTooltipAgentId((current) => current === agent.id ? null : current) }}
-      onClick={() => actions.onSelect(agent)}
+      onClick={() => { if (suppressClick.current) { suppressClick.current = false; return } actions.onSelect(agent) }}
       onContextMenu={(event) => { event.preventDefault(); openBlobMenu(agent, event.clientX, event.clientY, event.currentTarget) }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return
+        drag.current = { id: agent.id, pointerId: event.pointerId, fromX: event.clientX, fromY: event.clientY, moved: false }
+        try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* capture may be unavailable */ }
+      }}
+      onPointerMove={(event) => {
+        const state = drag.current
+        if (!state || state.id !== agent.id || state.pointerId !== event.pointerId) return
+        if (!state.moved) {
+          if (Math.abs(event.clientX - state.fromX) < 5 && Math.abs(event.clientY - state.fromY) < 5) return
+          state.moved = true
+          setDragId(agent.id)
+        }
+        setDropHint(hintFromPoint(event.clientX, event.clientY, agent.id))
+      }}
+      onPointerUp={(event) => {
+        const state = drag.current
+        drag.current = null
+        try { event.currentTarget.releasePointerCapture(event.pointerId) } catch { /* already released */ }
+        if (!state || state.id !== agent.id) return
+        if (!state.moved) { setDropHint(null); return }
+        suppressClick.current = true
+        finishDrag(agent)
+      }}
+      onPointerCancel={() => { drag.current = null; setDragId(null); setDropHint(null) }}
       onKeyDown={(event) => {
+        if (event.altKey && !event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+          event.preventDefault()
+          const direction: -1 | 1 = event.key === 'ArrowUp' ? -1 : 1
+          actions.onReorder(agent, direction)
+          setAnnouncement(`Moved ${agent.name} ${direction === -1 ? 'up' : 'down'}.`)
+          return
+        }
+        if (event.altKey && event.shiftKey && event.key === 'ArrowRight') {
+          event.preventDefault()
+          const rect = event.currentTarget.getBoundingClientRect()
+          menuTrigger.current = event.currentTarget
+          setMenu({ kind: 'move', agent, x: rect.left + 24, y: rect.bottom + 4 })
+          return
+        }
         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); actions.onSelect(agent); return }
         if ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu') { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openBlobMenu(agent, rect.left + 24, rect.bottom, event.currentTarget); return }
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -189,8 +271,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
           const next = rowOrder[index + (event.key === 'ArrowDown' ? 1 : -1)]
           if (next) document.querySelector<HTMLButtonElement>(`.team-row[data-agent-id="${CSS.escape(next.id)}"]`)?.focus()
         }
-      }}
-      onDragStart={(event) => { event.dataTransfer.setData('application/x-bloblex-agent', agent.id); event.dataTransfer.effectAllowed = 'move' }}>
+      }}>
       <span className="team-row-avatar">
         <BlobCanvas color={agentColorHex(agent.color)} size={50} mood={status.mood} look={agentLook(agent)} label={agent.name} />
         {agent.leader && <span className="leader-badge" title="Team leader" aria-hidden="true"><Star size={8} strokeWidth={0} fill="currentColor" /></span>}
@@ -206,17 +287,6 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     </button>
   }
 
-  const dropProps = (projectId: string | null) => ({
-    onDragOver: (event: React.DragEvent) => { if (!event.dataTransfer.types.includes('application/x-bloblex-agent')) return; event.preventDefault(); setDropTarget(projectId ?? 'unassigned') },
-    onDragLeave: (event: React.DragEvent) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null) },
-    onDrop: (event: React.DragEvent) => {
-      const id = event.dataTransfer.getData('application/x-bloblex-agent')
-      setDropTarget(null)
-      const agent = agents.find((item) => item.id === id)
-      if (agent && (agent.projectId ?? null) !== projectId) { event.preventDefault(); actions.onMove(agent, projectId) }
-    },
-  })
-
   return <div className="team-sidebar">
     <label className="sidebar-search"><span className="sr-only">Search {nouns}</span>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
@@ -231,7 +301,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
         const key = project?.id ?? 'unassigned'
         const rows = members.filter((agent) => !pinnedIds.includes(agent.id))
         if (!project && rows.length === 0 && members.length === 0 && projects.length > 0 && !query) return null
-        return <section key={key} className={`team-group ${dropTarget === key ? 'drop-target' : ''}`} aria-label={project?.name ?? 'Unassigned'} {...dropProps(project?.id ?? null)}>
+        return <section key={key} data-project-id={project?.id ?? 'unassigned'} className={`team-group ${dropHint?.kind === 'project' && dropHint.projectId === (project?.id ?? null) ? 'drop-target' : ''}`} aria-label={project?.name ?? 'Unassigned'}>
           <div className="team-group-head">
             {project ? <button type="button" className="team-group-toggle" aria-expanded={!project.collapsed} onClick={() => actions.onToggleProjectCollapsed(project)}
               onContextMenu={(event) => { event.preventDefault(); menuTrigger.current = event.currentTarget; setMenu({ kind: 'project', project, x: event.clientX, y: event.clientY }) }}>
@@ -256,5 +326,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     </nav>
     {menu?.kind === 'blob' && <TeamMenu label={`${menu.agent.name} actions`} position={menu} items={blobMenu(menu.agent)} onClose={closeMenu} />}
     {menu?.kind === 'project' && <TeamMenu label={`${menu.project.name} actions`} position={menu} items={projectMenu(menu.project)} onClose={closeMenu} />}
+    {menu?.kind === 'move' && <TeamMenu label={`Move ${menu.agent.name} to a project`} position={menu} items={moveMenu(menu.agent)} onClose={closeMenu} />}
+    <div className="sr-only" role="status" aria-live="polite">{announcement}</div>
   </div>
 }

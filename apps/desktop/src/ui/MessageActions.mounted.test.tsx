@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MessageActions } from './MessageActions'
 
@@ -16,17 +18,23 @@ afterEach(() => {
   if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard)
   else Reflect.deleteProperty(navigator, 'clipboard')
   originalClipboard = undefined
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
+const experimentsCss = readFileSync(resolve(process.cwd(), 'src/ui/experiments.css'), 'utf8')
+
 describe('message action toolbar', () => {
-  it('keeps exactly Reaction, Reply and Copy visible; selection toggles the local reaction', async () => {
+  it('lists Copy, Quote, Retry and React in one order everywhere', async () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    const onReply = vi.fn(), onToggleReaction = vi.fn().mockResolvedValue({})
-    await act(async () => root!.render(<MessageActions text="Original **markdown**" reactions={['❤️']} onReply={onReply} onToggleReaction={onToggleReaction} onError={vi.fn()} />))
+    const onReply = vi.fn(), onRetry = vi.fn(), onToggleReaction = vi.fn().mockResolvedValue({})
+    await act(async () => root!.render(<MessageActions text="Original **markdown**" reactions={['❤️']} onReply={onReply} onRetry={onRetry} onToggleReaction={onToggleReaction} onError={vi.fn()} />))
     const toolbar = host.querySelector('[role="toolbar"]')!
-    expect(toolbar.querySelectorAll(':scope > button, :scope > div > button')).toHaveLength(3)
-    expect(toolbar.querySelector('[aria-label="Copy request ID"]')).toBeNull()
+    expect([...toolbar.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Copy message text', 'Quote message', 'Retry this turn', 'React to message'])
+    await act(async () => { toolbar.querySelector<HTMLButtonElement>('[aria-label="Quote message"]')!.click() })
+    expect(onReply).toHaveBeenCalledOnce()
+    await act(async () => { toolbar.querySelector<HTMLButtonElement>('[aria-label="Retry this turn"]')!.click() })
+    expect(onRetry).toHaveBeenCalledOnce()
     const reaction = host.querySelector<HTMLButtonElement>('[aria-label="React to message"]')!
     await act(async () => { reaction.click(); await Promise.resolve() })
     expect(document.querySelectorAll('[role="dialog"][aria-label="Choose a reaction"] .message-reaction-option')).toHaveLength(6)
@@ -34,8 +42,21 @@ describe('message action toolbar', () => {
     await act(async () => { (document.querySelector('[aria-label="Add your celebration reaction"]') as HTMLButtonElement).click(); await Promise.resolve() })
     expect(onToggleReaction).toHaveBeenCalledWith('🎉')
     expect(reaction.getAttribute('aria-expanded')).toBe('false')
-    await act(async () => { host!.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')!.click() })
-    expect(onReply).toHaveBeenCalledOnce()
+  })
+
+  it('reserves the retry slot for a message that cannot be retried', async () => {
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root!.render(<MessageActions text="Old reply" onReply={vi.fn()} onToggleReaction={vi.fn()} onError={vi.fn()} />))
+    const toolbar = host.querySelector('[role="toolbar"]')!
+    expect(toolbar.querySelector('[aria-label="Retry this turn"]')).toBeNull()
+    expect(toolbar.querySelector('.message-action-slot')).not.toBeNull()
+    expect([...toolbar.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Copy message text', 'Quote message', 'React to message'])
+  })
+
+  it('reveals on keyboard focus with 32 px targets and never shifts layout', () => {
+    expect(experimentsCss).toMatch(/\.message-action-shell:focus-within \.message-actions\s*\{[^}]*opacity:\s*1/)
+    expect(experimentsCss).toMatch(/\.message-action-button\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px/)
+    expect(experimentsCss).toMatch(/\.message-action-slot\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px/)
   })
 
   it('supports keyboard opening, arrow navigation, Escape restoration and exact-text copy', async () => {

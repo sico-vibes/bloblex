@@ -1018,14 +1018,21 @@ describe('blob roster and editor', () => {
     configure(snapshot({ sessions: [main, side, ...sessions.filter((item) => item.id !== 'session-claude')] }))
     const view = startApp()
     await view.settle()
-    const chips = [...view.host.querySelectorAll('.team-chip')].map((chip) => chip.getAttribute('aria-label'))
-    expect(chips).toEqual(['Messaged Codex. Open side conversation', 'Message from Codex. Open side conversation'])
+    const chips = [...view.host.querySelectorAll('.team-chip')]
+    expect(chips.map((chip) => chip.getAttribute('aria-label'))).toEqual(['Messaged Codex. Show the message', 'Message from Codex. Show the message'])
     // The relayed text stays in the side conversation; the chip links to it.
     expect(view.host.querySelector('.team-reply-toggle')).toBeNull()
     expect(view.host.querySelector('.message-list')?.textContent ?? '').not.toContain('All 12 tests pass.')
     // Side conversations stay out of the main transcript and the sidebar rows.
     expect(rows(view.host).filter((row) => row.getAttribute('data-agent-id') === 'agent-codex')).toHaveLength(1)
-    await click(view.host.querySelector('.team-chip'))
+    // A chip is a disclosure now: it expands to the message in place.
+    await click(chips[0])
+    expect(chips[0].getAttribute('aria-expanded')).toBe('true')
+    expect(view.host.querySelector('.team-chip-panel')?.textContent).toContain('Check the tests')
+    expect(view.host.querySelector('.side-header')).toBeNull()
+    // The header's side-conversation menu is the way into the read-only side view.
+    await click(view.host.querySelector('[aria-label="Side conversations"]'))
+    await click(view.host.querySelector('.side-menu-item'))
     expect(view.host.querySelector('.side-header')?.getAttribute('aria-label')).toBe('Side conversation between Claude and Codex')
     expect(view.host.querySelector('.composer-box')).toBeNull()
     expect(view.host.querySelector('.side-peer .message-author')?.textContent).toContain('Claude')
@@ -1148,6 +1155,17 @@ describe('opt-in conversation experiments', () => {
     expect(experimentalSession.messages?.map((m) => m.content)).toEqual(['Original prompt', 'First reply', 'Latest prompt', 'Latest reply'])
     expect(view.host.querySelector('.conversation-auto-title')?.textContent).toBe('Review the saved changes')
   })
+  it('offers Retry on the latest turn only and re-sends that prompt', async () => {
+    prepare(true)
+    const view = startApp(); await view.settle()
+    const userShell = [...view.host.querySelectorAll<HTMLElement>('.message-action-shell')].find((shell) => shell.querySelector('.message-row.user'))!
+    expect(userShell.querySelector('[aria-label="Retry this turn"]')).toBeNull()
+    const retries = [...view.host.querySelectorAll<HTMLButtonElement>('[aria-label="Retry this turn"]')]
+    expect(retries).toHaveLength(1)
+    await click(retries[0])
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId: 'session-claude', text: 'Latest prompt' })
+  })
   it('stages a quoted user message and sends its scoped reference with the new prompt', async () => {
     const previousMessages = experimentalSession.messages
     experimentalSession.messages = [...(previousMessages ?? [])]
@@ -1164,7 +1182,7 @@ describe('opt-in conversation experiments', () => {
     try {
       const view = startApp(); await view.settle()
       const firstUser = view.host.querySelector<HTMLElement>('.message-action-shell.user')!
-      await click(firstUser.querySelector('[aria-label="Reply to message"]'))
+      await click(firstUser.querySelector('[aria-label="Quote message"]'))
       expect(view.host.querySelector('.composer-box .reply-context-strip')?.textContent).toContain('Original prompt')
       await typeInto(view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea'), 'Explain that earlier request')
       await click(view.host.querySelector('[aria-label="Send message"]'))

@@ -1,6 +1,6 @@
 // Team surfaces inside a conversation: delegation chips, relayed replies,
 // side-conversation header, proposed plans, inline questions and @mentions.
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { ArrowLeftRight, Check, ChevronDown, ClipboardList, Hash, RotateCw, Send, X } from 'lucide-react'
 import type { Agent, PermissionRequest, Session, UserQuestion } from '../types'
@@ -18,21 +18,56 @@ function MiniBlob({ agent, name, size = 18 }: { agent: Agent | null | undefined;
 
 const accentOf = (agent: Agent | null | undefined) => agent ? { ['--chip-accent' as string]: agentColorHex(agent.color) } : undefined
 
-/** "Messaged Codex" in the sender's conversation; opens the side conversation. */
-export function DelegationChip({ peer, name, topic, failed, detail, onOpen }: { peer: Agent | null | undefined; name: string; topic?: string; failed?: boolean; detail?: string; onOpen?: () => void }) {
-  return <div className="team-chip-row">
-    <button type="button" className={`team-chip ${failed ? 'failed' : ''}`} style={accentOf(peer)} disabled={!onOpen} onClick={onOpen} aria-label={failed ? `${name} could not start${detail ? `: ${detail}` : ''}` : `Messaged ${name}${topic ? ` about ${topic}` : ''}. Open side conversation`} title={detail ?? (onOpen ? 'Open the side conversation' : undefined)}>
-      <span>{failed ? 'Could not reach' : 'Messaged'}</span><MiniBlob agent={peer} name={name} /><b>{name}</b>{topic && !failed && <em className="team-chip-topic">{topic}</em>}
-    </button>
-  </div>
+/** "Messaged Codex" in the sender's conversation; expands to the message and a link to Codex's own conversation. */
+export function DelegationChip({ peer, name, topic, failed, detail, text, onOpenConversation }: { peer: Agent | null | undefined; name: string; topic?: string; failed?: boolean; detail?: string; text?: string; onOpenConversation?: () => void }) {
+  return <TeamChatChip kind="outgoing" peer={peer} name={name} topic={topic} failed={failed} text={text ?? detail} onOpenConversation={onOpenConversation} />
 }
 
-/** A relayed reply ("Message from Codex"); opens the side conversation where it was written. */
-export function ReplyChip({ from, name, onOpen }: { from: Agent | null | undefined; name: string; onOpen?: () => void }) {
+/** A relayed reply ("Message from Codex"); expands to the message and a link to Codex's own conversation. */
+export function ReplyChip({ from, name, text, onOpenConversation }: { from: Agent | null | undefined; name: string; text?: string; onOpenConversation?: () => void }) {
+  return <TeamChatChip kind="incoming" peer={from} name={name} text={text} onOpenConversation={onOpenConversation} />
+}
+
+/** Heuristic for whether a chip's "Show more" toggle is worth offering: more than six line breaks, or a body long enough to wrap past six lines. */
+export function chipNeedsShowMore(text: string) {
+  return text.split(/\r?\n/).length > 6 || text.length > 240
+}
+
+/** A delegation or relayed-reply chip: a disclosure button that opens the message in place. */
+function TeamChatChip({ kind, peer, name, topic, failed, text, onOpenConversation }: {
+  kind: 'outgoing' | 'incoming'
+  peer: Agent | null | undefined
+  name: string
+  topic?: string
+  failed?: boolean
+  text?: string
+  onOpenConversation?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [showAll, setShowAll] = useState(false)
+  const panelId = useId()
+  const body = typeof text === 'string' ? text.trim() : ''
+  const expandable = body.length > 0
+  const needsMore = chipNeedsShowMore(body)
+  const label = kind === 'outgoing'
+    ? failed
+      ? `${name} could not start${body ? `: ${body}` : ''}`
+      : `Messaged ${name}${topic ? ` about ${topic}` : ''}. Show the message`
+    : `Message from ${name}. Show the message`
   return <div className="team-chip-row">
-    <button type="button" className="team-chip incoming" style={accentOf(from)} onClick={onOpen} disabled={!onOpen} aria-label={`Message from ${name}. Open side conversation`} title={onOpen ? 'Open the side conversation' : undefined}>
-      <span>Message from</span><MiniBlob agent={from} name={name} /><b>{name}</b>
-    </button>
+    <div className={`team-chip-block${open ? ' open' : ''}`}>
+      <button type="button" className={`team-chip ${kind === 'incoming' ? 'incoming' : ''} ${failed ? 'failed' : ''}`} style={accentOf(peer)} disabled={!expandable}
+        aria-expanded={open} aria-controls={open && expandable ? panelId : undefined} aria-label={label} title={expandable ? 'Show the message' : undefined}
+        onClick={() => setOpen((value) => !value)}>
+        <span>{kind === 'incoming' ? 'Message from' : failed ? 'Could not reach' : 'Messaged'}</span><MiniBlob agent={peer} name={name} /><b>{name}</b>{topic && !failed && <em className="team-chip-topic">{topic}</em>}
+        {expandable && <ChevronDown size={12} className="team-chip-caret" aria-hidden="true" />}
+      </button>
+      {open && expandable && <div id={panelId} className="team-chip-panel">
+        <p className={`team-chip-text${showAll ? '' : ' clamped'}`}>{body}</p>
+        {needsMore && <button type="button" className="team-chip-more" onClick={() => setShowAll((value) => !value)}>{showAll ? 'Show less' : 'Show more'}</button>}
+        {onOpenConversation && <button type="button" className="team-chip-link" onClick={onOpenConversation}>Open {name}&rsquo;s conversation</button>}
+      </div>}
+    </div>
   </div>
 }
 

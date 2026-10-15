@@ -1,0 +1,34 @@
+/* Density: CSS-only consumption of `data-density` on <html>, set by uiPrefs.
+   Layout only — heights, gaps and padding. No colour, no type. `default` is
+   untouched, so the base stylesheets stay the single source for it. */
+
+/* ── Compact ─────────────────────────────────────────────────────────── */
+:root[data-density="compact"] .bot-row,
+:root[data-density="compact"] .team-row { min-height: 36px; padding-block: 2px; }
+:root[data-density="compact"] .team-group-rows { gap: 1px; }
+:root[data-density="compact"] .chat-column { gap: 8px; }
+:root[data-density="compact"] .message-row,
+:root[data-density="compact"] .message-action-shell { margin-bottom: 2px; }
+:root[data-density="compact"] .message-row.group-start,
+:root[data-density="compact"] .message-row.user,
+:root[data-density="compact"] .message-action-shell.group-start,
+:root[data-density="compact"] .message-action-shell.user { margin-top: 4px; }
+:root[data-density="compact"] .composer-box { min-height: 74px; padding: 6px 8px 6px 10px; gap: 4px; }
+:root[data-density="compact"] .composer-box textarea { line-height: 20px; }
+
+/* ── Roomy ───────────────────────────────────────────────────────────── */
+:root[data-density="roomy"] .bot-row,
+:root[data-density="roomy"] .team-row { min-height: 56px; padding-block: 6px; }
+:root[data-density="roomy"] .team-group-rows { gap: 4px; }
+:root[data-density="roomy"] .chat-column { gap: 18px; }
+:root[data-density="roomy"] .message-row.group-start,
+:root[data-density="roomy"] .message-row.user,
+:root[data-density="roomy"] .message-action-shell.group-start,
+:root[data-density="roomy"] .message-action-shell.user { margin-top: 18px; }
+
+/* ── Segmented control (placed by the Director) ──────────────────────── */
+.density-control { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--radius-pill); background: var(--surface-raised); }
+.density-control button { min-height: 28px; padding: 0 12px; color: var(--text-2); border: 0; border-radius: var(--radius-pill); background: transparent; font-size: var(--fs-xs); cursor: pointer; }
+.density-control button:hover:not(.active) { color: var(--text-1); }
+.density-control button.active { color: var(--text-inverse); background: var(--text-1); }
+.density-control button:focus-visible { outline: none; box-shadow: var(--focus-ring); }

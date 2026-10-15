@@ -205,6 +205,71 @@ export function companionPills(agents: readonly Agent[], selectedId: string | nu
   return [...window.slice(0, 3), selected]
 }
 
+/** Active blob ids for one runtime, in the roster order the daemon persists. */
+export function runtimeRosterIds(agents: readonly Agent[] | null | undefined, runtimeId: string): string[] {
+  return activeAgents(agents).filter((agent) => agent.runtimeId === runtimeId).map((agent) => agent.id)
+}
+
+/** The active members of a project (`null` = unassigned) in roster order. */
+export function projectMemberIds(agents: readonly Agent[] | null | undefined, projectId: string | null): string[] {
+  return activeAgents(agents).filter((agent) => (agent.projectId ?? null) === projectId).map((agent) => agent.id)
+}
+
+/** Swap one id with its neighbour in `orderedIds`; null at the edge or when the id is absent. */
+export function moveWithin(orderedIds: readonly string[], id: string, direction: -1 | 1): string[] | null {
+  const index = orderedIds.indexOf(id)
+  if (index < 0) return null
+  const target = index + direction
+  if (target < 0 || target >= orderedIds.length) return null
+  const next = [...orderedIds]
+  const swap = next[target]!
+  next[target] = next[index]!
+  next[index] = swap
+  return next
+}
+
+/** Writes a reordered subsequence back into the full runtime order that still contains it. */
+function applySubsetOrder(runtime: readonly string[], previous: readonly string[], next: readonly string[]): string[] {
+  const members = new Set(previous)
+  let cursor = 0
+  return runtime.map((id) => members.has(id) ? next[cursor++]! : id)
+}
+
+/**
+ * The new full runtime order after moving a blob one step inside its own
+ * project. Null at the project's edge or when the blob is unknown. Feed the
+ * result straight to `agent.reorder`.
+ */
+export function reorderAgentInProject(agents: readonly Agent[] | null | undefined, agentId: string, direction: -1 | 1): string[] | null {
+  const agent = (agents ?? []).find((item) => item.id === agentId)
+  if (!agent) return null
+  const runtime = runtimeRosterIds(agents, agent.runtimeId)
+  if (!runtime.includes(agentId)) return null
+  const members = projectMemberIds(agents, agent.projectId ?? null).filter((id) => runtime.includes(id))
+  const moved = moveWithin(members, agentId, direction)
+  if (!moved) return null
+  return applySubsetOrder(runtime, members, moved)
+}
+
+/**
+ * The new full runtime order with a blob placed just before or after another
+ * blob of the same runtime. Covers both a reorder inside a project and a move
+ * into a different one (which also needs its `projectId` updated separately).
+ */
+export function placeAgentOrder(agents: readonly Agent[] | null | undefined, agentId: string, targetId: string, edge: 'before' | 'after'): string[] | null {
+  if (agentId === targetId) return null
+  const list = agents ?? []
+  const agent = list.find((item) => item.id === agentId)
+  const target = list.find((item) => item.id === targetId)
+  if (!agent || !target || agent.runtimeId !== target.runtimeId) return null
+  const runtime = runtimeRosterIds(list, agent.runtimeId)
+  const without = runtime.filter((id) => id !== agentId)
+  const at = without.indexOf(targetId)
+  if (at < 0) return null
+  without.splice(edge === 'before' ? at : at + 1, 0, agentId)
+  return without
+}
+
 /** Grouping key for a stored project path. Display only — never sent to `session.new`. */
 export function projectKey(path: string | null | undefined): string | null {
   if (typeof path !== 'string') return null

@@ -101,6 +101,13 @@ describe('FirstRunOnboarding', () => {
     expect(create).toHaveBeenCalledWith(runtime, 'Helper', '#b7a7f4', 'gpt-6-luna')
   })
 
+  it('shows skeleton rows while the first agent scan is running', () => {
+    const { host: mounted } = mount({ initialStep: 1, runtimes: [], scanning: true })
+    expect(mounted.querySelector('.onboarding-runtimes .skeleton-row')).not.toBeNull()
+    expect(mounted.querySelector('.onboarding-runtimes')?.getAttribute('aria-busy')).toBe('true')
+    expect(mounted.textContent).toContain('Scanning…')
+  })
+
   it('omits an unconfirmed version command and links to the official docs', () => {
     const { host: mounted } = mount({ initialStep: 0, runtimes: [runtime] })
     act(() => button('Skip').click())

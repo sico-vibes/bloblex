@@ -41,7 +41,7 @@ import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
 import { friendlyError } from './errorCopy'
 import { createDraft, createParams, daemonCodeOf, draftFromAgent, teamParams, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, starterDraft, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
-import { activeAgents, agentSessions, agentsForRuntime, duplicateAgentName, legacySessions, nextAgentAfterArchive, projectGroups, runtimeUsable, sessionDisplayTitle, sessionSelectionTarget } from './rosterSelectors'
+import { activeAgents, agentSessions, agentsForRuntime, duplicateAgentName, legacySessions, nextAgentAfterArchive, placeAgentOrder, projectGroups, reorderAgentInProject, runtimeUsable, sessionDisplayTitle, sessionSelectionTarget } from './rosterSelectors'
 import { conversationMarkdown } from './conversationMarkdown'
 import { parseSharedBlob, serializeBlob, type SharedBlob } from './blobShare'
 import { ApprovalPill } from './approvalUi'
@@ -65,6 +65,7 @@ import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, type MessageSea
 import { ConnectionBanner } from './ConnectionBanner'
 import { removeUndoToast, useUndoToasts, useUndoable } from './undo'
 import { messageExcerpt, MessageActions, MessageContextMenu, MessageReactionBadges, originalMessageText, ReplyContextStrip, type ReplyTarget } from './MessageActions'
+import { Skeleton } from './Skeleton'
 import { UsageTip } from './UsageTip'
 import { appendUsageTipDismissal, parseUsageTipDismissals, selectUsageTip, type UsageTip as UsageTipModel, type UsageTipDismissal } from './usageTips'
 import { setApprovalBadge } from '../tauri'
@@ -1440,10 +1441,12 @@ export function App() {
     const role = String(message.role ?? '')
     const text = typeof message.content === 'string' ? message.content : ''
     if (role === 'notice' && meta?.kind === 'delegation') {
-      return <DelegationChip key={key} peer={agents.find((agent) => agent.id === meta.peerAgentId)} name={meta.peerName ?? 'Teammate'} topic={typeof meta.topic === 'string' ? meta.topic : undefined} failed={meta.direction === 'failed'} detail={meta.direction === 'failed' ? text : undefined} onOpen={meta.sideSessionId ? () => openSideConversation(meta.sideSessionId) : undefined} />
+      const peerId = meta.peerAgentId
+      return <DelegationChip key={key} peer={agents.find((agent) => agent.id === peerId)} name={meta.peerName ?? 'Teammate'} topic={typeof meta.topic === 'string' ? meta.topic : undefined} failed={meta.direction === 'failed'} detail={meta.direction === 'failed' ? text : undefined} text={text} onOpenConversation={peerId ? () => openBlobConversation(peerId) : undefined} />
     }
     if (role === 'user' && meta?.kind === 'blob_reply') {
-      return <ReplyChip key={key} from={agents.find((agent) => agent.id === meta.fromAgentId)} name={meta.fromName ?? 'Teammate'} onOpen={meta.sideSessionId ? () => openSideConversation(meta.sideSessionId) : undefined} />
+      const fromId = meta.fromAgentId
+      return <ReplyChip key={key} from={agents.find((agent) => agent.id === fromId)} name={meta.fromName ?? 'Teammate'} text={text} onOpenConversation={fromId ? () => openBlobConversation(fromId) : undefined} />
     }
     if (role === 'user' && meta?.kind === 'blob_message') {
       const from = agents.find((agent) => agent.id === meta.fromAgentId)
@@ -1486,6 +1489,15 @@ export function App() {
     replyTargetRef.current = target
     setReplyTarget(target)
     requestAnimationFrame(() => composerRef.current?.focus())
+  }
+
+  /** Retry the latest turn: re-send the prompt that produced it. Offered on the latest turn's replies only. */
+  const retryLatestTurn = async () => {
+    if (!selectedSession || busy) return
+    const lastUser = [...sessionMessages].reverse().find((item) => String(item.role ?? '') === 'user' && !(item.meta && typeof item.meta === 'object'))
+    const text = lastUser ? originalMessageText(lastUser.content ?? lastUser.text) : ''
+    if (!text.trim()) { setError('There is no prompt to retry.'); return }
+    try { await doRpc('session.prompt', { sessionId: selectedSession.id, text }); await refresh() } catch { /* The actionable error is shown inline. */ }
   }
 
   const openUserMessageMenu = (event: ReactMouseEvent<HTMLElement>, message: Record<string, unknown>) => {
@@ -1741,6 +1753,11 @@ export function App() {
     setBlobPage((page) => page && page.agentId !== agent.id ? null : page)
     if (!main) void ensureConversation(agent)
   }
+  /** Jump to a blob and its latest conversation; the delegation chips link here. */
+  const openBlobConversation = (agentId: string) => {
+    const agent = agents.find((item) => item.id === agentId && !item.archived)
+    if (agent) selectAgent(agent)
+  }
   const upsertSession = (session: Session) => setSnapshot((current) => {
     if (!current) return current
     const exists = (current.sessions ?? []).some((item) => item.id === session.id)
@@ -1790,6 +1807,25 @@ export function App() {
       setSelectedAgentId(back.agentId)
       if (back.sessionId) setSelectedSessionId(back.sessionId)
     }
+  }
+  /** Persists a new roster order for the blob's runtime (the daemon needs every active id). */
+  const reorderRoster = async (agent: Agent, agentIds: string[]) => {
+    try {
+      const result = await doRpc<{ agents?: Agent[] }>('agent.reorder', { runtimeId: agent.runtimeId, agentIds }, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.reorder'))
+      for (const updated of result.agents ?? []) mergeAgent(updated)
+    } catch { /* inline */ }
+  }
+  const reorderAgent = (agent: Agent, direction: -1 | 1) => {
+    const order = reorderAgentInProject(agents, agent.id, direction)
+    if (!order) return
+    setRosterAnnouncement(`Moved ${agent.name} ${direction === -1 ? 'up' : 'down'}.`)
+    void reorderRoster(agent, order)
+  }
+  const placeAgent = async (agent: Agent, target: Agent, edge: 'before' | 'after') => {
+    setRosterAnnouncement(`Moved ${agent.name} next to ${target.name}.`)
+    if ((agent.projectId ?? null) !== (target.projectId ?? null)) await teamUpdate(agent, { projectId: target.projectId ?? null })
+    const order = placeAgentOrder(agents, agent.id, target.id, edge)
+    if (order) await reorderRoster(agent, order)
   }
   const teamUpdate = async (agent: Agent, params: Record<string, unknown>) => {
     try {
@@ -1943,6 +1979,7 @@ export function App() {
   const canStartSession = connection === 'connected' && !busy && !!activeSelectedAgent && runtimeReady && !sideSession
   const conversationEmpty = !selectedSession || (selectedSession.messages ?? []).length === 0
   const lastAgentIndex = conversationItems.reduce((last, item, index) => item.kind === 'message' && !isUserMessage(item.value) ? index : last, -1)
+  const lastUserIndex = groupedConversationItems.reduce((last, item, index) => item.kind === 'message' && isUserMessage(item.value) ? index : last, -1)
   // The details panel describes the open conversation, so it steps aside for the blob editor and Analytics.
   const detailsVisible = inspectorOpen && !blobPage && !analyticsOpen
   const toggleInspector = () => setInspectorOpen((open) => { localStorage.setItem('bloblex.inspector.open', open ? '0' : '1'); return !open })
@@ -2072,6 +2109,8 @@ export function App() {
           onRename: (agent) => setTextPrompt({ title: `Rename ${agent.name}`, label: `${Noun} name`, value: agent.name, confirmLabel: 'Rename', onSubmit: async (name) => { if (experiments.undo) await renameBlob(agent, name, agent.name); else await renameAgent(agent, name) } }),
           onTogglePin: (agentId) => updatePins((current) => toggleFavorite(current, agentId)),
           onMove: (agent, projectId) => { if (experiments.undo) void moveBlob(agent, projectId, agent.projectId ?? null); else void moveAgent(agent, projectId) },
+          onReorder: (agent, direction) => reorderAgent(agent, direction),
+          onPlace: (agent, target, edge) => void placeAgent(agent, target, edge),
           onToggleLeader: (agent) => void teamUpdate(agent, { leader: !agent.leader }),
           onSetHidden: (agent, hidden) => void teamUpdate(agent, { hidden }),
           onToggleUnread: (_agent, session, unread) => { if (session) setSeenSessions((current) => markSeen(current, session.id, unread ? new Date(0).toISOString() : new Date().toISOString())) },
@@ -2147,6 +2186,7 @@ export function App() {
                 const hasUserOrAssistantMessage = (message?.role === 'user' || message?.role === 'assistant') && !['blob_reply', 'blob_message', 'delegation', 'auto_retry'].includes(String(messageMeta.kind ?? ''))
                 const actions = experiments.messageActions && !sideSession && hasUserOrAssistantMessage
                 const userMessage = message?.role === 'user'
+                const retryable = actions && message?.role === 'assistant' && index > lastUserIndex && connection === 'connected' && runtimeReady && !busy && !sessionBusy
                 const groupStart = !!message && !userMessage && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))
                 const files = experiments.changeReview && !sideSession && message ? filesUnderReply(selectedSession, message) : []
                 return <Fragment key={item.id}>
@@ -2157,7 +2197,7 @@ export function App() {
                     if (!row) return
                     const rect = row.getBoundingClientRect()
                     row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + Math.min(rect.width, 120), clientY: rect.top + Math.min(rect.height, 48) }))
-                  }}>{content}<MessageActions text={text} time={messageClock(message?.createdAt)} reactions={Array.isArray(message.reactions) ? message.reactions as string[] : []} canReply={!!text.trim() && !!message.id} onReply={() => stageMessageReply(message)} onToggleReaction={(emoji) => toggleMessageReaction(selectedSession.id, String(message.id), emoji)} onError={setError} /></div> : content}
+                  }}>{content}<MessageActions text={text} time={messageClock(message?.createdAt)} reactions={Array.isArray(message.reactions) ? message.reactions as string[] : []} canReply={!!text.trim() && !!message.id} onReply={() => stageMessageReply(message)} onRetry={retryable ? () => void retryLatestTurn() : undefined} onToggleReaction={(emoji) => toggleMessageReaction(selectedSession.id, String(message.id), emoji)} onError={setError} /></div> : content}
                   {files.length > 0 && <ChangeReview files={files} dismissed={reviewDismissals[selectedSession.id] ?? []} onKeep={(id) => dismissReviewFile(selectedSession.id, id)} onRevert={(file) => setRevertTarget({ sessionId: selectedSession.id, file })} onDiff={(path, content) => setDiffViewer({ path, content })} />}
                 </Fragment>
               })}
@@ -2660,7 +2700,7 @@ function UsageSheet({ summary, period, quotas, loading, quotaRefreshing, onRefre
       <section className="usage-block">
         <div className="usage-block-heading"><h3>Token usage</h3><span>{summary && typeof summary.from === 'string' && typeof summary.to === 'string' ? `${shortDate(summary.from)} – ${shortDate(summary.to)}` : 'Recorded activity'}</span></div>
         <div className="usage-period-switch" aria-label="Usage date range"><button className={period === 'today' ? 'active' : ''} aria-pressed={period === 'today'} onClick={() => onPeriodChange('today')}>Today</button><button className={period === 'month' ? 'active' : ''} aria-pressed={period === 'month'} onClick={() => onPeriodChange('month')}>This month</button></div>
-        {loading ? <div className="sheet-loading"><LoaderCircle className="spinning" /><span>Loading the daemon summary…</span></div> : summary ? <div className="usage-token-grid">{usageTokenBuckets(summary).map((bucket) => <div className="usage-token" key={bucket.key}><span>{bucket.label}</span><strong>{bucket.value}</strong></div>)}</div> : <div className="sheet-empty"><CircleHelp size={20} /><strong>Usage summary unavailable</strong><p>The daemon did not return token usage for this period.</p></div>}
+        {loading ? <div className="sheet-loading" role="status" aria-busy="true"><Skeleton variant="row" lines={4} /><span className="sr-only">Loading the daemon summary…</span></div> : summary ? <div className="usage-token-grid">{usageTokenBuckets(summary).map((bucket) => <div className="usage-token" key={bucket.key}><span>{bucket.label}</span><strong>{bucket.value}</strong></div>)}</div> : <div className="sheet-empty"><CircleHelp size={20} /><strong>Usage summary unavailable</strong><p>The daemon did not return token usage for this period.</p></div>}
       </section>
     </div>
     <footer><span>Token counts describe recorded activity. Plan limits are a separate account quota.</span><button type="button" className="secondary-button small" onClick={onOpenHistory}>Usage history</button></footer>

@@ -20,3 +20,13 @@
 .queue-later { margin-left: auto; height: 24px; padding: 0 10px; color: var(--companion-text-muted, var(--text-2)); font-size: 11px; border: 1px solid var(--companion-alpha-18, rgba(255, 255, 255, .18)); border-radius: 999px; background: transparent; cursor: pointer; }
 .queue-later:hover { color: var(--companion-text-bright, var(--text-1)); }
 @media (prefers-reduced-motion: reduce) { .needs-you { transition: none; } }
+
+/* The header actions rule (.island-actions > button) resets padding, border and
+   display for icon buttons; the badge is a labelled pill, so it restates itself. */
+.island-actions > .needs-you,
+.island-actions > .needs-you:not(.companion-collapse) {
+  height: 24px; padding: 0 9px 0 8px; display: inline-flex; flex-direction: row; place-items: initial; align-items: center; gap: 7px;
+  color: var(--companion-text-bright, var(--c-ink)); border: 1px solid color-mix(in srgb, var(--companion-status-alert, #f5a524) 55%, transparent);
+  background: color-mix(in srgb, var(--companion-status-alert, #f5a524) 14%, transparent);
+}
+.island-actions > .needs-you:hover:not(:disabled) { color: var(--companion-text-bright, var(--c-ink)); background: color-mix(in srgb, var(--companion-status-alert, #f5a524) 24%, transparent); }

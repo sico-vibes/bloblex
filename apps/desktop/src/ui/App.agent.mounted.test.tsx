@@ -372,6 +372,7 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await click(buttonNamed(view.host, 'Create blob'))
+    await click(buttonNamed(view.host, 'Show all settings'))
     expect(view.host.textContent).toContain('Enter a name.')
     const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create blob'))
     // Create stays pressable: pressing it with a problem moves focus to the first invalid field.
@@ -407,6 +408,7 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await click(buttonNamed(view.host, 'Create blob'))
+    await click(buttonNamed(view.host, 'Show all settings'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Fresh blob')
     const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create blob'))
     const cases: Array<[string, string]> = [
@@ -725,6 +727,7 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await click(buttonNamed(view.host, 'Create blob'))
+    await click(buttonNamed(view.host, 'Show all settings'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Fresh blob')
     const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create blob'))
     await click(save)

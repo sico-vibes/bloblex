@@ -7,7 +7,9 @@ import type { ExecutionSendGate } from '../executionContract'
 import { Archive, Check, ChevronLeft, Copy, Download, Trash2 } from 'lucide-react'
 import { BotRail, BotSaveBar, railSections, sectionDomId } from './BotPageChrome'
 import { BotPreviewPane } from './BotPreviewPane'
-import { summarizeChanges, type ChangedField } from './agentForm'
+import { BotWizard } from './BotWizard'
+import { labelize } from '../types'
+import { summarizeChanges, type BotSection, type ChangedField } from './agentForm'
 import { BlobOverview } from './BlobOverview'
 import { BlobSessions } from './BlobSessions'
 import { BlobSettings } from './BlobSettings'
@@ -17,7 +19,7 @@ import { useEntityNoun } from './vocabulary'
 type MorphPairSnapshot = { rect: DOMRect; fontSize: number; ghost: HTMLElement }
 type MorphSnapshot = { surface: DOMRect; radius: string; shadow: string; pairs: Map<string, MorphPairSnapshot> }
 
-export function BlobPage({ mode, agent, draft, runtime, session, runtimes, projects = [], sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onDuplicate, onExport, changes = [], onNewSession, onOpenSession }: {
+export function BlobPage({ mode, agent, draft, runtime, session, runtimes, projects = [], sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onDuplicate, onExport, onOpenMemory, changes = [], onNewSession, onOpenSession }: {
   mode: 'create' | 'edit'
   agent: Agent | null
   draft: AgentDraft
@@ -46,6 +48,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
   onArchive: () => void
   onDuplicate?: () => void
   onExport?: () => void
+  onOpenMemory?: () => void
   changes?: readonly ChangedField[]
   onNewSession: () => void
   onOpenSession: (session: Session) => void
@@ -123,6 +126,11 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
   const discardBody = mode === 'edit' && discard === 'revert' && changes.length
     ? 'These changes will be lost: ' + summarizeChanges(changes, 8) + '.'
     : discard === 'leave' && changes.length ? 'Unsaved changes: ' + summarizeChanges(changes, 8) + '.' : undefined
+  const renderSettings = (only?: BotSection[]) => <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate}  sections={only} sessions={sessions} onOpenMemory={onOpenMemory} />
+  // A draft that already has a name (an import, a duplicate, a starter) is a review job, not a blank page.
+  const [advanced, setAdvanced] = useState(() => mode === 'create' && draft.name.trim().length > 0)
+  const wizardActive = mode === 'create' && !advanced
+  const providerName = runtime ? labelize(runtime.provider) : 'No coding agent'
   return <div className="blob-page">
     <header className="blob-page-header">
       <button ref={backRef} type="button" className="icon-button" aria-label="Back" title="Back" onClick={requestBack}><ChevronLeft size={18} aria-hidden="true" /></button>
@@ -130,14 +138,16 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
     </header>
     <div className="blob-page-scroll" ref={scrollRef}>
       <div className="blob-page-layout with-preview">
-        <BotRail sections={sections} changes={changes} scrollRoot={scrollRef} />
+        {!wizardActive && <BotRail sections={sections} changes={changes} scrollRoot={scrollRef} />}
         <div className="blob-page-column">
+          {wizardActive && <BotWizard draft={draft} errors={errors} noun={noun} ready={ready} saving={saving} providerName={providerName} onDraftChange={onDraftChange} renderSections={(only) => renderSettings(only)} onCreate={trySave} onAdvanced={() => setAdvanced(true)} onCancel={requestBack} />}
+          {!wizardActive && <>
           <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} approvalMode={badgeMode} agentId={agent?.id ?? null} />
           {error && <p className="blob-page-notice error" role="alert">{error}</p>}
           {remoteNotice && <p className="blob-page-notice" role="status">{remoteNotice}</p>}
           {localNotice && <p className="blob-page-notice error" role="alert">{localNotice}</p>}
           {bypassLine && <p className="blob-page-notice warning" role="status">Bypass is active for this {noun}. New requests are approved without asking.</p>}
-          <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate} />
+          {renderSettings()}
           {mode === 'edit' && <BlobSessions agent={agent} sessions={sessions} legacyCount={legacyCount} canCreate={canStartSession} onOpenSession={onOpenSession} onNewSession={onNewSession} />}
           {mode === 'edit' && <section id={sectionDomId('manage')} className="settings-group blob-group" aria-label="Manage">
             <div className="settings-group-head"><h3>Manage</h3></div>
@@ -147,11 +157,12 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
               <button type="button" className="blob-manage-row danger" onClick={onArchive}><Archive size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Archive {draft.name.trim() || `this ${noun}`}</strong><small>It leaves the sidebar and companion. Its conversations stay saved.</small></span></button>
             </div>
           </section>}
+          </>}
         </div>
         <BotPreviewPane draft={draft} agentId={agent?.id ?? null} connected={connected} />
       </div>
     </div>
-    <BotSaveBar mode={mode} noun={noun} dirty={dirty} saving={saving} changes={changes} invalidCount={invalid.length} saved={saved} canSubmit onSave={trySave} onDiscard={requestDiscard} />
+    {!wizardActive && <BotSaveBar mode={mode} noun={noun} dirty={dirty} saving={saving} changes={changes} invalidCount={invalid.length} saved={saved} canSubmit onSave={trySave} onDiscard={requestDiscard} />}
     {discard && <ConfirmDialog title={discard === 'revert' ? 'Discard these changes?' : 'Discard unsaved changes?'} body={discardBody} confirmLabel="Discard" cancelLabel="Keep editing" onConfirm={confirmDiscard} onCancel={() => setDiscard(null)} />}
   </div>
 }

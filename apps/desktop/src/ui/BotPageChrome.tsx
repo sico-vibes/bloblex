@@ -17,7 +17,7 @@ export function railSections(mode: 'create' | 'edit'): RailSection[] {
     { id: 'notifications', label: 'Notifications' },
     { id: 'details', label: 'Technical details' },
   ]
-  return mode === 'edit' ? [...base, { id: 'conversations', label: 'Conversations' }, { id: 'manage', label: 'Manage' }] : base
+  return mode === 'edit' ? [...base.slice(0, 6), { id: 'memory', label: 'Memory' }, ...base.slice(6), { id: 'conversations', label: 'Conversations' }, { id: 'manage', label: 'Manage' }] : base
 }
 
 export function sectionDomId(id: string) { return `bot-section-${id}` }

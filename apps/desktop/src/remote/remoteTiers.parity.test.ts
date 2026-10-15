@@ -3,13 +3,20 @@
 // extracts every method string it answers (including `a | b` alternations and
 // method prefix guards), and fails when the two disagree. It fails loudly if
 // the dispatch cannot be parsed, rather than passing quietly.
+//
+// FIX25 adds the second half: every event type the daemon can emit must be
+// classified in `EVENT_POLICY` (`allow` or `drop`), so a new event type fails
+// the build until someone decides whether it may cross to a device.
 
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { METHOD_RULES } from './remoteTiers'
+import { EVENT_POLICY, METHOD_RULES } from './remoteTiers'
 
 const MAIN_RS = fileURLToPath(new URL('../../../../crates/bloblex-daemon/src/main.rs', import.meta.url))
+const DAEMON_SRC = fileURLToPath(new URL('../../../../crates/bloblex-daemon/src', import.meta.url))
+const STORAGE_SRC = fileURLToPath(new URL('../../../../crates/bloblex-storage/src', import.meta.url))
 
 interface ParsedDispatch {
   /** Every concrete method string named by a dispatch arm. */
@@ -21,15 +28,14 @@ interface ParsedDispatch {
 }
 
 /**
- * The body of `async fn dispatch`, found by scanning braces while skipping
- * string literals and comments. Throws rather than returning a partial body.
+ * The body of a function, found by scanning braces while skipping string
+ * literals and comments. Throws rather than returning a partial body.
  */
-function dispatchBody(source: string): string {
-  const signature = 'async fn dispatch('
+function bodyOf(source: string, signature: string): string {
   const at = source.indexOf(signature)
   if (at < 0) throw new Error(`parity: could not find \`${signature}\` in ${MAIN_RS}`)
   const open = source.indexOf('{', at)
-  if (open < 0) throw new Error('parity: `async fn dispatch` has no body')
+  if (open < 0) throw new Error(`parity: \`${signature}\` has no body`)
   let depth = 0
   let inString = false
   let inLineComment = false
@@ -46,7 +52,11 @@ function dispatchBody(source: string): string {
     if (c === '{') depth++
     else if (c === '}') { depth--; if (depth === 0) return source.slice(open + 1, i) }
   }
-  throw new Error('parity: could not find the end of the dispatch function (unbalanced braces)')
+  throw new Error(`parity: could not find the end of \`${signature}\` (unbalanced braces)`)
+}
+
+function dispatchBody(source: string): string {
+  return bodyOf(source, 'async fn dispatch(')
 }
 
 function parseDispatch(source: string): ParsedDispatch {
@@ -114,5 +124,70 @@ describe('remote tier parity with the daemon dispatch', () => {
       if (!used) stale.push(rule.method)
     }
     expect(stale, `METHOD_RULES entries the dispatch no longer has: ${stale.join(', ')}`).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Event policy parity
+
+/** Every event type the daemon can emit, gathered from the sources it owns. */
+function daemonEventTypes(): string[] {
+  const types = new Set<string>()
+  for (const dir of [DAEMON_SRC, STORAGE_SRC]) {
+    for (const entry of readdirSync(dir)) {
+      if (!entry.endsWith('.rs')) continue
+      const source = readFileSync(join(dir, entry), 'utf8')
+      // `st.emit("type", ...)`, including the multi-line calls.
+      for (const match of source.matchAll(/\.emit\(\s*"([a-z][a-zA-Z0-9_.]*)"/g)) types.add(match[1])
+      // JSON event envelopes built inline (`events.replay.complete`, `replay.gap`).
+      for (const match of source.matchAll(/"timestamp"\s*:[^}]*?"type"\s*:\s*"([a-z][a-zA-Z0-9_.]*)"/g)) types.add(match[1])
+      // Storage rows the daemon broadcasts (`agent.changed`, `settings.changed`).
+      for (const match of source.matchAll(/INTO\s+app_events\([^)]*\)\s*VALUES\([^)]*?'([a-z][a-zA-Z0-9_.]*)'/g)) types.add(match[1])
+    }
+  }
+  // The event-forwarding match returns `("type", payload)` tuples rather than
+  // calling `emit` with a literal (`message.delta`, `tool.changed`, ...).
+  const forwarded = bodyOf(readFileSync(MAIN_RS, 'utf8'), 'async fn forward_events_with_timeouts(')
+  for (const match of forwarded.matchAll(/\(\s*"([a-z][a-zA-Z0-9_.]*)"\s*,/g)) {
+    if (match[1].includes('.')) types.add(match[1])
+  }
+  return [...types].sort()
+}
+
+const eventTypes = daemonEventTypes()
+
+describe('remote event policy parity with the daemon', () => {
+  it('parsed a plausible set of emitted event types', () => {
+    expect(eventTypes.length).toBeGreaterThan(25)
+    for (const expected of ['message.completed', 'session.changed', 'agent.changed', 'settings.changed', 'replay.gap', 'events.replay.complete']) {
+      expect(eventTypes, expected).toContain(expected)
+    }
+  })
+
+  it('classifies every emitted event type as allow or drop', () => {
+    const unclassified = eventTypes.filter((type) => !(type in EVENT_POLICY))
+    expect(unclassified, `daemon event types with no EVENT_POLICY entry: ${unclassified.join(', ')}`).toEqual([])
+  })
+
+  it('sends only the reviewed event types', () => {
+    const allowed = Object.entries(EVENT_POLICY).filter(([, policy]) => policy === 'allow').map(([type]) => type).sort()
+    expect(allowed).toEqual([
+      'agent.changed',
+      'daemon.health',
+      'events.replay.complete',
+      'message.completed',
+      'message.delta',
+      'permission.requested',
+      'permission.resolved',
+      'queue.changed',
+      'quota.updated',
+      'replay.gap',
+      'session.changed',
+      'session.deleted',
+      'turn.cancelled',
+      'turn.completed',
+      'turn.error',
+      'usage.updated',
+    ])
   })
 })

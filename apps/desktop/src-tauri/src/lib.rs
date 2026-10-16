@@ -53,6 +53,8 @@ struct DaemonProcess {
 enum SelectedFilePurpose {
     Export,
     Import,
+    BackupExport,
+    BackupImport,
 }
 
 struct SelectedFilePath {
@@ -753,6 +755,93 @@ fn read_blob_import(state: State<'_, AppState>, selection_token: String) -> Resu
         return Err("This blob file is too large.".to_string());
     }
     String::from_utf8(bytes).map_err(|_| "This blob file is not UTF-8 text.".to_string())
+}
+
+/// Largest `.bitbots-backup.json` the native reader accepts.
+const MAX_BACKUP_BYTES: u64 = 64 * 1024 * 1024;
+
+#[tauri::command]
+fn select_backup_export_path(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let suggested_name = format!("bitbots-backup-{}.bitbots-backup.json", chrono::Utc::now().format("%Y-%m-%d"));
+    let Some(selected) = app
+        .dialog()
+        .file()
+        .set_title("Save a Bitbots backup")
+        .set_file_name(suggested_name)
+        .add_filter("Bitbots backup", &["json"])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let path = selected.into_path().map_err(|_| "The selected file path is unavailable.".to_string())?;
+    Ok(Some(remember_selected_path(&state, path, SelectedFilePurpose::BackupExport)?))
+}
+
+#[tauri::command]
+fn select_backup_import_path(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(selected) = app
+        .dialog()
+        .file()
+        .set_title("Choose a Bitbots backup")
+        .add_filter("Bitbots backup", &["json"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = selected.into_path().map_err(|_| "The selected backup file path is unavailable.".to_string())?;
+    Ok(Some(remember_selected_path(&state, path, SelectedFilePurpose::BackupImport)?))
+}
+
+/// Writes bytes to `path` through a sibling temp file and a rename, so a
+/// half-written backup never replaces a good one.
+fn write_backup_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    fs::create_dir_all(&parent).map_err(|_| "The backup folder could not be created.".to_string())?;
+    let temp = parent.join(format!(".{}.tmp", Uuid::new_v4()));
+    fs::write(&temp, bytes).map_err(|_| "The backup could not be written.".to_string())?;
+    fs::rename(&temp, path).map_err(|error| {
+        let _ = fs::remove_file(&temp);
+        format!("The backup could not be written: {error}")
+    })
+}
+
+#[tauri::command]
+async fn backup_export_write(state: State<'_, AppState>, selection_token: String, include: Option<Value>) -> Result<Value, String> {
+    let path = take_selected_path(&state, &selection_token, SelectedFilePurpose::BackupExport)?;
+    let conn = connection(&state)?;
+    let params = match include {
+        Some(include) => json!({ "include": include }),
+        None => json!({}),
+    };
+    let result = rpc_call(&conn, "backup.export", params).await?;
+    let document = result.get("document").cloned().ok_or_else(|| "The backup could not be created.".to_string())?;
+    let bytes = serde_json::to_vec_pretty(&document).map_err(|_| "The backup could not be written.".to_string())?;
+    write_backup_file(&path, &bytes)?;
+    Ok(json!({
+        "path": path.to_string_lossy(),
+        "stats": result.get("stats").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+/// Reads a chosen `.bitbots-backup.json` (cap 64 MB, UTF-8, JSON) and sends it
+/// to the daemon for validation. The file text never passes through the
+/// renderer; only the preview crosses back.
+#[tauri::command]
+async fn backup_import_preview(state: State<'_, AppState>, selection_token: String) -> Result<Value, String> {
+    let path = take_selected_path(&state, &selection_token, SelectedFilePurpose::BackupImport)?;
+    let metadata = fs::metadata(&path).map_err(|_| "The selected backup file could not be read.".to_string())?;
+    if metadata.len() > MAX_BACKUP_BYTES {
+        return Err("This backup file is too large.".to_string());
+    }
+    let bytes = fs::read(&path).map_err(|_| "The selected backup file could not be read.".to_string())?;
+    if bytes.len() as u64 > MAX_BACKUP_BYTES {
+        return Err("This backup file is too large.".to_string());
+    }
+    let document: Value = serde_json::from_slice(&bytes).map_err(|_| "This is not a Bitbots backup file.".to_string())?;
+    let conn = connection(&state)?;
+    rpc_call(&conn, "backup.preview", json!({ "document": document })).await
 }
 
 const MAX_STAGED_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
@@ -2253,6 +2342,10 @@ pub fn run() {
             select_blob_export_path,
             select_blob_import_path,
             read_blob_import,
+            select_backup_export_path,
+            select_backup_import_path,
+            backup_export_write,
+            backup_import_preview,
             inspect_local_file,
             stage_prompt_attachment,
             open_in_editor,
@@ -2313,7 +2406,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod markdown_export_tests {
-    use super::{remember_selected_path, take_selected_path, write_markdown_export, AppState, SelectedFilePurpose};
+    use super::{remember_selected_path, take_selected_path, write_backup_file, write_markdown_export, AppState, SelectedFilePurpose};
     use std::path::PathBuf;
 
     #[test]
@@ -2344,5 +2437,36 @@ mod markdown_export_tests {
             SelectedFilePurpose::Import,
         ).unwrap();
         assert!(write_markdown_export(&state, &token, "content").is_err());
+    }
+
+    #[test]
+    fn backup_selection_purposes_are_distinct_and_single_use() {
+        let state = AppState::default();
+        // A token chosen for a backup export cannot be spent as a backup import.
+        let export = remember_selected_path(&state, PathBuf::from("C:/selected/backup.json"), SelectedFilePurpose::BackupExport).unwrap();
+        assert!(take_selected_path(&state, &export, SelectedFilePurpose::BackupImport).is_err());
+        // The purpose mismatch also consumes the token, so it cannot be retried.
+        assert!(take_selected_path(&state, &export, SelectedFilePurpose::BackupExport).is_err());
+
+        // A blob import token cannot be spent as a backup import either.
+        let blob = remember_selected_path(&state, PathBuf::from("C:/selected/blob.json"), SelectedFilePurpose::Import).unwrap();
+        assert!(take_selected_path(&state, &blob, SelectedFilePurpose::BackupImport).is_err());
+
+        let import = remember_selected_path(&state, PathBuf::from("C:/selected/restore.json"), SelectedFilePurpose::BackupImport).unwrap();
+        assert_eq!(take_selected_path(&state, &import, SelectedFilePurpose::BackupImport).unwrap(), PathBuf::from("C:/selected/restore.json"));
+        assert!(take_selected_path(&state, &import, SelectedFilePurpose::BackupImport).is_err());
+    }
+
+    #[test]
+    fn backup_writes_through_a_temp_file_and_rename() {
+        let dir = std::env::temp_dir().join(format!("bitbots-backup-write-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("backup.bitbots-backup.json");
+        write_backup_file(&target, b"{\"ok\":true}").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"{\"ok\":true}");
+        // No temp file is left beside the target.
+        let leftovers = std::fs::read_dir(&dir).unwrap().flatten().filter(|entry| entry.file_name().to_string_lossy().starts_with('.')).count();
+        assert_eq!(leftovers, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

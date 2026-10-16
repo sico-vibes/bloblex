@@ -45,6 +45,7 @@ mod experiments;
 mod quota;
 mod quota_sources;
 mod automations;
+mod backup;
 mod memory;
 mod questions;
 mod skills;
@@ -76,6 +77,7 @@ struct AppState {
     automations: Arc<automations::Automations>,
     memory: Arc<memory::Memory>,
     skills: Arc<skills::Skills>,
+    backup_previews: Arc<backup::BackupPreviews>,
     /// Serialises provider activation per session so a warm-up and a first send
     /// cannot resume the same conversation twice.
     activation_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
@@ -653,6 +655,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
         "memory.list" | "memory.get" | "memory.create" | "memory.update" | "memory.approve" | "memory.delete" | "memory.restore" => memory::rpc(st, method, &p).await,
         "skills.list" | "skills.get" | "skills.scan" | "skills.import" | "skills.delete" | "skills.toggle" => skills::rpc(st, method, &p).await,
+        "backup.export" | "backup.preview" | "backup.import" => backup::rpc(st, method, &p).await,
         "exec.snapshot.get" => {
             let id=p["snapshotId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","snapshotId is required",StatusCode::BAD_REQUEST))?;
             st.db.exec_snapshot_get(id).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?.ok_or_else(||derr("not_found","execution snapshot not found",StatusCode::NOT_FOUND))
@@ -1069,43 +1072,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         }),
         "settings.set" => {
             let k = p["key"].as_str().unwrap_or("");
-            if k.is_empty(){return Err(derr("invalid_argument","key is required",StatusCode::BAD_REQUEST));}
-            if k.starts_with("exec_gate.")&&!p["value"].is_boolean(){return Err(derr("invalid_argument","execution gates require a JSON boolean",StatusCode::BAD_REQUEST));}
-            if k=="notifications.enabled"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","notifications.enabled requires a JSON boolean",StatusCode::BAD_REQUEST));}
-            if k=="experimental.autoRetry"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","experimental.autoRetry requires a JSON boolean",StatusCode::BAD_REQUEST));}
-            if k=="experimental.memory"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","experimental.memory requires a JSON boolean",StatusCode::BAD_REQUEST));}
-            if k=="memory.sharedAgentWrites"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","memory.sharedAgentWrites requires a JSON boolean",StatusCode::BAD_REQUEST));}
-            if k=="skills.enabled"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","skills.enabled requires a JSON boolean",StatusCode::BAD_REQUEST));}
-            if k=="conversations.autoTitle"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","conversations.autoTitle requires a JSON boolean",StatusCode::BAD_REQUEST));}
-            if k=="appearance.style"&&!p["value"].as_str().is_some_and(|v|["bitbots","blobots"].contains(&v)){return Err(derr("invalid_argument","appearance.style must be bitbots or blobots",StatusCode::BAD_REQUEST));}
-            if k=="appearance.accent"&&!p["value"].as_str().is_some_and(|v|v.is_empty()||is_accent_hex(v)){return Err(derr("invalid_argument","appearance.accent must be empty or a #rrggbb hex colour",StatusCode::BAD_REQUEST));}
-            let mut value = p["value"].clone();
-            if k=="appearance.accent"{ value = json!(p["value"].as_str().unwrap_or("").to_ascii_lowercase()); }
-            if k=="profile.about"{
-                if !p["value"].is_string(){return Err(derr("invalid_argument","profile.about requires a string of at most 1500 characters",StatusCode::BAD_REQUEST));}
-                match memory::validate_about(&p["value"]) {
-                    Ok(trimmed) => value = json!(trimmed),
-                    Err(message) => return Err(derr("invalid_argument",&message,StatusCode::BAD_REQUEST)),
-                }
-            }
-            if k=="retry.maxWaitSecs"&&!p["value"].as_u64().is_some_and(|secs|secs<=86_400){return Err(derr("invalid_argument","retry.maxWaitSecs requires an integer between 0 and 86400",StatusCode::BAD_REQUEST));}
-            if k=="claude.enableWorkflows"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","claude.enableWorkflows requires a JSON boolean",StatusCode::BAD_REQUEST));}
-            if k=="permissions.default_mode"&&!p["value"].as_str().is_some_and(|v|["ask","auto"].contains(&v)){return Err(derr("invalid_argument","permissions.default_mode must be ask or auto",StatusCode::BAD_REQUEST));}
-            if k=="automations.paused"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","automations.paused requires a JSON boolean",StatusCode::BAD_REQUEST));}
-            if k=="companion.focusMode"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","companion.focusMode requires a JSON boolean",StatusCode::BAD_REQUEST));}
-            if k=="companion.positions"&&!valid_companion_positions(&p["value"]){return Err(derr("invalid_argument","companion.positions must map at most 8 display names to {x,y} numbers",StatusCode::BAD_REQUEST));}
-            if k=="questions.expirySecs"&&!p["value"].as_i64().is_some_and(|secs|(1_800..=604_800).contains(&secs)){return Err(derr("invalid_argument","questions.expirySecs requires an integer between 1800 and 604800",StatusCode::BAD_REQUEST));}
-            if k=="automations.maxConcurrent"&&!p["value"].as_u64().is_some_and(|count|(1..=3).contains(&count)){return Err(derr("invalid_argument","automations.maxConcurrent requires an integer between 1 and 3",StatusCode::BAD_REQUEST));}
-            if k.to_ascii_lowercase().contains("token")
-                || k.to_ascii_lowercase().contains("secret")
-                || k.to_ascii_lowercase().contains("password")
-            {
-                return Err(derr(
-                    "invalid_argument",
-                    "credential material cannot be stored as a setting",
-                    StatusCode::BAD_REQUEST,
-                ));
-            }
+            let value = validate_setting(k, &p["value"])?;
             let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions";
             let events=st.db.set_setting(k, &value).map_err(|e| {
                 derr(
@@ -1124,6 +1091,44 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             StatusCode::NOT_FOUND,
         )),
     }
+}
+
+/// Validates one setting value and returns the value to store. Shared by
+/// `settings.set` and by backup import, so a restored value is held to exactly
+/// the same rules as one the user typed. Some keys are normalised here
+/// (`appearance.accent` lower-cased, `profile.about` trimmed).
+fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
+    if k.is_empty() { return Err(derr("invalid_argument", "key is required", StatusCode::BAD_REQUEST)); }
+    if k.starts_with("exec_gate.") && !value.is_boolean() { return Err(derr("invalid_argument", "execution gates require a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "notifications.enabled" && !value.is_boolean() { return Err(derr("invalid_argument", "notifications.enabled requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "experimental.autoRetry" && !value.is_boolean() { return Err(derr("invalid_argument", "experimental.autoRetry requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "experimental.memory" && !value.is_boolean() { return Err(derr("invalid_argument", "experimental.memory requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "memory.sharedAgentWrites" && !value.is_boolean() { return Err(derr("invalid_argument", "memory.sharedAgentWrites requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "skills.enabled" && !value.is_boolean() { return Err(derr("invalid_argument", "skills.enabled requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "conversations.autoTitle" && !value.is_boolean() { return Err(derr("invalid_argument", "conversations.autoTitle requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "appearance.style" && !value.as_str().is_some_and(|v| ["bitbots", "blobots"].contains(&v)) { return Err(derr("invalid_argument", "appearance.style must be bitbots or blobots", StatusCode::BAD_REQUEST)); }
+    if k == "appearance.accent" && !value.as_str().is_some_and(|v| v.is_empty() || is_accent_hex(v)) { return Err(derr("invalid_argument", "appearance.accent must be empty or a #rrggbb hex colour", StatusCode::BAD_REQUEST)); }
+    let mut stored = value.clone();
+    if k == "appearance.accent" { stored = json!(value.as_str().unwrap_or("").to_ascii_lowercase()); }
+    if k == "profile.about" {
+        if !value.is_string() { return Err(derr("invalid_argument", "profile.about requires a string of at most 1500 characters", StatusCode::BAD_REQUEST)); }
+        match memory::validate_about(value) {
+            Ok(trimmed) => stored = json!(trimmed),
+            Err(message) => return Err(derr("invalid_argument", &message, StatusCode::BAD_REQUEST)),
+        }
+    }
+    if k == "retry.maxWaitSecs" && !value.as_u64().is_some_and(|secs| secs <= 86_400) { return Err(derr("invalid_argument", "retry.maxWaitSecs requires an integer between 0 and 86400", StatusCode::BAD_REQUEST)); }
+    if k == "claude.enableWorkflows" && !value.is_boolean() { return Err(derr("invalid_argument", "claude.enableWorkflows requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "permissions.default_mode" && !value.as_str().is_some_and(|v| ["ask", "auto"].contains(&v)) { return Err(derr("invalid_argument", "permissions.default_mode must be ask or auto", StatusCode::BAD_REQUEST)); }
+    if k == "automations.paused" && !value.is_boolean() { return Err(derr("invalid_argument", "automations.paused requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "companion.focusMode" && !value.is_boolean() { return Err(derr("invalid_argument", "companion.focusMode requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "companion.positions" && !valid_companion_positions(value) { return Err(derr("invalid_argument", "companion.positions must map at most 8 display names to {x,y} numbers", StatusCode::BAD_REQUEST)); }
+    if k == "questions.expirySecs" && !value.as_i64().is_some_and(|secs| (1_800..=604_800).contains(&secs)) { return Err(derr("invalid_argument", "questions.expirySecs requires an integer between 1800 and 604800", StatusCode::BAD_REQUEST)); }
+    if k == "automations.maxConcurrent" && !value.as_u64().is_some_and(|count| (1..=3).contains(&count)) { return Err(derr("invalid_argument", "automations.maxConcurrent requires an integer between 1 and 3", StatusCode::BAD_REQUEST)); }
+    if k.to_ascii_lowercase().contains("token") || k.to_ascii_lowercase().contains("secret") || k.to_ascii_lowercase().contains("password") {
+        return Err(derr("invalid_argument", "credential material cannot be stored as a setting", StatusCode::BAD_REQUEST));
+    }
+    Ok(stored)
 }
 
 /// A `#rrggbb` colour, as accepted for `appearance.accent`.
@@ -3689,6 +3694,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         automations: Arc::new(automations::Automations::default()),
         memory: Arc::new(memory::Memory::default()),
         skills: Arc::new(skills::Skills::default()),
+        backup_previews: Arc::new(backup::BackupPreviews::default()),
         activation_locks: Arc::new(Mutex::new(HashMap::new())),
         starting_cancels: Arc::new(Mutex::new(HashSet::new())),
         warm_lru: Arc::new(Mutex::new(Vec::new())),
@@ -4626,7 +4632,7 @@ mod phase2a_tests {
 
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),skills:Arc::new(skills::Skills::default()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -8653,5 +8659,387 @@ mod phase2a_tests {
         st.db.merge_session_data("labelled", &json!({"projectId":project["id"]})).unwrap();
         assert_eq!(st.db.session_detail("labelled").unwrap()["workspaceLabel"], "Beacon");
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    // ── FIX31 backup and restore ───────────────────────────────────────────
+
+    async fn add_provider_runtime(st: &AppState, id: &str, provider: &str) {
+        st.db.upsert_runtime(&json!({"id": id, "provider": provider, "status": "offline", "executablePath": "fake"})).unwrap();
+        let mut runtimes = st.runtimes.write().await;
+        if !runtimes.iter().any(|runtime| runtime["id"] == id) {
+            runtimes.push(json!({"id": id, "provider": provider, "status": "offline", "version": "9.9.9"}));
+        }
+    }
+
+    /// A valid `.bitbots-backup.json` envelope around `contents`, including the
+    /// canonical checksum the daemon checks.
+    fn backup_document(contents: Value) -> Value {
+        let canonical = serde_json::to_vec(&contents).unwrap();
+        json!({
+            "format": "bitbots.backup",
+            "version": 1,
+            "createdAt": "2026-10-16T00:00:00.000Z",
+            "app": {"version": "0.1.0-test"},
+            "contents": contents,
+            "checksum": {"alg": "sha256", "value": bloblex_adapter_acp::sha256_hex(&canonical)},
+        })
+    }
+
+    fn bot_entry(export_id: &str, name: &str, provider: &str, leader: bool, approval: &str) -> Value {
+        json!({
+            "exportId": export_id,
+            "provider": provider,
+            "runtimeHint": Value::Null,
+            "name": name,
+            "description": "A bot.",
+            "instructions": "Do the work.",
+            "color": "mint",
+            "outfit": "auto",
+            "look": Value::Null,
+            "role": "",
+            "model": Value::Null,
+            "thinking": Value::Null,
+            "serviceTier": Value::Null,
+            "approvalMode": approval,
+            "notificationLevel": Value::Null,
+            "leader": leader,
+            "hidden": false,
+            "maxConcurrency": 1,
+            "customEnvKeys": [],
+        })
+    }
+
+    fn bots_document(bots: Vec<Value>) -> Value {
+        backup_document(json!({"bots": bots, "memory": [], "skills": [], "automations": [], "settings": {}}))
+    }
+
+    async fn preview_of(st: &AppState, document: Value) -> Value {
+        dispatch(st, "backup.preview", json!({"document": document})).await.unwrap()
+    }
+
+    async fn import_of(st: &AppState, preview: &Value, resolutions: Value) -> Result<Value, DispatchError> {
+        dispatch(st, "backup.import", json!({"previewId": preview["previewId"], "resolutions": resolutions})).await
+    }
+
+    #[tokio::test]
+    async fn backup_round_trip_restores_bots_memory_skills_automations_and_settings() {
+        let (source, _) = state();
+        let source_dir = std::env::temp_dir().join(format!("bloblex-backup-src-{}", Uuid::new_v4()));
+        *source.team.data_dir.lock().unwrap() = Some(source_dir.clone());
+        add_provider_runtime(&source, "rt-claude", "claude").await;
+
+        let scout = source.db.agent_create(&json!({"name":"Scout","runtimeId":"rt-test","description":"Explore","instructions":"Be careful.","color":"#123456","model":"m1","thinking":"high","approvalMode":"auto","customEnv":{"LANG":"en_US"},"look":{"shape":"round","seed":"seed-1"}})).unwrap().0;
+        let scout_id = scout["id"].as_str().unwrap().to_owned();
+        source.db.agent_set_team(&scout_id, &json!({"role":"researcher","leader":true})).unwrap();
+        let review = source.db.agent_create(&json!({"name":"Review","runtimeId":"rt-claude"})).unwrap().0;
+        let _review_id = review["id"].as_str().unwrap().to_owned();
+
+        source.db.memory_create(&json!({"scope":"blob","scopeId":scout_id,"kind":"fact","title":"Scout fact","body":"The build uses rustls.","tags":["tls"],"origin":"user"})).unwrap();
+        source.db.memory_create(&json!({"scope":"shared","kind":"preference","title":"Shared","body":"Prefer short answers.","origin":"user"})).unwrap();
+        source.db.memory_create(&json!({"scope":"blob","scopeId":scout_id,"kind":"fact","title":"Leaky","body":"sk-ant-abcdefghijklmnopqrstuvwxyz012345","origin":"user"})).unwrap();
+
+        let skill_src = std::env::temp_dir().join(format!("bloblex-backup-skill-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(skill_src.join("scripts")).unwrap();
+        std::fs::write(skill_src.join("SKILL.md"), "---\nname: deploy\ndescription: Deploy the app.\n---\nRun the script.\n").unwrap();
+        std::fs::write(skill_src.join("scripts/run.sh"), "#!/bin/sh\necho deploy\n").unwrap();
+        dispatch(&source, "skills.import", json!({"path": skill_src.to_string_lossy()})).await.unwrap();
+
+        source.db.automation_create(&json!({"agentId":scout_id,"name":"Daily","prompt":"Summarize today.","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"},"enabled":true})).unwrap();
+        dispatch(&source, "settings.set", json!({"key":"appearance.accent","value":"#AABBCC"})).await.unwrap();
+        dispatch(&source, "settings.set", json!({"key":"profile.name","value":"Sico"})).await.unwrap();
+        dispatch(&source, "settings.set", json!({"key":"hints.seen","value":["one"]})).await.unwrap();
+        dispatch(&source, "settings.set", json!({"key":"exec_gate.codex.model","value":false})).await.unwrap();
+
+        let exported = dispatch(&source, "backup.export", json!({})).await.unwrap();
+        let document = exported["document"].clone();
+        assert_eq!(exported["stats"]["bots"], 2);
+        assert_eq!(exported["stats"]["memory"], 2, "the secret-marked note is not exported");
+        assert_eq!(document["contents"]["settings"]["appearance.accent"], json!("#aabbcc"));
+        assert!(document["contents"]["settings"].get("hints.seen").is_none());
+        assert!(document["contents"]["settings"].get("exec_gate.codex.model").is_none());
+        let exported_scout = document["contents"]["bots"].as_array().unwrap().iter().find(|bot| bot["name"] == "Scout").unwrap();
+        assert!(exported_scout.get("customEnv").is_none());
+        assert_eq!(exported_scout["customEnvKeys"], json!(["LANG"]));
+        assert_eq!(exported_scout["provider"], "codex");
+
+        let (target, _) = state();
+        let target_dir = std::env::temp_dir().join(format!("bloblex-backup-dst-{}", Uuid::new_v4()));
+        *target.team.data_dir.lock().unwrap() = Some(target_dir.clone());
+        add_provider_runtime(&target, "rt-claude", "claude").await;
+
+        let preview = preview_of(&target, document).await;
+        assert_eq!(preview["counts"]["bots"], 2);
+        assert_eq!(preview["counts"]["skills"], 1);
+        assert_eq!(preview["counts"]["automations"], 1);
+        let result = import_of(&target, &preview, json!({"default":"rename"})).await.unwrap();
+        assert_eq!(result["imported"]["bots"], 2);
+        assert_eq!(result["imported"]["memory"], 2);
+        assert_eq!(result["imported"]["skills"], 1);
+        assert_eq!(result["imported"]["automations"], 1);
+
+        let agents = target.db.agent_list(false, None).unwrap();
+        let restored = agents.iter().find(|agent| agent["name"] == "Scout").unwrap();
+        assert_eq!(restored["description"], "Explore");
+        assert_eq!(restored["instructions"], "Be careful.");
+        assert_eq!(restored["look"], json!({"shape":"round","seed":"seed-1"}));
+        assert_eq!(restored["role"], "researcher");
+        assert_eq!(restored["approvalMode"], "auto");
+        assert_eq!(restored["effectiveApprovalMode"], "auto");
+        assert_eq!(restored["color"], "#123456");
+        assert_eq!(restored["projectId"], Value::Null);
+        assert_eq!(restored["customEnv"], json!({}));
+        assert_eq!(agents.iter().filter(|agent| agent["leader"] == true).count(), 1);
+
+        let restored_id = restored["id"].as_str().unwrap();
+        let notes = target.db.memory_list(&json!({"scope":"blob"})).unwrap();
+        assert!(notes.iter().any(|note| note["scopeId"].as_str() == Some(restored_id) && note["title"] == "Scout fact"), "bot memory follows the restored bot");
+        assert!(target.db.memory_list(&json!({"scope":"shared"})).unwrap().iter().any(|note| note["title"] == "Shared"));
+
+        let automations = target.db.automation_list(None).unwrap();
+        assert_eq!(automations.len(), 1);
+        assert_eq!(automations[0]["enabled"], false);
+        assert_eq!(automations[0]["pauseReason"], "restored");
+        assert_eq!(automations[0]["reuseSessionId"], Value::Null);
+        assert_eq!(automations[0]["nextRunAt"], Value::Null);
+        assert_eq!(automations[0]["agentId"].as_str(), Some(restored_id));
+
+        assert_eq!(target.db.skills_list().unwrap().len(), 1);
+        assert_eq!(crate::skills::read_files(&target, "deploy").unwrap(), crate::skills::read_files(&source, "deploy").unwrap());
+
+        let settings = target.db.settings().unwrap();
+        assert_eq!(settings["appearance.accent"], json!("#aabbcc"));
+        assert_eq!(settings["profile.name"], json!("Sico"));
+        assert!(settings.get("hints.seen").is_none());
+
+        let _ = std::fs::remove_dir_all(source_dir);
+        let _ = std::fs::remove_dir_all(target_dir);
+        let _ = std::fs::remove_dir_all(skill_src);
+    }
+
+    #[tokio::test]
+    async fn backup_export_honours_include_flags() {
+        let (st, _) = state();
+        st.db.agent_create(&json!({"name":"Keeper","runtimeId":"rt-test"})).unwrap();
+        st.db.memory_create(&json!({"scope":"shared","kind":"fact","title":"Kept note","body":"Something durable.","origin":"user"})).unwrap();
+        let exported = dispatch(&st, "backup.export", json!({"include":{"memory":false,"skills":false,"automations":false,"settings":false}})).await.unwrap();
+        assert_eq!(exported["stats"]["bots"], 1, "bots are always included");
+        assert_eq!(exported["stats"]["memory"], 0);
+        assert_eq!(exported["stats"]["skills"], 0);
+        assert_eq!(exported["stats"]["automations"], 0);
+        assert_eq!(exported["stats"]["settings"], 0);
+    }
+
+    #[tokio::test]
+    async fn backup_preview_refuses_a_damaged_or_newer_document() {
+        let (st, _) = state();
+        let document = bots_document(vec![bot_entry("e1", "Scout", "codex", false, "ask")]);
+        assert!(preview_of(&st, document.clone()).await["previewId"].is_string());
+
+        let mut tampered = document.clone();
+        tampered["contents"]["bots"][0]["name"] = json!("Sneaky");
+        let error = dispatch(&st, "backup.preview", json!({"document": tampered})).await.unwrap_err();
+        assert_eq!(error.1.code, "invalid_argument");
+        assert_eq!(error.1.message, "The backup file is damaged or was edited.");
+
+        let mut newer = document;
+        newer["version"] = json!(2);
+        assert_eq!(dispatch(&st, "backup.preview", json!({"document": newer})).await.unwrap_err().1.code, "unsupported");
+    }
+
+    #[tokio::test]
+    async fn backup_import_rename_replace_and_skip_resolve_a_name_conflict() {
+        let (st, _) = state();
+        let existing = st.db.agent_create(&json!({"name":"Scout","runtimeId":"rt-test","description":"Old."})).unwrap().0;
+        let existing_id = existing["id"].as_str().unwrap().to_owned();
+        let document = bots_document(vec![bot_entry("e1", "Scout", "codex", false, "ask")]);
+
+        // Rename (the default on a conflict).
+        let preview = preview_of(&st, document.clone()).await;
+        assert_eq!(preview["conflicts"]["bots"][0]["existingAgentId"].as_str(), Some(existing_id.as_str()));
+        let renamed = import_of(&st, &preview, json!({"default":"rename"})).await.unwrap();
+        assert_eq!(renamed["imported"]["bots"], 1);
+        assert_eq!(renamed["renamed"][0]["from"], "Scout");
+        assert_eq!(renamed["renamed"][0]["to"], "Scout (2)");
+        assert!(st.db.agent_list(false, None).unwrap().iter().any(|agent| agent["name"] == "Scout (2)"));
+
+        // Skip.
+        let preview = preview_of(&st, document.clone()).await;
+        let skipped = import_of(&st, &preview, json!({"default":"skip"})).await.unwrap();
+        assert_eq!(skipped["imported"]["bots"], 0);
+        assert_eq!(skipped["skipped"]["bots"], 1);
+        assert_eq!(st.db.agent_list(false, None).unwrap().len(), 2, "skip leaves the roster unchanged");
+
+        // Replace keeps the existing id and applies the incoming fields.
+        let replace_doc = bots_document(vec![{
+            let mut entry = bot_entry("e1", "Scout", "codex", false, "auto");
+            entry["description"] = json!("New purpose.");
+            entry["instructions"] = json!("New steps.");
+            entry
+        }]);
+        let preview = preview_of(&st, replace_doc).await;
+        let replaced = import_of(&st, &preview, json!({"bots":{"e1":"replace"}})).await.unwrap();
+        assert_eq!(replaced["imported"]["bots"], 1);
+        let scout = st.db.agent_get(&existing_id).unwrap();
+        assert_eq!(scout["description"], "New purpose.");
+        assert_eq!(scout["instructions"], "New steps.");
+        assert_eq!(scout["approvalMode"], "auto");
+        assert_eq!(st.db.agent_list(false, None).unwrap().iter().filter(|agent| agent["name"] == "Scout").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn backup_import_keeps_a_single_leader() {
+        let (st, _) = state();
+        let chief = st.db.agent_create(&json!({"name":"Chief","runtimeId":"rt-test"})).unwrap().0;
+        st.db.agent_set_team(chief["id"].as_str().unwrap(), &json!({"leader":true})).unwrap();
+        let document = bots_document(vec![
+            bot_entry("e1", "Alpha", "codex", true, "ask"),
+            bot_entry("e2", "Beta", "codex", true, "ask"),
+        ]);
+        let preview = preview_of(&st, document).await;
+        assert!(preview["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().unwrap_or("").contains("leader")));
+        let result = import_of(&st, &preview, json!({"default":"rename"})).await.unwrap();
+        assert_eq!(result["imported"]["bots"], 2);
+        let agents = st.db.agent_list(false, None).unwrap();
+        let leaders = agents.iter().filter(|agent| agent["leader"] == true).collect::<Vec<_>>();
+        assert_eq!(leaders.len(), 1);
+        assert_eq!(leaders[0]["name"], "Chief", "the existing leader keeps the flag");
+    }
+
+    #[tokio::test]
+    async fn backup_import_ignores_non_allowlisted_settings_and_reports_invalid_ones() {
+        let (st, _) = state();
+        let document = backup_document(json!({
+            "bots": [],
+            "memory": [],
+            "skills": [],
+            "automations": [],
+            "settings": {"hints.seen": ["x"], "notifications.enabled": "yes", "appearance.accent": "#ABCDEF"},
+        }));
+        let preview = preview_of(&st, document).await;
+        assert_eq!(preview["counts"]["settings"], 3);
+        let result = import_of(&st, &preview, json!({})).await.unwrap();
+        assert_eq!(result["imported"]["settings"], 1);
+        assert_eq!(result["skipped"]["settings"], 1, "the invalid boolean is reported, the unknown key is ignored");
+        let settings = st.db.settings().unwrap();
+        assert_eq!(settings["appearance.accent"], json!("#abcdef"));
+        assert!(settings.get("hints.seen").is_none());
+        assert!(settings.get("notifications.enabled").is_none());
+    }
+
+    #[tokio::test]
+    async fn backup_skips_secret_marked_memory_on_both_sides() {
+        let (source, _) = state();
+        source.db.agent_create(&json!({"name":"Keeper","runtimeId":"rt-test"})).unwrap();
+        source.db.memory_create(&json!({"scope":"shared","kind":"fact","title":"Leaky","body":"Authorization: xoxb-1234567890","origin":"user"})).unwrap();
+        let exported = dispatch(&source, "backup.export", json!({})).await.unwrap();
+        assert_eq!(exported["stats"]["memory"], 0);
+
+        let (target, _) = state();
+        let document = backup_document(json!({
+            "bots": [],
+            "memory": [
+                {"id":"m1","scope":"shared","kind":"fact","title":"Leaky","body":"please use Bearer abcdef","origin":"user","reviewed":true,"tags":[],"importance":50,"pinned":false,"createdAt":"2026-10-16T00:00:00.000Z"},
+                {"id":"m2","scope":"shared","kind":"fact","title":"Clean","body":"A plain durable note.","origin":"user","reviewed":true,"tags":[],"importance":50,"pinned":false,"createdAt":"2026-10-16T00:00:00.000Z"},
+            ],
+            "skills": [],
+            "automations": [],
+            "settings": {},
+        }));
+        let preview = preview_of(&target, document).await;
+        let result = import_of(&target, &preview, json!({})).await.unwrap();
+        assert_eq!(result["imported"]["memory"], 1);
+        assert_eq!(result["skipped"]["memory"], 1);
+        assert!(target.db.memory_list(&json!({"scope":"shared"})).unwrap().iter().all(|note| note["title"] != "Leaky"));
+    }
+
+    #[tokio::test]
+    async fn backup_skips_a_bot_whose_provider_has_no_runtime() {
+        let (st, _) = state();
+        let document = bots_document(vec![
+            bot_entry("e1", "Codexter", "codex", false, "ask"),
+            bot_entry("e2", "Opener", "opencode", false, "ask"),
+        ]);
+        let preview = preview_of(&st, document).await;
+        assert!(preview["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().unwrap_or("").contains("opencode")));
+        let result = import_of(&st, &preview, json!({"default":"rename"})).await.unwrap();
+        assert_eq!(result["imported"]["bots"], 1);
+        assert_eq!(result["skipped"]["bots"], 1);
+        assert!(st.db.agent_list(false, None).unwrap().iter().all(|agent| agent["name"] != "Opener"));
+    }
+
+    #[tokio::test]
+    async fn backup_import_of_an_expired_preview_is_not_found() {
+        let (st, _) = state();
+        let preview = preview_of(&st, bots_document(vec![bot_entry("e1", "Scout", "codex", false, "ask")])).await;
+        st.backup_previews.expire_all();
+        let error = import_of(&st, &preview, json!({"default":"rename"})).await.unwrap_err();
+        assert_eq!(error.1.code, "not_found");
+    }
+
+    #[tokio::test]
+    async fn backup_enforces_the_skill_size_caps() {
+        use base64::Engine as _;
+        let (st, _) = state();
+        let data_dir = std::env::temp_dir().join(format!("bloblex-backup-caps-{}", Uuid::new_v4()));
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+
+        // Export: a skill file larger than 5 MB is refused with a clear error.
+        let big = vec![("big.bin".to_owned(), vec![0u8; 5 * 1024 * 1024 + 1])];
+        let staging = crate::skills::stage_files(&st, &big).unwrap();
+        crate::skills::commit_staged(&st, &staging, "biggy").unwrap();
+        st.db.skills_upsert(&json!({"name":"biggy","description":"Big.","source":"folder","contentSha256":"abc","fileCount":1,"totalBytes":5*1024*1024+1})).unwrap();
+        let error = dispatch(&st, "backup.export", json!({})).await.unwrap_err();
+        assert_eq!(error.1.code, "invalid_argument");
+        assert!(error.1.message.contains("cannot be exported"));
+        st.db.skills_delete("biggy").unwrap();
+
+        // Import: an oversized file makes the whole skill skipped, not failed.
+        let oversized = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 5 * 1024 * 1024 + 1]);
+        let document = backup_document(json!({
+            "bots": [], "memory": [], "automations": [], "settings": {},
+            "skills": [{"name":"huge","description":"Huge.","files":[{"path":"big.bin","sha256":"x","base64":oversized}]}],
+        }));
+        let preview = preview_of(&st, document).await;
+        let result = import_of(&st, &preview, json!({})).await.unwrap();
+        assert_eq!(result["imported"]["skills"], 0);
+        assert_eq!(result["skipped"]["skills"], 1);
+        assert!(st.db.skills_list().unwrap().is_empty());
+
+        // Import: a same-name skill is skipped unless replacements are chosen.
+        let small = backup_document(json!({
+            "bots": [], "memory": [], "automations": [], "settings": {},
+            "skills": [{"name":"deploy","description":"Deploy.","files":[{"path":"SKILL.md","sha256":bloblex_adapter_acp::sha256_hex(b"---\nname: deploy\ndescription: Deploy.\n---\nbody"),"base64":base64::engine::general_purpose::STANDARD.encode(b"---\nname: deploy\ndescription: Deploy.\n---\nbody")}]}],
+        }));
+        let preview = preview_of(&st, small.clone()).await;
+        let first = import_of(&st, &preview, json!({})).await.unwrap();
+        assert_eq!(first["imported"]["skills"], 1);
+        let preview = preview_of(&st, small).await;
+        assert_eq!(preview["conflicts"]["skills"][0]["name"], "deploy");
+        let preview_again = preview_of(&st, backup_document(json!({
+            "bots": [], "memory": [], "automations": [], "settings": {},
+            "skills": [{"name":"deploy","description":"Deploy.","files":[{"path":"SKILL.md","sha256":bloblex_adapter_acp::sha256_hex(b"---\nname: deploy\ndescription: Deploy.\n---\nbody"),"base64":base64::engine::general_purpose::STANDARD.encode(b"---\nname: deploy\ndescription: Deploy.\n---\nbody")}]}],
+        }))).await;
+        let skipped = import_of(&st, &preview_again, json!({"skills":{"deploy":"skip"}})).await.unwrap();
+        assert_eq!(skipped["imported"]["skills"], 0);
+        assert_eq!(skipped["skipped"]["skills"], 1);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn backup_import_reports_project_memory_that_cannot_be_matched() {
+        let (st, _) = state();
+        st.db.agent_create(&json!({"name":"Keeper","runtimeId":"rt-test"})).unwrap();
+        let document = backup_document(json!({
+            "bots": [], "skills": [], "automations": [], "settings": {},
+            "memory": [
+                {"id":"p1","scope":"project","projectId":"missing","projectName":"Nowhere","kind":"fact","title":"Project note","body":"Attached to a project.","origin":"user","reviewed":true,"tags":[],"importance":50,"pinned":false,"createdAt":"2026-10-16T00:00:00.000Z"},
+            ],
+        }));
+        let preview = preview_of(&st, document).await;
+        assert!(preview["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().unwrap_or("").contains("project note")));
+        let result = import_of(&st, &preview, json!({})).await.unwrap();
+        assert_eq!(result["imported"]["memory"], 0);
+        assert_eq!(result["skipped"]["memory"], 1);
     }
 }

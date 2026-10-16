@@ -485,6 +485,7 @@ version = "0.1.0-beta.29"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "bloblex-adapter-acp",
  "bloblex-adapter-claude",
  "bloblex-adapter-codex",

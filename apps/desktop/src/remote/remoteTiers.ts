@@ -187,6 +187,9 @@ export const METHOD_RULES: readonly MethodRule[] = [
   { method: 'mcp.*', class: 'never', minTier: null, why: 'The MCP bridge is the local agent tool surface, not a remote device surface.' },
   { method: 'session.handoff.draft', class: 'never', minTier: null, why: 'A remote device must not draft a handoff between conversations.' },
   { method: 'session.model.update', class: 'never', minTier: null, why: 'A remote device must not change a conversation\'s model, effort or approval mode.' },
+  { method: 'backup.export', class: 'never', minTier: null, why: 'A remote device must not read the host\'s backup file (it would carry bots, memory and skills off the host).' },
+  { method: 'backup.preview', class: 'never', minTier: null, why: 'A remote device must not read a backup file the host selected.' },
+  { method: 'backup.import', class: 'never', minTier: null, why: 'A remote device must not restore a backup onto the host.' },
   { method: 'pricing.*', class: 'never', minTier: null, why: 'Monetary valuation controls are retired and never remote.' },
   { method: 'subscription.*', class: 'never', minTier: null, why: 'Subscription controls are retired and never remote.' },
   { method: 'budget.*', class: 'never', minTier: null, why: 'Budget controls are retired and never remote.' },
@@ -526,6 +529,7 @@ export const EVENT_POLICY: Readonly<Record<string, EventPolicy>> = {
   'replay.gap': 'allow',
   'runtime.models.changed': 'allow',
   // drop (never sent)
+  'backup.imported': 'drop',
   'automation.changed': 'drop',
   'automation.deleted': 'drop',
   'automation.run.changed': 'drop',

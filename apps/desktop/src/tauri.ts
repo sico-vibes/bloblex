@@ -68,6 +68,55 @@ export async function writeBlobExport(selectionToken: string, text: string): Pro
   await writeMarkdownExport(selectionToken, text)
 }
 
+/** The parts of an export a caller may switch off; bots are always included. */
+export type BackupInclude = {
+  memory?: boolean
+  skills?: boolean
+  automations?: boolean
+  settings?: boolean
+}
+
+export type BackupStats = { bots: number; memory: number; skills: number; automations: number; settings: number }
+
+/** Save dialog for a `.bitbots-backup.json`; returns an opaque selection token. */
+export async function selectBackupExportPath(): Promise<string | null> {
+  if (!inDesktop) return null
+  return invoke<string | null>('select_backup_export_path')
+}
+
+/** Open dialog for a `.bitbots-backup.json`; returns an opaque selection token. */
+export async function selectBackupImportPath(): Promise<string | null> {
+  if (!inDesktop) return null
+  return invoke<string | null>('select_backup_import_path')
+}
+
+/** Asks the daemon for a document and writes it to the chosen path. */
+export async function writeBackupExport(token: string, include?: BackupInclude): Promise<{ path: string; stats: BackupStats }> {
+  if (!inDesktop) throw new Error('Backups are available only in the desktop app.')
+  return invoke<{ path: string; stats: BackupStats }>('backup_export_write', { selectionToken: token, include: include ?? null })
+}
+
+/**
+ * Reads and validates a chosen backup file through the daemon. The file text
+ * never reaches the renderer; the returned preview carries only counts,
+ * conflicts and warnings. Import is completed by calling `rpc('backup.import',
+ * { previewId, resolutions })` directly.
+ */
+export async function previewBackupImport(token: string) {
+  if (!inDesktop) throw new Error('Backups are available only in the desktop app.')
+  return invoke<{
+    previewId: string
+    counts: BackupStats
+    conflicts: {
+      bots: { exportId: string; name: string; existingAgentId: string }[]
+      skills: { name: string; same: boolean }[]
+      memory: { id: string; identical: boolean }[]
+      settings: { key: string; current: unknown; incoming: unknown }[]
+    }
+    warnings: string[]
+  }>('backup_import_preview', { selectionToken: token })
+}
+
 export async function inspectLocalFile(path: string): Promise<{ path: string; fileName: string; sizeBytes: number }> {
   if (!inDesktop) throw new Error('Local file validation is available only in the desktop app.')
   return invoke<{ path: string; fileName: string; sizeBytes: number }>('inspect_local_file', { path })

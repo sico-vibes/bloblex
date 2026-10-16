@@ -250,7 +250,7 @@ fn path_parts_guarded(rel: &str) -> bool {
 }
 
 /// The `read_skill_file` guard, additionally rejecting an absolute path.
-fn safe_relative(rel: &str) -> bool {
+pub(crate) fn safe_relative(rel: &str) -> bool {
     if rel.starts_with('/') || rel.starts_with('\\') {
         return false;
     }
@@ -445,6 +445,82 @@ fn skills_dir(st: &AppState) -> PathBuf {
 
 fn skill_dir(st: &AppState, name: &str) -> PathBuf {
     skills_dir(st).join(name)
+}
+
+// ---------------------------------------------------------------------------
+// FIX31 backup helpers
+
+/// Every file of an installed skill as `(relative path, bytes)`.
+pub(crate) fn read_files(st: &AppState, name: &str) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let files = walk_files(&skill_dir(st, name))?;
+    let mut out = Vec::with_capacity(files.len());
+    for (rel, path) in files {
+        out.push((rel, std::fs::read(&path).map_err(|error| error.to_string())?));
+    }
+    Ok(out)
+}
+
+/// SHA-256 over the sorted relative paths and bytes, matching `content_sha256`
+/// so a restored skill hashes the same as one imported from a folder.
+pub(crate) fn files_sha256(files: &[(String, Vec<u8>)]) -> String {
+    let mut data = Vec::new();
+    for (rel, bytes) in files {
+        data.extend_from_slice(rel.as_bytes());
+        data.push(0);
+        data.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        data.extend_from_slice(bytes);
+    }
+    bloblex_adapter_acp::sha256_hex(&data)
+}
+
+/// Writes `(relative path, bytes)` into a fresh staging folder under the pool
+/// root and returns its path. The same path guard as `read_skill_file` is used;
+/// staging is always removed when anything fails.
+pub(crate) fn stage_files(st: &AppState, files: &[(String, Vec<u8>)]) -> Result<PathBuf, String> {
+    let root = skills_dir(st);
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let staging = root.join(format!(".staging-{}", Uuid::new_v4()));
+    let staged = (|| -> Result<(), String> {
+        std::fs::create_dir_all(&staging).map_err(|error| error.to_string())?;
+        for (rel, bytes) in files {
+            if !safe_relative(rel) {
+                return Err(format!("The skill contains an unsupported path: {rel}"));
+            }
+            let destination = staging.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            std::fs::write(&destination, bytes).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = staged {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    Ok(staging)
+}
+
+/// Moves a staged folder into place as `name`, replacing any existing folder.
+pub(crate) fn commit_staged(st: &AppState, staging: &Path, name: &str) -> Result<PathBuf, String> {
+    let root = skills_dir(st);
+    let destination = root.join(name);
+    if destination.exists() {
+        let old = root.join(format!(".staging-old-{}", Uuid::new_v4()));
+        if std::fs::rename(&destination, &old).is_ok() {
+            let _ = std::fs::remove_dir_all(&old);
+        }
+    }
+    std::fs::rename(staging, &destination).map_err(|error| {
+        let _ = std::fs::remove_dir_all(staging);
+        error.to_string()
+    })?;
+    Ok(destination)
+}
+
+/// Removes a staging folder that will not be placed.
+pub(crate) fn discard_staged(staging: &Path) {
+    let _ = std::fs::remove_dir_all(staging);
 }
 
 // ---------------------------------------------------------------------------

@@ -952,6 +952,61 @@ fn migrate_approval_modes(c:&mut Connection,path:Option<&Path>,backup_done:bool)
     Ok(())
 }
 
+/// The value validation a setting must pass before it is written. Shared by
+/// `settings.set` and the backup importer, so a restored value is held to
+/// exactly the same rules as one the user typed.
+fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
+    if k=="permissions.default_mode" && !v.as_str().is_some_and(|s|["ask","auto"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="notifications.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="experimental.autoRetry" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="retry.maxWaitSecs" && !v.as_u64().is_some_and(|secs| secs<=86_400){return Err(StorageError::InvalidAgent)}
+    if k=="automations.paused" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="automations.maxConcurrent" && !v.as_u64().is_some_and(|count| (1..=3).contains(&count)){return Err(StorageError::InvalidAgent)}
+    if k=="experimental.usageTips" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="experimental.usageTipDismissals" && !valid_usage_tip_dismissals(v){return Err(StorageError::InvalidAgent)}
+    if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="skills.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.accent" && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()==7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit()))){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.density" && !v.as_str().is_some_and(|s| ["compact","default","roomy"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="hints.seen" && !valid_hints_seen(v){return Err(StorageError::InvalidAgent)}
+    if k=="onboarding.tour" && !valid_tour_state(v){return Err(StorageError::InvalidAgent)}
+    if k=="companion.focusMode" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="companion.positions" && !valid_companion_positions(v){return Err(StorageError::InvalidAgent)}
+    if k=="profile.about" && !v.as_str().is_some_and(|text| text.trim().chars().count()<=1500){return Err(StorageError::InvalidAgent)}
+    if k=="conversations.autoTitle" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    Ok(())
+}
+
+/// Writes one setting row inside an existing transaction and returns the
+/// `settings.changed` envelopes it produced. A no-op write produces no event.
+fn write_setting(tx:&Transaction<'_>,k:&str,v:&Value)->Result<Vec<Value>,StorageError>{
+    validate_setting_value(k,v)?;
+    let previous:Option<String>=tx.query_row("SELECT value FROM settings WHERE key=?1",[k],|r|r.get(0)).optional()?;
+    tx.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![k,v.to_string()])?;
+    let mut events=Vec::new();
+    if k.starts_with("exec_gate.") {
+        let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
+        let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
+        if !same { events.push(push_settings_event(tx,k,enabled)?); }
+    } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("memory.") || k.starts_with("appearance.") || k.starts_with("hints.") || k.starts_with("onboarding.") || k.starts_with("conversations.") {
+        // Window-level preferences: the main window and the companion both follow them live.
+        let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
+        if !same {
+            let payload=json!({"key":k,"value":v});
+            let id=Uuid::new_v4().to_string();
+            let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
+            tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'settings.changed',?3)",params![id,ts,payload.to_string()])?;
+            events.push(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"settings.changed","payload":payload}));
+        }
+    } else if k=="permissions.default_mode" {
+        let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
+        if !same {let payload=json!({"key":k,"mode":v});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'settings.changed',?3)",params![id,ts,payload.to_string()])?;events.push(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"settings.changed","payload":payload}));}
+    }
+    Ok(events)
+}
+
 fn push_settings_event(tx:&Transaction<'_>,key:&str,enabled:bool)->Result<Value,StorageError>{
     let payload=json!({"key":key,"enabled":enabled});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
     tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'settings.changed',?3)",params![id,ts,payload.to_string()])?;
@@ -3391,49 +3446,10 @@ impl Storage {
         Ok(Value::Object(out))
     }
     pub fn set_setting(&self, k: &str, v: &Value) -> Result<Vec<Value>, StorageError> {
-        if k=="permissions.default_mode" && !v.as_str().is_some_and(|s|["ask","auto"].contains(&s)){return Err(StorageError::InvalidAgent)}
-        if k=="notifications.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-        if k=="experimental.autoRetry" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-        if k=="retry.maxWaitSecs" && !v.as_u64().is_some_and(|secs| secs<=86_400){return Err(StorageError::InvalidAgent)}
-        if k=="automations.paused" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-        if k=="automations.maxConcurrent" && !v.as_u64().is_some_and(|count| (1..=3).contains(&count)){return Err(StorageError::InvalidAgent)}
-        if k=="experimental.usageTips" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-        if k=="experimental.usageTipDismissals" && !valid_usage_tip_dismissals(v){return Err(StorageError::InvalidAgent)}
-        if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-        if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-        if k=="skills.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-        if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
-        if k=="appearance.accent" && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()==7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit()))){return Err(StorageError::InvalidAgent)}
-        if k=="appearance.density" && !v.as_str().is_some_and(|s| ["compact","default","roomy"].contains(&s)){return Err(StorageError::InvalidAgent)}
-        if k=="hints.seen" && !valid_hints_seen(v){return Err(StorageError::InvalidAgent)}
-        if k=="onboarding.tour" && !valid_tour_state(v){return Err(StorageError::InvalidAgent)}
-        if k=="companion.focusMode" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-        if k=="companion.positions" && !valid_companion_positions(v){return Err(StorageError::InvalidAgent)}
-        if k=="profile.about" && !v.as_str().is_some_and(|text| text.trim().chars().count()<=1500){return Err(StorageError::InvalidAgent)}
-        if k=="conversations.autoTitle" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+        validate_setting_value(k, v)?;
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let previous:Option<String>=tx.query_row("SELECT value FROM settings WHERE key=?1",[k],|r|r.get(0)).optional()?;
-        tx.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![k,v.to_string()])?;
-        let mut events=Vec::new();
-        if k.starts_with("exec_gate.") {
-            let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
-            let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
-            if !same { events.push(push_settings_event(&tx,k,enabled)?); }
-        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("memory.") || k.starts_with("appearance.") || k.starts_with("hints.") || k.starts_with("onboarding.") || k.starts_with("conversations.") {
-            // Window-level preferences: the main window and the companion both follow them live.
-            let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
-            if !same {
-                let payload=json!({"key":k,"value":v});
-                let id=Uuid::new_v4().to_string();
-                let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
-                tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'settings.changed',?3)",params![id,ts,payload.to_string()])?;
-                events.push(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"settings.changed","payload":payload}));
-            }
-        } else if k=="permissions.default_mode" {
-            let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
-            if !same {let payload=json!({"key":k,"mode":v});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'settings.changed',?3)",params![id,ts,payload.to_string()])?;events.push(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"settings.changed","payload":payload}));}
-        }
+        let events = write_setting(&tx, k, v)?;
         tx.commit()?;Ok(events)
     }
     pub fn profiles(&self) -> Result<Value, StorageError> {
@@ -3681,6 +3697,15 @@ impl Storage {
         rows.truncate(limit);
         Ok(rows)
     }
+    /// Every live (not soft-deleted) memory record, oldest first. Used by the
+    /// FIX31 backup export, which may exceed the review UI's page limit.
+    pub fn memory_all_live(&self) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut rows = memory_all(&c)?;
+        rows.retain(|row| row["deletedAt"].is_null());
+        rows.sort_by(|a, b| a["id"].as_str().unwrap_or("").cmp(b["id"].as_str().unwrap_or("")));
+        Ok(rows)
+    }
     pub fn memory_create(&self, input: &Value) -> Result<Value, StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let scope = input["scope"].as_str().map(str::trim).filter(|value| !value.is_empty()).ok_or(StorageError::InvalidAgent)?;
@@ -3905,6 +3930,208 @@ impl Storage {
         row["disabledFor"] = json!(disabled.into_iter().filter(|(skill, _)| skill == name).map(|(_, agent)| agent).collect::<Vec<_>>());
         Ok(row)
     }
+
+    /// FIX31: restore bots, memory, automations and settings in one
+    /// transaction. `plan` is fully resolved by the daemon's `backup.rs`: bots
+    /// already name a local runtime, memory has been checked for secrets and
+    /// project-scope memory carries a local project id, the settings allowlist
+    /// has been applied. This method re-checks the invariants that must hold
+    /// inside the transaction (name uniqueness, a real runtime, valid rows) and
+    /// returns what it imported, what it skipped and the events to broadcast.
+    ///
+    /// `plan.memory[i].scopeExportId` names the exported bot for blob-scope
+    /// notes; the method maps it to the id of the bot it just created or
+    /// replaced, so restored notes follow their bot.
+    pub fn backup_import(&self, plan: &Value) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let mut leader_taken: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE leader=1 AND archived=0)", [], |r| r.get(0))?;
+        let mut export_to_agent: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut renamed: Vec<Value> = Vec::new();
+        let mut events: Vec<Value> = Vec::new();
+        let mut bots = 0u64;
+        let mut bots_skipped = 0u64;
+        let empty: Vec<Value> = Vec::new();
+
+        for bot in plan["bots"].as_array().unwrap_or(&empty) {
+            let export_id = bot["exportId"].as_str().unwrap_or("").to_owned();
+            let resolution = bot["resolution"].as_str().unwrap_or("rename");
+            if resolution == "skip" { bots_skipped += 1; continue; }
+            let fields = &bot["fields"];
+            if resolution == "replace" {
+                let Some(id) = bot["replaceAgentId"].as_str().filter(|id| !id.is_empty()) else { bots_skipped += 1; continue; };
+                let existing = agent_read(&tx, id)?;
+                if existing["archived"] == true { bots_skipped += 1; continue; }
+                let mut next = existing.clone();
+                for key in ["name","runtimeId","description","instructions","color","outfit","look","role","model","thinking","serviceTier","approvalMode","customArgs","customEnv","maxConcurrency","notificationLevel"] {
+                    if let Some(value) = fields.get(key) { next[key] = value.clone(); }
+                }
+                if validate_agent_fields(&next, false).is_err() { bots_skipped += 1; continue; }
+                let runtime = next["runtimeId"].as_str().unwrap_or("").to_owned();
+                if !runtime_exists(&tx, &runtime)? { bots_skipped += 1; continue; }
+                let name = next["name"].as_str().unwrap_or("").trim().to_owned();
+                let key = name.to_lowercase();
+                let old_runtime = existing["runtimeId"].as_str().unwrap_or("").to_owned();
+                if runtime != old_runtime {
+                    let pos: i64 = tx.query_row("SELECT COALESCE(MAX(sort_order)+1,0) FROM agents WHERE runtime_id=?1 AND archived=0 AND id<>?2", params![runtime, id], |r| r.get(0))?;
+                    tx.execute("UPDATE agents SET runtime_id=?2,sort_order=?3 WHERE id=?1", params![id, runtime, pos])?;
+                }
+                let color = next["color"].as_str().unwrap_or("mint");
+                let color = if color.starts_with('#') { color.to_ascii_uppercase() } else { color.to_owned() };
+                let leader = bot["leader"].as_bool().unwrap_or(false) && !leader_taken;
+                if leader { tx.execute("UPDATE agents SET leader=0 WHERE leader=1 AND id<>?1", [id])?; leader_taken = true; }
+                tx.execute("UPDATE agents SET name=?2,name_key=?3,description=?4,instructions=?5,color=?6,outfit=?7,model=?8,thinking=?9,service_tier=?10,approval_mode=?11,custom_args=?12,custom_env=?13,max_concurrency=?14,default_project=NULL,notification_level=?15,role=?16,hidden=?17,leader=?18,updated_at=?19 WHERE id=?1",
+                    params![id, name, key, next["description"].as_str().unwrap_or(""), next["instructions"].as_str().unwrap_or(""), color, next["outfit"].as_str().unwrap_or("auto"), nullable(&next["model"]), nullable(&next["thinking"]), nullable(&next["serviceTier"]), nullable(&next["approvalMode"]), next["customArgs"].to_string(), next["customEnv"].to_string(), next["maxConcurrency"].as_i64().unwrap_or(1), nullable(&next["notificationLevel"]), next["role"].as_str().unwrap_or(""), next["hidden"].as_bool().unwrap_or(false), leader, now])?;
+                tx.execute("UPDATE agents SET look=?2 WHERE id=?1", params![id, look_column(&next["look"])])?;
+                let updated = agent_read(&tx, id)?;
+                events.push(push_agent_event(&tx, "updated", &updated)?);
+                export_to_agent.insert(export_id, id.to_owned());
+                bots += 1;
+            } else {
+                let base = fields["name"].as_str().unwrap_or("Bot").trim().to_owned();
+                let (name, key) = unique_agent_name(&tx, &base)?;
+                if name != base { renamed.push(json!({"from": base, "to": name})); }
+                let mut value = fields.clone();
+                value["name"] = json!(name);
+                let runtime = value["runtimeId"].as_str().unwrap_or("").to_owned();
+                if !runtime_exists(&tx, &runtime)? || validate_agent_fields(&value, true).is_err() { bots_skipped += 1; continue; }
+                let id = Uuid::new_v4().to_string();
+                let pos: i64 = tx.query_row("SELECT COALESCE(MAX(sort_order)+1,0) FROM agents WHERE runtime_id=?1 AND archived=0", [runtime.as_str()], |r| r.get(0))?;
+                insert_agent(&tx, &id, &value, &name, &key, pos, &now)?;
+                let leader = bot["leader"].as_bool().unwrap_or(false) && !leader_taken;
+                if leader { leader_taken = true; }
+                tx.execute("UPDATE agents SET role=?2,hidden=?3,leader=?4,project_id=NULL WHERE id=?1",
+                    params![id, value["role"].as_str().unwrap_or(""), value["hidden"].as_bool().unwrap_or(false), leader])?;
+                let created = agent_read(&tx, &id)?;
+                events.push(push_agent_event(&tx, "created", &created)?);
+                export_to_agent.insert(export_id, id);
+                bots += 1;
+            }
+        }
+
+        let mut memory = 0u64;
+        let mut memory_skipped = 0u64;
+        let mut live: u64 = tx.query_row("SELECT COUNT(*) FROM memory_records WHERE deleted_at IS NULL", [], |r| r.get::<_, i64>(0))? as u64;
+        for item in plan["memory"].as_array().unwrap_or(&empty) {
+            let scope = item["scope"].as_str().unwrap_or("");
+            if !memory_valid_scope(scope) { memory_skipped += 1; continue; }
+            let scope_id: Option<String> = match scope {
+                "shared" => None,
+                "blob" => match item["scopeExportId"].as_str().and_then(|export| export_to_agent.get(export)).cloned() {
+                    Some(id) => Some(id),
+                    None => { memory_skipped += 1; continue; }
+                },
+                "project" => match item["scopeId"].as_str() {
+                    Some(id) if tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [id], |r| r.get::<_, bool>(0))? => Some(id.to_owned()),
+                    _ => { memory_skipped += 1; continue; }
+                },
+                _ => { memory_skipped += 1; continue; }
+            };
+            let kind = item["kind"].as_str().unwrap_or("fact");
+            if !memory_valid_kind(kind) { memory_skipped += 1; continue; }
+            let Ok(title) = memory_validate_title(item["title"].as_str().unwrap_or("")) else { memory_skipped += 1; continue; };
+            let Ok(body) = memory_validate_body(item["body"].as_str().unwrap_or("")) else { memory_skipped += 1; continue; };
+            let Ok(tags) = memory_validate_tags(item.get("tags").unwrap_or(&json!([]))) else { memory_skipped += 1; continue; };
+            let Ok(importance) = memory_validate_importance(item.get("importance")) else { memory_skipped += 1; continue; };
+            let pinned = item["pinned"].as_bool().unwrap_or(false);
+            let origin = match item["origin"].as_str() { Some("agent") => "agent", _ => "user" };
+            let reviewed = item["reviewed"].as_bool().unwrap_or(origin == "user");
+            let source_id = item["sourceId"].as_str().unwrap_or("");
+            if let Some(existing) = memory_read(&tx, source_id)? {
+                if memory_identical(&existing, scope, scope_id.as_deref(), kind, &title, &body, &tags, importance, pinned, origin, reviewed) {
+                    memory_skipped += 1; continue;
+                }
+            }
+            if live >= 1000 { memory_skipped += 1; continue; }
+            let id = if source_id.is_empty() || memory_read(&tx, source_id)?.is_some() { Uuid::new_v4().to_string() } else { source_id.to_owned() };
+            let created = item["createdAt"].as_str().unwrap_or(&now).to_owned();
+            tx.execute(
+                "INSERT INTO memory_records(id,scope,scope_id,kind,title,body,tags,importance,pinned,origin,reviewed,source_session_id,version,created_at,updated_at,deleted_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,NULL,1,?12,?12,NULL)",
+                params![id, scope, scope_id, kind, title, body, tags, importance, pinned, origin, reviewed, created],
+            )?;
+            tx.execute("INSERT INTO memory_fts(record_id,title,body,tags) VALUES(?1,?2,?3,?4)", params![id, title, body, tags])?;
+            tx.execute("INSERT INTO memory_versions(record_id,version,title,body,changed_by,changed_at) VALUES(?1,1,?2,?3,?4,?5)", params![id, title, body, origin, &now])?;
+            memory += 1;
+            live += 1;
+        }
+
+        let mut restored_automations: Vec<Value> = Vec::new();
+        let mut automations_skipped = 0u64;
+        for item in plan["automations"].as_array().unwrap_or(&empty) {
+            let Some(agent_id) = item["agentExportId"].as_str().and_then(|export| export_to_agent.get(export)).cloned() else { automations_skipped += 1; continue; };
+            let name = item["name"].as_str().map(str::trim).unwrap_or("");
+            let prompt = item["prompt"].as_str().unwrap_or("");
+            if !(1..=80).contains(&name.chars().count()) || prompt.is_empty() || prompt.len() > 8000 { automations_skipped += 1; continue; }
+            let Ok(schedule) = cron::parse_schedule(&item["schedule"], None) else { automations_skipped += 1; continue; };
+            let session_mode = match item["sessionMode"].as_str() { Some("reuse") => "reuse", _ => "new" };
+            let approval_mode = match item["approvalMode"].as_str() { Some("plan") => "plan", _ => "auto" };
+            let max_runtime = item["maxRuntimeSecs"].as_i64().filter(|secs| (60..=14_400).contains(secs)).unwrap_or(1800);
+            let count: i64 = tx.query_row("SELECT COUNT(*) FROM automations", [], |r| r.get(0))?;
+            if count >= 50 { automations_skipped += 1; continue; }
+            let id = Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO automations(id,agent_id,name,prompt,schedule_kind,cron,timezone,once_at,session_mode,approval_mode,max_runtime_secs,enabled,created_by,reuse_session_id,next_run_at,last_run_at,consecutive_failures,pause_reason,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,'user',NULL,NULL,NULL,0,'restored',?12,?12)",
+                params![id, agent_id, name, prompt, schedule.kind, schedule.cron, schedule.timezone, schedule.once_at, session_mode, approval_mode, max_runtime, now],
+            )?;
+            restored_automations.push(automation_read(&tx, &id)?);
+        }
+
+        let mut settings = 0u64;
+        let mut settings_skipped = 0u64;
+        for entry in plan["settings"].as_array().unwrap_or(&empty) {
+            let Some(key) = entry["key"].as_str().filter(|key| !key.is_empty()) else { settings_skipped += 1; continue; };
+            match write_setting(&tx, key, &entry["value"]) {
+                Ok(mut produced) => { events.append(&mut produced); settings += 1; }
+                Err(_) => settings_skipped += 1,
+            }
+        }
+
+        tx.commit()?;
+        Ok(json!({
+            "bots": bots,
+            "memory": memory,
+            "automations": restored_automations,
+            "settings": settings,
+            "skipped": {"bots": bots_skipped, "memory": memory_skipped, "automations": automations_skipped, "settings": settings_skipped},
+            "renamed": renamed,
+            "events": events,
+        }))
+    }
+}
+
+/// FIX31: a bot name that is free among non-archived bots, adding " (2)",
+/// " (3)"… and staying within the 60-character cap.
+fn unique_agent_name(c: &Connection, base: &str) -> Result<(String, String), StorageError> {
+    let clean = base.trim();
+    let clean = if clean.is_empty() { "Bot" } else { clean };
+    let mut candidate = clean.chars().take(60).collect::<String>();
+    let mut n = 2u32;
+    loop {
+        let key = candidate.to_lowercase();
+        let taken: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE name_key=?1 AND archived=0)", [key.as_str()], |r| r.get(0))?;
+        if !taken { return Ok((candidate, key)); }
+        let suffix = format!(" ({n})");
+        let keep = 60usize.saturating_sub(suffix.chars().count());
+        candidate = format!("{}{}", clean.chars().take(keep).collect::<String>(), suffix);
+        n += 1;
+    }
+}
+
+/// Whether a stored memory record already carries exactly this incoming note,
+/// so a re-import can skip it instead of duplicating it.
+#[allow(clippy::too_many_arguments)]
+fn memory_identical(existing: &Value, scope: &str, scope_id: Option<&str>, kind: &str, title: &str, body: &str, tags: &str, importance: i64, pinned: bool, origin: &str, reviewed: bool) -> bool {
+    existing["scope"].as_str() == Some(scope)
+        && existing["scopeId"].as_str() == scope_id
+        && existing["kind"].as_str() == Some(kind)
+        && existing["title"].as_str() == Some(title)
+        && existing["body"].as_str() == Some(body)
+        && serde_json::to_string(&existing["tags"]).is_ok_and(|stored| stored == tags)
+        && existing["importance"].as_i64() == Some(importance)
+        && existing["pinned"].as_bool() == Some(pinned)
+        && existing["origin"].as_str() == Some(origin)
+        && existing["reviewed"].as_bool() == Some(reviewed)
 }
 
 /// Hint ids: `[a-z0-9._-]{1,48}`, at most 64 kept, oldest dropped by the caller.

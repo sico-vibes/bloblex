@@ -11,6 +11,16 @@ const TEAM_TOOLS: Record<string, string> = {
   list_blobs: 'Checked the team',
   list_conversations: 'Looked up side conversations',
   message_blob: 'Messaged a teammate',
+  list_skills: 'Checked the skills',
+  read_skill_file: 'Read a skill file',
+}
+
+/** The skill a `load_skill` call named, from its input (an object or JSON text). */
+export function loadedSkillName(input: unknown): string | null {
+  let value = input
+  if (typeof value === 'string') { try { value = JSON.parse(value) } catch { return null } }
+  const name = value && typeof value === 'object' ? (value as JsonRecord).name : null
+  return typeof name === 'string' && name.trim() ? name.trim() : null
 }
 
 function detailOf(item: ConversationItem): JsonRecord {
@@ -28,6 +38,7 @@ export function activityTitle(item: ConversationItem): string {
   if (category === 'file') return text(detail.path) ?? text(activity.path) ?? 'Edited a file'
   const tool = text(detail.tool)
   const toolName = tool?.split(' · ').pop() ?? null
+  if (toolName === 'load_skill') { const name = loadedSkillName(detail.input ?? detail.arguments); return name ? `Used skill: ${name}` : 'Used a skill' }
   if (toolName && TEAM_TOOLS[toolName]) return TEAM_TOOLS[toolName]
   if (category === 'command') return text(detail.command) ?? text(activity.title) ?? 'Ran a command'
   if (category === 'search') return text(detail.query) ? `Searched: ${text(detail.query)}` : text(activity.title) ?? 'Searched the web'

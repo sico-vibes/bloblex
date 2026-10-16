@@ -18,7 +18,7 @@ import { useEntityNoun } from './vocabulary'
 type MorphPairSnapshot = { rect: DOMRect; fontSize: number; ghost: HTMLElement }
 type MorphSnapshot = { surface: DOMRect; radius: string; shadow: string; pairs: Map<string, MorphPairSnapshot> }
 
-export function BlobPage({ mode, agent, draft, runtime, session, runtimes, projects = [], sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onDuplicate, onExport, onOpenMemory, changes = [], onNewSession, onOpenSession }: {
+export function BlobPage({ mode, agent, draft, runtime, session, runtimes, projects = [], sessions, legacyCount, connected, saving, dirty, ready, canStartSession, error, remoteNotice, errors, execution, autoApprovals = [], bypassNotices = [], onDraftChange, onExecutionGate, onBack, onSave, onCancel, onArchive, onDuplicate, onExport, onOpenMemory, onOpenSkills, changes = [], onNewSession, onOpenSession }: {
   mode: 'create' | 'edit'
   agent: Agent | null
   draft: AgentDraft
@@ -48,6 +48,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
   onDuplicate?: () => void
   onExport?: () => void
   onOpenMemory?: () => void
+  onOpenSkills?: () => void
   changes?: readonly ChangedField[]
   onNewSession: () => void
   onOpenSession: (session: Session) => void
@@ -124,7 +125,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
   const discardBody = mode === 'edit' && discard === 'revert' && changes.length
     ? 'These changes will be lost: ' + summarizeChanges(changes, 8) + '.'
     : discard === 'leave' && changes.length ? 'Unsaved changes: ' + summarizeChanges(changes, 8) + '.' : undefined
-  const renderSettings = (only?: BotSection[]) => <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} savedRuntimeId={agent?.runtimeId ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate}  sections={only} sessions={sessions} onOpenMemory={onOpenMemory} />
+  const renderSettings = (only?: BotSection[]) => <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} savedRuntimeId={agent?.runtimeId ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate}  sections={only} sessions={sessions} onOpenMemory={onOpenMemory} onOpenSkills={onOpenSkills} />
   // A draft that already has a name (an import, a duplicate, a starter) is a review job, not a blank page.
   const [advanced, setAdvanced] = useState(() => mode === 'create' && draft.name.trim().length > 0)
   const wizardActive = mode === 'create' && !advanced

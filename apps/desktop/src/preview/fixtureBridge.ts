@@ -65,6 +65,11 @@ const fixtureQueues: Record<string, { items: Array<Record<string, unknown>>; pau
 const fixtureAutomations: Array<Record<string, unknown>> = []
 /** Preview-only memory notes. */
 const fixtureMemory: Array<Record<string, unknown>> = []
+const fixtureSkills: Array<Record<string, unknown>> = [
+  { name: 'pdf', description: 'Read, fill and merge PDF files. Use when a task mentions a PDF form or document.', source: 'claude', sourcePath: null, contentSha256: 'a1', enabled: true, fileCount: 4, totalBytes: 18_400, importedAt: '2026-10-16T10:00:00Z', updatedAt: '2026-10-16T10:00:00Z', disabledFor: [], nativeFor: ['claude'] },
+  { name: 'release-notes', description: 'Write release notes from the git log in the house style: short, plain, grouped by area.', source: 'codex', sourcePath: null, contentSha256: 'b2', enabled: true, fileCount: 1, totalBytes: 2_100, importedAt: '2026-10-16T10:00:00Z', updatedAt: '2026-10-16T10:00:00Z', disabledFor: [], nativeFor: [] },
+  { name: 'figma-to-react', description: 'Turn a Figma frame export into React components that follow DESIGN.md.', source: 'folder', sourcePath: null, contentSha256: 'c3', enabled: false, fileCount: 7, totalBytes: 64_000, importedAt: '2026-10-16T10:00:00Z', updatedAt: '2026-10-16T10:00:00Z', disabledFor: [], nativeFor: [] },
+]
 const fixtureRuns: Record<string, Array<Record<string, unknown>>> = {}
 const composerPreviewStorageKey = 'bloblex.preview.composer-session.v1'
 
@@ -524,6 +529,38 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     }
     if (method === 'automation.runs') return { runs: fixtureRuns[String(target.id)] ?? [] } as T
   }
+  if (typeof method === 'string' && method.startsWith('skills.')) {
+    const find = () => fixtureSkills.find((item) => item.name === params.name)
+    if (method === 'skills.list') return { skills: fixtureSkills.map((item) => ({ ...item, disabledFor: [...(item.disabledFor as string[])] })) } as T
+    if (method === 'skills.get') {
+      const skill = find()
+      if (!skill) throw rpcError('not_found', 'That skill is not in the pool.')
+      return { name: skill.name, description: skill.description, body: `# ${skill.name}\n\n${skill.description}\n\n1. Read the input.\n2. Follow the steps.\n3. Report what changed.`, files: [{ path: 'SKILL.md', bytes: 1200 }, { path: 'scripts/run.py', bytes: 3400 }] } as T
+    }
+    if (method === 'skills.scan') return { candidates: [
+      { source: 'claude', name: 'pdf', description: 'Read, fill and merge PDF files.', path: '~/.claude/skills/pdf', status: 'same' },
+      { source: 'claude', name: 'brand-voice', description: 'Keep copy in the house voice: plain, short, kind.', path: '~/.claude/skills/brand-voice', status: 'new' },
+      { source: 'codex', name: 'release-notes', description: 'Write release notes from the git log.', path: '~/.codex/skills/release-notes', status: 'changed' },
+    ] } as T
+    if (method === 'skills.import') {
+      const items = Array.isArray(params.items) ? params.items as Array<{ source: string; name: string }> : []
+      for (const item of items) if (!fixtureSkills.some((skill) => skill.name === item.name)) fixtureSkills.push({ name: item.name, description: 'Imported in the preview.', source: item.source, enabled: true, fileCount: 1, totalBytes: 900, disabledFor: [], nativeFor: [] })
+      notifyFixtureDaemon('skills.changed', { action: 'imported' })
+      return { imported: items.map((item) => item.name), skipped: [] } as T
+    }
+    if (method === 'skills.delete') { const index = fixtureSkills.findIndex((item) => item.name === params.name); if (index >= 0) fixtureSkills.splice(index, 1); return { deleted: true } as T }
+    if (method === 'skills.toggle') {
+      const skill = find()
+      if (!skill) throw rpcError('not_found', 'That skill is not in the pool.')
+      if (typeof params.agentId === 'string') {
+        const off = new Set(skill.disabledFor as string[])
+        if (params.enabled === false) off.add(params.agentId); else off.delete(params.agentId)
+        skill.disabledFor = [...off]
+      } else skill.enabled = params.enabled !== false
+      return { skill: { ...skill } } as T
+    }
+  }
+  if (method === 'backup.import') return { imported: { bots: 3, memory: 14, skills: 1, automations: 1, settings: 9 }, skipped: { bots: 0, memory: 0, skills: 1, automations: 0, settings: 0 }, renamed: [{ from: String(agents[0]?.name ?? 'Mochi'), to: `${String(agents[0]?.name ?? 'Mochi')} (2)` }] } as T
   if (typeof method === 'string' && method.startsWith('memory.')) {
     const live = () => fixtureMemory.filter((item) => !item.deletedAt)
     const find = () => fixtureMemory.find((item) => item.id === params.id)
@@ -887,6 +924,24 @@ export async function readBlobImport(_selectionToken: string) {
   }, null, 2)
 }
 export async function writeBlobExport(_selectionToken: string, _text: string) {}
+export async function selectBackupExportPath() { return 'preview-backup-export-token' }
+export async function selectBackupImportPath() { return 'preview-backup-import-token' }
+export async function writeBackupExport(_selectionToken: string, _include?: unknown) {
+  return { path: 'C:\\Users\\you\\Documents\\bitbots-backup-2026-10-17.bitbots-backup.json', stats: { bots: agents.length, memory: fixtureMemory.length, skills: fixtureSkills.length, automations: 1, settings: 9 } }
+}
+export async function previewBackupImport(_selectionToken: string) {
+  return {
+    previewId: 'preview-backup',
+    counts: { bots: 3, memory: 14, skills: 2, automations: 1, settings: 9 },
+    conflicts: {
+      bots: [{ exportId: 'export-1', name: String(agents[0]?.name ?? 'Mochi'), existingAgentId: String(agents[0]?.id ?? 'agent-1') }],
+      skills: [{ name: 'pdf', same: false }, { name: 'release-notes', same: true }],
+      memory: [],
+      settings: [{ key: 'appearance.theme', current: 'dark', incoming: 'light' }],
+    },
+    warnings: ['This backup contains a leader, but a leader is already set; the restored bot will not lead.', 'One bot used Bypass approvals; it is restored as Ask.'],
+  }
+}
 export async function inspectLocalFile(path: string) { return { path, fileName: path.split(/[\\/]/).pop() ?? path, sizeBytes: 2048 } }
 export async function openInEditor() {}
 export async function revealInExplorer() {}

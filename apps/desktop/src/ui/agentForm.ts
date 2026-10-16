@@ -253,7 +253,7 @@ export function executionFromAgent(agent: Agent | null): StoredExecution {
 }
 
 /** The editor's sections, in the order the rail lists them. */
-export type BotSection = 'look' | 'profile' | 'team' | 'model' | 'permissions' | 'notifications' | 'details' | 'memory'
+export type BotSection = 'look' | 'profile' | 'team' | 'model' | 'permissions' | 'notifications' | 'details' | 'memory' | 'skills'
 
 export interface ChangedField { field: string; label: string; section: BotSection }
 

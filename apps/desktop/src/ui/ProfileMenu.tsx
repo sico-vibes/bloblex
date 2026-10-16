@@ -1,7 +1,7 @@
 import { rpc } from '../tauri'
 import { usePlatform } from '../transport/platform'
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
-import { CalendarClock, ChevronsUpDown, Compass, Gauge, LogOut, Pencil, Settings2, Keyboard, Smartphone } from 'lucide-react'
+import { ArchiveRestore, CalendarClock, ChevronsUpDown, Compass, Gauge, LogOut, Pencil, Settings2, Keyboard, Smartphone } from 'lucide-react'
 import { startTour } from './tour/startTour'
 import { useRemoteStatus } from '../remote/useRemote'
 import type { ConnectionState } from '../types'
@@ -39,7 +39,7 @@ export function profileInitials(name: string) {
  * (usage, settings, quit) lives in its menu, like a chat app's
  * profile menu. The name is local to this device.
  */
-export function ProfileMenu({ connection, usageActive, schedulesActive = false, triggerRef, onUsage, onSchedules, onRemote, onSettings, onQuit, onShortcuts }: {
+export function ProfileMenu({ connection, usageActive, schedulesActive = false, triggerRef, onUsage, onSchedules, onRemote, onBackup, onSettings, onQuit, onShortcuts }: {
   connection: ConnectionState
   usageActive: boolean
   schedulesActive?: boolean
@@ -47,6 +47,7 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
   triggerRef?: RefObject<HTMLButtonElement | null>
   onUsage: () => void
   onRemote?: () => void
+  onBackup?: () => void
   onShortcuts?: () => void
   onSettings: () => void
   onQuit: () => void
@@ -134,6 +135,7 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
       <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onUsage)}><Gauge size={15} />Usage</button>
       {onSchedules && <button type="button" role="menuitem" className="menu-item" aria-current={schedulesActive ? "page" : undefined} disabled={!connected} onClick={() => run(onSchedules)}><CalendarClock size={15} />Automations</button>}
       {remoteAvailable === true && onRemote && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onRemote)}><Smartphone size={15} />Remote</button>}
+      {onBackup && <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onBackup)}><ArchiveRestore size={15} />Backup</button>}
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(onSettings)}><Settings2 size={15} />Settings</button>
       {onShortcuts && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onShortcuts)}><Keyboard size={15} />Keyboard shortcuts</button>}
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(startTour)}><Compass size={15} />Take the tour</button>

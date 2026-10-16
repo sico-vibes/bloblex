@@ -1,6 +1,6 @@
 import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone } from 'lucide-react'
+import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
 import { usePlatform } from '../transport/platform'
 import type { Agent, Snapshot } from '../types'
@@ -11,6 +11,8 @@ import { agentColorHex } from './agentColor'
 import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
 import { MemoryPage } from './MemoryPage'
+import { SkillsPage } from './SkillsPage'
+import { BackupPage } from './BackupPage'
 import { normalizeEngineChoice, setDictationEnginePrefs, type DictationEngineChoice } from './dictation'
 import { UpdatesPanel } from './UpdatesPanel'
 import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
@@ -36,7 +38,7 @@ import { clearCompanionPosition } from './companionPositions'
 import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
-export type SettingsPageId = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
+export type SettingsPageId = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
@@ -44,7 +46,9 @@ const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHori
   { id: 'Remote', label: 'Remote', icon: Smartphone },
   { id: 'Agents', label: 'Agents', icon: Bot },
   { id: 'Memory', label: 'Memory', icon: Brain },
+  { id: 'Skills', label: 'Skills', icon: Puzzle },
   { id: 'Speech', label: 'Speech', icon: Mic },
+  { id: 'Backup', label: 'Backup', icon: ArchiveRestore },
   { id: 'Updates', label: 'Updates', icon: Download },
 ]
 
@@ -728,6 +732,10 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
           </>}
 
           {consentFor && <ConfirmDialog title="Use cloud dictation?" body="Each recording is sent to OpenAI's ChatGPT transcription service using your signed-in Codex account, which Bitbots reads from Codex's own file on this computer. Recordings, text and the sign-in are not stored or logged by Bitbots. If the cloud is unavailable, dictation uses the on-device model when it is installed. Choose On device in Settings to stop." confirmLabel="Allow cloud" cancelLabel="Keep on device" onCancel={() => setConsentFor(null)} onConfirm={async () => { const engine = consentFor; setConsentFor(null); await applySpeechEngine(engine, true) }} />}
+          {!loading && page === 'Skills' && <SkillsPage connected={inDesktop} />}
+
+          {!loading && page === 'Backup' && <BackupPage connected={inDesktop} />}
+
           {!loading && page === 'Updates' && <>
             {platform.updater && <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />}
             <SettingsGroup title="About">

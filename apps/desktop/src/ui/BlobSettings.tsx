@@ -31,6 +31,7 @@ import { instructionPresets, type BotTemplate } from './botTemplates'
 import { recentFolders, rememberFolder } from './folderRecents'
 import { useDetailsOpen } from './botPrefs'
 import { BotMemoryGroup } from './BotMemoryGroup'
+import { BotSkillsGroup } from './BotSkillsGroup'
 
 const NOTIFICATION_LEVEL_HELP: Record<'all' | 'input' | 'muted', string> = {
   all: 'Tells you when it finishes, fails or needs you.',
@@ -45,7 +46,7 @@ const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; name: string; sente
   { value: 'bypass', name: 'Bypass', sentence: 'nothing asks; use only on a computer and project you trust', Icon: ShieldAlert },
 ]
 
-export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, savedRuntimeId, sessionId, autoApprovals, sections, sessions, memoryEnabled, onOpenMemory, onDraftChange, onArchive, onExecutionGate }: {
+export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, savedRuntimeId, sessionId, autoApprovals, sections, sessions, memoryEnabled, onOpenMemory, onOpenSkills, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
   runtimes: Runtime[]
   projects?: Project[]
@@ -65,6 +66,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
   memoryEnabled?: boolean
   /** Opens Settings › Memory. Rendered only when given. */
   onOpenMemory?: () => void
+  onOpenSkills?: () => void
   onDraftChange: (draft: AgentDraft) => void
   onArchive?: () => void
   onExecutionGate?: (gate: ExecutionSendGate) => void
@@ -388,6 +390,8 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     </section>}
 
     {show('memory') && agentId && <BotMemoryGroup agentId={agentId} enabled={memoryOn} sessions={sessions} onOpenMemory={onOpenMemory} />}
+
+    {show('skills') && agentId && <BotSkillsGroup agentId={agentId} onOpenSkills={onOpenSkills} />}
 
     {onArchive && <section className="settings-group">
       <div className="settings-card">

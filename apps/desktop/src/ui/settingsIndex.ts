@@ -2,10 +2,10 @@
 // group heading on that page, which the sheet scrolls to and flashes. Keep the
 // `group` strings equal to the `SettingsGroup title` values in SettingsSheet.
 
-export type SettingsPageName = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Memory' | 'Speech' | 'Updates'
+export type SettingsPageName = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Updates'
 
 /** The page list, for anything that has to validate an incoming page name. */
-export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Remote', 'Agents', 'Memory', 'Speech', 'Updates']
+export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Remote', 'Agents', 'Memory', 'Skills', 'Speech', 'Backup', 'Updates']
 
 /**
  * The page out of an open-settings event payload (C13): a known page name, or
@@ -54,6 +54,10 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'Agents', group: 'Coding agents', label: 'Coding agents', keywords: 'claude codex opencode runtime scan sign in' },
   { page: 'Agents', group: 'Custom launchers', label: 'Custom launchers', keywords: 'profile command arguments' },
   { page: 'Memory', group: 'Memory', label: 'Memory', keywords: 'remember notes shared' },
+  { page: 'Skills', group: 'Skills', label: 'Skills', keywords: 'skill pool shared instructions scripts skill.md' },
+  { page: 'Skills', group: 'Import skills', label: 'Import skills', keywords: 'claude codex opencode folder copy add' },
+  { page: 'Backup', group: 'Export', label: 'Export a backup', keywords: 'save file bots memory skills automations settings' },
+  { page: 'Backup', group: 'Restore', label: 'Restore a backup', keywords: 'import load file recover move computer' },
   { page: 'Speech', group: 'Dictation', label: 'Dictation', keywords: 'microphone voice talk' },
   { page: 'Speech', group: 'Transcription engine', label: 'Transcription engine', keywords: 'cloud on device local' },
   { page: 'Speech', group: 'Speech model', label: 'Speech model', keywords: 'download size language' },

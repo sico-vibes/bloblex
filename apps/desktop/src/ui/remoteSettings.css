@@ -49,3 +49,26 @@
 
 @media (max-width: 640px) { .remote-pair { flex-direction: column; align-items: flex-start; } }
 @media (prefers-reduced-motion: reduce) { .remote-hero-art i { animation: none; } .remote-paired { animation: none; } }
+
+/* Tailscale not ready: what to do, as numbered steps. */
+.remote-fix { margin: 0; padding: 14px 16px; display: grid; gap: 8px; justify-items: start; border-bottom: 1px solid var(--line); background: var(--surface-warning); }
+.remote-fix strong { font-size: var(--fs-sm); font-weight: 600; }
+.remote-fix ol { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; }
+.remote-fix button { display: inline-flex; align-items: center; gap: 6px; }
+.remote-status > div { min-width: 0; flex: 1; }
+.remote-address { min-width: 0; max-width: 55%; height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: transparent; font: 12px/1 var(--font-mono); cursor: pointer; }
+.remote-address span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-address svg { flex: 0 0 auto; }
+.remote-address:hover { color: var(--text-1); background: var(--surface-hover); }
+.remote-address:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* A device asking to pair: the owner picks a tier and approves here. */
+.remote-request { padding: 14px 16px; display: flex; align-items: flex-start; gap: 12px; background: color-mix(in srgb, var(--user-accent, var(--text-1)) 8%, transparent); animation: remote-pop 260ms cubic-bezier(.2, .8, .2, 1) both; }
+.remote-request .remote-paired-icon { color: var(--text-1); background: var(--surface-selected); }
+.remote-request-copy { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.remote-request-copy strong { font-size: var(--fs-sm); font-weight: 600; }
+.remote-request-copy small { color: var(--text-2); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.remote-request-actions { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.remote-request-actions .select-root, .remote-request-actions > :first-child { min-width: 170px; }
+.remote-rename { width: 100%; height: 26px; padding: 0 8px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: transparent; font: inherit; font-size: var(--fs-sm); }
+.remote-rename:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+@media (prefers-reduced-motion: reduce) { .remote-request { animation: none; } }

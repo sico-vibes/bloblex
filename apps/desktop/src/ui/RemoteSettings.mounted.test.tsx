@@ -61,12 +61,11 @@ describe('RemoteSettings', () => {
     expect(view.querySelector('.remote-code')?.textContent).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
     await act(async () => { button(view, 'Simulate a phone pairing')!.click() })
     await flush()
-    // FIX29: pairing is owner-confirmed now. This page has no approve control yet
-    // (the Director rewrites Settings > Remote), so the test answers through the
-    // simulator's host side, exactly as `remote.pair.confirm` does.
+    // Pairing is owner-confirmed: the device asks, and the owner approves it here.
     const request = events.find((event) => event.type === 'remote.pairing.requested')?.payload as PairingRequest
     expect(request?.pairingId).toBeTruthy()
-    await act(async () => { await simulator.call('remote.pair.confirm', { pairingId: request.pairingId, approve: true, tier: 'chat' }) })
+    expect(view.querySelector('.remote-request')?.textContent).toContain(`${request.name} wants to connect`)
+    await act(async () => { button(view, 'Approve')!.click() })
     await flush(140)
     expect(view.querySelector('.remote-paired')?.textContent).toContain('is connected')
     expect(view.querySelectorAll('.remote-device').length).toBe(1)
@@ -75,6 +74,27 @@ describe('RemoteSettings', () => {
     expect(document.body.textContent).toContain(`Remove ${name}?`)
     await act(async () => { document.querySelector<HTMLButtonElement>('.blob-dialog .primary-button, .blob-dialog .danger-confirm-button')!.click() })
     await flush()
+    expect(view.querySelectorAll('.remote-device').length).toBe(0)
+  })
+
+  it('explains what to fix when Tailscale is not ready and keeps the switch off', async () => {
+    simulator.reset({ enabled: false, devices: 0, tailscale: 'https_disabled' })
+    const view = await mount()
+    expect(view.querySelector('.remote-fix')?.textContent).toContain('HTTPS is off for your tailnet')
+    expect(view.querySelector<HTMLButtonElement>('[aria-label="Allow remote devices"]')!.disabled).toBe(true)
+  })
+
+  it('a rejected device is not added', async () => {
+    simulator.reset({ enabled: true, devices: 0 })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 800)) })
+    const view = await mount()
+    await act(async () => { button(view, 'Show pairing code')!.click() })
+    await flush()
+    await act(async () => { button(view, 'Simulate a phone pairing')!.click() })
+    await flush()
+    await act(async () => { button(view, 'Reject')!.click() })
+    await flush(140)
+    expect(view.querySelector('.remote-request')).toBeNull()
     expect(view.querySelectorAll('.remote-device').length).toBe(0)
   })
 

@@ -42,6 +42,7 @@ import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
 import { fetchCached, invalidateCatalog } from './catalogCache'
 import { ConversationsPanel } from './ConversationsPanel'
 import { SessionRail } from './SessionRail'
+import { ChangeBanner } from './ChangeBanner'
 import { conversationPlaceName, hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
@@ -2267,6 +2268,7 @@ export function App() {
         {archiveNotice && <div className="inline-error" role="status"><span>{archiveNotice}</span><button aria-label="Dismiss notice" onClick={() => setArchiveNotice(null)}><X size={15} /></button></div>}
 
         {!selectedSession ? <>{activePermission && <ApprovalCard permission={activePermission} onReply={(choice) => answerPermission(activePermission, choice)} /> }<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} runtimeReady={runtimeReady} runtimeStatus={selectedRuntime?.status} accent={accent} mood={selectedMood} agentName={agentName} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={() => openCreate()} onRefresh={() => void refreshRuntimes()} /></> : <>
+          {!sideSession && <ChangeBanner session={selectedSession} dismissed={reviewDismissals[selectedSession.id] ?? []} onDiff={(path, content) => setDiffViewer({ path, content })} onUndo={(file) => setRevertTarget({ sessionId: selectedSession.id, file })} onDismiss={(ids) => setReviewDismissals((current) => ({ ...current, [selectedSession.id]: [...(current[selectedSession.id] ?? []), ...ids] }))} onNewConversation={() => newSession()} />}
           <div className="conversation-frame">
             {conversationScrollable && <ConversationOutline key={selectedSession.id} sessionId={selectedSession.id} items={outlineItems} />}
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>

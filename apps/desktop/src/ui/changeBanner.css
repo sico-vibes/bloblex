@@ -1,0 +1,24 @@
+/* The latest-changes strip at the top of a conversation. */
+.change-banner { width: min(800px, calc(100% - 32px)); margin: 10px auto 0; padding: 6px 8px 6px 10px; display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); font-size: var(--fs-xs); }
+.change-banner-main { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.change-banner-main > .change-banner-list.single, .change-banner-summary { min-width: 0; flex: 1; }
+.change-banner-summary { display: flex; align-items: center; gap: 10px; }
+.change-banner-list { margin: 0; padding: 0; display: grid; gap: 2px; list-style: none; }
+.change-banner-file { min-width: 0; min-height: 28px; display: flex; align-items: center; gap: 10px; }
+.change-banner-name, .change-banner-toggle { min-width: 0; height: 26px; padding: 0 6px; display: inline-flex; align-items: center; gap: 6px; overflow: hidden; color: var(--text-1); border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.change-banner-name { flex: 1; justify-content: flex-start; }
+.change-banner-name svg, .change-banner-toggle svg { flex: 0 0 auto; color: var(--text-3); }
+.change-banner-name:hover:not(:disabled), .change-banner-toggle:hover { background: var(--surface-hover); }
+.change-banner-name:disabled { cursor: default; }
+.change-banner-undo, .change-banner-link { padding: 0 4px; color: var(--text-2); border: 0; background: transparent; font: inherit; cursor: pointer; }
+.change-banner-undo:hover:not(:disabled), .change-banner-link:hover { color: var(--text-1); text-decoration: underline; text-underline-offset: 3px; }
+.change-banner-undo:disabled { color: var(--text-3); cursor: default; }
+.change-banner-counts { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.change-banner-counts em { color: var(--status-ok, #5fd38d); font-style: normal; }
+.change-banner-counts i { color: var(--status-danger-text); font-style: normal; }
+.change-banner-close { width: 24px; height: 24px; flex: 0 0 auto; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+.change-banner-close:hover { color: var(--text-1); background: var(--surface-hover); }
+.change-banner-tip { margin: 0; padding: 2px 6px 2px; color: var(--text-2); line-height: 1.5; }
+.change-banner-link { padding: 0; color: var(--user-accent, var(--text-1)); text-decoration: underline; text-underline-offset: 3px; }
+.change-banner button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+:root[data-bitbots="on"] .change-banner { border: 2px solid var(--bb-line-strong); border-radius: 0; background: var(--bb-raised); }

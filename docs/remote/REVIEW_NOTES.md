@@ -231,15 +231,26 @@ that take no attachments. `permission.reply`'s `choice` is only checked to be a 
 
 ## 6. Open questions the owner must answer before P1
 
-1. **Relay identity without accounts.** `ARCHITECTURE.md:63-67` says the relay authenticates a
+> **Update, 16 October 2026.** The owner chose Tailscale in place of the relay and Noise
+> channel. Questions 1, 2, 9 and 10 are superseded by that choice and need no answer. Question 3
+> is reframed. The rest stand. See [ARCHITECTURE.md](ARCHITECTURE.md) and
+> [PROTOCOL.md](PROTOCOL.md) for the current design. Findings above that cite the relay or
+> Noise describe the 15 October draft.
+
+1. **Superseded (16 October 2026): there is no relay.** Reachability comes from the owner's
+   tailnet, so no `hostId` is registered anywhere. Original question: **Relay identity without accounts.** `ARCHITECTURE.md:63-67` says the relay authenticates a
    hello with "a registered public key" and "has no accounts", while `REMOTE_MODE.md:26-27`
    promises "no Bitbots-held list of a person's computers". How is a `hostId` registered, and
    who prevents a stranger from squatting a `hostId`? Is the relay operated by Bitbots at all,
    or is self-hosting the only P1 path (`PROTOCOL.md:12` open question 1)?
-2. **Relay metadata.** Even if the relay is content-blind, it holds stable `deviceId`/`hostId`
+2. **Superseded (16 October 2026): there is no relay.** Tailscale's coordination service sees
+   node metadata, as it does for any tailnet (THREAT_MODEL.md T33). Original question: **Relay metadata.** Even if the relay is content-blind, it holds stable `deviceId`/`hostId`
    and IPs and sees frame sizes (`PROTOCOL.md:180-185`). Is that acceptable, and for how long is
    it retained? (Goal 4 says nothing is held; the framing contradicts the spirit of that.)
-3. **Browser key storage.** `ARCHITECTURE.md:88` allows "a wrapped key where [non-extractable
+3. **Reframed (16 October 2026): there are no device keys.** The same clone question now
+   applies to the `HttpOnly` cookie (THREAT_MODEL.md T32): is the cookie plus the Tailscale-login
+   check enough, or must Remote refuse devices that send no login header? Original question:
+   **Browser key storage.** `ARCHITECTURE.md:88` allows "a wrapped key where [non-extractable
    WebCrypto] is unavailable". Is a copyable wrapped key acceptable, or must Remote refuse to
    pair in browsers without a non-extractable X25519 key? This decides the clone risk in §2.
 4. **Quiet hours semantics.** Does "read but not send" (`REMOTE_MODE.md:78-79`) also block
@@ -255,9 +266,12 @@ that take no attachments. `permission.reply`'s `choice` is only checked to be a 
    at all (`ipc-contract.md:69`), or must every provider-touching call be operator-only?
 8. **Staging lifetime and quota.** `PROTOCOL.md:479-480` asks how long a `stagedId` lives. Also
    needed: a per-device staged-bytes cap and single-use/binding rules (§2).
-9. **Multi-host push attribution.** `PROTOCOL.md:473-474` — which host may send a `wake`, and how
+9. **Superseded (16 October 2026): each computer is its own origin.** A push comes from the
+   computer whose app received it, so attribution is by origin. Original question:
+   **Multi-host push attribution.** `PROTOCOL.md:473-474` — which host may send a `wake`, and how
    does the client attribute it before it has fetched state?
-10. **Direct LAN address in P1.** `PHASES.md:9` schedules the direct listener in P1;
+10. **Superseded (16 October 2026): there is no direct LAN listener.** The only listener is on
+    loopback and is reached through `tailscale serve`. Original question: **Direct LAN address in P1.** `PHASES.md:9` schedules the direct listener in P1;
     `THREAT_MODEL.md:59,69` treats it as advanced and off by default, and the AGENTS amendment
     (`AGENTS_AMENDMENT_DRAFT.md:39-40`) needs owner sign-off for the non-loopback bind. Confirm
     whether P1 ships it or defers it.
@@ -265,6 +279,11 @@ that take no attachments. `permission.reply`'s `choice` is only checked to be a 
 ---
 
 ## Summary (most serious findings)
+
+> **Update, 16 October 2026.** Item 3, the Noise and ticket part of item 4, and the relay half
+> of item 5 describe the superseded relay and Noise design. Items 1 and 2, the missing CSP and
+> Origin check in item 4, and the pairing race in item 5 still stand until P1 builds the
+> answers in PROTOCOL.md section 4.
 
 1. The tier table is not enforced anywhere: `remoteTiers.ts` claims `daemon_rpc` consults it, but `lib.rs:449-463` is a pure pass-through, and the "mirror in the daemon" the amendment promises does not exist.
 2. `redactSnapshotForRemote` leaves real secrets and host paths in the snapshot — message and tool output, `executablePath`, `defaultProject`, `customArgs`, message attachment paths — and event payloads are not redacted at all.

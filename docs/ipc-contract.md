@@ -20,6 +20,8 @@ The desktop shell owns the daemon child process and starts it for the signed-in 
 
 The capability exists only in daemon memory and the desktop shell's child-process channel; do not persist or log it. The shell keeps it in the native Tauri process and proxies renderer calls through Tauri commands. A connecting client must send it in `Authorization: Bearer <capability>`. Reject requests without a valid capability using a constant-time comparison. CORS is disabled. Only loopback peers are accepted. If another UI client is needed, it must receive the secret through the same authenticated native shell path.
 
+**Remote mode (design, not implemented).** Remote adds one more listener and leaves the one above unchanged. While Remote is on, the daemon runs a second listener on `127.0.0.1:<remote.port>` (default 48620), published on the owner's tailnet with `tailscale serve --bg --https=443` (fallback 8443). It never binds a non-loopback address, never uses Tailscale Funnel and never runs `tailscale serve reset`. It calls `dispatch()` in-process and never reads, accepts or returns the capability. Its clients are paired devices authenticated by a cookie, not by the capability. The routes, pairing and policy are in [remote/PROTOCOL.md](remote/PROTOCOL.md). This exception needs the owner-approved AGENTS.md amendment ([remote/AGENTS_AMENDMENT_DRAFT.md](remote/AGENTS_AMENDMENT_DRAFT.md)).
+
 HTTP transport uses WebSocket upgrade at `/v1/events` for push events and JSON over `POST /v1/rpc` for request/response. Immediately after upgrading, the shell sends `{"v":1,"afterSequence":<snapshot.sequence>}`. The daemon registers the live subscription before reading/replaying persisted events after that cursor; clients discard duplicate sequences. This closes the snapshot/subscribe race. On `replayAvailable:false`, fetch a fresh snapshot. Every response and event carries protocol version 1.
 
 ## Envelope
@@ -135,6 +137,31 @@ These names are dispatched in `crates/bloblex-daemon/src/main.rs` (dispatch matc
 - Messages and files: `message.reaction.toggle`, `search.messages`, `file.revert`.
 - Quota: `quota.list`, `quota.refresh`.
 - Hooks: `hook.event`.
+
+### Remote mode methods (design, not implemented)
+
+The `remote.*` family is served on the daemon's own loopback API for the desktop shell only. Every `remote.*` method is `never` remote in `remote/tiers.json`, so a paired device cannot call it. Shapes follow `apps/desktop/src/remote/remoteContract.ts`; the backend spec (`docs/FIX29_REMOTE_TAILSCALE_SPEC.md`, to be written) is authoritative for exact fields.
+
+| Method | Params | Result / behavior |
+|---|---|---|
+| `remote.status` | `{}` | `{enabled,link,url,port,servePort,tailscale,hostName,deviceCount,connectedCount,keepAwake,error}`. `tailscale` is `not_installed`, `logged_out`, `https_disabled`, `port_in_use`, `funnel_on` or `ready`. `link` is `off`, `starting`, `online` or `error`. Never includes the tailnet login or raw status JSON. |
+| `remote.enable` | `{}` | Checks Tailscale, starts the loopback listener and adds Bitbots' `tailscale serve` handler on 443, or 8443 if 443 is served by something else. Returns the status. When Tailscale is not `ready` it changes nothing and returns `unsupported` with a safe message naming the fix. |
+| `remote.disable` | `{}` | Closes every device socket, stops the listener and removes only Bitbots' serve handler. Paired devices are kept. |
+| `remote.pair.begin` | `{}` | `{code,url,qrPayload,expiresAt,attemptsLeft}`. Eight characters, five minutes, five wrong attempts before it is burned. Starting a new offer cancels the previous one. `conflict` when Remote is off. |
+| `remote.pair.cancel` | `{}` | Burns the live offer, if any. |
+| `remote.pair.confirm` | `{ "pairingId": string, "approve": boolean, "tier"?: "viewer"\|"chat"\|"operator" }` | Approves (tier required) or rejects the device that locked the offer. Approval creates the device record and its token; rejection burns the offer. |
+| `remote.devices.list` | `{}` | `{devices: RemoteDevice[]}`. Never includes the token or its hash. |
+| `remote.devices.update` | `{ "deviceId": string, "name"?: string, "tier"?: string }` | Renames a device or changes its tier. |
+| `remote.devices.revoke` | `{ "deviceId": string }` | Marks the device revoked, closes its socket at once and removes it from `remote.devices.list`. The token hash is kept only so later requests get `device_revoked`; it never authorises again. |
+| `remote.security.get` | `{}` | `{approvalsFromRemote,idleExpiryDays,quietHours:{enabled,from,to}}`. |
+| `remote.security.set` | same shape | Persists the options. Turning approvals from remote off leaves operator devices unable to approve until it is on again. |
+| `remote.activity.list` | `{ "limit"?: integer }` | `{entries: RemoteActivityEntry[]}` newest first; the table keeps at most 500 rows. Summaries are one short sentence and never message content. |
+
+Events, all local only (`never` in the remote event policy): `remote.changed {status}`, `remote.pairing.requested {pairingId,name,kind,platform,login,expiresAt}` (`login` is null when Tailscale sent no login header), `remote.pairing.completed {pairingId,outcome,deviceId?}` with `outcome` `approved`, `rejected`, `expired`, `cancelled` or `burned`, `remote.device.changed {action,device}`, and `remote.activity {entry}`.
+
+Settings `remote.enabled`, `remote.port`, `remote.servePort` and `remote.security` change only through these methods; `settings.set` refuses every key with the `remote.` prefix. Storage adds the tables `remote_devices` and `remote_activity`.
+
+The browser simulator's `remote.direct.set` is dropped (there is no LAN listener). `remote.hosts.list` and `remote.hosts.select` are not daemon methods: the list of computers lives only on the device.
 
 Appearance and companion preferences use `appearance.theme` (`system`, `dark`, or `light`), `appearance.textSize` (`small`, `default`, `large`, or `larger`), `companion.startPosition` (`launch` or `last`), `companion.hotkey` (boolean), and `companion.openAtStartup` (boolean).
 
@@ -259,6 +286,7 @@ The execution snapshot RPCs use `invalid_argument` for malformed IDs, cursors, o
 ## Security invariants
 
 - Loopback-only listener and random per-process capability; no LAN exposure.
+- Remote mode (design): the second listener also binds loopback only, is reachable from other machines only through `tailscale serve` on the owner's tailnet, never through Funnel, and never sees the capability.
 - Capability is memory-only and passed to the desktop shell only through daemon stdout at startup.
 - Renderer never receives the capability or connects directly to the daemon.
 - Process launch is direct executable plus argument array. User input never becomes shell text.

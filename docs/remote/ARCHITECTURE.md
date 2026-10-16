@@ -1,7 +1,14 @@
 # Remote mode: architecture
 
-**Status: design.** Written 15 October 2026. Wire details are in [PROTOCOL.md](PROTOCOL.md),
-risks in [THREAT_MODEL.md](THREAT_MODEL.md), phases in [PHASES.md](PHASES.md).
+**Status: design.** Written 15 October 2026; amended 16 October 2026 for the owner's choice of
+Tailscale. Wire details are in [PROTOCOL.md](PROTOCOL.md), risks in
+[THREAT_MODEL.md](THREAT_MODEL.md), phases in [PHASES.md](PHASES.md).
+
+> **Superseded design.** The 15 October draft used Noise XX/IK sessions, X25519 device keys, a
+> hosted relay and an optional direct LAN listener. On 16 October 2026 the owner chose Tailscale
+> instead. Tailscale (WireGuard) now supplies encryption, node identity and HTTPS certificates,
+> so those parts are removed. The old text is in git history; [REVIEW_NOTES.md](REVIEW_NOTES.md)
+> records which review findings it answered.
 
 ## 1. Starting point (what exists today)
 
@@ -21,140 +28,171 @@ Facts from the code, each checked when this document was written:
 - The invariant in `AGENTS.md` and `docs/ipc-contract.md`: no LAN or wildcard binding; the
   capability never leaves the native shell. Remote needs a documented exception
   ([AGENTS_AMENDMENT_DRAFT.md](AGENTS_AMENDMENT_DRAFT.md)).
+- There is no `remote` module in the daemon yet. `apps/desktop/remote.html`,
+  `remote.webmanifest` and an inert `remote-sw.js` exist for the browser mock.
 
 ## 2. Components
 
 ```
- Device (phone / PWA / browser / 2nd computer)                       Host (the user's computer)
- +---------------------------------------+                           +------------------------------------------+
- | Remote client (React, same UI kit)     |                           | bitbotsd                                  |
- |  - transport: RemoteTransport          |      sealed frames        |  +------------------------------------+   |
- |  - device key (non-extractable)        | <=======================> |  | Remote gateway (module, off by     |   |
- |  - host list, per-host cursor          |   via relay or direct     |  | default)                           |   |
- +---------------------------------------+                           |  |  - Noise session per device         |   |
-                  ^                                                   |  |  - tier + quiet-hours check         |   |
-                  |                                                   |  |  - snapshot redaction               |   |
-        +---------+----------+                                        |  |  - rate limit, audit log            |   |
-        |  Relay (stateless)  |  routes opaque frames by id            |  +------------------+-----------------+   |
-        |  no storage         |                                        |                     | internal dispatch   |
-        +--------------------+                                        |  +------------------v-----------------+   |
-                                                                      |  | existing daemon (loopback only)     |   |
-                                                                      |  +------------------------------------+   |
-                                                                      +------------------------------------------+
+ Device (phone / browser on the tailnet)                 Host (the user's computer)
+ +-----------------------------------+                   +----------------------------------------------+
+ | Bitbots Remote (PWA, same UI kit)  |                   | tailscaled                                   |
+ |  - remoteTransport: fetch + WS     |   WireGuard       |  serve: https://<host>.<tailnet>.ts.net:443  |
+ |  - session cookie (HttpOnly)       | <===============> |         -> http://127.0.0.1:48620            |
+ |  - service worker (shell only)     |   HTTPS (tailnet  +----------------------+-----------------------+
+ +-----------------------------------+    certificate)                           | loopback only
+                                                         +----------------------v-----------------------+
+                                                         | bitbotsd                                     |
+                                                         |  +----------------------------------------+  |
+                                                         |  | Remote gateway (listener 2, off by      |  |
+                                                         |  | default): 127.0.0.1:<remote.port>       |  |
+                                                         |  |  - static PWA files (manifest-listed)   |  |
+                                                         |  |  - /api/pair, /api/rpc, /api/events     |  |
+                                                         |  |  - cookie + Origin + login checks       |  |
+                                                         |  |  - quiet hours, tiers, param rules      |  |
+                                                         |  |  - redaction, event allowlist, audit    |  |
+                                                         |  +-------------------+--------------------+  |
+                                                         |                      | in-process dispatch() |
+                                                         |  +-------------------v--------------------+  |
+                                                         |  | existing daemon API (127.0.0.1:0,       |  |
+                                                         |  | capability-protected, unchanged)        |  |
+                                                         |  +----------------------------------------+  |
+                                                         +----------------------------------------------+
 ```
 
 ### 2.1 Gateway (host)
 
-A module inside `bitbotsd`, compiled in but **inactive** until `remote.enable`. It:
+A module inside `bitbotsd` (`crates/bloblex-daemon/src/remote/`, files `mod`, `policy`,
+`tailscale`, `pairing` and `web`). It is compiled in but **inactive** until `remote.enable`.
+While Remote is on it:
 
-1. keeps one outbound connection to the relay (and, if enabled, a direct listener);
-2. terminates the Noise session per paired device and maps it to a device record;
-3. parses each frame as the daemon envelope, looks the method up in the tier table, checks
-   quiet hours and `approvalsFromRemote`, then calls **internal dispatch** (never the
-   loopback HTTP route, so the capability token stays in-process);
-4. redacts `app.snapshot` and event payloads;
-5. writes an audit entry (kind, device, one short sentence; never content);
-6. enforces rate limits and size limits.
+1. runs a **second axum listener on `127.0.0.1:<remote.port>`** (default `48620`). It never
+   binds `0.0.0.0`, a LAN interface or an IPv6 wildcard;
+2. asks Tailscale to publish that port on the tailnet with `tailscale serve` (section 2.2);
+3. serves the PWA's static files, but only paths listed in a manifest built at startup;
+4. authenticates each `/api/*` request by its device cookie, checks revocation and `Origin`,
+   and checks the `Tailscale-User-Login` header when present (section 3);
+5. runs each RPC through: auth → quiet hours → tier policy → parameter rules → `dispatch()` →
+   redaction → audit;
+6. streams events through the event allowlist and the scrubber;
+7. writes an audit entry (kind, device, one short sentence; never content);
+8. enforces rate limits and size limits.
 
-The loopback listener, its capability and the Tauri shell path do not change.
+The gateway calls `dispatch()` in-process. It never reads, accepts or forwards the daemon
+capability. The existing listener, its loopback checks, its capability and the Tauri shell path
+do not change.
 
-### 2.2 Relay
+### 2.2 Tailscale (`tailscale.rs`)
 
-A small stateless service. It accepts two kinds of outbound WebSocket (hosts and devices),
-authenticates each by a signed hello that proves possession of a public key (the relay therefore sees public keys, identifiers, frame types, sizes, addresses and timing, never content), and forwards
-opaque frames between a device id and a host id. It stores nothing, has no accounts and
-cannot read content. It rate-limits and can drop a host or device id. It is replaceable: the
-address is part of the pairing payload, so a user can point at their own relay.
+Tailscale is installed and signed in by the user. Bitbots does not bundle it and does not
+create tailnets.
 
-### 2.3 Remote client
+- Find `tailscale.exe` and parse `tailscale status --json` for the backend state, the node's
+  DNS name, its certificate domains and the signed-in login.
+- Publish with `tailscale serve --bg --https=443 http://127.0.0.1:<port>`. If port 443 is
+  already served by something else, use `--https=8443` instead. The chosen port is stored as
+  `remote.servePort`.
+- Turning Remote off removes only the handler Bitbots added. It never runs
+  `tailscale serve reset`, which would remove other people's handlers.
+- It never runs `tailscale funnel`, and it checks that Funnel is off for our port. If Funnel is
+  on, Remote refuses to start and says why.
+- Errors the user can act on: Tailscale not installed, logged out, HTTPS certificates turned off
+  in the tailnet's admin settings, or the port already in use.
+- Status JSON is never logged, because it contains email addresses and device names.
 
-The existing React UI kit with a `RemoteTransport` behind the same `rpc` / event surface as
-`src/tauri.ts`. Native features are hidden through a `platform()` capability object
-([FIX16](../FIX16_TRANSPORT_SEAM_SPEC.md)). The phone shell in `src/remote/` is a purpose-built
-mobile layout over the same data (bot list, chat, approvals), not the desktop window shrunk.
+### 2.3 Remote client (PWA)
 
-### 2.4 Direct address (advanced)
+The existing React UI kit, built separately (`vite.remote.config.ts`, input `remote.html`,
+output `dist-remote`, public folder `remote-public/`). An alias swaps `../tauri` for
+`src/remote/remoteTauri.ts`, which sits on `remoteTransport.ts`: `fetch` for RPC and a WebSocket
+with a cursor, back-off and gap recovery for events. Native features are hidden through a
+`platform()` capability object ([FIX16](../FIX16_TRANSPORT_SEAM_SPEC.md)). The phone shell in
+`src/remote/` is a mobile layout over the same data (bot list, chat, approvals), not the desktop
+window shrunk.
 
-The same gateway, listening on the local network at a user-visible `host:port`, with the same
-handshake and tiers. It exists for people who do not want a relay; it is off by default and
-the UI warns about untrusted networks. A tunnel (Tailscale, Cloudflare) is just another way
-to reach the same listener.
+The build ships inside the desktop installer as a Tauri resource (`remote-web/`). The shell
+passes its path to the daemon in `BITBOTS_REMOTE_WEB_DIR` from `start_daemon`
+(`src-tauri/src/lib.rs`).
+
+A real service worker replaces the inert `remote-sw.js`: a versioned precache of the hashed
+shell, network-first for `remote.html`, `/api/*` never cached, an "update ready" prompt on
+`controllerchange`, and a strict content security policy.
 
 ## 3. Identity and pairing
 
-- **Host identity**: an X25519 static keypair created the first time Remote is enabled,
-  stored with the other local secrets (user-only ACL), never exported.
-- **Device identity**: an X25519 keypair created on the device. In a browser it is a
-  non-extractable WebCrypto key in IndexedDB (or a wrapped key where that is unavailable).
-- **Pairing**: the host mints a one-time secret and shows `K7QM-4XPD` plus a QR containing
-  `relay`, `hostId`, the host public key and the secret. The device completes a Noise `XX`
-  handshake whose prologue binds the one-time secret, so a relay cannot substitute keys. On
-  success the host stores `{deviceId, publicKey, name, tier, pairedAt}` and the code is spent.
-- **Known devices** reconnect with Noise `IK`.
-- **Revocation**: removing a device deletes its record and closes its session; the relay is
-  told to drop its id. A removed device must pair again.
+- **Network identity** comes from Tailscale. Only nodes on the owner's tailnet can reach the
+  serve address, and traffic is WireGuard-encrypted end to end between the two nodes. HTTPS uses
+  the tailnet's certificate for `<host>.<tailnet>.ts.net`.
+- **Device identity** is a Bitbots session cookie, issued only after the owner approves the
+  device. There are no device key pairs.
+- **Pairing** (owner-confirmed):
+  1. On the desktop, `remote.pair.begin` returns an 8-character code (two groups, for example
+     `K7QM-4XPD`), valid for 5 minutes, plus the serve URL and a QR payload of that URL.
+  2. The phone opens the URL and posts the code. Five wrong attempts burn the code.
+  3. The desktop shows the device (name, platform and Tailscale login when known). The owner
+     approves it with a tier, `viewer`, `chat` or `operator`, or rejects it.
+  4. On approval the device gets a 256-bit random token in an
+     `HttpOnly; Secure; SameSite=Strict` cookie. The host stores only `sha256(token)` with
+     `{deviceId, name, kind, platform, tier, login, pairedAt, lastSeenAt}`.
+- **Every `/api/*` request** checks the cookie hash, revocation and the `Origin` header. If the
+  `Tailscale-User-Login` header is present, it must match the login recorded at pairing.
+- **Revocation** marks the device record revoked, closes its event socket and makes its cookie
+  useless at once; later requests get `device_revoked`. A removed device must pair again.
 
 ## 4. Sessions, resume, offline
 
-- Per host, the client keeps `afterSequence`. On reconnect it sends the cursor; the gateway
-  replays through the existing mechanism. A gap leads to a fresh redacted snapshot.
-- The relay has no memory: if the host is offline the device sees `host_offline` and a
-  last-seen time, and shows an honest "asleep/offline" screen. Nothing is queued.
-- A host that sleeps cannot serve. The Remote page links to the keep-awake setting. A future
-  wake-on-push (a content-free ping through the relay) can bring a device's attention back,
-  not the computer.
+- The client keeps its `afterSequence` cursor. On reconnect it opens `/api/events` with that
+  cursor; the gateway replays through the existing mechanism. A gap leads to a fresh redacted
+  snapshot.
+- One live event socket per device. A second socket for the same device closes the first.
+- If the host is asleep or Tailscale is down, the device cannot reach the address. The client
+  shows an honest "asleep or offline" screen with the last-seen time. Nothing is queued.
+- A host that sleeps cannot serve. The Remote page links to the keep-awake setting.
 
 ## 5. Multi-computer
 
-The client stores `N` host records (name, id, public key, relay, tier, cursor). The UI shows
-state per host: online, asleep, offline, reconnecting, with a count of bots waiting. Each
-host has its own snapshot and its own cursor; switching hosts swaps both. Attention (the
-"needs you" count) is shown per host in the switcher so a waiting bot on another computer is
-not invisible.
+Each computer serves its own PWA at its own tailnet address, so each has its own origin, its
+own cookie and its own install. In v1 a phone installs one app per computer. A switcher that
+lists other computers and opens their addresses is a later item; it needs no host-side method,
+because host records live only on the device.
 
 ## 6. What changes in this repository
 
 | Area | Change | Phase |
 |---|---|---|
 | `src/transport/` | `Transport` interface, `platform()` flags, no direct `@tauri-apps` imports outside the seam | P0 (done as FIX16 when merged) |
-| `src/remote/remoteContract.ts` | Shapes for status, devices, offers, hosts, security | P0 (done) |
-| `src/remote/remoteTiers.ts` | Method tier table, `authorizeRemoteCall`, snapshot redaction, parity test | P0 (done) |
+| `src/remote/remoteContract.ts` | Shapes for status, devices, offers, security | P0 (done); P1 drops relay and direct fields |
+| `src/remote/remoteTiers.ts` | Tier table, `authorizeRemoteCall`, redactors, event policy, parity test | P0 (done); P1 moves the tables to `remote/tiers.json` |
 | `src/preview/remoteFixture.ts` | Simulator for the web preview | P0 (done) |
 | Settings > Remote, `remote.html` | Host and device UI, mock | P0 (done) |
-| Gateway module in `bitbotsd` | `remote.*` methods, tier enforcement, audit | P1 |
-| Noise session, device keys | Pairing and reconnect | P1 |
-| Relay service | Forwarding, rate limits | P2 |
-| Push wake, PWA offline shell | Notifications | P3 |
+| `crates/bloblex-daemon/src/remote/` | Second loopback listener, Tailscale control, pairing, cookie auth, policy, redaction, audit | P1 |
+| `remote/tiers.json` | One tier table, event policy and settings allowlist read by Rust and TypeScript | P1 |
+| `vite.remote.config.ts`, `remote-public/`, service worker | PWA build shipped as the `remote-web/` resource | P1 |
+| Storage | Tables `remote_devices` and `remote_activity` (capped at 500 rows) | P1 |
+| Push notifications | Content-free notifications | P3 |
 
 ## 7. Failure modes
 
 | Failure | Behaviour |
 |---|---|
-| Relay unreachable | Host shows "Reconnecting"; devices see the host as offline; direct address, if on, still works. |
+| Tailscale not installed or logged out | Remote does not start; the page shows the fix-it step. |
+| HTTPS certificates off in the tailnet | Remote does not start; the page links to the admin setting. |
+| Port 443 served by something else | Use 8443; if that is taken too, refuse and say so. |
+| Funnel on for our port | Remote refuses to start until it is off. |
 | Device offline | Host marks it offline; sessions on the host are unaffected. |
-| Daemon restarts | Gateway re-registers with the relay; devices reconnect and resume from their cursor. |
-| Slow device | Existing broadcast behaviour: the daemon sends `replay.gap` and the gateway closes that session; the device refetches a snapshot. |
+| Daemon restarts | The gateway listens again and re-applies `tailscale serve`; devices reconnect and resume from their cursor. |
+| Slow device | Existing broadcast behaviour: the daemon sends `replay.gap` and the gateway closes that socket; the device refetches a snapshot. |
 | Clock skew | Pairing codes use a host-side expiry; the device never evaluates it. |
-| Lost phone | Remove the device on the computer; its key is dead at once. |
-| Stolen paired laptop | Same, and set tiers to View only until removed. |
+| Lost phone | Remove the device on the computer; its cookie is dead at once. Removing the node from the tailnet also cuts it off. |
 
-## 8. Review corrections (15 October 2026)
+## 8. Review corrections (15 October 2026, still in force)
 
-Findings from [REVIEW_NOTES.md](REVIEW_NOTES.md) that change this design:
+Findings from [REVIEW_NOTES.md](REVIEW_NOTES.md) that still shape this design:
 
 - **Enforcement is not built.** `daemon_rpc` in the Tauri shell is still a pass-through. The
-  tier policy is an executable specification (`remoteTiers.ts`); the gateway must call it, and
-  it must also call the redactors for results and the event allowlist for pushes. Until then
-  nothing is enforced and Remote must not ship.
-- **Relay identity without accounts.** A host registers by proving possession of its public
-  key; the relay refuses a second registration of the same `hostId` with a different key
-  until the first is released by the host. Squatting a `hostId` therefore needs the host's key.
-  This is open question 1 in the review and is still a decision for the owner (see
-  [PHASES.md](PHASES.md)).
-- **Relay metadata** (stable ids, addresses, sizes, timing) is accepted and documented, and
-  per-connection routing tokens with frame padding are a P2 hardening item.
-- **Browser clients** need the ticket-and-subprotocol flow in PROTOCOL.md "Review corrections",
-  an Origin allowlist and a PWA content security policy (`connect-src` limited to the relay
-  and `self`, `frame-ancestors 'none'`); none exists yet.
-- **Revocation** closes the gateway session before notifying the relay, and covers the direct
-  listener.
+  tier policy is an executable specification (`remoteTiers.ts`, moving to `tiers.json`); the
+  gateway must apply it, and it must also apply the redactors to results and the event
+  allowlist to pushes. Until then nothing is enforced and Remote must not ship.
+- **Browser clients** need an `Origin` check and a PWA content security policy
+  (`connect-src 'self'`, `frame-ancestors 'none'`); none exists yet.
+- **Revocation** closes the device's socket on the host first. There is no third party to tell.

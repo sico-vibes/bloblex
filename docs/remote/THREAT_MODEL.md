@@ -1,7 +1,13 @@
 # Remote mode: threat model
 
-**Status: design.** Written 15 October 2026. Scope: the gateway, the relay, paired devices and
-the pairing flow. Out of scope: the coding agents' own sandboxing and provider accounts.
+**Status: design.** Written 15 October 2026; amended 16 October 2026 for the owner's choice of
+Tailscale. Scope: the gateway, Tailscale serve, paired devices and the pairing flow. Out of
+scope: the coding agents' own sandboxing, provider accounts, and Tailscale's own security.
+
+> **Superseded rows.** The 15 October model covered a relay, Noise sessions, X25519 device keys
+> and a direct LAN listener. Those parts are gone. Rows that only made sense for them (relay
+> reading or correlating traffic, browser key theft, recorded-frame replay, LAN handshakes,
+> browser tickets) are marked superseded below. New rows T28–T33 cover Tailscale.
 
 ## 1. The core fact
 
@@ -16,57 +22,62 @@ Every control below exists because of that sentence, and the product says it in 
 |---|---|
 | The host computer and the user's projects | A prompt can act on them. |
 | Conversations and tool output | May contain code, secrets pasted by the user, internal paths. |
-| Provider credentials (Claude, Codex, OpenCode auth files) | Read by the daemon locally; must never reach a device or relay. |
+| Provider credentials (Claude, Codex, OpenCode auth files) | Read by the daemon locally; must never reach a device. |
 | The daemon capability token | Full authority over the loopback API. |
-| Device and host keys | Prove identity. |
+| Device cookies | Prove a paired device; whoever holds one acts at its tier. |
+| The owner's Tailscale account | Decides which nodes can reach the host at all. |
+| The host's `tailscale serve` configuration | May hold other people's handlers; must not be clobbered. |
 | Approvals | The brake on unattended action. |
 
 ## 3. Actors
 
 - **Owner** on the host and on paired devices.
 - **Thief or finder** of a paired, unlocked device.
-- **Network attacker** between device, relay and host.
-- **Relay operator** (Bitbots, or a self-hosted operator).
+- **Other members of the tailnet**, or people a node is shared with.
+- **Network attacker** outside the tailnet.
 - **Other local user or process** on the host.
 - **Malicious web page** the owner visits in the same browser as the PWA.
+- **Attacker who takes over the owner's Tailscale account.**
 - **Compromised provider output** (prompt injection in a repository or web page the agent reads).
 
 ## 4. Trust boundaries
 
-1. Device <-> relay: untrusted network, TLS plus end-to-end Noise.
-2. Relay <-> host: same.
+1. Device <-> host: WireGuard inside the tailnet, managed by Tailscale. HTTPS with the tailnet
+   certificate, terminated by `tailscaled` on the host.
+2. `tailscaled` <-> gateway: plain HTTP on `127.0.0.1:<remote.port>`. Any local process can
+   reach this port too, so nothing that arrives here is trusted for its source.
 3. Gateway <-> daemon dispatch: in-process, trusted.
 4. Daemon <-> coding agents: existing boundary, unchanged.
-5. Host <-> other local processes: the loopback API stays capability-protected; remote adds
-   no new local listener unless the direct address is on.
+5. Host <-> other local processes: the daemon API stays capability-protected. The gateway is the
+   one new loopback listener, and only while Remote is on.
 
 ## 5. Abuse cases and mitigations
 
 | # | Abuse | Mitigation | Residual risk |
 |---|---|---|---|
-| T1 | Stolen unlocked phone sends prompts | Device removable from the host at once; default tier Chat (no approvals); quiet hours; idle expiry; activity list shows every prompt source | Until removed, the thief can send prompts that run within the approval mode. Document it; recommend "Ask first" mode. |
-| T2 | Attacker approves a command from a stolen phone | Approvals from remote are **off by default** and a per-device tier; operator tier only appears when the global switch is on | If the owner enables it and loses the phone, approvals are possible until removal. |
-| T3 | Relay reads or alters traffic | Noise end-to-end; relay sees ids and sizes only; pairing prologue binds the one-time secret so keys cannot be swapped | Traffic analysis (timing, sizes). |
-| T4 | Pairing code guessed or shoulder-surfed | 8 characters from a 32-symbol alphabet, single use, 5-minute life, rate-limited attempts per host, QR shown only on the host screen | A watcher who reads the code within five minutes and is on the relay can pair; the host shows "Pixel 8 connected" at once and the owner can remove it. |
-| T5 | Remote client calls a dangerous method (settings, runtime profile, file revert) | Server-side tier table; never-remote methods denied regardless of tier; parity test fails the build when a daemon method has no rule | A bug in the table; mitigated by the parity test and review. |
+| T1 | Stolen unlocked phone sends prompts | Device removable from the host at once; removing the node from the tailnet also cuts it off; owner picks the tier at approval; quiet hours; idle expiry; activity list shows every prompt source | Until removed, the thief can send prompts that run within the approval mode. Document it; recommend "Ask first" mode. |
+| T2 | Attacker approves a command from a stolen phone | Approvals from remote are **off by default**; the operator tier only acts while that switch is on | If the owner enables it and loses the phone, approvals are possible until removal. |
+| T3 | *Superseded:* relay reads or alters traffic | There is no relay. WireGuard and HTTPS protect the link | — |
+| T4 | Pairing code guessed or shoulder-surfed | 8 characters from a 32-symbol alphabet; 5-minute life; 5 wrong attempts burn it; only reachable from inside the tailnet; the owner must approve the device and its tier | A watcher on the tailnet who reads the code and submits first locks the offer; the owner sees an unexpected device and rejects it. |
+| T5 | Remote client calls a dangerous method (settings, runtime profile, file revert, `remote.*`) | Host-side tier table in `tiers.json`; never-remote methods denied at every tier; parity test fails the build when a daemon method has no rule | A bug in the table; mitigated by the parity test and review. |
 | T6 | Snapshot leaks secrets (env values, instructions, absolute paths) | `redactSnapshotForRemote` strips env values and instruction text, shortens paths, drops keys named like secrets | New fields added later; the redaction test uses an allowlist-minded fixture and must be extended with each new snapshot field. |
-| T7 | Attachment used to read arbitrary files | Remote prompts accept only `stagedId` from the gateway upload, never `path`; same size and magic-byte checks as today | Image parsing bugs. |
-| T8 | Device key theft from a browser | Non-extractable WebCrypto key; PWA origin isolation | Malware on the device. |
-| T9 | Malicious web page drives the PWA | PWA origin has its own storage; no cookies carry authority; every request is inside the Noise session; CSP with `connect-src` limited to the relay and `self` | Browser vulnerabilities. |
-| T10 | Replay of recorded frames | Noise nonces; sessions are per connection | None expected. |
-| T11 | Denial of service on the host through the relay | Gateway rate limits per device; max frame 256 KiB; max concurrent sessions; relay drops abusive ids | A determined flood still costs bandwidth. |
+| T7 | Attachment used to read arbitrary files | Attachments are refused from remote in v1 | None while refused. |
+| T8 | *Superseded:* device key theft from a browser | No device keys; the cookie replaces them (see T32) | — |
+| T9 | Malicious web page drives the PWA | Cookie is `SameSite=Strict` and `HttpOnly`; `Origin` must equal the serve origin on every `/api/*` request and WebSocket upgrade; CSP `connect-src 'self'`, `frame-ancestors 'none'` | Browser vulnerabilities. |
+| T10 | *Superseded:* replay of recorded Noise frames | TLS inside WireGuard; a recorded request is useless without the cookie | — |
+| T11 | Denial of service on the host | Per-device rate limits; 256 KiB body cap; one event socket per device; reachable only from the tailnet | A paired device can still cost bandwidth until removed. |
 | T12 | Prompt injection makes a bot exfiltrate through Remote | Remote adds no new tool or egress; the bot's capabilities and approval mode are unchanged | Existing agent risk, unchanged. |
-| T13 | Another local user connects to the direct address | Direct listener requires the same handshake and device keys; off by default; warning copy | Anyone on the network can attempt handshakes. |
+| T13 | *Superseded:* another user connects to the direct LAN address | There is no LAN listener; see T28 for local processes | — |
 | T14 | Audit log leaks content | Entries are one short templated sentence, never message text, paths or command lines | Template mistakes; covered by a unit test on every entry kind. |
-| T15 | Host left running a remote session while the owner thinks it is off | One master switch; status chip in the sidebar and tray; off disconnects everything at once | None expected. |
+| T15 | Host left serving while the owner thinks Remote is off | One master switch; status chip in the sidebar and tray; off stops the listener and removes our serve handler at once | None expected. |
 
 ## 6. Defaults that carry the model
 
 1. Remote is off.
-2. New devices are **Chat**, not **Chat and approve**.
-3. Approvals from remote are off globally.
+2. Approvals from remote are off globally.
+3. The owner picks each device's tier at approval; the dialog preselects **Chat**.
 4. Idle devices expire in 30 days.
-5. Direct address is off.
+5. Never Funnel, never `serve reset`, never a non-loopback bind.
 6. No message text in logs, push payloads or the activity list.
 
 ## 7. Not mitigated by design
@@ -75,17 +86,20 @@ Every control below exists because of that sentence, and the product says it in 
 - A user who turns approvals from remote on, sets bypass mode and loses a phone. The product
   warns, and bypass mode is already a typed-confirmation setting.
 - Data the user chooses to paste into a chat.
+- Tailscale itself being broken. Bitbots relies on WireGuard and the tailnet's access rules.
 
 ## 8. Review checklist before P1 ships
 
 - [ ] Every daemon method has a tier rule (parity test green).
 - [ ] The gateway calls internal dispatch only; the capability token never appears in a
-      frame, log or error.
+      response, event, log or error.
 - [ ] Snapshot and event redaction covered by tests with the real field set.
 - [ ] Rate limits and size limits tested.
-- [ ] Pairing code attempts limited per host and per relay id.
+- [ ] Pairing: 5-minute expiry, 5 attempts then burned, offer locked by the first correct code,
+      owner approval required; all tested.
 - [ ] Activity entries tested for content-free templates.
-- [ ] Independent review of the Noise integration and key storage.
+- [ ] Independent review of the cookie, `Origin` and Tailscale-login checks and of the serve and
+      Funnel handling.
 
 ## 9. Additions from the independent review (15 October 2026)
 
@@ -93,23 +107,23 @@ Source: [REVIEW_NOTES.md](REVIEW_NOTES.md). These rows continue the table in sec
 
 | # | Abuse | Mitigation | Residual risk |
 |---|---|---|---|
-| T16 | Two devices race for one pairing code | Host-issued pairing nonce in the handshake prologue; the offer is spent atomically by the first completed handshake; the owner confirms name and key fingerprint before the record is committed | A watcher who reads the code and wins the race is caught by the owner's confirmation |
-| T17 | Relay correlates devices and hosts over time | Stable ids are accepted; per-connection routing tokens and frame padding are P2 hardening | Long-term traffic analysis |
-| T18 | Cloned device key (wrapped key where non-extractable keys do not exist) | One live session per device id; a concurrent second session closes both and logs; Remote may refuse to pair browsers without a non-extractable key (owner decision) | A clone used while the original is offline |
-| T19 | Push counts reveal activity | Push payload is "check in" only, no counts; counts stay on the secure channel | Existence of a push is itself a signal |
-| T20 | Staged attachment ids guessed or reused, decompression bombs | Random single-use ids bound to device and session with a TTL; per-device staged-bytes cap; image decoding limits | Image parser bugs |
+| T16 | Two devices race for one pairing code | The first correct code locks the offer; later submissions are refused; the owner approves name, platform and Tailscale login before a record exists | A watcher who wins the race is caught by the owner's approval |
+| T17 | *Superseded:* relay correlates devices and hosts | No relay. Tailscale's coordination server sees node metadata, as it does for every tailnet | Covered by T33 |
+| T18 | Cloned device credential | One live event socket per device; a second closes the first and writes an activity line; Tailscale-login check when the header is present (see T32) | A clone used while the original is offline |
+| T19 | Push counts reveal activity | Push payload is "check in" only, no counts; counts stay inside the tailnet | Existence of a push is itself a signal |
+| T20 | Staged attachment ids guessed or reused, decompression bombs | Attachments are refused in v1 | Returns when staging is designed |
 | T21 | Event payloads carry secrets (message bodies, tool output) | Event allowlist and per-event scrubbing; tool detail off by default; message text is the conversation and is shown | A secret pasted into a chat is visible to the owner's own devices by design |
-| T22 | Snapshot fields outside the redactor (paths, args, attachments) | The redactor's field policy in `remoteTiers.ts`; results of other reads go through `redactResultForRemote`; tests cover each path | New fields added later must be added to the policy and its test |
-| T23 | Browser WebSocket cannot carry headers | Short-lived single-use ticket in a subprotocol, never in the URL; Origin allowlist | Ticket theft inside its 60 s life |
-| T24 | CSRF or framing of the PWA | `frame-ancestors 'none'`, `connect-src` limited to the relay and self, Origin checks, approvals require a user gesture inside the PWA | Browser bugs |
+| T22 | Snapshot fields outside the redactor (paths, args, attachments) | The redactor's field policy in `tiers.json` and `policy.rs`; results of other reads go through `redactResultForRemote`; golden fixtures run in both Rust and Vitest | New fields added later must be added to the policy and its test |
+| T23 | *Superseded:* browser WebSocket cannot carry headers | The same-origin cookie travels on the upgrade; `Origin` is checked | — |
+| T24 | CSRF or framing of the PWA | `SameSite=Strict` cookie, `Origin` check, `frame-ancestors 'none'`, `connect-src 'self'`, approvals need a user gesture inside the PWA | Browser bugs |
 | T25 | Quiet hours bypassed through cancel, archive or queue send | Quiet hours are a hard read-only override applied before dispatch | None expected |
-| T26 | Revocation fails when the relay is unreachable or the path is direct | The gateway closes the session itself; telling the relay is best effort | A device already holding a direct socket is closed on the next frame at the latest |
+| T26 | Revocation leaves a session open | Revoking marks the device revoked and closes the event socket on the host; the next request fails with `device_revoked` | None expected |
 | T27 | Viewer forces provider polling or reads host config | `runtime.models refresh` refused remotely; executable paths and arguments redacted | None expected |
 
 ### Corrections to earlier rows
 
 - **T5:** the tier table is an executable specification and a parity test of method **names**.
-  Enforcement does not exist until the gateway calls it. The risk stays open until then.
+  Enforcement does not exist until the gateway applies it. The risk stays open until then.
 - **T9:** the content security policy is a requirement, not a present fact.
 - **T14:** a unit test over every activity-entry template is a requirement for P1; none exists.
 - **Idle expiry:** the "Never" option removes the only automatic containment for a forgotten
@@ -117,12 +131,31 @@ Source: [REVIEW_NOTES.md](REVIEW_NOTES.md). These rows continue the table in sec
 - **Redaction is not defence in depth.** It is the only layer between the host and a device for
   fields the daemon keeps.
 
-## 10. Checklist additions for P1
+## 10. Tailscale threats (16 October 2026)
 
-- [ ] The gateway calls `authorizeRemoteCall`, `redactResultForRemote` and the event allowlist;
-      a test proves no code path returns raw daemon output to a device.
-- [ ] Pairing offer spent atomically; second handshake rejected; owner confirmation implemented.
-- [ ] Ticket and subprotocol flow implemented and Origin allowlist tested.
+| # | Abuse | Mitigation | Residual risk |
+|---|---|---|---|
+| T28 | A local process spoofs `tailscaled`: it connects straight to `127.0.0.1:<remote.port>` and forges `Tailscale-User-Login` or `Origin` | The cookie is required on every `/api/*` request; the login header and `Origin` are extra checks, never proof on their own; pairing still needs the live code and the owner's approval | A local process that can read the browser's cookie store already owns the user's account |
+| T29 | Other tailnet members, or people the node is shared with, reach the serve address | They need a pairing code and the owner's approval; the approval shows their Tailscale login; the Remote page says that everyone on the tailnet can reach the address and links to Tailscale's access rules | A member who shoulder-surfs a code still has to get past the owner's approval |
+| T30 | Accidental Funnel exposes the gateway to the internet | Bitbots never runs `tailscale funnel`; it checks Funnel is off for its port at start and on each status refresh, and stops serving if Funnel appears | The owner turns Funnel on by hand between checks; the cookie and `Origin` checks still apply |
+| T31 | Bitbots clobbers the user's own `tailscale serve` setup | Never `serve reset`; add and remove only our own handler; fall back from 443 to 8443 when 443 is taken; refuse rather than overwrite | Tailscale CLI changes; covered by tests that assert the exact commands issued |
+| T32 | Cookie theft (malware, a shared browser profile, a backup of browser data) | `HttpOnly`, `Secure`, `SameSite=Strict`, `__Host-` prefix; only its SHA-256 is stored; login check when the header is present; one live socket per device; idle expiry; one-click revoke | A stolen cookie used from another node with no login header, until revoked |
+| T33 | The owner's Tailscale account is taken over | An attacker can add nodes, but still needs a pairing code and the owner's approval on the desktop; existing cookies stay bound to their recorded login; the Remote page recommends two-factor sign-in for Tailscale | An attacker who also controls a paired device acts at its tier |
+
+## 11. Checklist additions for P1
+
+- [ ] The gateway applies `authorizeRemoteCall`, `redactResultForRemote` and the event allowlist
+      (Rust ports, same `tiers.json`); a test proves no code path returns raw daemon output to a
+      device.
+- [ ] Pairing offer locked by the first correct code; later submissions refused; owner approval
+      implemented.
+- [ ] Cookie attributes, `Origin` check and Tailscale-login check tested, including a request
+      with a forged login header and no cookie.
+- [ ] Tests prove the gateway never issues `tailscale serve reset` or `tailscale funnel`, and
+      that it refuses to start when Funnel is on.
+- [ ] The listener binds `127.0.0.1` only (test).
+- [ ] Static server rejects paths outside its manifest, including traversal.
 - [ ] PWA content security policy written and tested.
-- [ ] One live session per device id enforced.
+- [ ] One live event socket per device enforced.
 - [ ] Activity entry templates covered by a test.
+- [ ] Tailscale status JSON never logged.

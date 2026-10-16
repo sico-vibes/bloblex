@@ -5,18 +5,24 @@ device (phone, tablet, browser) and a host's gateway. It is grounded in the daem
 exists today; every daemon fact cites its source file. Choices that are not yet forced by the
 daemon are marked **(recommendation)** and may change before implementation.
 
+**Amended 16 October 2026.** The owner chose Tailscale. The Noise secure channel, X25519 device
+keys, relay framing, `wake` frames and the direct LAN listener of the 15 October draft are
+superseded and removed from this document. Tailscale (WireGuard) supplies encryption, node
+identity and HTTPS; Bitbots adds device pairing, cookies and tier policy on top.
+
 Vocabulary: a **host** is a computer running Bitbots and its daemon; a **device** is a paired
-phone, tablet, browser or computer; the **gateway** is the host-side component that exposes the
-daemon to remote devices; the **relay** is the optional public broker. See
+phone, tablet, browser or computer on the same tailnet; the **gateway** is the host-side
+listener that exposes the daemon to remote devices; the **serve address** is the HTTPS URL
+`tailscale serve` publishes, for example `https://work-pc.example-tailnet.ts.net`. See
 `apps/desktop/src/remote/remoteContract.ts` for the UI shapes this document assumes.
 
 ---
 
 ## 1. Scope and non-goals
 
-**In scope.** Device-to-host request/response and events over a relay or a direct socket. The
-existing daemon envelope, filtered for remote. Pairing, key storage, resume and replay, the
-method allowlist, attachment staging, presence and versioning.
+**In scope.** Device-to-host request/response and events over the tailnet. The existing daemon
+envelope, filtered for remote. Pairing, the device cookie, resume and replay, the method
+allowlist, presence and versioning.
 
 **Non-goals.**
 
@@ -27,30 +33,38 @@ method allowlist, attachment staging, presence and versioning.
   (`docs/ipc-contract.md:15-23`).
 - This document does not define product policy (who may pair, what a tier means to the user),
   the architecture or the threat model. Those are Director documents under `docs/remote/`.
-- No remote listener on the daemon, no cloud storage of transcripts, no server-side authority
-  over sessions. The host daemon remains authoritative (`docs/ipc-contract.md:7`).
+- No listener on a non-loopback address, no cloud storage of transcripts, no server-side
+  authority over sessions. The host daemon remains authoritative (`docs/ipc-contract.md:7`).
+- Attachments from remote devices. v1 refuses them (§9).
 
 ---
 
 ## 2. Layers
 
-Three layers, each independent of the one above it.
-
 | Layer | Carries | Defined in |
 |---|---|---|
-| Transport | WebSocket over TLS to the relay, or a direct WebSocket to the host address | §2.1 |
-| Secure channel | Noise handshake plus AEAD records | §4 |
+| Network | WireGuard between tailnet nodes, managed by Tailscale | Tailscale |
+| HTTPS | `tailscale serve` terminates TLS with the tailnet certificate and forwards to the gateway on loopback | §2.1 |
+| Gateway routes | Static PWA files, `/api/pair`, `/api/me`, `/api/rpc`, `/api/events`, `/api/logout` | §4 |
 | Application frames | The existing daemon envelope, filtered | §3 |
 
-### 2.1 Transport **(recommendation)**
+### 2.1 Listener and serve
 
-- Relay path: one WebSocket (`wss://`) per device and per host. The relay cannot read the
-  secure-channel payload; it sees only the routing header in §5.
-- Direct path: the host opens a WebSocket listener reachable on the local network, advertised
-  as `RemoteStatus.directAddress` (`apps/desktop/src/remote/remoteContract.ts:42`). The secure
-  channel is mandatory on direct too; a LAN socket is not trusted by position alone.
-- The transport is a byte pipe for the lifetime of a connection. Either side may send `ping`
-  frames (§5). No HTTP semantics above the floor.
+- The gateway is a second listener inside `bitbotsd` on `127.0.0.1:<remote.port>`, default
+  `48620`. It runs only while Remote is on. It never binds `0.0.0.0`, a LAN interface or an
+  IPv6 wildcard.
+- The host publishes it with `tailscale serve --bg --https=443 http://127.0.0.1:<port>`. If
+  443 is already served by another handler, it uses `--https=8443`. The chosen port is
+  `remote.servePort`.
+- Turning Remote off removes only that handler. The gateway never runs `tailscale serve reset`
+  and never runs `tailscale funnel`. It checks that Funnel is off for its port and refuses to
+  start otherwise.
+- The **serve origin** is `https://<DNSName>` (or `https://<DNSName>:8443`), where `DNSName`
+  comes from `tailscale status --json` with the trailing dot removed. It is the only accepted
+  `Origin` (§4.1).
+- Every request reaches the gateway from `127.0.0.1`, because `tailscaled` proxies it. The
+  gateway therefore never trusts the peer address, and per-address rate limits are meaningless;
+  limits are per device and per pairing offer.
 
 ---
 
@@ -94,13 +108,18 @@ The gateway adds its own error codes, used only on the remote path:
 
 | Code | Meaning |
 |---|---|
-| `forbidden_remote` | The method is not on the remote allowlist, or the device's tier is too low. |
+| `forbidden_remote` | The method is not on the remote allowlist, or it is `never` remote. |
 | `tier_required` | The call is allowed at a higher tier than the device holds. |
 | `approvals_disabled` | Approvals from remote are switched off on the host. |
-| `host_offline` | The host daemon is not reachable. |
-| `rate_limited` | The relay or the gateway is throttling this device. |
-| `payload_too_large` | A frame or an upload exceeds its limit. |
-| `device_revoked` | The device's pairing was removed; re-pair to continue. |
+| `quiet_hours` | Quiet hours are on; the host allows reading only. |
+| `invalid_params` | A parameter rule refused the call, for example an attachment or `refresh:true`. |
+| `rate_limited` | The gateway is throttling this device or this pairing offer. |
+| `payload_too_large` | A request body or a WebSocket message exceeds its limit. |
+| `device_revoked` | The device's pairing was removed, expired, signed out, or its Tailscale login no longer matches; pair again to continue. |
+| `pairing_invalid` | `/api/pair` only: the code is wrong, expired, burned or already used. One code for all four on purpose. |
+
+The 15 October `host_offline` code is removed: with no relay, nothing can answer for an
+unreachable host. The client infers it from a failed connection.
 
 These codes sit beside the daemon's stable codes (`invalid_argument`, `not_found`,
 `unauthorized`, `unsupported`, `provider_unavailable`, `provider_error`, `conflict`,
@@ -109,99 +128,133 @@ carries no credential material or prompt text (`docs/ipc-contract.md:255`).
 
 ---
 
-## 4. Secure channel
+## 4. Gateway routes and authentication
 
-**(recommendation)** unless stated otherwise. The secure channel is end-to-end between device
-and host gateway. The relay and the network are untrusted.
+Tailscale encrypts the link and proves which tailnet node is talking. Bitbots still decides
+which **device** may act, and at which tier. Every rule in this section runs on the host.
 
-### 4.1 Primitives
+### 4.1 Checks on every `/api/*` request
 
-| Purpose | Choice |
+In this order:
+
+1. **Origin.** The `Origin` header must be present and equal the serve origin (§2.1). A missing
+   or different `Origin` is refused with HTTP 403 before anything else runs. This applies to the
+   WebSocket upgrade too.
+2. **Cookie.** The device cookie must be present. The gateway hashes it with SHA-256 and looks up
+   `remote_devices.token_sha256`. No match: HTTP 401, `unauthorized`. A revoked or expired
+   device: HTTP 401, `device_revoked`. (`/api/pair` is the only route that runs without it.)
+3. **Tailscale login.** If the `Tailscale-User-Login` header is present, it must equal the login
+   recorded at pairing. A mismatch is HTTP 401, `device_revoked`, and writes an activity line.
+   The header is a second check, never a way in on its own: any local process can reach the
+   loopback port and set it.
+4. **Size and rate.** A request body over 256 KiB is `payload_too_large`. Calls above the
+   per-device rate are `rate_limited`.
+
+### 4.2 The device cookie
+
+| Property | Value |
 |---|---|
-| Handshake | Noise `XX` for first contact (pairing); Noise `IK` for known devices |
-| Key agreement | X25519 |
-| Cipher | ChaCha20-Poly1305 |
-| Hash | BLAKE2s |
-| Rekey | every 1 GiB of traffic or 1 hour, whichever comes first |
+| Name | `__Host-bitbots_remote` **(recommendation)**; the `__Host-` prefix forces `Secure`, `Path=/` and no `Domain` |
+| Value | 256 random bits, base64url, created by the host at approval |
+| Attributes | `HttpOnly; Secure; SameSite=Strict; Path=/`, `Max-Age` equal to the idle expiry (no `Max-Age` when expiry is "never") |
+| Stored on the host | `sha256(token)` only, never the token |
+| Stored on the device | the cookie only; JavaScript cannot read it |
 
-`XX` authenticates both sides during pairing; `IK` lets a known device resume without a new
-code, authenticating the host by its static key.
+The host stores `{deviceId, name, kind, platform, tier, login, tokenSha256, pairedAt,
+lastSeenAt, revokedAt}` in `remote_devices`. `RemoteDevice` already carries the fields the UI
+needs (`apps/desktop/src/remote/remoteContract.ts:17-28`).
 
-### 4.2 What each side stores
+### 4.3 Pairing (owner-confirmed)
 
-| Side | Stored |
-|---|---|
-| Host | device public keys, device id, device name, kind, tier, `pairedAt`, `lastSeenAt` |
-| Device | its non-extractable private key, the host public key, host id, relay address |
-
-`RemoteDevice` already carries the host-side fields (`apps/desktop/src/remote/remoteContract.ts:17-28`).
-Device private keys are generated non-extractable and never leave the device **(recommendation)**.
-The host never stores a device's private key.
-
-### 4.3 Pairing
-
-1. Host creates a one-time code via `remote.pair.begin`; the code is eight characters in two
-   groups (for example `K7QM-4XPD`) and lives five minutes
-   (`apps/desktop/src/remote/remoteContract.ts:50-58,119`).
-2. The code is bound into the Noise handshake **prologue**: both sides fold
-   `H(code ‖ hostId ‖ deviceId ‖ relay)` into the handshake hash. The relay therefore cannot
-   swap keys between the two peers without changing the prologue and failing the handshake.
-3. After the handshake completes, the host issues the device a device id and its tier. The
-   offer is cleared and the device is added to the list.
-
-Once a device is known, later connections use `IK` and no code.
+1. On the desktop, `remote.pair.begin` returns `{code, url, qrPayload, expiresAt}`. The code is
+   eight characters from a 32-symbol alphabet in two groups (for example `K7QM-4XPD`) and lives
+   five minutes (`apps/desktop/src/remote/remoteContract.ts:50-58,119`). One offer is live at a
+   time; a new offer cancels the old one.
+2. The phone opens the URL and posts `POST /api/pair {code, name, kind, platform}`.
+   - A wrong code counts one attempt against the live offer. After five wrong attempts the code
+     is burned and the owner must start a new one.
+   - The first correct code **locks** the offer to that request. Any later submission, right or
+     wrong, is refused. The response is `202 {state:"pending"}` and sets a short-lived
+     `__Host-bitbots_pair` cookie (`HttpOnly; Secure; SameSite=Strict`, five minutes) that
+     names this pending request.
+   - Every failure returns the same `pairing_invalid` error, so a guesser cannot tell a wrong code
+     from an expired or burned one.
+3. The desktop raises `remote.pairing.requested` with a `pairingId` and the device's name,
+   platform and `Tailscale-User-Login` (when the header is present). The owner chooses a tier
+   (`viewer`, `chat` or `operator`) and approves with
+   `remote.pair.confirm {pairingId, approve:true, tier}`, or rejects with
+   `{pairingId, approve:false}`. Rejecting burns the offer. If nobody decides before the code's
+   five minutes run out, the request expires. The `remote.*` methods are listed in
+   `docs/ipc-contract.md`; none of them is callable from a device.
+4. The phone polls `GET /api/pair` **(recommendation: every two seconds)**. It returns
+   `pending`, `approved`, `rejected` or `expired`. On `approved` the response sets the device
+   cookie (§4.2) and clears the pairing cookie.
 
 ```
-device                         relay                        host gateway
-  |                              |                              |
-  |  hello(deviceId)             |                              |
-  |----------------------------->|                              |
-  |                              |  frame(hostId, hello, len)   |
-  |                              |----------------------------->|
-  |                              |                              | code K7QM-4XPD
-  |                              |                              | valid < 5 min
-  |<======== Noise XX ==========================================>|
-  |   prologue = H(code ‖ hostId ‖ deviceId ‖ relay)             |
-  |   X25519 · ChaCha20-Poly1305 · BLAKE2s                       |
-  |                              |                              |
-  |  {data} paired, tier=chat    |                              |
-  |<------------------------------------------------------------>|
-  |                              |                              | offer cleared
-  |                              |                              | device stored
+phone (PWA)                           gateway (127.0.0.1:48620)          desktop (owner)
+  |                                      |  <- remote.pair.begin            |
+  |                                      |  code K7QM-4XPD, 5 min, 5 tries  |
+  |                                      |  -> code + QR of serve URL ----->|
+  |  POST /api/pair {code,name,...}      |                                  |
+  |------------------------------------->|  offer locked to this request    |
+  |  202 pending + pairing cookie        |                                  |
+  |<-------------------------------------|  remote.pairing.requested ------>|
+  |  GET /api/pair  (poll)               |                                  |
+  |------------------------------------->|  <- remote.pair.confirm          |
+  |                                      |     {approve:true, tier:"chat"}  |
+  |  200 approved + device cookie        |  store sha256(token)             |
+  |<-------------------------------------|  remote.pairing.completed ------>|
 ```
+
+### 4.4 Routes
+
+| Route | Purpose |
+|---|---|
+| `GET /` and static files | The PWA, served only from paths listed in a manifest built at startup from `BITBOTS_REMOTE_WEB_DIR`. Anything else is 404, which also rules out path traversal. |
+| `POST /api/pair`, `GET /api/pair` | Pairing (§4.3). Runs without the device cookie. |
+| `GET /api/me` **(recommendation)** | `{protocolVersion:1, device:{id,name,tier}, host:{name}, approvalsFromRemote, quietHoursActive}`, so the client can show what it may do. |
+| `POST /api/rpc` | One daemon envelope in, one out (§4.5). |
+| `GET /api/events` | WebSocket upgrade for events (§6). |
+| `POST /api/logout` | Clears the device cookie and deletes its token hash. The device row stays, marked signed out, until the owner removes it or idle expiry does. |
+
+### 4.5 `POST /api/rpc` pipeline
+
+The body is a daemon request envelope (§3). The gateway runs, in order:
+
+1. **auth**: the checks in §4.1;
+2. **quiet hours**: while they are on, every method above `viewer` is refused with `quiet_hours`;
+3. **tier policy**: the method's rule in `tiers.json`; unknown or `never` gives
+   `forbidden_remote`, too low a tier gives `tier_required`, `permission.reply` without
+   approvals from remote gives `approvals_disabled`;
+4. **parameter rules**: per-method checks, for example no `refresh:true` on `runtime.models` and
+   no attachments at all (§9); a failure is `invalid_params`;
+5. **dispatch**: `dispatch()` in-process, with no capability token;
+6. **redaction**: `redactResultForRemote` for the method;
+7. **audit**: one content-free activity line for writes, approvals and denials.
+
+The response is the daemon envelope. A refused call is `ok:false` with a gateway code (§3), and
+the daemon is never asked.
 
 ---
 
-## 5. Relay framing
+## 5. Relay framing (removed)
 
-The relay routes frames. It sees a small, opaque header and the length; it does not see the
-payload.
-
-| Field | Meaning |
-|---|---|
-| `deviceId` | Routing: which device sent or receives the frame |
-| `hostId` | Routing: which host the frame is for |
-| `frameType` | `hello`, `data`, `ping` or `wake` |
-| `len` | Length in bytes of the opaque payload that follows |
-
-Besides those fields the relay also sees the public keys in the signed `hello` it verifies, network addresses and timing. It cannot read `data` frames, which carry secure-channel records only. (Corrected after the review in REVIEW_NOTES.md section 1.)
-
-Relay behaviour:
-
-- **Rate limits.** The relay limits frames per device and per host and answers excess with
-  `rate_limited` (§3).
-- **Max frame 256 KiB.** A larger frame is rejected with `payload_too_large`.
-- **No storage of data frames.** The relay forwards and forgets. It buffers only what a live
-  connection needs; a disconnection cannot recover missed `data` frames through the relay.
-- **Wake pings carry no content.** A `wake` frame is a signal to check in, nothing more (§10).
-- `ping` frames keep the connection alive and carry no application state.
+Superseded on 16 October 2026. There is no relay. Tailscale carries the traffic, and the
+gateway sees ordinary HTTPS requests forwarded by `tailscaled` on loopback (§2.1).
 
 ---
 
 ## 6. Resume and replay
 
-The device keeps a per-host cursor: the highest `sequence` it has applied. On reconnect it
-sends that cursor; the gateway replays through the daemon's existing mechanism.
+The device keeps its cursor: the highest `sequence` it has applied. On reconnect it opens
+`GET /api/events` (a WebSocket upgrade, checked as in §4.1) and sends that cursor; the gateway
+replays through the daemon's existing mechanism (`db.replay_events`), then streams live events
+through the event allowlist and the scrubber.
+
+- **One live socket per device.** A new socket for the same device closes the older one and
+  writes an activity line.
+- A WebSocket message from the device other than the first cursor message is ignored. Requests
+  go through `POST /api/rpc`, never the socket.
 
 Daemon facts this relies on:
 
@@ -220,13 +273,13 @@ Daemon facts this relies on:
 - After replay the daemon emits `events.replay.complete` with `throughSequence`
   (`crates/bloblex-daemon/src/main.rs:3297-3304`).
 
-The remote event socket upgrades with `{"v":1,"afterSequence":<cursor>}` on the daemon side
-(`crates/bloblex-daemon/src/main.rs:3264-3272`; `docs/ipc-contract.md:23`); the gateway passes
-the device's per-host cursor in the same shape.
+The first message on the remote socket is `{"v":1,"afterSequence":<cursor>}`, the same shape
+the daemon's own socket takes (`crates/bloblex-daemon/src/main.rs:3264-3272`;
+`docs/ipc-contract.md:23`).
 
 ```
 device                              host gateway
-  |  hello + afterSequence=418          |
+  |  upgrade + afterSequence=418        |
   |------------------------------------>|
   |  event 419 … 1418 (batch of 1000)   |
   |<------------------------------------|
@@ -374,53 +427,47 @@ it; regenerate it so it cannot drift from `METHOD_RULES`.
 
 ## 9. Attachments
 
-Attachments are uploaded in chunks to a staging area on the host, through the gateway, before
-the prompt that references them.
+**Refused in v1.** `session.prompt` and `session.queue.add` from a remote device must carry no
+`attachments`, or an empty list. Anything else is `invalid_params` ("attachments are not
+supported from remote devices yet").
 
-- Each chunk carries an offset and a byte range; the gateway reassembles into staging.
-- Size limit: 10 MiB per image, matching the daemon's `MAX_ATTACHMENT_BYTES`
-  (`crates/bloblex-daemon/src/main.rs:2608,2626`). At most 8 attachments per message
-  (`crates/bloblex-daemon/src/main.rs:2607,2619`).
-- Magic-byte check: the host reads the file header and derives the media type itself, never
-  from the caller (`crates/bloblex-daemon/src/main.rs:2610-2641`). Accepted signatures are PNG,
-  JPEG, GIF and WebP.
-- The staging area returns a `stagedId`. A prompt references only `stagedId`; a device never
-  sends a raw file path.
-
-This is stricter than the local daemon path, which today accepts an absolute local path
-(`crates/bloblex-daemon/src/main.rs:2621-2623`). Remote does not: a device has no path into the
-host filesystem. The params rule is stated in FIX18: `session.prompt` and `session.queue.add`
-reject any attachment object that carries a `path`; only `{ stagedId }` is allowed
-(`docs/FIX18_REMOTE_TIERS_SPEC.md:44-48`).
+Reasons: the local path accepts an absolute host path
+(`crates/bloblex-daemon/src/main.rs:2621-2623`), which a device must never send, and a staging
+upload area would need its own design (random single-use ids bound to device and session, a time
+to live, a per-device byte cap and image decoding limits). That design is deferred. When it
+returns, it keeps the daemon's limits: 10 MiB per image (`MAX_ATTACHMENT_BYTES`,
+`crates/bloblex-daemon/src/main.rs:2608,2626`), at most 8 per message
+(`crates/bloblex-daemon/src/main.rs:2607,2619`), and the host derives the media type from magic
+bytes, never from the caller (`crates/bloblex-daemon/src/main.rs:2610-2641`).
 
 ---
 
 ## 10. Presence and notifications
 
 **Host heartbeat.** The daemon reports `state`, `version`, `uptimeSeconds` and `heartbeatAt`
-through `daemon.health` (`crates/bloblex-daemon/src/main.rs:709-711`). The gateway derives host
-presence from the live link, not from a stored value.
+through `daemon.health` (`crates/bloblex-daemon/src/main.rs:709-711`). The gateway derives
+presence from the live event socket, not from a stored value.
 
-**Device online flag.** `RemoteDevice.online` is true while the device has a live session with
-the host (`apps/desktop/src/remote/remoteContract.ts:26`). On the client side each host has a
-state of `online`, `asleep`, `offline` or `reconnecting`
-(`apps/desktop/src/remote/remoteContract.ts:81`).
+**Device online flag.** `RemoteDevice.online` is true while the device has a live event socket
+(`apps/desktop/src/remote/remoteContract.ts:26`). On the client, the host is `online`,
+`reconnecting`, `asleep` or `offline` (`apps/desktop/src/remote/remoteContract.ts:81`). With
+no relay there is no `host_offline` reply: an unreachable address is the signal, and the client
+shows its last-seen time.
 
-**Wake pings.** A `wake` relay frame (§5) tells a sleeping host or device to check in. It
-carries no content.
-
-**Push payload.** A push notification may contain nothing but a signal to check in. It never
-carries message text, blob names, file paths or counts. The client fetches state over the
-secure channel after the signal. The host-side activity log already follows this rule: an
-activity summary is one short sentence and never message content
+**Push (P3).** A push notification may contain nothing but a signal to check in. It never
+carries message text, bot names, file paths or counts. The client fetches state over the
+tailnet after the signal. The host-side activity log already follows this rule: an activity
+summary is one short sentence and never message content
 (`apps/desktop/src/remote/remoteContract.ts:70-78`).
 
 ---
 
 ## 11. Versioning and errors
 
-- `protocolVersion` is negotiated at connect. The daemon's startup bootstrap and every
-  envelope carry protocol version 1 (`docs/ipc-contract.md:15-23,25-51`).
+- `protocolVersion` is read from `GET /api/me` at start. The daemon's startup bootstrap and
+  every envelope carry protocol version 1 (`docs/ipc-contract.md:15-23,25-51`).
+- The PWA is served by the host it talks to, so client and gateway ship together and normally
+  match. A stale cached shell is the main mismatch; the service worker prompts for the update.
 - A request whose `v` does not match is rejected with `unsupported` ("protocol version
   mismatch") (`crates/bloblex-daemon/src/main.rs:345-350`). Remote keeps a matching rule: an
   unsupported major version fails at startup, not per call.
@@ -467,48 +514,48 @@ daemon is never asked to evaluate remote policy; the gateway denies before dispa
 
 ## 12. Open questions
 
-1. **Relay discovery.** How does a device find a host's relay and host id from a QR payload
-   (`qrPayload` is currently opaque; `apps/desktop/src/remote/remoteContract.ts:53`)? Is there a
-   directory, or is everything in the QR?
-2. **Multi-host push.** With several paired hosts, which host may send a `wake` push, and how
-   does the client attribute it before it has fetched state?
-3. **Key backup.** If a device's non-extractable key is lost, is the only path re-pairing? Is
-   there any sealed backup, and who holds it?
-4. **Enterprise policy.** Can an administrator pin a relay, forbid the direct path, or force
-   approvals off and tiers down? Where is that enforced — host, relay, or device?
-5. **Staging lifetime.** How long does a `stagedId` live, and when is staged data removed if a
-   prompt never references it?
+1. **iOS cookie behaviour.** Does an installed iOS PWA keep an `HttpOnly` cookie set in Safari,
+   or must pairing happen inside the installed app? Unverified; test before P1 ships.
+2. **Tailscale headers.** `Tailscale-User-Login` is absent for tagged nodes and may differ for
+   nodes shared from another tailnet. Is pairing allowed when the header is absent? Proposed:
+   yes, with the cookie as the only proof, and the desktop shows "no Tailscale login" at
+   approval.
+3. **Enterprise policy.** Tailnet ACLs already decide which nodes can reach the host. Should
+   Bitbots also offer an allowlist of Tailscale logins? Deferred.
+4. **Staging design.** When attachments return, how long does a staged upload live and what is
+   the per-device cap? Deferred with §9.
 
-## Review corrections (15 October 2026)
+Superseded on 16 October 2026 by the Tailscale choice: relay discovery from the QR payload
+(the QR now holds the serve URL), multi-host push attribution (one origin per host), and key
+backup (there are no device keys; a lost device pairs again).
+
+## Review corrections (15 October 2026, amended 16 October 2026)
 
 These rules supersede earlier wording in this document. They answer
 [REVIEW_NOTES.md](REVIEW_NOTES.md) and are implemented as executable policy in
-`apps/desktop/src/remote/remoteTiers.ts`; the gateway that must call it does not exist yet.
+`apps/desktop/src/remote/remoteTiers.ts`, which moves to the shared `remote/tiers.json`; the
+gateway that must apply it does not exist yet.
 
-1. **Pairing nonce.** The host issues a random 128-bit nonce with each offer. The handshake
-   prologue binds `H(code || nonce || hostId || relay)`, not a device-chosen id. The offer is
-   spent atomically by the first handshake that completes; a second handshake on the same offer
-   is rejected. The owner sees the new device's name and a short key fingerprint and must
-   confirm before the record is committed.
-2. **Browser authentication.** A browser cannot set headers on a WebSocket. The client first
-   obtains a short-lived (60 s), single-use ticket from the relay by presenting its signed hello
-   over HTTPS, then opens the WebSocket with the ticket in a `Sec-WebSocket-Protocol` value
-   (never in the URL). The relay and a direct listener check `Origin` against an allowlist.
+1. **Pairing race.** The first correct code locks the offer; later submissions are refused; the
+   owner sees the device and its Tailscale login and must approve it with a tier before a record
+   exists (§4.3). This replaces the 15 October handshake nonce.
+2. **Browser authentication.** A same-origin `HttpOnly` cookie travels on `fetch` and on the
+   WebSocket upgrade, so no ticket or subprotocol is needed. The gateway checks `Origin` on every
+   `/api/*` request (§4.1). This replaces the 15 October ticket flow.
 3. **Wire codes.** `forbidden_remote`, `tier_required`, `approvals_disabled`, `quiet_hours`
-   and `invalid_params` are produced by `authorizeRemoteCall`; the gateway returns them
-   unchanged.
+   and `invalid_params` are produced by `authorizeRemoteCall` (and its Rust port); the gateway
+   returns them unchanged.
 4. **Quiet hours** are a hard read-only override applied before dispatch: every `chat` and
    `approve` method is refused, including cancel, archive, rename, queue and resume.
-5. **Events are allowlisted.** Only event types on the allowlist in `remoteTiers.ts`
-   (`EVENT_POLICY`) leave the host, and each is scrubbed: no `raw` or provider payloads, no tool
-   detail by default, paths reduced. A new daemon event type fails the build until classified.
+5. **Events are allowlisted.** Only event types on the allowlist (`EVENT_POLICY`) leave the
+   host, and each is scrubbed: no `raw` or provider payloads, no tool detail by default, paths
+   reduced. A new daemon event type fails the build until classified.
 6. **Reads are redacted, not just the snapshot.** `session.get`, `session.list`, `agent.get`,
    `agent.list`, `runtime.list`, `runtime.profile.list`, `search.messages` and `settings.get`
    (an allowlist of keys) pass through `redactResultForRemote`.
 7. **Provider-touching reads.** `runtime.models` with `refresh: true` is refused remotely.
-8. **Staged attachments** use random, single-use ids bound to the device and session, with a
-   time to live and a per-device staged-bytes cap.
-9. **Revocation order.** The gateway closes the device's session first and treats telling the
-   relay as best effort; the direct listener path closes the same way.
-10. **One live session per device id.** A second concurrent session with the same device key
-    closes both and raises an activity line, which limits the value of a cloned key.
+8. **Attachments** are refused in v1 (§9). The staged-upload rules wait for that design.
+9. **Revocation** marks the device revoked and closes its event socket on the host; later
+   requests get `device_revoked`. There is no relay to tell.
+10. **One live event socket per device.** A second socket for the same device closes the first
+    and writes an activity line, which also shows a copied cookie in use.

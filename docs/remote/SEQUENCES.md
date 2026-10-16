@@ -1,86 +1,81 @@
 # Remote mode: sequence diagrams
 
-**Status: design.** Written 15 October 2026 as part of FIX24. These diagrams describe the
-intended wire behaviour from [PROTOCOL.md](PROTOCOL.md); they do not claim the flows are
-implemented. Section numbers below (for example `PROTOCOL §4.3`) refer to that document.
-Participants are **Device**, **Relay**, **Gateway** and **Daemon**; **Owner** is the human on
-the host making a local decision.
+**Status: design.** Written 15 October 2026 as part of FIX24; rewritten 16 October 2026 for
+the owner's choice of Tailscale. The 15 October diagrams (relay, Noise XX/IK handshakes) are
+superseded and are in git history. These diagrams describe the intended behaviour from
+[PROTOCOL.md](PROTOCOL.md); they do not claim the flows are implemented. Section numbers below
+(for example `PROTOCOL §4.3`) refer to that document. Participants are **Device** (the PWA),
+**Tailscale** (`tailscaled` on the host, which terminates HTTPS and forwards to loopback),
+**Gateway** (the second listener in `bitbotsd`) and **Daemon** (in-process dispatch); **Owner**
+is the human on the host making a local decision.
 
 ---
 
-## (a) Pairing with a one-time code
+## (a) Pairing with a one-time code and owner approval
 
-Reference: PROTOCOL §4.3 (pairing), §2.1 (transport), §5 (relay framing).
+Reference: PROTOCOL §4.3 (pairing), §4.2 (cookie), §2.1 (listener and serve).
 
-The Owner enables Remote on the host and the Gateway mints a single-use code (eight characters,
-five-minute life); the Owner shows that code to the Device by scanning the QR or typing it. The
-Device opens a WebSocket to the Relay and addresses the host by `hostId`; the Relay forwards an
-opaque `hello` frame without reading its contents. Device and Gateway then run a Noise `XX`
-handshake whose prologue folds `H(code ‖ hostId ‖ deviceId ‖ relay)`, so the Relay cannot
-substitute keys without breaking the handshake. On success the Gateway assigns a device id and
-tier, spends the offer, stores the device record, and returns the pairing result; later
-connections use Noise `IK` and no code.
+The Owner turns Remote on and asks for a code. The Gateway mints an 8-character code valid for
+five minutes with five attempts. The Device opens the serve address from the QR and posts the
+code. The first correct code locks the offer. The Owner sees the device and its Tailscale login
+and approves it with a tier. The Device's next poll receives the cookie; the host stores only
+its hash.
 
 ```mermaid
 sequenceDiagram
     participant Owner
     participant Device
-    participant Relay
+    participant Tailscale
     participant Gateway
-    participant Daemon
 
-    Owner->>Gateway: enable Remote, request pairing (remote.pair.begin)
-    Gateway->>Gateway: mint one-time code K7QM-4XPD, 5 min life
-    Gateway-->>Owner: display code + QR {relay, hostId, hostPubKey, code}
+    Owner->>Gateway: remote.pair.begin
+    Gateway->>Gateway: mint code K7QM-4XPD, 5 min, 5 attempts
+    Gateway-->>Owner: code + QR of https://work-pc.<tailnet>.ts.net
     Owner->>Device: scan QR / type code
-    Device->>Relay: WebSocket connect (wss)
-    Device->>Relay: frame{deviceId, hostId, frameType=hello, len}
-    Relay->>Gateway: forward frame(hostId, hello, len)
-    Device->>Gateway: Noise XX handshake init
-    Note over Device,Gateway: prologue = H(code ‖ hostId ‖ deviceId ‖ relay)
-    Gateway->>Device: Noise XX response
-    Device->>Gateway: Noise XX finish
-    Gateway->>Gateway: verify code in prologue, within 5 min
-    Gateway->>Daemon: store device record {deviceId, pubKey, tier=chat}
-    Gateway-->>Device: {data} paired, tier=chat
-    Gateway-->>Owner: "Pixel 8 connected"
-    Note over Gateway,Daemon: offer cleared, code spent
+    Device->>Tailscale: POST /api/pair {code, name, kind, platform} (HTTPS over WireGuard)
+    Tailscale->>Gateway: forward to 127.0.0.1:48620 (+ Tailscale-User-Login)
+    Gateway->>Gateway: check Origin, check code, lock offer
+    Gateway-->>Device: 202 pending + pairing cookie
+    Gateway-->>Owner: remote.pairing.requested {pairingId, name, login}
+    Device->>Gateway: GET /api/pair (poll)
+    Gateway-->>Device: pending
+    Owner->>Gateway: remote.pair.confirm {pairingId, approve, tier=chat}
+    Gateway->>Gateway: create device, store sha256(token), spend offer
+    Device->>Gateway: GET /api/pair (poll)
+    Gateway-->>Device: approved + Set-Cookie (HttpOnly, Secure, SameSite=Strict)
+    Gateway-->>Owner: remote.pairing.completed, "iPhone is connected"
 ```
 
 ---
 
 ## (b) First connect after pairing
 
-Reference: PROTOCOL §4.1–§4.2 (Noise `IK`), §6 (resume/replay), §7 (snapshot filtering).
+Reference: PROTOCOL §4.1 (checks), §6 (resume/replay), §7 (snapshot filtering).
 
-A known Device reconnects with Noise `IK`, proving identity from its stored non-extractable key
-and authenticating the host by its static key; no one-time code is needed. After the secure
-channel is up the Gateway sends a redacted `app.snapshot` (per §7) so the Device has a full state
-and a starting `sequence`, then the Device subscribes to live events with `afterSequence` set to
-that snapshot sequence. The subscription is registered before replay, so the Device may see
-duplicate sequences and discards them.
+The Device calls `/api/me` to learn its tier, then `app.snapshot` through `/api/rpc`. The
+Gateway checks Origin, cookie and login, dispatches in-process with no capability, and redacts
+the result. The Device then opens the event socket with the snapshot's sequence. The
+subscription is registered before replay, so the Device may see duplicate sequences and
+discards them.
 
 ```mermaid
 sequenceDiagram
     participant Device
-    participant Relay
     participant Gateway
     participant Daemon
 
-    Device->>Relay: WebSocket connect, frame{hello, hostId, deviceId}
-    Relay->>Gateway: forward hello
-    Device->>Gateway: Noise IK handshake (static keys)
-    Gateway->>Gateway: match deviceId to stored record, check revoked
-    Gateway-->>Device: IK complete, secure channel up
-    Device->>Gateway: req app.snapshot
-    Gateway->>Daemon: dispatch app.snapshot (internal, no capability token)
+    Device->>Gateway: GET /api/me (cookie)
+    Gateway->>Gateway: Origin, sha256(cookie) lookup, revoked?, login matches?
+    Gateway-->>Device: {protocolVersion, device{tier}, host{name}}
+    Device->>Gateway: POST /api/rpc app.snapshot
+    Gateway->>Daemon: dispatch app.snapshot (in-process, no capability)
     Daemon-->>Gateway: {snapshotVersion, sequence, ...}
     Gateway->>Gateway: redactSnapshotForRemote(snapshot)
-    Gateway-->>Device: result redacted snapshot, sequence=S
-    Device->>Gateway: subscribe events, afterSequence=S
+    Gateway-->>Device: redacted snapshot, sequence=S
+    Device->>Gateway: GET /api/events (WebSocket upgrade), {"v":1,"afterSequence":S}
     Gateway->>Daemon: subscribe live, replay_events(S, 1000)
     Daemon-->>Gateway: events S+1..S+n, replay.complete{throughSequence}
-    Gateway-->>Device: live events (Device dedupes by sequence)
+    Gateway-->>Device: allowlisted, scrubbed events (Device dedupes by sequence)
 ```
 
 ---
@@ -89,12 +84,9 @@ sequenceDiagram
 
 Reference: PROTOCOL §6 (resume and replay), §3 (`replay_gap`).
 
-On reconnect the Device sends its per-host cursor (highest applied `sequence`). The Gateway asks
-the Daemon to replay events after that cursor in batches of 1000. If retention still covers the
-gap the Device receives the missing events and then live events, deduping by sequence. If the
-cursor is older than retention the Daemon reports `replayAvailable:false` with an
-`earliestSequence` (or the live socket emits `replay.gap` and closes when a slow client lags);
-the Device then fetches a fresh redacted snapshot and resumes from that snapshot's sequence.
+On reconnect the Device sends its cursor. If retention still covers the gap the Device receives
+the missing events and then live events. If the cursor is older than retention, or a slow client
+lags, the Device fetches a fresh redacted snapshot and resumes from its sequence.
 
 ```mermaid
 sequenceDiagram
@@ -102,7 +94,8 @@ sequenceDiagram
     participant Gateway
     participant Daemon
 
-    Device->>Gateway: hello + afterSequence=418
+    Device->>Gateway: GET /api/events, afterSequence=418
+    Gateway->>Gateway: close any older socket of this device
     Gateway->>Daemon: subscribe live, replay_events(418, 1000)
     alt retention covers the gap
         Daemon-->>Gateway: events 419..1418
@@ -113,8 +106,8 @@ sequenceDiagram
         Gateway-->>Device: live events (dedupe by sequence)
     else cursor too old for retention
         Daemon-->>Gateway: replayAvailable=false, earliestSequence=E
-        Gateway-->>Device: replay.gap / replayAvailable=false
-        Device->>Gateway: req app.snapshot
+        Gateway-->>Device: replay.gap, socket closed
+        Device->>Gateway: POST /api/rpc app.snapshot
         Gateway->>Daemon: dispatch app.snapshot
         Daemon-->>Gateway: fresh snapshot, sequence=S
         Gateway->>Gateway: redactSnapshotForRemote(snapshot)
@@ -124,16 +117,13 @@ sequenceDiagram
 
 ---
 
-## (d) A chat prompt through the gateway including tier check and audit write
+## (d) A chat prompt through the gateway
 
-Reference: PROTOCOL §8 (allowlist/tiers), §3 (frames), §9 (attachments), §11 (dispatch).
+Reference: PROTOCOL §4.5 (pipeline), §8 (allowlist/tiers), §9 (attachments).
 
-The Device sends `session.prompt` as an ordinary daemon request inside the secure channel. The
-Gateway parses the envelope, looks the method up in the tier table, checks the Device holds at
-least the `chat` tier (and any per-method conditions), rejects any attachment object carrying a
-`path`, and only then calls internal daemon dispatch. After the Daemon acknowledges, the Gateway
-appends one content-free audit entry and returns the result; the resulting turn events flow back
-over the same channel with replay semantics.
+The Device posts `session.prompt` to `/api/rpc`. The Gateway runs auth, quiet hours, the tier
+policy and the parameter rules (no attachments in v1), then dispatches in-process, redacts the
+result and writes one content-free activity line.
 
 ```mermaid
 sequenceDiagram
@@ -141,42 +131,47 @@ sequenceDiagram
     participant Gateway
     participant Daemon
 
-    Device->>Gateway: req session.prompt {sessionId, text, attachments:[{stagedId}]}
-    Gateway->>Gateway: parse envelope, look up session.prompt in METHOD_RULES
-    Gateway->>Gateway: check device tier >= chat, reject any {path} attachment
-    Gateway->>Daemon: internal dispatch session.prompt
+    Device->>Gateway: POST /api/rpc session.prompt {sessionId, text}
+    Gateway->>Gateway: auth (Origin, cookie, login)
+    Gateway->>Gateway: quiet hours off?
+    Gateway->>Gateway: tiers.json: session.prompt needs chat; device holds chat
+    Gateway->>Gateway: param rules: no attachments
+    Gateway->>Daemon: dispatch session.prompt (in-process)
     Daemon-->>Gateway: ok, turn admitted
-    Gateway->>Gateway: audit write: kind=prompt, device, one sentence (no content)
+    Gateway->>Gateway: redactResultForRemote, audit: kind=prompt, device (no content)
     Gateway-->>Device: result {turnId, ...}
     Daemon-->>Gateway: events message.delta / turn.completed
-    Gateway-->>Device: live events
+    Gateway-->>Device: allowlisted events on /api/events
 ```
 
 ---
 
-## (e) A denied call
+## (e) Denied calls
 
-Reference: PROTOCOL §11 (denied call), §8 (never-remote), §3 (gateway error codes).
+Reference: PROTOCOL §4.1, §4.5, §11 (denied call), §3 (gateway error codes).
 
-The Gateway denies before the Daemon is ever asked to evaluate remote policy. A method with no
-rule (or a `never` rule) returns `forbidden_remote`; a known method at a tier the Device does not
-hold returns `tier_required`; an operator-only method while approvals from remote are off returns
-`approvals_disabled`. Each denial is a normal daemon envelope with `ok:false` and a gateway code.
+The Gateway denies before the Daemon is asked. A request from another origin is refused at
+HTTP level. A `never` method returns `forbidden_remote`; a method above the device's tier returns
+`tier_required`; `permission.reply` while approvals from remote are off returns
+`approvals_disabled`; any write during quiet hours returns `quiet_hours`.
 
 ```mermaid
 sequenceDiagram
     participant Device
     participant Gateway
 
-    Device->>Gateway: req settings.set {id=req_9}
-    Gateway->>Gateway: METHOD_RULES[settings.set] = never
+    Device->>Gateway: POST /api/rpc (Origin: https://evil.example)
+    Gateway-->>Device: HTTP 403
+
+    Device->>Gateway: POST /api/rpc settings.set {id=req_9}
+    Gateway->>Gateway: tiers.json[settings.set] = never
     Gateway-->>Device: err forbidden_remote {id=req_9}
 
-    Device->>Gateway: req permission.reply {tier=chat}
-    Gateway->>Gateway: requires operator, device holds chat
+    Device->>Gateway: POST /api/rpc permission.reply (device tier chat)
+    Gateway->>Gateway: requires operator
     Gateway-->>Device: err tier_required
 
-    Device->>Gateway: req permission.reply {tier=operator}
+    Device->>Gateway: POST /api/rpc permission.reply (device tier operator)
     Gateway->>Gateway: approvalsFromRemote is off
     Gateway-->>Device: err approvals_disabled
 ```
@@ -185,30 +180,26 @@ sequenceDiagram
 
 ## (f) Host goes to sleep and the device shows asleep
 
-Reference: PROTOCOL §10 (presence and notifications), ARCHITECTURE §4 (offline).
+Reference: PROTOCOL §10 (presence), ARCHITECTURE §4 (offline).
 
-When the host computer sleeps, the Gateway's link to the Relay drops. The Relay holds no state
-and queues nothing, so the Device sees its connection go quiet; the client moves that host to
-`asleep` (distinct from `offline`) and shows a last-seen time rather than pretending state is
-current. A `wake` frame is content-free and can only prompt a check-in; it cannot wake the
-computer. On resume the Device reconnects and replays from its cursor.
+When the host sleeps, its tailnet address stops answering and the Device's socket drops. Nothing
+is queued anywhere. The client marks the host asleep or offline and shows the last-seen time.
+When the host wakes, the daemon listens again and re-applies its serve handler; the Device
+reconnects and replays from its cursor.
 
 ```mermaid
 sequenceDiagram
     participant Device
-    participant Relay
+    participant Tailscale
     participant Gateway
-    participant Owner
 
-    Note over Gateway: host computer sleeps, link down
-    Gateway--xRelay: connection drops
-    Relay--xDevice: no frames forwarded (relay stores nothing)
+    Note over Tailscale,Gateway: host computer sleeps
+    Gateway--xDevice: event socket drops
     Device->>Device: mark host asleep, show last-seen
-    Owner->>Gateway: (host wakes) gateway reconnects to relay
-    Gateway->>Relay: fresh WebSocket, hello(hostId)
-    Device->>Relay: retry connect (frame{hello})
-    Relay->>Gateway: forward hello
-    Device->>Gateway: afterSequence=cursor
+    Device->>Tailscale: retry with back-off (no answer)
+    Note over Tailscale,Gateway: host wakes
+    Gateway->>Tailscale: listener up, serve handler re-applied
+    Device->>Gateway: GET /api/events, afterSequence=cursor
     Gateway-->>Device: replay then live events
     Device->>Device: mark host online
 ```
@@ -217,25 +208,22 @@ sequenceDiagram
 
 ## (g) Revoking a device
 
-Reference: ARCHITECTURE §3 (revocation), PROTOCOL §3 (`device_revoked`), §10.
+Reference: ARCHITECTURE §3 (revocation), PROTOCOL §3 (`device_revoked`).
 
-The Owner removes a paired device on the host. The Gateway deletes the device record, closes its
-active session and tells the Relay to drop that device id, so its key is dead immediately; any
-in-flight or later call from that device fails with `device_revoked`. The device must pair again
-with a new one-time code to be restored.
+The Owner removes a paired device on the host. The Gateway marks the record revoked (it keeps
+the hash only so it can answer `device_revoked`) and closes the device's socket. Any later request fails with `device_revoked`. The device
+must pair again with a new code. There is no third party to notify.
 
 ```mermaid
 sequenceDiagram
     participant Owner
     participant Gateway
     participant Device
-    participant Relay
 
-    Owner->>Gateway: remove device (remote.device.revoke)
-    Gateway->>Gateway: delete device record, invalidate its key
-    Gateway->>Relay: drop deviceId
-    Gateway--xDevice: close active session
-    Device->>Gateway: req session.list (stale key)
-    Gateway-->>Device: err device_revoked
-    Note over Device: must re-pair with a new code (flow a)
+    Owner->>Gateway: remote.devices.revoke {deviceId}
+    Gateway->>Gateway: set revokedAt on the record
+    Gateway--xDevice: close event socket
+    Device->>Gateway: POST /api/rpc session.list (old cookie)
+    Gateway-->>Device: HTTP 401, err device_revoked
+    Note over Device: must pair again with a new code (flow a)
 ```

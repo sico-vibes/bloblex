@@ -185,6 +185,7 @@ describe('remote event policy parity with the daemon', () => {
       'runtime.models.changed',
       'session.changed',
       'session.deleted',
+      'skills.changed',
       'turn.cancelled',
       'turn.completed',
       'turn.error',

@@ -47,6 +47,7 @@ mod quota_sources;
 mod automations;
 mod memory;
 mod questions;
+mod skills;
 
 use quota::{normalize_codex_quota, PollFailure, PollOutcome, QuotaPollGate, QUOTA_POLL_INTERVAL, QUOTA_REQUEST_TIMEOUT};
 
@@ -74,6 +75,7 @@ struct AppState {
     queue: Arc<queue::Queue>,
     automations: Arc<automations::Automations>,
     memory: Arc<memory::Memory>,
+    skills: Arc<skills::Skills>,
     /// Serialises provider activation per session so a warm-up and a first send
     /// cannot resume the same conversation twice.
     activation_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
@@ -650,6 +652,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
         "memory.list" | "memory.get" | "memory.create" | "memory.update" | "memory.approve" | "memory.delete" | "memory.restore" => memory::rpc(st, method, &p).await,
+        "skills.list" | "skills.get" | "skills.scan" | "skills.import" | "skills.delete" | "skills.toggle" => skills::rpc(st, method, &p).await,
         "exec.snapshot.get" => {
             let id=p["snapshotId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","snapshotId is required",StatusCode::BAD_REQUEST))?;
             st.db.exec_snapshot_get(id).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?.ok_or_else(||derr("not_found","execution snapshot not found",StatusCode::NOT_FOUND))
@@ -884,6 +887,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 st.team.forget(id);
                 st.queue.forget(id);
                 st.memory.forget(id);
+                st.skills.forget(id);
                 st.emit("session.deleted", json!({"sessionId":id})).await;
                 remove_session_gate(st, id, &gate).await;
                 (active, active_turn)
@@ -1071,6 +1075,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if k=="experimental.autoRetry"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","experimental.autoRetry requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="experimental.memory"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","experimental.memory requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="memory.sharedAgentWrites"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","memory.sharedAgentWrites requires a JSON boolean",StatusCode::BAD_REQUEST));}
+            if k=="skills.enabled"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","skills.enabled requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="conversations.autoTitle"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","conversations.autoTitle requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="appearance.style"&&!p["value"].as_str().is_some_and(|v|["bitbots","blobots"].contains(&v)){return Err(derr("invalid_argument","appearance.style must be bitbots or blobots",StatusCode::BAD_REQUEST));}
             if k=="appearance.accent"&&!p["value"].as_str().is_some_and(|v|v.is_empty()||is_accent_hex(v)){return Err(derr("invalid_argument","appearance.accent must be empty or a #rrggbb hex colour",StatusCode::BAD_REQUEST));}
@@ -1101,7 +1106,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                     StatusCode::BAD_REQUEST,
                 ));
             }
-            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions";
+            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions";
             let events=st.db.set_setting(k, &value).map_err(|e| {
                 derr(
                     if validation_key{"invalid_argument"}else{"internal"},
@@ -1259,7 +1264,7 @@ async fn resolve_session_model_lock(
 /// Bitbots' own MCP tools (list_blobs, list_conversations, message_blob) are app-owned and safe.
 fn is_team_tool_permission(raw: &Value) -> bool {
     let text = raw.to_string();
-    ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob", "bloblex_list_conversations", "bloblex__list_conversations", "bloblex_memory_", "bloblex__memory_", "bloblex_list_projects", "bloblex__list_projects", "bloblex_create_blob", "bloblex__create_blob", "bloblex_update_blob", "bloblex__update_blob"].iter().any(|needle| text.contains(needle))
+    ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob", "bloblex_list_conversations", "bloblex__list_conversations", "bloblex_memory_", "bloblex__memory_", "bloblex_list_skills", "bloblex__list_skills", "bloblex_load_skill", "bloblex__load_skill", "bloblex_read_skill_file", "bloblex__read_skill_file", "bloblex_list_projects", "bloblex__list_projects", "bloblex_create_blob", "bloblex__create_blob", "bloblex_update_blob", "bloblex__update_blob"].iter().any(|needle| text.contains(needle))
 }
 fn parse_mode(s:&str)->ApprovalMode{match s{"auto"=>ApprovalMode::Auto,"bypass"=>ApprovalMode::Bypass,_=>ApprovalMode::Ask}}
 fn provider_mode(provider:&str)->&'static str{match provider{"claude"=>"bypassPermissions","codex"=>"never",_=>"daemon_allow_all"}}
@@ -2041,6 +2046,7 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
     // first activation lost nothing, so it announces nothing.
     if resume_fallback && !lazy_first_activation {
         memory::forget_catalog(st, &sid);
+        skills::forget_index(st, &sid);
         team::note(st, &sid, context_change_notice(ContextChangeReason::FreshSession), json!({"kind":"context_reset","reason":"fresh_session","contextLost":true})).await;
     }
     let state = st.clone();
@@ -2828,9 +2834,12 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         // saving a memory never changes the instruction hash or forces a new
         // provider thread.
         let memory_context = crate::memory::catalog_for_prompt(st, &sid);
+        // The skills index is the same kind of per-turn suffix: it never
+        // changes the instruction hash or forces a new provider thread.
+        let skills_context = crate::skills::index_for_prompt(st, &sid);
         let reference_context = references.as_ref().map(|(extra, _)| extra.as_str()).unwrap_or("");
         let reply_context = reply_snapshot.as_ref().map(reply_prompt_context).unwrap_or_default();
-        format!("{text}{}{reference_context}{reply_context}", memory_context.as_deref().unwrap_or(""))
+        format!("{text}{}{}{reference_context}{reply_context}", memory_context.as_deref().unwrap_or(""), skills_context.as_deref().unwrap_or(""))
     };
     if let Err(e) = active.adapter.prompt(&active.handle, PromptRequest { attachments, turn_id: turn.clone(), text: prompt_text, exec_options }).await {
         let permission_denied = st.denied_turns.lock().await.remove(&turn);
@@ -3488,6 +3497,7 @@ async fn forward_events_with_timeouts(
                 let notice = context_change_notice(reason);
                 let meta = json!({"kind":"context_reset","reason":reason.as_str(),"contextLost":context_lost});
                 memory::forget_catalog(&st, &sid);
+                skills::forget_index(&st, &sid);
                 team::note(&st, &sid, notice, meta).await;
                 st.emit("session.replaced", json!({"sessionId":sid,"reason":reason.as_str(),"contextLost":context_lost})).await;
                 if context_lost {
@@ -3678,6 +3688,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         queue: Arc::new(queue::Queue::default()),
         automations: Arc::new(automations::Automations::default()),
         memory: Arc::new(memory::Memory::default()),
+        skills: Arc::new(skills::Skills::default()),
         activation_locks: Arc::new(Mutex::new(HashMap::new())),
         starting_cancels: Arc::new(Mutex::new(HashSet::new())),
         warm_lru: Arc::new(Mutex::new(Vec::new())),
@@ -4615,7 +4626,7 @@ mod phase2a_tests {
 
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),skills:Arc::new(skills::Skills::default()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -7568,10 +7579,11 @@ mod phase2a_tests {
         assert_eq!(proposed[0]["approvalMode"],"plan");
         automations::sweep(&st).await;
         assert!(st.db.automation_runs_list(proposed[0]["id"].as_str().unwrap(),10,None).unwrap().is_empty(),"a proposed automation never runs on its own");
-        // An automation-linked session has no write tools and no scheduling RPCs.
+        // An automation-linked session gets the read-only skill tools and nothing else.
         st.db.create_session("guard-auto","rt-test","codex",".","Auto").unwrap();
         st.db.set_session_link("guard-auto",&json!({"kind":"automation","automationId":"x","runId":"y","approvalMode":"auto"})).unwrap();
-        assert!(team::mcp_rpc(&st,"guard-auto","mcp.tools.list",&json!({})).await.unwrap()["tools"].as_array().unwrap().is_empty());
+        let auto_tools=tool_names(&team::mcp_rpc(&st,"guard-auto","mcp.tools.list",&json!({})).await.unwrap());
+        assert_eq!(auto_tools,vec!["list_skills".to_owned(),"load_skill".to_owned(),"read_skill_file".to_owned()],"an automation run gets only the read-only skill tools");
         assert_eq!(team::mcp_rpc(&st,"guard-auto","mcp.tools.call",&json!({"name":"schedule_task","arguments":{}})).await.unwrap_err().1.code,"forbidden");
         assert_eq!(team::mcp_rpc(&st,"guard-auto","automation.create",&json!({})).await.unwrap_err().1.code,"forbidden");
     }
@@ -7871,6 +7883,273 @@ mod phase2a_tests {
 
     fn tools_listed(tools: &Value) -> bool {
         tools["tools"].as_array().is_some_and(|list| list.iter().any(|tool| tool["name"] == "ask_user"))
+    }
+
+    // ── FIX32: one shared pool of skills for every bot ───────────────────
+
+    fn skills_state() -> (AppState, broadcast::Receiver<EventEnvelope>, std::path::PathBuf) {
+        let (st, rx) = state();
+        let data = std::env::temp_dir().join(format!("bloblex-skills-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&data).unwrap();
+        *st.team.data_dir.lock().unwrap() = Some(data.clone());
+        (st, rx, data)
+    }
+
+    fn write_skill(folder: &std::path::Path, name: &str, description: &str, extra: &[(&str, &str)]) {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(folder.join("SKILL.md"), format!("---\nname: {name}\ndescription: {description}\n---\n\nInstructions for {name}.\n")).unwrap();
+        for (rel, content) in extra {
+            let path = folder.join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, content).unwrap();
+        }
+    }
+
+    fn skills_session(st: &AppState, sid: &str, provider: &str) {
+        let runtime = match provider { "claude" => "rt-claude", "opencode" => "rt-open", _ => "rt-test" };
+        st.db.upsert_runtime(&json!({"id":runtime,"provider":provider,"status":"offline"})).unwrap();
+        st.db.create_session_for_agent(sid, runtime, provider, ".", "Skills", None).unwrap();
+        st.db.update_session_state(sid, "idle").unwrap();
+    }
+
+    fn staging_leftovers(root: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(root)
+            .map(|entries| entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).filter(|name| name.starts_with(".staging")).collect())
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn skills_tools_are_offered_to_every_bot() {
+        let tools = team::mcp_tools_for_test();
+        let names = tools.iter().filter_map(|tool| tool["name"].as_str()).collect::<Vec<_>>();
+        for tool in ["list_skills", "load_skill", "read_skill_file"] {
+            assert!(names.contains(&tool), "{tool} must be offered to every bot: {names:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn skills_import_scan_toggle_get_and_delete_round_trip() {
+        let (st, mut events, data) = skills_state();
+        let claude = data.join("claude").join("skills");
+        write_skill(&claude.join("alpha"), "alpha", "Alpha skill.", &[("scripts/run.sh", "echo alpha\n")]);
+        st.skills.set_roots(vec![("claude".to_owned(), claude.clone())]);
+
+        // Scan only lists; it never imports.
+        let scan = dispatch(&st, "skills.scan", json!({})).await.unwrap();
+        let candidates = scan["candidates"].as_array().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0]["source"], "claude");
+        assert_eq!(candidates[0]["name"], "alpha");
+        assert_eq!(candidates[0]["status"], "new");
+        assert!(st.db.skills_list().unwrap().is_empty(), "scan does not import");
+        assert!(!data.join("skills").join("alpha").exists(), "scan does not copy files");
+
+        // Import copies the folder and stores the row.
+        let imported = dispatch(&st, "skills.import", json!({"items":[{"source":"claude","name":"alpha"}]})).await.unwrap();
+        assert_eq!(imported["imported"], json!(["alpha"]));
+        assert_eq!(imported["skipped"], json!([]));
+        assert_eq!(events.recv().await.unwrap().event_type, "skills.changed");
+        assert!(data.join("skills").join("alpha").join("scripts").join("run.sh").is_file());
+        assert_eq!(st.db.skills_list().unwrap()[0]["fileCount"], 2);
+
+        // A second scan sees the same content.
+        assert_eq!(dispatch(&st, "skills.scan", json!({})).await.unwrap()["candidates"][0]["status"], "same");
+        std::fs::write(claude.join("alpha").join("scripts").join("run.sh"), "echo changed\n").unwrap();
+        assert_eq!(dispatch(&st, "skills.scan", json!({})).await.unwrap()["candidates"][0]["status"], "changed");
+
+        let got = dispatch(&st, "skills.get", json!({"name":"alpha"})).await.unwrap();
+        assert_eq!(got["description"], "Alpha skill.");
+        assert!(got["body"].as_str().unwrap().contains("Instructions for alpha."));
+        assert_eq!(got["files"].as_array().unwrap().len(), 2);
+
+        let toggled = dispatch(&st, "skills.toggle", json!({"name":"alpha","enabled":false})).await.unwrap();
+        assert_eq!(toggled["skill"]["enabled"], false);
+        assert_eq!(events.recv().await.unwrap().event_type, "skills.changed");
+        assert_eq!(dispatch(&st, "skills.list", json!({})).await.unwrap()["skills"][0]["enabled"], false);
+
+        dispatch(&st, "skills.delete", json!({"name":"alpha"})).await.unwrap();
+        assert_eq!(events.recv().await.unwrap().event_type, "skills.changed");
+        assert!(!data.join("skills").join("alpha").exists(), "delete removes the files");
+        assert_eq!(dispatch(&st, "skills.get", json!({"name":"alpha"})).await.unwrap_err().1.code, "not_found");
+        assert_eq!(dispatch(&st, "skills.get", json!({"name":"Bad Name"})).await.unwrap_err().1.code, "invalid_argument");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[tokio::test]
+    async fn skills_import_enforces_the_file_and_size_caps_and_cleans_staging() {
+        let (st, _events, data) = skills_state();
+        let source = data.join("src");
+
+        let many = source.join("many");
+        write_skill(&many, "many", "Many files.", &[]);
+        for index in 0..201 {
+            std::fs::write(many.join(format!("f{index}.txt")), "x").unwrap();
+        }
+        let result = dispatch(&st, "skills.import", json!({"path": many.to_string_lossy()})).await.unwrap();
+        assert_eq!(result["imported"], json!([]));
+        assert!(result["skipped"][0]["reason"].as_str().unwrap().contains("200 files"), "{result}");
+        assert!(st.db.skills_list().unwrap().is_empty());
+        assert!(staging_leftovers(&data.join("skills")).is_empty(), "no staging folder is left behind");
+
+        let big = source.join("big");
+        write_skill(&big, "big", "Big skill.", &[]);
+        std::fs::write(big.join("blob.bin"), vec![0u8; (skills::MAX_BYTES + 1) as usize]).unwrap();
+        let result = dispatch(&st, "skills.import", json!({"path": big.to_string_lossy()})).await.unwrap();
+        assert_eq!(result["imported"], json!([]));
+        assert!(result["skipped"][0]["reason"].as_str().unwrap().contains("MB"), "{result}");
+        assert!(st.db.skills_list().unwrap().is_empty());
+        assert!(staging_leftovers(&data.join("skills")).is_empty());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[tokio::test]
+    async fn skills_index_is_sent_once_and_rebuilt_after_a_change_or_forget() {
+        let (st, _events, data) = skills_state();
+        let source = data.join("src");
+        write_skill(&source.join("delta"), "delta", "Delta skill.", &[]);
+        st.skills.set_roots(vec![("folder".to_owned(), source.clone())]);
+        dispatch(&st, "skills.import", json!({"path": source.join("delta").to_string_lossy()})).await.unwrap();
+        let agent = memory_agent(&st, "Index bot");
+        let sid = "skills-once-session";
+        memory_session(&st, &agent, sid);
+
+        let first = skills::index_for_prompt(&st, sid).expect("the index is sent");
+        assert!(first.starts_with("<bloblex_skills>") && first.contains("- delta: Delta skill."), "{first}");
+        assert!(first.contains("load_skill"));
+        assert!(skills::index_for_prompt(&st, sid).is_none(), "an unchanged index is not re-sent");
+
+        dispatch(&st, "skills.toggle", json!({"name":"delta","enabled":false})).await.unwrap();
+        assert!(skills::index_for_prompt(&st, sid).is_none(), "nothing is injected when the pool is off");
+        dispatch(&st, "skills.toggle", json!({"name":"delta","enabled":true})).await.unwrap();
+        assert!(skills::index_for_prompt(&st, sid).is_some(), "a change forces a re-send");
+        assert!(skills::index_for_prompt(&st, sid).is_none(), "and again it is not repeated");
+        skills::forget_index(&st, sid);
+        assert!(skills::index_for_prompt(&st, sid).is_some(), "forget forces a re-send");
+
+        // The pool-wide switch turns injection off entirely.
+        dispatch(&st, "settings.set", json!({"key":"skills.enabled","value":false})).await.unwrap();
+        skills::forget_index(&st, sid);
+        assert!(skills::index_for_prompt(&st, sid).is_none(), "skills.enabled=false injects nothing");
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"skills.enabled","value":"yes"})).await.unwrap_err().1.code, "invalid_argument");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[tokio::test]
+    async fn skills_index_is_capped_past_three_thousand_characters() {
+        let (st, _events, data) = skills_state();
+        let source = data.join("src");
+        st.skills.set_roots(vec![("folder".to_owned(), source.clone())]);
+        for index in 0..60 {
+            let name = format!("skill-{index}");
+            write_skill(&source.join(&name), &name, &"d".repeat(120), &[]);
+            dispatch(&st, "skills.import", json!({"path": source.join(&name).to_string_lossy()})).await.unwrap();
+        }
+        let agent = memory_agent(&st, "Cap bot");
+        let sid = "skills-cap-session";
+        memory_session(&st, &agent, sid);
+        let block = skills::index_for_prompt(&st, sid).expect("the index is sent");
+        assert!(block.chars().count() <= skills::INDEX_CHAR_CAP, "index is {} chars", block.chars().count());
+        assert!(block.contains("Call list_skills for descriptions."), "past the cap, names only");
+        assert!(block.contains("skill-0"), "{block}");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[tokio::test]
+    async fn skills_per_bot_opt_out_hides_it_from_the_index_and_list_skills() {
+        let (st, _events, data) = skills_state();
+        let source = data.join("src");
+        write_skill(&source.join("beta"), "beta", "Beta skill.", &[]);
+        st.skills.set_roots(vec![("folder".to_owned(), source.clone())]);
+        dispatch(&st, "skills.import", json!({"path": source.join("beta").to_string_lossy()})).await.unwrap();
+        let agent = memory_agent(&st, "Opt-out bot");
+        let sid = "skills-optout-session";
+        memory_session(&st, &agent, sid);
+
+        assert!(skills::index_for_prompt(&st, sid).unwrap().contains("beta"));
+        assert!(call_tool(&st, sid, "list_skills", json!({})).await["content"][0]["text"].as_str().unwrap().contains("beta"));
+
+        let toggled = dispatch(&st, "skills.toggle", json!({"name":"beta","enabled":false,"agentId":agent})).await.unwrap();
+        assert_eq!(toggled["skill"]["disabledFor"], json!([agent.as_str()]));
+        assert_eq!(st.db.skills_get("beta").unwrap()["enabled"], true, "a per-bot opt-out is not the global switch");
+        skills::forget_index(&st, sid);
+        assert!(skills::index_for_prompt(&st, sid).is_none(), "an opted-out skill is gone from the index");
+        assert!(!call_tool(&st, sid, "list_skills", json!({})).await["content"][0]["text"].as_str().unwrap().contains("beta"), "and from list_skills");
+        let load = call_tool(&st, sid, "load_skill", json!({"name":"beta"})).await;
+        assert_eq!(load["isError"], true, "load_skill refuses an opted-out skill");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[tokio::test]
+    async fn skills_native_copies_are_not_double_loaded_for_claude_and_codex() {
+        let (st, _events, data) = skills_state();
+        let claude = data.join("claude").join("skills");
+        let codex = data.join("codex").join("skills");
+        write_skill(&claude.join("gamma"), "gamma", "Gamma skill.", &[("run.sh", "echo gamma\n")]);
+        write_skill(&codex.join("gamma"), "gamma", "Gamma skill.", &[("run.sh", "echo gamma\n")]);
+        st.skills.set_roots(vec![("claude".to_owned(), claude.clone()), ("codex".to_owned(), codex.clone())]);
+        dispatch(&st, "skills.import", json!({"items":[{"source":"claude","name":"gamma"}]})).await.unwrap();
+
+        // `skills.list` reports the providers whose native copy matches.
+        let rows = dispatch(&st, "skills.list", json!({})).await.unwrap()["skills"].clone();
+        let gamma = rows.as_array().unwrap().iter().find(|row| row["name"] == "gamma").unwrap();
+        assert_eq!(gamma["nativeFor"], json!(["claude", "codex"]));
+
+        for provider in ["claude", "codex"] {
+            let sid = format!("native-{provider}");
+            skills_session(&st, &sid, provider);
+            assert!(skills::index_for_prompt(&st, &sid).is_none(), "{provider} loads gamma natively, so it is not injected");
+            let listed = call_tool(&st, &sid, "list_skills", json!({})).await["content"][0]["text"].as_str().unwrap().to_owned();
+            assert!(!listed.contains("gamma"), "{provider}: {listed}");
+        }
+
+        // OpenCode does not load those folders, so it still gets the pool copy.
+        let sid = "native-opencode";
+        skills_session(&st, &sid, "opencode");
+        assert!(skills::index_for_prompt(&st, &sid).unwrap().contains("gamma"));
+        assert!(call_tool(&st, &sid, "list_skills", json!({})).await["content"][0]["text"].as_str().unwrap().contains("gamma"));
+
+        // Removing the native copy brings the pool copy back for Claude.
+        std::fs::remove_dir_all(claude.join("gamma")).unwrap();
+        let sid = "native-claude-2";
+        skills_session(&st, &sid, "claude");
+        assert!(skills::index_for_prompt(&st, &sid).unwrap().contains("gamma"));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[tokio::test]
+    async fn load_skill_and_read_skill_file_serve_files_and_refuse_traversal() {
+        let (st, _events, data) = skills_state();
+        let source = data.join("src");
+        write_skill(&source.join("epsilon"), "epsilon", "Epsilon skill.", &[("notes.txt", "the notes"), ("sub/data.json", "{}")]);
+        st.skills.set_roots(vec![("folder".to_owned(), source.clone())]);
+        dispatch(&st, "skills.import", json!({"path": source.join("epsilon").to_string_lossy()})).await.unwrap();
+        let agent = memory_agent(&st, "Reader bot");
+        let sid = "skills-read-session";
+        memory_session(&st, &agent, sid);
+
+        let loaded = call_tool(&st, sid, "load_skill", json!({"name":"epsilon"})).await;
+        let text = loaded["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Instructions for epsilon."), "{text}");
+        assert!(text.contains("Directory: "), "load_skill names the folder for a shell: {text}");
+        assert!(text.contains("notes.txt"), "{text}");
+        assert!(text.contains("sub/data.json"), "{text}");
+
+        let file = call_tool(&st, sid, "read_skill_file", json!({"name":"epsilon","path":"notes.txt"})).await;
+        assert_eq!(file["content"][0]["text"], "the notes");
+        let nested = call_tool(&st, sid, "read_skill_file", json!({"name":"epsilon","path":"sub/data.json"})).await;
+        assert_eq!(nested["content"][0]["text"], "{}");
+
+        for bad in ["../secret", "..\\secret", "C:\\Windows\\win.ini", "a:b", "/etc/passwd"] {
+            let refused = call_tool(&st, sid, "read_skill_file", json!({"name":"epsilon","path":bad})).await;
+            assert_eq!(refused["isError"], true, "{bad} must be refused: {refused}");
+        }
+        let missing = call_tool(&st, sid, "read_skill_file", json!({"name":"epsilon","path":"nope.txt"})).await;
+        assert_eq!(missing["isError"], true);
+        let unknown = call_tool(&st, sid, "load_skill", json!({"name":"nope"})).await;
+        assert_eq!(unknown["isError"], true);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     fn ask_user_card(st: &AppState, session_id: &str) -> Value {

@@ -199,8 +199,13 @@ pub fn attach(st: &AppState, session_id: &str, agent_id: Option<&str>, link: &Va
 /// write rails restrict them to blob scope.
 fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_leader: bool, noun: &str, nouns: &str) -> Value {
     let memory = if memory_enabled { crate::memory::tool_schemas() } else { Vec::new() };
+    // The shared skills pool is read-only, so every bot gets it, including
+    // automation runs (the index is what tells a bot the pool exists).
+    let skill_tools = crate::skills::tool_schemas();
     if is_automation {
-        return json!(memory);
+        let mut list = memory;
+        list.extend(skill_tools);
+        return json!(list);
     }
     let mut list: Vec<Value> = vec![
         json!({"name":"list_blobs","description":"List your teammates in Bitbots: name, role, what each is for, project, whether they are busy, and which one is the leader.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
@@ -218,6 +223,7 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_leader: b
     // OpenCode has no native question tool over ACP, so the bridge offers one.
     if ask_user { list.push(crate::questions::tool_schema()); }
     list.extend(memory);
+    list.extend(skill_tools);
     json!(list)
 }
 
@@ -254,7 +260,7 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
         "mcp.tools.list" => Ok(json!({"tools":tools(is_automation, memory_enabled, ask_user, is_leader, &entity_noun(false), &entity_noun(true))})),
         "mcp.tools.call" => {
             let name = params["name"].as_str().unwrap_or("");
-            if is_automation && !name.starts_with("memory_") {
+            if is_automation && !name.starts_with("memory_") && !matches!(name, "list_skills" | "load_skill" | "read_skill_file") {
                 return Err(derr("forbidden", "Automation runs cannot use team or scheduling tools.", StatusCode::FORBIDDEN));
             }
             let args = &params["arguments"];
@@ -275,6 +281,9 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "memory_write" if memory_enabled => crate::memory::tool_write(st, session_id, args).await,
                 "memory_update" if memory_enabled => crate::memory::tool_update(st, session_id, args).await,
                 "memory_forget" if memory_enabled => crate::memory::tool_forget(st, session_id, args).await,
+                "list_skills" => crate::skills::tool_list(st, session_id).await,
+                "load_skill" => crate::skills::tool_load(st, session_id, args).await,
+                "read_skill_file" => crate::skills::tool_read_file(st, session_id, args).await,
                 _ => Err(format!("Unknown tool {name}.")),
             };
             Ok(match result {

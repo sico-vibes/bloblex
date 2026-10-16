@@ -572,6 +572,81 @@ fn ensure_model_catalog_schema(c: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// Shared skills pool schema (FIX32). Additive and idempotent like the other
+/// `ensure_*` functions, so it runs on every open without a `user_version`
+/// bump. `skills` is the one pool every bot shares; `skill_agent_settings`
+/// holds the per-bot opt-out (`enabled = 0`) rows.
+fn ensure_skills_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS skills(
+            name TEXT PRIMARY KEY NOT NULL CHECK(name GLOB '[a-z0-9]*'),
+            description TEXT NOT NULL,
+            source TEXT NOT NULL CHECK(source IN ('claude','codex','opencode','folder','backup')),
+            source_path TEXT,
+            content_sha256 TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+            file_count INTEGER NOT NULL,
+            total_bytes INTEGER NOT NULL,
+            imported_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS skill_agent_settings(
+            skill_name TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+            PRIMARY KEY(skill_name, agent_id)
+        );",
+    )?;
+    Ok(())
+}
+
+const SKILL_COLUMNS: &str = "name,description,source,source_path,content_sha256,enabled,file_count,total_bytes,imported_at,updated_at";
+
+fn valid_skill_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit() => {}
+        _ => return false,
+    }
+    name.len() <= 64 && chars.all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-')
+}
+
+fn skill_dto_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    Ok(json!({
+        "name": row.get::<_, String>(0)?,
+        "description": row.get::<_, String>(1)?,
+        "source": row.get::<_, String>(2)?,
+        "sourcePath": row.get::<_, Option<String>>(3)?,
+        "contentSha256": row.get::<_, String>(4)?,
+        "enabled": row.get::<_, bool>(5)?,
+        "fileCount": row.get::<_, i64>(6)?,
+        "totalBytes": row.get::<_, i64>(7)?,
+        "importedAt": row.get::<_, String>(8)?,
+        "updatedAt": row.get::<_, String>(9)?,
+        "disabledFor": [],
+    }))
+}
+
+/// The skills whose per-bot opt-out row is set (enabled = 0), as
+/// `(skill_name, agent_id)` pairs.
+fn skill_disabled_pairs(c: &Connection) -> Result<Vec<(String, String)>, StorageError> {
+    let mut statement = c.prepare("SELECT skill_name,agent_id FROM skill_agent_settings WHERE enabled=0")?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn skill_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
+    let mut statement = c.prepare(&format!("SELECT {SKILL_COLUMNS} FROM skills ORDER BY name"))?;
+    let mut rows = statement.query_map([], skill_dto_from_row)?.collect::<Result<Vec<_>, _>>()?;
+    let disabled = skill_disabled_pairs(c)?;
+    for row in rows.iter_mut() {
+        let name = row["name"].as_str().unwrap_or("").to_owned();
+        let list = disabled.iter().filter(|(skill, _)| *skill == name).map(|(_, agent)| json!(agent)).collect::<Vec<_>>();
+        row["disabledFor"] = json!(list);
+    }
+    Ok(rows)
+}
+
 fn memory_dto_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     let tags: String = row.get(6)?;
     Ok(json!({
@@ -1063,6 +1138,7 @@ impl Storage {
                 ensure_opencode_effort_gate_open(&conn)?;
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
+                ensure_skills_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==11 {
@@ -1075,6 +1151,7 @@ impl Storage {
                 ensure_opencode_effort_gate_open(&conn)?;
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
+                ensure_skills_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==10 {
@@ -1088,6 +1165,7 @@ impl Storage {
                 ensure_opencode_effort_gate_open(&conn)?;
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
+                ensure_skills_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1104,6 +1182,7 @@ impl Storage {
                 ensure_opencode_effort_gate_open(&conn)?;
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
+                ensure_skills_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1215,6 +1294,7 @@ impl Storage {
                 ensure_opencode_effort_gate_open(&conn)?;
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
+                ensure_skills_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -3321,6 +3401,7 @@ impl Storage {
         if k=="experimental.usageTipDismissals" && !valid_usage_tip_dismissals(v){return Err(StorageError::InvalidAgent)}
         if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+        if k=="skills.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
         if k=="appearance.accent" && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()==7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit()))){return Err(StorageError::InvalidAgent)}
         if k=="appearance.density" && !v.as_str().is_some_and(|s| ["compact","default","roomy"].contains(&s)){return Err(StorageError::InvalidAgent)}
@@ -3745,6 +3826,84 @@ impl Storage {
             "changedAt": row.get::<_, String>(4)?,
         })))?.collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    // ── Skills: the shared pool every bot draws from (FIX32) ──────────────
+    pub fn skills_list(&self) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        skill_rows(&c)
+    }
+    pub fn skills_get(&self, name: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut row = c.query_row(&format!("SELECT {SKILL_COLUMNS} FROM skills WHERE name=?1"), [name], skill_dto_from_row).optional()?.ok_or(StorageError::AgentNotFound)?;
+        let disabled = skill_disabled_pairs(&c)?;
+        row["disabledFor"] = json!(disabled.into_iter().filter(|(skill, _)| skill == name).map(|(_, agent)| agent).collect::<Vec<_>>());
+        Ok(row)
+    }
+    pub fn skills_upsert(&self, input: &Value) -> Result<Value, StorageError> {
+        let name = input["name"].as_str().map(str::trim).filter(|value| !value.is_empty()).ok_or(StorageError::InvalidAgent)?;
+        if !valid_skill_name(name) { return Err(StorageError::InvalidAgent); }
+        let description = input["description"].as_str().ok_or(StorageError::InvalidAgent)?;
+        let source = input["source"].as_str().ok_or(StorageError::InvalidAgent)?;
+        if !["claude", "codex", "opencode", "folder", "backup"].contains(&source) { return Err(StorageError::InvalidAgent); }
+        let source_path = input["sourcePath"].as_str().map(str::trim).filter(|value| !value.is_empty());
+        let content_sha256 = input["contentSha256"].as_str().map(str::trim).filter(|value| !value.is_empty()).ok_or(StorageError::InvalidAgent)?;
+        let file_count = input["fileCount"].as_i64().filter(|value| *value >= 0).ok_or(StorageError::InvalidAgent)?;
+        let total_bytes = input["totalBytes"].as_i64().filter(|value| *value >= 0).ok_or(StorageError::InvalidAgent)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO skills(name,description,source,source_path,content_sha256,enabled,file_count,total_bytes,imported_at,updated_at) \
+             VALUES(?1,?2,?3,?4,?5,1,?6,?7,?8,?8) \
+             ON CONFLICT(name) DO UPDATE SET description=excluded.description,source=excluded.source,source_path=excluded.source_path,\
+             content_sha256=excluded.content_sha256,file_count=excluded.file_count,total_bytes=excluded.total_bytes,updated_at=excluded.updated_at",
+            params![name, description, source, source_path, content_sha256, file_count, total_bytes, now],
+        )?;
+        let mut row = tx.query_row(&format!("SELECT {SKILL_COLUMNS} FROM skills WHERE name=?1"), [name], skill_dto_from_row)?;
+        tx.commit()?;
+        row["disabledFor"] = json!([]);
+        Ok(row)
+    }
+    pub fn skills_delete(&self, name: &str) -> Result<(), StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !tx.query_row("SELECT EXISTS(SELECT 1 FROM skills WHERE name=?1)", [name], |r| r.get::<_, bool>(0))? {
+            return Err(StorageError::AgentNotFound);
+        }
+        tx.execute("DELETE FROM skill_agent_settings WHERE skill_name=?1", [name])?;
+        tx.execute("DELETE FROM skills WHERE name=?1", [name])?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// `agent_id` present: a per-bot row (an opt-out when `enabled` is false).
+    /// `agent_id` absent: the pool-wide switch.
+    pub fn skills_toggle(&self, name: &str, enabled: bool, agent_id: Option<&str>) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM skills WHERE name=?1)", [name], |r| r.get(0))?;
+        if !exists { return Err(StorageError::AgentNotFound); }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        match agent_id.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(agent_id) => {
+                if !tx.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1)", [agent_id], |r| r.get::<_, bool>(0))? {
+                    return Err(StorageError::InvalidAgent);
+                }
+                tx.execute(
+                    "INSERT INTO skill_agent_settings(skill_name,agent_id,enabled) VALUES(?1,?2,?3) \
+                     ON CONFLICT(skill_name,agent_id) DO UPDATE SET enabled=excluded.enabled",
+                    params![name, agent_id, enabled],
+                )?;
+            }
+            None => {
+                tx.execute("UPDATE skills SET enabled=?2,updated_at=?3 WHERE name=?1", params![name, enabled, now])?;
+            }
+        }
+        let mut row = tx.query_row(&format!("SELECT {SKILL_COLUMNS} FROM skills WHERE name=?1"), [name], skill_dto_from_row)?;
+        tx.commit()?;
+        let disabled = skill_disabled_pairs(&c)?;
+        row["disabledFor"] = json!(disabled.into_iter().filter(|(skill, _)| skill == name).map(|(_, agent)| agent).collect::<Vec<_>>());
+        Ok(row)
     }
 }
 

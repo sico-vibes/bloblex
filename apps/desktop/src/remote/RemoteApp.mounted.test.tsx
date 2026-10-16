@@ -30,7 +30,7 @@ const flush = async (ms = 60) => { await act(async () => { await new Promise((re
 beforeEach(() => {
   try { localStorage.clear() } catch { /* ignore */ }
   simulator = createRemoteSimulator()
-  simulator.reset({ enabled: true, devices: 1, hosts: 3 })
+  simulator.reset({ enabled: true, devices: 1 })
 })
 afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null; simulator.dispose() })
 

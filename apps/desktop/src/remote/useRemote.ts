@@ -3,6 +3,8 @@ import { listenForDaemonEvents, rpc } from '../tauri'
 import {
   DEFAULT_REMOTE_SECURITY,
   type PairingOffer,
+  type PairingOutcome,
+  type PairingRequest,
   type RemoteActivityEntry,
   type RemoteDevice,
   type RemoteSecurityOptions,
@@ -24,13 +26,41 @@ export interface RemoteState {
   security: RemoteSecurityOptions
   activity: RemoteActivityEntry[]
   offer: PairingOffer | null
-  /** The device that just finished pairing, for a short confirmation. */
-  justPaired: RemoteDevice | null
+  /** The device that submitted the right code and waits for the owner's decision. */
+  request: PairingRequest | null
+  /** The last pairing outcome of this session, with the device when one was created. */
+  lastOutcome: { outcome: PairingOutcome; device: RemoteDevice | null } | null
   busy: boolean
   error: string | null
 }
 
-const EMPTY: RemoteState = { available: null, status: null, devices: [], security: DEFAULT_REMOTE_SECURITY, activity: [], offer: null, justPaired: null, busy: false, error: null }
+/** `justPaired` is derived from `lastOutcome`; it exists only for the current Settings page. */
+export type RemoteHookState = RemoteState & { justPaired: RemoteDevice | null }
+
+const EMPTY: RemoteState = {
+  available: null,
+  status: null,
+  devices: [],
+  security: DEFAULT_REMOTE_SECURITY,
+  activity: [],
+  offer: null,
+  request: null,
+  lastOutcome: null,
+  busy: false,
+  error: null,
+}
+
+/** `remote.devices.list` is `{devices}`; a bare array is accepted too, because the shapes are young. */
+function devicesFrom(result: { devices?: RemoteDevice[] } | RemoteDevice[] | null | undefined): RemoteDevice[] {
+  if (Array.isArray(result)) return result
+  return Array.isArray(result?.devices) ? result.devices : []
+}
+
+/** `remote.activity.list` is `{entries}`; likewise. */
+function activityFrom(result: { entries?: RemoteActivityEntry[] } | RemoteActivityEntry[] | null | undefined): RemoteActivityEntry[] {
+  if (Array.isArray(result)) return result
+  return Array.isArray(result?.entries) ? result.entries : []
+}
 
 /**
  * The host side of Remote mode as the Settings page sees it. Everything goes
@@ -41,17 +71,37 @@ export function useRemote(enabled = true) {
   const [state, setState] = useState<RemoteState>(EMPTY)
   const alive = useRef(true)
   const reloadTimer = useRef<number | null>(null)
+  /** The device named by the last `remote.pairing.completed`, resolved on the next reload. */
+  const pairedDeviceId = useRef<string | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [status, devices, security, activity] = await Promise.all([
+      const [status, devicesResult, security, activityResult] = await Promise.all([
         rpc<RemoteStatus>('remote.status'),
-        rpc<RemoteDevice[]>('remote.devices.list'),
+        rpc<{ devices?: RemoteDevice[] } | RemoteDevice[]>('remote.devices.list'),
         rpc<RemoteSecurityOptions>('remote.security.get'),
-        rpc<RemoteActivityEntry[]>('remote.activity.list'),
+        rpc<{ entries?: RemoteActivityEntry[] } | RemoteActivityEntry[]>('remote.activity.list'),
       ])
       if (!alive.current) return
-      setState((current) => ({ ...current, available: true, status, devices, security, activity, error: null }))
+      const devices = devicesFrom(devicesResult)
+      const activity = activityFrom(activityResult)
+      setState((current) => {
+        const wanted = pairedDeviceId.current
+        return {
+          ...current,
+          available: true,
+          status,
+          devices,
+          security,
+          activity,
+          // A request that outlived its code is gone even if no event said so.
+          request: current.request && Date.parse(current.request.expiresAt) > Date.now() ? current.request : null,
+          lastOutcome: current.lastOutcome && wanted
+            ? { ...current.lastOutcome, device: devices.find((device) => device.id === wanted) ?? null }
+            : current.lastOutcome,
+          // A finished action's message survives the reload; only the next action clears it.
+        }
+      })
     } catch {
       if (alive.current) setState((current) => ({ ...current, available: false }))
     }
@@ -64,9 +114,17 @@ export function useRemote(enabled = true) {
     let unlisten: (() => void) | null = null
     void listenForDaemonEvents((event) => {
       if (!event.type.startsWith('remote.')) return
+      if (event.type === 'remote.pairing.requested') {
+        const request = event.payload as PairingRequest | undefined
+        // The code is locked to this request, so the live offer is gone with it.
+        if (request && typeof request.pairingId === 'string') setState((current) => ({ ...current, offer: null, request }))
+      }
       if (event.type === 'remote.pairing.completed') {
-        const device = (event.payload as { device?: RemoteDevice } | undefined)?.device ?? null
-        setState((current) => ({ ...current, offer: null, justPaired: device }))
+        const payload = event.payload as { outcome?: PairingOutcome; deviceId?: string } | undefined
+        if (payload?.outcome) {
+          pairedDeviceId.current = payload.deviceId ?? null
+          setState((current) => ({ ...current, offer: null, request: null, lastOutcome: { outcome: payload.outcome as PairingOutcome, device: null } }))
+        }
       }
       if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current)
       reloadTimer.current = window.setTimeout(() => { reloadTimer.current = null; void load() }, 40)
@@ -89,23 +147,26 @@ export function useRemote(enabled = true) {
     await load()
   }, [load])
 
+  const hookState: RemoteHookState = { ...state, justPaired: state.lastOutcome?.outcome === 'approved' ? state.lastOutcome.device : null }
+
   return {
-    state,
+    state: hookState,
     reload: load,
     enable: () => run(async () => { await rpc('remote.enable') }),
-    disable: () => run(async () => { await rpc('remote.disable'); setState((current) => ({ ...current, offer: null })) }),
+    disable: () => run(async () => { await rpc('remote.disable'); setState((current) => ({ ...current, offer: null, request: null })) }),
     beginPairing: () => run(async () => {
       const offer = await rpc<PairingOffer>('remote.pair.begin')
-      setState((current) => ({ ...current, offer, justPaired: null }))
+      setState((current) => ({ ...current, offer, request: null, lastOutcome: null }))
     }),
-    cancelPairing: () => run(async () => { await rpc('remote.pair.cancel'); setState((current) => ({ ...current, offer: null })) }),
+    cancelPairing: () => run(async () => { await rpc('remote.pair.cancel'); setState((current) => ({ ...current, offer: null, request: null })) }),
+    confirmPairing: (pairingId: string, tier: RemoteTier) => run(async () => { await rpc('remote.pair.confirm', { pairingId, approve: true, tier }) }),
+    rejectPairing: (pairingId: string) => run(async () => { await rpc('remote.pair.confirm', { pairingId, approve: false }) }),
     updateDevice: (deviceId: string, patch: { tier?: RemoteTier; name?: string }) => run(async () => { await rpc('remote.devices.update', { deviceId, ...patch }) }),
     revokeDevice: (deviceId: string) => run(async () => { await rpc('remote.devices.revoke', { deviceId }) }),
     setSecurity: (patch: Partial<RemoteSecurityOptions>) => run(async () => { await rpc('remote.security.set', { ...state.security, ...patch }) }),
-    setDirect: (enabledDirect: boolean) => run(async () => { await rpc('remote.direct.set', { enabled: enabledDirect }) }),
-    /** Preview only: act as the phone finishing pairing. */
+    /** Preview only: act as the phone submitting the code. */
     simulatePairing: () => run(async () => { await rpc('remote.preview.pair') }),
-    dismissPaired: () => setState((current) => ({ ...current, justPaired: null })),
+    dismissPaired: () => setState((current) => ({ ...current, lastOutcome: null })),
   }
 }
 

@@ -87,14 +87,16 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
 
     <SettingsGroup title="Remote access">
       <SettingsRow label="Allow remote devices" hint="Devices you pair can reach this computer's bots through an encrypted relay. Turn it off and everyone is disconnected at once.">
-        <button type="button" role="switch" aria-checked={on} aria-label="Allow remote devices" className={`toggle ${on ? 'on' : ''}`} disabled={state.busy || status?.link === 'connecting'}
+        {/* FIX29 UI: Director — `link` is off/starting/online/error now. */}
+        <button type="button" role="switch" aria-checked={on} aria-label="Allow remote devices" className={`toggle ${on ? 'on' : ''}`} disabled={state.busy || status?.link === 'starting'}
           onClick={() => { if (on) void remote.disable(); else setConsent(true) }}><i /></button>
       </SettingsRow>
       {on && status && <div className="remote-status" role="status" aria-live="polite">
         <StatusDot status={status.link === 'online' ? 'working' : status.link === 'error' ? 'failed' : 'waiting'} label={status.link} />
         <div>
-          <strong>{status.link === 'online' ? `Online as ${status.hostName}` : status.link === 'connecting' ? 'Connecting…' : status.link === 'reconnecting' ? 'Reconnecting…' : 'Not connected'}</strong>
-          <small>{status.link === 'online' ? `${status.relay} · ${status.latencyMs ?? '–'} ms · ${status.connectedCount} of ${status.deviceCount} devices connected` : status.error ?? 'Waiting for the relay.'}</small>
+          <strong>{status.link === 'online' ? `Online as ${status.hostName}` : status.link === 'starting' ? 'Starting…' : 'Not connected'}</strong>
+          {/* FIX29 UI: Director — the relay host, latency and "since" fields are gone; the serve URL replaces them. */}
+          <small>{status.link === 'online' ? `${status.url ?? 'no address'} · ${status.connectedCount} of ${status.deviceCount} devices connected` : status.error ?? `Waiting for the serve address (Tailscale: ${status.tailscale}).`}</small>
         </div>
       </div>}
       {on && <SettingsRow label="Keep this computer awake" hint="Remote only works while this computer is on and online. Sleep makes it unreachable.">
@@ -116,7 +118,8 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
         <div className="remote-pair-copy">
           <small>Pairing code</small>
           <output className="remote-code" aria-label={`Pairing code ${state.offer.code.split('').join(' ')}`}>{state.offer.code}</output>
-          <p>Open <b>{state.offer.relay}</b> on the new device, choose Connect, and enter the code. It works once and expires in <b>{countdown(state.offer.expiresAt, now)}</b>.</p>
+          {/* FIX29 UI: Director — the offer names the serve URL now, not a relay. */}
+          <p>Open <b>{state.offer.url}</b> on the new device, choose Connect, and enter the code. It works once and expires in <b>{countdown(state.offer.expiresAt, now)}</b>.</p>
           <div className="remote-pair-actions">
             <button type="button" className="secondary-button small" disabled={state.busy} onClick={() => void remote.beginPairing()}>New code</button>
             <button type="button" className="ghost-button small" disabled={state.busy} onClick={() => void remote.cancelPairing()}>Cancel</button>
@@ -164,13 +167,8 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
         : <ul className="remote-activity">{state.activity.slice(0, 8).map((entry) => <ActivityLine key={entry.id} entry={entry} now={now} />)}</ul>}
     </SettingsGroup>}
 
-    {on && status && <SettingsGroup title="Advanced">
-      <SettingsRow label="Also listen on this network" hint={status.direct && status.directAddress ? `Devices on the same network can connect directly at ${status.directAddress}. Only turn this on at home or on a network you trust.` : 'Lets devices on your local network connect without the relay. Off by default.'}>
-        <button type="button" role="switch" aria-checked={status.direct} aria-label="Also listen on this network" className={`toggle ${status.direct ? 'on' : ''}`} disabled={state.busy}
-          onClick={() => void remote.setDirect(!status.direct)}><i /></button>
-      </SettingsRow>
-    </SettingsGroup>}
-
+    {/* FIX29 UI: Director — the Advanced "also listen on this network" row and the
+        relay wording are gone with the Tailscale design; the Director rewrites this page. */}
     {state.error && <p className="settings-banner error" role="alert">{state.error}</p>}
 
     {consent && <ConfirmDialog title="Turn on Remote?" confirmLabel="Turn on" cancelLabel="Not now"

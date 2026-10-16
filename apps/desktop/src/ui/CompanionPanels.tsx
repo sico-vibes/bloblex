@@ -83,7 +83,9 @@ export function CompanionActivitySummary({ agents, sessions, runtimes, connected
 }
 
 /** The companion settings' Remote row (C13): read-only status plus a Settings shortcut. */
-const REMOTE_DOT: Record<RemoteStatus['link'], BotStatus> = { online: 'working', connecting: 'waiting', reconnecting: 'waiting', off: 'offline', error: 'failed' }
+// FIX29 UI: Director — `RemoteStatus.link` lost `connecting`/`reconnecting` for the
+// Tailscale states (`starting`); the Settings page is rewritten by the Director.
+const REMOTE_DOT: Record<RemoteStatus['link'], BotStatus> = { online: 'working', starting: 'waiting', off: 'offline', error: 'failed' }
 
 /** The companion settings' Remote row (C13): read-only status plus a Settings shortcut. */
 export function CompanionRemoteRow({ onOpenSettings }: { onOpenSettings: (page: 'Remote') => void }) {

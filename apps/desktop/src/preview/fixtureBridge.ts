@@ -11,7 +11,7 @@ import { parseUpdateChannel, type UpdateChannel, type UpdateInfo, type UpdatePro
 import { entityNoun } from '../ui/vocabulary'
 import { themeStyle } from '../blob/bitbots'
 import { REMOTE_METHODS } from '../remote/remoteContract'
-import type { RemoteMethod, RemoteStatus } from '../remote/remoteContract'
+import type { RemoteMethod, RemoteStatus, RemoteTailscaleState } from '../remote/remoteContract'
 import { createRemoteSimulator } from './remoteFixture'
 import type { RemoteSeed } from './remoteFixture'
 
@@ -29,18 +29,24 @@ const setPreviewSelection = (agentId: string) => {
 }
 
 // Remote mode preview: one shared simulator, seeded once from the URL. Flags are
-// `?remote=on|off`, `?devices=0|1|3` and `?host=offline`; the default is off with
-// no devices so the empty state is what people see first.
+// `?remote=off|on|<tailscale state>` and `?devices=0|1|3`; the default is off
+// with no devices so the empty state is what people see first. A Tailscale state
+// (`not_installed`, `logged_out`, `https_disabled`, `port_in_use`, `funnel_on`)
+// shows the host refusing to start and naming the fix; `on` and `ready` seed a
+// working serve address.
 const remoteSimulator = createRemoteSimulator()
 let remoteFixtureSeeded = false
+const REMOTE_PREVIEW_FLAGS = ['off', 'on', 'ready', 'not_installed', 'logged_out', 'https_disabled', 'port_in_use', 'funnel_on'] as const
 const remoteFixtureSeed = (): RemoteSeed => {
   const search = flags()
   const devicesParam = search.get('devices')
+  const requested = search.get('remote') ?? 'off'
+  const flag = (REMOTE_PREVIEW_FLAGS as readonly string[]).includes(requested) ? requested : 'off'
+  const tailscale: RemoteTailscaleState = flag === 'on' || flag === 'off' ? 'ready' : flag as RemoteTailscaleState
   return {
-    enabled: search.get('remote') === 'on',
+    enabled: flag === 'on' || flag === 'ready',
     devices: devicesParam === '1' ? 1 : devicesParam === '3' ? 3 : 0,
-    host: search.get('host') === 'offline' ? 'offline' : 'online',
-    hosts: 3,
+    tailscale,
   }
 }
 function ensureRemoteFixture() {
@@ -298,9 +304,10 @@ export const inDesktop = true
 export const previewMode = true
 export async function rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   if (method === 'remote.preview.pair') {
-    // Preview only: act as the phone finishing pairing with the live code.
+    // Preview only: act as the phone submitting the code for the live offer. It
+    // raises `remote.pairing.requested`; the owner still approves or rejects.
     ensureRemoteFixture()
-    return remoteSimulator.simulatePairingCompleted() as T
+    return remoteSimulator.simulatePhoneRequest({ code: typeof params.code === 'string' ? params.code : undefined }) as T
   }
   if ((REMOTE_METHODS as readonly string[]).includes(method)) {
     ensureRemoteFixture()

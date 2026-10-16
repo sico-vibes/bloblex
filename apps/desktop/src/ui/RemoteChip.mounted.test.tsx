@@ -19,10 +19,11 @@ vi.mock('../tauri', () => ({
 
 import { RemoteChip } from './RemoteChip'
 
+// FIX29: the Tailscale status shape (no relay, no latency; `link` is off, starting, online or error).
 function status(patch: Partial<RemoteStatus>): RemoteStatus {
   return {
-    enabled: false, link: 'off', hostName: 'Work PC', relay: 'relay.bitbots.app', latencyMs: null, since: null,
-    direct: false, directAddress: null, deviceCount: 0, connectedCount: 0, keepAwake: false, error: null, ...patch,
+    enabled: false, link: 'off', url: null, port: 48620, servePort: null, tailscale: 'ready', hostName: 'Work PC',
+    deviceCount: 0, connectedCount: 0, keepAwake: false, error: null, ...patch,
   }
 }
 
@@ -76,13 +77,8 @@ describe('RemoteChip', () => {
     expect(chipText()).toBe('Remote on, no devices')
   })
 
-  it('says "Remote connecting" while the link is connecting or reconnecting', async () => {
-    h.rpc.mockImplementation(async () => status({ enabled: true, link: 'connecting' }))
-    await mount()
-    expect(chipText()).toBe('Remote connecting')
-    act(() => root?.unmount()); host?.remove()
-    root = null; host = null
-    h.rpc.mockImplementation(async () => status({ enabled: true, link: 'reconnecting' }))
+  it('says "Remote connecting" while the link is starting', async () => {
+    h.rpc.mockImplementation(async () => status({ enabled: true, link: 'starting' }))
     await mount()
     expect(chipText()).toBe('Remote connecting')
   })

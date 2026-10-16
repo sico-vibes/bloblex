@@ -1,25 +1,30 @@
 // Preview-only, in-memory stand-in for the daemon side of Remote mode. The web
 // preview runs the same React UI against this module so the host Settings page
-// and the paired-computer list can be inspected without a relay, a phone or any
-// network. Everything here is a fixture: nothing is persisted and no timers run
-// at import time. The method names, event names and shapes are fixed by
-// src/remote/remoteContract.ts; see docs/FIX17_REPORT.md.
+// and the paired-computer list can be inspected without Tailscale, a phone or
+// any network. Everything here is a fixture: nothing is persisted and no timers
+// run at import time. The method names, event names and shapes are fixed by
+// src/remote/remoteContract.ts and docs/ipc-contract.md:141-165.
+//
+// FIX29 WP6d: the Tailscale design. There is no relay and no direct listener;
+// `tailscale serve` publishes the loopback gateway, and pairing is
+// owner-confirmed (`docs/remote/PROTOCOL.md:167-207`).
 import {
   DEFAULT_REMOTE_SECURITY,
   PAIRING_CODE_TTL_MS,
+  PAIRING_MAX_ATTEMPTS,
   isRemoteTier,
 } from '../remote/remoteContract'
 import type {
   PairingOffer,
+  PairingRequest,
   RemoteActivityEntry,
   RemoteActivityKind,
   RemoteDevice,
   RemoteEventType,
-  RemoteHost,
-  RemoteLinkState,
   RemoteMethod,
   RemoteSecurityOptions,
   RemoteStatus,
+  RemoteTailscaleState,
   RemoteTier,
 } from '../remote/remoteContract'
 
@@ -29,32 +34,49 @@ export interface TimerLike {
   clearTimeout(handle: unknown): void
 }
 
+/** What the simulated phone sends with `POST /api/pair` (`docs/remote/PROTOCOL.md:173-179`). */
+export interface PhoneSubmission {
+  /** Omit to submit the live code; anything else counts one wrong attempt. */
+  code?: string
+  name?: string
+  kind?: RemoteDevice['kind']
+  platform?: string
+  login?: string | null
+}
+
 export interface RemoteSimulator {
   call(method: RemoteMethod, params: Record<string, unknown>): Promise<unknown>
   subscribe(listener: (event: { type: RemoteEventType; payload: unknown }) => void): () => void
   reset(seed?: RemoteSeed): void
-  /** Preview-only: act as the phone finishing pairing with the current offer. */
-  simulatePairingCompleted(device?: Partial<RemoteDevice>): RemoteDevice | null
+  /** Preview-only: the phone submitted a code and locked the live offer. */
+  simulatePhoneRequest(submission?: PhoneSubmission): PairingRequest | null
   dispose(): void
 }
 
 export interface RemoteSeed {
   enabled?: boolean
   devices?: number
-  host?: 'online' | 'offline'
-  hosts?: number
+  /** The Tailscale state the host reports; only `ready` can serve. */
+  tailscale?: RemoteTailscaleState
 }
 
 const HOST_NAME = 'Work PC'
-const RELAY = 'relay.bitbots.app'
-const HOST_ID = 'work-pc'
-const DIRECT_ADDRESS = '192.168.1.24:7843'
-const CONNECT_DELAY_MS = 700
-const JITTER_INTERVAL_MS = 5_000
-const LATENCY_MIN_MS = 24
-const LATENCY_MAX_MS = 60
+const SERVE_URL = 'https://work-pc.tail1234.ts.net'
+const GATEWAY_PORT = 48620
+const SERVE_PORT = 443
+/** How long `remote.enable` takes to publish the serve handler. */
+const SERVE_START_MS = 700
 const ACTIVITY_LIMIT = 50
 const DEVICE_NAME_MAX = 40
+
+/** The fix the Settings page shows, one line per state (`docs/remote/ARCHITECTURE.md:99-101`). */
+const TAILSCALE_FIX: Record<Exclude<RemoteTailscaleState, 'ready'>, string> = {
+  not_installed: 'Tailscale is not installed. Install Tailscale on this computer and sign in, then turn Remote on again.',
+  logged_out: 'Tailscale is not signed in. Sign in to Tailscale on this computer, then turn Remote on again.',
+  https_disabled: 'HTTPS certificates are off for your tailnet. Turn them on in the Tailscale admin settings, then turn Remote on again.',
+  port_in_use: 'Tailscale cannot publish this computer: ports 443 and 8443 are both in use. Free one of them, then turn Remote on again.',
+  funnel_on: 'Funnel is on for the port Bitbots needs. Turn Funnel off in Tailscale, then turn Remote on again.',
+}
 
 /** Unambiguous pairing alphabet: no 0/O and no 1/I. */
 const PAIRING_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -72,12 +94,13 @@ const DEVICE_PRESETS: readonly DevicePreset[] = [
   { name: 'Loft laptop', kind: 'browser', platform: 'Windows 11, Edge', tier: 'operator' },
 ]
 
-/** A screen the user can see in the client even though it is a host fixture. */
-const HOST_PRESETS: readonly Omit<RemoteHost, 'state' | 'lastSeenAt'>[] = [
-  { id: 'host-work', name: 'Work PC', os: 'windows', botCount: 5, waitingCount: 1, tier: 'chat' },
-  { id: 'host-home', name: 'Home laptop', os: 'windows', botCount: 3, waitingCount: 0, tier: 'chat' },
-  { id: 'host-studio', name: 'Studio Mac', os: 'macos', botCount: 2, waitingCount: 0, tier: 'viewer' },
-]
+/** What the preview phone sends when a test does not say otherwise. */
+const PHONE_SUBMISSION: Required<Omit<PhoneSubmission, 'code'>> = {
+  name: DEVICE_PRESETS[0].name,
+  kind: DEVICE_PRESETS[0].kind,
+  platform: DEVICE_PRESETS[0].platform,
+  login: 'owner@example.com',
+}
 
 const defaultTimers: TimerLike = {
   setTimeout: (handler, delay) => globalThis.setTimeout(handler, delay),
@@ -100,6 +123,11 @@ function cloneSecurity(options: RemoteSecurityOptions): RemoteSecurityOptions {
   }
 }
 
+/** Codes are compared case-insensitively and without the group dash. */
+function normalizeCode(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '')
+}
+
 export function createRemoteSimulator(options: {
   now?: () => number
   random?: () => number
@@ -110,33 +138,28 @@ export function createRemoteSimulator(options: {
   const timers = options.timers ?? defaultTimers
 
   let enabled = false
-  let link: RemoteLinkState = 'off'
-  let latencyMs: number | null = null
-  let since: string | null = null
-  let direct = false
+  let link: RemoteStatus['link'] = 'off'
+  let url: string | null = null
+  let servePort: number | null = null
+  let tailscale: RemoteTailscaleState = 'ready'
+  /** The fixture never reaches a serving failure, so this stays null; a real host sets it when `tailscale serve` dies. */
   let error: string | null = null
   let devices: RemoteDevice[] = []
   let offer: PairingOffer | null = null
+  let request: PairingRequest | null = null
   let security: RemoteSecurityOptions = cloneSecurity(DEFAULT_REMOTE_SECURITY)
   let activity: RemoteActivityEntry[] = []
-  let hosts: RemoteHost[] = []
-  let activeHostId: string | null = null
   let deviceSerial = 0
+  let pairingSerial = 0
   let activitySerial = 0
 
-  let connectTimer: unknown = null
-  let jitterTimer: unknown = null
-  let offerTimer: unknown = null
+  let startTimer: unknown = null
+  let expiryTimer: unknown = null
 
   const listeners = new Set<(event: { type: RemoteEventType; payload: unknown }) => void>()
 
   const iso = (ms: number) => new Date(ms).toISOString()
   const nowIso = () => iso(nowFn())
-  const randInt = (min: number, max: number) => {
-    const span = max - min + 1
-    const offset = Math.min(span - 1, Math.max(0, Math.floor(randomFn() * span)))
-    return min + offset
-  }
   const emit = (type: RemoteEventType, payload: unknown) => {
     const event = { type, payload }
     for (const listener of [...listeners]) listener(event)
@@ -147,12 +170,11 @@ export function createRemoteSimulator(options: {
     return {
       enabled,
       link,
+      url,
+      port: GATEWAY_PORT,
+      servePort,
+      tailscale,
       hostName: HOST_NAME,
-      relay: RELAY,
-      latencyMs,
-      since,
-      direct,
-      directAddress: direct ? DIRECT_ADDRESS : null,
       deviceCount: devices.length,
       connectedCount: devices.filter((device) => device.online).length,
       keepAwake: enabled,
@@ -179,26 +201,6 @@ export function createRemoteSimulator(options: {
     return `${raw.slice(0, 4)}-${raw.slice(4)}`
   }
 
-  function buildHosts(hostState: 'online' | 'offline', count: number) {
-    const wanted = Math.max(0, Math.floor(count))
-    hosts = []
-    for (let index = 0; index < wanted; index += 1) {
-      const base = HOST_PRESETS[index]
-      if (base) {
-        const state = index === 0 && hostState === 'offline' ? 'offline' : index === 1 ? 'asleep' : index === 2 ? 'offline' : 'online'
-        const lastSeenAt = state === 'online'
-          ? nowIso()
-          : state === 'asleep'
-            ? iso(nowFn() - 2 * 3_600_000)
-            : index === 0 ? iso(nowFn() - 25 * 60_000) : iso(nowFn() - 26 * 3_600_000)
-        hosts.push({ ...base, state, lastSeenAt })
-      } else {
-        hosts.push({ id: `host-extra-${index}`, name: `Desk ${index}`, os: 'linux', state: 'offline', lastSeenAt: iso(nowFn() - 48 * 3_600_000), botCount: 0, waitingCount: 0, tier: 'viewer' })
-      }
-    }
-    activeHostId = hosts[0]?.id ?? null
-  }
-
   function createSeedDevice(index: number): RemoteDevice {
     const preset = DEVICE_PRESETS[index % DEVICE_PRESETS.length]
     return {
@@ -213,115 +215,177 @@ export function createRemoteSimulator(options: {
     }
   }
 
-  function startJitter() {
-    cancel(jitterTimer)
-    const tick = () => {
-      jitterTimer = null
-      if (!enabled || link !== 'online') return
-      latencyMs = randInt(LATENCY_MIN_MS, LATENCY_MAX_MS)
-      emit('remote.changed', status())
-      jitterTimer = timers.setTimeout(tick, JITTER_INTERVAL_MS)
-    }
-    jitterTimer = timers.setTimeout(tick, JITTER_INTERVAL_MS)
+  /** A live offer that nobody locked. */
+  function clearOffer() {
+    if (expiryTimer !== null) { cancel(expiryTimer); expiryTimer = null }
+    offer = null
+  }
+
+  /** The request that locked an offer ran out of time (`docs/remote/PROTOCOL.md:186`). */
+  function expireRequest() {
+    if (!request) return
+    const pairingId = request.pairingId
+    if (expiryTimer !== null) { cancel(expiryTimer); expiryTimer = null }
+    request = null
+    emit('remote.pairing.completed', { pairingId, outcome: 'expired' })
+  }
+
+  function armExpiry() {
+    if (expiryTimer !== null) cancel(expiryTimer)
+    const expiresAt = offer?.expiresAt ?? request?.expiresAt
+    if (!expiresAt) { expiryTimer = null; return }
+    const delay = Math.max(0, Date.parse(expiresAt) - nowFn())
+    expiryTimer = timers.setTimeout(() => {
+      expiryTimer = null
+      const pending = request
+      request = null
+      offer = null
+      if (pending) emit('remote.pairing.completed', { pairingId: pending.pairingId, outcome: 'expired' })
+    }, delay)
   }
 
   function enable(): RemoteStatus {
+    if (tailscale !== 'ready') throw remoteError('unsupported', TAILSCALE_FIX[tailscale])
     if (enabled && link === 'online') return status()
     enabled = true
     error = null
-    cancel(connectTimer)
-    link = 'connecting'
-    latencyMs = null
-    since = null
-    emit('remote.changed', status())
-    connectTimer = timers.setTimeout(() => {
-      connectTimer = null
+    cancel(startTimer)
+    link = 'starting'
+    url = null
+    servePort = null
+    emit('remote.changed', { status: status() })
+    startTimer = timers.setTimeout(() => {
+      startTimer = null
       if (!enabled) return
       link = 'online'
-      latencyMs = randInt(LATENCY_MIN_MS, LATENCY_MAX_MS)
-      since = nowIso()
-      emit('remote.changed', status())
-      startJitter()
-    }, CONNECT_DELAY_MS)
+      servePort = SERVE_PORT
+      url = SERVE_URL
+      emit('remote.changed', { status: status() })
+    }, SERVE_START_MS)
     return status()
   }
 
   function disable(): RemoteStatus {
-    cancel(connectTimer)
-    connectTimer = null
-    cancel(jitterTimer)
-    jitterTimer = null
+    cancel(startTimer)
+    startTimer = null
+    clearOffer()
+    if (request) { cancel(expiryTimer); expiryTimer = null; request = null }
     enabled = false
     link = 'off'
-    latencyMs = null
-    since = null
+    url = null
+    servePort = null
     error = null
     for (const device of devices) {
       if (!device.online) continue
       device.online = false
       device.lastSeenAt = nowIso()
-      emit('remote.device.changed', { device: { ...device }, change: 'updated' })
+      emit('remote.device.changed', { action: 'updated', device: { ...device } })
     }
-    emit('remote.changed', status())
+    emit('remote.changed', { status: status() })
     return status()
   }
 
+  function activeOffer(): PairingOffer | null {
+    if (!offer) return null
+    if (nowFn() >= Date.parse(offer.expiresAt)) { clearOffer(); return null }
+    return offer
+  }
+
   function pairBegin(): PairingOffer {
-    if (!enabled) throw remoteError('remote_disabled', 'Remote access is off.')
-    cancel(offerTimer)
-    const code = generateCode()
+    if (!enabled) throw remoteError('conflict', 'Remote access is off. Turn it on before pairing a device.')
+    clearOffer()
     const created: PairingOffer = {
-      code,
-      qrPayload: `bitbots://pair?r=${RELAY}&c=${code}&h=${HOST_ID}`,
+      code: generateCode(),
+      url: url ?? SERVE_URL,
+      qrPayload: url ?? SERVE_URL,
       expiresAt: iso(nowFn() + PAIRING_CODE_TTL_MS),
-      relay: RELAY,
+      attemptsLeft: PAIRING_MAX_ATTEMPTS,
     }
     offer = created
-    offerTimer = timers.setTimeout(() => {
-      offerTimer = null
-      if (offer && offer.code === code) offer = null
-    }, PAIRING_CODE_TTL_MS)
+    armExpiry()
     return { ...created }
   }
 
   function pairCancel() {
-    cancel(offerTimer)
-    offerTimer = null
-    offer = null
+    if (request) {
+      const pairingId = request.pairingId
+      if (expiryTimer !== null) { cancel(expiryTimer); expiryTimer = null }
+      request = null
+      emit('remote.pairing.completed', { pairingId, outcome: 'cancelled' })
+      return { cancelled: true }
+    }
+    clearOffer()
     return { cancelled: true }
   }
 
-  function simulatePairingCompleted(partial: Partial<RemoteDevice> = {}): RemoteDevice | null {
-    if (!offer || nowFn() >= Date.parse(offer.expiresAt)) {
-      cancel(offerTimer)
-      offerTimer = null
-      offer = null
-      return null
+  function simulatePhoneRequest(submission: PhoneSubmission = {}): PairingRequest | null {
+    const live = activeOffer()
+    if (!live) return null
+    if (submission.code !== undefined && normalizeCode(submission.code) !== normalizeCode(live.code)) {
+      live.attemptsLeft -= 1
+      if (live.attemptsLeft <= 0) clearOffer()
+      throw remoteError('pairing_invalid', 'That code is not right.')
     }
-    cancel(offerTimer)
-    offerTimer = null
+    if (expiryTimer !== null) { cancel(expiryTimer); expiryTimer = null }
+    pairingSerial += 1
+    const locked: PairingRequest = {
+      pairingId: `pairing-${pairingSerial}`,
+      name: submission.name ?? PHONE_SUBMISSION.name,
+      kind: submission.kind ?? PHONE_SUBMISSION.kind,
+      platform: submission.platform ?? PHONE_SUBMISSION.platform,
+      login: submission.login === undefined ? PHONE_SUBMISSION.login : submission.login,
+      expiresAt: live.expiresAt,
+    }
+    // The first correct code locks the offer to this request; the code is spent.
     offer = null
+    request = locked
+    armExpiry()
+    emit('remote.pairing.requested', { ...locked })
+    return { ...locked }
+  }
+
+  function pairConfirm(params: Record<string, unknown>): { approved: boolean; device?: RemoteDevice } {
+    const pairingId = String(params.pairingId ?? '')
+    const approve = params.approve
+    if (typeof approve !== 'boolean') throw remoteError('invalid_argument', 'approve must be a boolean.')
+    if (!request || request.pairingId !== pairingId) throw remoteError('not_found', 'That pairing request is no longer waiting.')
+    if (nowFn() >= Date.parse(request.expiresAt)) { expireRequest(); throw remoteError('not_found', 'That pairing request is no longer waiting.') }
+    const decided = request
+    if (!approve) {
+      // Rejecting burns the offer (`docs/ipc-contract.md:152`).
+      if (expiryTimer !== null) { cancel(expiryTimer); expiryTimer = null }
+      request = null
+      const entry = activityEntry('denied', '', decided.name, `Pairing request from ${decided.name} was rejected`)
+      pushActivity(entry)
+      emit('remote.pairing.completed', { pairingId, outcome: 'burned' })
+      emit('remote.activity', { entry })
+      emit('remote.changed', { status: status() })
+      return { approved: false }
+    }
+    // Validate before consuming the request, so a refused call leaves it waiting.
+    const tier = params.tier
+    if (!isRemoteTier(tier)) throw remoteError('invalid_argument', 'tier must be viewer, chat or operator.')
+    if (expiryTimer !== null) { cancel(expiryTimer); expiryTimer = null }
+    request = null
     deviceSerial += 1
-    const preset = DEVICE_PRESETS[0]
     const device: RemoteDevice = {
       id: `device-${deviceSerial}`,
-      name: preset.name,
-      kind: preset.kind,
-      platform: preset.platform,
-      tier: preset.tier,
+      name: decided.name,
+      kind: decided.kind,
+      tier,
+      platform: decided.platform,
       pairedAt: nowIso(),
       lastSeenAt: nowIso(),
       online: true,
-      ...partial,
     }
     devices.push(device)
     const entry = activityEntry('paired', device.id, device.name, `${device.name} paired`)
     pushActivity(entry)
-    emit('remote.pairing.completed', { device: { ...device } })
-    emit('remote.device.changed', { device: { ...device }, change: 'added' })
+    emit('remote.pairing.completed', { pairingId, outcome: 'approved', deviceId: device.id })
+    emit('remote.device.changed', { action: 'added', device: { ...device } })
     emit('remote.activity', { entry })
-    emit('remote.changed', status())
-    return { ...device }
+    emit('remote.changed', { status: status() })
+    return { approved: true, device: { ...device } }
   }
 
   function updateDevice(params: Record<string, unknown>): RemoteDevice {
@@ -339,7 +403,7 @@ export function createRemoteSimulator(options: {
       if (name.length < 1 || name.length > DEVICE_NAME_MAX) throw remoteError('invalid_argument', `name must be 1 to ${DEVICE_NAME_MAX} characters.`)
       if (device.name !== name) { device.name = name; changed = true }
     }
-    if (changed) emit('remote.device.changed', { device: { ...device }, change: 'updated' })
+    if (changed) emit('remote.device.changed', { action: 'updated', device: { ...device } })
     return { ...device }
   }
 
@@ -350,9 +414,9 @@ export function createRemoteSimulator(options: {
     const [removed] = devices.splice(index, 1)
     const entry = activityEntry('revoked', removed.id, removed.name, `${removed.name} was removed`)
     pushActivity(entry)
-    emit('remote.device.changed', { device: { ...removed }, change: 'removed' })
+    emit('remote.device.changed', { action: 'removed', device: { ...removed } })
     emit('remote.activity', { entry })
-    emit('remote.changed', status())
+    emit('remote.changed', { status: status() })
     return { revoked: true, deviceId: removed.id }
   }
 
@@ -380,7 +444,7 @@ export function createRemoteSimulator(options: {
       for (const device of devices) {
         if (device.tier !== 'operator') continue
         device.tier = 'chat'
-        emit('remote.device.changed', { device: { ...device }, change: 'updated' })
+        emit('remote.device.changed', { action: 'updated', device: { ...device } })
       }
       const entry = activityEntry('approval', '', HOST_NAME, 'Approvals from remote turned off')
       pushActivity(entry)
@@ -389,44 +453,26 @@ export function createRemoteSimulator(options: {
     return cloneSecurity(security)
   }
 
-  function setDirect(params: Record<string, unknown>): RemoteStatus {
-    if (typeof params.enabled !== 'boolean') throw remoteError('invalid_argument', 'enabled must be a boolean.')
-    direct = params.enabled
-    emit('remote.changed', status())
-    return status()
-  }
-
-  function selectHost(params: Record<string, unknown>): RemoteHost {
-    const id = String(params.hostId ?? '')
-    const host = hosts.find((item) => item.id === id)
-    if (!host) throw remoteError('not_found', 'That computer is not paired.')
-    activeHostId = host.id
-    emit('remote.host.changed', { hostId: host.id, host: { ...host }, activeHostId })
-    return { ...host }
-  }
-
   function reset(seed: RemoteSeed = {}) {
-    cancel(connectTimer)
-    connectTimer = null
-    cancel(jitterTimer)
-    jitterTimer = null
-    cancel(offerTimer)
-    offerTimer = null
-    enabled = seed.enabled ?? false
+    cancel(startTimer)
+    startTimer = null
+    cancel(expiryTimer)
+    expiryTimer = null
+    tailscale = seed.tailscale ?? 'ready'
+    enabled = (seed.enabled ?? false) && tailscale === 'ready'
     link = enabled ? 'online' : 'off'
-    latencyMs = enabled ? randInt(LATENCY_MIN_MS, LATENCY_MAX_MS) : null
-    since = enabled ? nowIso() : null
-    direct = false
+    url = enabled ? SERVE_URL : null
+    servePort = enabled ? SERVE_PORT : null
     error = null
     offer = null
+    request = null
     security = cloneSecurity(DEFAULT_REMOTE_SECURITY)
     activity = []
     activitySerial = 0
+    pairingSerial = 0
     const count = Math.max(0, Math.floor(seed.devices ?? 0))
     devices = Array.from({ length: count }, (_, index) => createSeedDevice(index))
     deviceSerial = count
-    buildHosts(seed.host ?? 'online', seed.hosts ?? 3)
-    if (enabled) startJitter()
   }
 
   async function call(method: RemoteMethod, params: Record<string, unknown> = {}): Promise<unknown> {
@@ -436,26 +482,22 @@ export function createRemoteSimulator(options: {
       case 'remote.disable': return disable()
       case 'remote.pair.begin': return pairBegin()
       case 'remote.pair.cancel': return pairCancel()
-      case 'remote.devices.list': return devices.map((device) => ({ ...device }))
+      case 'remote.pair.confirm': return pairConfirm(params)
+      case 'remote.devices.list': return { devices: devices.map((device) => ({ ...device })) }
       case 'remote.devices.update': return updateDevice(params)
       case 'remote.devices.revoke': return revokeDevice(params)
       case 'remote.security.get': return cloneSecurity(security)
       case 'remote.security.set': return setSecurity(params)
-      case 'remote.activity.list': return activity.map((entry) => ({ ...entry }))
-      case 'remote.direct.set': return setDirect(params)
-      case 'remote.hosts.list': return hosts.map((host) => ({ ...host }))
-      case 'remote.hosts.select': return selectHost(params)
+      case 'remote.activity.list': return { entries: activity.map((entry) => ({ ...entry })) }
       default: throw remoteError('unsupported', `Unknown remote method ${String(method)}.`)
     }
   }
 
   function dispose() {
-    cancel(connectTimer)
-    connectTimer = null
-    cancel(jitterTimer)
-    jitterTimer = null
-    cancel(offerTimer)
-    offerTimer = null
+    cancel(startTimer)
+    startTimer = null
+    cancel(expiryTimer)
+    expiryTimer = null
     listeners.clear()
   }
 
@@ -470,7 +512,7 @@ export function createRemoteSimulator(options: {
       return () => { listeners.delete(listener) }
     },
     reset,
-    simulatePairingCompleted,
+    simulatePhoneRequest,
     dispose,
   }
 }

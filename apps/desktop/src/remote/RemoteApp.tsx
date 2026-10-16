@@ -29,6 +29,16 @@ function writePrefs(next: ClientPrefs) { try { localStorage.setItem(KEY, JSON.st
 const HOST_WORD: Record<RemoteHostState, string> = { online: 'Online', asleep: 'Asleep', offline: 'Offline', reconnecting: 'Reconnecting' }
 const TIER_WORD: Record<RemoteTier, string> = { viewer: 'View only', chat: 'Chat', operator: 'Chat and approve' }
 
+// FIX29 UI: Director — the list of computers lives on this device; there is no
+// host-side `remote.hosts.*` method (docs/remote/PROTOCOL.md:164, ARCHITECTURE.md:152-157).
+// These entries stand in for the device's own store until the client is rewritten.
+const agoIso = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
+const PREVIEW_HOSTS: RemoteHost[] = [
+  { id: 'host-work', name: 'Work PC', os: 'windows', state: 'online', lastSeenAt: agoIso(0), botCount: 5, waitingCount: 1, tier: 'chat' },
+  { id: 'host-home', name: 'Home laptop', os: 'windows', state: 'asleep', lastSeenAt: agoIso(2), botCount: 3, waitingCount: 0, tier: 'chat' },
+  { id: 'host-studio', name: 'Studio Mac', os: 'macos', state: 'offline', lastSeenAt: agoIso(26), botCount: 2, waitingCount: 0, tier: 'viewer' },
+]
+
 function ago(iso: string | null): string {
   if (!iso) return 'a while ago'
   const seconds = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000))
@@ -69,7 +79,7 @@ export function RemoteApp() {
   const nouns = useEntityNoun({ plural: true })
   const [prefs, setPrefs] = useState<ClientPrefs>(readPrefs)
   const [screen, setScreen] = useState<Screen>(prefs.paired ? 'bots' : 'connect')
-  const [hosts, setHosts] = useState<RemoteHost[]>([])
+  const hosts = PREVIEW_HOSTS
   const [hostId, setHostId] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [agentId, setAgentId] = useState<string | null>(null)
@@ -84,10 +94,9 @@ export function RemoteApp() {
 
   const refresh = useCallback(async () => {
     try {
-      const [list, snap] = await Promise.all([rpc<RemoteHost[]>('remote.hosts.list'), fetchSnapshot()])
-      setHosts(list)
+      const snap = await fetchSnapshot()
       setSnapshot(snap)
-      setHostId((current) => current ?? list.find((item) => item.state === 'online')?.id ?? list[0]?.id ?? null)
+      setHostId((current) => current ?? PREVIEW_HOSTS.find((item) => item.state === 'online')?.id ?? PREVIEW_HOSTS[0]?.id ?? null)
     } catch { /* the preview bridge can fail only while reloading */ }
   }, [])
 
@@ -115,7 +124,6 @@ export function RemoteApp() {
   const chooseHost = async (id: string) => {
     setSheet(null)
     setHostId(id)
-    try { await rpc('remote.hosts.select', { hostId: id }) } catch { /* ignore */ }
     setScreen('bots')
     void refresh()
   }

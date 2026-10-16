@@ -1,6 +1,12 @@
 // Remote mode: the shapes shared by the host Settings page, the simulator used
 // by the web preview, and the browser/PWA client. This is a design contract:
-// there is no network behind it yet. See docs/remote/ARCHITECTURE.md.
+// there is no network behind it yet. See docs/remote/ARCHITECTURE.md and the
+// daemon-side shapes in docs/ipc-contract.md ("Remote mode methods").
+//
+// Amended for the Tailscale design (16 October 2026, FIX29 WP6d): there is no
+// relay and no direct listener. `tailscale serve` publishes the host's loopback
+// gateway over the tailnet; pairing is owner-confirmed. The daemon-side shapes
+// are fixed by docs/ipc-contract.md:141-165 and docs/remote/PROTOCOL.md:167-207.
 //
 // Naming: "host" is a computer running Bitbots; "device" is a phone, tablet or
 // browser that has been paired with a host.
@@ -11,8 +17,15 @@ export const REMOTE_TIERS: readonly RemoteTier[] = ['viewer', 'chat', 'operator'
 
 export type DeviceKind = 'phone' | 'tablet' | 'browser' | 'computer'
 
-/** The host's link to the relay (or direct listener). */
-export type RemoteLinkState = 'off' | 'connecting' | 'online' | 'reconnecting' | 'error'
+/** The host's link to its Tailscale serve address. */
+export type RemoteLinkState = 'off' | 'starting' | 'online' | 'error'
+
+/**
+ * What Tailscale must report before Remote can serve. Only `ready` starts;
+ * every other state names the fix the Settings page has to show.
+ * (`docs/ipc-contract.md:147`, `docs/remote/PROTOCOL.md:2.1`.)
+ */
+export type RemoteTailscaleState = 'not_installed' | 'logged_out' | 'https_disabled' | 'port_in_use' | 'funnel_on' | 'ready'
 
 export interface RemoteDevice {
   id: string
@@ -30,16 +43,15 @@ export interface RemoteDevice {
 export interface RemoteStatus {
   enabled: boolean
   link: RemoteLinkState
+  /** The HTTPS address `tailscale serve` publishes, for example "https://work-pc.tail1234.ts.net"; null while nothing is served. */
+  url: string | null
+  /** The loopback port the gateway listens on (`remote.port`, default 48620). */
+  port: number
+  /** The HTTPS port `tailscale serve` uses, 443 or 8443; null while nothing is served. */
+  servePort: number | null
+  tailscale: RemoteTailscaleState
   /** Host name devices see, for example "Work PC". */
   hostName: string
-  /** Relay host shown to the user, for example "relay.bitbots.app". */
-  relay: string
-  latencyMs: number | null
-  /** When the link last became online. */
-  since: string | null
-  /** Whether the optional direct address is switched on. */
-  direct: boolean
-  directAddress: string | null
   deviceCount: number
   connectedCount: number
   /** Remote needs the computer awake; true when "keep awake" is covering that. */
@@ -50,12 +62,30 @@ export interface RemoteStatus {
 export interface PairingOffer {
   /** Eight characters in two groups, for example "K7QM-4XPD". */
   code: string
-  /** The string a QR code encodes. Opaque to the UI. */
+  /** The serve URL the phone opens; null is never sent, the address always exists while an offer is live. */
+  url: string
+  /** The string a QR code encodes; the serve URL. Opaque to the UI. */
   qrPayload: string
   /** ISO time; a code lives five minutes. */
   expiresAt: string
-  relay: string
+  /** Wrong submissions left before the code is burned (five). */
+  attemptsLeft: number
 }
+
+/** Payload of `remote.pairing.requested`: the phone submitted the right code and locked the offer. */
+export interface PairingRequest {
+  pairingId: string
+  name: string
+  kind: DeviceKind
+  platform: string
+  /** The Tailscale login that made the request; null when no login header was sent. */
+  login: string | null
+  /** ISO time; the request expires with the code. */
+  expiresAt: string
+}
+
+/** Outcome of `remote.pairing.completed`. */
+export type PairingOutcome = 'approved' | 'rejected' | 'expired' | 'cancelled' | 'burned'
 
 export interface RemoteSecurityOptions {
   /** Operator devices may approve permission requests. Off by default. */
@@ -77,7 +107,11 @@ export interface RemoteActivityEntry {
   summary: string
 }
 
-/** What the browser/PWA client knows about each paired computer. */
+/**
+ * What the browser/PWA client knows about each paired computer. This list lives
+ * only on the device: there is no host-side `remote.hosts.*` method
+ * (`docs/ipc-contract.md:164`, `docs/remote/ARCHITECTURE.md:152-157`).
+ */
 export type RemoteHostState = 'online' | 'asleep' | 'offline' | 'reconnecting'
 
 export interface RemoteHost {
@@ -93,30 +127,31 @@ export interface RemoteHost {
   tier: RemoteTier
 }
 
-/** Method names of the simulated `remote.*` family (the daemon will own these later). */
+/** Method names of the daemon's `remote.*` family (`docs/ipc-contract.md:145-158`). */
 export const REMOTE_METHODS = [
   'remote.status',
   'remote.enable',
   'remote.disable',
   'remote.pair.begin',
   'remote.pair.cancel',
+  'remote.pair.confirm',
   'remote.devices.list',
   'remote.devices.update',
   'remote.devices.revoke',
   'remote.security.get',
   'remote.security.set',
   'remote.activity.list',
-  'remote.direct.set',
-  'remote.hosts.list',
-  'remote.hosts.select',
 ] as const
 export type RemoteMethod = typeof REMOTE_METHODS[number]
 
-/** Event types the simulator emits (payloads are the shapes above). */
-export const REMOTE_EVENTS = ['remote.changed', 'remote.device.changed', 'remote.pairing.completed', 'remote.activity', 'remote.host.changed'] as const
+/** Event types the simulator emits; payload shapes are in `docs/ipc-contract.md:160`. */
+export const REMOTE_EVENTS = ['remote.changed', 'remote.pairing.requested', 'remote.pairing.completed', 'remote.device.changed', 'remote.activity'] as const
 export type RemoteEventType = typeof REMOTE_EVENTS[number]
 
 export const PAIRING_CODE_TTL_MS = 5 * 60 * 1000
+
+/** Wrong submissions a live code survives before it is burned (`docs/ipc-contract.md:150`). */
+export const PAIRING_MAX_ATTEMPTS = 5
 
 export function isRemoteTier(value: unknown): value is RemoteTier {
   return value === 'viewer' || value === 'chat' || value === 'operator'

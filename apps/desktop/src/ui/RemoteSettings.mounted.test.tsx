@@ -3,12 +3,14 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRemoteSimulator, type RemoteSimulator } from '../preview/remoteFixture'
+import type { PairingRequest } from '../remote/remoteContract'
 
 let simulator: RemoteSimulator
 const listeners = new Set<(event: { type: string; payload?: unknown }) => void>()
+const events: Array<{ type: string; payload?: unknown }> = []
 vi.mock('../tauri', () => ({
   rpc: (method: string, params: Record<string, unknown> = {}) => method === 'remote.preview.pair'
-    ? Promise.resolve(simulator.simulatePairingCompleted())
+    ? Promise.resolve(simulator.simulatePhoneRequest())
     : simulator.call(method as never, params),
   listenForDaemonEvents: (handler: (event: { type: string; payload?: unknown }) => void) => { listeners.add(handler); return Promise.resolve(() => listeners.delete(handler)) },
   previewMode: true,
@@ -23,7 +25,8 @@ const flush = async (ms = 80) => { await act(async () => { await new Promise((re
 beforeEach(() => {
   simulator = createRemoteSimulator()
   simulator.reset({ enabled: false, devices: 0 })
-  simulator.subscribe((event) => { for (const listener of listeners) listener(event) })
+  events.length = 0
+  simulator.subscribe((event) => { events.push(event); for (const listener of listeners) listener(event) })
 })
 afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null; simulator.dispose(); listeners.clear() })
 
@@ -58,6 +61,13 @@ describe('RemoteSettings', () => {
     expect(view.querySelector('.remote-code')?.textContent).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
     await act(async () => { button(view, 'Simulate a phone pairing')!.click() })
     await flush()
+    // FIX29: pairing is owner-confirmed now. This page has no approve control yet
+    // (the Director rewrites Settings > Remote), so the test answers through the
+    // simulator's host side, exactly as `remote.pair.confirm` does.
+    const request = events.find((event) => event.type === 'remote.pairing.requested')?.payload as PairingRequest
+    expect(request?.pairingId).toBeTruthy()
+    await act(async () => { await simulator.call('remote.pair.confirm', { pairingId: request.pairingId, approve: true, tier: 'chat' }) })
+    await flush(140)
     expect(view.querySelector('.remote-paired')?.textContent).toContain('is connected')
     expect(view.querySelectorAll('.remote-device').length).toBe(1)
     const name = view.querySelector('.remote-device-copy strong')!.textContent!

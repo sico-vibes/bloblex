@@ -2,6 +2,7 @@
 // daemon owns the store and the rules; this page lets the user review, edit and
 // remove notes, and write a few lines about themselves.
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { RowCopy } from './SettingsParts'
 import { Check, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { Agent, MemoryRecord, Project } from '../types'
 import { isMemoryRecord } from '../types'
@@ -102,23 +103,22 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
 
   return <div className="memory-page">
     <p className="settings-intro">Memory lets {nouns} save short notes, like preferences and decisions, and recall them in later conversations. Notes a {noun} saves for a project or for everyone stay unused until you approve them. Don’t keep passwords or keys here.</p>
-    <section className="settings-group" aria-label="Memory">
+    <section className="settings-group memory-switches" aria-label="Memory">
+      <div className="settings-card">
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Let {nouns} use memory</strong><small>Adds saved notes to what {nouns} see and lets them save new ones.</small></span>
+        <RowCopy label={`Let ${nouns} use memory`} hint={`Adds saved notes to what ${nouns} see and lets them save new ones.`} />
         <span className="settings-row-control">
           <button type="button" className={`toggle ${enabled ? 'on' : ''}`} role="switch" aria-label={`Let ${nouns} use memory`} aria-checked={enabled} disabled={!connected || busy} onClick={() => void run(() => onEnabledChange(!enabled))}><i /></button>
         </span>
       </div>
-    </section>
-
-    {enabled && <section className="settings-group" aria-label="Shared notes">
-      <div className="settings-row">
-        <span className="settings-row-copy"><strong>Let {nouns} suggest shared notes</strong><small>{Nouns} may propose notes for a project or for everyone. Each one waits for your approval before anyone uses it.</small></span>
+      {enabled && <div className="settings-row">
+        <RowCopy label={`Let ${nouns} suggest shared notes`} hint={`${Nouns} may propose notes for a project or for everyone. Each one waits for your approval before anyone uses it.`} />
         <span className="settings-row-control">
           <button type="button" className={`toggle ${sharedWrites ? 'on' : ''}`} role="switch" aria-label={`Let ${nouns} suggest shared notes`} aria-checked={sharedWrites} disabled={!connected || busy} onClick={() => void run(() => onSharedWritesChange(!sharedWrites))}><i /></button>
         </span>
+      </div>}
       </div>
-    </section>}
+    </section>
 
     <section className="memory-about" aria-label="About you">
       <label className="blob-field"><span>About you<small className={aboutOver ? 'over' : ''}>{aboutDraft.length}/{ABOUT_LIMIT}</small></span>

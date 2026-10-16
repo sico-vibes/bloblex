@@ -71,7 +71,9 @@
 /* Side conversations. */
 /* The side conversation pill floats in the middle of the header, like a call bubble. */
 .chat-header { position: relative; }
-.side-header { position: absolute; left: 50%; top: 50%; z-index: 2; max-width: min(560px, calc(100% - 260px)); transform: translate(-50%, -50%); }
+/* A bot-to-bot conversation sits a little lower, clear of the window's title bar. */
+.chat-header:has(.side-header) { height: 64px; padding-top: 10px; }
+.side-header { position: absolute; left: 50%; top: calc(50% + 5px); z-index: 2; max-width: min(560px, calc(100% - 260px)); transform: translate(-50%, -50%); }
 .side-header-pill { max-width: 100%; height: 34px; padding: 0 14px 0 7px; display: inline-flex; align-items: center; gap: 10px; color: var(--text-3); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--surface-raised); box-shadow: 0 6px 22px #0000004d; font-size: var(--fs-sm); }
 .side-header-pair { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
 .side-header-pair b { color: color-mix(in srgb, var(--chip-accent, var(--text-1)) 72%, var(--text-1)); font-weight: 600; }

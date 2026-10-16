@@ -201,7 +201,7 @@ export interface SessionLink extends JsonRecord {
 
 /** Team metadata on a stored message. */
 export interface MessageMeta extends JsonRecord {
-  kind?: 'delegation' | 'blob_message' | 'blob_reply' | 'plan' | 'context_reset' | string
+  kind?: 'delegation' | 'blob_message' | 'blob_reply' | 'blob_created' | 'plan' | 'context_reset' | string
   /** `context_reset` notices: why the provider's context changed, and whether earlier turns are gone for the agent. */
   reason?: 'compaction' | 'fresh_session' | 'restart' | string
   contextLost?: boolean
@@ -213,6 +213,9 @@ export interface MessageMeta extends JsonRecord {
   fromName?: string
   sideSessionId?: string
   topic?: string
+  /** `blob_created` notices: the new bot and the name it was given. */
+  agentId?: string
+  name?: string
 }
 
 export interface UserQuestion extends JsonRecord {
@@ -278,6 +281,10 @@ export interface Session extends JsonRecord {
   model?: string
   modelLock?: SessionModelLock | null
   link?: SessionLink | null
+  /** The project the conversation was started for (daemon-stamped; absent on older rows). */
+  projectId?: string | null
+  /** Where it works, as a name people know: the project name, or "Casual". */
+  workspaceLabel?: string | null
   contextUsed?: number | null
   contextSize?: number | null
   /** Model identity associated with the last provider-reported context measurement. */

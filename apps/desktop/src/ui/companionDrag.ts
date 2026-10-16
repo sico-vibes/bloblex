@@ -16,9 +16,10 @@ function shouldDrag(el: Element): boolean {
   if (el.closest(`[${COMPANION_NO_DRAG_ATTR}]`)) return false
   const control = el.closest(INTERACTIVE)
   if (!control) return true
-  // The compact face is a canvas inside the open button, and that canvas is
-  // the mousedown target. Other control descendants must not start a drag.
-  return el.classList.contains('blob-canvas') && control.classList.contains('compact-bot')
+  // The compact face is a canvas (or the frame around it, or the robot head)
+  // inside the open button, and that is the mousedown target. Other control
+  // descendants must not start a drag.
+  return control.classList.contains('compact-bot') && el !== control
 }
 
 export function stampCompanionDragRegions(root: HTMLElement) {

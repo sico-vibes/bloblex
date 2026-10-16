@@ -5,8 +5,7 @@ import type { Agent, Project, Runtime, Session } from '../types'
 import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
 import type { ExecutionSendGate } from '../executionContract'
 import { Archive, Check, ChevronLeft, Copy, Download, Trash2 } from 'lucide-react'
-import { BotRail, BotSaveBar, railSections, sectionDomId } from './BotPageChrome'
-import { BotPreviewPane } from './BotPreviewPane'
+import { BotSaveBar, sectionDomId } from './BotPageChrome'
 import { BotWizard } from './BotWizard'
 import { labelize } from '../types'
 import { summarizeChanges, type BotSection, type ChangedField } from './agentForm'
@@ -122,11 +121,10 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
     const field = scrollRef.current?.querySelector<HTMLInputElement>('input[aria-label$=" name"]')
     field?.focus()
   }, [mode])
-  const sections = railSections(mode)
   const discardBody = mode === 'edit' && discard === 'revert' && changes.length
     ? 'These changes will be lost: ' + summarizeChanges(changes, 8) + '.'
     : discard === 'leave' && changes.length ? 'Unsaved changes: ' + summarizeChanges(changes, 8) + '.' : undefined
-  const renderSettings = (only?: BotSection[]) => <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate}  sections={only} sessions={sessions} onOpenMemory={onOpenMemory} />
+  const renderSettings = (only?: BotSection[]) => <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} savedRuntimeId={agent?.runtimeId ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate}  sections={only} sessions={sessions} onOpenMemory={onOpenMemory} />
   // A draft that already has a name (an import, a duplicate, a starter) is a review job, not a blank page.
   const [advanced, setAdvanced] = useState(() => mode === 'create' && draft.name.trim().length > 0)
   const wizardActive = mode === 'create' && !advanced
@@ -137,8 +135,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
       <h1 className="blob-page-heading">{title}</h1>
     </header>
     <div className="blob-page-scroll" ref={scrollRef}>
-      <div className="blob-page-layout with-preview">
-        {!wizardActive && <BotRail sections={sections} changes={changes} scrollRoot={scrollRef} />}
+      <div className={`blob-page-layout ${wizardActive ? 'wizard' : ''}`.trim()}>
         <div className="blob-page-column">
           {wizardActive && <BotWizard draft={draft} errors={errors} noun={noun} ready={ready} saving={saving} providerName={providerName} onDraftChange={onDraftChange} renderSections={(only) => renderSettings(only)} onCreate={trySave} onAdvanced={() => setAdvanced(true)} onCancel={requestBack} />}
           {!wizardActive && <>
@@ -152,14 +149,13 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
           {mode === 'edit' && <section id={sectionDomId('manage')} className="settings-group blob-group" aria-label="Manage">
             <div className="settings-group-head"><h3>Manage</h3></div>
             <div className="settings-card">
-              {onDuplicate && <button type="button" className="blob-manage-row" onClick={onDuplicate}><Copy size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Duplicate</strong><small>Make a copy with the same look, model and instructions.</small></span></button>}
-              {onExport && <button type="button" className="blob-manage-row" onClick={onExport}><Download size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Export</strong><small>Save this {noun} as a file you can share or import later.</small></span></button>}
-              <button type="button" className="blob-manage-row danger" onClick={onArchive}><Archive size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Archive {draft.name.trim() || `this ${noun}`}</strong><small>It leaves the sidebar and companion. Its conversations stay saved.</small></span></button>
+              {onDuplicate && <button type="button" className="blob-manage-row" title={`Make a copy with the same look, model and instructions.`} onClick={onDuplicate}><Copy size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Duplicate</strong></span></button>}
+              {onExport && <button type="button" className="blob-manage-row" title={`Save this ${noun} as a file you can share or import later.`} onClick={onExport}><Download size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Export</strong></span></button>}
+              <button type="button" className="blob-manage-row danger" title={`It leaves the sidebar and companion. Its conversations stay saved.`} onClick={onArchive}><Archive size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Archive {draft.name.trim() || `this ${noun}`}</strong></span></button>
             </div>
           </section>}
           </>}
         </div>
-        <BotPreviewPane draft={draft} agentId={agent?.id ?? null} connected={connected} />
       </div>
     </div>
     {!wizardActive && <BotSaveBar mode={mode} noun={noun} dirty={dirty} saving={saving} changes={changes} invalidCount={invalid.length} saved={saved} canSubmit onSave={trySave} onDiscard={requestDiscard} />}

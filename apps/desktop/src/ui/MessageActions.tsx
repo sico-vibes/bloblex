@@ -33,16 +33,20 @@ export function messageExcerpt(value: string, limit = 160) {
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat
 }
 
-export function MessageActions({ text, time, reactions = [], canReply = true, onReply, onRetry, onToggleReaction, onError }: {
+/**
+ * Copy, quote and react, side by side beside the bubble, with the time after
+ * them (retry lives in the message's right-click menu). `compact` is the
+ * companion's smaller size; quote and react appear only when they are given.
+ */
+export function MessageActions({ text, time, reactions = [], canReply = true, compact = false, onReply, onToggleReaction, onError }: {
   text: string
   /** Local time of the message, shown beside the buttons on hover. */
   time?: string
   reactions?: string[]
   canReply?: boolean
-  onReply: () => void
-  /** Provided only for the latest turn's assistant messages; the slot is always reserved. */
-  onRetry?: () => void
-  onToggleReaction: (emoji: string) => Promise<unknown> | void
+  compact?: boolean
+  onReply?: () => void
+  onToggleReaction?: (emoji: string) => Promise<unknown> | void
   onError: (error: string) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -103,7 +107,7 @@ export function MessageActions({ text, time, reactions = [], canReply = true, on
     previousOpen.current = open
   }, [open])
   const choose = async (emoji: string) => {
-    try { await onToggleReaction(emoji); close(true) }
+    try { await onToggleReaction?.(emoji); close(true) }
     catch { onError('Could not save your reaction. Try again.') }
   }
   const moveReactionFocus = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -117,15 +121,13 @@ export function MessageActions({ text, time, reactions = [], canReply = true, on
     event.preventDefault()
     buttons[next]?.focus()
   }
-  return <div ref={rootRef} className={`message-actions${open ? ' open' : ''}`} role="toolbar" aria-label="Message actions">
-    <button type="button" className={`message-action-button${copied ? ' copied' : ''}`} aria-label={copied ? 'Copied' : 'Copy message text'} title={copied ? 'Copied' : 'Copy'} disabled={!text} onClick={copy}>{copied ? <Check size={15} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}</button>
-    <button type="button" className="message-action-button" aria-label={canReply ? 'Quote message' : 'This message cannot be quoted'} title={canReply ? 'Quote' : 'Message text is unavailable'} disabled={!canReply} onClick={onReply}><CornerUpLeft size={15} aria-hidden="true" /></button>
-    {onRetry
-      ? <button type="button" className="message-action-button" aria-label="Retry this turn" title="Retry" onClick={onRetry}><RotateCcw size={14} aria-hidden="true" /></button>
-      : <span className="message-action-slot" aria-hidden="true" />}
-    <div className="message-reaction-anchor">
+  const iconSize = compact ? 13 : 15
+  return <div ref={rootRef} className={`message-actions${open ? ' open' : ''}${compact ? ' compact' : ''}`} role="toolbar" aria-label="Message actions">
+    <button type="button" className={`message-action-button${copied ? ' copied' : ''}`} aria-label={copied ? 'Copied' : 'Copy message text'} title={copied ? 'Copied' : 'Copy'} disabled={!text} onClick={copy}>{copied ? <Check size={iconSize} aria-hidden="true" /> : <Copy size={iconSize - 1} aria-hidden="true" />}</button>
+    {onReply && <button type="button" className="message-action-button" aria-label={canReply ? 'Quote message' : 'This message cannot be quoted'} title={canReply ? 'Quote' : 'Message text is unavailable'} disabled={!canReply} onClick={onReply}><CornerUpLeft size={iconSize} aria-hidden="true" /></button>}
+    {onToggleReaction && <div className="message-reaction-anchor">
       <button ref={triggerRef} type="button" className="message-action-button" aria-label="React to message" title="React" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        <SmilePlus size={15} aria-hidden="true" />
+        <SmilePlus size={iconSize} aria-hidden="true" />
       </button>
       {open && createPortal(<div ref={pickerRef} className="message-reaction-picker" role="dialog" aria-label="Choose a reaction" style={position} onKeyDown={moveReactionFocus}>
         {MESSAGE_REACTIONS.map(({ emoji, label }) => {
@@ -133,7 +135,7 @@ export function MessageActions({ text, time, reactions = [], canReply = true, on
           return <button key={emoji} type="button" className="message-reaction-option" aria-label={`${selected ? 'Remove' : 'Add'} your ${label.toLowerCase()} reaction`} aria-pressed={selected} title={label} onClick={() => void choose(emoji)}>{emoji}</button>
         })}
       </div>, document.body)}
-    </div>
+    </div>}
     {time && <span className="message-action-time" aria-hidden="true">{time}</span>}
     <span className="sr-only" role="status" aria-live="polite">{copied ? 'Copied to clipboard' : ''}</span>
   </div>

@@ -3,7 +3,7 @@
 // to a face and the line it is working on. Same projects, roles, leader and
 // side conversations as the main window.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeftRight, Check, ClipboardList, Copy, LayoutGrid, Pin, PinOff, Terminal, X } from 'lucide-react'
+import { ArrowLeftRight, ArrowUpRight, Check, ClipboardList, Copy, LayoutGrid, Pin, PinOff, Terminal, X } from 'lucide-react'
 import type { Agent, ChatMessage, Project, Runtime, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -11,7 +11,7 @@ import { MAX_COMPANION_PEERS } from '../blob/companionLayout'
 import { agentColorHex } from './agentColor'
 import { activityTitle } from './ActivityDetails'
 import { buildConversationItems } from './conversation'
-import { MessageReactionBadges, ReplyContextStrip } from './MessageActions'
+import { MessageActions, MessageReactionBadges, ReplyContextStrip } from './MessageActions'
 import { conversationPreview, groupAgentsByProject, mainSessionFor, sessionIsBusy, sideSessionsFor, sideTitle, splitMentions } from './teamSelectors'
 import { useEntityNoun } from './vocabulary'
 
@@ -94,7 +94,9 @@ export function CompanionPeers({ agents, projects, sessions, runtimes, connected
           const line = peerLine(agent, sessions, state)
           return <button key={agent.id} type="button" className={`peer state-${state}`} style={{ ['--peer' as string]: agentColorHex(agent.color), animationDelay: `${index * 45}ms` }} aria-keyshortcuts={`Control+${index + 1}${state === 'waiting' ? ' N' : ''}`} aria-label={`${agent.name}${agent.leader ? ', team leader' : ''}: ${line}`} title={`${agent.name}: ${line}`} onClick={() => onSelect(agent)}>
             <span className="peer-face"><Face agent={agent} size={22} mood={state === 'offline' ? 'offline' : 'idle'} />{agent.leader && <i className="peer-leader" aria-hidden="true">★</i>}</span>
-            <span className="peer-copy"><b>{agent.name}</b><span className={`peer-line${state === 'working' ? ' shimmer' : ''}`}>{line}</span></span>
+            {/* One line per chip so the name has room; what it is doing is in the tooltip and the label. */}
+            <span className="peer-copy"><b className={state === 'working' ? 'shimmer' : undefined}>{agent.name}</b></span>
+            {state !== 'idle' && state !== 'offline' && <i className={`peer-state-dot ${state}`} aria-hidden="true" />}
           </button>
         })}
       </div>}
@@ -269,8 +271,16 @@ export function CompanionCopyButton({ text, label = 'Copy message text' }: { tex
   return <button type="button" className={`companion-copy${copied ? ' copied' : ''}`} aria-label={copied ? 'Copied' : label} title={copied ? 'Copied' : 'Copy'} disabled={!text} onClick={(event) => { event.stopPropagation(); copy() }}>{copied ? <Check size={12} aria-hidden="true" /> : <Copy size={12} aria-hidden="true" />}</button>
 }
 
-/** A conversation item in the companion chat, with the same team semantics as the main window. */
-export function CompanionChatItem({ message, agents, onOpenSide, currentSessionId, availableMessageIds = new Set() }: { message: ChatMessage; agents: readonly Agent[]; onOpenSide: (sessionId: string | undefined) => void; currentSessionId?: string; availableMessageIds?: ReadonlySet<string> }): ReactNode {
+function clockOf(value: unknown) {
+  const time = Date.parse(String(value ?? ''))
+  return Number.isFinite(time) ? new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined
+}
+
+/**
+ * A conversation item in the companion chat, with the same team semantics and
+ * the same per-message actions as the main window (at the companion's size).
+ */
+export function CompanionChatItem({ message, agents, onOpenSide, onOpenAgent, onToggleReaction, currentSessionId, availableMessageIds = new Set() }: { message: ChatMessage; agents: readonly Agent[]; onOpenSide: (sessionId: string | undefined) => void; onOpenAgent?: (agent: Agent) => void; onToggleReaction?: (messageId: string, emoji: string) => Promise<unknown> | void; currentSessionId?: string; availableMessageIds?: ReadonlySet<string> }): ReactNode {
   const role = String(message.role ?? '')
   const text = String(message.content ?? message.text ?? '')
   const meta = message.meta
@@ -291,10 +301,24 @@ export function CompanionChatItem({ message, agents, onOpenSide, currentSessionI
     const name = (meta.kind === 'delegation' ? meta.peerName : meta.fromName) ?? peer?.name ?? 'Teammate'
     const failed = meta.kind === 'delegation' && meta.direction === 'failed'
     return <div className="companion-team-chip-row">
-      <button type="button" className={`companion-team-chip${failed ? ' failed' : ''}`} style={peer ? { ['--chip-accent' as string]: agentColorHex(peer.color) } : undefined} onClick={() => onOpenSide(meta.sideSessionId)} aria-label={`${meta.kind === 'delegation' ? (failed ? 'Could not reach' : 'Messaged') : 'Message from'} ${name}. Open in Bitbots`}>
-        <span>{meta.kind === 'delegation' ? (failed ? 'Could not reach' : 'Messaged') : 'Message from'}</span>{peer && <Face agent={peer} size={14} />}<b>{name}</b>
+      <button type="button" className={`companion-team-chip${failed ? ' failed' : ''}`} style={peer ? { ['--chip-accent' as string]: agentColorHex(peer.color) } : undefined} disabled={!meta.sideSessionId} title={text.trim() ? text.trim().slice(0, 280) : undefined} onClick={() => onOpenSide(meta.sideSessionId)} aria-label={`${meta.kind === 'delegation' ? (failed ? 'Could not reach' : 'Messaged') : 'Message from'} ${name}. Open the conversation`}>
+        <span>{meta.kind === 'delegation' ? (failed ? 'Could not reach' : 'Messaged') : 'Message from'}</span>{peer && <Face agent={peer} size={14} />}<b>{name}</b>{meta.sideSessionId && <ArrowUpRight size={11} aria-hidden="true" className="companion-team-chip-open" />}
       </button>
     </div>
+  }
+  if (role === 'notice' && meta?.kind === 'blob_created') {
+    const created = agents.find((agent) => agent.id === meta.agentId)
+    const name = created?.name ?? (typeof meta.name === 'string' ? meta.name : 'Teammate')
+    return <div className="companion-team-chip-row">
+      <button type="button" className="companion-team-chip created" style={created ? { ['--chip-accent' as string]: agentColorHex(created.color) } : undefined} disabled={!created || !onOpenAgent} onClick={() => { if (created) onOpenAgent?.(created) }} aria-label={`Created ${name}${created?.role ? `, ${created.role}` : ''}`}>
+        <span>Created</span>{created && <Face agent={created} size={14} />}<b>{name}</b>{created?.role?.trim() && <em className="companion-team-chip-topic">{created.role.trim()}</em>}
+      </button>
+    </div>
+  }
+  if (role === 'user' && meta?.kind === 'blob_message') {
+    // In a conversation between two bots, the asking bot's message reads as theirs, not as yours.
+    const from = agents.find((agent) => agent.id === meta.fromAgentId)
+    return <div className="chat-row peer-message"><div className="companion-peer-author">{from && <Face agent={from} size={14} />}<b style={from ? { color: agentColorHex(from.color) } : undefined}>{meta.fromName ?? from?.name ?? 'Teammate'}</b></div><div className="reply message-bubble">{plain(text)}</div></div>
   }
   if ((role === 'notice' || role === 'user') && meta?.kind === 'auto_retry') {
     return <div className="companion-context-divider" role="status"><span>{role === 'user' ? 'Continuing automatically' : plain(text)}</span></div>
@@ -306,9 +330,11 @@ export function CompanionChatItem({ message, agents, onOpenSide, currentSessionI
     return <div className="companion-plan"><ClipboardList size={12} aria-hidden="true" /><span><b>Proposed plan</b> {plain(text)}</span></div>
   }
   const quotedContext = reply && <ReplyContextStrip target={reply} compact available={reply.sourceSessionId === currentSessionId && availableMessageIds.has(reply.messageId)} onJump={jump} />
-  if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}<div className="bubble"><CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div><CompanionCopyButton text={text} /></div>
+  const reactions = Array.isArray(message.reactions) ? message.reactions as string[] : []
+  const actions = (copyText: string) => <MessageActions compact text={copyText} time={clockOf(message.createdAt)} reactions={reactions} onToggleReaction={onToggleReaction && messageId ? (emoji) => onToggleReaction(messageId, emoji) : undefined} onError={() => undefined} />
+  if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}{actions(text)}<div className="bubble"><CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div></div>
   const replyText = plain(text)
-  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply message-bubble">{replyText}<MessageReactionBadges reactions={message.reactions} /></div><CompanionCopyButton text={replyText} /></div> : null
+  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply message-bubble">{replyText}<MessageReactionBadges reactions={message.reactions} /></div>{actions(replyText)}</div> : null
 }
 
 /** Side conversations the focused blob took part in, newest first. */

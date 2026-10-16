@@ -3,8 +3,12 @@
 .remote-hero { margin: 0 0 20px; padding: 18px; display: flex; gap: 16px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-raised); }
 .remote-hero h3 { margin: 0 0 6px; font-size: var(--fs-md); font-weight: 600; }
 .remote-hero p { margin: 0; color: var(--text-2); font-size: var(--fs-sm); line-height: 1.55; text-wrap: pretty; }
-.remote-hero-art { flex: 0 0 auto; width: 74px; height: 56px; display: grid; grid-template-columns: 1fr 14px auto; align-items: end; gap: 0; color: var(--text-1); }
-.remote-hero-art i { height: 2px; margin-bottom: 14px; background: repeating-linear-gradient(90deg, var(--text-3) 0 3px, transparent 3px 6px); animation: remote-link 1.6s linear infinite; }
+.remote-hero-art { flex: 0 0 auto; height: 44px; display: flex; align-items: center; gap: 6px; color: var(--text-1); }
+.remote-hero-art svg { flex: 0 0 auto; }
+/* One even dashed link between the two devices; it moves only while Remote is on. */
+.remote-hero-art i { width: 26px; height: 2px; flex: 0 0 auto; border-radius: 1px; background: repeating-linear-gradient(90deg, var(--text-3) 0 4px, transparent 4px 7px); }
+.remote-hero-art.live i { background-image: repeating-linear-gradient(90deg, var(--status-ok, var(--text-1)) 0 4px, transparent 4px 7px); animation: remote-link 1.2s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .remote-hero-art.live i { animation: none; } }
 @keyframes remote-link { to { background-position-x: 6px; } }
 
 .remote-status { margin: 0; padding: 12px 16px; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--line); }

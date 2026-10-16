@@ -8,7 +8,7 @@ import './lookPicker.css'
 /** The look the app ships with, in the order they are offered. */
 export const LOOKS: ReadonlyArray<{ id: ThemeStyle; name: string; tag: 'Primary' | 'Alternative'; blurb: string }> = [
   { id: 'bitbots', name: 'Bitbots', tag: 'Primary', blurb: 'Pixel robots, square corners and dot-matrix type.' },
-  { id: 'blobots', name: 'Blobots', tag: 'Alternative', blurb: 'Soft blobs, rounded corners and a calmer feel.' },
+  { id: 'blobots', name: 'Blobots', tag: 'Alternative', blurb: 'Soft round bots, rounded corners and a calmer feel.' },
 ]
 
 /** The same default avatar colour in both looks, so only the style differs. */
@@ -44,7 +44,7 @@ export function LookPicker({ value, onChange, disabled = false, compact = false,
         onClick={() => { setWoken(look.id); onChange(look.id) }}>
         <span className={`look-tag ${look.tag === 'Primary' ? 'primary' : 'alternative'}`}>{look.tag}</span>
         <span className="look-avatar" aria-hidden="true">
-          <LookAvatar key={woken === look.id ? 'wake' : 'rest'} look={look.id} size={compact ? 44 : 72} mood={woken === look.id ? 'success' : 'idle'} greeting={woken === look.id && look.id === 'bitbots'} />
+          <LookAvatar key={woken === look.id ? 'wake' : 'rest'} look={look.id} size={compact ? 44 : 72} mood={woken === look.id ? 'success' : 'idle'} />
         </span>
         <strong>{look.name}</strong>
         {!compact && <small>{look.blurb}</small>}

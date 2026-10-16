@@ -22,7 +22,8 @@ function mount(props: Partial<React.ComponentProps<typeof FirstRunOnboarding>> =
 }
 function button(name: string) { return [...(host?.querySelectorAll('button') ?? [])].find((item) => item.textContent?.includes(name))! }
 function input(value: string, label: string) {
-  const target = host?.querySelector<HTMLInputElement>('input')
+  const target = [...(host?.querySelectorAll<HTMLLabelElement>('label') ?? [])].find((item) => item.textContent?.toLowerCase().startsWith(label.toLowerCase()))?.querySelector<HTMLInputElement>('input')
+    ?? host?.querySelector<HTMLInputElement>('input')
   if (!target) throw new Error('Input missing: ' + label)
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(target, value)
@@ -82,7 +83,7 @@ describe('FirstRunOnboarding', () => {
     expect(mounted.querySelector('[data-provider="opencode"]')?.textContent).toContain('Zen: signed in · Go: signed in')
   })
 
-  it('shows found agent details and sends the selected runtime, name and colour to create', async () => {
+  it('shows found agent details and sends the whole first-bot draft to create', async () => {
     mocks.rpc.mockResolvedValue({ runtimeId:'runtime-codex', provider:'codex', validated:true, fallback:false, models:[
       { id:'gpt-6-sol', displayName:'GPT-6 Sol', supportedThinking:['low','medium','high','xhigh','max','ultra'], serviceTiers:[], isDefault:true },
       { id:'gpt-6-luna', displayName:'GPT-6 Luna', supportedThinking:['low','medium','high','xhigh','max'], serviceTiers:[], isDefault:false },
@@ -90,15 +91,18 @@ describe('FirstRunOnboarding', () => {
     const create = vi.fn(async () => ({ id: 'agent-1' } as Agent))
     const saveName = vi.fn()
     const { host: mounted } = mount({ initialStep: 0, runtimes: [runtime], onCreate: create, onSaveName: saveName })
-    input('Sam', 'name')
+    input('Sam', 'your name')
     await act(async () => { button('Continue').click(); await Promise.resolve(); await Promise.resolve() })
     expect(mounted.textContent).toContain('1.2')
     expect(mounted.textContent).toContain('Signed in')
     await act(async () => { button('Continue').click(); await Promise.resolve(); await Promise.resolve() })
     input('Helper', 'bot name')
+    input('Reviewer', 'role')
     await act(async () => { button('Create bot').click(); await Promise.resolve() })
     expect(saveName).toHaveBeenCalledWith('Sam')
-    expect(create).toHaveBeenCalledWith(runtime, 'Helper', '#b7a7f4', 'gpt-6-luna')
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: 'runtime-codex', name: 'Helper', role: 'Reviewer', model: 'gpt-6-luna', approvalMode: 'ask' }))
+    // The first bot is customised here: the look editor sits beside the fields.
+    expect(mounted.querySelector('.onboarding-bot-look')).not.toBeNull()
   })
 
   it('shows skeleton rows while the first agent scan is running', () => {
@@ -118,7 +122,7 @@ describe('FirstRunOnboarding', () => {
     expect(codex?.querySelector('[aria-label="Copy Codex version command"]')).toBeNull()
   })
 
-  it("labels the character with the chosen look's word and follows a look change", async () => {
+  it('calls the character a bot in both looks', async () => {
     mocks.rpc.mockResolvedValue({ runtimeId: 'runtime-codex', provider: 'codex', validated: true, fallback: false, models: [
       { id: 'gpt-6-sol', displayName: 'GPT-6 Sol', supportedThinking: [], serviceTiers: [], isDefault: true },
     ] })
@@ -127,13 +131,11 @@ describe('FirstRunOnboarding', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(mounted.textContent).toContain('Meet your first bot')
     expect(mounted.textContent).toContain('Bot name')
-    expect(mounted.querySelector('[aria-label="Bot colour"]')).not.toBeNull()
     expect(button('Create bot')).toBeTruthy()
     act(() => setThemeStyle('blobots'))
-    expect(mounted.textContent).toContain('Meet your first blob')
-    expect(mounted.textContent).toContain('Blob name')
-    expect(mounted.querySelector('[aria-label="Blob colour"]')).not.toBeNull()
-    expect(button('Create blob')).toBeTruthy()
+    expect(mounted.textContent).toContain('Meet your first bot')
+    expect(mounted.textContent).not.toMatch(/\bblob\b/i)
+    expect(button('Create bot')).toBeTruthy()
     act(() => setThemeStyle('bitbots'))
   })
 })

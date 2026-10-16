@@ -22,9 +22,12 @@ describe('quota display model', () => {
       { provider:'claude', lastError:'unauthorized', snapshot:null },
       { provider:'codex', lastError:'timeout', snapshot:{ limits:[{ label:'Codex', primary:{ usedPercent:5, windowDurationMins:300 } }] } },
     ])
-    expect(missing).toMatchObject({ windows:[], status:'Sign-in expired', stale:false })
+    expect(missing).toMatchObject({ windows:[], status:'Sign-in needed', stale:false })
     expect(stale).toMatchObject({ status:'Timed out', stale:true })
     expect(quotaRows([{ provider:'codex', snapshot:{ limits:[{ label:'Codex', primary:{ usedPercent:'50' } }] } }])[0]).toMatchObject({ windows:[], status:'Unavailable' })
+    // A provider whose CLI reports no sign-in says so instead of a generic failure.
+    expect(quotaRows([{ provider:'claude', lastError:'unavailable', snapshot:null }], ['claude'])[0].status).toBe('Sign-in needed')
+    expect(quotaRows([{ provider:'claude', lastError:'unavailable', snapshot:null }])[0].status).toBe('Unavailable')
   })
 
   it('formats reset countdowns, freshness and tone thresholds', () => {

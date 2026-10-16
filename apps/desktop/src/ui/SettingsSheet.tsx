@@ -1,6 +1,6 @@
 import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { Bot, Brain, Check, ChevronDown, ChevronRight, CircleHelp, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone } from 'lucide-react'
+import { Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
 import { usePlatform } from '../transport/platform'
 import type { Agent, Snapshot } from '../types'
@@ -22,7 +22,7 @@ import { ScanRecovery } from './ScanRecovery'
 import { ConfirmDialog } from './BlobPage'
 import { setAccentColor, setThemeStyle, useAccentColor, useThemeStyle } from '../blob/bitbots'
 import { LookPicker } from './LookPicker'
-import { SettingsGroup, SettingsRow } from './SettingsParts'
+import { RowCopy, SettingsGroup, SettingsRow } from './SettingsParts'
 import { RemoteSettings } from './RemoteSettings'
 import { LookPreview } from './LookPreview'
 import { searchSettings, type SettingsIndexEntry } from './settingsIndex'
@@ -550,28 +550,28 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </form>
             </SettingsGroup>}
             <SettingsGroup title="Experimental">
-              <SettingsRow label={<span className="experimental-label">Claude dynamic workflows and Ultracode<HelpTip text="On by default. New Claude Code sessions receive enableWorkflows:true as a session-local setting, which is also what makes the Ultracode effort level available. Bitbots does not edit Claude's config. Claude Code can still decline this when a managed policy forbids it. Turning it off keeps Claude's own default and hides Ultracode." /></span>} hint="Lets Claude run dynamic workflows and offers Ultracode in the effort selector. Existing conversations keep their launch settings.">
+              <SettingsRow label={<span className="experimental-label">Claude dynamic workflows and Ultracode</span>} hint="On by default. New Claude Code sessions receive enableWorkflows:true as a session-local setting, which is also what makes the Ultracode effort level available. Bitbots does not edit Claude's config. Claude Code can still decline this when a managed policy forbids it. Turning it off keeps Claude's own default and hides Ultracode.">
                 <button type="button" className={`toggle ${claudeWorkflowsEnabled ? 'on' : ''}`} role="switch" aria-label="Claude dynamic workflows" aria-checked={claudeWorkflowsEnabled} disabled={saving} onClick={() => { const next = !claudeWorkflowsEnabled; void saveSetting('claude.enableWorkflows', next).then((failure) => { if (!failure) onClaudeWorkflowsChange?.(next) }) }}><i /></button>
               </SettingsRow>
-              <SettingsRow label={<span className="experimental-label">Usage tips<span className="experimental-tag">Experimental</span><HelpTip text="Shows a notice above the active composer when the selected CLI reports 75%, 90% or 100% use in a current quota window. It uses the reported window reset when available, can be dismissed per period, and includes no estimates or upgrade link." /></span>} hint="Accurate high-usage notices from the selected coding agent.">
+              <SettingsRow label={<span className="experimental-label">Usage tips<span className="experimental-tag">Experimental</span></span>} hint="Shows a notice above the active composer when the selected CLI reports 75%, 90% or 100% use in a current quota window. It uses the reported window reset when available, can be dismissed per period, and includes no estimates or upgrade link.">
                 <button type="button" className={`toggle ${usageTipsEnabled ? 'on' : ''}`} role="switch" aria-label="Usage tips" aria-checked={usageTipsEnabled} disabled={saving} onClick={() => { const next = !usageTipsEnabled; void saveSetting('experimental.usageTips', next).then((failure) => { if (!failure) onUsageTipsChange?.(next) }) }}><i /></button>
               </SettingsRow>
-              <SettingsRow label={<span className="experimental-label">Usage bar<span className="experimental-tag">Experimental</span><HelpTip text="Shows each coding agent's plan limits (for example 5-hour and weekly usage) along the bottom of the main window, read from the sign-in each CLI already has. Turn it off if the numbers are not useful to you; the Usage page still has them." /></span>} hint="Plan limits for each coding agent, along the bottom of the window.">
+              <SettingsRow label={<span className="experimental-label">Usage bar<span className="experimental-tag">Experimental</span></span>} hint="Shows each coding agent's plan limits (for example 5-hour and weekly usage) along the bottom of the main window, read from the sign-in each CLI already has. Turn it off if the numbers are not useful to you; the Usage page still has them.">
                 <button type="button" className={`toggle ${usageBarEnabled ? 'on' : ''}`} role="switch" aria-label="Usage bar" aria-checked={usageBarEnabled} disabled={saving} onClick={() => { const next = !usageBarEnabled; void saveSetting('experimental.usageBar', next).then((failure) => { if (!failure) onUsageBarChange?.(next) }) }}><i /></button>
               </SettingsRow>
-              <SettingsRow label={<span className="experimental-label">Runtime logos<span className="experimental-tag">Experimental</span><HelpTip text={`Shows the logo of the coding agent each ${noun} runs on (Claude Code, Codex or OpenCode) just before its name, in the sidebar and the conversation header. Hover the logo to see which runtime it is.`} /></span>} hint={`See at a glance which coding agent each ${noun} uses.`}>
+              <SettingsRow label={<span className="experimental-label">Runtime logos<span className="experimental-tag">Experimental</span></span>} hint={`Shows the logo of the coding agent each ${noun} runs on (Claude Code, Codex or OpenCode) just before its name, in the sidebar and the conversation header. Hover the logo to see which runtime it is.`}>
                 <button type="button" className={`toggle ${runtimeLogos ? 'on' : ''}`} role="switch" aria-label="Runtime logos" aria-checked={runtimeLogos} disabled={saving} onClick={() => { const next = !runtimeLogos; void saveSetting('experimental.runtimeLogos', next).then((failure) => { if (!failure) onRuntimeLogosChange?.(next) }) }}><i /></button>
               </SettingsRow>
-              <SettingsRow label={<span className="experimental-label">Agent activity<span className="experimental-tag">Experimental</span><HelpTip text={`Shows what each coding agent did during a reply as one line under it, for example “Ran 3 commands · edited 1 file”. Open it to see every step, then open a step for the command and its output, the tool and its result, or the file and its diff. In the companion, the Activity tab shows the same steps. When it is off you only see that a ${noun} is working.`} /></span>} hint="Commands, tools and file edits under each reply, in the app and the companion.">
+              <SettingsRow label={<span className="experimental-label">Agent activity<span className="experimental-tag">Experimental</span></span>} hint={`Shows what each coding agent did during a reply as one line under it, for example “Ran 3 commands · edited 1 file”. Open it to see every step, then open a step for the command and its output, the tool and its result, or the file and its diff. In the companion, the Activity tab shows the same steps. When it is off you only see that a ${noun} is working.`}>
                 <button type="button" className={`toggle ${activityDetails ? 'on' : ''}`} role="switch" aria-label="Agent activity" aria-checked={activityDetails} disabled={saving} onClick={() => { const next = !activityDetails; void saveSetting('experimental.activityDetails', next).then((failure) => { if (!failure) onActivityDetailsChange?.(next) }) }}><i /></button>
               </SettingsRow>
-              {EXPERIMENTS.map(({ name, label, hint, help }) => <SettingsRow key={name} label={<span className="experimental-label">{label}<span className="experimental-tag">Experimental</span><HelpTip text={help()} /></span>} hint={hint()}>
+              {EXPERIMENTS.map(({ name, label, help }) => <SettingsRow key={name} label={<span className="experimental-label">{label}<span className="experimental-tag">Experimental</span></span>} hint={help()}>
                 <button type="button" className={`toggle ${experiments[name] ? 'on' : ''}`} role="switch" aria-label={label} aria-checked={experiments[name]} disabled={saving} onClick={() => { const next = !experiments[name]; void saveSetting(`experimental.${name}`, next).then((failure) => { if (!failure) onExperimentChange?.(name, next) }) }}><i /></button>
               </SettingsRow>)}
               {experiments.autoRetry && <SettingsRow label="Longest wait for a rate limit" hint="Automatic retry gives up when the limit resets later than this.">
                 <Select ariaLabel="Longest wait for a rate limit" variant="muted" value={String(retryMaxWaitSecs)} disabled={saving} onChange={(value) => { const next = Number(value); void saveSetting('retry.maxWaitSecs', next).then((failure) => { if (!failure) setRetryMaxWaitSecs(next) }) }} options={[{ value: '0', label: 'Do not wait' }, { value: '3600', label: '1 hour' }, { value: '21600', label: '6 hours' }, { value: '86400', label: '24 hours' }]} />
               </SettingsRow>}
-              <SettingsRow label={<span className="experimental-label">Steer a running Codex turn<span className="experimental-tag">Experimental</span><HelpTip text={`Adds Steer beside Queue while a Codex ${noun} works, which adds your message to the turn that is running now. It uses Codex's turn/steer request and has not been verified against a live Codex turn. If the turn already ended, the message is queued instead. Claude Code and OpenCode only queue.`} /></span>} hint="Add a message to the turn that is running now.">
+              <SettingsRow label={<span className="experimental-label">Steer a running Codex turn<span className="experimental-tag">Experimental</span></span>} hint={`Adds Steer beside Queue while a Codex ${noun} works, which adds your message to the turn that is running now. It uses Codex's turn/steer request and has not been verified against a live Codex turn. If the turn already ended, the message is queued instead. Claude Code and OpenCode only queue.`}>
                 <button type="button" className={`toggle ${steerGate ? 'on' : ''}`} role="switch" aria-label="Steer a running Codex turn" aria-checked={steerGate} disabled={saving} onClick={() => { const next = !steerGate; void saveSetting('exec_gate.codex.steer', next).then((failure) => { if (!failure) setSteerGate(next) }) }}><i /></button>
               </SettingsRow>
             </SettingsGroup>
@@ -651,7 +651,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                 </div>
               })}
               {orphanAgents.length > 0 && <div className="runtime-entry open">
-                <div className="settings-row"><span className="settings-row-copy"><strong>{Nouns} without a detected agent</strong><small>Their command line tool was not found on this device.</small></span></div>
+                <div className="settings-row"><RowCopy label={`${Nouns} without a detected agent`} hint="Their command line tool was not found on this device." /></div>
                 <div className="runtime-entry-body">{orphanAgents.map((agent) => <BlobLink key={agent.id} agent={agent} mode={modeFor(agent)} onOpen={() => onOpenAgent(agent.id)} />)}</div>
               </div>}
             </SettingsGroup>
@@ -661,7 +661,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                 {typeof profile.id === 'string' && <button type="button" className="ghost-button small" onClick={() => setProfileDeleteTarget({ id: profile.id as string, name: String(profile.name ?? 'this launcher') })}>Remove</button>}
               </div>)}
               {!launcherFormOpen && <div className="settings-row">
-                <span className="settings-row-copy"><strong>{profiles.length === 0 ? 'No custom launchers' : 'Add another launcher'}</strong><small>Run an agent from a specific executable with fixed arguments.</small></span>
+                <RowCopy label={profiles.length === 0 ? 'No custom launchers' : 'Add another launcher'} hint="Run an agent from a specific executable with fixed arguments." />
                 <button type="button" className="secondary-button small" onClick={() => setLauncherFormOpen(true)}><Plus size={13} />Add launcher</button>
               </div>}
               {launcherFormOpen && <form className="settings-form" onSubmit={(event) => void saveProfile(event)}>
@@ -713,10 +713,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                 const percent = Math.round((speechProgress[model.id] ?? 0) * 100)
                 const inUse = ready && (speechModel ? speechModel === model.id : model.recommended)
                 return <div className={`settings-row speech-model-row ${inUse ? 'in-use' : ''}`} key={model.id}>
-                  <span className="settings-row-copy">
-                    <strong>{model.label}{model.recommended && <span className="speech-model-tag">Recommended</span>}</strong>
-                    <small>{model.description} · {formatBytes(model.sizeBytes)}</small>
-                  </span>
+                  <RowCopy label={<>{model.label}{model.recommended && <span className="speech-model-tag">Recommended</span>}</>} hint={model.description} detail={formatBytes(model.sizeBytes)} />
                   <span className="settings-row-control">
                     {busy
                       ? <span className="speech-model-progress" role="progressbar" aria-label={`Downloading ${model.label}`} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${percent}%` }} /><b>{percent}%</b></span>
@@ -735,7 +732,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             {platform.updater && <UpdatesPanel sessions={snapshot?.sessions ?? []} permissions={snapshot?.permissions ?? []} />}
             <SettingsGroup title="About">
               <div data-settings-about>
-                <SettingsRow label="Code signing" hint="Windows may warn the first time you run a new installer."><span className="settings-value">Not configured</span></SettingsRow>
+                <SettingsRow label={<span title="Windows may warn the first time you run a new installer.">Code signing</span>}><span className="settings-value">Not configured</span></SettingsRow>
               </div>
             </SettingsGroup>
           </>}
@@ -744,14 +741,6 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       </section>
       {profileDeleteTarget && <ConfirmDialog title={`Remove ${profileDeleteTarget.name}?`} body="This removes the custom launcher profile from Bitbots. It does not uninstall the coding agent." confirmLabel="Remove" cancelLabel="Keep launcher" holdToConfirm successTitle="Launcher removed" successBody="The custom launcher profile was removed from Bitbots." onConfirm={async () => { await deleteProfile(profileDeleteTarget.id) }} onComplete={() => setProfileDeleteTarget(null)} onCancel={() => setProfileDeleteTarget(null)} />}
     </div>
-}
-
-/** A "?" that explains a setting on hover or focus. */
-function HelpTip({ text }: { text: string }) {
-  return <span className="help-tip">
-    <button type="button" className="help-tip-trigger" aria-label="What does this do?" aria-describedby={undefined}><CircleHelp size={14} aria-hidden="true" /></button>
-    <span className="help-tip-bubble" role="tooltip">{text}</span>
-  </span>
 }
 
 function BlobLink({ agent, mode, onOpen }: { agent: Agent; mode: string; onOpen: () => void }) {

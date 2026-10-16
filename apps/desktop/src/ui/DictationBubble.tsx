@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { currentWindow, invokeNative, listenNative } from '../transport/nativeBridge'
 import { playDictationCue } from './dictationSound'
+import { syncThemeStyleFromCache } from '../blob/bitbots'
 import { DictationIsland, type IslandPhase } from './DictationIsland'
 import type { DictationEngineInfo } from './dictation'
 
@@ -46,6 +47,8 @@ export function DictationBubble() {
         if (!responsible.current) return
         const { type, text } = payload
         if (type === 'ready') {
+          // This window may have been created under the other look; match the app before showing.
+          syncThemeStyleFromCache()
           heard.current = false
           setEngine(null)
           setFinals(''); setPartial(''); setErrorText(''); setWarming(false)

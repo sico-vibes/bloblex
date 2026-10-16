@@ -12,8 +12,8 @@
 .message-action-shell.user .message-action-time { left: auto; right: 100%; margin: 0 6px 0 0; }
 .message-action-shell:hover .message-actions, .message-action-shell:focus-within .message-actions { opacity: 1; }
 .message-action-shell .message-actions.open { opacity: 1; }
-.message-action-button { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 8px; background: transparent; cursor: pointer; transition: color 120ms ease; }
-.message-action-slot { width: 32px; height: 32px; flex: 0 0 auto; }
+.message-action-button { width: 26px; height: 26px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 8px; background: transparent; cursor: pointer; transition: color 120ms ease; }
+.message-actions.compact .message-action-button { width: 24px; height: 24px; border-radius: 6px; }
 .message-action-button:hover:not(:disabled), .message-action-button[aria-expanded="true"], .message-action-button.copied { color: var(--text-1); }
 .message-action-button:focus-visible, .message-reaction-option:focus-visible, .reply-context-cancel:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .message-action-button:disabled { color: var(--text-3); cursor: default; }

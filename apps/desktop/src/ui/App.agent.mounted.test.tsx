@@ -313,7 +313,7 @@ describe('blob roster and editor', () => {
     await click(buttonNamed(view.host, 'Create bot'))
     await view.settle()
     const create = h.rpc.mock.calls.find(([method]) => method === 'agent.create')
-    expect(create?.[1]).toMatchObject({ name: 'Codex', runtimeId: 'runtime-codex', color: '#B7A7F4', approvalMode: 'ask' })
+    expect(create?.[1]).toMatchObject({ name: 'Codex', runtimeId: 'runtime-codex', color: 'violet', approvalMode: 'ask' })
   })
 
   it('keeps an existing session-only workspace in the shell instead of auto-opening onboarding', async () => {
@@ -331,7 +331,7 @@ describe('blob roster and editor', () => {
     const names = rows(view.host).map((row) => row.querySelector('strong')?.textContent)
     expect(names).toEqual(['Claude', 'Codex', 'Invoice helper', 'OpenCode'])
     expect(view.host.textContent).not.toContain('Retired')
-    expect(view.host.querySelector('nav[aria-label="Blobs"]')).not.toBeNull()
+    expect(view.host.querySelector('nav[aria-label="Bots"]')).not.toBeNull()
     expect(rows(view.host)[0]?.getAttribute('aria-current')).toBe('true')
     expect(rows(view.host)[0]?.querySelector('[data-color]')?.getAttribute('data-color')).toBe('#F38C6F')
     expect(rows(view.host)[1]?.querySelector('[data-color]')?.getAttribute('data-color')).toBe('#82AAFF')
@@ -371,10 +371,10 @@ describe('blob roster and editor', () => {
   it('shows every create validation message and the runtime not_found sentence', async () => {
     const view = startApp()
     await view.settle()
-    await click(buttonNamed(view.host, 'Create blob'))
+    await click(buttonNamed(view.host, 'Create bot'))
     await click(buttonNamed(view.host, 'Show all settings'))
     expect(view.host.textContent).toContain('Enter a name.')
-    const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create blob'))
+    const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create bot'))
     // Create stays pressable: pressing it with a problem moves focus to the first invalid field.
     expect(save?.hasAttribute('disabled')).toBe(false)
     await click(save)
@@ -386,7 +386,7 @@ describe('blob roster and editor', () => {
     expect(view.host.textContent).toContain('256 / 255')
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Claude')
     await typeInto(field(view.host, 'Description') as HTMLTextAreaElement, 'ok')
-    expect(view.host.textContent).toContain('Another blob already uses this name.')
+    expect(view.host.textContent).toContain('Another bot already uses this name.')
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Fresh blob')
     await typeInto(view.host.querySelector('[aria-label="Instructions"]') as HTMLTextAreaElement, 'keep\0out')
     expect(view.host.textContent).toContain('Instructions cannot include a null character.')
@@ -407,12 +407,12 @@ describe('blob roster and editor', () => {
   it('surfaces the remaining create daemon codes without clearing the draft', async () => {
     const view = startApp()
     await view.settle()
-    await click(buttonNamed(view.host, 'Create blob'))
+    await click(buttonNamed(view.host, 'Create bot'))
     await click(buttonNamed(view.host, 'Show all settings'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Fresh blob')
-    const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create blob'))
+    const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create bot'))
     const cases: Array<[string, string]> = [
-      ['conflict: taken', 'Another blob already uses this name.'],
+      ['conflict: taken', 'Another bot already uses this name.'],
       ['invalid_argument: bad', 'Check the name, description, colour, and runtime, then try again.'],
       ['internal: boom', 'Bitbots could not save that change. Nothing was applied.'],
       ['unauthorized: no', 'Bitbots could not reach the local daemon. Reconnect and try again.'],
@@ -431,7 +431,7 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await openMenu(rows(view.host)[0]!)
-    await click(buttonNamed(view.host, 'Edit blob'))
+    await click(buttonNamed(view.host, 'Edit bot'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Claude Prime')
     expect(buttonNamed(view.host, 'Discard')).toBeTruthy()
     expect(view.host.querySelector('.bot-savebar')?.textContent).toContain('1 change')
@@ -462,7 +462,7 @@ describe('blob roster and editor', () => {
     h.updateError = 'conflict: name'
     await click(buttonNamed(view.host, 'Save changes'))
     await view.settle()
-    expect(view.host.textContent).toContain('Another blob already uses this name.')
+    expect(view.host.textContent).toContain('Another bot already uses this name.')
     expect(field(view.host, 'Name')).toHaveProperty('value', 'Claude Prime')
     const update = h.rpc.mock.calls.find((call) => call[0] === 'agent.update')
     expect(update?.[1]).toEqual({ agentId: 'agent-claude', name: 'Claude Prime' })
@@ -526,7 +526,7 @@ describe('blob roster and editor', () => {
     await click(buttonNamed(view.host, 'Archive'))
     const dialog = view.host.querySelector('[role="dialog"]')
     expect(dialog?.textContent).toContain('Archive Claude?')
-    expect(dialog?.textContent).toContain('It leaves the sidebar and companion. Its conversations stay saved. Restoring a blob is not available yet.')
+    expect(dialog?.textContent).toContain('It leaves the sidebar and companion. Its conversations stay saved. Restoring a bot is not available yet.')
     expect(dialog?.querySelector('.blob-dialog-icon.warning')).not.toBeNull()
     await view.settle()
     expect(document.activeElement?.textContent).toBe('Keep it')
@@ -609,21 +609,12 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.disabled).toBe(true)
   })
 
-  it('fills the composer from a starter chip without sending, then hides the chips', async () => {
+  it('shows no starter suggestions in an empty conversation', async () => {
     configure()
     const view = startApp()
     await view.settle()
-    const starters = view.host.querySelector('.session-starters')!
-    expect([...starters.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
-      'Review this repository', 'Find and fix a failing test', 'Explain how this project is organised',
-    ])
-    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')!
-    await click([...starters.querySelectorAll('button')][1]!)
-    await view.settle()
-    expect(textarea.value).toBe('Find and fix a failing test')
-    expect(document.activeElement).toBe(textarea)
+    expect(view.host.querySelector('.session-first-state')?.textContent).toContain('Ready when you are')
     expect(view.host.querySelector('.session-starters')).toBeNull()
-    expect(h.rpc.mock.calls.some(([method]) => method === 'session.prompt')).toBe(false)
   })
 
   it('announces each roster avatar with its name and state', async () => {
@@ -638,7 +629,7 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await openMenu(rows(view.host)[0]!)
-    await click(buttonNamed(view.host, 'Edit blob'))
+    await click(buttonNamed(view.host, 'Edit bot'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Claude Prime')
     await click(buttonNamed(view.host, 'Back'))
     expect(view.host.querySelector('#blob-dialog-title')?.textContent).toBe('Discard unsaved changes?')
@@ -726,10 +717,10 @@ describe('blob roster and editor', () => {
   it('focuses the new roster row after a created blob page is closed', async () => {
     const view = startApp()
     await view.settle()
-    await click(buttonNamed(view.host, 'Create blob'))
+    await click(buttonNamed(view.host, 'Create bot'))
     await click(buttonNamed(view.host, 'Show all settings'))
     await typeInto(field(view.host, 'Name') as HTMLInputElement, 'Fresh blob')
-    const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create blob'))
+    const save = [...view.host.querySelectorAll('button')].find((button) => button.classList.contains('primary-button') && button.textContent?.includes('Create bot'))
     await click(save)
     await view.settle()
     expect(view.host.querySelector('.blob-page-heading')?.textContent).toBe('Fresh blob')
@@ -824,9 +815,9 @@ describe('blob roster and editor', () => {
     configure(snapshot({ agents: [{ ...claude, role: 'Copywriter' }, codex, invoice, opencode, retired] }))
     const view = startApp()
     await view.settle()
-    await typeInto(view.host.querySelector<HTMLInputElement>('input[aria-label="Search blobs"]'), 'copy')
+    await typeInto(view.host.querySelector<HTMLInputElement>('input[aria-label="Search bots"]'), 'copy')
     expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Claude'])
-    await typeInto(view.host.querySelector<HTMLInputElement>('input[aria-label="Search blobs"]'), 'invoice')
+    await typeInto(view.host.querySelector<HTMLInputElement>('input[aria-label="Search bots"]'), 'invoice')
     expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Invoice helper'])
   })
 
@@ -998,7 +989,7 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await click(view.host.querySelector('[aria-label="More options"]'))
-    await click(menuItem(view.host, 'Continue in another blob…'))
+    await click(menuItem(view.host, 'Continue in another bot…'))
     const dialog = view.host.querySelector('[role="dialog"]')!
     expect(dialog.textContent).toContain('Nothing is sent until you send it.')
     const names = [...dialog.querySelectorAll('.handoff-choice strong')].map((node) => node.textContent)
@@ -1028,20 +1019,15 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     const chips = [...view.host.querySelectorAll('.team-chip')]
-    expect(chips.map((chip) => chip.getAttribute('aria-label'))).toEqual(['Messaged Codex. Show the message', 'Message from Codex. Show the message'])
+    expect(chips.map((chip) => chip.getAttribute('aria-label'))).toEqual(['Messaged Codex. Open the conversation', 'Message from Codex. Open the conversation'])
     // The relayed text stays in the side conversation; the chip links to it.
     expect(view.host.querySelector('.team-reply-toggle')).toBeNull()
     expect(view.host.querySelector('.message-list')?.textContent ?? '').not.toContain('All 12 tests pass.')
     // Side conversations stay out of the main transcript and the sidebar rows.
     expect(rows(view.host).filter((row) => row.getAttribute('data-agent-id') === 'agent-codex')).toHaveLength(1)
-    // A chip is a disclosure now: it expands to the message in place.
-    await click(chips[0])
-    expect(chips[0].getAttribute('aria-expanded')).toBe('true')
-    expect(view.host.querySelector('.team-chip-panel')?.textContent).toContain('Check the tests')
+    // A chip opens the read-only conversation between the two bots.
     expect(view.host.querySelector('.side-header')).toBeNull()
-    // The header's side-conversation menu is the way into the read-only side view.
-    await click(view.host.querySelector('[aria-label="Side conversations"]'))
-    await click(view.host.querySelector('.side-menu-item'))
+    await click(chips[0])
     expect(view.host.querySelector('.side-header')?.getAttribute('aria-label')).toBe('Side conversation between Claude and Codex')
     expect(view.host.querySelector('.composer-box')).toBeNull()
     expect(view.host.querySelector('.side-peer .message-author')?.textContent).toContain('Claude')
@@ -1164,16 +1150,10 @@ describe('opt-in conversation experiments', () => {
     expect(experimentalSession.messages?.map((m) => m.content)).toEqual(['Original prompt', 'First reply', 'Latest prompt', 'Latest reply'])
     expect(view.host.querySelector('.conversation-auto-title')?.textContent).toBe('Review the saved changes')
   })
-  it('offers Retry on the latest turn only and re-sends that prompt', async () => {
+  it('keeps Retry out of the hover toolbar; it stays in the message menu', async () => {
     prepare(true)
     const view = startApp(); await view.settle()
-    const userShell = [...view.host.querySelectorAll<HTMLElement>('.message-action-shell')].find((shell) => shell.querySelector('.message-row.user'))!
-    expect(userShell.querySelector('[aria-label="Retry this turn"]')).toBeNull()
-    const retries = [...view.host.querySelectorAll<HTMLButtonElement>('[aria-label="Retry this turn"]')]
-    expect(retries).toHaveLength(1)
-    await click(retries[0])
-    await view.settle()
-    expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId: 'session-claude', text: 'Latest prompt' })
+    expect(view.host.querySelector('[aria-label="Retry this turn"]')).toBeNull()
   })
   it('stages a quoted user message and sends its scoped reference with the new prompt', async () => {
     const previousMessages = experimentalSession.messages

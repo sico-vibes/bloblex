@@ -17,7 +17,7 @@
 .look-card.dim:hover { opacity: 1; }
 .look-card strong { font-size: var(--fs-md, 15px); font-weight: 600; }
 .look-card small { max-width: 24ch; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.45; }
-.look-avatar { height: 76px; display: grid; place-items: end center; }
+.look-avatar { width: 100%; height: 76px; display: grid; place-items: end center; overflow: hidden; }
 .look-card[data-look="bitbots"] strong { font-family: "Doto", "DM Mono", ui-monospace, monospace; font-weight: 700; letter-spacing: .04em; }
 .look-tag {
   position: absolute; top: 10px; left: 10px; padding: 2px 7px; font-size: var(--fs-2xs, 10px); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; border-radius: 999px;

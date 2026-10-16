@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Project, Session } from '../types'
-import { conversationPreview, groupAgentsByProject, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
+import { conversationPlaceName, conversationPreview, groupAgentsByProject, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 
 const agent = (id: string, name: string, extra: Partial<Agent> = {}): Agent => ({ id, name, description: '', instructions: '', color: 'mint', runtimeId: 'rt', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', ...extra })
 const session = (id: string, extra: Partial<Session> = {}): Session => ({ id, runtimeId: 'rt', updatedAt: '2026-10-01T00:00:00Z', ...extra })
@@ -70,5 +70,19 @@ describe('team selectors', () => {
     const parts = splitMentions('Ask @codex and @Pololo, not mail@Codex or @Codexy.', team)
     expect(parts.map((part) => part.agent ? `[${part.agent.name}]` : part.text)).toEqual(['Ask ', '[Codex]', ' and ', '[Pololo]', ', not mail@Codex or @Codexy.'])
     expect(splitMentions('No mentions here', team)).toEqual([{ text: 'No mentions here' }])
+  })
+})
+
+describe('conversationPlaceName', () => {
+  const projects: Project[] = [{ id: 'p1', name: 'crewspan', path: null, sortOrder: 0 }]
+  it('names the project, never the per-bot workspace id', () => {
+    const veve = agent('a1', 'Veve', { projectId: 'p1' })
+    const casual = agent('a2', 'Dodo')
+    const workspace = String.raw`C:\Users\me\AppData\Local\Bitbots\workspaces\4cb94b29-dcd1-4196-b7f8-f717274b892f`
+    expect(conversationPlaceName(session('s1', { agentId: 'a1', projectPath: workspace }), [veve], projects)).toBe('crewspan')
+    expect(conversationPlaceName(session('s2', { agentId: 'a2', projectPath: workspace }), [casual], projects)).toBeNull()
+    expect(conversationPlaceName(session('s3', { agentId: 'a2', projectPath: String.raw`D:\code\bloblex` }), [casual], projects)).toBe('bloblex')
+    expect(conversationPlaceName(session('s4', { agentId: 'a2', workspaceLabel: 'Casual' }), [casual], projects)).toBe('Casual')
+    expect(conversationPlaceName(null, [], projects)).toBeNull()
   })
 })

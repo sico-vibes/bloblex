@@ -65,7 +65,7 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
   if (state.available === null) return <p className="settings-loading">Loading Remote…</p>
 
   const intro = <div className="remote-hero">
-    <span className="remote-hero-art" aria-hidden="true"><Monitor size={22} /><i /><Smartphone size={18} /></span>
+    <span className={`remote-hero-art${on ? ' live' : ''}`} aria-hidden="true"><Monitor size={24} /><i /><Smartphone size={20} /></span>
     <div>
       <h3>Use your {nouns} from anywhere</h3>
       <p>Turn this computer into a host. Open Bitbots from a phone, a tablet or another browser and chat with your {nouns} while this computer keeps doing the work.</p>

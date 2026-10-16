@@ -347,7 +347,7 @@ describe('C10 chat polish', () => {
     const view = startApp('?companion=1')
     await openHome(view)
     await press(view.host, 'Chat')
-    const copy = view.host.querySelector<HTMLButtonElement>('.chat-row.user .companion-copy')!
+    const copy = view.host.querySelector<HTMLButtonElement>('.chat-row.user .message-actions.compact [aria-label="Copy message text"]')!
     await act(async () => { copy.click(); await settleMicrotasks() })
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Hello from the test')
     expect(copy.getAttribute('aria-label')).toBe('Copied')

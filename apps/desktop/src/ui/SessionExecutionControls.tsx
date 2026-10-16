@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Check, ChevronDown, LoaderCircle, Zap } from 'lucide-react'
+import { Check, ChevronDown, Flame, Gauge, LoaderCircle, Search, Signal, SignalHigh, SignalLow, SignalMedium, SignalZero, Zap, type LucideIcon } from 'lucide-react'
 import type { Agent, Session, SessionModelLock } from '../types'
 import { rpc } from '../tauri'
 import { parseModelCatalog, type CatalogModel, type ModelCatalog, type ServiceTierOption } from '../executionContract'
@@ -8,7 +8,7 @@ import { moveMenuFocus, usePopoverDismiss } from './ComposerControls'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { positionFromPointer, SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
 import { Tip } from './Tip'
-import { labelizeEffort, effortDescription } from './effortLabels'
+import { labelizeEffort, effortIconName, type EffortIconName } from './effortLabels'
 import { concreteModelForSelection } from './modelPreferences'
 import { organizeModels, presentedModelName } from './modelPresentation'
 import { Skeleton } from './Skeleton'
@@ -319,6 +319,7 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
     : value && efforts.includes(value) ? labelizeEffort(value, provider) : unlistedValue ? labelizeEffort(unlistedValue, provider) : defaultThinking ? labelizeEffort(defaultThinking, provider) : 'Model default'
   const savedTop = efforts.length > 1 && value === efforts[efforts.length - 1]
   const trigger = <button type="button" className={`composer-pill session-effort-trigger ${savedTop ? 'highest' : ''} ${isTopTierEffort(value) ? 'max-tier' : ''} ${lockedReason ? 'locked' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={lockedReason ? `Effort: ${triggerLabel}. ${lockedReason}` : `Effort: ${triggerLabel}`} aria-disabled={lockedReason ? true : undefined} disabled={disabled && !lockedReason} onClick={toggle}>
+    <EffortIcon value={lockedReason === MODEL_FIRST_REASON ? null : value && efforts.includes(value) ? value : unlistedValue ?? defaultThinking ?? null} />
     <span>{triggerLabel}</span>
     <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
   </button>
@@ -334,7 +335,7 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
         <div className="session-effort-meter-frame">
           <div className="session-effort-caption"><span>Faster</span><span>Smarter</span></div>
           <SessionEffortMeter trackRef={trackRef} style={providerStyle} count={efforts.length} position={displayedPosition} recommendedIndex={-1} top={atTop} dragging={mode === 'drag'} settling={mode === 'settle'} valueText={mode === 'rest' && visibleIndex < 0 ? visibleLabel : labelizeEffort(efforts[stop] ?? '', provider)} disabled={disabled} onPointerDown={beginPointer} onPointerMove={movePointer} onPointerUp={finishPointer} onPointerCancel={abandonPointer} onLostPointerCapture={abandonPointer} onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} />
-          <div className="session-effort-labels" role="group" aria-label="Effort levels">{efforts.map((effort, index) => { const description = effortDescription(effort); return <button type="button" key={`${effort}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${isTopTierEffort(effort) ? 'ultra' : ''}`} aria-pressed={visibleIndex === index} aria-description={description || undefined} disabled={disabled} onClick={() => choose(effort)}>{labelizeEffort(effort, provider)}{description && <small className="session-effort-level-note">{description}</small>}</button> })}</div>
+          <div className="session-effort-labels" role="group" aria-label="Effort levels">{efforts.map((effort, index) => <button type="button" key={`${effort}-${index}`} className={`${visibleIndex === index ? 'selected' : ''} ${isTopTierEffort(effort) ? 'ultra' : ''}`} aria-pressed={visibleIndex === index} disabled={disabled} onClick={() => choose(effort)}><EffortIcon value={effort} size={12} /><span>{labelizeEffort(effort, provider)}</span></button>)}</div>
         </div>
         {provider.toLowerCase() === 'claude' && !efforts.includes('ultracode') && <p className="session-effort-note">{workflowEnabled ? 'Claude Code did not report Ultracode for this model. The model needs catalog-reported Extra high support; managed policy may also keep it unavailable.' : 'Ultracode needs a model with catalog-reported Extra high and Claude dynamic workflows. Bitbots did not enable workflows for this conversation; its setting applies to new conversations. Claude config or managed policy may still provide it. Max remains separate.'}</p>}
         {lastIsUltra && atTop && <p className="session-effort-note">{providerStyle === 'claude' ? 'Claude Code reported Ultracode for this model. It runs at Extra high with dynamic workflows enabled for this session. Standard Max remains separate.' : 'Ultra is a separate catalog effort, distinct from Max.'}</p>}
@@ -342,6 +343,14 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
       </> : <div className="session-effort-unavailable"><strong>{unlistedValue ? `Saved selection: ${labelizeEffort(unlistedValue, provider)}` : 'Model default'}</strong><p>{unavailableReason ?? 'This model does not report selectable effort levels. Bitbots cannot change effort for it.'}</p>{unlistedValue && <button type="button" className="ghost-button small" disabled={disabled} onClick={() => choose(defaultThinking ?? null)}>Reset to model default</button>}{defaultThinking && <p>Model default: {labelizeEffort(defaultThinking, provider)}.</p>}</div>}
     </div>}
   </div>
+}
+
+const EFFORT_ICONS: Record<EffortIconName, LucideIcon> = { 'signal-zero': SignalZero, 'signal-low': SignalLow, 'signal-medium': SignalMedium, 'signal-high': SignalHigh, signal: Signal, flame: Flame, gauge: Gauge }
+
+/** The bars icon beside an effort level. */
+export function EffortIcon({ value, size = 13 }: { value: string | null | undefined; size?: number }) {
+  const Icon = EFFORT_ICONS[effortIconName(value)]
+  return <Icon size={size} aria-hidden="true" className="effort-icon" />
 }
 
 function isUltraEffort(value: string | null | undefined) { return value === 'ultra' || value === 'ultracode' }
@@ -372,16 +381,28 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
   onFast: (enabled: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const close = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus()) }
+  const searchRef = useRef<HTMLInputElement>(null)
+  const close = (restoreFocus: boolean) => { setOpen(false); setQuery(''); if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus()) }
   usePopoverDismiss(open, rootRef, close)
-  useEffect(() => { if (open) requestAnimationFrame(() => (menuRef.current?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]') ?? menuRef.current?.querySelector<HTMLElement>('[role^="menuitem"]'))?.focus()) }, [open])
-  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
-  const choose = (next: string) => { close(true); onSelect(next) }
   const brand = providerBrand(provider).name
   const ordered = useMemo(() => organizeModels(provider, models), [provider, models])
+  // Long catalogs (OpenCode lists dozens) get a filter; short ones keep the plain list.
+  const searchable = ordered.length > MODEL_SEARCH_THRESHOLD
+  const visible = useMemo(() => filterModels(provider, ordered, query), [provider, ordered, query])
+  useEffect(() => {
+    if (!open) return
+    requestAnimationFrame(() => {
+      if (searchable) { searchRef.current?.focus(); return }
+      const checked = menuRef.current?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]')
+      ;(checked ?? menuRef.current?.querySelector<HTMLElement>('[role^="menuitem"]'))?.focus()
+    })
+  }, [open, searchable])
+  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
+  const choose = (next: string) => { close(true); onSelect(next) }
   return <div ref={rootRef} className="composer-popover-anchor">
     <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''}`} title="Choose which model this conversation uses" aria-haspopup="menu" aria-expanded={open} aria-label={`Conversation model: ${ariaLabel}${fastOn ? ', fast mode on' : ''}`} disabled={disabled || (saving && !open)} onClick={() => setOpen((value) => !value)}>
       {saving ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : fastOn ? <Zap size={13} aria-hidden="true" className="model-pill-fast" /> : null}
@@ -391,12 +412,20 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
       <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
     </button>
     {open && <div ref={menuRef} className="composer-menu model-menu align-right" role="menu" aria-label="Conversation model" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
-      <div className="composer-menu-heading">{brand} models</div>
+      {searchable
+        ? <label className="composer-menu-search"><Search size={13} aria-hidden="true" /><input ref={searchRef} type="text" value={query} placeholder={`Search ${brand} models`} aria-label="Search models" spellCheck={false}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') { event.preventDefault(); const first = visible[0]; if (first && !saving) choose(first.id); return }
+              if (event.key === 'ArrowDown') { event.preventDefault(); menuRef.current?.querySelector<HTMLElement>('[role^="menuitem"]')?.focus() }
+            }} /></label>
+        : <div className="composer-menu-heading">{brand} models</div>}
       <div className="composer-menu-scroll">
         {!model && <p className="composer-menu-note" role="status">Choose an explicit model for this conversation.</p>}
         {model && !models.some((item) => item.id === model) && <p className="composer-menu-note" role="status">Saved model {model} is not currently offered. Choose an available model to continue.</p>}
-        {ordered.map((item, index) => <div key={item.id} role="none">
-          {item.group && item.group !== ordered[index - 1]?.group && <div className="composer-menu-group" role="presentation">{item.group}</div>}
+        {visible.length === 0 && <p className="composer-menu-note" role="status">No models match “{query.trim()}”.</p>}
+        {visible.map((item, index) => <div key={item.id} role="none">
+          {item.group && item.group !== visible[index - 1]?.group && <div className="composer-menu-group" role="presentation">{item.group}</div>}
           <button type="button" role="menuitemradio" aria-checked={model === item.id} className="composer-menu-item" data-value={item.id} disabled={saving} onClick={() => choose(item.id)}>
             <span className="composer-menu-text"><strong>{presentedModelName(provider, item)}</strong></span>
             {model === item.id && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
@@ -413,6 +442,19 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
       </>}
     </div>}
   </div>
+}
+
+/** Model lists longer than this get a search field. */
+export const MODEL_SEARCH_THRESHOLD = 8
+
+/** Models whose name, id or group contains every word of the query, in catalog order. */
+export function filterModels(provider: string, models: readonly CatalogModel[], query: string): CatalogModel[] {
+  const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return [...models]
+  return models.filter((item) => {
+    const haystack = `${presentedModelName(provider, item)} ${item.id} ${item.group ?? ''}`.toLocaleLowerCase()
+    return words.every((word) => haystack.includes(word))
+  })
 }
 
 function resolveProviderStyle(runtimeProvider: string, modelProvider: string | null | undefined, modelId: string | null | undefined, displayName?: string): EffortMeterStyle {

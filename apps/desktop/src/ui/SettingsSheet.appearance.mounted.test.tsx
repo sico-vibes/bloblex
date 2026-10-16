@@ -153,9 +153,10 @@ describe('General settings mounted controls', () => {
     await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(host.querySelector('[aria-label="Notify when a bot finishes or needs approval"]')).not.toBeNull()
+    // The characters are bots in both looks.
     act(() => setThemeStyle('blobots'))
-    expect(host.querySelector('[aria-label="Notify when a blob finishes or needs approval"]')).not.toBeNull()
-    expect(host.querySelector('[aria-label="Notify when a bot finishes or needs approval"]')).toBeNull()
+    expect(host.querySelector('[aria-label="Notify when a bot finishes or needs approval"]')).not.toBeNull()
+    expect(host.querySelector('[aria-label="Notify when a blob finishes or needs approval"]')).toBeNull()
     act(() => setThemeStyle('bitbots'))
   })
 

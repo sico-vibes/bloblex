@@ -25,16 +25,15 @@ afterEach(() => {
 const experimentsCss = readFileSync(resolve(process.cwd(), 'src/ui/experiments.css'), 'utf8')
 
 describe('message action toolbar', () => {
-  it('lists Copy, Quote, Retry and React in one order everywhere', async () => {
+  it('lists Copy, Quote and React side by side, with no Retry', async () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    const onReply = vi.fn(), onRetry = vi.fn(), onToggleReaction = vi.fn().mockResolvedValue({})
-    await act(async () => root!.render(<MessageActions text="Original **markdown**" reactions={['❤️']} onReply={onReply} onRetry={onRetry} onToggleReaction={onToggleReaction} onError={vi.fn()} />))
+    const onReply = vi.fn(), onToggleReaction = vi.fn().mockResolvedValue({})
+    await act(async () => root!.render(<MessageActions text="Original **markdown**" reactions={['❤️']} onReply={onReply} onToggleReaction={onToggleReaction} onError={vi.fn()} />))
     const toolbar = host.querySelector('[role="toolbar"]')!
-    expect([...toolbar.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Copy message text', 'Quote message', 'Retry this turn', 'React to message'])
+    expect([...toolbar.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Copy message text', 'Quote message', 'React to message'])
+    expect(toolbar.querySelector('.message-action-slot')).toBeNull()
     await act(async () => { toolbar.querySelector<HTMLButtonElement>('[aria-label="Quote message"]')!.click() })
     expect(onReply).toHaveBeenCalledOnce()
-    await act(async () => { toolbar.querySelector<HTMLButtonElement>('[aria-label="Retry this turn"]')!.click() })
-    expect(onRetry).toHaveBeenCalledOnce()
     const reaction = host.querySelector<HTMLButtonElement>('[aria-label="React to message"]')!
     await act(async () => { reaction.click(); await Promise.resolve() })
     expect(document.querySelectorAll('[role="dialog"][aria-label="Choose a reaction"] .message-reaction-option')).toHaveLength(6)
@@ -44,19 +43,17 @@ describe('message action toolbar', () => {
     expect(reaction.getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('reserves the retry slot for a message that cannot be retried', async () => {
+  it('shows only the actions it is given, at the smaller companion size', async () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root!.render(<MessageActions text="Old reply" onReply={vi.fn()} onToggleReaction={vi.fn()} onError={vi.fn()} />))
+    await act(async () => root!.render(<MessageActions compact text="Companion reply" onError={vi.fn()} />))
     const toolbar = host.querySelector('[role="toolbar"]')!
-    expect(toolbar.querySelector('[aria-label="Retry this turn"]')).toBeNull()
-    expect(toolbar.querySelector('.message-action-slot')).not.toBeNull()
-    expect([...toolbar.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Copy message text', 'Quote message', 'React to message'])
+    expect(toolbar.classList.contains('compact')).toBe(true)
+    expect([...toolbar.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Copy message text'])
   })
 
-  it('reveals on keyboard focus with 32 px targets and never shifts layout', () => {
+  it('reveals on keyboard focus with the beta.28 26 px targets', () => {
     expect(experimentsCss).toMatch(/\.message-action-shell:focus-within \.message-actions\s*\{[^}]*opacity:\s*1/)
-    expect(experimentsCss).toMatch(/\.message-action-button\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px/)
-    expect(experimentsCss).toMatch(/\.message-action-slot\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px/)
+    expect(experimentsCss).toMatch(/\.message-action-button\s*\{[^}]*width:\s*26px;[^}]*height:\s*26px/)
   })
 
   it('supports keyboard opening, arrow navigation, Escape restoration and exact-text copy', async () => {

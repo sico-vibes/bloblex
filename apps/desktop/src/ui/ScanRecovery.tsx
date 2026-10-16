@@ -3,7 +3,7 @@
 // it last ran and shows an inline result.
 
 import { useEffect, useRef, useState } from 'react'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, RefreshCw } from 'lucide-react'
 import type { Runtime } from '../types'
 import { PROVIDER_GUIDES } from './providerGuides'
 import { ProviderLogo, providerBrand } from './providerBrand'
@@ -17,7 +17,7 @@ export function checkTimeLabel(at: number): string {
 }
 
 /** A per-provider re-check that remembers its last run and reports the result inline. */
-export function CheckAgainButton({ name, found, scanning, onScan }: { name: string; found: boolean; scanning: boolean; onScan: () => void }) {
+export function CheckAgainButton({ name, found, scanning, onScan, compact = false }: { name: string; found: boolean; scanning: boolean; onScan: () => void; compact?: boolean }) {
   const [checkedAt, setCheckedAt] = useState<number | null>(null)
   const [result, setResult] = useState<'found' | 'not-found' | null>(null)
   const pending = useRef(false)
@@ -29,6 +29,14 @@ export function CheckAgainButton({ name, found, scanning, onScan }: { name: stri
     }
     wasScanning.current = scanning
   }, [scanning, found])
+  const resultText = result === 'found' ? `Found ${name}` : result === 'not-found' ? 'Still not found' : ''
+  // Compact: one icon button whose tooltip carries when it last ran and what it found.
+  if (compact) return <div className="scan-check compact">
+    <button type="button" className="icon-button small" aria-label={`Check ${name} again`} title={[scanning && pending.current ? 'Checking…' : 'Check again', checkedAt !== null ? checkTimeLabel(checkedAt) : '', resultText].filter(Boolean).join(' · ')} disabled={scanning} onClick={() => { pending.current = true; setCheckedAt(Date.now()); setResult(null); onScan() }}>
+      <RefreshCw size={14} className={scanning && pending.current ? 'spinning' : ''} aria-hidden="true" />
+    </button>
+    <span className="sr-only" role="status" aria-live="polite">{resultText}</span>
+  </div>
   return <div className="scan-check">
     <button type="button" className="secondary-button small" disabled={scanning} onClick={() => { pending.current = true; setCheckedAt(Date.now()); setResult(null); onScan() }}>{scanning && pending.current ? 'Checking…' : 'Check again'}</button>
     {checkedAt !== null && <small className="scan-check-time">{checkTimeLabel(checkedAt)}</small>}

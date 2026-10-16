@@ -14,9 +14,10 @@ import {
   type CapabilitySetting, type ExecutionSendGate, type ExecSnapshotView, type ModelCatalog, type RuntimeCapabilities,
 } from '../executionContract'
 import { Select } from './Select'
-import { ProviderLogo, providerBrand } from './providerBrand'
+import { providerBrand } from './providerBrand'
 import { AutoApprovedList, BypassConfirmDialog } from './approvalUi'
-import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
+import { ChevronDown, ChevronRight, Hand, RefreshCw, ShieldAlert, ShieldCheck, type LucideIcon } from 'lucide-react'
+import { HelpTip, RowCopy } from './SettingsParts'
 import { LookEditor } from './LookEditor'
 import { draftLook } from '../blob/look'
 import { agentColorHex, previewHex } from './agentColor'
@@ -24,7 +25,6 @@ import { labelizeEffort } from './effortLabels'
 import { preferredConcreteModel } from './modelPreferences'
 import { useEntityNoun } from './vocabulary'
 import { useAutosizeTextarea } from './useAutosize'
-import { useHintSeen } from './uiPrefs'
 import { instructionCounts, instructionVersions, thousands, type InstructionVersion } from './instructionHistory'
 import { instructionPresets, type BotTemplate } from './botTemplates'
 import { recentFolders, rememberFolder } from './folderRecents'
@@ -38,21 +38,21 @@ const NOTIFICATION_LEVEL_HELP: Record<'all' | 'input' | 'muted', string> = {
 }
 
 /** Plain-language permissions (FIX22 B8). The values are unchanged. */
-const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; name: string; sentence: string }> = [
-  { value: 'ask', name: 'Ask first', sentence: 'nothing changes until you approve each action' },
-  { value: 'auto', name: 'Auto-approve', sentence: 'safe actions go through, risky ones still ask' },
-  { value: 'bypass', name: 'Bypass', sentence: 'nothing asks; use only on a computer and project you trust' },
+const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; name: string; sentence: string; Icon: LucideIcon }> = [
+  { value: 'ask', name: 'Ask first', sentence: 'nothing changes until you approve each action', Icon: Hand },
+  { value: 'auto', name: 'Auto-approve', sentence: 'safe actions go through, risky ones still ask', Icon: ShieldCheck },
+  { value: 'bypass', name: 'Bypass', sentence: 'nothing asks; use only on a computer and project you trust', Icon: ShieldAlert },
 ]
 
-const INSTRUCTIONS_HELP_ID = 'bot.instructions.help'
-
-export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, sessionId, autoApprovals, sections, sessions, memoryEnabled, onOpenMemory, onDraftChange, onArchive, onExecutionGate }: {
+export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, savedRuntimeId, sessionId, autoApprovals, sections, sessions, memoryEnabled, onOpenMemory, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
   runtimes: Runtime[]
   projects?: Project[]
   errors: FieldErrors
   execution: StoredExecution
   agentId?: string | null
+  /** The saved bot's runtime. The agent id is only sent with capability checks for that runtime. */
+  savedRuntimeId?: string | null
   sessionId?: string | null
   /** Shown under the approval mode for saved blobs. */
   autoApprovals?: readonly AutoResolvedAction[]
@@ -102,32 +102,30 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     setCatalogError(null)
     setCatalogUnavailable(false)
     const probeModel = draft.model ?? (provider === 'claude' ? 'sonnet' : undefined)
-    const params = { runtimeId: draft.runtimeId, ...(agentId ? { agentId } : {}), ...(probeModel ? { model: probeModel } : {}) }
-    Promise.all([
+    // A bot being moved to another coding agent is still saved on its old one, so its id only goes with its own runtime.
+    const sameRuntime = !!agentId && (!savedRuntimeId || savedRuntimeId === draft.runtimeId)
+    const params = { runtimeId: draft.runtimeId, ...(sameRuntime ? { agentId } : {}), ...(probeModel ? { model: probeModel } : {}) }
+    // Models and capabilities load on their own, so a capability failure never blanks the model list.
+    void Promise.allSettled([
       rpc('runtime.capabilities', params),
       rpc('runtime.models', { runtimeId: draft.runtimeId }),
-    ]).then(([capsRaw, modelsRaw]) => {
+    ]).then(([capsResult, modelsResult]) => {
       if (cancelled) return
-      const nextCaps = parseCapabilities(capsRaw)
-      const nextCatalog = parseModelCatalog(modelsRaw)
-      setCapabilities(nextCaps)
-      setCatalog(nextCatalog)
-      if (!nextCatalog) {
-        setCatalogError('The model catalog was not reported.')
-        setCatalogUnavailable(false)
+      setCapabilities(capsResult.status === 'fulfilled' ? parseCapabilities(capsResult.value) : null)
+      if (modelsResult.status === 'fulfilled') {
+        const nextCatalog = parseModelCatalog(modelsResult.value)
+        setCatalog(nextCatalog)
+        if (!nextCatalog) setCatalogError('The model list was not reported.')
+      } else {
+        const failure = rpcFailure(modelsResult.reason)
+        setCatalog(null)
+        setCatalogUnavailable(isProviderUnavailable(failure))
+        setCatalogError(isProviderUnavailable(failure) ? 'The coding agent could not be reached.' : failure.message)
       }
-      setLoading(false)
-    }).catch((reason) => {
-      if (cancelled) return
-      const failure = rpcFailure(reason)
-      setCapabilities(null)
-      setCatalog(null)
-      setCatalogUnavailable(isProviderUnavailable(failure))
-      setCatalogError(isProviderUnavailable(failure) ? 'The provider could not be reached.' : failure.message)
       setLoading(false)
     })
     return () => { cancelled = true }
-  }, [draft.runtimeId, draft.model, agentId, provider])
+  }, [draft.runtimeId, draft.model, agentId, savedRuntimeId, provider])
 
   useEffect(() => {
     if (agentId || custom || draft.model || !catalog?.validated) return
@@ -182,11 +180,11 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       const modelsRaw = await rpc('runtime.models', { runtimeId: draft.runtimeId, refresh: true, ...(probeModel ? { model: probeModel } : {}) })
       const nextCatalog = parseModelCatalog(modelsRaw)
       setCatalog(nextCatalog)
-      if (!nextCatalog) setCatalogError('The model catalog was not reported.')
+      if (!nextCatalog) setCatalogError('The model list was not reported.')
     } catch (reason) {
       const failure = rpcFailure(reason)
       setCatalogUnavailable(isProviderUnavailable(failure))
-      setCatalogError(isProviderUnavailable(failure) ? 'The provider could not be reached.' : failure.message)
+      setCatalogError(isProviderUnavailable(failure) ? 'The coding agent could not be reached.' : failure.message)
     } finally { setLoading(false) }
   }
 
@@ -240,52 +238,51 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
           <input aria-label={`${Noun} name`} aria-invalid={!!errors.name} aria-describedby={errors.name ? 'blob-name-error' : undefined} value={draft.name} onChange={(event) => onDraftChange({ ...draft, name: event.target.value })} />
         </label>
         {errors.name && <p className="blob-error" id="blob-name-error">{errors.name}</p>}
-        <label className="blob-field"><span>Description <small id="blob-description-count" className={descriptionCount > 255 ? 'over' : undefined}>{descriptionCount} / 255</small></span>
+        <label className="blob-field"><span className="blob-field-title">Description<HelpTip text={`Teammates read this when deciding who to ask, and the ${noun} reads it as part of its instructions.`} align="start" /><small id="blob-description-count" className={descriptionCount > 255 ? 'over' : undefined}>{descriptionCount} / 255</small></span>
           <textarea aria-label="Description" rows={2} aria-invalid={!!errors.description} aria-describedby={described('blob-description-count', errors.description ? 'blob-description-error' : undefined)} value={draft.description} onChange={(event) => onDraftChange({ ...draft, description: event.target.value })} />
         </label>
         {errors.description && <p className="blob-error" id="blob-description-error">{errors.description}</p>}
-        <p className="blob-help">Teammates read this when deciding who to ask, and the {noun} reads it as part of its instructions.</p>
       </div>
     </EditGroup>}
 
     {show('team') && <EditGroup id="team" title="Team">
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Role</strong><small>A short label shown next to the name, like CTO or Researcher.</small></span>
+        <RowCopy label="Role" hint="A short label shown next to the name, like CTO or Researcher." />
         <span className="settings-row-control"><input className="text-input role-input" aria-label="Role" maxLength={40} placeholder="No role" value={draft.role} onChange={(event) => onDraftChange({ ...draft, role: event.target.value })} /></span>
       </div>
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Team project</strong><small>Which project this {noun} belongs to on the team.</small></span>
+        <RowCopy label="Team project" hint={`Which project this ${noun} belongs to on the team.`} />
         <span className="settings-row-control"><Select ariaLabel="Team project" variant="muted" value={draft.projectId ?? ''} onChange={(value) => onDraftChange({ ...draft, projectId: value || null })} options={[{ value: '', label: 'No team project (casual)' }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} /></span>
       </div>
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Team leader</strong><small>The leader coordinates the other {nouns}, reports back, and is the only {noun} that can create new ones when you ask it to. Only one {noun} leads.</small></span>
+        <RowCopy label="Team leader" hint={`The leader coordinates the other ${nouns}, reports back, and is the only ${noun} that can create new ones when you ask it to. Only one ${noun} leads.`} />
         <span className="settings-row-control"><button type="button" role="switch" aria-checked={draft.leader} aria-label="Team leader" className={`toggle ${draft.leader ? 'on' : ''}`} onClick={() => onDraftChange({ ...draft, leader: !draft.leader })}><i /></button></span>
       </div>
     </EditGroup>}
 
     {show('model') && <EditGroup id="model" title="Model" label="Execution" action={<span className="catalog-refresh-action">{catalog?.fetchedAt && <small>Updated {formatCatalogTime(catalog.fetchedAt)}</small>}<button type="button" className="ghost-button small" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}><RefreshCw size={13} className={loading ? 'spinning' : ''} />Refresh models</button></span>}>
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Coding agent</strong><small>New conversations use it. Existing ones keep theirs.</small></span>
+        <RowCopy label="Coding agent" hint="New conversations use it. Existing ones keep theirs." />
         <span className="settings-row-control">
           <Select ariaLabel="Runtime" variant="muted" value={draft.runtimeId} onChange={(value) => { setCustom(false); onDraftChange({ ...draft, runtimeId: value, model: null, thinking: null, serviceTier: null }) }} options={runtimes.map((item) => ({ value: item.id, label: runtimeOptionLabel(item, runtimes), provider: item.provider }))} />
         </span>
       </div>
       {errors.runtimeId && <p className="blob-error blob-inset">{errors.runtimeId}</p>}
-      {(loading || catalogError || (!loading && catalog && catalog.models.length === 0)) && <div className="blob-notes">
-        {loading && <p className="blob-help" role="status">Loading models…</p>}
+      {(catalogError || (!loading && catalog && catalog.models.length === 0)) && <div className="blob-notes model-notes">
         {catalogError && <div className="blob-error" role="alert">
           <p>{catalogError}</p>
           {catalogUnavailable && <button type="button" className="secondary-button small" onClick={() => void refreshCatalog()}>Retry</button>}
         </div>}
         {!loading && catalog && catalog.models.length === 0 && <p className="blob-help">No models were reported for this agent.</p>}
       </div>}
-      <CapabilityField label="Model" provider={provider} state={modelState} setting={capabilities?.settings.model ?? null}>
-        <Select ariaLabel="Model" variant="muted" value={custom ? '__custom__' : (draft.model ?? '')} disabled={!modelInteractive} onChange={(value) => {
+      {loading && !catalog
+        ? <div className="settings-row model-skeleton" role="status" aria-busy="true"><span className="skeleton-block model-skeleton-label" /><span className="skeleton-block model-skeleton-control" /><span className="sr-only">Loading models…</span></div>
+        : <CapabilityField label="Model" state={modelState} setting={capabilities?.settings.model ?? null}>
+        <Select ariaLabel="Model" variant="muted" searchable={8} searchPlaceholder="Search models" placeholder={catalog ? 'Choose a model' : 'Model unavailable'} value={custom ? '__custom__' : (draft.model ?? '')} disabled={!modelInteractive} onChange={(value) => {
           if (value === '__custom__') applyModel(draft.model, true)
           else applyModel(value || null, false)
         }} options={[
-          { value: '', label: !catalog ? (loading ? 'Loading models…' : 'Model unavailable') : 'Choose a model', disabled: true },
-          ...organizeModels(provider, catalog?.models ?? []).map((model, index, models) => ({ value: model.id, label: presentedModelName(provider, model), group: model.group && model.group !== models[index - 1]?.group ? model.group : undefined, ...(index === 0 ? { groupBefore: [{ label: `${providerBrand(provider).name} models`, provider }] } : {}) })),
+          ...organizeModels(provider, catalog?.models ?? []).map((model, index, models) => ({ value: model.id, label: presentedModelName(provider, model), group: model.group && model.group !== models[index - 1]?.group ? model.group : undefined })),
           ...(draft.model && !custom && !(catalog?.models ?? []).some((model) => model.id === draft.model)
             ? [{
                 value: draft.model,
@@ -296,7 +293,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
             : []),
           ...(allowsCustomModelId(provider) ? [{ value: '__custom__', label: 'Custom model id' }] : []),
         ]} />
-      </CapabilityField>
+      </CapabilityField>}
       {catalog && (!catalog.validated || catalog.fallback) && <p className="blob-help model-catalog-note">Suggested models, not checked with {providerLabel(provider)}.</p>}
       {custom && allowsCustomModelId(provider) && <div className="blob-form blob-form-tight">
         <label className="blob-field"><span>Custom model id <small id="custom-model-note">Not validated</small></span>
@@ -316,14 +313,13 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       <InstructionsSection draft={draft} agentId={agentId ?? null} error={errors.instructions} help={instructionHelp} noun={noun} onDraftChange={onDraftChange} />
 
       <div className="blob-form">
-        <label className="blob-field"><span>Working folder</span>
-          <input aria-label="Working folder" aria-describedby="blob-working-folder-help" placeholder="C:\path\to\folder" value={draft.defaultProject ?? ''} onChange={(event) => onDraftChange({ ...draft, defaultProject: event.target.value })} />
+        <label className="blob-field"><span className="blob-field-title">Working folder<HelpTip text={`Where this ${noun} works when you start a conversation. Leave empty to pick a folder each time.`} align="start" /></span>
+          <input aria-label="Working folder" placeholder="C:\path\to\folder" value={draft.defaultProject ?? ''} onChange={(event) => onDraftChange({ ...draft, defaultProject: event.target.value })} />
         </label>
         <div className="working-folder-actions">
           {recents.length > 0 && <Select ariaLabel="Recent folders" variant="field" value="" placeholder="Recent folders" onChange={(value) => chooseFolder(value)} options={recents.map((folder) => ({ value: folder, label: folder }))} />}
           <button type="button" className="secondary-button small" onClick={() => void browseFolder()}>Browse…</button>
         </div>
-        <p id="blob-working-folder-help" className="blob-help">Where this {noun} works when you start a conversation. Leave empty to pick a folder each time.</p>
       </div>
     </EditGroup>}
 
@@ -339,8 +335,11 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
             className={`approval-choice${draft.approvalMode === choice.value ? ' on' : ''}${choice.value === 'bypass' ? ' warning' : ''}`}
             onClick={() => onApproval(choice.value)}
           >
-            <span className="approval-choice-name">{choice.name}</span>
-            <span className="approval-choice-sentence">{choice.sentence}</span>
+            <span className="approval-choice-icon" aria-hidden="true"><choice.Icon size={16} /></span>
+            <span className="approval-choice-copy">
+              <span className="approval-choice-name">{choice.name}</span>
+              <span className="approval-choice-sentence">{choice.sentence}</span>
+            </span>
           </button>)}
         </div>
         <div className="approval-default">
@@ -357,7 +356,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
 
     {show('notifications') && <EditGroup id="notifications" title="Notifications">
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Notify me</strong><small>{NOTIFICATION_LEVEL_HELP[draft.notificationLevel ?? 'all']}</small></span>
+        <RowCopy label="Notify me" hint={NOTIFICATION_LEVEL_HELP[draft.notificationLevel ?? 'all']} />
         <span className="settings-row-control">
           <Select ariaLabel="Notify me" variant="muted" value={draft.notificationLevel ?? 'all'} onChange={(value) => onDraftChange({ ...draft, notificationLevel: value === 'input' || value === 'muted' ? value : 'all' })} options={[{ value: 'all', label: 'About everything' }, { value: 'input', label: 'Only when it needs me' }, { value: 'muted', label: 'Never' }]} />
         </span>
@@ -386,7 +385,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     {onArchive && <section className="settings-group">
       <div className="settings-card">
         <div className="settings-row">
-          <span className="settings-row-copy"><strong>Archive {noun}</strong><small>It leaves the sidebar. Its conversations stay saved.</small></span>
+          <RowCopy label={`Archive ${noun}`} hint="It leaves the sidebar. Its conversations stay saved." />
           <span className="settings-row-control"><button type="button" className="secondary-button small danger-button" onClick={onArchive}>Archive {noun}</button></span>
         </div>
       </div>
@@ -408,8 +407,6 @@ function InstructionsSection({ draft, agentId, error, help, noun, onDraftChange 
   onDraftChange: (draft: AgentDraft) => void
 }) {
   const counts = instructionCounts(draft.instructions)
-  const [helpSeen, markHelpSeen] = useHintSeen(INSTRUCTIONS_HELP_ID)
-  const [helpOpen, setHelpOpen] = useState(!helpSeen)
   const [pending, setPending] = useState<BotTemplate | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -452,7 +449,11 @@ function InstructionsSection({ draft, agentId, error, help, noun, onDraftChange 
 
   return <div className="blob-form instructions-section" id="bot-instructions">
     <div className="instructions-head">
-      <span className="blob-field-label">Instructions</span>
+      <span className="blob-field-label blob-field-title">Instructions<HelpTip align="start" placement="bottom" text={<dl>
+        <div><dt>Role</dt><dd>The label next to the name.</dd></div>
+        <div><dt>Description</dt><dd>What teammates read to decide whom to ask.</dd></div>
+        <div><dt>Instructions</dt><dd>The {noun}’s standing brief, read on every request.{help ? ` ${help}` : ''}</dd></div>
+      </dl>} /></span>
       <span className="instructions-head-trail">
         <small id="blob-instructions-count" className="instructions-count">{thousands(counts.characters)} characters, about {thousands(counts.tokens)} tokens</small>
         {agentId && <div className="instructions-history" ref={historyRef}>
@@ -470,8 +471,6 @@ function InstructionsSection({ draft, agentId, error, help, noun, onDraftChange 
         </div>}
       </span>
     </div>
-    <button type="button" className="link-button instructions-help-toggle" aria-expanded={helpOpen} onClick={() => { if (helpOpen) markHelpSeen(); setHelpOpen(!helpOpen) }}>What are Role, Description and Instructions?</button>
-    {helpOpen && <p className="blob-help instructions-help">Role is the label next to the name. Description is what teammates read to decide whom to ask. Instructions are the {noun}’s standing brief, read on every request.</p>}
     <div className="instructions-presets" role="group" aria-label="Preset instructions">
       <span className="blob-field-label">Start from a preset</span>
       <div className="instructions-preset-row">
@@ -487,9 +486,8 @@ function InstructionsSection({ draft, agentId, error, help, noun, onDraftChange 
       </span>
     </div>}
     <label className="blob-field">
-      <textarea ref={textareaRef} className="instructions-textarea" aria-label="Instructions" rows={10} placeholder={`How should this ${noun} work? For example: keep answers short and run the tests before finishing.`} aria-invalid={!!error} aria-describedby={`blob-instructions-help${error ? ' blob-instructions-error' : ''}`} value={draft.instructions} onChange={(event) => onDraftChange({ ...draft, instructions: event.target.value })} />
+      <textarea ref={textareaRef} className="instructions-textarea" aria-label="Instructions" rows={10} placeholder={`How should this ${noun} work? For example: keep answers short and run the tests before finishing.`} aria-invalid={!!error} aria-describedby={error ? 'blob-instructions-error' : undefined} value={draft.instructions} onChange={(event) => onDraftChange({ ...draft, instructions: event.target.value })} />
     </label>
-    <p id="blob-instructions-help" className="blob-help">{help}</p>
     {error && <p className="blob-error" id="blob-instructions-error">{error}</p>}
   </div>
 }
@@ -518,10 +516,10 @@ function EditGroup({ id, title, label, action, children }: { id?: string; title:
   </section>
 }
 
-function CapabilityField({ label, provider, state, setting, children }: { label: string; provider?: string; state: ReturnType<typeof capabilityState>; setting: CapabilitySetting | null; children: ReactNode }) {
+function CapabilityField({ label, state, setting, children }: { label: string; state: ReturnType<typeof capabilityState>; setting: CapabilitySetting | null; children: ReactNode }) {
   const reason = state === 'supported' ? '' : settingReason(setting, state)
   return <div className="settings-row" data-capability={state}>
-    <span className="settings-row-copy"><strong>{provider ? <span className="model-picker-provider"><ProviderLogo provider={provider} />{label}</span> : label}</strong>{reason && <small>{reason}</small>}</span>
+    <RowCopy label={label} hint={reason || undefined} />
     <span className="settings-row-control">{children}</span>
   </div>
 }

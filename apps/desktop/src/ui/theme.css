@@ -368,7 +368,7 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
 .select.field .select-trigger { width: 100%; height: 34px; justify-content: space-between; border: 1px solid var(--line-strong); background: var(--surface-input); }
 .select.muted .select-trigger { color: var(--text-2); }
 .select-menu, .menu-surface {
-  position: absolute; z-index: 60; min-width: 100%; max-width: 340px; max-height: 300px; padding: 5px; overflow-y: auto;
+  position: absolute; z-index: 60; min-width: 100%; max-width: 340px; max-height: 300px; padding: 5px; overflow-x: hidden; overflow-y: auto;
   border-radius: var(--radius-md); background: var(--surface-overlay); box-shadow: var(--shadow-pop); scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent;
 }
 .select-menu { top: calc(100% + 4px); right: 0; width: max-content; }
@@ -383,6 +383,14 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
 .select-option.active, .select-option:hover:not(:disabled), .menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--surface-hover); box-shadow: none; }
 .select-option[aria-disabled="true"] { color: var(--text-3); cursor: default; }
 .select-group-label { padding: 8px 10px 4px; color: var(--text-3); font-size: var(--fs-2xs); }
+/* Searchable lists: the field stays put while the options scroll under it. */
+.select-menu-search { max-height: 340px; padding: 0; display: flex; flex-direction: column; overflow: hidden; min-width: max(100%, 240px); }
+.select-search { flex: 0 0 auto; height: 36px; margin: 5px 5px 2px; padding: 0 10px; display: flex; align-items: center; gap: 7px; color: var(--text-3); border-radius: var(--radius-sm); background: var(--surface-input); }
+.select-search input { min-width: 0; flex: 1; height: 100%; padding: 0; color: var(--text-1); border: 0; outline: none; background: transparent; font: inherit; font-size: var(--fs-sm); }
+.select-search input:focus-visible { outline: none; box-shadow: none; }
+.select-list { min-height: 0; flex: 1 1 auto; padding: 3px 5px 5px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+.select-list:focus-visible { outline: none; box-shadow: none; }
+.select-empty { padding: 10px; color: var(--text-3); font-size: var(--fs-sm); }
 .menu-item > svg { flex: 0 0 auto; color: var(--text-2); }
 .menu-item .menu-item-trail { margin-left: auto; color: var(--text-3); font-size: var(--fs-xs); }
 .menu-separator { height: 1px; margin: 4px 6px; background: var(--line); }
@@ -396,3 +404,28 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* Text fields whose container already shows focus stay quiet inside it:
+   the command palette search, the companion composer and searchable lists. */
+.quick-switcher-search input:focus-visible,
+.companion-chat-composer .chat-input:focus-visible,
+.select-search input:focus-visible { outline: none; box-shadow: none; }
+
+/* HelpTip: a "?" that explains something on hover or focus (SettingsParts.tsx). Global: used in settings, the bot editor, onboarding and the companion. */
+.help-tip { position: relative; display: inline-flex; }
+.help-tip-trigger { width: 20px; height: 20px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 50%; background: transparent; cursor: help; }
+.help-tip-trigger:hover, .help-tip-trigger:focus-visible { color: var(--text-1); }
+.help-tip-bubble { position: absolute; z-index: 40; bottom: calc(100% + 8px); left: 50%; width: 260px; padding: 9px 11px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 10px 28px #00000066; font-size: var(--fs-xs); font-weight: 400; line-height: 1.45; white-space: normal; opacity: 0; visibility: hidden; transform: translate(-50%, 4px); transition: opacity 120ms ease, transform 120ms ease, visibility 0s linear 120ms; pointer-events: none; }
+.help-tip:hover .help-tip-bubble, .help-tip:focus-within .help-tip-bubble { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition: opacity 120ms ease, transform 120ms ease; }
+/* Row titles carry their explanation as a "?" beside the label. */
+.settings-row-title { min-width: 0; display: flex; align-items: center; gap: 4px; }
+.settings-row-title > strong { min-width: 0; }
+.help-tip.place-bottom .help-tip-bubble { top: calc(100% + 8px); bottom: auto; }
+.help-tip.align-start .help-tip-bubble { left: -6px; transform: translate(0, 4px); }
+.help-tip.align-end .help-tip-bubble { left: auto; right: -6px; transform: translate(0, 4px); }
+.help-tip.align-start:hover .help-tip-bubble, .help-tip.align-start:focus-within .help-tip-bubble,
+.help-tip.align-end:hover .help-tip-bubble, .help-tip.align-end:focus-within .help-tip-bubble { transform: translate(0, 0); }
+.help-tip-bubble dl { margin: 0; display: grid; gap: 6px; }
+.help-tip-bubble dt { color: var(--text-1); font-weight: 600; }
+.help-tip-bubble dd { margin: 0; color: var(--text-2); }
+@media (prefers-reduced-motion: reduce) { .help-tip-bubble { transition: none; } }

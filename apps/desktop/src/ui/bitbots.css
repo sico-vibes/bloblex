@@ -909,3 +909,18 @@
 :root[data-bitbots="on"] .settings-card > .blob-session-row:first-child,
 :root[data-bitbots="on"] .settings-card > .blob-session-row:last-child { border-radius: 0; }
 :root[data-bitbots="on"] .blob-session-row:hover { background: var(--bb-hover); box-shadow: inset 2px 0 0 var(--bb-accent); }
+
+/* ── Owner review wave (FIX26) ──────────────────────────────────────────── */
+/* One focus mark per field group: no dotted ring on the field inside. */
+:root[data-bitbots="on"] .quick-switcher-search input:focus,
+:root[data-bitbots="on"] .quick-switcher-search input:focus-visible,
+:root[data-bitbots="on"] .companion-chat-composer .chat-input:focus,
+:root[data-bitbots="on"] .companion-chat-composer .chat-input:focus-visible,
+:root[data-bitbots="on"] .select-search input:focus,
+:root[data-bitbots="on"] .select-search input:focus-visible,
+:root[data-bitbots="on"] .select-list:focus-visible { outline: none; box-shadow: none; border-color: transparent; }
+:root[data-bitbots="on"] .select-search { border: 2px solid var(--bb-line); border-radius: 0; background: var(--bb-input); }
+:root[data-bitbots="on"] .select-search:focus-within { border-color: var(--bb-line-strong); }
+:root[data-bitbots="on"] .composer-menu-search { border: 2px solid var(--bb-line); border-radius: 0; background: var(--bb-input); }
+:root[data-bitbots="on"] .composer-menu-search input:focus,
+:root[data-bitbots="on"] .composer-menu-search input:focus-visible { outline: none; box-shadow: none; }

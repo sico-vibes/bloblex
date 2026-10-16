@@ -35,6 +35,8 @@
 .compact-name .approval-pill { flex: 0 0 auto; }
 .compact-status { overflow: hidden; color: var(--c-dim-2); font: 400 var(--fs-xs) var(--c-font); text-overflow: ellipsis; white-space: nowrap; }
 .companion-alert { flex: 0 0 auto; color: var(--companion-status-alert); }
+/* The name area fills the bar and drags on press-and-move (see compactDrag in App.tsx). */
+.compact-copy { touch-action: none; }
 .mini-grid { width: 33px; height: 33px; flex: 0 0 auto; display: grid; grid-template-columns: 15px 15px; grid-auto-rows: 15px; gap: 3px; pointer-events: none; }
 /* An even box around an even icon, so the chevron sits on whole pixels at its centre. */
 .companion-collapse { width: 26px; height: 26px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; color: var(--c-dim-2); border: 0; border-radius: 50%; background: var(--companion-alpha-07); line-height: 0; }
@@ -50,6 +52,9 @@
 .island-header .tab.on { color: var(--c-ink); background: var(--c-tab-on); }
 .island-header .tab:disabled { opacity: 0.35; }
 .island-drag { flex: 1; align-self: stretch; }
+.companion-hint-pill { min-width: 0; height: 22px; margin-left: 8px; padding: 0 3px 0 9px; display: inline-flex; flex: 0 1 auto; align-items: center; gap: 6px; color: var(--c-ink-2); border: 1px solid var(--c-hairline); border-radius: 11px; background: var(--companion-alpha-07); font: 500 var(--fs-2xs) var(--c-font); animation: peek-in 0.24s ease-out both; }
+.companion-hint-pill > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.companion-hint-pill > button { height: 16px; flex: 0 0 auto; padding: 0 7px; color: var(--text-inverse); border: 0; border-radius: 8px; background: var(--c-ink); font: 600 10px var(--c-font); }
 .island-actions { display: flex; align-items: center; gap: 14px; padding-right: 12px; }
 .island-actions > button:not(.companion-collapse) { padding: 0; display: grid; place-items: center; color: var(--c-dim-2); border: 0; background: transparent; }
 .island-actions > button.on, .island-actions > button:hover:not(:disabled) { color: var(--c-ink); }
@@ -130,6 +135,9 @@
 
 /* Chat */
 .chat-body { position: relative; z-index: 1; height: 100%; padding: 12px 16px 12px 84px; display: flex; flex-direction: column; gap: 6px; }
+.companion-chat-view { display: flex; flex-direction: column; }
+.companion-chat-view > .chat-body { height: auto; min-height: 0; flex: 1 1 auto; padding-bottom: 4px; }
+.companion-composer-zone { position: relative; z-index: 1; flex: 0 0 auto; padding: 0 10px 10px; display: flex; flex-direction: column; gap: 6px; }
 .chat-log { min-height: 0; flex: 1 1 auto; padding: 2px 0; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--companion-alpha-18) transparent; }
 .chat-row { display: flex; }
 .chat-row.user { justify-content: flex-end; padding-left: 32px; }
@@ -144,15 +152,20 @@
 .chat-bar { min-height: 42px; padding: 5px 6px 5px 6px; display: flex; align-items: center; gap: 2px; border-radius: 12px; background: var(--companion-alpha-07); }
 /* The companion composer is two rows: the message gets the full width and grows with the
    text, and the model, effort, context, attach, microphone and send controls sit below it. */
-.companion-chat-composer { flex-wrap: wrap; row-gap: 2px; padding: 8px 8px 6px; }
-.companion-chat-composer .chat-input { order: -1; flex: 1 1 100%; min-height: 40px; max-height: 132px; padding: 4px 4px 6px; overflow-y: hidden; }
-.companion-chat-composer .session-execution-controls { flex: 1 1 0; min-width: 0; }
+.companion-chat-composer { flex-wrap: wrap; row-gap: 4px; padding: 8px 8px 6px; }
+.companion-chat-composer .chat-input { flex: 1 1 100%; min-height: 40px; max-height: 132px; padding: 4px 6px 6px; overflow-y: hidden; }
+/* One bar under the message: attach, model and effort on the left; context, mic and send on the right, all 30 px. */
+.companion-composer-bar { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.companion-composer-start, .companion-composer-end { min-width: 0; display: flex; align-items: center; gap: 2px; }
+.companion-composer-start { flex: 1 1 auto; }
+.companion-composer-end { flex: 0 0 auto; }
+.companion-composer-bar > * > * { align-self: center; }
 .companion-chat-composer .composer-popover-anchor { max-width: none; }
 .companion-chat-composer .model-pill { max-width: 100%; }
 .companion-chat-composer .composer-menu { right: auto; left: 0; max-width: min(300px, calc(100vw - 24px)); }
 .companion-chat-composer .composer-menu.align-right { right: auto; left: 0; transform-origin: bottom left; }
 .companion-chat-composer .session-effort-popover { right: auto; left: 0; max-width: calc(100vw - 24px); transform-origin: bottom left; }
-.companion-chat-composer .session-execution-controls { min-width: 0; flex: 1 1 0; gap: 0; }
+.companion-chat-composer .session-execution-controls { min-width: 0; flex: 0 1 auto; gap: 0; }
 .companion-chat-composer .session-effort-control { max-width: none; flex: 0 0 auto; }
 .companion-chat-composer .composer-pill { min-width: 0; max-width: 100%; height: 30px; padding-inline: 8px; }
 .companion-chat-composer .composer-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -307,9 +320,9 @@
 .focus-ticker-dot::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .7; }
 @keyframes ticker-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
-.peers-card { position: relative; padding: 8px; }
-.peer-grid { height: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.peer { --peer: var(--companion-white); min-width: 0; padding: 0 12px 0 5px; display: flex; align-items: center; gap: 6px; color: color-mix(in srgb, var(--peer) 72%, var(--c-ink)); text-align: left; border: 1px solid color-mix(in srgb, var(--peer) 22%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--peer) 9%, var(--c-card-flat)); font: 600 var(--fs-2xs) var(--c-font); animation: peer-in 340ms cubic-bezier(.3, 1.2, .4, 1) both; transition: transform 140ms ease, background 140ms ease, border-color 140ms ease; }
+.peers-card { position: relative; padding: 10px; }
+.peer-grid { height: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.peer { --peer: var(--companion-white); position: relative; min-width: 0; padding: 0 14px 0 6px; display: flex; align-items: center; gap: 8px; color: color-mix(in srgb, var(--peer) 72%, var(--c-ink)); text-align: left; border: 1px solid color-mix(in srgb, var(--peer) 22%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--peer) 9%, var(--c-card-flat)); font: 600 var(--fs-2xs) var(--c-font); animation: peer-in 340ms cubic-bezier(.3, 1.2, .4, 1) both; transition: transform 140ms ease, background 140ms ease, border-color 140ms ease; }
 .peer:hover { border-color: color-mix(in srgb, var(--peer) 55%, transparent); background: color-mix(in srgb, var(--peer) 18%, var(--c-card-flat)); transform: translateY(-1px); }
 .peer:active { transform: scale(.97); }
 .peer.state-offline { opacity: .5; }
@@ -318,11 +331,15 @@
 .peer-face { position: relative; flex: 0 0 auto; display: grid; place-items: center; }
 .peer-face .blob-canvas { pointer-events: none; }
 .peer-leader { position: absolute; right: -3px; bottom: -2px; width: 11px; height: 11px; display: grid; place-items: center; color: #fff; border-radius: 50%; background: linear-gradient(160deg, #ffad42, #f27a1a); font-size: 7px; font-style: normal; line-height: 1; box-shadow: 0 0 0 1.5px var(--c-card); }
-.peer-copy { min-width: 0; display: grid; line-height: 1.2; }
+.peer-copy { min-width: 0; flex: 1; display: grid; line-height: 1.3; }
+.peer-copy b { font-size: var(--fs-xs); }
+.peer-state-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--companion-status-working, #f5a524); }
+.peer-state-dot.waiting { background: var(--companion-status-alert, #f5a524); }
+.peer-state-dot.failed { background: var(--companion-status-error, #ef6461); }
 .peer-copy b { overflow: hidden; color: color-mix(in srgb, var(--peer) 78%, var(--c-ink)); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .peer-line { min-width: 0; overflow: hidden; color: var(--c-dim-2); font-weight: 500; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .peer.state-waiting .peer-line { color: var(--companion-status-alert, #f5a524); }
-.peers-all { position: absolute; top: 4px; right: 6px; z-index: 2; height: 18px; padding: 0 7px; display: inline-flex; align-items: center; gap: 4px; color: var(--c-dim-2); border: 1px solid var(--companion-alpha-08); border-radius: 999px; background: var(--c-card); font: 600 10px var(--c-font); opacity: 0; transition: opacity 140ms ease; }
+.peers-all { position: absolute; top: -9px; right: 10px; z-index: 2; height: 18px; padding: 0 7px; display: inline-flex; align-items: center; gap: 4px; color: var(--c-dim-2); border: 1px solid var(--companion-alpha-08); border-radius: 999px; background: var(--c-card); font: 600 10px var(--c-font); opacity: 0; transition: opacity 140ms ease; }
 .peers-card:hover .peers-all, .peers-all:focus-visible { opacity: 1; }
 .peers-all:hover { color: var(--c-ink); background: var(--companion-alpha-08); }
 
@@ -413,7 +430,32 @@ button.compact-copy:active { transform: none; }
 .companion-elapsed { flex: 0 0 auto; color: var(--c-dim-3); font: 500 var(--fs-2xs) var(--c-font); font-style: normal; font-variant-numeric: tabular-nums; }
 
 /* ── C10: chat copy, Load earlier and the New messages pill ───────────── */
-.chat-row { align-items: flex-end; gap: 4px; }
+.chat-row { align-items: center; gap: 4px; }
+.chat-row:hover .message-actions, .chat-row:focus-within .message-actions, .chat-row .message-actions.open { opacity: 1; }
+.chat-row .message-actions.compact .message-action-time { position: static; margin: 0 0 0 4px; }
+.chat-row.user .message-actions.compact { order: -1; flex-direction: row-reverse; }
+.chat-row.user .message-actions.compact .message-action-time { margin: 0 4px 0 0; }
+.chat-row .message-actions .message-action-button { color: var(--c-dim-3); }
+.chat-row .message-actions .message-action-button:hover:not(:disabled) { color: var(--c-ink); }
+.chat-row.peer-message { flex-direction: column; align-items: flex-start; gap: 3px; }
+.companion-peer-author { display: inline-flex; align-items: center; gap: 5px; font: 600 var(--fs-2xs) var(--c-font); }
+.companion-team-chip-open { flex: 0 0 auto; opacity: .7; }
+.companion-team-chip-topic { color: var(--c-dim-2); font-style: normal; }
+.companion-team-chip-topic::before { content: "·"; margin-right: 5px; }
+/* A conversation between two bots, opened in place. */
+.companion-side-view { display: flex; flex-direction: column; }
+.companion-side-head { position: relative; z-index: 1; min-width: 0; padding: 8px 10px 4px; display: flex; align-items: center; gap: 6px; }
+.companion-side-head .side-header { position: static; min-width: 0; max-width: none; flex: 1; transform: none; display: flex; justify-content: center; }
+.companion-side-head .side-header-pill { height: 28px; padding: 0 10px 0 5px; font-size: var(--fs-2xs); }
+.companion-side-head .icon-btn { width: 24px; height: 24px; flex: 0 0 auto; }
+.companion-side-log { min-height: 0; flex: 1 1 auto; padding: 4px 14px 12px; }
+/* Usage notices wrap to two lines here instead of cutting off. */
+.companion-root .usage-tip { width: 100%; margin: 0; font-size: var(--fs-2xs); }
+.companion-root .usage-tip-copy { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* Settings titles carry their explanation behind a "?". */
+.cset-title { min-width: 0; display: flex; align-items: center; gap: 3px; }
+.cset-title .help-tip-trigger { width: 18px; height: 18px; color: var(--c-dim-3); }
+.cset-title .help-tip-bubble { width: 220px; }
 .companion-copy { width: 20px; height: 20px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; color: var(--c-dim-3); border: 0; border-radius: 50%; background: transparent; opacity: 0; transition: opacity 120ms ease, color 120ms ease; }
 .chat-row:hover .companion-copy, .chat-row:focus-within .companion-copy, .companion-copy:focus-visible, .companion-copy.copied { opacity: 1; }
 .companion-copy:hover { color: var(--c-ink); }

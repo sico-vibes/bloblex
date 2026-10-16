@@ -81,6 +81,25 @@ export function setThemeStyle(next: ThemeStyle) {
   for (const listener of listeners) listener()
 }
 
+/**
+ * Re-reads the style another window saved (the dictation bubble and the
+ * companion are separate windows that never see the main window's setting
+ * events). Returns true when it changed.
+ */
+export function syncThemeStyleFromCache(): boolean {
+  const cached = readStyle()
+  if (cached === style) return false
+  setThemeStyle(cached)
+  return true
+}
+
+// Another window changed the look: follow it at once.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === STYLE_KEY || event.key === null) syncThemeStyleFromCache()
+  })
+}
+
 /** True while Bitbots (the pixel-robot theme) is the current style. */
 export function bitbotsEnabled() { return style === 'bitbots' }
 

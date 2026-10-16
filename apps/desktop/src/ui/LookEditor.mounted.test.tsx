@@ -29,7 +29,7 @@ afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => ro
 describe('look editor', () => {
   it('previews every shape in the blob and picks one by click or arrow keys', () => {
     const { host, onLookChange } = mount({ shape: 'round', seed: 'pololo' })
-    const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Blob shape"] [role="radio"]')]
+    const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Bot shape"] [role="radio"]')]
     expect(radios).toHaveLength(10)
     expect(radios[0].getAttribute('aria-checked')).toBe('true')
     expect(radios.map((radio) => radio.querySelector('span[data-shape]')?.getAttribute('data-shape'))).toEqual(['round', 'organic', 'boxy', 'capsule', 'cloud', 'droplet', 'hexagon', 'sun', 'triangle', 'cat'])

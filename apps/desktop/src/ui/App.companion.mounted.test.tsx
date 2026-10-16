@@ -337,7 +337,7 @@ describe('companion drag and usage labels', () => {
 
     await press(view.host, 'Settings')
     await view.settle()
-    expect(view.host.textContent).toContain('Drag the island to place it anywhere.')
+    expect(view.host.querySelector('.companion-settings-view')).not.toBeNull()
     expect(view.host.querySelector('[role="switch"]')?.hasAttribute(DRAG), 'sounds switch').toBe(false)
     expect(view.host.querySelector('.btn.primary')?.hasAttribute(DRAG), 'settings button').toBe(false)
     assertIsland(view.host, 'settings')
@@ -540,7 +540,6 @@ describe('companion settings panel', () => {
     expect([...panel.querySelectorAll('.cset-section > h3')].map((heading) => heading.textContent)).toEqual(['Sound', 'Chat', 'Placement', 'Teammates on the island', 'Remote'])
     expect(panel.querySelector('[role="switch"][aria-label="Companion sounds"]')).not.toBeNull()
     expect(panel.querySelector('[role="radiogroup"][aria-label="Chat height"]')).not.toBeNull()
-    expect(panel.querySelector('.cset-footer')?.textContent).toContain('Drag the island to place it anywhere.')
     expect([...panel.querySelectorAll('.cset-footer button')].map((button) => button.textContent)).toEqual(['Open Bitbots settings', 'Hide companion'])
     // The old loose "Choose" hop to the overview is gone: choosing happens in the panel.
     expect([...panel.querySelectorAll('button')].some((button) => button.textContent === 'Choose')).toBe(false)
@@ -629,13 +628,15 @@ describe('companion first-run drag hint', () => {
     await view.settle()
     await press(view.host, 'Open companion home')
     await view.settle()
-    const hint = view.host.querySelector('.companion-hint')!
-    expect(hint.textContent).toContain('Drag me anywhere. Ctrl+Alt+B shows or hides me.')
+    // The tip sits in the header, beside the tabs and the + button.
+    const hint = view.host.querySelector('.island-header .companion-hint-pill')!
+    expect(hint.textContent).toContain('Drag me anywhere')
+    expect(hint.getAttribute('title')).toBe('Drag me anywhere. Ctrl+Alt+B shows or hides me.')
     await act(async () => { [...hint.querySelectorAll('button')].find((button) => button.textContent === 'Got it')!.click(); await settleMicrotasks() })
-    expect(view.host.querySelector('.companion-hint')).toBeNull()
+    expect(view.host.querySelector('.companion-hint-pill')).toBeNull()
     // A second mount in the same window does not bring it back.
     await press(view.host, 'Home')
     await view.settle()
-    expect(view.host.querySelector('.companion-hint')).toBeNull()
+    expect(view.host.querySelector('.companion-hint-pill')).toBeNull()
   })
 })

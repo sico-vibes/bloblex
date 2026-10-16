@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { RowCopy } from './SettingsParts'
 import {
   BETA_CHANNEL_EXPLANATION, CHECKING_UPDATES_MESSAGE, DEV_BUILD_UPDATES_MESSAGE, NO_STABLE_RELEASE_MESSAGE,
   STABLE_CHANNEL_EXPLANATION, UP_TO_DATE_MESSAGE, UPDATE_FAILED_MESSAGE,
@@ -187,13 +188,13 @@ export function UpdatesPanel({ sessions = [], permissions = [] }: {
       </div>}
       {!(statusText || (checkKind === 'available' && offer && !devBuild) || shownProgress) && <p className="sr-only" role="status" aria-live="polite" data-update-status />}
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Channel</strong><small id="update-channel-hint">{channel === 'stable' ? STABLE_CHANNEL_EXPLANATION : BETA_CHANNEL_EXPLANATION}</small></span>
+        <RowCopy label="Channel" hint={channel === 'stable' ? STABLE_CHANNEL_EXPLANATION : BETA_CHANNEL_EXPLANATION} hintId="update-channel-hint" />
         <span className="settings-row-control">
           <Select ariaLabel="Update channel" describedBy="update-channel-hint" variant="muted" value={channel} disabled={controlsDisabled || !state} onChange={(value) => { const next = parseUpdateChannel(value); if (next) void persist({ channel: next }) }} options={[{ value: 'stable', label: 'Stable' }, { value: 'beta', label: 'Beta' }]} />
         </span>
       </div>
       <div className="settings-row">
-        <span className="settings-row-copy"><strong>Check for updates automatically</strong><small>Looks in the background. You still choose when to install.</small></span>
+        <RowCopy label="Check for updates automatically" hint="Looks in the background. You still choose when to install." />
         <span className="settings-row-control"><button type="button" className={`toggle ${state?.autoCheck !== false ? 'on' : ''}`} role="switch" aria-label="Check for updates automatically" aria-checked={state?.autoCheck !== false} disabled={controlsDisabled || !state} onClick={() => void persist({ autoCheck: state?.autoCheck === false })}><i /></button></span>
       </div>
     </div>

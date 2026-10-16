@@ -5,7 +5,12 @@
 }
 .sidebar-usage:hover { color: var(--text-1); border-color: var(--line-strong); background: var(--surface-hover); }
 .sidebar-usage:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.sidebar-usage-slide { min-width: 0; flex: 1; display: flex; align-items: center; gap: 9px; animation: sidebar-usage-in 320ms ease; }
 .sidebar-usage-text { min-width: 0; flex: 1; display: grid; gap: 5px; }
+.sidebar-usage-dots { flex: 0 0 auto; display: grid; gap: 3px; }
+.sidebar-usage-dots i { width: 4px; height: 4px; display: block; border-radius: 50%; background: var(--text-3); opacity: .45; transition: opacity 200ms ease; }
+.sidebar-usage-dots i.on { opacity: 1; background: var(--text-1); }
+@keyframes sidebar-usage-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 .sidebar-usage-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: var(--fs-xs); white-space: nowrap; }
 .sidebar-usage-line > b { color: var(--text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
 .sidebar-usage-reset { margin-left: auto; overflow: hidden; color: var(--text-3); text-overflow: ellipsis; font-size: var(--fs-2xs); }
@@ -14,4 +19,4 @@
 .sidebar-usage.tone-warning .sidebar-usage-meter > b { background: var(--status-working); }
 .sidebar-usage.tone-critical .sidebar-usage-meter > b { background: var(--status-danger); }
 .sidebar-usage.tone-critical .sidebar-usage-line > b { color: var(--status-danger-text); }
-@media (prefers-reduced-motion: reduce) { .sidebar-usage, .sidebar-usage-meter > b { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .sidebar-usage, .sidebar-usage-meter > b, .sidebar-usage-dots i { transition: none; } .sidebar-usage-slide { animation: none; } }

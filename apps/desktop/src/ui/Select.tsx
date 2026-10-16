@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
-import { Check, ChevronDown } from 'lucide-react'
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Check, ChevronDown, Search } from 'lucide-react'
 import { ProviderLogo } from './providerBrand'
 
 export interface SelectOption {
@@ -16,9 +16,10 @@ export interface SelectOption {
 /**
  * Dropdown used everywhere instead of the native select, whose popup cannot be
  * styled on Windows. The trigger carries `data-value`; the list is a listbox
- * with arrow-key, Home/End, type-ahead, Enter and Escape support.
+ * with arrow-key, Home/End, type-ahead, Enter and Escape support. Long lists
+ * can pass `searchable` to get a filter field at the top of the menu.
  */
-export function Select({ value, options, onChange, ariaLabel, disabled = false, variant = 'inline', align = 'right', menuPlacement = 'bottom', triggerLabel, placeholder, describedBy, className = '' }: {
+export function Select({ value, options, onChange, ariaLabel, disabled = false, variant = 'inline', align = 'right', menuPlacement = 'bottom', triggerLabel, placeholder, describedBy, className = '', searchable = false, searchPlaceholder = 'Search' }: {
   value: string
   options: readonly SelectOption[]
   onChange: (value: string) => void
@@ -31,8 +32,13 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
   placeholder?: string
   describedBy?: string
   className?: string
+  /** Shows a filter field when there are more than this many options (true means always). */
+  searchable?: boolean | number
+  searchPlaceholder?: string
 }) {
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
   const [active, setActive] = useState(-1)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -52,15 +58,23 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
     return () => document.removeEventListener('pointerdown', close)
   }, [open])
 
+  const showSearch = searchable === true || (typeof searchable === 'number' && options.length > searchable)
+  // Each option's group, carried down from the option that starts it, so a filtered list keeps its headings.
+  const groups = groupOf(options)
+  const needle = query.trim().toLocaleLowerCase()
+  const visible = options.map((_, index) => index).filter((index) => !needle || matches(options[index], groups[index], needle))
+
   useEffect(() => {
     if (!open) return
-    listRef.current?.focus()
+    if (showSearch) searchRef.current?.focus()
+    else listRef.current?.focus()
     listRef.current?.querySelector<HTMLElement>('[data-active="true"]')?.scrollIntoView?.({ block: 'nearest' })
-  }, [open, active])
+  }, [open, active, showSearch])
 
   useEffect(() => () => window.clearTimeout(typeahead.current.timer), [])
 
-  const enabledIndexes = options.map((option, index) => option.disabled ? -1 : index).filter((index) => index >= 0)
+  const placement = `${align === 'left' ? 'align-left' : ''} ${menuPlacement === 'top' ? 'open-up' : ''}`.trim()
+  const enabledIndexes = visible.filter((index) => !options[index].disabled)
   const openMenu = () => {
     if (disabled) return
     const current = options.findIndex((option) => option.value === value && !option.disabled)
@@ -69,6 +83,7 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
   }
   const close = (refocus = true) => {
     setOpen(false)
+    setQuery('')
     // Focus returns synchronously so a dialog opened by onChange records the trigger as its return target.
     if (refocus) triggerRef.current?.focus()
   }
@@ -128,19 +143,51 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
       <span className={selected?.provider ? 'select-provider-label' : undefined}>{selected?.provider && <ProviderLogo provider={selected.provider} size={16} />}{visibleTriggerLabel}</span>
       <ChevronDown size={14} aria-hidden="true" />
     </button>
-    {open && <div
+    {open && <SearchShell enabled={showSearch} className={placement}>
+    {showSearch && <label className="select-search">
+      <Search size={13} aria-hidden="true" />
+      <input
+        ref={searchRef}
+        type="text"
+        value={query}
+        placeholder={searchPlaceholder}
+        aria-label={`Search ${ariaLabel.toLocaleLowerCase()}`}
+        aria-controls={listId}
+        aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
+        spellCheck={false}
+        onChange={(event) => {
+          const next = event.target.value
+          setQuery(next)
+          const nextNeedle = next.trim().toLocaleLowerCase()
+          const first = options.findIndex((option, index) => !option.disabled && (!nextNeedle || matches(option, groups[index], nextNeedle)))
+          setActive(first)
+        }}
+        onKeyDown={(event) => {
+          if (event.key.length === 1 || event.key === 'Backspace' || event.key === 'Delete' || event.key === 'ArrowLeft' || event.key === 'ArrowRight' || (event.key === ' ' && query)) return
+          onListKeyDown(event as unknown as KeyboardEvent<HTMLDivElement>)
+        }}
+      />
+    </label>}
+    <div
       ref={listRef}
       id={listId}
-      className={`select-menu ${align === 'left' ? 'align-left' : ''} ${menuPlacement === 'top' ? 'open-up' : ''}`}
+      className={showSearch ? 'select-list' : `select-menu ${placement}`}
       role="listbox"
       aria-label={ariaLabel}
       tabIndex={-1}
       aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
       onKeyDown={onListKeyDown}
     >
-      {options.map((option, index) => [
-        ...(option.groupBefore ?? []).map((group, groupIndex) => <div key={`group-before-${index}-${groupIndex}`} className={`select-group-label ${group.provider ? 'provider-group-label' : ''}`} role="presentation">{group.provider && <ProviderLogo provider={group.provider} size={16} />}{group.label}</div>),
-        option.group ? <div key={`group-${index}`} className={`select-group-label ${option.groupProvider ? 'provider-group-label' : ''}`} role="presentation">{option.groupProvider && <ProviderLogo provider={option.groupProvider} size={16} />}{option.group}</div> : null,
+      {visible.length === 0 && <div className="select-empty" role="presentation">No matches</div>}
+      {visible.map((index, position) => {
+        const option = options[index]
+        const previous = position > 0 ? visible[position - 1] : -1
+        const heading = needle
+          ? (groups[index] && groups[index] !== (previous >= 0 ? groups[previous] : undefined) ? { label: groups[index]!, provider: undefined } : null)
+          : (option.group ? { label: option.group, provider: option.groupProvider } : null)
+        return [
+        ...(needle ? [] : option.groupBefore ?? []).map((group, groupIndex) => <div key={`group-before-${index}-${groupIndex}`} className={`select-group-label ${group.provider ? 'provider-group-label' : ''}`} role="presentation">{group.provider && <ProviderLogo provider={group.provider} size={16} />}{group.label}</div>),
+        heading ? <div key={`group-${index}`} className={`select-group-label ${heading.provider ? 'provider-group-label' : ''}`} role="presentation">{heading.provider && <ProviderLogo provider={heading.provider} size={16} />}{heading.label}</div> : null,
         <div
           key={`${option.value}-${index}`}
           id={`${listId}-${index}`}
@@ -156,7 +203,27 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
           <span className={option.provider ? 'select-provider-label' : undefined}>{option.provider && <ProviderLogo provider={option.provider} size={16} />}{option.label}</span>
           {option.value === value && <Check size={14} aria-hidden="true" />}
         </div>,
-      ])}
-    </div>}
+      ]})}
+    </div>
+    </SearchShell>}
   </div>
+}
+
+/** With search on, the field and the list share one floating surface; otherwise the list is the surface. */
+function SearchShell({ enabled, className, children }: { enabled: boolean; className: string; children: ReactNode }) {
+  return enabled ? <div className={`select-menu select-menu-search ${className}`}>{children}</div> : <>{children}</>
+}
+
+function groupOf(options: readonly SelectOption[]) {
+  let current: string | undefined
+  return options.map((option) => {
+    if (option.group) current = option.group
+    return current
+  })
+}
+
+function matches(option: SelectOption, group: string | undefined, needle: string) {
+  return option.label.toLocaleLowerCase().includes(needle)
+    || option.value.toLocaleLowerCase().includes(needle)
+    || (group ?? '').toLocaleLowerCase().includes(needle)
 }

@@ -27,9 +27,11 @@ export function quotaProviderName(provider: string) {
   return provider === 'opencode' ? 'OpenCode Go' : provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : provider
 }
 
+export const SIGN_IN_NEEDED = 'Sign-in needed'
+
 const ERROR_STATUS: Record<string, string> = {
-  no_credentials: 'Not signed in',
-  unauthorized: 'Sign-in expired',
+  no_credentials: SIGN_IN_NEEDED,
+  unauthorized: SIGN_IN_NEEDED,
   no_subscription: 'No subscription',
   protocol: 'Unreadable',
   timeout: 'Timed out',
@@ -53,7 +55,11 @@ function windowNames(duration: number | null, limitLabel: string, provider: stri
   return { label: provider === 'codex' && limitLabel !== 'Codex' ? limitLabel : slot === 'primary' ? 'Primary' : 'Secondary', short: slot === 'primary' ? 'pri' : 'sec' }
 }
 
-export function quotaRows(quotas: Record<string, unknown>[]): QuotaProviderRow[] {
+/**
+ * `signedOut` lists providers whose CLI reports no sign-in; a failed or empty
+ * reading for one of them says "Sign-in needed" rather than a generic failure.
+ */
+export function quotaRows(quotas: Record<string, unknown>[], signedOut: readonly string[] = []): QuotaProviderRow[] {
   return quotas
     .filter((item) => PROVIDER_ORDER.includes(String(item.provider)))
     .sort((a, b) => PROVIDER_ORDER.indexOf(String(a.provider)) - PROVIDER_ORDER.indexOf(String(b.provider)))
@@ -73,11 +79,12 @@ export function quotaRows(quotas: Record<string, unknown>[]): QuotaProviderRow[]
         }
       }
       const lastError = typeof item.lastError === 'string' ? item.lastError : null
+      const failed = lastError ? ERROR_STATUS[lastError] ?? 'Unavailable' : windows.length ? null : 'Unavailable'
       return {
         provider,
         name: quotaProviderName(provider),
         windows,
-        status: lastError ? ERROR_STATUS[lastError] ?? 'Unavailable' : windows.length ? null : 'Unavailable',
+        status: failed && signedOut.includes(provider) ? SIGN_IN_NEEDED : failed,
         stale: !!lastError && windows.length > 0,
         fetchedAt: typeof item.fetchedAt === 'string' ? item.fetchedAt : null,
       }

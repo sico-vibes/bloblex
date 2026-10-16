@@ -28,8 +28,10 @@ function providerSummary(row: QuotaProviderRow) {
   return `${row.name}: ${row.windows.map(windowSummary).join('; ')}${row.stale ? `; ${row.status}, showing last reading` : ''}`
 }
 
-export function QuotaBar({ quotas, refreshing, onRefresh, onOpenDetails }: {
+export function QuotaBar({ quotas, signedOut = [], refreshing, onRefresh, onOpenDetails }: {
   quotas: Record<string, unknown>[]
+  /** Providers whose CLI reports no sign-in. */
+  signedOut?: readonly string[]
   refreshing: boolean
   onRefresh: () => void
   onOpenDetails: () => void
@@ -37,7 +39,7 @@ export function QuotaBar({ quotas, refreshing, onRefresh, onOpenDetails }: {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
-  const rows = quotaRows(quotas)
+  const rows = quotaRows(quotas, signedOut)
   const close = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus()) }
   usePopoverDismiss(open, rootRef, close)
   return <div ref={rootRef} className="quota-bar">
@@ -92,7 +94,8 @@ function UsagePopover({ rows, refreshing, onRefresh, onOpenDetails }: { rows: Qu
       {rows.length === 0 && <p className="usage-rows-empty">Signed-in Codex, Claude Code and OpenCode Go accounts report their plan limits here.</p>}
       {rows.map((row) => {
         const primary = row.windows[0]
-        const reset = primary ? resetIn(primary.resetsAt) : null
+        // A stale reading's reset has usually passed, so it is not shown.
+        const reset = primary && !row.stale ? resetIn(primary.resetsAt) : null
         return <button key={row.provider} type="button" className={`usage-row ${active === row.provider ? 'active' : ''}`} aria-describedby={active === row.provider ? 'usage-flyout' : undefined} aria-label={providerSummary(row)} onMouseEnter={(event) => show(row.provider, event.currentTarget)} onFocus={(event) => show(row.provider, event.currentTarget)} onBlur={hideSoon} onClick={(event) => show(row.provider, event.currentTarget)}>
           <span className="usage-row-head">
             <ProviderLogo provider={row.provider} size={18} />

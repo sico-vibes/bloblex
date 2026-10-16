@@ -45,10 +45,33 @@ export function conversationPreview(session: Session | null | undefined): string
     if (role === 'thinking') continue
     if (role === 'notice' && message.meta?.kind === 'delegation') return `Messaged ${message.meta.peerName ?? 'a teammate'}`
     if (message.meta?.kind === 'blob_reply') return `Message from ${message.meta.fromName ?? 'a teammate'}`
+    if (role === 'notice' && message.meta?.kind === 'blob_created') return `Created ${typeof message.meta.name === 'string' ? message.meta.name : 'a teammate'}`
     const text = messageText(message)
     if (text) return role === 'user' && !message.meta ? `You: ${text}` : text
   }
   return null
+}
+
+/** True for Bitbots' own per-bot folder (`<data>/workspaces/<id>`), which is not a name people know. */
+export function isBotWorkspacePath(path: string) {
+  return /[\\/]workspaces[\\/][^\\/]+[\\/]?$/i.test(path)
+}
+
+/**
+ * Where a conversation works, as a name people recognise: the daemon's label,
+ * else the bot's project, else the folder name of a real project folder.
+ * Null for a casual bot working in its own Bitbots workspace.
+ */
+export function conversationPlaceName(session: Session | null | undefined, agents: readonly Agent[], projects: readonly Project[]): string | null {
+  if (!session) return null
+  const label = typeof session.workspaceLabel === 'string' ? session.workspaceLabel.trim() : ''
+  if (label) return label
+  const projectId = typeof session.projectId === 'string' ? session.projectId : agents.find((agent) => agent.id === session.agentId)?.projectId
+  const project = projectId ? projects.find((item) => item.id === projectId) : undefined
+  if (project?.name) return project.name
+  const path = typeof session.projectPath === 'string' ? session.projectPath : ''
+  if (!path || isBotWorkspacePath(path)) return null
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? null
 }
 
 export type ProjectGroup = { project: Project | null; agents: Agent[] }

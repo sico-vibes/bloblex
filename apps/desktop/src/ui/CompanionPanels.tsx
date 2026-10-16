@@ -10,6 +10,16 @@ import { agentColorHex } from './agentColor'
 import { blobState, sessionSteps } from './CompanionTeam'
 import { mainSessionFor } from './teamSelectors'
 import { StatusDot, type BotStatus } from './StatusDot'
+import { HelpTip } from './SettingsParts'
+import type { ReactNode } from 'react'
+
+/** A companion setting's title with its explanation behind a "?", like the main Settings rows. */
+export function CompanionSettingCopy({ label, hint, detail }: { label: ReactNode; hint?: ReactNode; detail?: ReactNode }) {
+  return <span className="cset-copy">
+    <span className="cset-title"><strong>{label}</strong>{hint && <HelpTip text={hint} align="start" placement="bottom" />}</span>
+    {detail && <small>{detail}</small>}
+  </span>
+}
 import { useEntityNoun } from './vocabulary'
 import type { RemoteStatus } from '../remote/remoteContract'
 import { rpc } from '../tauri'

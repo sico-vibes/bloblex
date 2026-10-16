@@ -4,6 +4,7 @@ import type { Agent, Session, SessionModelLock } from '../types'
 import { rpc } from '../tauri'
 import { parseModelCatalog, type CatalogModel, type ModelCatalog, type ServiceTierOption } from '../executionContract'
 import { ConfirmDialog } from './BlobPage'
+import { useCachedRpc } from './catalogCache'
 import { moveMenuFocus, usePopoverDismiss } from './ComposerControls'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { positionFromPointer, SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
@@ -28,8 +29,6 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   onSessionUpdated: (session: Session) => void
   onError: (reason: unknown) => void
 }) {
-  const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
-  const [catalogUnavailable, setCatalogUnavailable] = useState(false)
   const [pendingModel, setPendingModel] = useState<PendingModel | null>(null)
   const [effortDraft, setEffortDraft] = useState<EffortDraft | null>(null)
   const [savingSessionIds, setSavingSessionIds] = useState<Set<string>>(() => new Set())
@@ -44,36 +43,21 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   const serviceTier = rawSessionLock.serviceTier === undefined ? agent.serviceTier : rawSessionLock.serviceTier
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    setCatalog(null)
-    setCatalogUnavailable(false)
-    void rpc('runtime.models', { runtimeId: session.runtimeId, sessionId: session.id }).then((value) => {
-      if (!cancelled) {
-        const parsed = parseModelCatalog(value)
-        setCatalog(parsed)
-        setCatalogUnavailable(!parsed || parsed.models.length === 0)
-      }
-    }).catch(() => { if (!cancelled) { setCatalog(null); setCatalogUnavailable(true) } })
-    return () => { cancelled = true }
-  }, [session.runtimeId, session.id, model, rawSessionLock.enableWorkflows])
+  // The catalog comes from the shared cache: the runtime-wide list (warmed at
+  // boot) shows at once, and this conversation's own list replaces it when it
+  // arrives. A model or workflows change refreshes it in the background.
+  const modelsQuery = useCachedRpc('runtime.models', { runtimeId: session.runtimeId, sessionId: session.id }, { fallback: { runtimeId: session.runtimeId }, revalidate: [model, rawSessionLock.enableWorkflows] })
+  const catalog = useMemo<ModelCatalog | null>(() => modelsQuery.value === undefined ? null : parseModelCatalog(modelsQuery.value), [modelsQuery.value])
+  const catalogUnavailable = (modelsQuery.value === undefined && !!modelsQuery.error) || (modelsQuery.value !== undefined && (!catalog || catalog.models.length === 0))
 
   // When the daemon says effort cannot be chosen (this model has no levels, or
   // the runtime does not allow it) the pill is shown greyed out with the reason
   // instead of failing on use. The answer is per model for OpenCode.
-  const [thinkingLocked, setThinkingLocked] = useState<'unsupported' | 'gated' | 'no-levels' | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    setThinkingLocked(null)
-    const params = { runtimeId: session.runtimeId, sessionId: session.id, ...(model ? { model } : {}) }
-    void rpc<{ settings?: { thinking?: { supported?: boolean; enabled?: boolean; reason?: string } } }>('runtime.capabilities', params).then((caps) => {
-      const thinkingGate = caps?.settings?.thinking
-      if (cancelled || !thinkingGate) return
-      if (thinkingGate.supported === false) setThinkingLocked(thinkingGate.reason === 'model_has_no_effort_levels' ? 'no-levels' : 'unsupported')
-      else if (thinkingGate.enabled === false) setThinkingLocked('gated')
-    }).catch(() => undefined)
-    return () => { cancelled = true }
-  }, [session.runtimeId, session.id, model])
+  const capsQuery = useCachedRpc<{ settings?: { thinking?: { supported?: boolean; enabled?: boolean; reason?: string } } }>('runtime.capabilities', { runtimeId: session.runtimeId, sessionId: session.id, ...(model ? { model } : {}) }, { fallback: { runtimeId: session.runtimeId } })
+  const thinkingGate = capsQuery.value?.settings?.thinking
+  const thinkingLocked: 'unsupported' | 'gated' | 'no-levels' | null = !thinkingGate ? null
+    : thinkingGate.supported === false ? (thinkingGate.reason === 'model_has_no_effort_levels' ? 'no-levels' : 'unsupported')
+      : thinkingGate.enabled === false ? 'gated' : null
 
   useEffect(() => {
     sessionGeneration.current += 1

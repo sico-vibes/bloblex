@@ -546,3 +546,9 @@
 .runtime-problem-details { margin-top: 3px; }
 .runtime-problem-details > summary { cursor: pointer; color: var(--text-3); }
 .runtime-problem-details pre { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* A message on its way to the daemon: shown at once, slightly faded, with a quiet "Sending…". */
+.message-row.user.pending .message-bubble { opacity: .72; }
+.message-pending-note { margin-top: 4px; color: var(--text-3); font-size: var(--fs-2xs); text-align: right; animation: pending-pulse 1.4s ease-in-out infinite; }
+@keyframes pending-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .message-pending-note { animation: none; } }

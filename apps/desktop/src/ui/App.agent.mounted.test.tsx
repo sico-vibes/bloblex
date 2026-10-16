@@ -1184,6 +1184,27 @@ describe('opt-in conversation experiments', () => {
       expect([...view.host.querySelectorAll('.message-row.user .reply-context-strip.compact')].some((strip) => strip.textContent?.includes('Original prompt'))).toBe(true)
     } finally { experimentalSession.messages = previousMessages }
   })
+  it('clears the composer at once, shows the message as Sending… and restores the draft when the send fails', async () => {
+    prepare(true)
+    const originalRpc = h.rpc.getMockImplementation()!
+    let fail!: (reason: unknown) => void
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => method === 'session.prompt'
+      ? new Promise((_resolve, reject) => { fail = reject })
+      : originalRpc(method, params))
+    const view = startApp(); await view.settle()
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea')!
+    await typeInto(textarea, 'Run the tests')
+    await click(view.host.querySelector('[aria-label="Send message"]'))
+    // The composer never waits for the daemon.
+    expect(textarea.value).toBe('')
+    expect(textarea.disabled).toBe(false)
+    expect(view.host.querySelector('.message-row.user.pending')?.textContent).toContain('Run the tests')
+    expect(view.host.querySelector('.message-pending-note')?.textContent).toBe('Sending…')
+    await act(async () => { fail(new Error('conflict: busy')) })
+    await view.settle()
+    expect(view.host.querySelector('.message-row.user.pending')).toBeNull()
+    expect(textarea.value).toBe('Run the tests')
+  })
   it('applies the daemon reaction event to the correct message badge', async () => {
     prepare(true)
     const originalRpc = h.rpc.getMockImplementation()!

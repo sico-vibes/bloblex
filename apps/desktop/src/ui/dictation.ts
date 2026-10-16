@@ -125,8 +125,12 @@ export const DEFAULT_SPEECH_MODEL_ID = 'parakeet-tdt-0.6b-v3-int8'
 export async function configureDictation(enabled: boolean, modelId: string): Promise<void> {
   if (!isNative()) return
   await invokeNative('set_dictation_shortcut', { enabled }).catch(() => undefined)
-  if (enabled) await invokeNative('dictation_warm', { modelId }).catch(() => undefined)
-  else await invokeNative('dictation_release').catch(() => undefined)
+  if (!enabled) { await invokeNative('dictation_release').catch(() => undefined); return }
+  await invokeNative('dictation_warm', { modelId }).catch(() => undefined)
+  // Cloud dictation, when chosen and consented to: build the client, read the
+  // sign-in state and resolve DNS now, so the first dictation does not pay for
+  // it. Nothing is sent to the transcription endpoint by this.
+  if (enginePrefs.engine !== 'local' && enginePrefs.consent) await invokeNative('dictation_cloud_warm').catch(() => undefined)
 }
 
 /**

@@ -7,6 +7,7 @@ import type { Runtime } from '../types'
 import { updateParams, type AgentDraft } from './agentForm'
 import type { ExecutionSendGate } from '../executionContract'
 import { BlobSettings } from './BlobSettings'
+import { resetCatalogCacheForTests } from './catalogCache'
 
 const rpc = vi.hoisted(() => vi.fn())
 vi.mock('../tauri', () => ({ inDesktop: true, previewMode: false, rpc }))
@@ -78,7 +79,7 @@ function mount(node: ReactNode) {
   mounted.push(view)
   return view
 }
-afterEach(() => { for (const view of mounted.splice(0)) view.unmount(); rpc.mockReset() })
+afterEach(() => { for (const view of mounted.splice(0)) view.unmount(); rpc.mockReset(); resetCatalogCacheForTests() })
 
 function selectNamed(host: ParentNode, label: string) {
   return selectTrigger(host, label)

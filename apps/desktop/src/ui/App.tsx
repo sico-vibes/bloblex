@@ -39,6 +39,7 @@ import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { applySoundPrefs, saveSoundsEnabled, saveSoundVolume, soundPrefsFromSettings, subscribeSoundPrefs, SOUNDS_CHANGED_EVENT, SOUND_VOLUME_CHANGED_EVENT } from './soundPrefs'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
+import { fetchCached, invalidateCatalog } from './catalogCache'
 import { conversationPlaceName, hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
@@ -272,6 +273,8 @@ export function App() {
   const [appliedModelState, setAppliedModelState] = useState<AppliedModelState | null>(null)
   const appliedModelRequest = useRef(0)
   const [busy, setBusy] = useState(false)
+  /** Messages sent but not yet confirmed by the daemon: shown at once as "Sending…" so the composer never waits. */
+  const [pendingSends, setPendingSends] = useState<PendingSend[]>([])
   const [error, setError] = useState<string | null>(null)
   const [usageSheet, setUsageSheet] = useState(false)
   const [usagePeriod, setUsagePeriod] = useState<'today' | 'month'>('today')
@@ -462,9 +465,14 @@ export function App() {
     return () => { active = false }
   }, [connection, applyWindowSetting])
   // The main window owns dictation's shortcut and warm-up; the companion only follows.
+  // Coming back to the window re-warms it, because the on-device model is let go
+  // after ten idle minutes (warming an already warm engine does nothing).
   useEffect(() => {
     if (companion || !windowSettingsLoaded) return
     void configureDictation(speechEnabled, speechModel)
+    const rewarm = () => { void configureDictation(speechEnabled, speechModel) }
+    window.addEventListener('focus', rewarm)
+    return () => window.removeEventListener('focus', rewarm)
   }, [companion, windowSettingsLoaded, speechEnabled, speechModel])
 
   useEffect(() => {
@@ -790,7 +798,9 @@ export function App() {
       if (authSteps.length) await runSteps(authSteps)
       if (signal.aborted || generation !== launchGeneration.current) return
       const modelSteps = discoveryFailed ? [] : found.map((runtime) => ({ id: 'models:' + runtime.id, label: 'Loading ' + providerBrand(runtime.provider).name + ' models', timeoutMs: LAUNCH_TIMEOUTS.models, run: async (stageSignal: AbortSignal) => {
-        const result = await rpc<Record<string, unknown>>('runtime.models', { runtimeId: runtime.id })
+        // Through the shared catalog cache, so the composer and editor pickers open from it.
+        const result = await fetchCached<Record<string, unknown>>('runtime.models', { runtimeId: runtime.id })
+        void fetchCached('runtime.capabilities', { runtimeId: runtime.id }).catch(() => undefined)
         throwIfLaunchAborted(stageSignal)
         const models = Array.isArray(result.models) ? result.models : Array.isArray(result.items) ? result.items : []
         if (!models.length) return 'Warning: ' + providerBrand(runtime.provider).name + ': models could not be loaded'
@@ -877,6 +887,14 @@ export function App() {
     let cancelled = false
     void listenForDaemonEvents((event) => {
       if (event.type === 'quota.updated') setQuotaRefreshing(false)
+      // A runtime's model list changed (or the runtime itself did): refresh the shared catalog cache.
+      if ((event.type === 'runtime.models.changed' || event.type === 'runtime.changed') && event.payload && typeof event.payload === 'object') {
+        const runtimeId = (event.payload as { runtimeId?: unknown; id?: unknown }).runtimeId ?? (event.payload as { id?: unknown }).id
+        if (typeof runtimeId === 'string') {
+          invalidateCatalog(runtimeId)
+          void fetchCached('runtime.models', { runtimeId }, { force: true }).catch(() => undefined)
+        }
+      }
       if (event.type === 'settings.changed' && event.payload && typeof event.payload === 'object') {
         const payload = event.payload as Record<string, unknown>
         if (typeof payload.key === 'string' && 'value' in payload) applyWindowSetting(payload.key, payload.value)
@@ -1556,26 +1574,48 @@ export function App() {
     if (restoreFocus) requestAnimationFrame(() => anchor?.isConnected && anchor.focus({ preventScroll: true }))
   }
 
+  /**
+   * Sends without holding the composer: the draft clears at once and the
+   * message shows as "Sending…" until the daemon confirms it. If the daemon
+   * refuses, the draft comes back (unless you already typed something new) and
+   * the reason shows inline. A second message while one is still on its way
+   * goes to the queue, like a message sent during a turn.
+   */
   const sendPrompt = async (dueAt?: string) => {
     const text = composer.trim()
     const ready = attachments.filter((item) => item.status === 'ready' && item.path)
-    // A live turn (or a chosen time) puts the message in the daemon's durable queue instead of sending it now.
-    const queueIt = !!dueAt || ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
-    if ((!text && ready.length === 0) || attachments.some((item) => item.status === 'staging') || !selectedSession || busy || !runtimeUsable(selectedRuntime)) return
+    if ((!text && ready.length === 0) || attachments.some((item) => item.status === 'staging') || !selectedSession || !runtimeUsable(selectedRuntime)) return
+    const sessionId = selectedSession.id
+    // A live turn, a message still on its way, or a chosen time puts it in the daemon's durable queue.
+    const queueIt = !!dueAt || ['working', 'starting', 'waiting_permission'].includes(selectedSession.state ?? '') || pendingSends.some((item) => item.sessionId === sessionId)
     const sentReplyTarget = replyTarget
+    const sentRefs = conversationRefs
     const sentAttachmentIds = new Set(ready.map((item) => item.id))
+    const refs = sentRefs.filter((ref) => text.includes(`#${ref.title}`)).map((ref) => ref.id)
+    const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    setComposer('')
+    setConversationRefs([])
+    setReplyTarget(null)
+    setAttachments((current) => current.filter((item) => !sentAttachmentIds.has(item.id)))
+    if (!queueIt) setPendingSends((current) => [...current, { id: pendingId, sessionId, text, attachments: ready.length, at: Date.now() }])
+    setError(null)
     try {
-      const refs = conversationRefs.filter((ref) => text.includes(`#${ref.title}`)).map((ref) => ref.id)
-      await doRpc(queueIt ? 'session.queue.add' : 'session.prompt', { sessionId: selectedSession.id, text, ...(dueAt ? { dueAt } : {}), ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}) })
-      if (composerRef.current?.value.trim() === text && replyTargetRef.current === sentReplyTarget) {
-        setComposer('')
-        setConversationRefs([])
-        setReplyTarget(null)
-        clearAttachments(sentAttachmentIds)
-      }
-      if (queueIt) void loadQueue(selectedSession.id)
+      await rpc(queueIt ? 'session.queue.add' : 'session.prompt', { sessionId, text, ...(dueAt ? { dueAt } : {}), ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}) })
+      for (const item of ready) URL.revokeObjectURL(item.previewUrl)
+      if (queueIt) void loadQueue(sessionId)
       await refresh()
-    } catch { /* The actionable error is shown inline. */ }
+    } catch (reason) {
+      setError(messageOf(reason))
+      // Put the draft back where it was, unless something new has been typed since.
+      if (!composerRef.current?.value.trim()) {
+        setComposer(text)
+        setConversationRefs(sentRefs)
+        setReplyTarget(sentReplyTarget)
+        setAttachments((current) => [...ready, ...current.filter((item) => !sentAttachmentIds.has(item.id))])
+      } else for (const item of ready) URL.revokeObjectURL(item.previewUrl)
+    } finally {
+      setPendingSends((current) => current.filter((item) => item.id !== pendingId))
+    }
   }
 
   const clearAttachments = (only?: ReadonlySet<string>) => {
@@ -1954,7 +1994,7 @@ export function App() {
       <Companion onToggleReaction={(sessionId, messageId, emoji) => toggleMessageReaction(sessionId, messageId, emoji)} permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={(page) => void showMainSettings(companionSession?.id, page)} onSendPrompt={(sessionId, text) => {
         // A live turn queues the message in the daemon instead of failing with a conflict.
         const live = ['working', 'starting', 'waiting_permission'].includes(sessions.find((item) => item.id === sessionId)?.state ?? '')
-        return doRpc(live ? 'session.queue.add' : 'session.prompt', { sessionId, text }).then(() => { if (live) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
+        return rpc(live ? 'session.queue.add' : 'session.prompt', { sessionId, text }).then(() => { if (live) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
       }} queuedCount={companionSession ? snapshot?.queues?.[companionSession.id]?.items.length ?? 0 : 0} onLoadQueue={(sessionId) => void loadQueue(sessionId)} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
     </>
   }
@@ -2000,6 +2040,7 @@ export function App() {
   const runtimeReady = runtimeUsable(selectedRuntime)
   const approvalFocusOnMount = !composerTypingRef.current || connection !== 'connected' || busy || selectedSession?.state === 'waiting_permission' || !runtimeReady
   const canStartSession = connection === 'connected' && !busy && !!activeSelectedAgent && runtimeReady && !sideSession
+  const visiblePendingSends = selectedSession && !sideSession ? pendingSends.filter((item) => item.sessionId === selectedSession.id && !(selectedSession.messages ?? []).some((message) => message.role === 'user' && originalMessageText(message.content ?? message.text).trim() === item.text && Date.parse(String(message.createdAt ?? '')) >= item.at - 5000)) : []
   const conversationEmpty = !selectedSession || (selectedSession.messages ?? []).length === 0
   const lastAgentIndex = conversationItems.reduce((last, item, index) => item.kind === 'message' && !isUserMessage(item.value) ? index : last, -1)
   // The details panel describes the open conversation, so it steps aside for the blob editor and Analytics.
@@ -2206,7 +2247,7 @@ export function App() {
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
             <div className="conversation-layout">
               <div className="chat-column">
-              {groupedConversationItems.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} effectOverscanTop={118} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} label={activeSelectedAgent?.name ?? agentName} /><h2>{runtimeReady ? 'Ready when you are.' : 'This bot needs attention.'}</h2><p>{runtimeReady ? currentProjectName ? <>Ask {agentName} to explore <code>{currentProjectName}</code> or make a change.</> : <>Ask {agentName} a question or make a change.</> : selectedRuntime?.status === 'error' ? 'Open Settings → Coding agents. Update or repair this CLI, then choose Scan again.' : 'Open Settings → Coding agents and scan again before starting a conversation.'}</p></div> : groupedConversationItems.map((item, index) => {
+              {groupedConversationItems.length === 0 && visiblePendingSends.length === 0 ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} effectOverscanTop={118} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} label={activeSelectedAgent?.name ?? agentName} /><h2>{runtimeReady ? 'Ready when you are.' : 'This bot needs attention.'}</h2><p>{runtimeReady ? currentProjectName ? <>Ask {agentName} to explore <code>{currentProjectName}</code> or make a change.</> : <>Ask {agentName} a question or make a change.</> : selectedRuntime?.status === 'error' ? 'Open Settings → Coding agents. Update or repair this CLI, then choose Scan again.' : 'Open Settings → Coding agents and scan again before starting a conversation.'}</p></div> : groupedConversationItems.map((item, index) => {
                 const team = item.kind === 'message' ? teamItem(item.value!, item.id) : null
                 const content = item.kind === 'activity-group'
                   ? <ActivitySummaryLine group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
@@ -2233,6 +2274,9 @@ export function App() {
                   {files.length > 0 && <ChangeReview files={files} dismissed={reviewDismissals[selectedSession.id] ?? []} onKeep={(id) => dismissReviewFile(selectedSession.id, id)} onRevert={(file) => setRevertTarget({ sessionId: selectedSession.id, file })} onDiff={(path, content) => setDiffViewer({ path, content })} />}
                 </Fragment>
               })}
+              {visiblePendingSends.map((item) => <article key={item.id} className="message-row user pending" aria-label="You, sending" aria-busy="true">
+                <div className="message-content"><div className="message-bubble-wrap"><div className="message-bubble"><SafeMessageText text={item.text} /></div></div><div className="message-pending-note" role="status">{item.attachments ? `Sending with ${item.attachments} ${item.attachments === 1 ? 'file' : 'files'}…` : 'Sending…'}</div></div>
+              </article>)}
               {activePermission && (activePermission.kind === 'question'
                 ? <QuestionCard request={activePermission} onAnswer={(answers) => answerQuestion(activePermission, answers)} onDismiss={() => void answerQuestion(activePermission, null)} />
                 : <ApprovalCard permission={activePermission} focusOnMount={approvalFocusOnMount} onReply={(choice) => answerPermission(activePermission, choice)} />)}
@@ -2471,6 +2515,8 @@ function MessageItem({ id, message, accent, agentName, showAvatar, mood, agents 
     </div>
   </article>
 }
+
+type PendingSend = { id: string; sessionId: string; text: string; attachments: number; at: number }
 
 function TextPromptDialog({ title, label, value, confirmLabel, onSubmit, onCancel }: { title: string; label: string; value: string; confirmLabel: string; onSubmit: (value: string) => void | Promise<void>; onCancel: () => void }) {
   const { ref, close } = useDialogAccessibility(onCancel)
@@ -3147,11 +3193,17 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     const requested = draft.trim() || (droppedFile ? 'Please inspect this local file.' : '')
     if (!requested) return
     const prompt = droppedFile && fileInfo ? `${requested}\n\nLocal file reference selected by the user: ${fileInfo.fileName} (${fileInfo.path}, ${formatBytes(fileInfo.sizeBytes)}). File contents were not read by Bitbots. The provider may only access this path if its own process permissions and working directory allow it.` : requested
+    // The draft clears at once; the composer stays usable while the daemon confirms.
+    const sentDraft = draft
     setSending(true)
     setDropError(null)
+    setDraft('')
     playCompanionCue('send')
-    try { await onSendPrompt(session.id, prompt); setDraft(''); setDroppedFile(null); setFileInfo(null); setFileError(null) }
-    catch (reason) { if (fileInfo) setFileError(messageOf(reason)); else setDropError(messageOf(reason)) }
+    try { await onSendPrompt(session.id, prompt); setDroppedFile(null); setFileInfo(null); setFileError(null) }
+    catch (reason) {
+      if (!draftRef.current?.value.trim()) setDraft(sentDraft)
+      if (fileInfo) setFileError(messageOf(reason)); else setDropError(messageOf(reason))
+    }
     finally { setSending(false) }
   }
   useEffect(() => { if (session?.id) onLoadQueue?.(session.id) }, [session?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -3456,7 +3508,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
               {usageTip && onDismissUsageTip && <UsageTip tip={usageTip} onDismiss={() => onDismissUsageTip(usageTip)} />}
               {queuedCount > 0 && <p className="companion-queue-note" role="status">{queuedCount} queued · sends when this turn ends</p>}
               <form className="chat-bar companion-chat-composer" data-companion-no-drag="" onSubmit={(event) => void sendCompanionPrompt(event)}>
-                <textarea ref={draftRef} className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} rows={1} />
+                <textarea ref={draftRef} className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !runtimeUsable(runtime) || !session || session.state === 'waiting_permission'} rows={1} />
                 <div className="companion-composer-bar">
                 <div className="companion-composer-start">
                   <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !runtimeUsable(runtime) || !session || preparingFile}><Paperclip size={13} /></button>

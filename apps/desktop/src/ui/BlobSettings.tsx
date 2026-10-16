@@ -18,6 +18,7 @@ import { providerBrand } from './providerBrand'
 import { AutoApprovedList, BypassConfirmDialog } from './approvalUi'
 import { ChevronDown, ChevronRight, Hand, RefreshCw, ShieldAlert, ShieldCheck, type LucideIcon } from 'lucide-react'
 import { HelpTip, RowCopy } from './SettingsParts'
+import { fetchCached, invalidateCatalog, readCached } from './catalogCache'
 import { LookEditor } from './LookEditor'
 import { draftLook } from '../blob/look'
 import { agentColorHex, previewHex } from './agentColor'
@@ -98,7 +99,10 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       return
     }
     let cancelled = false
-    setLoading(true)
+    const cachedModels = readCached('runtime.models', { runtimeId: draft.runtimeId })
+    const cachedCatalog = cachedModels === undefined ? null : parseModelCatalog(cachedModels)
+    setCatalog(cachedCatalog)
+    setLoading(!cachedCatalog)
     setCatalogError(null)
     setCatalogUnavailable(false)
     const probeModel = draft.model ?? (provider === 'claude' ? 'sonnet' : undefined)
@@ -106,9 +110,10 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     const sameRuntime = !!agentId && (!savedRuntimeId || savedRuntimeId === draft.runtimeId)
     const params = { runtimeId: draft.runtimeId, ...(sameRuntime ? { agentId } : {}), ...(probeModel ? { model: probeModel } : {}) }
     // Models and capabilities load on their own, so a capability failure never blanks the model list.
+    // The model list comes from the shared cache (warmed at boot), so it is usually instant.
     void Promise.allSettled([
       rpc('runtime.capabilities', params),
-      rpc('runtime.models', { runtimeId: draft.runtimeId }),
+      fetchCached('runtime.models', { runtimeId: draft.runtimeId }),
     ]).then(([capsResult, modelsResult]) => {
       if (cancelled) return
       setCapabilities(capsResult.status === 'fulfilled' ? parseCapabilities(capsResult.value) : null)
@@ -178,6 +183,8 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     try {
       const probeModel = draft.model ?? (provider === 'claude' ? 'sonnet' : undefined)
       const modelsRaw = await rpc('runtime.models', { runtimeId: draft.runtimeId, refresh: true, ...(probeModel ? { model: probeModel } : {}) })
+      invalidateCatalog(draft.runtimeId)
+      void fetchCached('runtime.models', { runtimeId: draft.runtimeId }, { force: true }).catch(() => undefined)
       const nextCatalog = parseModelCatalog(modelsRaw)
       setCatalog(nextCatalog)
       if (!nextCatalog) setCatalogError('The model list was not reported.')

@@ -11,6 +11,7 @@ vi.mock('../tauri', () => ({ rpc }))
 vi.mock('./BlobPage', () => ({ ConfirmDialog: ({ title, body, confirmLabel, onConfirm, onCancel }: { title: string; body: string; confirmLabel: string; onConfirm: () => void; onCancel: () => void }) => <div role="dialog"><h2>{title}</h2><p>{body}</p><button onClick={onCancel}>Cancel</button><button onClick={onConfirm}>{confirmLabel}</button></div> }))
 
 import { labelizeEffort, SessionExecutionControls } from './SessionExecutionControls'
+import { resetCatalogCacheForTests } from './catalogCache'
 
 describe('Codex catalog effort labels', () => {
   it('maps display names by Codex provider while preserving the raw effort vocabulary for other providers', () => {
@@ -43,6 +44,7 @@ function mount() {
 
 afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } document.querySelector('#composer-css-test')?.remove(); vi.restoreAllMocks() })
 beforeEach(() => {
+  resetCatalogCacheForTests()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const style = document.createElement('style')
   style.id = 'composer-css-test'

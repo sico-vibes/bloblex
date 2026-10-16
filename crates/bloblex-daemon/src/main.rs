@@ -74,6 +74,14 @@ struct AppState {
     queue: Arc<queue::Queue>,
     automations: Arc<automations::Automations>,
     memory: Arc<memory::Memory>,
+    /// Serialises provider activation per session so a warm-up and a first send
+    /// cannot resume the same conversation twice.
+    activation_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    /// Turn ids cancelled while their session was still starting. The turn
+    /// driver checks this set after activation and before delivering a prompt.
+    starting_cancels: Arc<Mutex<HashSet<String>>>,
+    /// Warmed sessions that have had no turn since warming, oldest first (LRU).
+    warm_lru: Arc<Mutex<Vec<String>>>,
 }
 #[derive(Clone)]
 struct Adapters {
@@ -87,6 +95,15 @@ struct ActiveSession {
     runtime: RuntimeSpec,
     adapter: Arc<dyn AgentAdapter>,
     launch_approval_mode: ApprovalMode,
+}
+/// Who is asking for a provider activation. A turn may activate a session that
+/// is still `starting`; a warm-up refuses anything busy; the RPC keeps its
+/// extra conflict on an already-active session.
+#[derive(Clone)]
+enum Owner {
+    Rpc,
+    Turn(String),
+    Warm,
 }
 impl AppState {
     async fn emit(&self, kind: &str, payload: Value) {
@@ -141,6 +158,7 @@ fn failure_public_message(failure_class: &str) -> &'static str {
         "context" => "Context window is full. Start a new conversation.",
         "config_unsupported" => "Requested execution settings were unsupported.",
         "provider_error" => "The provider reported a turn error.",
+        "provider_unavailable" => "The coding agent could not start.",
         "permission_denied" => "A required permission was denied.",
         _ => "The turn could not be completed.",
     }
@@ -862,6 +880,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 let active = st.sessions.lock().await.remove(id);
                 let active_turn = st.active_turns.lock().await.remove(id);
                 if let Some(turn) = active_turn.as_deref() { st.denied_turns.lock().await.remove(turn); }
+                st.warm_lru.lock().await.retain(|warmed| warmed != id);
                 st.team.forget(id);
                 st.queue.forget(id);
                 st.memory.forget(id);
@@ -904,7 +923,18 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let active = {
                 let _guard = gate.lock().await;
                 if session_is_deleted(st, id).await { return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND)); }
-                let active = st.sessions.lock().await.get(id).cloned().ok_or_else(|| derr("not_found", "active session not found", StatusCode::NOT_FOUND))?;
+                let Some(active) = st.sessions.lock().await.get(id).cloned() else {
+                    // The turn is still starting: no provider handle exists yet.
+                    // Record the request; the turn driver checks it after
+                    // activation and before delivering a prompt.
+                    if let Some(turn_id) = st.active_turns.lock().await.get(id).cloned() {
+                        st.starting_cancels.lock().await.insert(turn_id);
+                        st.db.update_session_state(id, "cancelling").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+                        if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
+                        return Ok(json!({"cancellationRequested":true}));
+                    }
+                    return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND));
+                };
                 st.db.update_session_state(id, "cancelling").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
                 if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
                 active
@@ -915,31 +945,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             }
             Ok(json!({"cancellationRequested":true}))
         }
-        "session.close" => {
-            let id = p["sessionId"].as_str().unwrap_or("");
-            let gate = gate_for_session(st, id).await;
-            let (active, active_turn) = {
-                let _guard = gate.lock().await;
-                if session_is_deleted(st, id).await { return Ok(json!({"closed":true})); }
-                let state = st.db.session_state(id).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
-                if state.as_deref() == Some("starting") { return Err(derr("conflict", "session is starting", StatusCode::CONFLICT)); }
-                let active_turn = st.active_turns.lock().await.remove(id);
-                if let Some(turn) = active_turn.as_deref() {
-                    st.denied_turns.lock().await.remove(turn);
-                    let _ = st.db.update_turn_outcome(turn, "cancelled", Some("cancelled"));
-                }
-                let active = st.sessions.lock().await.remove(id);
-                let _ = st.db.update_session_state(id, "closed");
-                if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
-                remove_session_gate(st, id, &gate).await;
-                (active, active_turn)
-            };
-            if let Some(session) = active {
-                if active_turn.is_some() { let _ = session.adapter.cancel(&session.handle).await; }
-                session.adapter.close_session(&session.handle).await.map_err(|e| derr("provider_error", &e.to_string(), StatusCode::BAD_GATEWAY))?;
-            }
-            Ok(json!({"closed":true}))
-        }
+        "session.close" => close_session(st, p["sessionId"].as_str().unwrap_or("")).await,
+        "session.warm" => session_warm(st, p).await,
         "permission.reply" => {
             let id = p["permissionId"].as_str().unwrap_or("");
             let choice = p["choice"].as_str().unwrap_or("");
@@ -1851,18 +1858,27 @@ async fn resume_or_start_fresh(
     }
 }
 
+/// The `session.resume` RPC: an explicit, user-visible resume. It keeps its
+/// conflict when the session is already active; it shares the per-session
+/// activation lock with sends and warm-ups.
 async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
+    activate_session(st, &sid, Owner::Rpc).await
+}
+
+/// Resume a saved conversation through the provider. `allow_states` names
+/// session states accepted in addition to the idle-like default, so a turn
+/// that is still `starting` can be activated. Callers serialise concurrent
+/// activation with `activate_session`.
+async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result<Value, DispatchError> {
+    let sid = sid.to_owned();
     let gate = gate_for_session(st, &sid).await;
     let (row, previous_state) = {
         let _guard = gate.lock().await;
         if session_is_deleted(st, &sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
-        if st.sessions.lock().await.contains_key(&sid) {
-            return Err(derr("conflict", "session is already active", StatusCode::CONFLICT));
-        }
         let state = st.db.session_state(&sid).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
         let Some(previous_state) = state else { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); };
-        if matches!(previous_state.as_str(), "starting" | "working" | "cancelling" | "waiting_permission") {
+        if matches!(previous_state.as_str(), "starting" | "working" | "cancelling" | "waiting_permission") && !allow_states.contains(&previous_state.as_str()) {
             return Err(derr("conflict", "session is already active", StatusCode::CONFLICT));
         }
         let row = st.db.session_detail(&sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
@@ -1961,7 +1977,6 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         let _guard = current_gate.lock().await;
         let installed = session_gate_is_current(st, &sid, &gate).await
             && !session_is_deleted(st, &sid).await
-            && st.db.session_state(&sid).ok().flatten().as_deref() == Some(previous_state.as_str())
             && st.db.session_detail(&sid).is_ok_and(|session| session["archived"] != true && session["modelLock"] == model_lock)
             && !st.sessions.lock().await.contains_key(&sid);
         if installed {
@@ -1972,7 +1987,13 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
                 adapter: adapter.clone(),
                 launch_approval_mode: startup_options.approval_mode,
             });
-            st.db.update_session_state(&sid, "idle").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            // Resume makes a conversation idle again, but it must not overwrite
+            // a state a concurrent first send has already claimed (`starting`)
+            // or a live turn (`working`).
+            let current_state = st.db.session_state(&sid).ok().flatten();
+            if current_state.as_deref().is_some_and(|state| matches!(state, "idle" | "closed" | "offline" | "error" | "completed")) {
+                st.db.update_session_state(&sid, "idle").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            }
             if let Ok(summary) = st.db.session_event_summary(&sid) { st.emit("session.changed", summary).await; }
         }
         installed
@@ -2013,7 +2034,7 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
         .await
     });
     Ok(json!({
-        "sessionId": p["sessionId"],
+        "sessionId": sid,
         "resumed": !resume_fallback,
         "state": "idle",
         "outcomeNote": resume_fallback.then_some(if can_resume_saved_provider { "The saved provider session expired. A new provider session was started; saved Bitbots messages remain available." } else { "A new provider context was started; saved Bitbots messages remain available." })
@@ -2027,15 +2048,136 @@ fn normalize_provider_title(raw: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-async fn ensure_session_active(st: &AppState, session_id: &str) -> Result<(), DispatchError> {
-    if st.sessions.lock().await.contains_key(session_id) {
-        return Ok(());
+async fn activation_lock_for(st: &AppState, id: &str) -> Arc<Mutex<()>> {
+    let mut locks = st.activation_locks.lock().await;
+    locks.entry(id.to_owned()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+}
+
+/// Activate a conversation's provider process once. Concurrent callers wait on
+/// a per-session activation lock, so a warm-up and a first send cannot resume
+/// the same conversation twice.
+async fn activate_session(st: &AppState, sid: &str, owner: Owner) -> Result<Value, DispatchError> {
+    let already_active = || derr("conflict", "session is already active", StatusCode::CONFLICT);
+    let is_rpc = matches!(owner, Owner::Rpc);
+    if st.sessions.lock().await.contains_key(sid) {
+        return if is_rpc { Err(already_active()) } else { Ok(Value::Null) };
     }
-    match resume_session(st, json!({"sessionId": session_id})).await {
-        Ok(_) => Ok(()),
-        Err(_error) if st.sessions.lock().await.contains_key(session_id) => Ok(()),
-        Err(error) => Err(error),
+    // A turn may activate a session that is already `starting`; the reservation
+    // made in Phase A is its right to do so.
+    let allow_states: &[&str] = match &owner {
+        Owner::Turn(turn_id) => {
+            if st.active_turns.lock().await.get(sid).map(String::as_str) != Some(turn_id.as_str()) {
+                return Err(derr("conflict", "the turn is no longer reserved", StatusCode::CONFLICT));
+            }
+            &["starting"]
+        }
+        _ => &[],
+    };
+    if matches!(owner, Owner::Warm) && team::session_busy(st, sid).await { return Ok(Value::Null); }
+    let lock = activation_lock_for(st, sid).await;
+    let _guard = lock.lock().await;
+    if st.sessions.lock().await.contains_key(sid) {
+        return if is_rpc { Err(already_active()) } else { Ok(Value::Null) };
     }
+    resume_inner(st, sid, allow_states).await
+}
+
+/// Failure class for a turn that never reached the provider because the coding
+/// agent could not be started. Context exhaustion keeps its own class; anything
+/// else the activation path reports is `provider_unavailable`, which is never
+/// auto-retried (`retry::after_failed_turn` only acts on overload/rate-limit
+/// hints).
+fn activation_failure_class(error: &DispatchError) -> &'static str {
+    if error.1.message == failure_public_message("context") { "context" } else { "provider_unavailable" }
+}
+
+/// Finalise a turn whose provider activation failed: release the reservation,
+/// move the session to `error` and run the same team/retry hooks a provider
+/// turn error runs, exactly once.
+async fn finish_activation_failure(st: &AppState, sid: &str, turn: &str, error: &DispatchError) {
+    st.starting_cancels.lock().await.remove(turn);
+    let failure_class = activation_failure_class(error);
+    let public_message = failure_public_message(failure_class);
+    let detail = safe_provider_error_detail(&error.1.message);
+    finish_turn_failed(st, sid, turn, failure_class, public_message, detail.clone(), "error").await;
+    team::after_turn(st, sid, Some(turn.to_owned()), "turn.error", detail.or_else(|| Some(public_message.to_owned())));
+    retry::after_failed_turn(st, sid, Some(turn)).await;
+}
+
+/// Finalise a turn cancelled while its session was still starting, before any
+/// prompt reached the provider.
+async fn finish_turn_cancelled(st: &AppState, sid: &str, turn: &str) {
+    st.starting_cancels.lock().await.remove(turn);
+    let _ = st.db.update_turn_outcome(turn, "cancelled", Some("cancelled"));
+    let _ = st.db.update_session_state(sid, "idle");
+    st.active_turns.lock().await.remove(sid);
+    if let Ok(summary) = st.db.session_event_summary(sid) { st.emit("session.changed", summary).await; }
+    finish_turn_delivery(st, turn, false).await;
+    st.emit("turn.cancelled", json!({"sessionId":sid,"turnId":turn,"state":"cancelled"})).await;
+    team::after_turn(st, sid, Some(turn.to_owned()), "turn.cancelled", None);
+}
+
+/// How many warmed-but-untouched conversations are kept active at once.
+const WARM_MAX: usize = 2;
+
+/// Close a conversation's adapter process and release its turn. Shared by the
+/// `session.close` RPC and warm-up eviction.
+async fn close_session(st: &AppState, id: &str) -> Result<Value, DispatchError> {
+    st.warm_lru.lock().await.retain(|warmed| warmed != id);
+    let gate = gate_for_session(st, id).await;
+    let (active, active_turn) = {
+        let _guard = gate.lock().await;
+        if session_is_deleted(st, id).await { return Ok(json!({"closed":true})); }
+        let state = st.db.session_state(id).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+        if state.as_deref() == Some("starting") { return Err(derr("conflict", "session is starting", StatusCode::CONFLICT)); }
+        let active_turn = st.active_turns.lock().await.remove(id);
+        if let Some(turn) = active_turn.as_deref() {
+            st.denied_turns.lock().await.remove(turn);
+            let _ = st.db.update_turn_outcome(turn, "cancelled", Some("cancelled"));
+        }
+        let active = st.sessions.lock().await.remove(id);
+        let _ = st.db.update_session_state(id, "closed");
+        if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
+        remove_session_gate(st, id, &gate).await;
+        (active, active_turn)
+    };
+    if let Some(session) = active {
+        if active_turn.is_some() { let _ = session.adapter.cancel(&session.handle).await; }
+        session.adapter.close_session(&session.handle).await.map_err(|e| derr("provider_error", &e.to_string(), StatusCode::BAD_GATEWAY))?;
+    }
+    Ok(json!({"closed":true}))
+}
+
+/// Start a conversation's coding agent ahead of a message, so the first send is
+/// instant. Returns at once. Side and automation conversations are never warmed,
+/// and warming a third idle conversation closes the oldest warmed one.
+async fn session_warm(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    let sid = p["sessionId"].as_str().filter(|id| !id.is_empty())
+        .ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?
+        .to_owned();
+    let row = st.db.session_detail(&sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
+    if row["archived"] == true { return Ok(json!({"warming":false,"active":false})); }
+    let provider = row["provider"].as_str().unwrap_or("");
+    if matches!(row["link"]["kind"].as_str(), Some("side" | "automation")) { return Ok(json!({"warming":false,"active":false})); }
+    let runtime_usable = st.runtimes.read().await.iter().any(|runtime| runtime["id"] == row["runtimeId"] && catalog::runtime_usable(runtime));
+    if !runtime_usable || adapter_for(&st.adapters, provider).is_none() { return Ok(json!({"warming":false,"active":false})); }
+    if st.sessions.lock().await.contains_key(&sid) { return Ok(json!({"warming":false,"active":true})); }
+    if team::session_busy(st, &sid).await { return Ok(json!({"warming":false,"active":false})); }
+    // Warm and remember; a third warmed conversation evicts the oldest idle one.
+    let evicted = {
+        let mut lru = st.warm_lru.lock().await;
+        lru.retain(|id| id != &sid);
+        lru.push(sid.clone());
+        (lru.len() > WARM_MAX).then(|| lru.remove(0))
+    };
+    if let Some(oldest) = evicted {
+        if !team::session_busy(st, &oldest).await {
+            let _ = close_session(st, &oldest).await;
+        }
+    }
+    let state = st.clone();
+    tokio::spawn(async move { let _ = activate_session(&state, &sid, Owner::Warm).await; });
+    Ok(json!({"warming":true,"active":false}))
 }
 
 async fn update_session_model(st: &AppState, p: Value) -> Result<Value, DispatchError> {
@@ -2342,6 +2484,24 @@ pub(crate) async fn session_prompt_for_question_answer(st: &AppState, p: Value) 
     session_prompt_impl(st, p, PromptOrigin::QuestionAnswer).await
 }
 
+/// Structured per-turn arguments handed to the spawned provider driver
+/// (Phase B).
+struct TurnDriver {
+    sid: String,
+    turn: String,
+    text: String,
+    attachments: Vec<PromptAttachment>,
+    reply_snapshot: Option<Value>,
+    references: Option<(String, Value)>,
+    exec_options: ExecOptions,
+    provider: String,
+    desired_instruction_hash: Option<String>,
+}
+
+/// Phase A of a send: everything that can reject it, then reserve the turn and
+/// return at once. Provider activation (which can take seconds) is done by the
+/// spawned driver, so a first send after a restart lands immediately and the
+/// composer is released.
 async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
     let text = p["text"].as_str().unwrap_or("").to_owned();
@@ -2357,110 +2517,56 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     if session_before["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
     if session_before["link"]["kind"] == "side" && origin != PromptOrigin::Team { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
     let reply_snapshot = prepare_reply_snapshot(st, &sid, &session_before, &p["replyTo"])?;
-    // Provider processes are intentionally ephemeral across daemon restarts.
-    // Lazily restore the saved provider session before creating the turn or
-    // appending its user message. A resume failure therefore leaves the
-    // composer text untouched and creates no partial conversation message.
-    ensure_session_active(st, &sid).await?;
     // Side conversations the user tagged with # reach the blob as context; the
     // stored message keeps the text exactly as typed.
     let references = team::reference_context(st, &sid, &p["conversationRefs"]);
-    let mut gate = gate_for_session(st, &sid).await;
-    let (mut active, session_options, previous_state) = {
+    let provider = session_before["provider"].as_str().unwrap_or("").to_owned();
+    if !attachments.is_empty() && !matches!(provider.as_str(), "claude" | "codex") {
+        return Err(derr("unsupported", "This coding agent does not accept image attachments.", StatusCode::BAD_REQUEST));
+    }
+    let gate = gate_for_session(st, &sid).await;
+    // Admission runs synchronously: the queue and the team both requeue on this
+    // conflict, so it must never move into the spawned driver.
+    let (session_options, previous_state) = {
         let _guard = gate.lock().await;
         if session_is_deleted(st, &sid).await || !session_gate_is_current(st, &sid, &gate).await {
             return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND));
         }
-        let active = st.sessions.lock().await.get(&sid).cloned().ok_or_else(|| derr("not_found", "active session not found", StatusCode::NOT_FOUND))?;
         if st.active_turns.lock().await.contains_key(&sid) { return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT)); }
         let row = st.db.session_detail(&sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
         let state = row["state"].as_str().unwrap_or("idle").to_owned();
         if matches!(state.as_str(), "starting" | "working" | "cancelling" | "waiting_permission") {
             return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT));
         }
-        (active, row, state)
+        (row, state)
     };
     let exec_options=exec_options_for_session(st,&session_options)?;
-    if !attachments.is_empty() && !matches!(active.runtime.provider.as_str(), "claude" | "codex") {
-        return Err(derr("unsupported", "This coding agent does not accept image attachments.", StatusCode::BAD_REQUEST));
-    }
     let turn = Uuid::new_v4().to_string();
-    let runtime_value=st.runtimes.read().await.iter().find(|r|r["id"]==active.runtime.runtime_id).cloned().unwrap_or(Value::Null);
+    let runtime_value=st.runtimes.read().await.iter().find(|r|r["id"]==session_options["runtimeId"]).cloned().unwrap_or(Value::Null);
     let desired_instruction_hash=bloblex_agent_core::instruction_sha256(exec_options.instructions.as_deref().unwrap_or(""));
-    let baseline=if active.runtime.provider=="codex" {st.db.codex_thread_instruction_sha256(&sid)}else{st.db.claude_instruction_sha256(&sid)}.map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
-    let mut rejection=preflight_exec_options(st,&runtime_value,&active.runtime.provider,&exec_options).await;
-    if rejection.is_none(){if let Err(e)=active.adapter.preflight_exec_options(&exec_options).await{let (code,msg)=match e{bloblex_agent_core::AdapterError::Unsupported(m)=>("unsupported",m),_=>("provider_error","Provider option preparation failed before prompt delivery.".into())};rejection=Some(("instructions".into(),derr(code,&msg,StatusCode::BAD_REQUEST)));}}
+    // The catalog read is CachedOnly, so this preflight never waits on a probe.
+    let mut rejection=preflight_exec_options(st,&runtime_value,&provider,&exec_options).await;
+    if rejection.is_none(){if let Some(adapter)=adapter_for(&st.adapters,&provider){if let Err(e)=adapter.preflight_exec_options(&exec_options).await{let (code,msg)=match e{bloblex_agent_core::AdapterError::Unsupported(m)=>("unsupported",m),_=>("provider_error","Provider option preparation failed before prompt delivery.".into())};rejection=Some(("instructions".into(),derr(code,&msg,StatusCode::BAD_REQUEST)));}}}
     if let Some((setting, error)) = rejection {
         let _guard = gate.lock().await;
         if !session_gate_is_current(st, &sid, &gate).await || session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false) {
             return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND));
         }
-        if !st.sessions.lock().await.contains_key(&sid) || st.active_turns.lock().await.contains_key(&sid) {
+        if st.active_turns.lock().await.contains_key(&sid) {
             return Err(derr("conflict", "this session is no longer available for a new turn", StatusCode::CONFLICT));
         }
         let snapshot_id = Uuid::new_v4().to_string();
         let requested=safe_requested_options(&exec_options);let applied=json!({setting.clone():{"applied":false,"reason":"execution_gate_or_capability_unavailable"}});
-        let (_,event)=st.db.reject_exec_turn(&sid,&turn,&snapshot_id,&text,&requested,&applied,&json!({}),desired_instruction_hash.as_deref(),&json!({"adapter":active.runtime.provider}),&json!({"agentId":session_options["agentId"],"runtimeId":active.runtime.runtime_id,"setting":setting,"code":error.1.code,"reason":error.1.message})).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+        let (_,event)=st.db.reject_exec_turn(&sid,&turn,&snapshot_id,&text,&requested,&applied,&json!({}),desired_instruction_hash.as_deref(),&json!({"adapter":provider}),&json!({"agentId":session_options["agentId"],"runtimeId":session_options["runtimeId"],"setting":setting,"code":error.1.code,"reason":error.1.message})).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
         st.broadcast_persisted(vec![event]);
         return Err(error);
     }
-    active.adapter.set_instruction_hash_context(&sid,desired_instruction_hash.clone(),baseline.clone()).await;
-    if active.runtime.provider == "codex" && active.launch_approval_mode != exec_options.approval_mode {
-        let old = {
-            let _guard = gate.lock().await;
-            if !session_gate_is_current(st, &sid, &gate).await || session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false) {
-                return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND));
-            }
-            if st.active_turns.lock().await.contains_key(&sid) { return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT)); }
-            let Some(old) = st.sessions.lock().await.remove(&sid) else { return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND)); };
-            remove_session_gate(st, &sid, &gate).await;
-            old
-        };
-        old.adapter.close_session(&old.handle).await.map_err(|error| derr("provider_error", &error.to_string(), StatusCode::BAD_GATEWAY))?;
-        if session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false) {
-            return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND));
-        }
-        let (tx, rx) = tokio::sync::mpsc::channel(256);
-        let handle = old.adapter.resume_session(
-            &old.runtime,
-            ResumeSessionRequest {
-                session_id: sid.clone(),
-                provider_session_id: old.handle.provider_session_id.clone(),
-                project_path: PathBuf::from(session_options["projectPath"].as_str().unwrap_or("")),
-                exec_options: exec_options.clone(),
-            },
-            tx,
-        ).await.map_err(|error| derr("provider_error", &error.to_string(), StatusCode::BAD_GATEWAY))?;
-        active = ActiveSession { handle: handle.clone(), runtime: old.runtime.clone(), adapter: old.adapter.clone(), launch_approval_mode: exec_options.approval_mode };
-        gate = gate_for_session(st, &sid).await;
-        let installed = {
-            let _guard = gate.lock().await;
-            if session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false)
-                || st.db.session_state(&sid).ok().flatten().as_deref() != Some(previous_state.as_str())
-                || st.sessions.lock().await.contains_key(&sid)
-            { false } else {
-                st.sessions.lock().await.insert(sid.clone(), active.clone());
-                true
-            }
-        };
-        if !installed {
-            let _ = active.adapter.close_session(&active.handle).await;
-            return Err(if session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false) {
-                derr("not_found", "session not found", StatusCode::NOT_FOUND)
-            } else { derr("conflict", "session changed while execution options were being applied", StatusCode::CONFLICT) });
-        }
-        let state = st.clone();
-        let stream_id = sid.clone();
-        let event_provider = active.runtime.provider.clone();
-        let event_runtime = active.runtime.runtime_id.clone();
-        tokio::spawn(async move { forward_events(state, stream_id, event_provider, event_runtime, rx).await; });
-    }
-    {
-        let _event_guard = gate.lock().await;
+    let next_state = {
+        let _guard = gate.lock().await;
         if !session_gate_is_current(st, &sid, &gate).await || session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false) {
             return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND));
         }
-        if !st.sessions.lock().await.contains_key(&sid) || st.active_turns.lock().await.contains_key(&sid) {
+        if st.active_turns.lock().await.contains_key(&sid) {
             return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT));
         }
         let live_session = st.db.session_detail(&sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
@@ -2535,12 +2641,15 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         let requested = safe_requested_options(&exec_options);
         let requested_any = exec_options.model.is_some() || exec_options.thinking.is_some() || exec_options.service_tier.is_some() || exec_options.instructions.is_some() || !exec_options.env.is_empty() || exec_options.approval_mode!=ApprovalMode::Ask;
         let settings = st.db.settings().unwrap_or(Value::Null);
-        let gates = json!({"model":settings[format!("exec_gate.{}.model",active.runtime.provider)],"thinking":settings[format!("exec_gate.{}.thinking",active.runtime.provider)],"serviceTier":settings[format!("exec_gate.{}.serviceTier",active.runtime.provider)],"instructions":settings[format!("exec_gate.{}.instructions",active.runtime.provider)]});
-        let launch_applied=active.runtime.provider=="claude"||active.runtime.provider=="codex";
+        let gates = json!({"model":settings[format!("exec_gate.{}.model",provider)],"thinking":settings[format!("exec_gate.{}.thinking",provider)],"serviceTier":settings[format!("exec_gate.{}.serviceTier",provider)],"instructions":settings[format!("exec_gate.{}.instructions",provider)]});
+        let launch_applied=provider=="claude"||provider=="codex";
         let mode_outcome=json!({"value":exec_options.approval_mode.as_str(),"applied":true,"kind":"request_shape","reason":if launch_applied{"provider launch mode requested for this turn"}else{"daemon policy mode"}});
-        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({"approvalMode":mode_outcome}),&json!({"approvalMode":{"kind":"request_shape","value":exec_options.approval_mode.as_str()}}),desired_instruction_hash.as_deref(),&json!({"adapter":active.runtime.provider,"gates":gates,"approvalMode":exec_options.approval_mode.as_str()}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|{let _=st.db.update_turn_outcome(&turn,"error",Some("other"));derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR)})?;
-        st.emit("exec.options.changed", json!({"sessionId":sid,"turnId":turn,"agentId":session["agentId"],"runtimeId":active.runtime.runtime_id,"requested":snapshot["requested"],"applied":snapshot["applied"],"snapshotId":snapshot_id})).await;
-        st.db.update_session_state(&sid, "working").map_err(|e| {
+        let snapshot = st.db.create_exec_snapshot(&sid,&turn,&snapshot_id,&requested,&json!({"approvalMode":mode_outcome}),&json!({"approvalMode":{"kind":"request_shape","value":exec_options.approval_mode.as_str()}}),desired_instruction_hash.as_deref(),&json!({"adapter":provider,"gates":gates,"approvalMode":exec_options.approval_mode.as_str()}),if requested_any{"partial"}else{"runtime_default"}).map_err(|e|{let _=st.db.update_turn_outcome(&turn,"error",Some("other"));derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR)})?;
+        st.emit("exec.options.changed", json!({"sessionId":sid,"turnId":turn,"agentId":session["agentId"],"runtimeId":session_options["runtimeId"],"requested":snapshot["requested"],"applied":snapshot["applied"],"snapshotId":snapshot_id})).await;
+        // A live provider session keeps working; an untouched one is `starting`
+        // until the driver activates it.
+        let next_state = if st.sessions.lock().await.contains_key(&sid) { "working" } else { "starting" };
+        st.db.update_session_state(&sid, next_state).map_err(|e| {
             let _ = st.db.update_turn_outcome(&turn, "error", Some("other"));
             derr(
                 "internal",
@@ -2553,55 +2662,155 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         if let Ok(working) = st.db.session_event_summary(&sid) {
             st.emit("session.changed", working).await;
         }
-        if exec_options.approval_mode == ApprovalMode::Bypass && matches!(active.runtime.provider.as_str(), "claude" | "codex") {
-            st.emit("permission.bypass_active", json!({"sessionId":sid,"agentId":session_options["agentId"],"providerMode":provider_mode(&active.runtime.provider)})).await;
+        if exec_options.approval_mode == ApprovalMode::Bypass && matches!(provider.as_str(), "claude" | "codex") {
+            st.emit("permission.bypass_active", json!({"sessionId":sid,"agentId":session_options["agentId"],"providerMode":provider_mode(&provider)})).await;
+        }
+        next_state.to_owned()
+    };
+    st.denied_turns.lock().await.remove(&turn);
+    // A send means this conversation is no longer just "warmed".
+    st.warm_lru.lock().await.retain(|id| id != &sid);
+    let state = st.clone();
+    let driver = TurnDriver { sid: sid.clone(), turn: turn.clone(), text, attachments, reply_snapshot, references, exec_options, provider, desired_instruction_hash };
+    tokio::spawn(async move { run_turn(state, driver).await; });
+    Ok(json!({"turnId":turn,"accepted":true,"state":next_state}))
+}
+
+/// Phase B: activate the provider, apply the requested launch mode, then deliver
+/// the prompt. Every failure here is finalised as a turn error (or a
+/// cancellation) exactly once.
+async fn run_turn(state: AppState, driver: TurnDriver) {
+    let st = &state;
+    let TurnDriver { sid, turn, text, attachments, reply_snapshot, references, exec_options, provider, desired_instruction_hash } = driver;
+    // 1. Activate the provider (resume a saved session, or start fresh).
+    if let Err(error) = activate_session(st, &sid, Owner::Turn(turn.clone())).await {
+        finish_activation_failure(st, &sid, &turn, &error).await;
+        return;
+    }
+    // 2. A cancel that arrived while the session was still `starting` stops
+    //    before anything reaches the provider.
+    if st.starting_cancels.lock().await.remove(&turn) {
+        finish_turn_cancelled(st, &sid, &turn).await;
+        return;
+    }
+    // 3. The provider handle. If activation reported success the session must be
+    //    installed; if it was closed underneath us there is nothing to send to.
+    let Some(active) = st.sessions.lock().await.get(&sid).cloned() else {
+        finish_activation_failure(st, &sid, &turn, &derr("provider_unavailable", "The coding agent could not start.", StatusCode::BAD_GATEWAY)).await;
+        return;
+    };
+    let mut gate = gate_for_session(st, &sid).await;
+    let baseline = if active.runtime.provider == "codex" { st.db.codex_thread_instruction_sha256(&sid) } else { st.db.claude_instruction_sha256(&sid) };
+    match baseline {
+        Ok(baseline) => active.adapter.set_instruction_hash_context(&sid, desired_instruction_hash.clone(), baseline).await,
+        Err(error) => {
+            finish_activation_failure(st, &sid, &turn, &derr("internal", &error.to_string(), StatusCode::INTERNAL_SERVER_ERROR)).await;
+            return;
         }
     }
-    st.denied_turns.lock().await.remove(&turn);
-    let state = st.clone();
-    let sid2 = sid.clone();
-    let turn2 = turn.clone();
-    let provider_for_error = active.runtime.provider.clone();
-    tokio::spawn(async move {
-        if let Err(e) = active
-            .adapter
-            .prompt(
-                &active.handle,
-                PromptRequest {
-                    attachments,
-                    turn_id: turn2.clone(),
-                    text: {
-                        // The memory catalog is a per-turn prompt suffix, not an
-                        // instruction, so saving a memory never changes the
-                        // instruction hash or forces a new provider thread.
-                        let memory_context = crate::memory::catalog_for_prompt(&state, &sid2);
-                        let reference_context = references.as_ref().map(|(extra, _)| extra.as_str()).unwrap_or("");
-                        let reply_context = reply_snapshot.as_ref().map(reply_prompt_context).unwrap_or_default();
-                        format!("{text}{}{reference_context}{reply_context}", memory_context.as_deref().unwrap_or(""))
-                    },
-                    exec_options,
-                },
-            )
-            .await
-        {
-            let permission_denied = state.denied_turns.lock().await.remove(&turn2);
-            let failure_class = adapter_failure_class(&e, permission_denied);
-            let (detail, sign_in) = failure_detail_and_sign_in(&provider_for_error, failure_class, &e.to_string());
-            let public_message = if sign_in { "The coding agent's sign-in expired." } else { failure_public_message(failure_class) };
-            let gate = gate_for_session(&state, &sid2).await;
+    let mut active = active;
+    // 4. Codex takes its permission mode at launch, so a changed mode relaunches
+    //    the process before the prompt is delivered.
+    if active.runtime.provider == "codex" && active.launch_approval_mode != exec_options.approval_mode {
+        let old = {
             let _guard = gate.lock().await;
-            if !session_gate_is_current(&state, &sid2, &gate).await || session_is_deleted(&state, &sid2).await
-                || !state.db.session_exists(&sid2).unwrap_or(false) || !state.sessions.lock().await.contains_key(&sid2)
-            { return; }
-            let after_detail = detail.clone().or(Some(public_message.to_owned()));
-            // Budget admission remains charged when usage is unknown; the
-            // concurrency slot is released because this execution ended.
-            finish_turn_failed(&state, &sid2, &turn2, failure_class, public_message, detail, "error").await;
-            team::after_turn(&state, &sid2, Some(turn2.clone()), "turn.error", after_detail);
-            retry::after_failed_turn(&state, &sid2, Some(&turn2)).await;
+            if !session_gate_is_current(st, &sid, &gate).await || session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false) {
+                None
+            } else {
+                st.sessions.lock().await.remove(&sid)
+            }
+        };
+        let Some(old) = old else {
+            finish_activation_failure(st, &sid, &turn, &derr("not_found", "active session not found", StatusCode::NOT_FOUND)).await;
+            return;
+        };
+        remove_session_gate(st, &sid, &gate).await;
+        if let Err(error) = old.adapter.close_session(&old.handle).await {
+            finish_activation_failure(st, &sid, &turn, &derr("provider_error", &error.to_string(), StatusCode::BAD_GATEWAY)).await;
+            return;
         }
-    });
-    Ok(json!({"turnId":turn,"accepted":true}))
+        if session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false) {
+            finish_activation_failure(st, &sid, &turn, &derr("not_found", "session not found", StatusCode::NOT_FOUND)).await;
+            return;
+        }
+        let project_path = st.db.session_detail(&sid).ok().and_then(|row| row["projectPath"].as_str().map(PathBuf::from)).unwrap_or_default();
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let handle = match old.adapter.resume_session(
+            &old.runtime,
+            ResumeSessionRequest {
+                session_id: sid.clone(),
+                provider_session_id: old.handle.provider_session_id.clone(),
+                project_path,
+                exec_options: exec_options.clone(),
+            },
+            tx,
+        ).await {
+            Ok(handle) => handle,
+            Err(error) => {
+                finish_activation_failure(st, &sid, &turn, &derr("provider_error", &error.to_string(), StatusCode::BAD_GATEWAY)).await;
+                return;
+            }
+        };
+        active = ActiveSession { handle, runtime: old.runtime.clone(), adapter: old.adapter.clone(), launch_approval_mode: exec_options.approval_mode };
+        gate = gate_for_session(st, &sid).await;
+        let installed = {
+            let _guard = gate.lock().await;
+            if session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false)
+                || st.sessions.lock().await.contains_key(&sid)
+            { false } else {
+                st.sessions.lock().await.insert(sid.clone(), active.clone());
+                true
+            }
+        };
+        if !installed {
+            let _ = active.adapter.close_session(&active.handle).await;
+            finish_activation_failure(st, &sid, &turn, &derr("conflict", "session changed while execution options were being applied", StatusCode::CONFLICT)).await;
+            return;
+        }
+        let state = st.clone();
+        let stream_id = sid.clone();
+        let event_provider = active.runtime.provider.clone();
+        let event_runtime = active.runtime.runtime_id.clone();
+        tokio::spawn(async move { forward_events(state, stream_id, event_provider, event_runtime, rx).await; });
+    }
+    // 5. Deliver: mark the turn working, then hand the prompt to the provider.
+    if st.starting_cancels.lock().await.remove(&turn) || st.db.session_state(&sid).ok().flatten().as_deref() == Some("cancelling") {
+        finish_turn_cancelled(st, &sid, &turn).await;
+        return;
+    }
+    if let Err(error) = st.db.update_session_state(&sid, "working") {
+        finish_activation_failure(st, &sid, &turn, &derr("internal", &error.to_string(), StatusCode::INTERNAL_SERVER_ERROR)).await;
+        return;
+    }
+    if let Ok(working) = st.db.session_event_summary(&sid) {
+        st.emit("session.changed", working).await;
+    }
+    let prompt_text = {
+        // The memory catalog is a per-turn prompt suffix, not an instruction, so
+        // saving a memory never changes the instruction hash or forces a new
+        // provider thread.
+        let memory_context = crate::memory::catalog_for_prompt(st, &sid);
+        let reference_context = references.as_ref().map(|(extra, _)| extra.as_str()).unwrap_or("");
+        let reply_context = reply_snapshot.as_ref().map(reply_prompt_context).unwrap_or_default();
+        format!("{text}{}{reference_context}{reply_context}", memory_context.as_deref().unwrap_or(""))
+    };
+    if let Err(e) = active.adapter.prompt(&active.handle, PromptRequest { attachments, turn_id: turn.clone(), text: prompt_text, exec_options }).await {
+        let permission_denied = st.denied_turns.lock().await.remove(&turn);
+        let failure_class = adapter_failure_class(&e, permission_denied);
+        let (detail, sign_in) = failure_detail_and_sign_in(&provider, failure_class, &e.to_string());
+        let public_message = if sign_in { "The coding agent's sign-in expired." } else { failure_public_message(failure_class) };
+        let gate = gate_for_session(st, &sid).await;
+        let _guard = gate.lock().await;
+        if !session_gate_is_current(st, &sid, &gate).await || session_is_deleted(st, &sid).await
+            || !st.db.session_exists(&sid).unwrap_or(false) || !st.sessions.lock().await.contains_key(&sid)
+        { return; }
+        let after_detail = detail.clone().or(Some(public_message.to_owned()));
+        // Budget admission remains charged when usage is unknown; the
+        // concurrency slot is released because this execution ended.
+        finish_turn_failed(st, &sid, &turn, failure_class, public_message, detail, "error").await;
+        team::after_turn(st, &sid, Some(turn.clone()), "turn.error", after_detail);
+        retry::after_failed_turn(st, &sid, Some(&turn)).await;
+    }
 }
 
 /// Adds text to the turn that is running right now on a runtime that can
@@ -3431,6 +3640,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         queue: Arc::new(queue::Queue::default()),
         automations: Arc::new(automations::Automations::default()),
         memory: Arc::new(memory::Memory::default()),
+        activation_locks: Arc::new(Mutex::new(HashMap::new())),
+        starting_cancels: Arc::new(Mutex::new(HashSet::new())),
+        warm_lru: Arc::new(Mutex::new(Vec::new())),
     };
     // A send right after boot must not fail with "runtime is not installed":
     // show the saved roster until discovery replaces it. `validate_spawn_target`
@@ -4332,7 +4544,7 @@ mod phase2a_tests {
 
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default())};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -4446,7 +4658,7 @@ mod phase2a_tests {
     }
     #[tokio::test]
     async fn slow_adapter_preflight_does_not_block_another_sessions_event_stream() {
-        let (st, mut events) = state();
+        let (mut st, mut events) = state();
         st.db.create_session("slow-session", "rt-test", "codex", ".", "Slow").unwrap();
         st.db.update_session_state("slow-session", "idle").unwrap();
         st.db.create_session("fast-session", "rt-test", "codex", ".", "Fast").unwrap();
@@ -4455,6 +4667,9 @@ mod phase2a_tests {
         st.active_turns.lock().await.insert("fast-session".into(), "fast-turn".into());
 
         let slow_adapter = Arc::new(BlockingPreflightAdapter { started: tokio::sync::Notify::new(), release: tokio::sync::Notify::new() });
+        // Phase A fetches the adapter by provider (not from a live handle), so
+        // the blocking preflight must be installed on the adapter roster.
+        st.adapters = Arc::new(Adapters { acp: Arc::new(AcpAdapter::default()), codex: slow_adapter.clone(), claude: Arc::new(ClaudeAdapter::default()) });
         let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
         st.sessions.lock().await.insert("slow-session".into(), ActiveSession {
             handle: SessionHandle { session_id: "slow-session".into(), provider_session_id: "slow-native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() },
@@ -4507,9 +4722,9 @@ mod phase2a_tests {
     }
 
     #[tokio::test]
-    async fn first_prompt_after_daemon_restart_lazily_resumes_before_recording_user_message() {
-        async fn prepare(adapter: Arc<PromptResumeAdapter>, sid: &str) -> (AppState, PathBuf) {
-            let (mut st, _) = state();
+    async fn restart_send_is_accepted_then_resumes_and_prompts() {
+        async fn prepare(adapter: Arc<PromptResumeAdapter>, sid: &str) -> (AppState, PathBuf, broadcast::Receiver<EventEnvelope>) {
+            let (mut st, events) = state();
             let project = std::env::temp_dir().join(format!("bloblex-lazy-resume-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&project).unwrap();
             let executable = std::env::current_exe().unwrap();
@@ -4531,9 +4746,11 @@ mod phase2a_tests {
                 codex: adapter,
                 claude: Arc::new(ClaudeAdapter::default()),
             });
-            (st, project)
+            (st, project, events)
         }
 
+        // A saved provider session: the send returns at once with `starting`, the
+        // user message is stored, and the driver resumes once before prompting.
         let adapter = Arc::new(PromptResumeAdapter {
             reject_resume: false,
             fail_resume: false,
@@ -4542,23 +4759,26 @@ mod phase2a_tests {
             prompts: StdMutex::new(Vec::new()),
             events: StdMutex::new(None),
         });
-        let (st, project) = prepare(adapter.clone(), "restart-resume").await;
+        let (st, project, _events) = prepare(adapter.clone(), "restart-resume").await;
         let result = dispatch(&st, "session.prompt", json!({"sessionId":"restart-resume","text":"continue the saved task"})).await.unwrap();
         assert_eq!(result["accepted"], true);
-        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(result["state"], "starting");
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
                 if adapter.prompts.lock().unwrap().contains(&"continue the saved task".to_owned()) { break; }
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
         }).await.unwrap();
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(*adapter.prompts.lock().unwrap(), ["continue the saved task"]);
         let detail = st.db.session_detail("restart-resume").unwrap();
         assert_eq!(detail["messages"].as_array().unwrap().iter().filter(|message| message["role"] == "user").count(), 1);
         assert_eq!(st.db.session_context("restart-resume").unwrap(), (Some(420), Some(1000)));
         std::fs::remove_dir_all(project).unwrap();
 
+        // An expired provider session: the resume is rejected, a fresh provider
+        // context starts, and the prompt is still delivered once.
         let adapter = Arc::new(PromptResumeAdapter {
             reject_resume: true,
             fail_resume: false,
@@ -4567,17 +4787,17 @@ mod phase2a_tests {
             prompts: StdMutex::new(Vec::new()),
             events: StdMutex::new(None),
         });
-        let (st, project) = prepare(adapter.clone(), "expired-resume").await;
+        let (st, project, _events) = prepare(adapter.clone(), "expired-resume").await;
         let result = dispatch(&st, "session.prompt", json!({"sessionId":"expired-resume","text":"continue after expiry"})).await.unwrap();
         assert_eq!(result["accepted"], true);
-        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
                 if adapter.prompts.lock().unwrap().contains(&"continue after expiry".to_owned()) { break; }
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
         }).await.unwrap();
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(*adapter.prompts.lock().unwrap(), ["continue after expiry"]);
         let detail = st.db.session_detail("expired-resume").unwrap();
         assert_eq!(detail["messages"].as_array().unwrap().iter().filter(|message| message["role"] == "user").count(), 1);
@@ -4585,6 +4805,7 @@ mod phase2a_tests {
         assert_eq!(st.db.session_context("expired-resume").unwrap(), (None, None));
         std::fs::remove_dir_all(project).unwrap();
 
+        // An explicit `session.resume` with no saved handle still starts fresh.
         let adapter = Arc::new(PromptResumeAdapter {
             reject_resume: false,
             fail_resume: false,
@@ -4593,7 +4814,7 @@ mod phase2a_tests {
             prompts: StdMutex::new(Vec::new()),
             events: StdMutex::new(None),
         });
-        let (st, project) = prepare(adapter.clone(), "no-provider-handle").await;
+        let (st, project, _events) = prepare(adapter.clone(), "no-provider-handle").await;
         st.db.clear_session_provider_id("no-provider-handle").unwrap();
         dispatch(&st, "session.resume", json!({"sessionId":"no-provider-handle"})).await.unwrap();
         assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -4601,6 +4822,8 @@ mod phase2a_tests {
         assert_eq!(st.db.session_context("no-provider-handle").unwrap(), (None, None));
         std::fs::remove_dir_all(project).unwrap();
 
+        // A resume that fails is no longer a rejected send: the send is accepted,
+        // the message is stored, and the conversation reports a turn error.
         let adapter = Arc::new(PromptResumeAdapter {
             reject_resume: false,
             fail_resume: true,
@@ -4609,13 +4832,370 @@ mod phase2a_tests {
             prompts: StdMutex::new(Vec::new()),
             events: StdMutex::new(None),
         });
-        let (st, project) = prepare(adapter.clone(), "failed-resume").await;
-        let error = dispatch(&st, "session.prompt", json!({"sessionId":"failed-resume","text":"must remain in composer"})).await.unwrap_err();
-        assert_eq!(error.1.code, "provider_error");
-        assert!(st.db.session_detail("failed-resume").unwrap()["messages"].as_array().unwrap().is_empty());
-        assert!(adapter.prompts.lock().unwrap().is_empty());
+        let (st, project, mut events) = prepare(adapter.clone(), "failed-resume").await;
+        let result = dispatch(&st, "session.prompt", json!({"sessionId":"failed-resume","text":"reaches the transcript"})).await.unwrap();
+        assert_eq!(result["accepted"], true);
+        assert_eq!(result["state"], "starting");
+        let failed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event_type == "turn.error" { break event; }
+            }
+        }).await.unwrap();
+        assert_eq!(failed.payload["failureClass"], "provider_unavailable");
+        assert_eq!(failed.payload["message"], "The coding agent could not start.");
+        assert!(adapter.prompts.lock().unwrap().is_empty(), "a failed activation never prompts");
+        assert_eq!(st.db.session_detail("failed-resume").unwrap()["state"], "error");
+        assert!(!st.active_turns.lock().await.contains_key("failed-resume"), "the reservation is released");
+        assert_eq!(st.db.session_detail("failed-resume").unwrap()["messages"].as_array().unwrap().iter().filter(|message| message["role"] == "user").count(), 1);
         std::fs::remove_dir_all(project).unwrap();
     }
+
+    // -- FIX28 WP2: non-blocking sends and warm-up --------------------------
+
+    /// A send-path adapter. `resume_session` can be held until released, so a
+    /// test can observe a conversation while it is still `starting`.
+    struct SendAdapter {
+        block_resume: bool,
+        fail_resume: bool,
+        resume_started: tokio::sync::Notify,
+        resume_release: tokio::sync::Notify,
+        resume_calls: std::sync::atomic::AtomicUsize,
+        new_calls: std::sync::atomic::AtomicUsize,
+        prompts: StdMutex<Vec<String>>,
+        events: StdMutex<Option<tokio::sync::mpsc::Sender<AgentEvent>>>,
+    }
+    impl SendAdapter {
+        fn new(block_resume: bool, fail_resume: bool) -> Self {
+            Self {
+                block_resume,
+                fail_resume,
+                resume_started: tokio::sync::Notify::new(),
+                resume_release: tokio::sync::Notify::new(),
+                resume_calls: Default::default(),
+                new_calls: Default::default(),
+                prompts: StdMutex::new(Vec::new()),
+                events: StdMutex::new(None),
+            }
+        }
+        fn resume_calls(&self) -> usize { self.resume_calls.load(std::sync::atomic::Ordering::SeqCst) }
+        fn prompts(&self) -> Vec<String> { self.prompts.lock().unwrap().clone() }
+    }
+    #[async_trait::async_trait]
+    impl AgentAdapter for SendAdapter {
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, request: NewSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.new_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.events.lock().unwrap() = Some(events.clone());
+            let _ = events.send(AgentEvent::SessionStarted { provider_session_id: "fresh-send-context".into() }).await;
+            Ok(SessionHandle { session_id: request.session_id, provider_session_id: "fresh-send-context".into(), capabilities: bloblex_agent_core::AgentCapabilities { resume: true, ..Default::default() } })
+        }
+        async fn resume_session(&self, _: &RuntimeSpec, request: ResumeSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.resume_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.block_resume {
+                self.resume_started.notify_one();
+                self.resume_release.notified().await;
+            }
+            if self.fail_resume { return Err(bloblex_agent_core::AdapterError::Protocol("fixture resume failure".into())); }
+            *self.events.lock().unwrap() = Some(events.clone());
+            let _ = events.send(AgentEvent::SessionStarted { provider_session_id: request.provider_session_id.clone() }).await;
+            Ok(SessionHandle { session_id: request.session_id, provider_session_id: request.provider_session_id, capabilities: bloblex_agent_core::AgentCapabilities { resume: true, ..Default::default() } })
+        }
+        async fn prompt(&self, _: &SessionHandle, request: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> {
+            self.prompts.lock().unwrap().push(request.text);
+            let events = self.events.lock().unwrap().clone();
+            if let Some(events) = events { let _ = events.send(AgentEvent::TurnCompleted).await; }
+            Ok(())
+        }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> {
+            // Drop the sender so the event forwarder ends, as a real close does.
+            self.events.lock().unwrap().take();
+            Ok(())
+        }
+    }
+    fn install_send_adapter(st: &mut AppState, adapter: &Arc<SendAdapter>) {
+        st.adapters = Arc::new(Adapters { acp: Arc::new(AcpAdapter::default()), codex: adapter.clone(), claude: Arc::new(ClaudeAdapter::default()) });
+    }
+    /// Make `rt-test` a usable (online) runtime so `session.warm` accepts it.
+    async fn online_rt_test(st: &mut AppState) {
+        let runtime = json!({"id":"rt-test","provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await = vec![runtime];
+    }
+    async fn idle_send_session(st: &AppState, sid: &str) {
+        st.db.create_session(sid, "rt-test", "codex", ".", "Send").unwrap();
+        // A saved provider handle makes the driver resume (not start fresh),
+        // which is the path these tests hold open.
+        st.db.set_session_provider_id(sid, "saved-send-context", true).unwrap();
+        st.db.update_session_state(sid, "idle").unwrap();
+    }
+    /// Poll the persisted event log for one matching event.
+    async fn wait_for_replayed(st: &AppState, done: impl Fn(&Value) -> bool) -> Value {
+        for _ in 0..250 {
+            if let Ok(events) = st.db.replay_events(0, 5000) {
+                if let Some(found) = events.into_iter().find(|event| done(event)) { return found; }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("timed out waiting for a replayed event");
+    }
+    async fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+        for _ in 0..250 { if done() { return true; } tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
+        false
+    }
+
+    #[tokio::test]
+    async fn prompt_returns_accepted_before_resume_completes() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(SendAdapter::new(true, false));
+        install_send_adapter(&mut st, &adapter);
+        let sid = "send-accepted-early";
+        idle_send_session(&st, sid).await;
+
+        let accepted = dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"hello there"})).await.unwrap();
+        assert_eq!(accepted["accepted"], true);
+        assert_eq!(accepted["state"], "starting");
+        // The user message is saved before the provider is resumed.
+        assert_eq!(st.db.session_detail(sid).unwrap()["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "user").count(), 1);
+        assert!(st.active_turns.lock().await.contains_key(sid));
+
+        // The resume has started and has not completed.
+        tokio::time::timeout(std::time::Duration::from_secs(2), adapter.resume_started.notified()).await.unwrap();
+        assert_eq!(adapter.resume_calls(), 1);
+        assert!(adapter.prompts().is_empty(), "no prompt before activation completes");
+
+        adapter.resume_release.notify_one();
+        assert!(wait_until(|| !adapter.prompts().is_empty()).await, "the prompt is delivered after activation");
+        assert_eq!(adapter.prompts().len(), 1);
+        assert!(adapter.prompts()[0].starts_with("hello there"));
+        let saw_working = st.db.replay_events(0, 2000).unwrap().iter().any(|event| event["type"] == "session.changed" && event["payload"]["id"] == sid && event["payload"]["state"] == "working");
+        assert!(saw_working, "the driver moves the session from starting to working");
+    }
+
+    #[tokio::test]
+    async fn resume_failure_becomes_turn_error() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(SendAdapter::new(false, true));
+        install_send_adapter(&mut st, &adapter);
+        let sid = "send-resume-fails";
+        idle_send_session(&st, sid).await;
+
+        let accepted = dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"try"})).await.unwrap();
+        assert_eq!(accepted["accepted"], true);
+        let failed = wait_for_replayed(&st, |event| event["type"] == "turn.error" && event["payload"]["sessionId"] == sid).await;
+        assert_eq!(failed["payload"]["failureClass"], "provider_unavailable");
+        assert_eq!(failed["payload"]["message"], "The coding agent could not start.");
+        assert!(adapter.prompts().is_empty());
+        assert_eq!(st.db.session_detail(sid).unwrap()["state"], "error");
+        assert!(!st.active_turns.lock().await.contains_key(sid), "the reservation is released");
+        // `provider_unavailable` is never auto-retried: the retry hook only acts
+        // on an overload/rate-limit hint, and a resume failure carries none.
+        assert!(st.db.session_detail(sid).unwrap()["turns"].as_array().unwrap().iter().all(|turn| turn["failureClass"] != "overloaded"));
+
+        // A side conversation's failed activation relays exactly one reply note
+        // to its origin, never a duplicate "could not start" note.
+        let (mut st, _) = state();
+        let adapter = Arc::new(SendAdapter::new(false, true));
+        install_send_adapter(&mut st, &adapter);
+        let origin = "side-origin";
+        let side = "side-child";
+        st.db.create_session(origin, "rt-test", "codex", ".", "Origin").unwrap();
+        st.db.update_session_state(origin, "idle").unwrap();
+        let agent = st.db.agent_create(&json!({"name":"Mate","runtimeId":"rt-test"})).unwrap().0;
+        st.db.create_session_for_agent(side, "rt-test", "codex", ".", "Side", Some(agent["id"].as_str().unwrap())).unwrap();
+        st.db.set_session_provider_id(side, "side-native", true).unwrap();
+        st.db.set_session_link(side, &json!({"kind":"side","peerAgentId":"someone","originSessionId":origin})).unwrap();
+        st.db.update_session_state(side, "idle").unwrap();
+        let accepted = session_prompt_for_team(&st, json!({"sessionId":side,"text":"do it"})).await.unwrap();
+        assert_eq!(accepted["accepted"], true);
+        wait_for_replayed(&st, |event| event["type"] == "turn.error" && event["payload"]["sessionId"] == side).await;
+        let messages = wait_for_messages(&st, origin, |messages| messages.iter().any(|message| message["meta"]["kind"] == "blob_reply")).await;
+        let relays: Vec<&Value> = messages.iter().filter(|message| message["meta"]["kind"] == "blob_reply").collect();
+        assert_eq!(relays.len(), 1, "exactly one relay note to the origin");
+        assert!(relays[0]["content"].as_str().unwrap().contains("The turn failed"));
+        assert!(!messages.iter().any(|message| message["content"].as_str().unwrap_or("").contains("could not start")), "no duplicate relay_failure note");
+    }
+
+    #[tokio::test]
+    async fn cancel_while_starting_skips_prompt() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(SendAdapter::new(true, false));
+        install_send_adapter(&mut st, &adapter);
+        let sid = "cancel-starting";
+        idle_send_session(&st, sid).await;
+
+        dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"start"})).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), adapter.resume_started.notified()).await.unwrap();
+        let cancelled = dispatch(&st, "session.cancel", json!({"sessionId":sid})).await.unwrap();
+        assert_eq!(cancelled["cancellationRequested"], true);
+        assert_eq!(st.db.session_state(sid).ok().flatten().as_deref(), Some("cancelling"));
+
+        adapter.resume_release.notify_one();
+        wait_for_replayed(&st, |event| event["type"] == "turn.cancelled" && event["payload"]["sessionId"] == sid).await;
+        assert!(adapter.prompts().is_empty(), "a cancelled start never prompts");
+        assert_eq!(st.db.session_state(sid).ok().flatten().as_deref(), Some("idle"));
+        assert!(!st.active_turns.lock().await.contains_key(sid));
+        assert!(st.sessions.lock().await.contains_key(sid), "the activated handle stays installed and reusable");
+    }
+
+    #[tokio::test]
+    async fn concurrent_prompts_conflict_synchronously() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(SendAdapter::new(true, false));
+        install_send_adapter(&mut st, &adapter);
+        let sid = "send-conflict";
+        idle_send_session(&st, sid).await;
+
+        let first = dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"one"})).await.unwrap();
+        assert_eq!(first["accepted"], true);
+        let second = dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"two"})).await.unwrap_err();
+        assert_eq!(second.1.code, "conflict", "a second send while the first is starting conflicts synchronously");
+        adapter.resume_release.notify_one();
+        assert!(wait_until(|| !adapter.prompts().is_empty()).await);
+        assert_eq!(adapter.prompts().len(), 1);
+        assert!(adapter.prompts()[0].starts_with("one"));
+    }
+
+    #[tokio::test]
+    async fn delete_during_starting_conflicts() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(SendAdapter::new(true, false));
+        install_send_adapter(&mut st, &adapter);
+        let sid = "delete-starting";
+        idle_send_session(&st, sid).await;
+
+        dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"start"})).await.unwrap();
+        let deleted = dispatch(&st, "session.delete", json!({"sessionId":sid})).await.unwrap_err();
+        assert_eq!(deleted.1.code, "conflict", "a starting conversation cannot be deleted");
+        adapter.resume_release.notify_one();
+        assert!(wait_until(|| !adapter.prompts().is_empty()).await);
+    }
+
+    #[tokio::test]
+    async fn queue_send_claimed_requeues_on_conflict() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "queue-starting-conflict";
+        queue_session(&st, &adapter, sid).await;
+        dispatch(&st, "session.queue.add", json!({"sessionId":sid,"text":"queued while starting"})).await.unwrap();
+        // The session is mid-start: its turn is reserved.
+        st.active_turns.lock().await.insert(sid.into(), "turn-starting".into());
+        st.db.update_session_state(sid, "starting").unwrap();
+        crate::queue::drain_next(&st, sid, true).await;
+        let items = st.db.queue_list(sid).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["status"], "queued", "a starting turn requeues the item instead of failing it");
+        assert!(!st.queue.is_paused(sid));
+        assert!(adapter.texts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_resume_rpc_still_conflicts_on_active_session() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st, &adapter);
+        let sid = "resume-active";
+        queue_session(&st, &adapter, sid).await;
+        assert_eq!(dispatch(&st, "session.resume", json!({"sessionId":sid})).await.unwrap_err().1.code, "conflict");
+    }
+
+    #[tokio::test]
+    async fn warm_then_prompt_resumes_once() {
+        let (mut st, _) = state();
+        online_rt_test(&mut st).await;
+        let adapter = Arc::new(SendAdapter::new(false, false));
+        install_send_adapter(&mut st, &adapter);
+        let sid = "warm-once";
+        idle_send_session(&st, sid).await;
+
+        let warm = dispatch(&st, "session.warm", json!({"sessionId":sid})).await.unwrap();
+        assert_eq!(warm, json!({"warming":true,"active":false}));
+        let accepted = dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"hi"})).await.unwrap();
+        assert_eq!(accepted["accepted"], true);
+        assert!(wait_until(|| !adapter.prompts().is_empty()).await);
+        assert_eq!(adapter.prompts().len(), 1);
+        assert_eq!(adapter.resume_calls(), 1, "the warm-up and the send share one resume");
+        assert!(!st.warm_lru.lock().await.contains(&sid.to_owned()), "a turn removes the session from the warm LRU");
+    }
+
+    #[tokio::test]
+    async fn warm_refuses_side_archived_busy_and_unusable() {
+        let (mut st, _) = state();
+        online_rt_test(&mut st).await;
+        let adapter = Arc::new(SendAdapter::new(false, false));
+        install_send_adapter(&mut st, &adapter);
+        let refused = json!({"warming":false,"active":false});
+
+        // Side conversations are read-only and never warmed.
+        st.db.create_session("warm-origin", "rt-test", "codex", ".", "Origin").unwrap();
+        st.db.update_session_state("warm-origin", "idle").unwrap();
+        st.db.create_session("warm-side", "rt-test", "codex", ".", "Side").unwrap();
+        st.db.set_session_link("warm-side", &json!({"kind":"side","peerAgentId":"p","originSessionId":"warm-origin"})).unwrap();
+        st.db.update_session_state("warm-side", "idle").unwrap();
+        assert_eq!(dispatch(&st, "session.warm", json!({"sessionId":"warm-side"})).await.unwrap(), refused);
+
+        // Automation conversations are never warmed.
+        st.db.create_session("warm-auto", "rt-test", "codex", ".", "Auto").unwrap();
+        st.db.set_session_link("warm-auto", &json!({"kind":"automation","automationId":"a","runId":"r","approvalMode":"auto"})).unwrap();
+        st.db.update_session_state("warm-auto", "idle").unwrap();
+        assert_eq!(dispatch(&st, "session.warm", json!({"sessionId":"warm-auto"})).await.unwrap(), refused);
+
+        // Archived conversations are not warmed.
+        st.db.create_session("warm-archived", "rt-test", "codex", ".", "Archived").unwrap();
+        st.db.update_session_state("warm-archived", "idle").unwrap();
+        dispatch(&st, "session.archive", json!({"sessionId":"warm-archived","archived":true})).await.unwrap();
+        assert_eq!(dispatch(&st, "session.warm", json!({"sessionId":"warm-archived"})).await.unwrap(), refused);
+
+        // A busy conversation is not warmed.
+        idle_send_session(&st, "warm-busy").await;
+        st.active_turns.lock().await.insert("warm-busy".into(), "busy-turn".into());
+        st.db.update_session_state("warm-busy", "working").unwrap();
+        assert_eq!(dispatch(&st, "session.warm", json!({"sessionId":"warm-busy"})).await.unwrap(), refused);
+
+        // An unusable runtime is not warmed.
+        st.db.create_session("warm-offline", "rt-other", "codex", ".", "Offline").unwrap();
+        st.db.update_session_state("warm-offline", "idle").unwrap();
+        assert_eq!(dispatch(&st, "session.warm", json!({"sessionId":"warm-offline"})).await.unwrap(), refused);
+    }
+
+    #[tokio::test]
+    async fn warm_lru_closes_the_oldest_idle() {
+        let (mut st, _) = state();
+        online_rt_test(&mut st).await;
+        let adapter = Arc::new(SendAdapter::new(false, false));
+        install_send_adapter(&mut st, &adapter);
+        for (id, name) in [("warm-a","A"),("warm-b","B"),("warm-c","C")] {
+            st.db.create_session(id, "rt-test", "codex", ".", name).unwrap();
+            st.db.update_session_state(id, "idle").unwrap();
+        }
+        for id in ["warm-a", "warm-b"] {
+            assert_eq!(dispatch(&st, "session.warm", json!({"sessionId":id})).await.unwrap()["warming"], true);
+            let mut installed = false;
+            for _ in 0..250 {
+                if st.sessions.lock().await.contains_key(id) { installed = true; break; }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            assert!(installed, "the warm-up installs its handle");
+        }
+
+        let third = dispatch(&st, "session.warm", json!({"sessionId":"warm-c"})).await.unwrap();
+        assert_eq!(third["warming"], true);
+        // The oldest idle warmed conversation is closed immediately.
+        assert!(!st.sessions.lock().await.contains_key("warm-a"), "the oldest warm session is closed");
+        assert_eq!(st.db.session_state("warm-a").ok().flatten().as_deref(), Some("closed"));
+        let lru = st.warm_lru.lock().await.clone();
+        assert_eq!(lru, vec!["warm-b".to_owned(), "warm-c".to_owned()]);
+        let mut c_active = false;
+        for _ in 0..250 {
+            if st.sessions.lock().await.contains_key("warm-c") { c_active = true; break; }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(c_active, "the third warm-up installs its handle");
+    }
+
     #[tokio::test]
     async fn daemon_generic_resume_error_preserves_saved_provider_pointer(){
         let(st,_events)=state();
@@ -5564,19 +6144,35 @@ mod phase2a_tests {
         let started = adapter.started.notified();
         let prompt_state = st.clone();
         let prompt = tokio::spawn(async move {
-            dispatch(&prompt_state,"session.prompt",json!({"sessionId":sid,"text":"must not be stored"})).await
+            dispatch(&prompt_state,"session.prompt",json!({"sessionId":sid,"text":"reserved while starting"})).await
         });
         started.await;
         assert_eq!(st.db.session_detail(sid).unwrap()["modelLock"],json!({"model":"alpha","thinking":"low","enableWorkflows":false}));
 
-        dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"beta","thinking":"high","confirmModelChange":true})).await.unwrap();
+        // The turn is already reserved, so a model change through the RPC now
+        // conflicts instead of racing the resume.
+        assert_eq!(dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"beta","thinking":"high","confirmModelChange":true})).await.unwrap_err().1.code,"conflict");
+        // A concurrent writer changes the lock directly, as another process
+        // would. The resumed handle must be rejected rather than installed under
+        // the wrong model.
+        st.db.set_session_model_lock(sid,&json!({"model":"beta","thinking":"high"})).unwrap();
         adapter.release.notify_one();
-        let error = prompt.await.unwrap().unwrap_err();
-        assert_eq!(error.1.code,"conflict");
+        let accepted = prompt.await.unwrap().unwrap();
+        assert_eq!(accepted["accepted"], true);
+        assert_eq!(accepted["state"], "starting");
+        let mut settled = false;
+        for _ in 0..250 {
+            if st.db.session_state(sid).ok().flatten().as_deref() == Some("error") { settled = true; break; }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(settled, "the rejected handle must finalise the turn as an error");
         assert_eq!(adapter.close_calls.load(std::sync::atomic::Ordering::SeqCst),1);
         let session = st.db.session_detail(sid).unwrap();
         assert_eq!(session["modelLock"],json!({"model":"beta","thinking":"high"}));
-        assert_eq!(session["messages"].as_array().unwrap().len(),0);
+        // The message was reserved and stored before activation; only the turn
+        // failed, so there is exactly one user message and no assistant reply.
+        assert_eq!(session["messages"].as_array().unwrap().iter().filter(|message| message["role"] == "user").count(),1);
+        assert!(!st.active_turns.lock().await.contains_key(sid));
         assert!(!st.sessions.lock().await.contains_key(sid));
     }
 

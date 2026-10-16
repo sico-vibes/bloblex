@@ -353,7 +353,7 @@ fn spawn_refresh(st: &AppState, runtime: Value, probe: Probe) {
 
 /// A status the UI would consider usable, matching `runtimeUsable`, and a
 /// provider that is not signed out.
-fn runtime_usable(runtime: &Value) -> bool {
+pub(crate) fn runtime_usable(runtime: &Value) -> bool {
     let status = runtime["status"].as_str().unwrap_or("").to_ascii_lowercase();
     let usable = ["online", "ready", "available", "connected"].contains(&status.as_str());
     let signed_out = runtime["authState"].as_str().unwrap_or("").eq_ignore_ascii_case("unauthenticated");

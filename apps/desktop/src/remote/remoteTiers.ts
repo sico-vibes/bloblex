@@ -139,6 +139,7 @@ export const METHOD_RULES: readonly MethodRule[] = [
   { method: 'message.reaction.toggle', class: 'chat', minTier: CHAT, why: 'Adds or removes an emoji reaction.' },
   { method: 'turn.retry.cancel', class: 'chat', minTier: CHAT, why: 'Cancels a pending automatic retry.' },
   { method: 'session.resume', class: 'chat', minTier: CHAT, why: 'Resumes a resumable conversation.' },
+  { method: 'session.warm', class: 'chat', minTier: CHAT, why: 'Starts a conversation\'s coding agent ahead of a message.' },
   { method: 'session.close', class: 'chat', minTier: CHAT, why: 'Closes a managed adapter process.' },
 
   // -- approve (operator and up, only when the host allows it) ---------------

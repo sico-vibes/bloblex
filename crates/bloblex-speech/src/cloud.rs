@@ -1020,7 +1020,14 @@ pub struct WarmReport {
 pub async fn warm() -> WarmReport {
     let client_ready = cloud_client().is_ok();
     let auth = auth_status();
-    let dns_ok = tokio::net::lookup_host(("chatgpt.com", 443u16)).await.is_ok();
+    // A hung resolver must not hold the warm-up open: bound the lookup at a few
+    // seconds and report a timeout as `dns_ok: false`.
+    let dns_ok = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::net::lookup_host(("chatgpt.com", 443u16)),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok());
     WarmReport {
         client_ready,
         auth,
@@ -1092,6 +1099,19 @@ mod tests {
             assert_eq!(report.auth.state, AuthState::Missing);
         }
         let _ = report.dns_ok;
+    }
+
+    /// The warm-up is bounded: a hung resolver cannot hold it past the DNS
+    /// timeout, and a timeout is reported as `dns_ok: false`, not raised.
+    #[tokio::test]
+    async fn warm_returns_within_five_seconds() {
+        let report = tokio::time::timeout(Duration::from_secs(5), warm())
+            .await
+            .expect("warm() must return within five seconds");
+        // With or without network the report is produced; a failed or timed-out
+        // lookup is simply `dns_ok: false`.
+        let _ = report.dns_ok;
+        assert!(report.client_ready, "the shared client builds");
     }
 
     fn encode_segment(bytes: &[u8]) -> String {

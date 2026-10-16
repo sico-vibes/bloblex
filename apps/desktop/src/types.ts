@@ -195,6 +195,8 @@ export interface SessionLink extends JsonRecord {
   runId?: string
   peerName?: string
   originSessionId?: string
+  /** The conversation that started this side conversation; never changes (FIX27). */
+  spawnedFromSessionId?: string
   /** Short title the sender gave the conversation, also its session title. */
   topic?: string
 }

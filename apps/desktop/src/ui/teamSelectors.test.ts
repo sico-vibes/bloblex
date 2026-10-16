@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Project, Session } from '../types'
-import { conversationPlaceName, conversationPreview, groupAgentsByProject, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
+import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 
 const agent = (id: string, name: string, extra: Partial<Agent> = {}): Agent => ({ id, name, description: '', instructions: '', color: 'mint', runtimeId: 'rt', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', ...extra })
 const session = (id: string, extra: Partial<Session> = {}): Session => ({ id, runtimeId: 'rt', updatedAt: '2026-10-01T00:00:00Z', ...extra })
@@ -84,5 +84,27 @@ describe('conversationPlaceName', () => {
     expect(conversationPlaceName(session('s3', { agentId: 'a2', projectPath: String.raw`D:\code\bloblex` }), [casual], projects)).toBe('bloblex')
     expect(conversationPlaceName(session('s4', { agentId: 'a2', workspaceLabel: 'Casual' }), [casual], projects)).toBe('Casual')
     expect(conversationPlaceName(null, [], projects)).toBeNull()
+  })
+})
+
+describe('conversationTree', () => {
+  const sessions: Session[] = [
+    session('main-1', { agentId: 'a', title: 'Fix login', updatedAt: '2026-10-16T10:00:00Z' }),
+    session('main-2', { agentId: 'a', title: 'Docs', updatedAt: '2026-10-16T12:00:00Z' }),
+    // a asked b, started from main-1; the reply route moved, the spawn link did not.
+    session('side-asked', { agentId: 'b', link: { kind: 'side', peerAgentId: 'a', spawnedFromSessionId: 'main-1', originSessionId: 'main-2' }, updatedAt: '2026-10-16T11:00:00Z' }),
+    // b asked a from b's own conversation, which is not in a's list: a root.
+    session('side-received', { agentId: 'a', link: { kind: 'side', peerAgentId: 'b', originSessionId: 'b-main' }, updatedAt: '2026-10-16T09:00:00Z' }),
+    session('auto', { agentId: 'a', link: { kind: 'automation' } }),
+    session('old', { agentId: 'a', archived: true }),
+    session('elsewhere', { agentId: 'a', projectId: 'p2' }),
+  ]
+  it('nests bot-to-bot conversations under the one that started them', () => {
+    const tree = conversationTree(sessions, 'a', 'p1')
+    expect(tree.map((node) => node.session.id)).toEqual(['main-2', 'main-1', 'side-received'])
+    const main1 = tree.find((node) => node.session.id === 'main-1')!
+    expect(main1.children.map((node) => [node.session.id, node.kind, node.role])).toEqual([['side-asked', 'side', 'sender']])
+    expect(tree.find((node) => node.session.id === 'side-received')?.role).toBe('receiver')
+    expect(ancestorIds(tree, 'side-asked')).toEqual(['main-1'])
   })
 })

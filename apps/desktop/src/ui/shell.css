@@ -4,8 +4,9 @@
 .blob-canvas { display: block; flex: 0 0 auto; }
 .blob-canvas-frame { position: relative; display: inline-block; flex: 0 0 auto; vertical-align: top; line-height: 0; overflow: visible; }
 
-.app-shell { width: 100%; height: 100%; min-width: 860px; min-height: 560px; display: grid; grid-template-columns: 280px minmax(0, 1fr) 0; grid-template-rows: minmax(0, 1fr) auto; background: var(--surface-app); color: var(--text-1); transition: grid-template-columns 220ms cubic-bezier(0.22, 1, 0.36, 1); animation: launch-fade-in 220ms ease-out both; }
-.app-shell.inspector-open { grid-template-columns: 280px minmax(0, 1fr) 320px; }
+.app-shell { --convos-w: 0px; width: 100%; height: 100%; min-width: 860px; min-height: 560px; display: grid; grid-template-columns: 280px var(--convos-w) minmax(0, 1fr) 0; grid-template-rows: minmax(0, 1fr) auto; background: var(--surface-app); color: var(--text-1); transition: grid-template-columns 220ms cubic-bezier(0.22, 1, 0.36, 1); animation: launch-fade-in 220ms ease-out both; }
+.app-shell.inspector-open { grid-template-columns: 280px var(--convos-w) minmax(0, 1fr) 320px; }
+.app-shell.convos-open { --convos-w: 248px; }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 .sidebar { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface-sidebar); border-right: 1px solid var(--line); }
@@ -361,8 +362,9 @@
 .runtime-context-menu button svg { color: var(--text-2); }
 
 @media (max-width: 1080px) {
-  .app-shell { grid-template-columns: 248px minmax(0, 1fr) 0; }
-  .app-shell.inspector-open { grid-template-columns: 248px minmax(0, 1fr) 296px; }
+  .app-shell { grid-template-columns: 248px var(--convos-w) minmax(0, 1fr) 0; }
+  .app-shell.inspector-open { grid-template-columns: 248px var(--convos-w) minmax(0, 1fr) 296px; }
+  .app-shell.convos-open { --convos-w: 220px; }
   .context-pane > * { min-width: 296px; }
   .context-pane > .context-tabs { min-width: 256px; }
   .model-pill { display: none; }

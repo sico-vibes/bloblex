@@ -491,9 +491,8 @@ describe('side conversations across windows', () => {
     h.listenForActiveSession.mockImplementation(async (handler: (sessionId: string | null) => void) => { handlers.push(handler); return vi.fn() })
     const mainWindow = startApp()
     await mainWindow.settle()
-    await act(async () => { mainWindow.host.querySelector<HTMLButtonElement>('[aria-label="Side conversations"]')!.click() })
-    await mainWindow.settle()
-    await act(async () => { mainWindow.host.querySelector<HTMLButtonElement>('.side-menu-item')!.click() })
+    // The "Messaged" chip opens the conversation between the two bots.
+    await act(async () => { mainWindow.host.querySelector<HTMLButtonElement>('.team-chip')!.click() })
     await mainWindow.settle()
     expect(mainWindow.host.querySelector('.side-header')).not.toBeNull()
     await deliver(mainWindow, 'session-claude')

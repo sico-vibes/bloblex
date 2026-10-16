@@ -196,3 +196,67 @@ export function sideTitle(session: Session, agents: readonly Agent[]) {
   const target = agents.find((agent) => agent.id === session.agentId)?.name ?? 'Teammate'
   return `${peer} and ${target}`
 }
+
+export type ConversationRole = 'sender' | 'receiver' | null
+export interface ConversationNode {
+  session: Session
+  kind: 'main' | 'side'
+  /** For bot-to-bot conversations: whether this bot asked (sender) or was asked (receiver). */
+  role: ConversationRole
+  children: ConversationNode[]
+}
+
+const updatedAtOf = (session: Session) => String(session.updatedAt ?? session.createdAt ?? '')
+
+/**
+ * Every conversation a bot had in its project, as a tree: its own
+ * conversations at the top, and each bot-to-bot conversation under the
+ * conversation that started it (both when this bot asked and when it was
+ * asked). Mirrors the daemon's `agent.conversations`, but from the live session
+ * list so it updates with events and needs no round trip. Newest first.
+ */
+export function conversationTree(sessions: readonly Session[], agentId: string, projectId?: string | null): ConversationNode[] {
+  const rows = sessions.filter((session) => {
+    if (session.archived) return false
+    const kind = String(session.link?.kind ?? '')
+    const mine = session.agentId === agentId && kind !== 'automation' && kind !== 'handoff'
+    const asked = kind === 'side' && session.link?.peerAgentId === agentId
+    if (!mine && !asked) return false
+    // A conversation stamped for another project belongs to that project's view.
+    return !projectId || !session.projectId || session.projectId === projectId
+  })
+  const ids = new Set(rows.map((session) => session.id))
+  const nodes = new Map<string, ConversationNode>(rows.map((session) => {
+    const side = session.link?.kind === 'side'
+    const role: ConversationRole = !side ? null : session.link?.peerAgentId === agentId ? 'sender' : 'receiver'
+    return [session.id, { session, kind: side ? 'side' : 'main', role, children: [] }]
+  }))
+  const roots: ConversationNode[] = []
+  for (const node of nodes.values()) {
+    const link = node.session.link
+    const parentId = node.kind === 'side' ? (link?.spawnedFromSessionId ?? link?.originSessionId) : undefined
+    const parent = parentId && parentId !== node.session.id && ids.has(parentId) ? nodes.get(parentId) : undefined
+    if (parent) parent.children.push(node)
+    else roots.push(node)
+  }
+  const sort = (list: ConversationNode[]) => {
+    list.sort((a, b) => updatedAtOf(b.session).localeCompare(updatedAtOf(a.session)))
+    for (const node of list) sort(node.children)
+  }
+  sort(roots)
+  return roots
+}
+
+/** Ids of every conversation above `sessionId` in the tree, so its branch can be opened. */
+export function ancestorIds(tree: readonly ConversationNode[], sessionId: string | null | undefined): string[] {
+  if (!sessionId) return []
+  const walk = (nodes: readonly ConversationNode[], trail: string[]): string[] | null => {
+    for (const node of nodes) {
+      if (node.session.id === sessionId) return trail
+      const found = walk(node.children, [...trail, node.session.id])
+      if (found) return found
+    }
+    return null
+  }
+  return walk(tree, []) ?? []
+}

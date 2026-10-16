@@ -833,20 +833,21 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.composer-box textarea')?.getAttribute('aria-label')).toBe('Message Invoice helper')
   })
 
-  it('starts a fresh conversation only after confirmation', async () => {
+  it('starts a new conversation next to the old one, without archiving it', async () => {
     const busy = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'm1', role: 'user', content: 'Hello' }] })
-    const fresh = session({ id: 'session-claude-fresh', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T04:00:00.000Z' })
+    const fresh = session({ id: 'session-claude-fresh', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'New chat', updatedAt: '2026-10-02T04:00:00.000Z', messages: [] })
     configure(snapshot({ sessions: [busy, ...sessions.filter((item) => item.id !== 'session-claude')] }))
-    withRpc((method) => method === 'session.archive' ? { session: { ...busy, archived: true } } : method === 'agent.conversation' ? { session: fresh, created: true } : undefined)
+    withRpc((method) => method === 'agent.conversation.create' ? { session: fresh } : undefined)
     const view = startApp()
     await view.settle()
-    await click(buttonNamed(view.host, 'New conversation'))
-    expect(view.host.querySelector('[role="dialog"]')?.textContent).toContain('Start fresh with Claude?')
-    expect(h.rpc).not.toHaveBeenCalledWith('session.archive', expect.anything())
-    await click(buttonNamed(view.host, 'Start fresh'))
+    await click(view.host.querySelector('.chat-header [aria-label="New conversation"]'))
     await view.settle()
-    expect(h.rpc).toHaveBeenCalledWith('session.archive', { sessionId: 'session-claude', archived: true })
-    expect(h.rpc).toHaveBeenCalledWith('agent.conversation', { agentId: 'agent-claude' })
+    expect(view.host.querySelector('[role="dialog"]')).toBeNull()
+    expect(h.rpc).toHaveBeenCalledWith('agent.conversation.create', { agentId: 'agent-claude' })
+    expect(h.rpc).not.toHaveBeenCalledWith('session.archive', expect.anything())
+    // Both conversations are listed in the bot's conversations column.
+    const titles = [...view.host.querySelectorAll('.conversations-panel .convo-title')].map((node) => node.textContent)
+    expect(titles).toEqual(expect.arrayContaining(['New chat', 'Landing page copy']))
   })
 
   it('shows a context reset as a divider and flags lost context', async () => {

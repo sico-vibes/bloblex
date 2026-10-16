@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import {
   Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, Copy, CornerDownRight, FileDown, FileText, FolderOpen, FolderPlus, Hash, Import,
-  Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelRight, Paperclip, Plus,
+  Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus,
   RefreshCw, RotateCw, Search, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X,
 } from 'lucide-react'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
@@ -26,7 +26,7 @@ import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, isAu
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
-import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, SideConversationMenu, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
+import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, CompanionTeammatesSetting, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { NeedsYouBadge, PermissionQueueBar, nextWaitingAgent, waitingAgentsOf } from './CompanionAttention'
 import { CompanionActivitySummary, CompanionRemoteRow, useWorkingSince, CompanionSettingCopy } from './CompanionPanels'
@@ -40,6 +40,7 @@ import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { applySoundPrefs, saveSoundsEnabled, saveSoundVolume, soundPrefsFromSettings, subscribeSoundPrefs, SOUNDS_CHANGED_EVENT, SOUND_VOLUME_CHANGED_EVENT } from './soundPrefs'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
 import { fetchCached, invalidateCatalog } from './catalogCache'
+import { ConversationsPanel } from './ConversationsPanel'
 import { conversationPlaceName, hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
@@ -233,7 +234,6 @@ export function App() {
   const [sideSessionId, setSideSessionId] = useState<string | null>(null)
   const [textPrompt, setTextPrompt] = useState<{ title: string; label: string; value: string; confirmLabel: string; onSubmit: (value: string) => void | Promise<void> } | null>(null)
   const [projectDelete, setProjectDelete] = useState<Project | null>(null)
-  const [freshTarget, setFreshTarget] = useState<Agent | null>(null)
   const [mention, setMention] = useState<{ start: number; query: string; index: number } | null>(null)
   /** The `#conversation` being typed, and the side conversations already referenced in the draft. */
   const [hashRef, setHashRef] = useState<{ start: number; query: string; index: number } | null>(null)
@@ -345,6 +345,9 @@ export function App() {
   }, [])
   const [permissionClock, setPermissionClock] = useState(() => Date.now())
   const [inspectorOpen, setInspectorOpen] = useState(() => storageFlag('bloblex.inspector.open'))
+  /** The per-bot conversations column; open unless it was closed before. */
+  const [convosOpen, setConvosOpen] = useState(() => { try { return localStorage.getItem('bloblex.conversations.open') !== '0' } catch { return true } })
+  const setConvosVisible = (open: boolean) => { setConvosOpen(open); try { localStorage.setItem('bloblex.conversations.open', open ? '1' : '0') } catch { /* preference only */ } }
   const [search, setSearch] = useState('')
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false)
   const openQuickSwitcher = useCallback(() => setQuickSwitcherOpen(true), [])
@@ -1439,14 +1442,39 @@ export function App() {
   }
 
   /** One conversation per blob: "new" opens it, or asks before starting fresh. */
+  /**
+   * A new conversation with the bot, next to the existing ones (nothing is
+   * archived). It is saved at once and its coding agent starts with the first
+   * message. An empty open conversation is reused instead of adding another.
+   */
   const newSession = (agentId?: string, _anchor?: HTMLElement | null) => {
     const agent = agents.find((item) => item.id === (agentId ?? activeSelectedAgent?.id) && !item.archived)
     const runtime = agent ? runtimes.find((item) => item.id === agent.runtimeId) : null
-    if (!agent || connection !== 'connected' || busy || !runtimeUsable(runtime)) return
-    const main = mainSessionFor(sessions, agent.id)
-    if (!main) { selectAgent(agent); return }
-    if ((main.messages ?? []).length === 0) { selectAgent(agent); return }
-    setFreshTarget(agent)
+    if (!agent || connection !== 'connected' || !runtimeUsable(runtime)) return
+    const current = agent.id === activeSelectedAgent?.id ? selectedSession : mainSessionFor(sessions, agent.id)
+    if (current && !isSideSession(current) && (current.messages ?? []).length === 0 && current.agentId === agent.id) { selectAgent(agent); return }
+    void createConversation(agent)
+  }
+  const createConversation = async (agent: Agent) => {
+    try {
+      const result = await rpc<{ session?: Session }>('agent.conversation.create', { agentId: agent.id })
+      if (!result.session?.id) return
+      upsertSession(result.session)
+      setSideSessionId(null)
+      setSelectedAgentId(agent.id)
+      setSelectedSessionId(result.session.id)
+      void setActiveSession(result.session.id)
+      setRosterAnnouncement(`Started a new conversation with ${agent.name}.`)
+      requestAnimationFrame(() => composerRef.current?.focus())
+    } catch (reason) { setError(messageOf(reason)) }
+  }
+  const renameConversation = async (session: Session, title: string) => {
+    try { await rpc('session.rename', { sessionId: session.id, title }); await refresh() } catch (reason) { setError(messageOf(reason)) }
+  }
+  const selectConversation = (session: Session) => {
+    setSideSessionId(null)
+    setSelectedSessionId(session.id)
+    void setActiveSession(session.id)
   }
 
   const setPlanMode = async (enabled: boolean) => {
@@ -1853,17 +1881,6 @@ export function App() {
       return result.session
     } catch { return null } finally { ensuringConversation.current.delete(agent.id) }
   }
-  /** Archives the blob's conversation and starts a fresh one in the same place. */
-  const startFresh = async (agent: Agent) => {
-    const main = mainSessionFor(sessions, agent.id)
-    try {
-      if (main) await doRpc('session.archive', { sessionId: main.id, archived: true })
-      setSideSessionId(null)
-      setSnapshot((current) => current ? { ...current, sessions: (current.sessions ?? []).map((item) => item.id === main?.id ? { ...item, archived: true } : item) } : current)
-      const session = await ensureConversation(agent)
-      if (session) setRosterAnnouncement(`Started a fresh conversation with ${agent.name}.`)
-    } catch { /* inline */ }
-  }
   const openSideConversation = (sessionId: string | undefined | null) => {
     if (!sessionId) return
     if (!sideSessionId) sideReturn.current = { agentId: activeSelectedAgent?.id ?? null, sessionId: selectedSession?.id ?? null }
@@ -2166,7 +2183,7 @@ export function App() {
   if (launchVisible && !companion) return <LaunchIntro checks={launchChecks} runtimes={runtimes} agent={activeSelectedAgent} serviceDown={launchServiceDown} onRetry={retryLaunch} onContinueOffline={() => { setConnection('disconnected'); finishLaunch() }} onComplete={finishLaunch} />
   if (onboardingVisible && !companion) return <FirstRunOnboarding runtimes={runtimes} scanning={discoveryStatus.scanning} error={error} onScan={() => void refreshRuntimes()} onCreate={createOnboardedBlob} onFinish={finishOnboarding} onSaveName={saveProfileName} />
   return (
-    <main className={`app-shell ${detailsVisible ? 'inspector-open' : ''} ${reducedLaunchFade ? 'reduced-launch-fade' : ''}`} style={{ ...(accent ? { '--agent-accent': accent } : {}), ...(reducedLaunchFade ? { '--launch-fade-duration': '180ms' } : {}) } as React.CSSProperties}>
+    <main className={`app-shell ${detailsVisible ? 'inspector-open' : ''} ${convosOpen && activeSelectedAgent && !schedulesOpen ? 'convos-open' : ''} ${reducedLaunchFade ? 'reduced-launch-fade' : ''}`} style={{ ...(accent ? { '--agent-accent': accent } : {}), ...(reducedLaunchFade ? { '--launch-fade-duration': '180ms' } : {}) } as React.CSSProperties}>
       <aside className="sidebar" aria-label="Agents">
         <div className="sidebar-top">
           <div className="brand-lockup"><img className="brand-logo" src={bloblexLogo} alt="Bitbots logo" /><strong>Bitbots</strong></div>
@@ -2221,6 +2238,10 @@ export function App() {
         />
       </aside>
 
+      {activeSelectedAgent
+        ? <ConversationsPanel agent={activeSelectedAgent} agents={agents} sessions={sessions} selectedSessionId={selectedSession?.id ?? null} sideSessionId={sideSessionId} canCreate={connection === 'connected' && runtimeReady} onSelect={selectConversation} onOpenSide={openSideConversation} onNew={() => newSession()} onRename={renameConversation} onDelete={(session) => setSessionDeleteTarget(session)} onClose={() => setConvosVisible(false)} />
+        : <aside className="conversations-panel" aria-hidden="true" />}
+
       <section className="conversation-pane">
         {platform.updater && updateOffer.version && <UpdateAvailableBanner version={updateOffer.version} onView={() => { setSettingsInitialPage('General'); setSettingsFocus('updates'); setSettingsSheet(true) }} onLater={updateOffer.dismiss} />}
         {(launchWarnings.length > 0 || discoveryStatus.retrying) && !agentWarningDismissed && <LaunchWarnings warnings={launchWarnings} retrying={discoveryStatus.retrying} onSettings={() => { setSettingsInitialPage('Agents'); setSettingsSheet(true) }} onDismiss={() => setAgentWarningDismissed(true)} />}
@@ -2233,11 +2254,11 @@ export function App() {
               : activeSelectedAgent
                 ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title={`${Noun} settings`} onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button><RuntimeProblemMarker runtime={selectedRuntime} onOpenSettings={() => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) }} />{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}{experiments.autoTitles && selectedSession?.title && selectedSession.title !== activeSelectedAgent.name && <span className="conversation-auto-title" title={selectedSession.title}>{selectedSession.title}</span>}</>
                 : hasActiveBlobs ? <strong className="chat-title-text">{agentName}</strong> : null}
-            {!sideSession && activeSelectedAgent && <SideConversationMenu sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent.id} onOpen={openSideConversation} />}
           </div>
           <div className="header-actions" hidden={!hasActiveBlobs && !selectedSession}>
             <ApprovalPill mode={headerMode} />
             {!sideSession && <button className="icon-button" title={conversationEmpty ? 'This conversation is already fresh' : 'Start a fresh conversation'} aria-label="New conversation" disabled={!canStartSession || conversationEmpty} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>}
+            {activeSelectedAgent && !convosOpen && <button className="icon-button" title="Show conversations" aria-label="Show conversations" onClick={() => setConvosVisible(true)}><PanelLeft size={16} /></button>}
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setMoreOpen(false); restoreMoreFocus() } }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
@@ -2420,7 +2441,6 @@ export function App() {
       {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bitbots. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm successTitle="Conversation deleted" successBody={experiments.undo ? "Deletion is scheduled. Use Undo within eight seconds to keep the conversation." : "This conversation and its messages were removed from Bitbots."} onConfirm={async () => { if (experiments.undo) await deleteConversation(sessionDeleteTarget); else await rpc('session.delete', { sessionId: sessionDeleteTarget.id }) }} onComplete={() => { setSessionDeleteTarget(null); focusSidebarBlob() }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
       {textPrompt && <TextPromptDialog {...textPrompt} onCancel={() => setTextPrompt(null)} onSubmit={async (value) => { try { await textPrompt.onSubmit(value); setTextPrompt(null) } catch (reason) { setError(messageOf(reason)) } }} />}
       {projectDelete && <ConfirmDialog title={`Delete ${projectDelete.name}?`} body={`The project is removed from Bitbots. Its ${nouns} move to Unassigned and the folder on disk is not touched.`} confirmLabel="Delete project" cancelLabel="Keep it" tone="danger" onConfirm={() => { const project = projectDelete; setProjectDelete(null); const memberIds = agents.filter((agent) => agent.projectId === project.id).map((agent) => agent.id); if (experiments.undo) void removeProject(project, memberIds); else void projectAction('project.delete', { projectId: project.id }) }} onCancel={() => setProjectDelete(null)} />}
-      {freshTarget && <ConfirmDialog title={`Start fresh with ${freshTarget.name}?`} body="The current conversation is archived and a new one begins in the same place. Use this when the context is full or you want a clean slate." confirmLabel="Start fresh" cancelLabel="Keep chatting" onConfirm={() => { const agent = freshTarget; setFreshTarget(null); void startFresh(agent) }} onCancel={() => setFreshTarget(null)} />}
       {pendingBlobImport && <ImportBlobDialog blob={pendingBlobImport} runtimes={runtimes} onCancel={() => { setPendingBlobImport(null); restoreCreateFocus() }} onCreate={(runtimeId) => createImportedBlob(pendingBlobImport, runtimeId)} />}
     </main>
   )

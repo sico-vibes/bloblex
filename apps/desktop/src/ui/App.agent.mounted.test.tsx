@@ -1205,6 +1205,12 @@ describe('opt-in conversation experiments', () => {
     expect(view.host.querySelector('.message-row.user.pending')).toBeNull()
     expect(textarea.value).toBe('Run the tests')
   })
+  it('warms the open conversation so the first message does not wait for the coding agent', async () => {
+    prepare(true)
+    const view = startApp(); await view.settle()
+    await act(async () => { await vi.advanceTimersByTimeAsync(450) })
+    expect(h.rpc).toHaveBeenCalledWith('session.warm', { sessionId: 'session-claude' })
+  })
   it('applies the daemon reaction event to the correct message badge', async () => {
     prepare(true)
     const originalRpc = h.rpc.getMockImplementation()!

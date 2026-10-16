@@ -1127,6 +1127,16 @@ export function App() {
     }
   }, [activeSelectedAgent, selectedSession, selectedRuntimeId, activeSessionId, selectedSessionId])
 
+  // Start the open conversation's coding agent a moment after it is shown, so the
+  // first message does not wait for it. The daemon refuses side, archived and
+  // busy conversations and keeps at most two warmed, so this is cheap to ask.
+  const warmSessionId = !companion && connection === 'connected' && selectedSession && !sideSession && !selectedSession.archived ? selectedSession.id : null
+  useEffect(() => {
+    if (!warmSessionId) return
+    const timer = window.setTimeout(() => { void rpc('session.warm', { sessionId: warmSessionId }).catch(() => undefined) }, 400)
+    return () => window.clearTimeout(timer)
+  }, [warmSessionId])
+
   useEffect(() => {
     if (!snapshot || !selectedSessionId || sessions.some((session) => session.id === selectedSessionId)) return
     setSelectedSessionId(selectedSession?.id ?? null)
@@ -2281,6 +2291,7 @@ export function App() {
                 ? <QuestionCard request={activePermission} onAnswer={(answers) => answerQuestion(activePermission, answers)} onDismiss={() => void answerQuestion(activePermission, null)} />
                 : <ApprovalCard permission={activePermission} focusOnMount={approvalFocusOnMount} onReply={(choice) => answerPermission(activePermission, choice)} />)}
               {!sideSession && lastTurnWasPlan && !latestPlanId && <div className="plan-ready-bar" role="status"><span>Plan mode is on. Approve the plan to let {agentName} start building.</span><button type="button" className="primary-button small" onClick={() => void approvePlan()}>Approve &amp; build</button></div>}
+              {selectedSession.state === 'starting' && <div className="working-indicator starting" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>Starting {agentName}…</div>}
               {selectedSession.state === 'working' && <div className="working-indicator" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>{agentName} is working</div>}
               </div>
             </div>

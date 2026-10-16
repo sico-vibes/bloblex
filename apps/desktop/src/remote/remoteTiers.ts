@@ -107,6 +107,7 @@ export const METHOD_RULES: readonly MethodRule[] = [
   { method: 'daemon.health', class: 'read', minTier: READ, why: 'Daemon version, uptime and heartbeat; it carries no user data.' },
   { method: 'session.list', class: 'read', minTier: READ, why: 'Lists conversations so the device can show what is running.' },
   { method: 'session.get', class: 'read', minTier: READ, why: 'Reads one conversation and its history.' },
+  { method: 'session.environment', class: 'read', minTier: READ, why: 'Shows where a conversation works.' },
   { method: 'runtime.list', class: 'read', minTier: READ, why: 'Lists the coding agents installed on the host.' },
   { method: 'runtime.capabilities', class: 'read', minTier: READ, why: 'Describes which execution settings a runtime supports.' },
   { method: 'runtime.models', class: 'read', minTier: READ, why: 'Lists the models a runtime offers so the device can show the choices.', params: runtimeModelsRule },
@@ -513,6 +514,7 @@ export const EVENT_POLICY: Readonly<Record<string, EventPolicy>> = {
   'daemon.health': 'allow',
   'events.replay.complete': 'allow',
   'replay.gap': 'allow',
+  'runtime.models.changed': 'allow',
   // drop (never sent)
   'automation.changed': 'drop',
   'automation.deleted': 'drop',

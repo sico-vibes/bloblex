@@ -540,6 +540,21 @@ fn ensure_memory_schema(c: &Connection) -> Result<(), StorageError> {
 
 const MEMORY_COLUMNS: &str = "id,scope,scope_id,kind,title,body,tags,importance,pinned,origin,reviewed,source_session_id,version,created_at,updated_at,deleted_at";
 
+/// Model catalog cache schema. Additive and idempotent like the other
+/// `ensure_*` functions, so it runs on every open without a `user_version` bump.
+fn ensure_model_catalog_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS model_catalog_cache(
+            key TEXT PRIMARY KEY,
+            runtime_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            value_json TEXT NOT NULL CHECK(json_valid(value_json))
+        );",
+    )?;
+    Ok(())
+}
+
 fn memory_dto_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     let tags: String = row.get(6)?;
     Ok(json!({
@@ -1029,6 +1044,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_model_catalog_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==11 {
@@ -1039,6 +1055,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_model_catalog_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==10 {
@@ -1050,6 +1067,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_model_catalog_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1064,6 +1082,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_model_catalog_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1173,6 +1192,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_model_catalog_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -1535,6 +1555,31 @@ impl Storage {
         vals.into_iter()
             .map(|v| Ok(serde_json::from_str(&v)?))
             .collect()
+    }
+    /// Read one persisted model catalog. A hit counts as stale downstream.
+    pub fn catalog_cache_get(&self, key: &str) -> Result<Option<(String, Value)>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT fetched_at,value_json FROM model_catalog_cache WHERE key=?1")?;
+        let row = q.query_row([key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).optional()?;
+        row.map(|(fetched_at, value)| Ok((fetched_at, serde_json::from_str::<Value>(&value)?))).transpose()
+    }
+    /// Persist one model catalog under its cache key.
+    pub fn catalog_cache_put(&self, key: &str, runtime_id: &str, provider: &str, fetched_at: &str, value: &Value) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute(
+            "INSERT INTO model_catalog_cache(key,runtime_id,provider,fetched_at,value_json) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(key) DO UPDATE SET runtime_id=excluded.runtime_id,provider=excluded.provider,fetched_at=excluded.fetched_at,value_json=excluded.value_json",
+            params![key, runtime_id, provider, fetched_at, value.to_string()],
+        )?;
+        Ok(())
+    }
+    /// Drop persisted catalogs for one runtime, or every runtime when `None`.
+    pub fn catalog_cache_clear(&self, runtime_id: Option<&str>) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        match runtime_id {
+            Some(runtime_id) => { c.execute("DELETE FROM model_catalog_cache WHERE runtime_id=?1", [runtime_id])?; }
+            None => { c.execute("DELETE FROM model_catalog_cache", [])?; }
+        }
+        Ok(())
     }
     pub fn create_session(
         &self,

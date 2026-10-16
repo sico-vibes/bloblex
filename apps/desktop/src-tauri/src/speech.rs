@@ -10,14 +10,15 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use bloblex_speech::capture::{start_capture, AudioFrame};
 use bloblex_speech::cloud::{
-    auth_status, resolve_engine, AudioBuffer, CloudCooldown, CloudError, CloudTranscriber,
-    EnginePreference, ResolvedEngine, BOTH_ENGINES_UNAVAILABLE, CLOUD_SAMPLE_RATE, MAX_BUFFER_SAMPLES,
+    auth_status, resolve_engine, warm, AudioBuffer, AuthState, CloudCooldown, CloudError,
+    CloudTranscriber, EnginePreference, ResolvedEngine, WarmReport, BOTH_ENGINES_UNAVAILABLE,
+    CLOUD_SAMPLE_RATE, MAX_BUFFER_SAMPLES,
 };
 use bloblex_speech::{
     catalog, downmix_to_mono, get_catalog_model, model_manager, resample_to_rate, rms_level,
@@ -471,13 +472,49 @@ fn load_local_engine(
 }
 
 /// Transcribe 16 kHz mono samples through ChatGPT, blocking this worker thread.
-fn transcribe_cloud(samples: &[f32]) -> Result<String, CloudError> {
-    let transcriber = CloudTranscriber::new();
-    let runtime = tokio::runtime::Builder::new_current_thread()
+/// One long-lived runtime serves every cloud dictation, so the shared client's
+/// keep-alive connections survive between them.
+static CLOUD_RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn cloud_runtime() -> Result<&'static tokio::runtime::Runtime, CloudError> {
+    if let Some(runtime) = CLOUD_RT.get() {
+        return Ok(runtime);
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
         .enable_all()
         .build()
         .map_err(|_| CloudError::Unavailable)?;
+    Ok(CLOUD_RT.get_or_init(|| runtime))
+}
+
+fn transcribe_cloud(samples: &[f32]) -> Result<String, CloudError> {
+    let transcriber = CloudTranscriber::new();
+    let runtime = cloud_runtime()?;
     runtime.block_on(transcriber.transcribe_samples(samples, None))
+}
+
+/// The status-only warm-up result the UI reads: no token, no email. `signedIn`
+/// is true only when the Codex login is usable (ready or an API key).
+fn cloud_warm_payload(report: &WarmReport) -> Value {
+    json!({
+        "clientReady": report.client_ready,
+        "signedIn": matches!(report.auth.state, AuthState::Ready | AuthState::ApiKey),
+        "dnsOk": report.dns_ok,
+    })
+}
+
+/// Warm the cloud dictation path at boot: build the shared client, read the
+/// Codex login state and resolve DNS, all without sending any request to the
+/// endpoint. Status only; the token, audio and transcript are never returned.
+#[tauri::command]
+pub async fn dictation_cloud_warm() -> Result<Value, String> {
+    let runtime = cloud_runtime().map_err(|error| error.to_string())?;
+    let report = runtime
+        .spawn(warm())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(cloud_warm_payload(&report))
 }
 
 /// Feed the buffered samples through the local engine after a cloud failure.
@@ -793,8 +830,37 @@ pub fn dictation_state(state: State<'_, SpeechState>) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cloud_failure_events, cloud_failure_message};
-    use bloblex_speech::cloud::CloudError;
+    use super::{cloud_failure_events, cloud_failure_message, cloud_warm_payload};
+    use bloblex_speech::cloud::{AuthState, AuthStatus, CloudError, WarmReport};
+
+    #[test]
+    fn cloud_warm_payload_is_status_only() {
+        let missing = WarmReport {
+            client_ready: true,
+            auth: AuthStatus {
+                state: AuthState::Missing,
+                mode: None,
+                expires_at: None,
+            },
+            dns_ok: false,
+        };
+        let payload = cloud_warm_payload(&missing);
+        assert_eq!(payload["clientReady"], true);
+        assert_eq!(payload["signedIn"], false, "no auth file is not signed in");
+        assert_eq!(payload["dnsOk"], false);
+        assert!(payload.get("token").is_none() && payload.get("email").is_none());
+
+        let ready = WarmReport {
+            client_ready: false,
+            auth: AuthStatus {
+                state: AuthState::Ready,
+                mode: None,
+                expires_at: None,
+            },
+            dns_ok: true,
+        };
+        assert_eq!(cloud_warm_payload(&ready)["signedIn"], true);
+    }
 
     #[test]
     fn cloud_failure_events_announce_only_a_used_fallback() {

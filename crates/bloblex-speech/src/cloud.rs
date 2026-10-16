@@ -144,15 +144,29 @@ fn cloud_tls_config() -> Result<rustls::ClientConfig, CloudError> {
 }
 
 /// The HTTP client every cloud transcription call uses: HTTP/1.1 only, no
-/// ALPN, no redirects, one total request budget.
-fn build_cloud_client(timeout: Duration) -> Result<reqwest::Client, CloudError> {
+/// ALPN, no redirects. It carries **no fixed overall timeout**, so one client
+/// can serve many requests with different budgets and keep-alive connections
+/// survive between dictations; each request sets its own budget through
+/// `RequestBuilder::timeout`.
+fn build_cloud_client() -> Result<reqwest::Client, CloudError> {
     reqwest::Client::builder()
         .use_preconfigured_tls(cloud_tls_config()?)
         .http1_only()
-        .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| CloudError::Unavailable)
+}
+
+/// The one shared cloud client, built on first use. Reusing it keeps the
+/// connection pool and the rustls setup warm across dictations.
+static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn cloud_client() -> Result<&'static reqwest::Client, CloudError> {
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = build_cloud_client()?;
+    Ok(CLIENT.get_or_init(|| client))
 }
 
 /// How the user asked dictation to run.
@@ -893,10 +907,12 @@ impl CloudTranscriber {
 
         let boundary = make_boundary();
         let body = build_multipart(&boundary, wav, CLOUD_MODEL, prompt);
-        let client = build_cloud_client(self.timeout)?;
+        let client = cloud_client()?;
+        let timeout = self.timeout;
         let send = || {
             let mut request = client
                 .post(url.as_str())
+                .timeout(timeout)
                 .header(
                     reqwest::header::CONTENT_TYPE,
                     format!("multipart/form-data; boundary={boundary}"),
@@ -987,6 +1003,31 @@ impl Default for CloudTranscriber {
     }
 }
 
+/// What the cloud dictation warm-up found. Status only: it never carries a
+/// token, an email, audio or a transcript, and building it sends no request to
+/// the transcription endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WarmReport {
+    pub client_ready: bool,
+    pub auth: AuthStatus,
+    pub dns_ok: bool,
+}
+
+/// Prepare cloud dictation without contacting ChatGPT: build or reuse the shared
+/// client (and its rustls config), read the Codex login state (keeping no token)
+/// and resolve `chatgpt.com:443`. A missing client or a failed lookup is
+/// reported, not raised, and nothing here reaches the transcription endpoint.
+pub async fn warm() -> WarmReport {
+    let client_ready = cloud_client().is_ok();
+    let auth = auth_status();
+    let dns_ok = tokio::net::lookup_host(("chatgpt.com", 443u16)).await.is_ok();
+    WarmReport {
+        client_ready,
+        auth,
+        dns_ok,
+    }
+}
+
 async fn read_capped(response: &mut reqwest::Response) -> Result<Vec<u8>, CloudError> {
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| CloudError::Unavailable)? {
@@ -1027,7 +1068,30 @@ mod tests {
     /// The client is built with the no-ALPN rustls config and HTTP/1.1 only.
     #[test]
     fn build_cloud_client_succeeds() {
-        assert!(build_cloud_client(Duration::from_secs(5)).is_ok());
+        assert!(build_cloud_client().is_ok());
+    }
+
+    /// The client is a process-wide singleton, so its connection pool and rustls
+    /// setup are reused between dictations.
+    #[test]
+    fn cloud_client_is_a_shared_singleton() {
+        let first = cloud_client().expect("client builds");
+        let second = cloud_client().expect("client builds");
+        assert!(std::ptr::eq(first, second), "two calls must return the same client");
+    }
+
+    /// Warm-up reads the login state without a request to the endpoint. With no
+    /// auth file it reports Missing; the DNS step is reported, not raised.
+    #[tokio::test]
+    async fn warm_reports_status_without_contacting_the_endpoint() {
+        let report = tokio::time::timeout(Duration::from_secs(20), warm())
+            .await
+            .expect("warm() must not hang");
+        assert!(report.client_ready, "the shared client builds");
+        if default_auth_path().map(|path| !path.exists()).unwrap_or(true) {
+            assert_eq!(report.auth.state, AuthState::Missing);
+        }
+        let _ = report.dns_ok;
     }
 
     fn encode_segment(bytes: &[u8]) -> String {

@@ -182,6 +182,7 @@ describe('remote event policy parity with the daemon', () => {
       'queue.changed',
       'quota.updated',
       'replay.gap',
+      'runtime.models.changed',
       'session.changed',
       'session.deleted',
       'turn.cancelled',

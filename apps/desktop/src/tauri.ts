@@ -288,6 +288,12 @@ export async function dictationModelStatus(modelId: string): Promise<{ modelId: 
   return invoke<{ modelId: string; ready: boolean; sizeBytes: number }>('speech_model_status', { modelId })
 }
 
+/** Warm the cloud dictation path (client, sign-in, DNS) without sending a request. */
+export async function dictationCloudWarm(): Promise<{ clientReady: boolean; signedIn: boolean; dnsOk: boolean }> {
+  if (!inDesktop) return { clientReady: false, signedIn: false, dnsOk: false }
+  return invoke<{ clientReady: boolean; signedIn: boolean; dnsOk: boolean }>('dictation_cloud_warm')
+}
+
 export async function downloadSpeechModel(modelId: string): Promise<{ modelId: string; directory: string }> {
   if (!inDesktop) throw new Error('Speech models are available only in the desktop app.')
   return invoke<{ modelId: string; directory: string }>('speech_model_download', { modelId })

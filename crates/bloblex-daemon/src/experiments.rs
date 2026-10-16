@@ -4,7 +4,7 @@ use std::path::{Component, Path};
 use std::process::{Command, Stdio};
 
 /// Git started by the background daemon must not flash a console window on Windows.
-fn git_command() -> Command {
+pub(crate) fn git_command() -> Command {
     let mut command = Command::new("git");
     #[cfg(windows)]
     {

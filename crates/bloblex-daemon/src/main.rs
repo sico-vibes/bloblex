@@ -24,15 +24,18 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, HashSet}, future::IntoFuture, net::SocketAddr, path::PathBuf, sync::{Arc, OnceLock, Mutex as StdMutex},
+    collections::{HashMap, HashSet}, future::IntoFuture, net::SocketAddr, path::PathBuf, sync::Arc,
     time::Instant,
 };
 use tokio::{
     net::TcpListener,
     sync::{broadcast, Mutex, RwLock},
 };
+#[cfg(test)]
+use std::sync::Mutex as StdMutex;
 use uuid::Uuid;
 
+mod catalog;
 mod mcp_bridge;
 mod model_presentation;
 mod team;
@@ -47,8 +50,6 @@ mod questions;
 
 use quota::{normalize_codex_quota, PollFailure, PollOutcome, QuotaPollGate, QUOTA_POLL_INTERVAL, QUOTA_REQUEST_TIMEOUT};
 
-static MODEL_CATALOG_CACHE: OnceLock<StdMutex<HashMap<String, (Instant, Value)>>> = OnceLock::new();
-
 #[derive(Clone)]
 struct AppState {
     token: Arc<String>,
@@ -56,6 +57,7 @@ struct AppState {
     db: Arc<Storage>,
     events: broadcast::Sender<EventEnvelope>,
     runtimes: Arc<RwLock<Vec<Value>>>,
+    catalog: Arc<catalog::CatalogCache>,
     // Cache entry (fetch time plus discovery rows) reads clearer inline than as a one-use alias.
     #[allow(clippy::type_complexity)]
     discovery: Arc<Mutex<Option<(Instant, Vec<Value>)>>>,
@@ -422,6 +424,14 @@ async fn publish_runtime_discovery(
     Ok(values)
 }
 
+/// Seed `st.runtimes` from the saved rows before discovery finishes, so a send
+/// immediately after boot can still resolve its runtime.
+async fn load_saved_runtimes(st: &AppState) {
+    if let Ok(saved) = st.db.runtimes() {
+        *st.runtimes.write().await = saved;
+    }
+}
+
 // A launch refresh joins startup discovery instead of spawning duplicate CLI probes.
 async fn refresh_runtime_discovery(st: &AppState, work: impl std::future::Future<Output = Vec<bloblex_runtime::DiscoveredRuntime>>) -> Result<Vec<Value>, bloblex_storage::StorageError> {
     let requested = Instant::now();
@@ -660,7 +670,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let mut effective = existing.clone();
             if let (Some(dst), Some(src)) = (effective.as_object_mut(), fields.as_object()) { for (key, value) in src { dst.insert(key.clone(), value.clone()); } }
             if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id).cloned() {
-                if let Ok(catalog) = fetch_model_catalog(st, &runtime, false).await {
+                if let Ok(Some(served)) = catalog::get(st, &runtime, None, None, catalog::Mode::Fresh).await {
+                    let catalog = served.value;
                     if let Some(normalized) = normalize_model_fields(catalog["provider"].as_str().unwrap_or(""), &effective, &catalog) {
                         if let Some(target) = fields.as_object_mut() { for (key, value) in normalized.as_object().unwrap() { target.insert(key.clone(), value.clone()); } }
                         if let (Some(destination), Some(source)) = (effective.as_object_mut(), normalized.as_object()) { for (key, value) in source { destination.insert(key.clone(), value.clone()); } }
@@ -716,7 +727,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         }
         "runtime.list" => Ok(json!({"runtimes":*st.runtimes.read().await})),
         "runtime.refresh" => {
+            st.catalog.invalidate_all();
             let values = refresh_runtime_discovery(st, bloblex_runtime::discover()).await.map_err(|_| derr("internal", "Could not save the coding agent scan.", StatusCode::INTERNAL_SERVER_ERROR))?;
+            let prewarm = st.clone();
+            tokio::spawn(async move { catalog::prewarm_all(&prewarm).await; });
             Ok(json!({"runtimes":values}))
         }
         "quota.list" => st.db.quota_snapshots().map(|quotas| json!({"quotas":quotas})).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)),
@@ -865,6 +879,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             .db
             .session_detail(p["sessionId"].as_str().unwrap_or(""))
             .map_err(|e| derr("not_found", &e.to_string(), StatusCode::NOT_FOUND)),
+        "session.environment" => session_environment(st,&p).await,
         "session.new" => new_session(st, p).await,
         "session.resume" => resume_session(st, p).await,
         "session.model.update" => update_session_model(st, p).await,
@@ -1210,7 +1225,9 @@ async fn resolve_session_model_lock(
     mut options: ExecOptions,
 ) -> (ExecOptions, Value) {
     let catalog = if options.model.is_none() || options.thinking.is_none() {
-        fetch_model_catalog(st, runtime, false).await.ok().filter(|catalog| catalog["validated"] == true && catalog["fallback"] != true)
+        catalog::get(st, runtime, None, None, catalog::Mode::CachedOnly).await.ok().flatten()
+            .map(|served| served.value)
+            .filter(|catalog| catalog["validated"] == true && catalog["fallback"] != true)
     } else { None };
     if let Some(catalog) = catalog {
         let models = catalog["models"].as_array().cloned().unwrap_or_default();
@@ -1256,18 +1273,6 @@ async fn active_for_agent(st:&AppState,agent_id:&str)->u32{
     let sessions=st.active_turns.lock().await.keys().cloned().collect::<Vec<_>>();let mut n=0;
     for sid in sessions{if st.db.session_detail(&sid).is_ok_and(|v|v["agentId"]==agent_id){n+=1;}}n
 }
-fn catalog_key(runtime: &Value) -> String {
-    format!("{}|{}|{}|{}|{}", runtime["id"].as_str().unwrap_or(""), runtime["executablePath"].as_str().unwrap_or(""), runtime["version"].as_str().unwrap_or(""), serde_json::to_string(&runtime["launchArgs"]).unwrap_or_default(), runtime["profileId"].as_str().unwrap_or(""))
-}
-fn catalog_probe_args(provider: &str, workflows: bool, model_hint: Option<&str>) -> Vec<String> {
-    let mut args = Vec::new();
-    if provider == "claude" {
-        let model = model_hint.or_else(|| workflows.then_some("sonnet"));
-        if let Some(model) = model { args.extend(["--model".into(), model.into()]); }
-        if workflows { args.extend(["--settings".into(), r#"{"enableWorkflows":true}"#.into()]); }
-    }
-    args
-}
 fn session_catalog_probe(session: &Value) -> (bool, Option<String>) {
     let enabled = session["provider"] == "claude" && session["modelLock"]["enableWorkflows"] == true;
     let model = session["modelLock"]["model"].as_str().map(str::to_owned);
@@ -1280,30 +1285,6 @@ fn normalized_catalog_model_hint(provider: &str, hint: Option<String>) -> Option
     } else { Some(value) }
 }
 fn provider_display_name(provider: &str) -> &'static str { match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" } }
-async fn fetch_model_catalog(st: &AppState, runtime: &Value, refresh: bool) -> Result<Value, DispatchError> {
-    fetch_model_catalog_for(st, runtime, refresh, None, None).await
-}
-
-async fn fetch_model_catalog_for(st: &AppState, runtime: &Value, refresh: bool, workflow_override: Option<bool>, model_hint: Option<&str>) -> Result<Value, DispatchError> {
-    let workflows = runtime["provider"] == "claude" && workflow_override.unwrap_or_else(|| st.db.settings().map(|settings| claude_workflows_enabled(&settings)).unwrap_or(true));
-    let mut spec = runtime_from(runtime);
-    let effective_model_hint = model_hint.or_else(|| (runtime["provider"] == "claude" && workflows).then_some("sonnet"));
-    spec.args.extend(catalog_probe_args(runtime["provider"].as_str().unwrap_or(""), workflows, effective_model_hint));
-    let key = format!("{}|claude-workflows={workflows}|model={}", catalog_key(runtime), effective_model_hint.unwrap_or(""));
-    let cache = MODEL_CATALOG_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
-    if !refresh { if let Ok(cache) = cache.lock() { if let Some((at, value)) = cache.get(&key) { if at.elapsed() < std::time::Duration::from_secs(60) { return Ok(value.clone()); } } } }
-    let provider = runtime["provider"].as_str().unwrap_or("");
-    let adapter = adapter_for(&st.adapters, provider).ok_or_else(|| derr("unsupported", "model catalogs are unsupported for this runtime", StatusCode::BAD_REQUEST))?;
-    let mut catalog = adapter.model_catalog(&spec).await.map_err(|e| match e {
-        bloblex_agent_core::AdapterError::Unsupported(_) => derr("unsupported", "model catalogs are unsupported for this runtime", StatusCode::BAD_REQUEST),
-        bloblex_agent_core::AdapterError::Process(_) => derr("provider_unavailable", "runtime model catalog is unavailable", StatusCode::BAD_GATEWAY),
-        _ => derr("provider_error", "runtime returned an invalid model catalog", StatusCode::BAD_GATEWAY),
-    })?;
-    model_presentation::apply(&mut catalog.models, catalog.validated, catalog.fallback);
-    let value = json!({"runtimeId":spec.runtime_id,"provider":provider,"displayName":provider_display_name(provider),"models":catalog.models,"fetchedAt":catalog.fetched_at,"expiresAt":catalog.expires_at,"fallback":catalog.fallback,"source":catalog.source,"validated":catalog.validated});
-    if let Ok(mut cache) = cache.lock() { cache.insert(key, (Instant::now(), value.clone())); }
-    Ok(value)
-}
 
 fn preferred_catalog_model<'a>(provider: &str, models: &'a [Value]) -> Option<&'a Value> {
     let normalized = models.iter().filter_map(|model| serde_json::from_value::<bloblex_agent_core::ModelInfo>(model.clone()).ok()).collect::<Vec<_>>();
@@ -1400,7 +1381,12 @@ async fn runtime_models(st: &AppState, p: &Value) -> Result<Value, DispatchError
     if model_hint.as_deref().is_some_and(|model| model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_control)) {
         return Err(derr("invalid_argument", "model must be a valid model identifier", StatusCode::BAD_REQUEST));
     }
-    let catalog = fetch_model_catalog_for(st, &runtime, refresh, workflow_override, model_hint.as_deref()).await?;
+    let mode = if refresh { catalog::Mode::Refresh } else { catalog::Mode::Fresh };
+    let served = catalog::get(st, &runtime, workflow_override, model_hint.as_deref(), mode).await?
+        .ok_or_else(|| derr("unsupported", "model catalogs are unsupported for this runtime", StatusCode::BAD_REQUEST))?;
+    let mut catalog = served.value;
+    catalog["stale"] = json!(served.stale);
+    catalog["cachedAt"] = json!(served.cached_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
     if p.get("sessionId").is_none() { migrate_legacy_agent_models(st, id, &catalog).await?; }
     Ok(catalog)
 }
@@ -1419,7 +1405,7 @@ async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) 
     }
     let runtime = st.runtimes.read().await.iter().find(|r| r["id"] == runtime_id).cloned().ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
     let workflows = runtime["provider"] == "claude" && st.db.settings().map(|settings| claude_workflows_enabled(&settings)).unwrap_or(true);
-    let catalog = match fetch_model_catalog_for(st, &runtime, false, Some(workflows), value["model"].as_str()).await { Ok(c) => c, Err(_) => return Ok(()) };
+    let catalog = match catalog::get(st, &runtime, Some(workflows), value["model"].as_str(), catalog::Mode::Fresh).await { Ok(Some(served)) => served.value, _ => return Ok(()) };
     validate_option_values_against_catalog(value["model"].as_str(),value["thinking"].as_str(),value["serviceTier"].as_str(),Some(&catalog),runtime["provider"]=="codex")
 }
 /// The shared body of `agent.create`: normalize the requested model/effort
@@ -1429,7 +1415,8 @@ async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) 
 async fn agent_create_from_rpc(st: &AppState, mut fields: Value) -> Result<Value, DispatchError> {
     let runtime_id = fields["runtimeId"].as_str().ok_or_else(|| derr("invalid_argument", "runtimeId is required", StatusCode::BAD_REQUEST))?.to_owned();
     if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id.as_str()).cloned() {
-        if let Ok(catalog) = fetch_model_catalog(st, &runtime, false).await {
+        if let Ok(Some(served)) = catalog::get(st, &runtime, None, None, catalog::Mode::Fresh).await {
+            let catalog = served.value;
             if let Some(normalized) = normalize_model_fields(catalog["provider"].as_str().unwrap_or(""), &fields, &catalog) {
                 if let (Some(target), Some(source)) = (fields.as_object_mut(), normalized.as_object()) {
                     for (key, value) in source { target.insert(key.clone(), value.clone()); }
@@ -1485,7 +1472,7 @@ fn validate_option_values_against_catalog(model_id:Option<&str>,thinking:Option<
 async fn validate_exec_catalog(st:&AppState,runtime:&Value,options:&ExecOptions)->Result<(),DispatchError>{
     for (name,value) in [("model",options.model.as_deref()),("thinking",options.thinking.as_deref()),("serviceTier",options.service_tier.as_deref())]{if value.is_some_and(str::is_empty){return Err(derr("invalid_argument",&format!("{name} must be a non-empty identifier"),StatusCode::BAD_REQUEST));}}
     let workflow_scope = (runtime["provider"] == "claude").then_some(options.enable_workflows);
-    let catalog=fetch_model_catalog_for(st,runtime,false,workflow_scope,options.model.as_deref()).await.ok();
+    let catalog = catalog::get(st, runtime, workflow_scope, options.model.as_deref(), catalog::Mode::CachedOnly).await.ok().flatten().map(|served| served.value);
     if options.model.is_none() && catalog.as_ref().is_some_and(|catalog| catalog["validated"] == true && catalog["fallback"] != true) {
         return Err(derr("invalid_argument", "Choose a concrete model before sending a prompt.", StatusCode::BAD_REQUEST));
     }
@@ -1528,12 +1515,16 @@ fn exec_option_rejection(st: &AppState, provider: &str, options: &ExecOptions) -
     Ok(None)
 }
 /// The model whose effort the caller is asking about: an explicit `model`,
-/// else the agent's saved model, else the session's model lock.
+/// else the agent's saved model, else the session's model lock. An agent that
+/// belongs to a different runtime is ignored, so a stale `agentId` cannot pull
+/// another runtime's model into scope.
 async fn capability_selected_model(st:&AppState,p:&Value,runtime_id:&str)->Option<String>{
     if let Some(model)=p.get("model").and_then(Value::as_str).map(str::trim).filter(|model|!model.is_empty()){return Some(model.to_owned());}
     if let Some(agent_id)=p.get("agentId").and_then(Value::as_str){
         if let Ok(agent)=st.db.agent_get(agent_id){
-            if let Some(model)=agent["model"].as_str().map(str::trim).filter(|model|!model.is_empty()){return Some(model.to_owned());}
+            if agent["runtimeId"].as_str()==Some(runtime_id){
+                if let Some(model)=agent["model"].as_str().map(str::trim).filter(|model|!model.is_empty()){return Some(model.to_owned());}
+            }
         }
     }
     if let Some(session_id)=p.get("sessionId").and_then(Value::as_str){
@@ -1550,7 +1541,7 @@ async fn capability_selected_model(st:&AppState,p:&Value,runtime_id:&str)->Optio
 /// when the model lists at least one level, `Some(false)` when it lists none,
 /// `None` when the catalog is unavailable or does not carry the model.
 async fn opencode_thinking_support(st:&AppState,runtime:&Value,model:&str)->Option<bool>{
-    let catalog=fetch_model_catalog_for(st,runtime,false,None,Some(model)).await.ok()?;
+    let catalog=catalog::get(st,runtime,None,Some(model),catalog::Mode::CachedOnly).await.ok().flatten()?.value;
     if catalog["validated"]!=true||catalog["fallback"]==true{return None;}
     let models=catalog["models"].as_array()?;
     let selected=models.iter().find(|candidate|candidate["id"].as_str()==Some(model))?;
@@ -1591,15 +1582,22 @@ async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError
     }
     let active=st.active_turns.lock().await.len() as u32;
     let agent_id=match p.get("agentId"){None|Some(Value::Null)=>None,Some(Value::String(s))=>Some(s.as_str()),_=>return Err(derr("invalid_argument","agentId must be a string",StatusCode::BAD_REQUEST))};
+    // A saved bot may have moved to another runtime since it was last chosen.
+    // Report the mismatch instead of rejecting the read: the caller still gets
+    // the runtime's capabilities, just no per-agent concurrency for that bot.
+    let mut agent_runtime_mismatch=false;
     let agent_concurrency=if let Some(id)=agent_id{
-        let a=st.db.agent_get(id).map_err(agent_error)?;if a["runtimeId"]!=runtime_id{return Err(derr("invalid_argument","agentId does not belong to runtimeId",StatusCode::BAD_REQUEST));}
-        let configured=a["maxConcurrency"].as_u64().unwrap_or(1) as u32;Some(json!({"configuredMaxConcurrency":configured,"effectiveMaxConcurrency":configured.min(4),"active":active_for_agent(st,id).await}))
+        let a=st.db.agent_get(id).map_err(agent_error)?;
+        if a["runtimeId"]!=runtime_id{agent_runtime_mismatch=true;None}
+        else{let configured=a["maxConcurrency"].as_u64().unwrap_or(1) as u32;Some(json!({"configuredMaxConcurrency":configured,"effectiveMaxConcurrency":configured.min(4),"active":active_for_agent(st,id).await}))}
     }else{None};
     let mut agents=Vec::new();
     if agent_id.is_none(){for a in st.db.agent_list(false,Some(runtime_id)).map_err(agent_error)?{let id=a["id"].as_str().unwrap_or("");let configured=a["maxConcurrency"].as_u64().unwrap_or(1) as u32;agents.push(json!({"agentId":id,"configuredMaxConcurrency":configured,"effectiveMaxConcurrency":configured.min(4),"active":active_for_agent(st,id).await}));}}
     let provider_version = runtime["version"].as_str().unwrap_or("");
     let version_recognized = recognized_cli_version(provider, provider_version);
-    Ok(json!({"runtimeId":runtime_id,"versionRecognized":version_recognized,"settings":reported,"globalConcurrency":{"limit":4,"active":active},"agentConcurrency":agent_concurrency,"agentConcurrencies":agents,"hostDependent":true}))
+    let mut result=json!({"runtimeId":runtime_id,"versionRecognized":version_recognized,"settings":reported,"globalConcurrency":{"limit":4,"active":active},"agentConcurrency":agent_concurrency,"agentConcurrencies":agents,"hostDependent":true});
+    if agent_runtime_mismatch{result["agentRuntimeMismatch"]=json!(true);}
+    Ok(result)
 }
 
 fn recognized_cli_version(provider: &str, version: &str) -> bool {
@@ -1622,6 +1620,58 @@ fn recognized_cli_version(provider: &str, version: &str) -> bool {
         _ => false,
     }
 }
+
+/// `session.environment`: where a conversation works. The project folder, its
+/// Git state and the machine name. Every Git question is best-effort: a missing
+/// folder, a non-repo, a missing `git`, a timeout or a detached HEAD all answer
+/// without an error. Neither the path nor Git's output is ever logged.
+async fn session_environment(st:&AppState,p:&Value)->Result<Value,DispatchError>{
+    let session_id=p["sessionId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","sessionId is required",StatusCode::BAD_REQUEST))?;
+    let detail=st.db.session_detail(session_id).map_err(|_|derr("not_found","session not found",StatusCode::NOT_FOUND))?;
+    let project_path=detail["projectPath"].as_str().filter(|path|!path.is_empty()).map(str::to_owned);
+    let environment=match project_path.as_deref(){Some(path)=>git_project_environment(path).await,None=>None};
+    Ok(json!({
+        "projectPath":project_path,
+        "gitRepo":environment.is_some(),
+        "branch":environment.as_ref().and_then(|(_,branch)|branch.clone()),
+        "detached":environment.as_ref().is_some_and(|(head,_)|head=="HEAD"),
+        "host":environment_host(),
+    }))
+}
+
+/// Run one `git -C <path> <args>` without a shell and return its trimmed stdout,
+/// or `None` on any non-answer (spawn failure, non-zero status, a 2 second
+/// timeout). Git's output is read only to branch on it and never logged.
+async fn git_rev_parse(path:&str,args:&[&str])->Option<String>{
+    let mut command=tokio::process::Command::from(experiments::git_command());
+    command.kill_on_drop(true).arg("-C").arg(path).args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+    let output=tokio::time::timeout(std::time::Duration::from_secs(2),command.output()).await.ok()?.ok()?;
+    if !output.status.success(){return None;}
+    let text=String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!text.is_empty()).then_some(text)
+}
+
+/// `(head, branch)` for a project folder: `("main", Some("main"))` on a branch,
+/// `("HEAD", Some("<short sha>"))` when detached. `None` means "not a repo (or
+/// not answerable)", which the caller reports as `gitRepo:false`.
+async fn git_project_environment(path:&str)->Option<(String,Option<String>)>{
+    let head=git_rev_parse(path,&["rev-parse","--abbrev-ref","HEAD"]).await?;
+    if head=="HEAD"{
+        let short=git_rev_parse(path,&["rev-parse","--short","HEAD"]).await;
+        Some((head,short))
+    }else{
+        Some((head.clone(),Some(head)))
+    }
+}
+
+/// The machine a conversation runs on: `COMPUTERNAME`, else `HOSTNAME`, else a
+/// plain fallback. The value is a name, never a credential or a path.
+fn environment_host()->String{
+    std::env::var("COMPUTERNAME").ok().filter(|name|!name.trim().is_empty())
+        .or_else(||std::env::var("HOSTNAME").ok().filter(|name|!name.trim().is_empty()))
+        .unwrap_or_else(||"This computer".to_owned())
+}
+
 pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let agent_supplied=p.get("agentId").is_some(); let runtime_supplied=p.get("runtimeId").is_some();
     if agent_supplied==runtime_supplied{return Err(derr("invalid_argument","exactly one of agentId or runtimeId is required",StatusCode::BAD_REQUEST));}
@@ -1850,7 +1900,7 @@ async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError>
     let base_options = exec_options_for_session(st, &row)?;
     let (exec_options, model_lock, migrate_lock) = if row["modelLock"].is_object() {
         let current_lock = row["modelLock"].clone();
-        let catalog = fetch_model_catalog(st, &rt, false).await.ok();
+        let catalog = catalog::get(st, &rt, None, None, catalog::Mode::CachedOnly).await.ok().flatten().map(|served| served.value);
         let migrated = catalog.as_ref().and_then(|catalog| normalize_legacy_session_model_lock(&provider, &current_lock, catalog));
         if let Some(model_lock) = migrated {
             let mut options = base_options;
@@ -2152,7 +2202,7 @@ fn handoff_draft(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         .as_deref()
         .and_then(|id| st.db.agent_get(id).ok())
         .and_then(|agent| agent["name"].as_str().map(str::to_owned))
-        .unwrap_or_else(|| format!("another {}", crate::team::entity_noun(st, false)));
+        .unwrap_or_else(|| format!("another {}", crate::team::entity_noun(false)));
     let title = source["title"].as_str().unwrap_or("Conversation").to_owned();
     let messages = st.db.handoff_messages(from_session, HANDOFF_MESSAGE_LIMIT).map_err(agent_error)?;
     let (excerpt, carried, truncated) = handoff_excerpt(&messages, &source_name);
@@ -3366,6 +3416,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         db,
         events,
         runtimes: Arc::new(RwLock::new(Vec::new())),
+        catalog: Arc::new(catalog::CatalogCache::default()),
         discovery: Arc::new(Mutex::new(None)),
         adapters,
         sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -3381,6 +3432,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         automations: Arc::new(automations::Automations::default()),
         memory: Arc::new(memory::Memory::default()),
     };
+    // A send right after boot must not fail with "runtime is not installed":
+    // show the saved roster until discovery replaces it. `validate_spawn_target`
+    // still guards a missing executable.
+    load_saved_runtimes(&st).await;
     if let Ok(paused) = st.db.queue_paused_sessions() { st.queue.mark_startup_paused(paused); }
     // A run interrupted by an unclean exit is not a failure; leave its session.
     let _ = st.db.automation_interrupt_running();
@@ -3414,6 +3469,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         if refresh_runtime_discovery(&discovery_state, bloblex_runtime::discover()).await.is_err() {
             tracing::warn!("runtime discovery could not be persisted");
+        } else {
+            // Warm the catalog for every usable runtime, two at a time, so model
+            // and effort switching is instant after boot.
+            catalog::prewarm_all(&discovery_state).await;
         }
     });
     println!(
@@ -4075,24 +4134,24 @@ mod phase2a_tests {
         assert!(named.contains("tag the leader as @Boss so the user can ask them"), "{named}");
     }
     #[tokio::test]
-    async fn team_prose_follows_the_appearance_style() {
+    async fn team_prose_always_says_bot() {
         let (st, _) = state();
-        // Unset style is Bitbots, so the default word is "bot".
-        assert_eq!(team::entity_noun(&st, false), "bot");
-        assert_eq!(team::entity_noun(&st, true), "bots");
+        assert_eq!(team::entity_noun(false), "bot");
+        assert_eq!(team::entity_noun(true), "bots");
         let agent = st.db.agent_create(&json!({"name":"Styling","runtimeId":"rt-test"})).unwrap().0;
         let link = json!({});
         let as_bitbots = team::runtime_instructions(&st, &agent, &link, std::path::Path::new("."));
         assert!(as_bitbots.contains("a bot: one of the user's AI teammates"), "{as_bitbots}");
-        let tools = team::mcp_tools_for_test(&st);
+        let tools = team::mcp_tools_for_test();
         assert!(tools.iter().any(|tool| tool["description"].as_str().is_some_and(|text| text.contains("Create a new bot"))), "tool descriptions follow the word too");
 
+        // The Blobots look keeps its art but the prose is still "bot".
         dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"blobots"})).await.unwrap();
-        assert_eq!(team::entity_noun(&st, false), "blob");
-        assert_eq!(team::entity_noun(&st, true), "blobs");
+        assert_eq!(team::entity_noun(false), "bot");
+        assert_eq!(team::entity_noun(true), "bots");
         let as_blobots = team::runtime_instructions(&st, &agent, &link, std::path::Path::new("."));
-        assert!(as_blobots.contains("a blob: one of the user's AI teammates"), "{as_blobots}");
-        assert_ne!(as_bitbots, as_blobots);
+        assert!(as_blobots.contains("a bot: one of the user's AI teammates"), "{as_blobots}");
+        assert_eq!(as_bitbots, as_blobots);
     }
     #[tokio::test]
     async fn experimental_delete_can_be_undone_and_due_deletion_uses_the_existing_gate() {
@@ -4273,7 +4332,7 @@ mod phase2a_tests {
 
     fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default())};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default())};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -5118,6 +5177,101 @@ mod phase2a_tests {
         let agent=st.db.agent_create(&json!({"name":"Capped","runtimeId":"rt-opencode","maxConcurrency":8})).unwrap().0;let caps=dispatch(&st,"runtime.capabilities",json!({"runtimeId":"rt-opencode","agentId":agent["id"]})).await.unwrap();assert_eq!(caps["agentConcurrency"]["configuredMaxConcurrency"],8);assert_eq!(caps["agentConcurrency"]["effectiveMaxConcurrency"],4);
     }
     #[tokio::test]
+    async fn runtime_capabilities_tolerates_agent_on_another_runtime() {
+        let (st, _) = state();
+        // Two runtimes are visible; the bot is saved against the OpenCode one.
+        st.db.upsert_runtime(&json!({"id":"rt-opencode","provider":"opencode"})).unwrap();
+        *st.runtimes.write().await = vec![
+            json!({"id":"rt-test","provider":"codex","status":"offline"}),
+            json!({"id":"rt-opencode","provider":"opencode","status":"offline"}),
+        ];
+        let agent = st.db.agent_create(&json!({"name":"Moved","runtimeId":"rt-opencode","model":"opencode-model"})).unwrap().0;
+        let agent_id = agent["id"].as_str().unwrap();
+
+        // Asking the Codex runtime about a bot that lives on OpenCode is a
+        // mismatch, not an error: no per-agent concurrency, and the flag says so.
+        let caps = dispatch(&st, "runtime.capabilities", json!({"runtimeId":"rt-test","agentId":agent_id})).await.unwrap();
+        assert_eq!(caps["agentConcurrency"], Value::Null);
+        assert_eq!(caps["agentRuntimeMismatch"], true);
+        // The bot's saved model must not be pulled into the Codex runtime's scope.
+        assert_eq!(capability_selected_model(&st, &json!({"agentId":agent_id}), "rt-test").await, None);
+        // On its own runtime the bot is still understood.
+        let own = dispatch(&st, "runtime.capabilities", json!({"runtimeId":"rt-opencode","agentId":agent_id})).await.unwrap();
+        assert_eq!(own["agentConcurrency"]["configuredMaxConcurrency"], 1);
+        assert!(own.get("agentRuntimeMismatch").is_none());
+
+        // A missing bot is still not_found; a non-string agentId is still invalid_argument.
+        assert_eq!(dispatch(&st, "runtime.capabilities", json!({"runtimeId":"rt-test","agentId":Uuid::new_v4().to_string()})).await.unwrap_err().1.code, "not_found");
+        assert_eq!(dispatch(&st, "runtime.capabilities", json!({"runtimeId":"rt-test","agentId":7})).await.unwrap_err().1.code, "invalid_argument");
+    }
+    fn git_is_available() -> bool {
+        std::process::Command::new("git")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+    #[tokio::test]
+    async fn session_environment_reports_a_folder_that_is_not_a_repo() {
+        let (st, _) = state();
+        let dir = std::env::temp_dir().join(format!("bloblex-env-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        st.db.create_session("env-session", "rt-test", "codex", &dir.to_string_lossy(), "Saved").unwrap();
+        let environment = dispatch(&st, "session.environment", json!({"sessionId":"env-session"})).await.unwrap();
+        assert_eq!(environment["projectPath"], json!(dir.to_string_lossy()));
+        assert_eq!(environment["gitRepo"], false);
+        assert_eq!(environment["branch"], Value::Null);
+        assert_eq!(environment["detached"], false);
+        assert!(environment["host"].as_str().is_some_and(|host| !host.is_empty()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+    #[tokio::test]
+    async fn session_environment_maps_an_unknown_session_and_missing_params() {
+        let (st, _) = state();
+        assert_eq!(dispatch(&st, "session.environment", json!({"sessionId":"absent"})).await.unwrap_err().1.code, "not_found");
+        assert_eq!(dispatch(&st, "session.environment", json!({})).await.unwrap_err().1.code, "invalid_argument");
+    }
+    #[tokio::test]
+    async fn session_environment_reports_a_git_branch() {
+        if !git_is_available() {
+            return; // git is not on PATH; the non-repo case still covers the contract.
+        }
+        let (st, _) = state();
+        let dir = std::env::temp_dir().join(format!("bloblex-env-git-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| std::process::Command::new("git")
+            .current_dir(&dir)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        assert!(git(&["init", "-q"]), "git init");
+        let _ = git(&["config", "user.email", "test@bitbots.local"]);
+        let _ = git(&["config", "user.name", "Bitbots Test"]);
+        std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
+        assert!(git(&["add", "."]), "git add");
+        assert!(git(&["commit", "-q", "-m", "init"]), "git commit");
+        st.db.create_session("env-git", "rt-test", "codex", &dir.to_string_lossy(), "Saved").unwrap();
+        let environment = dispatch(&st, "session.environment", json!({"sessionId":"env-git"})).await.unwrap();
+        assert_eq!(environment["gitRepo"], true);
+        assert_eq!(environment["detached"], false);
+        let branch = environment["branch"].as_str().unwrap_or("");
+        assert!(!branch.is_empty() && branch != "HEAD", "expected a branch name, got {branch:?}");
+
+        // On a detached HEAD the branch is the short commit hash and detached is set.
+        assert!(git(&["checkout", "-q", "--detach"]), "git checkout --detach");
+        let detached = dispatch(&st, "session.environment", json!({"sessionId":"env-git"})).await.unwrap();
+        assert_eq!(detached["gitRepo"], true);
+        assert_eq!(detached["detached"], true);
+        assert_ne!(detached["branch"], Value::Null);
+        assert_ne!(detached["branch"], json!("HEAD"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+    #[tokio::test]
     async fn simultaneous_refreshes_share_one_discovery_and_a_later_scan_runs_again() {
         let (st, _) = state();
         let calls = std::sync::atomic::AtomicUsize::new(0);
@@ -5328,6 +5482,8 @@ mod phase2a_tests {
         let sid = "session-speed-lock";
         st.db.create_session_for_agent_with_model_lock(sid,runtime_id,"codex",".","Speedy",agent["id"].as_str(),Some(&json!({"model":"alpha","thinking":"low"}))).unwrap();
         st.db.update_session_state(sid,"idle").unwrap();
+        // Warm the catalog so turn-option validation has an authoritative list.
+        dispatch(&st,"runtime.models",json!({"runtimeId":runtime_id,"refresh":true})).await.unwrap();
 
         let updated = dispatch(&st,"session.model.update",json!({"sessionId":sid,"model":"alpha","thinking":"low","serviceTier":"priority","approvalMode":"bypass"})).await.unwrap();
         assert_eq!(updated["modelChanged"],false);
@@ -5492,6 +5648,9 @@ mod phase2a_tests {
         };
         st.adapters = Arc::new(Adapters{ acp:Arc::new(CatalogAdapter(catalog)), codex:Arc::new(CodexAdapter::default()), claude:Arc::new(ClaudeAdapter::default()) });
         *st.runtimes.write().await = vec![runtime];
+        // `runtime.capabilities` reads the cache without waiting; warm it first,
+        // as the boot prewarm does. OpenCode's key ignores the model hint.
+        dispatch(&st,"runtime.models",json!({"runtimeId":runtime_id,"refresh":true})).await.unwrap();
 
         let with_levels = dispatch(&st,"runtime.capabilities",json!({"runtimeId":runtime_id,"model":"opencode-go/deepseek-v4.1-flash"})).await.unwrap();
         assert_eq!(with_levels["settings"]["thinking"]["supported"],true);
@@ -5551,10 +5710,211 @@ mod phase2a_tests {
 
     #[test]
     fn claude_catalog_probe_targets_bloblex_sonnet_default_and_keys_workflows_to_that_probe() {
-        assert_eq!(catalog_probe_args("claude", true, None), vec!["--model", "sonnet", "--settings", r#"{"enableWorkflows":true}"#]);
-        assert_eq!(catalog_probe_args("claude", true, Some("claude-opus-5-5")), vec!["--model", "claude-opus-5-5", "--settings", r#"{"enableWorkflows":true}"#]);
-        assert_eq!(catalog_probe_args("claude", false, Some("claude-sonnet-5-5")), vec!["--model", "claude-sonnet-5-5"]);
-        assert!(catalog_probe_args("codex", true, Some("gpt-6-luna")).is_empty());
+        assert_eq!(catalog::catalog_probe_args("claude", true, None), vec!["--model", "sonnet", "--settings", r#"{"enableWorkflows":true}"#]);
+        assert_eq!(catalog::catalog_probe_args("claude", true, Some("claude-opus-5-5")), vec!["--model", "claude-opus-5-5", "--settings", r#"{"enableWorkflows":true}"#]);
+        assert_eq!(catalog::catalog_probe_args("claude", false, Some("claude-sonnet-5-5")), vec!["--model", "claude-sonnet-5-5"]);
+        assert!(catalog::catalog_probe_args("codex", true, Some("gpt-6-luna")).is_empty());
+    }
+
+    // -- FIX28 WP1: model catalog cache -------------------------------------
+
+    fn fake_catalog_model(id: &str) -> bloblex_agent_core::ModelInfo {
+        bloblex_agent_core::ModelInfo {
+            id: id.into(), display_name: id.into(), provider_id: None,
+            supported_thinking: vec!["low".into()], default_thinking: Some("low".into()),
+            service_tiers: Vec::new(), default_service_tier: None, variants: None,
+            host_dependent: false, is_default: Some(true), group: None, availability: None,
+            release_date: None, context_window: None,
+        }
+    }
+
+    /// A catalog adapter that counts probes, can be delayed and can fail.
+    struct CatalogProbeAdapter {
+        catalog: bloblex_agent_core::ModelCatalog,
+        calls: std::sync::atomic::AtomicUsize,
+        delay: std::time::Duration,
+        fail: bool,
+    }
+    impl CatalogProbeAdapter {
+        fn new(delay: std::time::Duration, fail: bool, fallback: bool) -> Self {
+            Self {
+                catalog: bloblex_agent_core::ModelCatalog {
+                    models: vec![fake_catalog_model("alpha")],
+                    fetched_at: "2026-10-16T00:00:00Z".into(),
+                    expires_at: "2026-10-16T00:15:00Z".into(),
+                    fallback,
+                    source: "fake_test_catalog".into(),
+                    validated: !fallback,
+                },
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                delay,
+                fail,
+            }
+        }
+    }
+    #[async_trait::async_trait]
+    impl AgentAdapter for CatalogProbeAdapter {
+        async fn model_catalog(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ModelCatalog, bloblex_agent_core::AdapterError> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if !self.delay.is_zero() { tokio::time::sleep(self.delay).await; }
+            if self.fail { return Err(bloblex_agent_core::AdapterError::Process("catalog unavailable".into())); }
+            let mut catalog = self.catalog.clone();
+            catalog.fetched_at = format!("2026-10-16T00:00:{:02}Z", call % 60);
+            Ok(catalog)
+        }
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, _: NewSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn resume_session(&self, _: &RuntimeSpec, _: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn prompt(&self, _: &SessionHandle, _: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+    }
+    fn install_catalog_probe_adapter(st: &mut AppState, adapter: &Arc<CatalogProbeAdapter>) {
+        st.adapters = Arc::new(Adapters { acp: adapter.clone(), codex: adapter.clone(), claude: adapter.clone() });
+    }
+
+    #[test]
+    fn catalog_key_ignores_model_hint_except_claude() {
+        let (st, _) = state();
+        let codex = json!({"id":"rt-key-codex","provider":"codex","executablePath":"x","launchArgs":[]});
+        assert_eq!(catalog::resolve_probe(&st, &codex, None, Some("gpt-6-luna")).key, catalog::resolve_probe(&st, &codex, None, Some("gpt-6-sol")).key);
+        let claude = json!({"id":"rt-key-claude","provider":"claude","executablePath":"x","launchArgs":[]});
+        assert_ne!(catalog::resolve_probe(&st, &claude, Some(false), Some("claude-opus-5-5")).key, catalog::resolve_probe(&st, &claude, Some(false), Some("claude-sonnet-5-5")).key);
+        assert_eq!(catalog::resolve_probe(&st, &claude, Some(false), Some("claude-sonnet-5-5")).key, catalog::resolve_probe(&st, &claude, Some(false), Some("claude-sonnet-5-5")).key);
+    }
+
+    #[tokio::test]
+    async fn catalog_single_flight() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(CatalogProbeAdapter::new(std::time::Duration::from_millis(50), false, false));
+        install_catalog_probe_adapter(&mut st, &adapter);
+        let runtime = json!({"id":"rt-single-flight","provider":"codex","executablePath":"x","launchArgs":[]});
+        let (first, second) = tokio::join!(
+            catalog::get(&st, &runtime, None, None, catalog::Mode::Fresh),
+            catalog::get(&st, &runtime, None, None, catalog::Mode::Fresh),
+        );
+        assert!(first.unwrap().is_some() && second.unwrap().is_some());
+        assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "two concurrent misses share one probe");
+    }
+
+    #[tokio::test]
+    async fn catalog_cached_only_never_waits() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(CatalogProbeAdapter::new(std::time::Duration::from_millis(40), false, false));
+        install_catalog_probe_adapter(&mut st, &adapter);
+        let runtime = json!({"id":"rt-cached-only","provider":"codex","executablePath":"x","launchArgs":[]});
+        let served = catalog::get(&st, &runtime, None, None, catalog::Mode::CachedOnly).await.unwrap();
+        assert!(served.is_none(), "a miss never waits");
+        assert!(wait_for(|| adapter.calls.load(std::sync::atomic::Ordering::SeqCst) == 1).await, "exactly one background refresh starts");
+        for _ in 0..3 { let _ = catalog::get(&st, &runtime, None, None, catalog::Mode::CachedOnly).await.unwrap(); }
+        assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "further reads join the in-flight refresh");
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(catalog::get(&st, &runtime, None, None, catalog::Mode::CachedOnly).await.unwrap().is_some(), "the background refresh fills the cache");
+    }
+
+    #[tokio::test]
+    async fn catalog_serves_stale_then_refreshes() {
+        let (mut st, _) = state();
+        st.catalog = Arc::new(catalog::CatalogCache::new(
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_secs(600),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(30),
+        ));
+        let adapter = Arc::new(CatalogProbeAdapter::new(std::time::Duration::ZERO, false, false));
+        install_catalog_probe_adapter(&mut st, &adapter);
+        let runtime = json!({"id":"rt-stale","provider":"codex","executablePath":"x","launchArgs":[]});
+        let first = catalog::get(&st, &runtime, None, None, catalog::Mode::Fresh).await.unwrap().unwrap();
+        assert!(!first.stale);
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let stale = catalog::get(&st, &runtime, None, None, catalog::Mode::CachedOnly).await.unwrap().unwrap();
+        assert!(stale.stale, "a value past its fresh window is served stale");
+        assert!(wait_for(|| adapter.calls.load(std::sync::atomic::Ordering::SeqCst) == 2).await, "a background refresh starts");
+        let mut refreshed = None;
+        for _ in 0..200 {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            let value = catalog::get(&st, &runtime, None, None, catalog::Mode::CachedOnly).await.unwrap().unwrap();
+            if !value.stale { refreshed = Some(value); break; }
+        }
+        let refreshed = refreshed.expect("the background refresh replaces the stale value");
+        assert_ne!(refreshed.value["fetchedAt"], first.value["fetchedAt"]);
+    }
+
+    #[tokio::test]
+    async fn catalog_persists_across_restart() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(CatalogProbeAdapter::new(std::time::Duration::ZERO, false, false));
+        install_catalog_probe_adapter(&mut st, &adapter);
+        let runtime = json!({"id":"rt-restart","provider":"codex","executablePath":"x","launchArgs":[]});
+        let warmed = catalog::get(&st, &runtime, None, None, catalog::Mode::Fresh).await.unwrap().unwrap();
+        let key = catalog::resolve_probe(&st, &runtime, None, None).key;
+        assert!(st.db.catalog_cache_get(&key).unwrap().is_some(), "a validated catalog is persisted");
+        // A new cache with the same database (a daemon restart) serves it as stale.
+        st.catalog = Arc::new(catalog::CatalogCache::default());
+        let served = catalog::get(&st, &runtime, None, None, catalog::Mode::CachedOnly).await.unwrap().unwrap();
+        assert!(served.stale, "a database hit counts as stale");
+        assert_eq!(served.value["fetchedAt"], warmed.value["fetchedAt"]);
+        assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the read is served from disk, not a new probe");
+    }
+
+    #[tokio::test]
+    async fn catalog_refresh_rpc_invalidates() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(CatalogProbeAdapter::new(std::time::Duration::ZERO, false, false));
+        install_catalog_probe_adapter(&mut st, &adapter);
+        let runtime = json!({"id":"rt-invalidate","provider":"codex","executablePath":"x","launchArgs":[]});
+        catalog::get(&st, &runtime, None, None, catalog::Mode::Fresh).await.unwrap();
+        assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // `runtime.refresh` calls this (then prewarms in the background).
+        st.catalog.invalidate_all();
+        let refreshed = catalog::get(&st, &runtime, None, None, catalog::Mode::Fresh).await.unwrap().unwrap();
+        assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::SeqCst), 2, "an invalidated entry is probed again");
+        assert!(!refreshed.stale);
+    }
+
+    #[tokio::test]
+    async fn catalog_fallback_not_persisted() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(CatalogProbeAdapter::new(std::time::Duration::ZERO, false, true));
+        install_catalog_probe_adapter(&mut st, &adapter);
+        let runtime = json!({"id":"rt-fallback","provider":"codex","executablePath":"x","launchArgs":[]});
+        let served = catalog::get(&st, &runtime, None, None, catalog::Mode::Fresh).await.unwrap().unwrap();
+        assert_eq!(served.value["fallback"], true);
+        let key = catalog::resolve_probe(&st, &runtime, None, None).key;
+        assert!(st.db.catalog_cache_get(&key).unwrap().is_none(), "a fallback catalog is never written to disk");
+    }
+
+    #[tokio::test]
+    async fn catalog_failure_negative_cached_30s() {
+        let (mut st, _) = state();
+        st.catalog = Arc::new(catalog::CatalogCache::new(
+            catalog::FRESH_TTL,
+            catalog::STALE_TTL,
+            catalog::FALLBACK_TTL,
+            std::time::Duration::from_millis(60),
+        ));
+        let adapter = Arc::new(CatalogProbeAdapter::new(std::time::Duration::ZERO, true, false));
+        install_catalog_probe_adapter(&mut st, &adapter);
+        let runtime = json!({"id":"rt-failure","provider":"codex","executablePath":"x","launchArgs":[]});
+        assert!(catalog::get(&st, &runtime, None, None, catalog::Mode::Fresh).await.is_err());
+        assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(catalog::get(&st, &runtime, None, None, catalog::Mode::Fresh).await.is_err(), "the same error is returned during the window");
+        assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "a broken CLI is not restarted on every call");
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(catalog::get(&st, &runtime, None, None, catalog::Mode::Fresh).await.is_err());
+        assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::SeqCst), 2, "after the window the probe is retried");
+    }
+
+    #[tokio::test]
+    async fn boot_loads_saved_runtimes() {
+        let (st, _) = state();
+        st.db.upsert_runtime(&json!({"id":"rt-saved","provider":"opencode","status":"online","executablePath":"x","launchArgs":[]})).unwrap();
+        *st.runtimes.write().await = Vec::new();
+        load_saved_runtimes(&st).await;
+        let runtimes = st.runtimes.read().await;
+        assert!(runtimes.iter().any(|runtime| runtime["id"] == "rt-saved"), "the saved roster is available before discovery");
+        assert!(runtimes.iter().any(|runtime| runtime["id"] == "rt-test"));
     }
 
     #[test]

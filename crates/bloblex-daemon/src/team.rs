@@ -75,13 +75,13 @@ impl Team {
 
 fn agent_name(agent: &Value) -> String { agent["name"].as_str().unwrap_or("A teammate").to_owned() }
 
-/// The word the model-facing prose uses for one of these characters: "bot" in
-/// Bitbots (the default) and "blob" in Blobots. Reads `appearance.style` at the
-/// moment of use, so switching the look shows up on the next turn (and changes
-/// the instruction hash, which only re-sends the instructions once).
-pub(crate) fn entity_noun(st: &AppState, plural: bool) -> String {
-    let style = st.db.settings().ok().and_then(|settings| settings["appearance.style"].as_str().map(str::to_owned));
-    let word = if style.as_deref() == Some("blobots") { "blob" } else { "bot" };
+/// The word the model-facing prose uses for one of these characters: always
+/// "bot". Owner review, 16 October 2026: the characters are bots in both looks,
+/// so the prose no longer changes with `appearance.style`. (This changes the
+/// instruction hash once for Blobots users, so their next turn re-sends the
+/// instructions.)
+pub(crate) fn entity_noun(plural: bool) -> String {
+    let word = "bot";
     if plural { format!("{word}s") } else { word.to_owned() }
 }
 
@@ -107,8 +107,8 @@ pub fn workspace_for(st: &AppState, agent: &Value) -> PathBuf {
 /// Bitbots context appended to every blob session's system instructions.
 pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspace: &std::path::Path) -> String {
     let name = agent_name(agent);
-    let noun = entity_noun(st, false);
-    let nouns = entity_noun(st, true);
+    let noun = entity_noun(false);
+    let nouns = entity_noun(true);
     let mut lines = vec![format!("You are {name}, a {noun}: one of the user's AI teammates in Bitbots, a desktop app where several coding agents work side by side on the user's computer.")];
     if let Some(role) = agent["role"].as_str().map(str::trim).filter(|role| !role.is_empty()) { lines.push(format!("Your role: {role}.")); }
     if let Some(description) = agent["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) { lines.push(format!("What you are for: {description}")); }
@@ -197,8 +197,8 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_leader: b
 }
 
 #[cfg(test)]
-pub(crate) fn mcp_tools_for_test(st: &AppState) -> Vec<Value> {
-    tools(false, false, false, true, &entity_noun(st, false), &entity_noun(st, true)).as_array().cloned().unwrap_or_default()
+pub(crate) fn mcp_tools_for_test() -> Vec<Value> {
+    tools(false, false, false, true, &entity_noun(false), &entity_noun(true)).as_array().cloned().unwrap_or_default()
 }
 
 /// MCP calls from `bitbotsd mcp-bridge`, authorized by a per-session token.
@@ -226,7 +226,7 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
         row["agentId"].as_str().is_some_and(|id| st.db.agent_get(id).is_ok_and(|agent| agent["leader"] == true && agent["archived"] != true))
     });
     match method {
-        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation, memory_enabled, ask_user, is_leader, &entity_noun(st, false), &entity_noun(st, true))})),
+        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation, memory_enabled, ask_user, is_leader, &entity_noun(false), &entity_noun(true))})),
         "mcp.tools.call" => {
             let name = params["name"].as_str().unwrap_or("");
             if is_automation && !name.starts_with("memory_") {
@@ -286,7 +286,7 @@ async fn list_blobs(st: &AppState, session_id: &str) -> Result<String, String> {
         if let Some(description) = agent["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) { line.push_str(&format!("\n  {description}")); }
         rows.push(line);
     }
-    Ok(if rows.is_empty() { format!("No {} are on the team yet.", entity_noun(st, true)) } else { format!("Your team:\n{}", rows.join("\n")) })
+    Ok(if rows.is_empty() { format!("No {} are on the team yet.", entity_noun(true)) } else { format!("Your team:\n{}", rows.join("\n")) })
 }
 
 fn resolve_blob(agents: &[Value], wanted: &str) -> Option<Value> {
@@ -307,15 +307,15 @@ fn bounded_text(args: &Value, key: &str, limit: usize) -> Result<Option<String>,
 /// The error a non-leader gets when it tries to create or change blobs.
 fn non_leader_create_error(st: &AppState) -> String {
     match st.db.leader_agent().ok().flatten() {
-        Some(leader) => { let name = agent_name(&leader); format!("Only the team leader ({name}) can create {}. Ask the user to tag @{name}.", entity_noun(st, true)) }
-        None => format!("Only the team leader can create {}, and this team has no leader yet. Ask the user to set one.", entity_noun(st, true)),
+        Some(leader) => { let name = agent_name(&leader); format!("Only the team leader ({name}) can create {}. Ask the user to tag @{name}.", entity_noun(true)) }
+        None => format!("Only the team leader can create {}, and this team has no leader yet. Ask the user to set one.", entity_noun(true)),
     }
 }
 
 /// Leader-only: projects a blob can be attached to.
 async fn list_projects(st: &AppState) -> Result<String, String> {
     let projects = st.db.project_list().map_err(|error| error.to_string())?;
-    if projects.is_empty() { return Ok(format!("No projects exist yet. Create one in Bitbots, or create a casual {} with no project.", entity_noun(st, false))); }
+    if projects.is_empty() { return Ok(format!("No projects exist yet. Create one in Bitbots, or create a casual {} with no project.", entity_noun(false))); }
     let rows = projects.iter().map(|project| {
         let name = project["name"].as_str().unwrap_or("Project");
         let id = project["id"].as_str().unwrap_or("");
@@ -324,13 +324,13 @@ async fn list_projects(st: &AppState) -> Result<String, String> {
         if let Some(description) = project["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) { line.push_str(&format!("\n  {description}")); }
         line
     }).collect::<Vec<_>>();
-    Ok(format!("Projects you can attach a {} to:\n{}", entity_noun(st, false), rows.join("\n")))
+    Ok(format!("Projects you can attach a {} to:\n{}", entity_noun(false), rows.join("\n")))
 }
 
 /// Leader-only: create a blob through the same path as the `agent.create` RPC.
 async fn create_blob(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
-    let leader_id = st.db.session_detail(session_id).ok().and_then(|row| row["agentId"].as_str().map(str::to_owned)).ok_or_else(|| format!("Only a {} conversation can create {}.", entity_noun(st, false), entity_noun(st, true)))?;
-    let leader = st.db.agent_get(&leader_id).map_err(|_| format!("Your {} is no longer available.", entity_noun(st, false)))?;
+    let leader_id = st.db.session_detail(session_id).ok().and_then(|row| row["agentId"].as_str().map(str::to_owned)).ok_or_else(|| format!("Only a {} conversation can create {}.", entity_noun(false), entity_noun(true)))?;
+    let leader = st.db.agent_get(&leader_id).map_err(|_| format!("Your {} is no longer available.", entity_noun(false)))?;
     if leader["leader"] != true || leader["archived"] == true { return Err(non_leader_create_error(st)); }
     let name = bounded_text(args, "name", 40)?.ok_or("name is required.")?;
     if name.chars().count() < 1 { return Err("name is required.".into()); }
@@ -338,10 +338,10 @@ async fn create_blob(st: &AppState, session_id: &str, args: &Value) -> Result<St
     let description = bounded_text(args, "description", 255)?;
     let instructions = bounded_text(args, "instructions", 4000)?;
     let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
-    if agents.len() >= 12 { return Err(format!("The team already has {} {}; Bitbots allows at most 12. Archive one before creating another.", agents.len(), entity_noun(st, true))); }
-    if st.team.creations(session_id) >= 5 { return Err(format!("You have already created 5 {} this turn. Ask the user before creating more.", entity_noun(st, true))); }
+    if agents.len() >= 12 { return Err(format!("The team already has {} {}; Bitbots allows at most 12. Archive one before creating another.", agents.len(), entity_noun(true))); }
+    if st.team.creations(session_id) >= 5 { return Err(format!("You have already created 5 {} this turn. Ask the user before creating more.", entity_noun(true))); }
     if agents.iter().any(|agent| agent["name"].as_str().map(str::trim).map(str::to_lowercase).is_some_and(|existing| existing == name.to_lowercase())) {
-        return Err(format!("A {} named {name} already exists. Choose a different name.", entity_noun(st, false)));
+        return Err(format!("A {} named {name} already exists. Choose a different name.", entity_noun(false)));
     }
     let project_id = match args["project"].as_str().map(str::trim).filter(|project| !project.is_empty()) {
         None => None,
@@ -363,7 +363,7 @@ async fn create_blob(st: &AppState, session_id: &str, args: &Value) -> Result<St
             runtimes.iter().find(|runtime| runtime["provider"] == provider).cloned().ok_or_else(|| format!("No {provider} runtime is installed."))?
         }
         None => {
-            let runtime_id = leader["runtimeId"].as_str().ok_or_else(|| format!("Your {} has no runtime.", entity_noun(st, false)))?;
+            let runtime_id = leader["runtimeId"].as_str().ok_or_else(|| format!("Your {} has no runtime.", entity_noun(false)))?;
             runtimes.iter().find(|runtime| runtime["id"] == runtime_id).cloned().ok_or("Your runtime is not available.")?
         }
     };
@@ -388,7 +388,7 @@ async fn create_blob(st: &AppState, session_id: &str, args: &Value) -> Result<St
     st.team.record_creation(session_id);
     let role_label = role.as_deref().unwrap_or("no role");
     let project_label = project_id.as_deref().and_then(|id| st.db.project_get(id).ok()).and_then(|project| project["name"].as_str().map(str::to_owned)).unwrap_or_else(|| "no project".into());
-    let noun = entity_noun(st, false);
+    let noun = entity_noun(false);
     note(st, session_id, &format!("Created {noun} {name} ({role_label}) in {project_label}."), json!({"kind":"blob_created","agentId":agent_id,"name":name})).await;
     let role_part = role.as_deref().map(|role| format!(" ({role})")).unwrap_or_default();
     let project_part = if project_label == "no project" { format!(" as a casual {noun}") } else { format!(" in {project_label}") };
@@ -404,7 +404,7 @@ async fn update_blob(st: &AppState, args: &Value) -> Result<String, String> {
     let instructions = bounded_text(args, "instructions", 4000)?;
     if role.is_none() && description.is_none() && instructions.is_none() { return Err("Give at least one of role, description or instructions to update.".into()); }
     let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
-    let target = resolve_blob(&agents, wanted).ok_or_else(|| format!("No {} is called {wanted}.", entity_noun(st, false)))?;
+    let target = resolve_blob(&agents, wanted).ok_or_else(|| format!("No {} is called {wanted}.", entity_noun(false)))?;
     let target_id = target["id"].as_str().unwrap_or("").to_owned();
     if let Some(role) = &role {
         let (_agent, events) = st.db.agent_set_team(&target_id, &json!({"role":role})).map_err(|error| error.to_string())?;
@@ -417,22 +417,22 @@ async fn update_blob(st: &AppState, args: &Value) -> Result<String, String> {
         let (_agent, events) = st.db.agent_update(&target_id, &fields).map_err(|error| error.to_string())?;
         st.broadcast_persisted(events);
     }
-    Ok(format!("Updated {} {}.", entity_noun(st, false), target["name"].as_str().unwrap_or(wanted)))
+    Ok(format!("Updated {} {}.", entity_noun(false), target["name"].as_str().unwrap_or(wanted)))
 }
 
 async fn message_blob(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
     let message = args["message"].as_str().map(str::trim).filter(|m| !m.is_empty()).ok_or("message is required.")?.to_owned();
     if message.len() > 200_000 { return Err("The message is too long; keep briefs under 200 KB.".into()); }
     let from_row = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.")?;
-    let from_id = from_row["agentId"].as_str().ok_or_else(|| format!("Only {} conversations can message teammates.", entity_noun(st, false)))?.to_owned();
-    let from = st.db.agent_get(&from_id).map_err(|_| format!("Your {} is no longer available.", entity_noun(st, false)))?;
+    let from_id = from_row["agentId"].as_str().ok_or_else(|| format!("Only {} conversations can message teammates.", entity_noun(false)))?.to_owned();
+    let from = st.db.agent_get(&from_id).map_err(|_| format!("Your {} is no longer available.", entity_noun(false)))?;
     let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
     let names = agents.iter().filter(|a| a["id"] != from_id.as_str() && a["hidden"] != true).map(agent_name).collect::<Vec<_>>().join(", ");
     let target = resolve_blob(&agents, args["blob"].as_str().unwrap_or("")).ok_or_else(|| format!("No teammate is called that. Teammates: {names}."))?;
     let target_id = target["id"].as_str().unwrap_or("").to_owned();
     if target_id == from_id { return Err("You cannot message yourself.".into()); }
     let depth = st.team.depth.lock().unwrap().get(session_id).copied().unwrap_or(0) + 1;
-    if depth > MAX_DEPTH { return Err(format!("This request has already passed between too many {}. Report back to the user instead.", entity_noun(st, true))); }
+    if depth > MAX_DEPTH { return Err(format!("This request has already passed between too many {}. Report back to the user instead.", entity_noun(true))); }
     let from_name = agent_name(&from);
     let target_name = agent_name(&target);
     let topic = args["topic"].as_str().and_then(clean_topic);
@@ -504,7 +504,7 @@ fn one_line(text: &str, limit: usize) -> String {
 }
 
 async fn list_conversations(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
-    let me = st.db.session_detail(session_id).ok().and_then(|row| row["agentId"].as_str().map(str::to_owned)).ok_or_else(|| format!("Only {} conversations have side conversations.", entity_noun(st, false)))?;
+    let me = st.db.session_detail(session_id).ok().and_then(|row| row["agentId"].as_str().map(str::to_owned)).ok_or_else(|| format!("Only {} conversations have side conversations.", entity_noun(false)))?;
     let agents = st.db.agent_list(true, None).map_err(|error| error.to_string())?;
     let only = args["blob"].as_str().map(str::trim).filter(|name| !name.is_empty()).map(|name| resolve_blob(&agents, name).ok_or_else(|| format!("No teammate is called {name}."))).transpose()?;
     let name_of = |id: &str| agents.iter().find(|agent| agent["id"] == id).map(agent_name).unwrap_or_else(|| "A former teammate".into());
@@ -639,7 +639,7 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
 pub async fn agent_conversation(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     let agent_id = p["agentId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
     let agent = st.db.agent_get(agent_id).map_err(agent_error)?;
-    if agent["archived"] == true { return Err(derr("conflict", &format!("archived {} have no conversation", entity_noun(st, true)), StatusCode::CONFLICT)); }
+    if agent["archived"] == true { return Err(derr("conflict", &format!("archived {} have no conversation", entity_noun(true)), StatusCode::CONFLICT)); }
     if let Some(id) = st.db.main_session(agent_id).map_err(agent_error)? {
         return Ok(json!({"session": st.db.session_detail(&id).map_err(agent_error)?, "created": false}));
     }

@@ -1,5 +1,13 @@
 # Bitbots collaboration instructions
 
+# Amendment (16 October 2026): two lanes only
+
+Owner directive; this amends the 12 October lanes below where they differ.
+
+- **UI/UX** (components, styles, copy, motion, island/companion, settings screens, onboarding, UI tests) is done by the Director (Claude), following `DESIGN.md` and `PRODUCT.md`.
+- **Everything backend that does not touch UI** (Rust daemon, adapters, storage, speech, `src-tauri` native code, schema, non-visual TypeScript, backend tests) is done by OpenCode `opencode-go/deepseek-v4.1-flash` at high effort, one git worktree per package, from a written spec. The lane never runs `git commit`.
+- **No third lane.** The `impl-b` (Cursor) second opinion is not used: the Director's review of every backend diff plus the full gates, run on the merged result in the main checkout, stand in for it. Codex `impl` is not used unless the owner assigns it again.
+
 # Amendment (12 October 2026): lanes, dictation exception, budgets
 
 Owner directive; this amends the section below where they differ. The roadmap is [docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md).

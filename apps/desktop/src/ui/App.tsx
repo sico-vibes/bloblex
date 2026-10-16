@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import {
-  Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, Copy, CornerDownRight, FileDown, FileText, FolderOpen, FolderPlus, Hash, Import,
+  Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, CornerDownRight, FileDown, FileText, FolderOpen, FolderPlus, Hash, Import,
   Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus,
   RefreshCw, RotateCw, Search, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X,
 } from 'lucide-react'
@@ -17,7 +17,7 @@ import { compactMoodLabel, deriveCompanionStatus } from './companionStatus'
 import { AnalyticsView } from './AnalyticsView'
 import { SchedulesView, type AutomationInput } from './SchedulesView'
 import type { DaemonSchedule } from './automationSchedule'
-import { tokenValue, usageTokenBuckets } from './usagePresentation'
+import { usageTokenBuckets } from './usagePresentation'
 import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermission } from './permissionSelection'
 import { ApprovalCard } from './ApprovalCard'
 import bloblexLogo from '../assets/bloblex-128.png'
@@ -41,6 +41,7 @@ import { applySoundPrefs, saveSoundsEnabled, saveSoundVolume, soundPrefsFromSett
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
 import { fetchCached, invalidateCatalog } from './catalogCache'
 import { ConversationsPanel } from './ConversationsPanel'
+import { SessionRail } from './SessionRail'
 import { conversationPlaceName, hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
@@ -108,7 +109,6 @@ import { entityNoun, useEntityNoun } from './vocabulary'
 import { themeStyle } from '../blob/bitbots'
 import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeBlobExport, writeMarkdownExport, currentCompanionMonitor } from '../tauri'
 
-type ContextTab = 'Details' | 'Runtime' | 'Files'
 type AppliedModelState = { sessionId: string; model: string | null; hasSnapshot: boolean; loading: boolean }
 type MessageMenuTarget = { x: number; y: number; sessionId: string; messageId: string; text: string; latest: boolean; references: NonNullable<ChatMessage['references']>; attachments: Array<{ name: string; path: string }>; replyTo: ReplyTarget | null }
 async function openSafeLink(url: string) {
@@ -259,7 +259,6 @@ export function App() {
   const [sessionDeleteTarget, setSessionDeleteTarget] = useState<Session | null>(null)
   const [rosterAnnouncement, setRosterAnnouncement] = useState('')
   const [archiveNotice, setArchiveNotice] = useState<string | null>(null)
-  const [tab, setTab] = useState<ContextTab>('Details')
   const [composer, setComposer] = useState('')
   const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null)
   const replyTargetRef = useRef<ReplyTarget | null>(null)
@@ -521,11 +520,6 @@ export function App() {
       ?? sessions.filter((session) => session.runtimeId === selectedRuntime?.id && !isSideSession(session)).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
       ?? null)
   detailsSessionIdRef.current = selectedSession?.id ?? null
-  const appliedModelForDetails = selectedSession
-    ? appliedModelState?.sessionId === selectedSession.id
-      ? appliedModelState.model?.trim() || (appliedModelState.hasSnapshot ? 'Unknown' : appliedModelState.loading ? 'Loading…' : 'Unavailable')
-      : 'Loading…'
-    : null
   const sessionMessages = selectedSession?.messages ?? selectedSession?.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages : []) ?? selectedSession?.events ?? []
   const conversationItems = selectedSession ? buildConversationItems(selectedSession) : []
   const waitingCount = waitingBlobCount(snapshot, permissionClock)
@@ -2363,17 +2357,12 @@ export function App() {
       </section>
 
       <aside className="context-pane" aria-label="Conversation details" aria-hidden={!detailsVisible} inert={!detailsVisible}>
-        <section className="context-head">
+        <section className="context-head compact">
           {activeSelectedAgent ? <BlobCanvas color={accent} size={64} mood={selectedMood} look={agentLook(activeSelectedAgent)} label={activeSelectedAgent.name} /> : <span className="context-head-placeholder"><Code2 size={20} /></span>}
           <h2>{agentName}</h2>
-          <p>{selectedRuntime ? [labelize(selectedRuntime.provider), selectedRuntime.version].filter(Boolean).join(' · ') : 'No coding agent selected'}</p>
+          <p>{selectedSession?.title?.trim() || (selectedRuntime ? [labelize(selectedRuntime.provider), selectedRuntime.version].filter(Boolean).join(' · ') : 'No coding agent selected')}</p>
         </section>
-        <div className="context-tabs" role="tablist" aria-label="Conversation context">{(['Details', 'Runtime', 'Files'] as ContextTab[]).map((name, index, tabs) => <button key={name} type="button" id={`context-tab-${name.toLowerCase()}`} role="tab" aria-controls="context-panel" aria-selected={tab === name} tabIndex={tab === name ? 0 : -1} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} onKeyDown={(event) => { if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return; event.preventDefault(); const targetIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length; const target = tabs[targetIndex]; setTab(target); document.getElementById(`context-tab-${target.toLowerCase()}`)?.focus() }}>{name}</button>)}</div>
-        <div id="context-panel" role="tabpanel" aria-labelledby={`context-tab-${tab.toLowerCase()}`} tabIndex={0} className="context-tab-panel">
-          {tab === 'Details' && <DetailsPane session={selectedSession} model={appliedModelForDetails} usage={snapshot?.usageSummary ?? null} onUsage={() => void showUsage()} />}
-          {tab === 'Runtime' && <RuntimePane runtime={selectedRuntime} connected={connection === 'connected'} onRefresh={() => void refreshRuntimes()} refreshing={refreshing} />}
-          {tab === 'Files' && <FilesPane session={selectedSession} onOpen={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onReveal={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopy={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} />}
-        </div>
+        <SessionRail session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
       </aside>
 
       {!companion && <ContextualHints enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet} />}
@@ -2668,109 +2657,6 @@ function ActivityItem({ item, onDiff }: { item: ConversationItem; onDiff?: (path
 
 function SafeMessageText({ text }: { text: string }) {
   return <SafeMarkdown text={text} onOpenLink={(url) => void openSafeLink(url)} />
-}
-
-function DetailRow({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
-  return <div className="detail-row"><span>{label}</span><strong className={mono ? 'mono' : undefined}>{value}</strong></div>
-}
-
-function DetailsPane({ session, model, usage, onUsage }: { session: Session | null; model: string | null; usage: Record<string, unknown> | null; onUsage: () => void }) {
-  const nouns = useEntityNoun({ plural: true })
-  return <div className="context-scroll">
-    <section className="context-section">
-      <h3>Conversation</h3>
-      {session ? <div className="detail-list">
-        <DetailRow label="Title" value={formatUnknownSafe(session.title, fileNameForPath(session.projectPath ?? '') ?? 'Untitled')} />
-        <DetailRow label="Project" value={session.projectPath ?? 'Unavailable'} mono />
-        <DetailRow label="Status" value={labelize(session.state, 'Unknown')} />
-        <DetailRow label="Model" value={model?.trim() ?? 'Unknown'} />
-      </div> : <p className="context-empty">No conversation selected.</p>}
-    </section>
-    <section className="context-section usage-section">
-      <h3>Usage <small className="usage-scope">All {nouns}, all time</small></h3>
-      <div className="detail-list">
-        <DetailRow label="Input tokens" value={tokenValue(usage?.inputTokens)} />
-        <DetailRow label="Output tokens" value={tokenValue(usage?.outputTokens)} />
-      </div>
-      <button type="button" className="secondary-button small context-action" onClick={onUsage}>Usage details</button>
-      <p className="honesty-note">Token usage is recorded when providers report it. Account quota is shown separately.</p>
-    </section>
-  </div>
-}
-
-function RuntimePane({ runtime, connected, refreshing, onRefresh }: { runtime: Runtime | null; connected: boolean; refreshing: boolean; onRefresh: () => void }) {
-  if (!runtime) return <div className="context-empty centered">{connected ? 'No coding agent selected.' : 'Runtime details appear when the daemon is connected.'}</div>
-  const host = runtime.host
-  const capabilities = Array.isArray(runtime.capabilities)
-    ? runtime.capabilities.map((capability) => String(capability))
-    : runtime.capabilities && typeof runtime.capabilities === 'object' ? Object.entries(runtime.capabilities).filter(([, enabled]) => enabled).map(([name]) => name) : []
-  return <div className="context-scroll">
-    <section className="context-section">
-      <h3>Runtime <button className="icon-button quiet" title="Refresh runtime" aria-label="Refresh runtime" onClick={onRefresh} disabled={refreshing}><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button></h3>
-      <div className="detail-list">
-        <DetailRow label="Daemon" value={connected ? 'Connected' : 'Disconnected'} />
-        <DetailRow label="Version" value={runtime.version ?? 'Unknown'} />
-        <DetailRow label="Sign-in" value={labelize(runtime.authState, 'Unknown')} />
-        <DetailRow label="Protocol" value={labelize(runtime.protocolFamily, 'Unknown')} />
-        <DetailRow label="Host" value={typeof host?.name === 'string' ? host.name : runtime.hostId ?? 'This computer'} />
-        <DetailRow label="Executable" value={runtime.executablePath ?? 'Unknown'} mono />
-      </div>
-    </section>
-    <section className="context-section">
-      <h3>Capabilities</h3>
-      {capabilities.length ? <div className="capability-list">{capabilities.map((name) => <span key={name}>{labelize(name)}</span>)}</div> : <p className="context-empty">Not reported by this runtime.</p>}
-    </section>
-  </div>
-}
-
-function FilesPane({ session, onOpen, onReveal, onCopy, onDiff }: { session: Session | null; onOpen: (path: string) => void; onReveal: (path: string) => void; onCopy: (path: string) => void; onDiff: (path: string, content: string) => void }) {
-  const platform = usePlatform()
-  const files = session?.files ?? []
-  if (files.length === 0) return <div className="context-scroll"><div className="files-empty"><FileText size={20} /><strong>No files yet</strong><span>Files the agent edits in this conversation appear here.</span></div></div>
-  const turns = session?.turns ?? []
-  const turnInfo = new Map(turns.map((turn, index) => {
-    const at = [turn.completedAt, turn.updatedAt, turn.startedAt, turn.createdAt].find((value) => typeof value === 'string' && Number.isFinite(Date.parse(value)))
-    return [String(turn.id ?? turn.turnId ?? ''), { index, at: typeof at === 'string' ? Date.parse(at) : 0 }] as const
-  }))
-  const groups = new Map<string, { id: string; label: string; index: number; at: number; sequence: number; files: Array<Record<string, unknown>> }>()
-  for (const file of files) {
-    const id = typeof file.turnId === 'string' ? file.turnId : ''
-    const info = id ? turnInfo.get(id) : undefined
-    const order = info?.index ?? -1
-    const sequence = typeof file.sequence === 'number' ? file.sequence : 0
-    const key = id || '__ungrouped__'
-    const title = id ? `Turn ${order >= 0 ? order + 1 : 'with changes'}` : 'Other changes'
-    const changedAt = typeof file.changedAt === 'string' ? Date.parse(file.changedAt) : 0
-    const group = groups.get(key) ?? { id: key, label: title, index: order, at: info?.at || (Number.isFinite(changedAt) ? changedAt : 0), sequence, files: [] }
-    group.sequence = Math.max(group.sequence, sequence)
-    group.files.push(file)
-    groups.set(key, group)
-  }
-  const orderedGroups = [...groups.values()].sort((a, b) => b.at - a.at || b.index - a.index || b.sequence - a.sequence)
-  const renderFile = (file: Record<string, unknown>, index: number) => {
-    const path = String(file.path ?? file.filePath ?? 'Unknown path')
-    const diff = typeof file.diff === 'string' ? file.diff : typeof file.patch === 'string' ? file.patch : null
-    const parsed = diff ? parseUnifiedDiff(diff) : null
-    const added = typeof file.addedLines === 'number' ? file.addedLines : typeof file.additions === 'number' ? file.additions : parsed?.additions ?? null
-    const removed = typeof file.removedLines === 'number' ? file.removedLines : typeof file.deletions === 'number' ? file.deletions : parsed?.deletions ?? null
-    const unknown = path === 'Unknown path'
-    return <article className="file-row" key={String(file.id ?? path) + index}>
-      <FileText size={15} />
-      <span className="file-main"><strong>{path.split(/[\\/]/).pop()}</strong><small>{path}</small></span>
-      {added !== null && <em>+{added}</em>}
-      {removed !== null && <i>−{removed}</i>}
-      <span className="file-actions">
-        {platform.editor && <>
-          <button title="Open in editor" aria-label={`Open ${path} in editor`} disabled={unknown} onClick={() => onOpen(path)}><Code2 size={13} /></button>
-          <button title="Reveal in File Explorer" aria-label={`Reveal ${path} in File Explorer`} disabled={unknown} onClick={() => onReveal(path)}><FolderOpen size={13} /></button>
-        </>}
-        <button title="Copy path" aria-label={`Copy ${path}`} disabled={unknown} onClick={() => onCopy(path)}><Copy size={13} /></button>
-        <button title={diff ? 'View diff' : 'No diff reported'} aria-label={`View diff for ${path}`} disabled={!diff} onClick={() => diff && onDiff(path, diff)}><FileText size={13} /></button>
-      </span>
-    </article>
-  }
-  const hasTurnInformation = files.some((file) => typeof file.turnId === 'string' && file.turnId)
-  return <div className="context-scroll"><div className="file-list">{hasTurnInformation ? orderedGroups.map((group) => <section className="file-turn-group" key={group.id}><h3>{group.label}</h3>{group.files.map(renderFile)}</section>) : files.map(renderFile)}</div></div>
 }
 
 function DiffViewer({ path, content, onClose }: { path: string; content: string; onClose: () => void }) {

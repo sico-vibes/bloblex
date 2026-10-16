@@ -369,7 +369,8 @@ describe('App mounted lifecycle', () => {
     })
     const view = startApp()
     await view.settle()
-    const modelRow = () => [...view.host.querySelectorAll<HTMLElement>('.detail-row')].find((row) => row.firstElementChild?.textContent === 'Model')
+    // The session rail's Environment card shows the model the coding agent reported using.
+    const modelRow = () => view.host.querySelector<HTMLElement>('.session-rail .rail-row-main[title="The model the coding agent reported using"]')
     expect(modelRow()?.textContent).toContain('model-before')
 
     latestModel = 'model-after'
@@ -377,12 +378,12 @@ describe('App mounted lifecycle', () => {
     act(() => h.daemonEventHandlers.at(-1)!({ sequence: 21, type: 'exec.options.changed', payload: { sessionId: 'session-a', turnId: 'turn-a' } }))
     await view.settle()
     expect(modelRow()?.textContent).toContain('model-before')
-    expect(view.host.querySelectorAll('.detail-row')[2]?.textContent).toContain('Working')
+    expect(view.host.querySelector('.working-indicator')?.textContent).toContain('is working')
 
     await act(async () => { nextSnapshot.resolve(execSnapshot(latestModel)); await settleMicrotasks() })
     await view.settle()
     expect(modelRow()?.textContent).toContain('model-after')
-    expect(view.host.querySelectorAll('.detail-row')[2]?.textContent).toContain('Working')
+    expect(view.host.querySelector('.working-indicator')?.textContent).toContain('is working')
   })
 
   it('keeps one opt-in companion sound owner in compact and home, and unlocks only on gesture', async () => {

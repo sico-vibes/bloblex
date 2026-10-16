@@ -1,0 +1,1812 @@
+{
+  "authorize": [
+    {
+      "name": "read-allowed-viewer",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": false,
+        "method": "app.snapshot",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "read-allowed-operator",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": false,
+        "method": "session.list",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "read-quiet-hours-passes",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": false,
+        "method": "session.get",
+        "params": {},
+        "quietHours": true
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "read-quiet-hours-runtime-list",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": false,
+        "method": "runtime.list",
+        "params": {},
+        "quietHours": true
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "chat-requires-tier",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": false,
+        "method": "session.prompt",
+        "params": {
+          "sessionId": "s",
+          "text": "hi"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "tier_required",
+        "reason": "a viewer device cannot call session.prompt"
+      }
+    },
+    {
+      "name": "chat-allowed",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": false,
+        "method": "session.cancel",
+        "params": {
+          "sessionId": "s"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "chat-allowed-operator",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": false,
+        "method": "session.archive",
+        "params": {
+          "sessionId": "s"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "chat-quiet-hours-denied",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": false,
+        "method": "session.cancel",
+        "params": {
+          "sessionId": "s"
+        },
+        "quietHours": true
+      },
+      "expect": {
+        "allowed": false,
+        "code": "quiet_hours",
+        "reason": "quiet hours are on; this host only allows reading right now"
+      }
+    },
+    {
+      "name": "approve-tier-denied-viewer",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": true,
+        "method": "permission.reply",
+        "params": {
+          "permissionId": "p",
+          "choice": "allow"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "approvals_disabled",
+        "reason": "a viewer device cannot approve on this host"
+      }
+    },
+    {
+      "name": "approve-tier-denied-chat",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": true,
+        "method": "permission.reply",
+        "params": {
+          "permissionId": "p",
+          "choice": "allow"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "approvals_disabled",
+        "reason": "a chat device cannot approve on this host"
+      }
+    },
+    {
+      "name": "approve-approvals-off",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": false,
+        "method": "permission.reply",
+        "params": {
+          "permissionId": "p",
+          "choice": "allow"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "approvals_disabled",
+        "reason": "approvals from remote are turned off on this host"
+      }
+    },
+    {
+      "name": "approve-allowed",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "permission.reply",
+        "params": {
+          "permissionId": "p",
+          "choice": "allow"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "approve-quiet-hours-denied",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "permission.reply",
+        "params": {
+          "permissionId": "p",
+          "choice": "allow"
+        },
+        "quietHours": true
+      },
+      "expect": {
+        "allowed": false,
+        "code": "quiet_hours",
+        "reason": "quiet hours are on; this host only allows reading right now"
+      }
+    },
+    {
+      "name": "never-class-settings-set",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "settings.set",
+        "params": {
+          "key": "x",
+          "value": 1
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "A remote device must not change the host's preferences."
+      }
+    },
+    {
+      "name": "never-class-family-mcp",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "mcp.memory_search",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "The MCP bridge is the local agent tool surface, not a remote device surface."
+      }
+    },
+    {
+      "name": "never-class-family-session-delete",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "session.delete.schedule",
+        "params": {
+          "sessionId": "s"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "A remote device must not schedule or cancel a conversation deletion."
+      }
+    },
+    {
+      "name": "exact-beats-family-session-delete",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "session.delete",
+        "params": {
+          "sessionId": "s"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "A remote device must not permanently delete a conversation."
+      }
+    },
+    {
+      "name": "family-read-exec-snapshot",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": false,
+        "method": "exec.snapshot.latest",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "family-read-usage",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": false,
+        "method": "usage.summary",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "family-chat-queue",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": false,
+        "method": "session.queue.add",
+        "params": {
+          "sessionId": "s",
+          "text": "hi",
+          "attachments": [
+            {
+              "stagedId": "up_1",
+              "name": "a.png"
+            }
+          ]
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "unknown-method",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "something.else",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "not on the remote allowlist"
+      }
+    },
+    {
+      "name": "unknown-method-quiet-read-lookalike",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": false,
+        "method": "usage.pending",
+        "params": {},
+        "quietHours": true
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "param-staged-raw-path",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": false,
+        "method": "session.prompt",
+        "params": {
+          "sessionId": "s",
+          "text": "hi",
+          "attachments": [
+            {
+              "path": "C:\\secret\\a.png",
+              "name": "a.png"
+            }
+          ]
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "invalid_params",
+        "reason": "attachments must be staged uploads; a raw path is not accepted"
+      }
+    },
+    {
+      "name": "param-staged-missing-id",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": false,
+        "method": "session.prompt",
+        "params": {
+          "sessionId": "s",
+          "text": "hi",
+          "attachments": [
+            {
+              "name": "a.png"
+            }
+          ]
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "invalid_params",
+        "reason": "attachments must carry a stagedId"
+      }
+    },
+    {
+      "name": "param-staged-non-object",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": false,
+        "method": "session.prompt",
+        "params": {
+          "sessionId": "s",
+          "text": "hi",
+          "attachments": [
+            "raw"
+          ]
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "invalid_params",
+        "reason": "attachments must be staged uploads, not raw values"
+      }
+    },
+    {
+      "name": "param-staged-empty-id",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": false,
+        "method": "session.queue.add",
+        "params": {
+          "sessionId": "s",
+          "text": "hi",
+          "attachments": [
+            {
+              "stagedId": ""
+            }
+          ]
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "invalid_params",
+        "reason": "attachments must carry a stagedId"
+      }
+    },
+    {
+      "name": "param-staged-allowed",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": false,
+        "method": "session.prompt",
+        "params": {
+          "sessionId": "s",
+          "text": "hi",
+          "attachments": [
+            {
+              "stagedId": "up_1",
+              "name": "a.png"
+            }
+          ]
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "param-staged-no-attachments",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": false,
+        "method": "session.prompt",
+        "params": {
+          "sessionId": "s",
+          "text": "hi"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "param-permission-no-params",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "permission.reply",
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "invalid_params",
+        "reason": "permission.reply requires permissionId and choice"
+      }
+    },
+    {
+      "name": "param-permission-empty-params",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "permission.reply",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "invalid_params",
+        "reason": "permission.reply requires a permissionId"
+      }
+    },
+    {
+      "name": "param-permission-missing-id",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "permission.reply",
+        "params": {
+          "choice": "allow"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "invalid_params",
+        "reason": "permission.reply requires a permissionId"
+      }
+    },
+    {
+      "name": "param-permission-missing-choice",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "permission.reply",
+        "params": {
+          "permissionId": "p"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "invalid_params",
+        "reason": "permission.reply requires a choice"
+      }
+    },
+    {
+      "name": "param-permission-empty-strings",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "permission.reply",
+        "params": {
+          "permissionId": "",
+          "choice": ""
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "invalid_params",
+        "reason": "permission.reply requires a permissionId"
+      }
+    },
+    {
+      "name": "param-runtime-models-refresh-true",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": false,
+        "method": "runtime.models",
+        "params": {
+          "runtimeId": "rt",
+          "refresh": true
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "invalid_params",
+        "reason": "a device may not make the host poll providers (refresh is not accepted)"
+      }
+    },
+    {
+      "name": "param-runtime-models-refresh-false",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": false,
+        "method": "runtime.models",
+        "params": {
+          "runtimeId": "rt",
+          "refresh": false
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "param-runtime-models-no-refresh",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": false,
+        "method": "runtime.models",
+        "params": {
+          "runtimeId": "rt"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "param-runtime-models-string-refresh",
+      "call": {
+        "tier": "viewer",
+        "approvalsFromRemote": false,
+        "method": "runtime.models",
+        "params": {
+          "runtimeId": "rt",
+          "refresh": "true"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    }
+  ],
+  "results": [
+    {
+      "name": "app-snapshot",
+      "method": "app.snapshot",
+      "options": {},
+      "input": {
+        "runtimes": [
+          {
+            "id": "rt_1",
+            "executablePath": "C:\\Tools\\codex.exe",
+            "launchArgs": [
+              "--profile",
+              "work"
+            ]
+          }
+        ],
+        "sessions": [
+          {
+            "id": "s_1",
+            "projectPath": "C:\\Users\\sam\\repos\\bloblex\\apps",
+            "providerSessionId": "thread_1"
+          }
+        ]
+      },
+      "expect": {
+        "runtimes": [
+          {
+            "id": "rt_1",
+            "executablePath": "codex.exe",
+            "launchArgs": {
+              "argCount": 2
+            }
+          }
+        ],
+        "sessions": [
+          {
+            "id": "s_1",
+            "projectPath": "bloblex/apps"
+          }
+        ]
+      }
+    },
+    {
+      "name": "session-get",
+      "method": "session.get",
+      "options": {},
+      "input": {
+        "id": "s_1",
+        "providerSessionId": "thread_opaque",
+        "projectPath": "C:\\Users\\sam\\repos\\bloblex\\apps\\desktop",
+        "messages": [
+          {
+            "id": "m_1",
+            "content": "hello",
+            "attachments": [
+              {
+                "name": "a.png",
+                "path": "C:\\pics\\a.png"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "id": "t_1",
+            "detail": {
+              "output": "SECRET=1"
+            }
+          }
+        ]
+      },
+      "expect": {
+        "id": "s_1",
+        "projectPath": "apps/desktop",
+        "messages": [
+          {
+            "id": "m_1",
+            "content": "hello",
+            "attachments": [
+              {
+                "name": "a.png",
+                "path": "a.png"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "id": "t_1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "session-list",
+      "method": "session.list",
+      "options": {},
+      "input": {
+        "sessions": [
+          {
+            "id": "s_1",
+            "projectPath": "C:\\Users\\sam\\repos\\bloblex\\deep",
+            "providerSessionId": "t"
+          },
+          {
+            "id": "s_2",
+            "projectPath": "relative/project"
+          }
+        ]
+      },
+      "expect": {
+        "sessions": [
+          {
+            "id": "s_1",
+            "projectPath": "bloblex/deep"
+          },
+          {
+            "id": "s_2",
+            "projectPath": "relative/project"
+          }
+        ]
+      }
+    },
+    {
+      "name": "agent-get",
+      "method": "agent.get",
+      "options": {},
+      "input": {
+        "agent": {
+          "id": "a_1",
+          "instructions": "x",
+          "customArgs": [
+            "--api-key",
+            "k"
+          ],
+          "customEnv": {
+            "LANG": "en"
+          },
+          "defaultProject": "C:\\Users\\sam\\deep\\proj"
+        }
+      },
+      "expect": {
+        "agent": {
+          "id": "a_1",
+          "instructions": {
+            "hasInstructions": true
+          },
+          "customArgs": {
+            "argCount": 2
+          },
+          "customEnv": {},
+          "defaultProject": "deep/proj"
+        }
+      }
+    },
+    {
+      "name": "agent-list",
+      "method": "agent.list",
+      "options": {},
+      "input": {
+        "agents": [
+          {
+            "id": "a_1",
+            "customArgs": [
+              "--x"
+            ],
+            "customEnv": {
+              "A": "1"
+            },
+            "instructions": ""
+          },
+          {
+            "id": "a_2",
+            "customArgs": [],
+            "customEnv": {},
+            "instructions": "Do the thing."
+          }
+        ]
+      },
+      "expect": {
+        "agents": [
+          {
+            "id": "a_1",
+            "customArgs": {
+              "argCount": 1
+            },
+            "customEnv": {},
+            "instructions": ""
+          },
+          {
+            "id": "a_2",
+            "customArgs": {
+              "argCount": 0
+            },
+            "customEnv": {},
+            "instructions": {
+              "hasInstructions": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "runtime-list",
+      "method": "runtime.list",
+      "options": {},
+      "input": {
+        "runtimes": [
+          {
+            "id": "rt_1",
+            "executablePath": "C:\\Tools\\codex.exe",
+            "launchArgs": [
+              "--profile",
+              "work"
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "runtimes": [
+          {
+            "id": "rt_1",
+            "executablePath": "codex.exe",
+            "launchArgs": {
+              "argCount": 2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "runtime-profile-list",
+      "method": "runtime.profile.list",
+      "options": {},
+      "input": {
+        "profiles": [
+          {
+            "id": "p_1",
+            "executablePath": "C:\\Tools\\codex.exe",
+            "args": [
+              "--profile",
+              "work"
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "profiles": [
+          {
+            "id": "p_1",
+            "executablePath": "codex.exe",
+            "args": {
+              "argCount": 2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "search-messages",
+      "method": "search.messages",
+      "options": {},
+      "input": {
+        "matches": [
+          {
+            "id": "m_1",
+            "sessionId": "s_1",
+            "snippet": "hello C:\\Users\\sam\\deep\\a.ts",
+            "apiKey": "x"
+          }
+        ]
+      },
+      "expect": {
+        "matches": [
+          {
+            "id": "m_1",
+            "sessionId": "s_1",
+            "snippet": "hello C:\\Users\\sam\\deep\\a.ts"
+          }
+        ]
+      }
+    },
+    {
+      "name": "automation-get",
+      "method": "automation.get",
+      "options": {},
+      "input": {
+        "automation": {
+          "id": "au_1",
+          "prompt": "Summarise the repository",
+          "apiKey": "nope"
+        }
+      },
+      "expect": {
+        "automation": {
+          "id": "au_1",
+          "prompt": "Summarise the repository"
+        }
+      }
+    },
+    {
+      "name": "memory-get-kept",
+      "method": "memory.get",
+      "options": {},
+      "input": {
+        "record": {
+          "id": "mem_1",
+          "title": "Dark mode",
+          "body": "the user prefers dark mode"
+        }
+      },
+      "expect": {
+        "record": {
+          "id": "mem_1",
+          "title": "Dark mode",
+          "body": "the user prefers dark mode"
+        }
+      }
+    },
+    {
+      "name": "memory-list-kept",
+      "method": "memory.list",
+      "options": {},
+      "input": {
+        "records": [
+          {
+            "id": "mem_1",
+            "title": "Dark mode"
+          }
+        ]
+      },
+      "expect": {
+        "records": [
+          {
+            "id": "mem_1",
+            "title": "Dark mode"
+          }
+        ]
+      }
+    },
+    {
+      "name": "settings-get-allowlist",
+      "method": "settings.get",
+      "options": {},
+      "input": {
+        "appearance.style": "dark",
+        "appearance.accent": "amber",
+        "profile.about": "private",
+        "apiSecret": "x"
+      },
+      "expect": {
+        "appearance.style": "dark",
+        "appearance.accent": "amber"
+      }
+    },
+    {
+      "name": "default-read-project-list",
+      "method": "project.list",
+      "options": {},
+      "input": {
+        "projects": [
+          {
+            "id": "pr_1",
+            "path": "C:\\Users\\sam\\repos\\bloblex\\deep\\proj",
+            "secret": "x"
+          }
+        ]
+      },
+      "expect": {
+        "projects": [
+          {
+            "id": "pr_1",
+            "path": "deep/proj"
+          }
+        ]
+      }
+    },
+    {
+      "name": "default-non-read-unchanged",
+      "method": "session.prompt",
+      "options": {},
+      "input": {
+        "ok": true,
+        "path": "C:\\Users\\sam\\deep\\x"
+      },
+      "expect": {
+        "ok": true,
+        "path": "C:\\Users\\sam\\deep\\x"
+      }
+    },
+    {
+      "name": "session-get-tool-output",
+      "method": "session.get",
+      "options": {
+        "includeToolOutput": true
+      },
+      "input": {
+        "id": "s_1",
+        "tools": [
+          {
+            "id": "t_1",
+            "detail": {
+              "command": "env",
+              "output": "SECRET=1"
+            }
+          }
+        ],
+        "turns": [
+          {
+            "id": "turn_1",
+            "detail": "provider failure"
+          }
+        ]
+      },
+      "expect": {
+        "id": "s_1",
+        "tools": [
+          {
+            "id": "t_1",
+            "detail": {
+              "command": "env",
+              "output": "SECRET=1"
+            }
+          }
+        ],
+        "turns": [
+          {
+            "id": "turn_1"
+          }
+        ]
+      }
+    }
+  ],
+  "snapshots": [
+    {
+      "name": "windows-paths",
+      "options": {},
+      "input": {
+        "runtimes": [
+          {
+            "id": "rt_1",
+            "executablePath": "C:\\Tools\\codex.exe",
+            "launchArgs": [
+              "--profile",
+              "work",
+              "--x"
+            ]
+          }
+        ],
+        "runtimeProfiles": [
+          {
+            "id": "p_1",
+            "executablePath": "C:\\Users\\sam\\bin\\claude.exe",
+            "args": [
+              "--a"
+            ]
+          }
+        ],
+        "profiles": [
+          {
+            "id": "p_2",
+            "executablePath": "D:\\node\\node.exe",
+            "args": []
+          }
+        ],
+        "agents": [
+          {
+            "id": "a_1",
+            "defaultProject": "C:\\Users\\sam\\repos\\bloblex\\apps\\desktop",
+            "customArgs": [
+              "--api-key",
+              "k"
+            ],
+            "customEnv": {
+              "LANG": "en"
+            },
+            "instructions": "Do it."
+          }
+        ],
+        "projects": [
+          {
+            "id": "pr_1",
+            "path": "C:\\Users\\sam\\deep\\project"
+          }
+        ],
+        "sessions": [
+          {
+            "id": "s_1",
+            "projectPath": "C:\\Users\\sam\\repos\\bloblex\\src",
+            "providerSessionId": "thread_1",
+            "messages": [
+              {
+                "id": "m_1",
+                "role": "user",
+                "content": "hi",
+                "attachments": [
+                  {
+                    "name": "a.png",
+                    "path": "C:\\Users\\sam\\pics\\a.png"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "runtimes": [
+          {
+            "id": "rt_1",
+            "executablePath": "codex.exe",
+            "launchArgs": {
+              "argCount": 3
+            }
+          }
+        ],
+        "runtimeProfiles": [
+          {
+            "id": "p_1",
+            "executablePath": "claude.exe",
+            "args": {
+              "argCount": 1
+            }
+          }
+        ],
+        "profiles": [
+          {
+            "id": "p_2",
+            "executablePath": "node.exe",
+            "args": {
+              "argCount": 0
+            }
+          }
+        ],
+        "agents": [
+          {
+            "id": "a_1",
+            "defaultProject": "apps/desktop",
+            "customArgs": {
+              "argCount": 2
+            },
+            "customEnv": {},
+            "instructions": {
+              "hasInstructions": true
+            }
+          }
+        ],
+        "projects": [
+          {
+            "id": "pr_1",
+            "path": "deep/project"
+          }
+        ],
+        "sessions": [
+          {
+            "id": "s_1",
+            "projectPath": "bloblex/src",
+            "messages": [
+              {
+                "id": "m_1",
+                "role": "user",
+                "content": "hi",
+                "attachments": [
+                  {
+                    "name": "a.png",
+                    "path": "a.png"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "posix-paths",
+      "options": {},
+      "input": {
+        "runtimes": [
+          {
+            "id": "rt_1",
+            "executablePath": "/usr/local/bin/codex",
+            "launchArgs": [
+              "--y"
+            ]
+          }
+        ],
+        "runtimeProfiles": [
+          {
+            "id": "p_1",
+            "executablePath": "/opt/claude/bin/claude",
+            "args": [
+              "--x",
+              "--y"
+            ]
+          }
+        ],
+        "profiles": [
+          {
+            "id": "p_2",
+            "executablePath": "/usr/bin/node",
+            "args": []
+          }
+        ],
+        "agents": [
+          {
+            "id": "a_1",
+            "defaultProject": "/home/sam/repos/bloblex/apps/desktop",
+            "instructions": ""
+          }
+        ],
+        "projects": [
+          {
+            "id": "pr_1",
+            "path": "/home/sam/deep/project"
+          }
+        ],
+        "sessions": [
+          {
+            "id": "s_1",
+            "projectPath": "/home/sam/repos/bloblex/src",
+            "files": [
+              {
+                "id": "f_1",
+                "path": "/home/sam/repos/bloblex/src/main.ts"
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "runtimes": [
+          {
+            "id": "rt_1",
+            "executablePath": "codex",
+            "launchArgs": {
+              "argCount": 1
+            }
+          }
+        ],
+        "runtimeProfiles": [
+          {
+            "id": "p_1",
+            "executablePath": "claude",
+            "args": {
+              "argCount": 2
+            }
+          }
+        ],
+        "profiles": [
+          {
+            "id": "p_2",
+            "executablePath": "node",
+            "args": {
+              "argCount": 0
+            }
+          }
+        ],
+        "agents": [
+          {
+            "id": "a_1",
+            "defaultProject": "apps/desktop",
+            "instructions": ""
+          }
+        ],
+        "projects": [
+          {
+            "id": "pr_1",
+            "path": "deep/project"
+          }
+        ],
+        "sessions": [
+          {
+            "id": "s_1",
+            "projectPath": "bloblex/src",
+            "files": [
+              {
+                "id": "f_1",
+                "path": "src/main.ts"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "nested-detail-default",
+      "options": {},
+      "input": {
+        "sessions": [
+          {
+            "id": "s_1",
+            "tools": [
+              {
+                "id": "t_1",
+                "detail": {
+                  "command": "env",
+                  "output": "SECRET=1"
+                }
+              }
+            ],
+            "turns": [
+              {
+                "id": "turn_1",
+                "detail": {
+                  "text": "provider failure",
+                  "path": "C:\\deep\\x"
+                }
+              }
+            ],
+            "files": [
+              {
+                "id": "f_1",
+                "path": "C:\\Users\\sam\\deep\\x.ts",
+                "detail": {
+                  "diff": "a secret diff"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "sessions": [
+          {
+            "id": "s_1",
+            "tools": [
+              {
+                "id": "t_1"
+              }
+            ],
+            "turns": [
+              {
+                "id": "turn_1"
+              }
+            ],
+            "files": [
+              {
+                "id": "f_1",
+                "path": "deep/x.ts"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "nested-detail-with-output",
+      "options": {
+        "includeToolOutput": true
+      },
+      "input": {
+        "sessions": [
+          {
+            "id": "s_1",
+            "tools": [
+              {
+                "id": "t_1",
+                "detail": {
+                  "command": "env",
+                  "output": "SECRET=1"
+                }
+              }
+            ],
+            "turns": [
+              {
+                "id": "turn_1",
+                "detail": {
+                  "text": "provider failure",
+                  "path": "C:\\deep\\x"
+                }
+              }
+            ],
+            "files": [
+              {
+                "id": "f_1",
+                "path": "C:\\Users\\sam\\deep\\x.ts",
+                "detail": {
+                  "diff": "a secret diff"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "sessions": [
+          {
+            "id": "s_1",
+            "tools": [
+              {
+                "id": "t_1",
+                "detail": {
+                  "command": "env",
+                  "output": "SECRET=1"
+                }
+              }
+            ],
+            "turns": [
+              {
+                "id": "turn_1"
+              }
+            ],
+            "files": [
+              {
+                "id": "f_1",
+                "path": "deep/x.ts"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "sensitive-keys-and-env",
+      "options": {},
+      "input": {
+        "daemon": {
+          "state": "ready",
+          "capability": "mem-secret"
+        },
+        "extra": {
+          "apiKey": "k",
+          "api_key": "k2",
+          "api-key": "k3",
+          "privateKey": "p",
+          "private_key": "p2",
+          "authorization": "Bearer x",
+          "cookie": "c",
+          "bearer_token": "b",
+          "accessToken": "t1",
+          "credentialRef": "r",
+          "password": "pw",
+          "clientSecret": "s"
+        },
+        "agents": [
+          {
+            "id": "a_1",
+            "customEnv": {
+              "LANG": "en",
+              "TOKEN": "x"
+            },
+            "customArgs": [
+              "--api-key",
+              "abc"
+            ],
+            "instructions": "Do the thing."
+          }
+        ],
+        "sessions": [
+          {
+            "id": "s_1",
+            "providerSessionId": "thread_opaque",
+            "nested": {
+              "deep": {
+                "refreshToken": "r"
+              }
+            }
+          }
+        ],
+        "settings": {
+          "appearance.style": "dark",
+          "profile.about": "private",
+          "apiSecret": "nope"
+        },
+        "sequence": 42
+      },
+      "expect": {
+        "daemon": {
+          "state": "ready"
+        },
+        "extra": {},
+        "agents": [
+          {
+            "id": "a_1",
+            "customEnv": {},
+            "customArgs": {
+              "argCount": 2
+            },
+            "instructions": {
+              "hasInstructions": true
+            }
+          }
+        ],
+        "sessions": [
+          {
+            "id": "s_1",
+            "nested": {
+              "deep": {}
+            }
+          }
+        ],
+        "settings": {
+          "appearance.style": "dark"
+        },
+        "sequence": 42
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "message-completed",
+      "input": {
+        "v": 1,
+        "type": "message.completed",
+        "payload": {
+          "sessionId": "s",
+          "content": "hello",
+          "raw": {
+            "provider": "x"
+          },
+          "providerPayload": {
+            "secret": "y"
+          }
+        }
+      },
+      "expect": {
+        "v": 1,
+        "type": "message.completed",
+        "payload": {
+          "sessionId": "s",
+          "content": "hello"
+        }
+      }
+    },
+    {
+      "name": "turn-error-long",
+      "input": {
+        "type": "turn.error",
+        "payload": {
+          "sessionId": "s",
+          "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "detail": "C:\\Users\\sam\\deep\\proj\\file.ts failed"
+        }
+      },
+      "expect": {
+        "type": "turn.error",
+        "payload": {
+          "sessionId": "s",
+          "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "detail": "proj/file.ts failed"
+        }
+      }
+    },
+    {
+      "name": "turn-error-short",
+      "input": {
+        "type": "turn.error",
+        "payload": {
+          "sessionId": "s",
+          "message": "boom at C:\\Users\\sam\\deep\\x"
+        }
+      },
+      "expect": {
+        "type": "turn.error",
+        "payload": {
+          "sessionId": "s",
+          "message": "boom at C:\\Users\\sam\\deep\\x"
+        }
+      }
+    },
+    {
+      "name": "permission-requested",
+      "input": {
+        "type": "permission.requested",
+        "payload": {
+          "sessionId": "s",
+          "title": "Run tests",
+          "detail": "pnpm test",
+          "path": "C:\\Users\\sam\\repos\\bloblex\\src\\a.ts"
+        }
+      },
+      "expect": {
+        "type": "permission.requested",
+        "payload": {
+          "sessionId": "s",
+          "title": "Run tests",
+          "detail": "pnpm test",
+          "path": "src/a.ts"
+        }
+      }
+    },
+    {
+      "name": "agent-changed",
+      "input": {
+        "type": "agent.changed",
+        "payload": {
+          "action": "updated",
+          "agentId": "a_1",
+          "customArgs": [
+            "--api-key",
+            "k"
+          ],
+          "customEnv": {
+            "LANG": "en"
+          },
+          "defaultProject": "C:\\Users\\sam\\deep\\proj"
+        }
+      },
+      "expect": {
+        "type": "agent.changed",
+        "payload": {
+          "action": "updated",
+          "agentId": "a_1",
+          "customArgs": {
+            "argCount": 2
+          },
+          "customEnv": {},
+          "defaultProject": "deep/proj"
+        }
+      }
+    },
+    {
+      "name": "message-delta-default",
+      "input": {
+        "type": "message.delta",
+        "payload": {
+          "sessionId": "s",
+          "delta": "hi",
+          "apiKey": "x"
+        }
+      },
+      "expect": {
+        "type": "message.delta",
+        "payload": {
+          "sessionId": "s",
+          "delta": "hi"
+        }
+      }
+    },
+    {
+      "name": "session-changed-default",
+      "input": {
+        "type": "session.changed",
+        "payload": {
+          "sessionId": "s"
+        }
+      },
+      "expect": {
+        "type": "session.changed",
+        "payload": {
+          "sessionId": "s"
+        }
+      }
+    },
+    {
+      "name": "usage-updated-default",
+      "input": {
+        "type": "usage.updated",
+        "payload": {
+          "sessionId": "s",
+          "totals": {
+            "tokens": 10
+          }
+        }
+      },
+      "expect": {
+        "type": "usage.updated",
+        "payload": {
+          "sessionId": "s",
+          "totals": {}
+        }
+      }
+    },
+    {
+      "name": "daemon-health-default",
+      "input": {
+        "type": "daemon.health",
+        "payload": {
+          "state": "ready",
+          "version": "0.1.0",
+          "uptimeSeconds": 12
+        }
+      },
+      "expect": {
+        "type": "daemon.health",
+        "payload": {
+          "state": "ready",
+          "version": "0.1.0",
+          "uptimeSeconds": 12
+        }
+      }
+    },
+    {
+      "name": "turn-completed-default",
+      "input": {
+        "type": "turn.completed",
+        "payload": {
+          "sessionId": "s",
+          "ok": true
+        }
+      },
+      "expect": {
+        "type": "turn.completed",
+        "payload": {
+          "sessionId": "s",
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "queue-changed-nested-sensitive",
+      "input": {
+        "type": "queue.changed",
+        "payload": {
+          "sessionId": "s",
+          "items": [
+            {
+              "id": "q1",
+              "token": "t"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "type": "queue.changed",
+        "payload": {
+          "sessionId": "s",
+          "items": [
+            {
+              "id": "q1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "dropped-backup-imported",
+      "input": {
+        "type": "backup.imported",
+        "payload": {}
+      },
+      "expect": null
+    },
+    {
+      "name": "dropped-tool-changed",
+      "input": {
+        "type": "tool.changed",
+        "payload": {}
+      },
+      "expect": null
+    },
+    {
+      "name": "dropped-settings-changed",
+      "input": {
+        "type": "settings.changed",
+        "payload": {}
+      },
+      "expect": null
+    },
+    {
+      "name": "unknown-type",
+      "input": {
+        "type": "some.new.event",
+        "payload": {}
+      },
+      "expect": null
+    },
+    {
+      "name": "missing-type",
+      "input": {
+        "payload": {}
+      },
+      "expect": null
+    },
+    {
+      "name": "non-object-null",
+      "input": null,
+      "expect": null
+    },
+    {
+      "name": "non-object-array",
+      "input": [
+        1,
+        2,
+        3
+      ],
+      "expect": null
+    },
+    {
+      "name": "non-object-string",
+      "input": "turn.error",
+      "expect": null
+    }
+  ]
+}

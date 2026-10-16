@@ -33,6 +33,7 @@ chrono = { version = "0.4", features = ["serde", "clock"] }
 chrono-tz = "0.10"
 futures-util = "0.3"
 rand = "0.9"
+regex = "1"
 rusqlite = { version = "0.37", features = ["bundled", "chrono", "backup"] }
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }

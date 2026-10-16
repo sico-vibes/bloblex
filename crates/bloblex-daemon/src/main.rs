@@ -49,6 +49,10 @@ mod backup;
 mod memory;
 mod questions;
 mod skills;
+// Remote mode (P1). WP6a adds the shared policy port; WP6b is the first
+// production caller, so the module is unused until then.
+#[allow(dead_code)]
+mod remote;
 
 use quota::{normalize_codex_quota, PollFailure, PollOutcome, QuotaPollGate, QUOTA_POLL_INTERVAL, QUOTA_REQUEST_TIMEOUT};
 

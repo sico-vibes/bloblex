@@ -1,0 +1,662 @@
+{
+  "version": 1,
+  "methods": [
+    {
+      "method": "app.snapshot",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "The authoritative state every remote view is built from; it is redacted before it leaves the host.",
+      "params": null
+    },
+    {
+      "method": "events.replay",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Replays retained events after a cursor so a reconnecting device can catch up.",
+      "params": null
+    },
+    {
+      "method": "daemon.health",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Daemon version, uptime and heartbeat; it carries no user data.",
+      "params": null
+    },
+    {
+      "method": "session.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists conversations so the device can show what is running.",
+      "params": null
+    },
+    {
+      "method": "session.get",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads one conversation and its history.",
+      "params": null
+    },
+    {
+      "method": "session.environment",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Shows where a conversation works.",
+      "params": null
+    },
+    {
+      "method": "runtime.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists the coding agents installed on the host.",
+      "params": null
+    },
+    {
+      "method": "runtime.capabilities",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Describes which execution settings a runtime supports.",
+      "params": null
+    },
+    {
+      "method": "runtime.models",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists the models a runtime offers so the device can show the choices.",
+      "params": "runtimeModels"
+    },
+    {
+      "method": "exec.snapshot.*",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads recorded execution snapshots, which already exclude instruction text and environment values.",
+      "params": null
+    },
+    {
+      "method": "usage.*",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads token and cost summaries.",
+      "params": null
+    },
+    {
+      "method": "quota.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads the provider quota windows the host has recorded.",
+      "params": null
+    },
+    {
+      "method": "search.messages",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Searches conversation text on the host.",
+      "params": null
+    },
+    {
+      "method": "memory.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists memory records the person can review.",
+      "params": null
+    },
+    {
+      "method": "memory.get",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads a single memory record for review.",
+      "params": null
+    },
+    {
+      "method": "skills.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists the shared skill pool.",
+      "params": null
+    },
+    {
+      "method": "skills.get",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads one shared skill for review.",
+      "params": null
+    },
+    {
+      "method": "automation.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists scheduled automations.",
+      "params": null
+    },
+    {
+      "method": "automation.get",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads one scheduled automation.",
+      "params": null
+    },
+    {
+      "method": "automation.runs",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists an automation run history.",
+      "params": null
+    },
+    {
+      "method": "automation.preview",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Previews the next run times of a schedule; it changes nothing.",
+      "params": null
+    },
+    {
+      "method": "agent.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists bots so a device can pick one.",
+      "params": null
+    },
+    {
+      "method": "agent.get",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads one bot's settings.",
+      "params": null
+    },
+    {
+      "method": "project.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists known projects so a device can pick one.",
+      "params": null
+    },
+    {
+      "method": "permissions.policy.get",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads the approval policy.",
+      "params": null
+    },
+    {
+      "method": "settings.get",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads local preferences; the response is filtered before it leaves the host.",
+      "params": null
+    },
+    {
+      "method": "runtime.profile.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists saved runtime profiles.",
+      "params": null
+    },
+    {
+      "method": "agent.conversation",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads a bot's conversation for viewing.",
+      "params": null
+    },
+    {
+      "method": "agent.conversations",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists a bot's conversations so a device can pick one.",
+      "params": null
+    },
+    {
+      "method": "session.prompt",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Starts a turn in an existing conversation.",
+      "params": "stagedAttachments"
+    },
+    {
+      "method": "session.steer",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Sends guidance into a running turn.",
+      "params": null
+    },
+    {
+      "method": "session.cancel",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Stops a running turn.",
+      "params": null
+    },
+    {
+      "method": "session.queue.*",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Manages the queued prompts of a conversation.",
+      "params": "stagedAttachments"
+    },
+    {
+      "method": "session.rename",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Renames a conversation.",
+      "params": null
+    },
+    {
+      "method": "session.archive",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Hides or restores a conversation.",
+      "params": null
+    },
+    {
+      "method": "message.reaction.toggle",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Adds or removes an emoji reaction.",
+      "params": null
+    },
+    {
+      "method": "turn.retry.cancel",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Cancels a pending automatic retry.",
+      "params": null
+    },
+    {
+      "method": "session.resume",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Resumes a resumable conversation.",
+      "params": null
+    },
+    {
+      "method": "session.warm",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Starts a conversation's coding agent ahead of a message.",
+      "params": null
+    },
+    {
+      "method": "session.close",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Closes a managed adapter process.",
+      "params": null
+    },
+    {
+      "method": "agent.conversation.create",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Starts a new conversation with a bot.",
+      "params": null
+    },
+    {
+      "method": "permission.reply",
+      "class": "approve",
+      "minTier": "operator",
+      "why": "Answers a pending approval; only when the host allows approvals from remote.",
+      "params": "permissionReply"
+    },
+    {
+      "method": "settings.set",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not change the host's preferences.",
+      "params": null
+    },
+    {
+      "method": "agent.create",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not create bots.",
+      "params": null
+    },
+    {
+      "method": "agent.update",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not edit bots.",
+      "params": null
+    },
+    {
+      "method": "agent.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not archive bots.",
+      "params": null
+    },
+    {
+      "method": "agent.restore",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not restore bots.",
+      "params": null
+    },
+    {
+      "method": "agent.reorder",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not reorder bots.",
+      "params": null
+    },
+    {
+      "method": "agent.team.update",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not change bot teams.",
+      "params": null
+    },
+    {
+      "method": "project.create",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not create projects.",
+      "params": null
+    },
+    {
+      "method": "project.update",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not edit projects.",
+      "params": null
+    },
+    {
+      "method": "project.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not delete projects.",
+      "params": null
+    },
+    {
+      "method": "runtime.profile.save",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not save runtime profiles.",
+      "params": null
+    },
+    {
+      "method": "runtime.profile.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not delete runtime profiles.",
+      "params": null
+    },
+    {
+      "method": "runtime.refresh",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not trigger a coding agent scan on the host.",
+      "params": null
+    },
+    {
+      "method": "session.new",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote client picks an existing bot and project through a higher-level call, not a session with an arbitrary path.",
+      "params": null
+    },
+    {
+      "method": "session.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not permanently delete a conversation.",
+      "params": null
+    },
+    {
+      "method": "session.delete.*",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not schedule or cancel a conversation deletion.",
+      "params": null
+    },
+    {
+      "method": "file.revert",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not revert files in the host's project.",
+      "params": null
+    },
+    {
+      "method": "automation.create",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not create scheduled automations.",
+      "params": null
+    },
+    {
+      "method": "automation.update",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not edit scheduled automations.",
+      "params": null
+    },
+    {
+      "method": "automation.pause",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not pause a scheduled automation.",
+      "params": null
+    },
+    {
+      "method": "automation.resume",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not resume a scheduled automation.",
+      "params": null
+    },
+    {
+      "method": "automation.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not delete a scheduled automation.",
+      "params": null
+    },
+    {
+      "method": "automation.run_now",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not start an unattended run on the host.",
+      "params": null
+    },
+    {
+      "method": "memory.create",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not write memory records.",
+      "params": null
+    },
+    {
+      "method": "memory.update",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not edit memory records.",
+      "params": null
+    },
+    {
+      "method": "memory.approve",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not approve agent-written memory.",
+      "params": null
+    },
+    {
+      "method": "memory.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not delete memory records.",
+      "params": null
+    },
+    {
+      "method": "memory.restore",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not restore memory records.",
+      "params": null
+    },
+    {
+      "method": "skills.scan",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not scan the host's coding-agent skill folders.",
+      "params": null
+    },
+    {
+      "method": "skills.import",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not import skills onto the host.",
+      "params": null
+    },
+    {
+      "method": "skills.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not delete a shared skill.",
+      "params": null
+    },
+    {
+      "method": "skills.toggle",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not change which shared skills are on.",
+      "params": null
+    },
+    {
+      "method": "daemon.shutdown",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not stop the host daemon.",
+      "params": null
+    },
+    {
+      "method": "hook.event",
+      "class": "never",
+      "minTier": null,
+      "why": "Hook events come from local coding agents, not from a paired device.",
+      "params": null
+    },
+    {
+      "method": "mcp.*",
+      "class": "never",
+      "minTier": null,
+      "why": "The MCP bridge is the local agent tool surface, not a remote device surface.",
+      "params": null
+    },
+    {
+      "method": "session.handoff.draft",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not draft a handoff between conversations.",
+      "params": null
+    },
+    {
+      "method": "session.model.update",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not change a conversation's model, effort or approval mode.",
+      "params": null
+    },
+    {
+      "method": "backup.export",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not read the host's backup file (it would carry bots, memory and skills off the host).",
+      "params": null
+    },
+    {
+      "method": "backup.preview",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not read a backup file the host selected.",
+      "params": null
+    },
+    {
+      "method": "backup.import",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not restore a backup onto the host.",
+      "params": null
+    },
+    {
+      "method": "pricing.*",
+      "class": "never",
+      "minTier": null,
+      "why": "Monetary valuation controls are retired and never remote.",
+      "params": null
+    },
+    {
+      "method": "subscription.*",
+      "class": "never",
+      "minTier": null,
+      "why": "Subscription controls are retired and never remote.",
+      "params": null
+    },
+    {
+      "method": "budget.*",
+      "class": "never",
+      "minTier": null,
+      "why": "Budget controls are retired and never remote.",
+      "params": null
+    },
+    {
+      "method": "quota.refresh",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not trigger a provider quota poll on the host; it only needs to read quota.list.",
+      "params": null
+    }
+  ],
+  "events": {
+    "message.delta": "allow",
+    "message.completed": "allow",
+    "session.changed": "allow",
+    "session.deleted": "allow",
+    "skills.changed": "allow",
+    "turn.completed": "allow",
+    "turn.cancelled": "allow",
+    "turn.error": "allow",
+    "permission.requested": "allow",
+    "permission.resolved": "allow",
+    "agent.changed": "allow",
+    "queue.changed": "allow",
+    "usage.updated": "allow",
+    "quota.updated": "allow",
+    "daemon.health": "allow",
+    "events.replay.complete": "allow",
+    "replay.gap": "allow",
+    "runtime.models.changed": "allow",
+    "backup.imported": "drop",
+    "automation.changed": "drop",
+    "automation.deleted": "drop",
+    "automation.run.changed": "drop",
+    "automation.run.finished": "drop",
+    "exec.options.changed": "drop",
+    "exec.options.rejected": "drop",
+    "file.changed": "drop",
+    "hook.observed": "drop",
+    "memory.changed": "drop",
+    "memory.deleted": "drop",
+    "permission.auto_denied": "drop",
+    "permission.auto_resolved": "drop",
+    "permission.bypass_active": "drop",
+    "runtime.changed": "drop",
+    "session.context.reset": "drop",
+    "session.context.updated": "drop",
+    "session.context_exhausted": "drop",
+    "session.replaced": "drop",
+    "session.resume_rejected": "drop",
+    "settings.changed": "drop",
+    "tool.changed": "drop",
+    "turn.retry_declined": "drop",
+    "turn.retry_scheduled": "drop"
+  },
+  "settingsAllowlist": [
+    "appearance.style",
+    "appearance.accent",
+    "appearance.theme",
+    "appearance.textSize",
+    "appearance.density",
+    "notifications.enabled",
+    "permissions.default_mode",
+    "experimental.memory"
+  ],
+  "sensitiveKeyPattern": "token|secret|password|credential|capability|api[-_]?key|private[-_]?key|authorization|bearer|cookie"
+}

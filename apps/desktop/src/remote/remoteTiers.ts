@@ -11,10 +11,19 @@
 // daemon's dispatch in `crates/bloblex-daemon/src/main.rs` and fails when a
 // dispatched method has no rule here, or a rule has outlived its dispatch arm.
 //
+// Since FIX29 (WP6a) the data itself lives in `./tiers.json`, next to this
+// file, so the same policy can be loaded by the Rust daemon
+// (`crates/bloblex-daemon/src/remote/policy.rs`, same bytes via `include_str!`)
+// without two hand-kept copies drifting. This module loads the JSON and exposes
+// it through the same names and behaviour as before. `paramRules` in the JSON
+// name one of the three checks defined below by id; each side implements those
+// three checks itself with identical denial strings.
+//
 // See docs/remote/PROTOCOL.md (the docs table is produced by
 // `renderTierTableMarkdown`, printed by scripts/print-remote-tiers.mjs).
 
 import { tierAtLeast, type RemoteTier } from './remoteContract'
+import tiersData from './tiers.json'
 
 export type MethodClass = 'read' | 'chat' | 'approve' | 'never'
 
@@ -91,110 +100,72 @@ export const runtimeModelsRule: ParamRule = {
   },
 }
 
-const READ: RemoteTier = 'viewer'
-const CHAT: RemoteTier = 'chat'
-const OPERATOR: RemoteTier = 'operator'
+// ---------------------------------------------------------------------------
+// tiers.json: the single source of the policy data
+//
+// The raw file is validated once, at import, so a typo in a class, a tier, a
+// params id or a duplicate method fails loudly instead of quietly changing what
+// a device may do. `PolicyData` is the shape this module expects; the Rust port
+// in `crates/bloblex-daemon/src/remote/policy.rs` deserializes the same file.
+
+interface PolicyMethodRow {
+  method: string
+  class: string
+  minTier: string | null
+  why: string
+  params: string | null
+}
+
+interface PolicyData {
+  version: number
+  methods: readonly PolicyMethodRow[]
+  events: Readonly<Record<string, string>>
+  settingsAllowlist: readonly string[]
+  sensitiveKeyPattern: string
+}
+
+const POLICY: PolicyData = tiersData as PolicyData
+
+const METHOD_CLASSES: readonly string[] = ['read', 'chat', 'approve', 'never']
+const TIER_NAMES: readonly string[] = ['viewer', 'chat', 'operator']
+
+/** The params checks, by the id `tiers.json` uses. */
+const PARAM_RULES: Readonly<Record<string, ParamRule>> = {
+  stagedAttachments: stagedAttachmentRule,
+  permissionReply: permissionReplyRule,
+  runtimeModels: runtimeModelsRule,
+}
 
 /**
- * The allowlist, in table order: reads, then chat, then approvals, then the
- * methods remote may never call. `why` is one plain sentence per rule and is
- * used verbatim in the docs table.
+ * A family wildcard (`mcp.*`) or a concrete method. `why` is one plain sentence
+ * per rule and is used verbatim in the docs table.
  */
-export const METHOD_RULES: readonly MethodRule[] = [
-  // -- read (viewer and up) --------------------------------------------------
-  { method: 'app.snapshot', class: 'read', minTier: READ, why: 'The authoritative state every remote view is built from; it is redacted before it leaves the host.' },
-  { method: 'events.replay', class: 'read', minTier: READ, why: 'Replays retained events after a cursor so a reconnecting device can catch up.' },
-  { method: 'daemon.health', class: 'read', minTier: READ, why: 'Daemon version, uptime and heartbeat; it carries no user data.' },
-  { method: 'session.list', class: 'read', minTier: READ, why: 'Lists conversations so the device can show what is running.' },
-  { method: 'session.get', class: 'read', minTier: READ, why: 'Reads one conversation and its history.' },
-  { method: 'session.environment', class: 'read', minTier: READ, why: 'Shows where a conversation works.' },
-  { method: 'runtime.list', class: 'read', minTier: READ, why: 'Lists the coding agents installed on the host.' },
-  { method: 'runtime.capabilities', class: 'read', minTier: READ, why: 'Describes which execution settings a runtime supports.' },
-  { method: 'runtime.models', class: 'read', minTier: READ, why: 'Lists the models a runtime offers so the device can show the choices.', params: runtimeModelsRule },
-  { method: 'exec.snapshot.*', class: 'read', minTier: READ, why: 'Reads recorded execution snapshots, which already exclude instruction text and environment values.' },
-  { method: 'usage.*', class: 'read', minTier: READ, why: 'Reads token and cost summaries.' },
-  { method: 'quota.list', class: 'read', minTier: READ, why: 'Reads the provider quota windows the host has recorded.' },
-  { method: 'search.messages', class: 'read', minTier: READ, why: 'Searches conversation text on the host.' },
-  { method: 'memory.list', class: 'read', minTier: READ, why: 'Lists memory records the person can review.' },
-  { method: 'memory.get', class: 'read', minTier: READ, why: 'Reads a single memory record for review.' },
-  { method: 'skills.list', class: 'read', minTier: READ, why: 'Lists the shared skill pool.' },
-  { method: 'skills.get', class: 'read', minTier: READ, why: 'Reads one shared skill for review.' },
-  { method: 'automation.list', class: 'read', minTier: READ, why: 'Lists scheduled automations.' },
-  { method: 'automation.get', class: 'read', minTier: READ, why: 'Reads one scheduled automation.' },
-  { method: 'automation.runs', class: 'read', minTier: READ, why: 'Lists an automation run history.' },
-  { method: 'automation.preview', class: 'read', minTier: READ, why: 'Previews the next run times of a schedule; it changes nothing.' },
-  { method: 'agent.list', class: 'read', minTier: READ, why: 'Lists bots so a device can pick one.' },
-  { method: 'agent.get', class: 'read', minTier: READ, why: 'Reads one bot\'s settings.' },
-  { method: 'project.list', class: 'read', minTier: READ, why: 'Lists known projects so a device can pick one.' },
-  { method: 'permissions.policy.get', class: 'read', minTier: READ, why: 'Reads the approval policy.' },
-  { method: 'settings.get', class: 'read', minTier: READ, why: 'Reads local preferences; the response is filtered before it leaves the host.' },
-  { method: 'runtime.profile.list', class: 'read', minTier: READ, why: 'Lists saved runtime profiles.' },
-  { method: 'agent.conversation', class: 'read', minTier: READ, why: 'Reads a bot\'s conversation for viewing.' },
-  { method: 'agent.conversations', class: 'read', minTier: READ, why: 'Lists a bot\'s conversations so a device can pick one.' },
+export const METHOD_RULES: readonly MethodRule[] = loadMethodRules(POLICY)
 
-  // -- chat (chat and up) ----------------------------------------------------
-  { method: 'session.prompt', class: 'chat', minTier: CHAT, why: 'Starts a turn in an existing conversation.', params: stagedAttachmentRule },
-  { method: 'session.steer', class: 'chat', minTier: CHAT, why: 'Sends guidance into a running turn.' },
-  { method: 'session.cancel', class: 'chat', minTier: CHAT, why: 'Stops a running turn.' },
-  { method: 'session.queue.*', class: 'chat', minTier: CHAT, why: 'Manages the queued prompts of a conversation.', params: stagedAttachmentRule },
-  { method: 'session.rename', class: 'chat', minTier: CHAT, why: 'Renames a conversation.' },
-  { method: 'session.archive', class: 'chat', minTier: CHAT, why: 'Hides or restores a conversation.' },
-  { method: 'message.reaction.toggle', class: 'chat', minTier: CHAT, why: 'Adds or removes an emoji reaction.' },
-  { method: 'turn.retry.cancel', class: 'chat', minTier: CHAT, why: 'Cancels a pending automatic retry.' },
-  { method: 'session.resume', class: 'chat', minTier: CHAT, why: 'Resumes a resumable conversation.' },
-  { method: 'session.warm', class: 'chat', minTier: CHAT, why: 'Starts a conversation\'s coding agent ahead of a message.' },
-  { method: 'session.close', class: 'chat', minTier: CHAT, why: 'Closes a managed adapter process.' },
-  { method: 'agent.conversation.create', class: 'chat', minTier: CHAT, why: 'Starts a new conversation with a bot.' },
-
-  // -- approve (operator and up, only when the host allows it) ---------------
-  { method: 'permission.reply', class: 'approve', minTier: OPERATOR, why: 'Answers a pending approval; only when the host allows approvals from remote.', params: permissionReplyRule },
-
-  // -- never (always denied remotely) ----------------------------------------
-  { method: 'settings.set', class: 'never', minTier: null, why: 'A remote device must not change the host\'s preferences.' },
-  { method: 'agent.create', class: 'never', minTier: null, why: 'A remote device must not create bots.' },
-  { method: 'agent.update', class: 'never', minTier: null, why: 'A remote device must not edit bots.' },
-  { method: 'agent.delete', class: 'never', minTier: null, why: 'A remote device must not archive bots.' },
-  { method: 'agent.restore', class: 'never', minTier: null, why: 'A remote device must not restore bots.' },
-  { method: 'agent.reorder', class: 'never', minTier: null, why: 'A remote device must not reorder bots.' },
-  { method: 'agent.team.update', class: 'never', minTier: null, why: 'A remote device must not change bot teams.' },
-  { method: 'project.create', class: 'never', minTier: null, why: 'A remote device must not create projects.' },
-  { method: 'project.update', class: 'never', minTier: null, why: 'A remote device must not edit projects.' },
-  { method: 'project.delete', class: 'never', minTier: null, why: 'A remote device must not delete projects.' },
-  { method: 'runtime.profile.save', class: 'never', minTier: null, why: 'A remote device must not save runtime profiles.' },
-  { method: 'runtime.profile.delete', class: 'never', minTier: null, why: 'A remote device must not delete runtime profiles.' },
-  { method: 'runtime.refresh', class: 'never', minTier: null, why: 'A remote device must not trigger a coding agent scan on the host.' },
-  { method: 'session.new', class: 'never', minTier: null, why: 'A remote client picks an existing bot and project through a higher-level call, not a session with an arbitrary path.' },
-  { method: 'session.delete', class: 'never', minTier: null, why: 'A remote device must not permanently delete a conversation.' },
-  { method: 'session.delete.*', class: 'never', minTier: null, why: 'A remote device must not schedule or cancel a conversation deletion.' },
-  { method: 'file.revert', class: 'never', minTier: null, why: 'A remote device must not revert files in the host\'s project.' },
-  { method: 'automation.create', class: 'never', minTier: null, why: 'A remote device must not create scheduled automations.' },
-  { method: 'automation.update', class: 'never', minTier: null, why: 'A remote device must not edit scheduled automations.' },
-  { method: 'automation.pause', class: 'never', minTier: null, why: 'A remote device must not pause a scheduled automation.' },
-  { method: 'automation.resume', class: 'never', minTier: null, why: 'A remote device must not resume a scheduled automation.' },
-  { method: 'automation.delete', class: 'never', minTier: null, why: 'A remote device must not delete a scheduled automation.' },
-  { method: 'automation.run_now', class: 'never', minTier: null, why: 'A remote device must not start an unattended run on the host.' },
-  { method: 'memory.create', class: 'never', minTier: null, why: 'A remote device must not write memory records.' },
-  { method: 'memory.update', class: 'never', minTier: null, why: 'A remote device must not edit memory records.' },
-  { method: 'memory.approve', class: 'never', minTier: null, why: 'A remote device must not approve agent-written memory.' },
-  { method: 'memory.delete', class: 'never', minTier: null, why: 'A remote device must not delete memory records.' },
-  { method: 'memory.restore', class: 'never', minTier: null, why: 'A remote device must not restore memory records.' },
-  { method: 'skills.scan', class: 'never', minTier: null, why: 'A remote device must not scan the host\'s coding-agent skill folders.' },
-  { method: 'skills.import', class: 'never', minTier: null, why: 'A remote device must not import skills onto the host.' },
-  { method: 'skills.delete', class: 'never', minTier: null, why: 'A remote device must not delete a shared skill.' },
-  { method: 'skills.toggle', class: 'never', minTier: null, why: 'A remote device must not change which shared skills are on.' },
-  { method: 'daemon.shutdown', class: 'never', minTier: null, why: 'A remote device must not stop the host daemon.' },
-  { method: 'hook.event', class: 'never', minTier: null, why: 'Hook events come from local coding agents, not from a paired device.' },
-  { method: 'mcp.*', class: 'never', minTier: null, why: 'The MCP bridge is the local agent tool surface, not a remote device surface.' },
-  { method: 'session.handoff.draft', class: 'never', minTier: null, why: 'A remote device must not draft a handoff between conversations.' },
-  { method: 'session.model.update', class: 'never', minTier: null, why: 'A remote device must not change a conversation\'s model, effort or approval mode.' },
-  { method: 'backup.export', class: 'never', minTier: null, why: 'A remote device must not read the host\'s backup file (it would carry bots, memory and skills off the host).' },
-  { method: 'backup.preview', class: 'never', minTier: null, why: 'A remote device must not read a backup file the host selected.' },
-  { method: 'backup.import', class: 'never', minTier: null, why: 'A remote device must not restore a backup onto the host.' },
-  { method: 'pricing.*', class: 'never', minTier: null, why: 'Monetary valuation controls are retired and never remote.' },
-  { method: 'subscription.*', class: 'never', minTier: null, why: 'Subscription controls are retired and never remote.' },
-  { method: 'budget.*', class: 'never', minTier: null, why: 'Budget controls are retired and never remote.' },
-  { method: 'quota.refresh', class: 'never', minTier: null, why: 'A remote device must not trigger a provider quota poll on the host; it only needs to read quota.list.' },
-] as const
+function loadMethodRules(data: PolicyData): MethodRule[] {
+  if (data.version !== 1) throw new Error(`tiers.json: unsupported version ${data.version}`)
+  const seen = new Set<string>()
+  const rules: MethodRule[] = []
+  for (const row of data.methods) {
+    if (seen.has(row.method)) throw new Error(`tiers.json: duplicate method rule ${row.method}`)
+    seen.add(row.method)
+    if (!METHOD_CLASSES.includes(row.class)) throw new Error(`tiers.json: ${row.method} has unknown class ${row.class}`)
+    if (row.minTier !== null && !TIER_NAMES.includes(row.minTier)) throw new Error(`tiers.json: ${row.method} has unknown tier ${row.minTier}`)
+    const rule: MethodRule = {
+      method: row.method,
+      class: row.class as MethodClass,
+      minTier: row.minTier as RemoteTier | null,
+      why: row.why,
+    }
+    if (row.params !== null) {
+      const params = PARAM_RULES[row.params]
+      if (!params) throw new Error(`tiers.json: ${row.method} names unknown params rule ${row.params}`)
+      rule.params = params
+    }
+    rules.push(rule)
+  }
+  return rules
+}
 
 function isFamily(method: string): boolean {
   return method.endsWith('.*')
@@ -297,20 +268,20 @@ export interface RedactOptions {
   includeToolOutput?: boolean
 }
 
-/** Keys whose values are never sent to a device. */
-const SENSITIVE_KEY = /token|secret|password|credential|capability|api[-_]?key|private[-_]?key|authorization|bearer|cookie/i
+/** Keys whose values are never sent to a device. The pattern comes from `tiers.json`. */
+const SENSITIVE_KEY = new RegExp(POLICY.sensitiveKeyPattern, 'i')
 
 /** Settings keys a device may read; the rest of the store is withheld. */
-export const SETTINGS_ALLOWLIST: readonly string[] = [
-  'appearance.style',
-  'appearance.accent',
-  'appearance.theme',
-  'appearance.textSize',
-  'appearance.density',
-  'notifications.enabled',
-  'permissions.default_mode',
-  'experimental.memory',
-]
+export const SETTINGS_ALLOWLIST: readonly string[] = loadSettingsAllowlist(POLICY)
+
+function loadSettingsAllowlist(data: PolicyData): string[] {
+  const keys: string[] = []
+  for (const key of data.settingsAllowlist) {
+    if (typeof key !== 'string' || key.length === 0) throw new Error('tiers.json: settingsAllowlist holds a non-string key')
+    keys.push(key)
+  }
+  return keys
+}
 
 function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY.test(key)
@@ -504,55 +475,20 @@ export type EventPolicy = 'allow' | 'drop'
 
 /**
  * Every event type the daemon can emit, classified. `allow` is the reviewed
- * send list from docs/remote/PROTOCOL.md; everything else is dropped. The
- * parity test fails when the daemon emits a type missing here, so a new event
- * must be classified deliberately.
+ * send list from docs/remote/PROTOCOL.md; everything else is dropped. The list
+ * lives in `tiers.json`; an unknown policy value fails at import. The parity
+ * test fails when the daemon emits a type missing here, so a new event must be
+ * classified deliberately.
  */
-export const EVENT_POLICY: Readonly<Record<string, EventPolicy>> = {
-  // send (reviewed allowlist)
-  'message.delta': 'allow',
-  'message.completed': 'allow',
-  'session.changed': 'allow',
-  'session.deleted': 'allow',
-  'skills.changed': 'allow',
-  'turn.completed': 'allow',
-  'turn.cancelled': 'allow',
-  'turn.error': 'allow',
-  'permission.requested': 'allow',
-  'permission.resolved': 'allow',
-  'agent.changed': 'allow',
-  'queue.changed': 'allow',
-  'usage.updated': 'allow',
-  'quota.updated': 'allow',
-  'daemon.health': 'allow',
-  'events.replay.complete': 'allow',
-  'replay.gap': 'allow',
-  'runtime.models.changed': 'allow',
-  // drop (never sent)
-  'backup.imported': 'drop',
-  'automation.changed': 'drop',
-  'automation.deleted': 'drop',
-  'automation.run.changed': 'drop',
-  'automation.run.finished': 'drop',
-  'exec.options.changed': 'drop',
-  'exec.options.rejected': 'drop',
-  'file.changed': 'drop',
-  'hook.observed': 'drop',
-  'memory.changed': 'drop',
-  'memory.deleted': 'drop',
-  'permission.auto_denied': 'drop',
-  'permission.auto_resolved': 'drop',
-  'permission.bypass_active': 'drop',
-  'runtime.changed': 'drop',
-  'session.context.reset': 'drop',
-  'session.context.updated': 'drop',
-  'session.context_exhausted': 'drop',
-  'session.replaced': 'drop',
-  'session.resume_rejected': 'drop',
-  'settings.changed': 'drop',
-  'tool.changed': 'drop',
-  'turn.retry_declined': 'drop',
-  'turn.retry_scheduled': 'drop',
+export const EVENT_POLICY: Readonly<Record<string, EventPolicy>> = loadEventPolicy(POLICY)
+
+function loadEventPolicy(data: PolicyData): Record<string, EventPolicy> {
+  const policy: Record<string, EventPolicy> = {}
+  for (const [type, value] of Object.entries(data.events)) {
+    if (value !== 'allow' && value !== 'drop') throw new Error(`tiers.json: event ${type} has unknown policy ${value}`)
+    policy[type] = value
+  }
+  return policy
 }
 
 function dropKeys(value: unknown, keys: readonly string[]): unknown {

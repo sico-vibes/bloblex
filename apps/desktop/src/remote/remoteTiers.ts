@@ -128,6 +128,7 @@ export const METHOD_RULES: readonly MethodRule[] = [
   { method: 'settings.get', class: 'read', minTier: READ, why: 'Reads local preferences; the response is filtered before it leaves the host.' },
   { method: 'runtime.profile.list', class: 'read', minTier: READ, why: 'Lists saved runtime profiles.' },
   { method: 'agent.conversation', class: 'read', minTier: READ, why: 'Reads a bot\'s conversation for viewing.' },
+  { method: 'agent.conversations', class: 'read', minTier: READ, why: 'Lists a bot\'s conversations so a device can pick one.' },
 
   // -- chat (chat and up) ----------------------------------------------------
   { method: 'session.prompt', class: 'chat', minTier: CHAT, why: 'Starts a turn in an existing conversation.', params: stagedAttachmentRule },
@@ -141,6 +142,7 @@ export const METHOD_RULES: readonly MethodRule[] = [
   { method: 'session.resume', class: 'chat', minTier: CHAT, why: 'Resumes a resumable conversation.' },
   { method: 'session.warm', class: 'chat', minTier: CHAT, why: 'Starts a conversation\'s coding agent ahead of a message.' },
   { method: 'session.close', class: 'chat', minTier: CHAT, why: 'Closes a managed adapter process.' },
+  { method: 'agent.conversation.create', class: 'chat', minTier: CHAT, why: 'Starts a new conversation with a bot.' },
 
   // -- approve (operator and up, only when the host allows it) ---------------
   { method: 'permission.reply', class: 'approve', minTier: OPERATOR, why: 'Answers a pending approval; only when the host allows approvals from remote.', params: permissionReplyRule },

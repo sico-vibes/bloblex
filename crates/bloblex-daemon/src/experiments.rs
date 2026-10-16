@@ -15,10 +15,35 @@ pub(crate) fn git_command() -> Command {
 }
 
 pub(super) fn automatic_title(row: &Value, name: &str, text: &str) -> Option<String> {
-    if row["link"]["kind"] == "side" || row["title"] != name || row["messages"].as_array().is_some_and(|m| m.iter().any(|m| m["role"] == "user")) { return None; }
-    let words = text.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
-    let title: String = words.trim_matches(|c: char| !c.is_alphanumeric()).chars().take(48).collect();
-    if title.is_empty() { None } else { Some(title.trim_end_matches(|c: char| !c.is_alphanumeric()).to_owned()) }
+    if row["link"]["kind"] == "side" || !is_default_title(row["title"].as_str(), name) || row["messages"].as_array().is_some_and(|m| m.iter().any(|m| m["role"] == "user")) { return None; }
+    title_from_prompt(text)
+}
+
+/// A title may be derived only while the row still carries a default: the
+/// bot's own name (the older default) or "New chat" (a lazily created one).
+fn is_default_title(title: Option<&str>, name: &str) -> bool {
+    title.is_some_and(|title| title == name || title == "New chat")
+}
+
+/// A title from the first line of a prompt: whitespace collapsed, at most 48
+/// characters, cut on a word boundary with an ellipsis when it is longer. No
+/// model call.
+fn title_from_prompt(text: &str) -> Option<String> {
+    let line = text.lines().find(|line| !line.trim().is_empty())?;
+    let flat = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = flat.trim_matches(|c: char| !c.is_alphanumeric());
+    if trimmed.is_empty() { return None; }
+    if trimmed.chars().count() <= 48 { return Some(trimmed.to_owned()); }
+    let mut title = String::new();
+    for word in trimmed.split(' ') {
+        let candidate = if title.is_empty() { word.chars().count() } else { title.chars().count() + 1 + word.chars().count() };
+        if candidate > 47 && !title.is_empty() { break; }
+        if !title.is_empty() { title.push(' '); }
+        title.push_str(word);
+    }
+    if title.chars().count() > 47 { title = title.chars().take(47).collect(); }
+    title.push('…');
+    Some(title)
 }
 
 fn git_patch(project: &Path, patch: &str, check: bool, directory: &str) -> Result<(), String> {
@@ -167,10 +192,15 @@ mod tests {
     #[test]
     fn title_changes_only_first_main_prompt_with_default_title() {
         let row = json!({"title":"Blob","messages":[]});
-        assert_eq!(automatic_title(&row,"Blob","... Fix the build and check tests please!"),Some("Fix the build and check".into()));
+        assert_eq!(automatic_title(&row,"Blob","... Fix the build and check tests please!"),Some("Fix the build and check tests please".into()));
+        assert_eq!(automatic_title(&json!({"title":"New chat","messages":[]}),"Blob","Draft the release notes"),Some("Draft the release notes".into()));
         assert!(automatic_title(&json!({"title":"Custom"}),"Blob","hello").is_none());
         assert!(automatic_title(&json!({"title":"Blob","link":{"kind":"side"}}),"Blob","hello").is_none());
         assert!(automatic_title(&json!({"title":"Blob","messages":[{"role":"user"}]}),"Blob","hello").is_none());
-        assert!(automatic_title(&row,"Blob",&"x".repeat(80)).unwrap().chars().count() <= 48);
+        assert!(automatic_title(&row,"Blob","   ").is_none());
+        let long = automatic_title(&row,"Blob",&"x".repeat(80)).unwrap();
+        assert!(long.chars().count() <= 48 && long.ends_with('…'));
+        let cut = automatic_title(&row,"Blob","Fix the flaky login test in the companion window please").unwrap();
+        assert!(cut.chars().count() <= 48 && cut.ends_with('…') && !cut.contains("  "));
     }
 }

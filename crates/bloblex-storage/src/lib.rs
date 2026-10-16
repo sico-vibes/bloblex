@@ -502,6 +502,23 @@ fn ensure_opencode_effort_gate_open(c: &Connection) -> Result<(), StorageError> 
     Ok(())
 }
 
+/// One-time, idempotent backfill of `sessions.data.projectId` for rows created
+/// before conversations carried a project stamp. It matches `project_path`
+/// against the projects table and never overwrites a stamp that is already
+/// present. The settings marker keeps it to a single run and preserves any
+/// later choice.
+fn ensure_session_project_backfill(c: &Connection) -> Result<(), StorageError> {
+    const MARKER: &str = "migration.sessionProjectBackfill";
+    let done: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1)", [MARKER], |r| r.get(0))?;
+    if done { return Ok(()); }
+    c.execute(
+        "UPDATE sessions SET data=json_set(COALESCE(NULLIF(data,''),'{}'),'$.projectId',(SELECT p.id FROM projects p WHERE p.path=sessions.project_path LIMIT 1)) WHERE json_extract(data,'$.projectId') IS NULL AND EXISTS(SELECT 1 FROM projects p WHERE p.path=sessions.project_path)",
+        [],
+    )?;
+    c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,'true')", [MARKER])?;
+    Ok(())
+}
+
 fn ensure_memory_schema(c: &Connection) -> Result<(), StorageError> {
     c.execute_batch(
         "CREATE TABLE IF NOT EXISTS memory_records(
@@ -1044,6 +1061,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1055,6 +1073,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1067,6 +1086,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
@@ -1082,6 +1102,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
@@ -1192,6 +1213,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
@@ -1366,8 +1388,14 @@ impl Storage {
     }
     /// The open side conversation in which `peer` talks to `agent`, if any.
     pub fn side_session(&self, agent_id: &str, peer_agent_id: &str) -> Result<Option<String>, StorageError> {
+        self.side_session_for(agent_id, peer_agent_id, "")
+    }
+    /// The open side conversation `peer` started with `agent`, preferring the
+    /// one spawned from `origin_session` so a reply lands in its own thread,
+    /// then the newest. An empty `origin_session` merely keeps the newest.
+    pub fn side_session_for(&self, agent_id: &str, peer_agent_id: &str, origin_session: &str) -> Result<Option<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        Ok(c.query_row("SELECT id FROM sessions WHERE agent_id=?1 AND archived=0 AND json_extract(data,'$.link.kind')='side' AND json_extract(data,'$.link.peerAgentId')=?2 ORDER BY updated_at DESC LIMIT 1", params![agent_id, peer_agent_id], |r| r.get(0)).optional()?)
+        Ok(c.query_row("SELECT id FROM sessions WHERE agent_id=?1 AND archived=0 AND json_extract(data,'$.link.kind')='side' AND json_extract(data,'$.link.peerAgentId')=?2 ORDER BY (CASE WHEN json_extract(data,'$.link.spawnedFromSessionId')=?3 THEN 0 ELSE 1 END),updated_at DESC LIMIT 1", params![agent_id, peer_agent_id, origin_session], |r| r.get(0)).optional()?)
     }
     /// Open side conversations a blob takes part in, either as the one asked
     /// (`agentId`) or the one asking (`peerAgentId`), newest first.
@@ -1391,6 +1419,39 @@ impl Storage {
     pub fn main_session(&self, agent_id: &str) -> Result<Option<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.query_row("SELECT id FROM sessions WHERE agent_id=?1 AND archived=0 AND (json_extract(data,'$.link') IS NULL OR json_extract(data,'$.link.kind') NOT IN ('side','automation','handoff')) ORDER BY updated_at DESC LIMIT 1", [agent_id], |r| r.get(0)).optional()?)
+    }
+    /// Every conversation a blob has, newest first: the main conversations in
+    /// its own sessions (`agent_id`) plus the side conversations it started as
+    /// the asking peer (`link.peerAgentId`). Automation and hand-off sessions
+    /// are never conversations. `project_id` filters on the stored or inferred
+    /// project; archived rows appear only with `include_archived`.
+    pub fn agent_conversations(&self, agent_id: &str, project_id: Option<&str>, include_archived: bool) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare(
+            "SELECT json_object(
+                'id',s.id,
+                'title',COALESCE(s.title_override,s.title),
+                'state',s.state,
+                'createdAt',s.created_at,
+                'updatedAt',s.updated_at,
+                'archived',json(CASE WHEN s.archived=1 THEN 'true' ELSE 'false' END),
+                'projectId',COALESCE(json_extract(s.data,'$.projectId'),(SELECT p.id FROM projects p WHERE p.path=s.project_path LIMIT 1)),
+                'kind',CASE WHEN json_extract(s.data,'$.link.kind')='side' THEN 'side' ELSE 'main' END,
+                'agentId',s.agent_id,
+                'peerAgentId',json_extract(s.data,'$.link.peerAgentId'),
+                'topic',json_extract(s.data,'$.link.topic'),
+                'spawnedFromSessionId',json_extract(s.data,'$.link.spawnedFromSessionId'),
+                'originSessionId',json_extract(s.data,'$.link.originSessionId'),
+                'messageCount',(SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.role IN ('user','assistant'))
+            ) FROM sessions s
+            WHERE ((s.agent_id=?1 AND (json_extract(s.data,'$.link.kind') IS NULL OR json_extract(s.data,'$.link.kind') NOT IN ('automation','handoff')))
+                OR (json_extract(s.data,'$.link.kind')='side' AND json_extract(s.data,'$.link.peerAgentId')=?1))
+              AND (?2 OR s.archived=0)
+              AND (?3 IS NULL OR COALESCE(json_extract(s.data,'$.projectId'),(SELECT p2.id FROM projects p2 WHERE p2.path=s.project_path LIMIT 1))=?3)
+            ORDER BY s.updated_at DESC",
+        )?;
+        let rows = q.query_map(params![agent_id, include_archived, project_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter().map(|raw| Ok(serde_json::from_str(&raw)?)).collect()
     }
     pub fn insert_question(&self, id: &str, session: &str, provider_id: &str, title: &str, questions: &Value, expires_at: Option<&str>) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -1743,8 +1804,8 @@ impl Storage {
     pub fn sessions(&self) -> Result<Vec<Value>, StorageError> { self.session_list(false) }
     pub fn session_list(&self, include_archived: bool) -> Result<Vec<Value>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json,json_extract(data,'$.link') FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
-        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"link":r.get::<_,Option<String>>(13)?.and_then(|value|serde_json::from_str::<Value>(&value).ok())})))?;
+        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json,json_extract(data,'$.link'),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual') FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
+        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"link":r.get::<_,Option<String>>(13)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"workspaceLabel":r.get::<_,String>(14)?})))?;
         iter.collect::<Result<Vec<_>, _>>()
             .map_err(StorageError::from)
     }
@@ -1768,6 +1829,47 @@ impl Storage {
         let changed = c.execute("UPDATE sessions SET title_override=?2,updated_at=?3 WHERE id=?1", params![id, title, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)])?;
         if changed == 0 { return Err(StorageError::AgentNotFound); }
         session_event_summary_locked(&c, id)
+    }
+    /// Writes a title derived from the first prompt, but only while the row
+    /// still carries a default title (`'New chat'` or the agent's own name), no
+    /// user message exists yet, the row is not a side conversation and the user
+    /// has not renamed it. It writes `title`, never `title_override`, so a user
+    /// rename always wins. Returns the summary when a row changed.
+    pub fn session_auto_title(&self, id: &str, title: &str) -> Result<Option<Value>, StorageError> {
+        let title = title.trim();
+        if title.is_empty() || title.chars().count() > 120 { return Ok(None); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute(
+            "UPDATE sessions SET title=?2,updated_at=?3 WHERE id=?1 AND title_override IS NULL AND (title='New chat' OR title=COALESCE((SELECT name FROM agents WHERE agents.id=sessions.agent_id),'')) AND json_extract(data,'$.link.kind') IS NOT 'side' AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.session_id=sessions.id AND m.role='user')",
+            params![id, title, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)],
+        )?;
+        if changed == 0 { return Ok(None); }
+        Ok(Some(session_event_summary_locked(&c, id)?))
+    }
+    /// Merges top-level keys into a session's `data` object (RFC 7396 patch).
+    pub fn merge_session_data(&self, id: &str, fields: &Value) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute("UPDATE sessions SET data=json_patch(COALESCE(NULLIF(data,''),'{}'),json(?2)) WHERE id=?1", params![id, fields.to_string()])?;
+        if changed == 0 { return Err(StorageError::AgentNotFound); }
+        Ok(())
+    }
+    /// Whether a conversation was created lazily and has not started its
+    /// provider yet (`data.lazyStart`, cleared once the provider installs).
+    pub fn session_lazy_start(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let flag: Option<i64> = c.query_row("SELECT json_extract(data,'$.lazyStart') FROM sessions WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten();
+        Ok(flag == Some(1))
+    }
+    /// Clears the lazy-start marker once the provider context is installed.
+    pub fn clear_session_lazy_start(&self, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE sessions SET data=json_remove(data,'$.lazyStart') WHERE id=?1", [id])?;
+        Ok(())
+    }
+    /// The id of the project whose folder is exactly `path`, if any.
+    pub fn project_id_for_path(&self, path: &str) -> Result<Option<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT id FROM projects WHERE path=?1 LIMIT 1", [path], |r| r.get(0)).optional()?)
     }
     pub fn session_provider_title(&self, id: &str, title: &str) -> Result<Option<Value>, StorageError> {
         let title = title.trim();
@@ -3227,6 +3329,7 @@ impl Storage {
         if k=="companion.focusMode" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         if k=="companion.positions" && !valid_companion_positions(v){return Err(StorageError::InvalidAgent)}
         if k=="profile.about" && !v.as_str().is_some_and(|text| text.trim().chars().count()<=1500){return Err(StorageError::InvalidAgent)}
+        if k=="conversations.autoTitle" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let previous:Option<String>=tx.query_row("SELECT value FROM settings WHERE key=?1",[k],|r|r.get(0)).optional()?;
@@ -3236,7 +3339,7 @@ impl Storage {
             let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same { events.push(push_settings_event(&tx,k,enabled)?); }
-        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("memory.") || k.starts_with("appearance.") || k.starts_with("hints.") || k.starts_with("onboarding.") {
+        } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("memory.") || k.starts_with("appearance.") || k.starts_with("hints.") || k.starts_with("onboarding.") || k.starts_with("conversations.") {
             // Window-level preferences: the main window and the companion both follow them live.
             let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
             if !same {
@@ -3410,7 +3513,7 @@ impl Storage {
         let mut q=c.prepare(sql)?;let vals=q.query_map([include_archived],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
     }
     fn session_detail_locked(&self, c: &Connection, id: &str) -> Result<Value, StorageError> {
-        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
+        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
         let mut v: Value =
             serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
         let (context_used, context_size, context_model, context_estimated) = session_context_locked(c, id)?;
@@ -3695,7 +3798,7 @@ fn valid_usage_tip_dismissals(value: &Value) -> bool {
 
 fn session_event_summary_locked(c: &Connection, id: &str) -> Result<Value, StorageError> {
     let json: Option<String> = c.query_row(
-        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
+        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
         [id],
         |r| r.get(0),
     ).optional()?;
@@ -6062,5 +6165,39 @@ mod memory_tests {
             assert_eq!(columns, 1);
         }
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_project_backfill_is_idempotent() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-p","provider":"codex"})).unwrap();
+        let project = db.project_create("Repo", Some("C:/repo")).unwrap().0;
+        let project_id = project["id"].as_str().unwrap().to_owned();
+        db.create_session("old", "rt-p", "codex", "C:/repo", "Old").unwrap();
+        // Clear the marker and run the one-off backfill as an older database would.
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute("DELETE FROM settings WHERE key='migration.sessionProjectBackfill'", []).unwrap();
+            ensure_session_project_backfill(&c).unwrap();
+            let stamp: Option<String> = c.query_row("SELECT json_extract(data,'$.projectId') FROM sessions WHERE id='old'", [], |r| r.get(0)).unwrap();
+            assert_eq!(stamp.as_deref(), Some(project_id.as_str()));
+        }
+        // With the marker set, a later run rewrites nothing.
+        db.conn.lock().unwrap().execute("UPDATE sessions SET data=json_remove(data,'$.projectId') WHERE id='old'", []).unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            ensure_session_project_backfill(&c).unwrap();
+            let stamp: Option<String> = c.query_row("SELECT json_extract(data,'$.projectId') FROM sessions WHERE id='old'", [], |r| r.get(0)).unwrap();
+            assert_eq!(stamp, None, "the marker keeps the backfill to a single run");
+        }
+        // A session outside every project stays unstamped.
+        db.create_session("elsewhere", "rt-p", "codex", "C:/elsewhere", "Other").unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute("DELETE FROM settings WHERE key='migration.sessionProjectBackfill'", []).unwrap();
+            ensure_session_project_backfill(&c).unwrap();
+            let stamp: Option<String> = c.query_row("SELECT json_extract(data,'$.projectId') FROM sessions WHERE id='elsewhere'", [], |r| r.get(0)).unwrap();
+            assert_eq!(stamp, None);
+        }
     }
 }

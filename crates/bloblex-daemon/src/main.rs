@@ -647,7 +647,7 @@ async fn quota_poll_loop(st: AppState, mut events: broadcast::Receiver<EventEnve
 
 async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, DispatchError> {
     match method {
-        "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" => team::team_rpc(st, method, &p).await,
+        "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
         "memory.list" | "memory.get" | "memory.create" | "memory.update" | "memory.approve" | "memory.delete" | "memory.restore" => memory::rpc(st, method, &p).await,
         "exec.snapshot.get" => {
@@ -1071,6 +1071,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if k=="experimental.autoRetry"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","experimental.autoRetry requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="experimental.memory"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","experimental.memory requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="memory.sharedAgentWrites"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","memory.sharedAgentWrites requires a JSON boolean",StatusCode::BAD_REQUEST));}
+            if k=="conversations.autoTitle"&&!p["value"].is_boolean(){return Err(derr("invalid_argument","conversations.autoTitle requires a JSON boolean",StatusCode::BAD_REQUEST));}
             if k=="appearance.style"&&!p["value"].as_str().is_some_and(|v|["bitbots","blobots"].contains(&v)){return Err(derr("invalid_argument","appearance.style must be bitbots or blobots",StatusCode::BAD_REQUEST));}
             if k=="appearance.accent"&&!p["value"].as_str().is_some_and(|v|v.is_empty()||is_accent_hex(v)){return Err(derr("invalid_argument","appearance.accent must be empty or a #rrggbb hex colour",StatusCode::BAD_REQUEST));}
             let mut value = p["value"].clone();
@@ -1748,6 +1749,21 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
         )
         .map_err(agent_error)?;
     if p["link"].is_object() { st.db.set_session_link(&id, &p["link"]).map_err(agent_error)?; }
+    // Stamp the conversation's project: the bot's own project, or the project
+    // whose folder it works in. A null stamp is left absent and inferred later.
+    let project_id = agent_id.as_deref()
+        .and_then(|id| st.db.agent_get(id).ok())
+        .and_then(|agent| agent["projectId"].as_str().map(str::to_owned))
+        .or_else(|| st.db.project_id_for_path(&project.to_string_lossy()).ok().flatten());
+    st.db.merge_session_data(&id, &json!({"projectId": project_id})).map_err(agent_error)?;
+    // A lazy conversation stops here: no provider is spawned. The first prompt
+    // starts it, and activation takes the fresh-context branch silently.
+    if p["lazy"] == true {
+        st.db.update_session_state(&id, "idle").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+        st.db.merge_session_data(&id, &json!({"lazyStart": true})).map_err(agent_error)?;
+        if let Ok(session_event) = st.db.session_event_summary(&id) { st.emit("session.changed", session_event).await; }
+        return Ok(json!({"id":id,"runtimeId":runtime_id,"agentId":agent_id,"provider":provider,"providerSessionId":Value::Null,"projectPath":p["projectPath"],"title":title,"state":"idle","resumable":false,"turns":[],"messages":[],"tools":[],"files":[]}));
+    }
     let startup_options=exec_options.clone();
     let (tx, rx) = tokio::sync::mpsc::channel(256);
     let handle_result = adapter
@@ -1886,6 +1902,11 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
     };
     let can_resume_saved_provider = row["resumable"].as_bool().unwrap_or(false)
         && row["providerSessionId"].as_str().is_some_and(|id| !id.is_empty());
+    // A conversation created lazily has never had a provider context: its first
+    // activation starts one, and that is not a context loss, so it stays silent.
+    let lazy_first_activation = !can_resume_saved_provider
+        && row["providerSessionId"].as_str().is_none_or(str::is_empty)
+        && st.db.session_lazy_start(&sid).unwrap_or(false);
     let rt = st
         .runtimes
         .read()
@@ -1954,9 +1975,10 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
             .await
     } else {
         // Starting a fresh provider context must not inherit context usage
-        // reported for the previous provider context.
+        // reported for the previous provider context. A lazy conversation's
+        // first activation has no earlier context to lose, so it stays silent.
         st.db.clear_session_provider_id(&sid).map_err(agent_error)?;
-        st.emit("session.context.reset", json!({"sessionId":sid})).await;
+        if !lazy_first_activation { st.emit("session.context.reset", json!({"sessionId":sid})).await; }
         let (tx, rx) = tokio::sync::mpsc::channel(256);
         adapter.new_session(&spec,NewSessionRequest{session_id:sid.clone(),project_path:project.clone(),exec_options},tx)
             .await.map(|handle| (handle,rx,true))
@@ -1981,6 +2003,7 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
             && !st.sessions.lock().await.contains_key(&sid);
         if installed {
             st.db.set_session_provider_id(&sid, &handle.provider_session_id, handle.capabilities.resume).map_err(agent_error)?;
+            if lazy_first_activation { let _ = st.db.clear_session_lazy_start(&sid); }
             st.sessions.lock().await.insert(sid.clone(), ActiveSession {
                 handle: handle.clone(),
                 runtime: spec.clone(),
@@ -2014,8 +2037,9 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
     // context. The adapter cannot announce this itself on this path, so the
     // daemon appends the same transcript notice the `ContextChanged` event path
     // uses. This cannot also fire for the Codex adapter's own crash fallback:
-    // that path runs on `prompt`, not on `session.resume`.
-    if resume_fallback {
+    // that path runs on `prompt`, not on `session.resume`. A lazy conversation's
+    // first activation lost nothing, so it announces nothing.
+    if resume_fallback && !lazy_first_activation {
         memory::forget_catalog(st, &sid);
         team::note(st, &sid, context_change_notice(ContextChangeReason::FreshSession), json!({"kind":"context_reset","reason":"fresh_session","contextLost":true})).await;
     }
@@ -2502,6 +2526,16 @@ struct TurnDriver {
 /// return at once. Provider activation (which can take seconds) is done by the
 /// spawned driver, so a first send after a restart lands immediately and the
 /// composer is released.
+/// Auto-titles are on by default through `conversations.autoTitle`; the older
+/// `experimental.autoTitles` flag still turns them on, and an explicit
+/// `conversations.autoTitle: false` turns them off.
+fn auto_titles_enabled(settings: &Value) -> bool {
+    match settings.get("conversations.autoTitle").and_then(Value::as_bool) {
+        Some(value) => value,
+        None => settings.get("experimental.autoTitles").and_then(Value::as_bool).unwrap_or(true),
+    }
+}
+
 async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
     let text = p["text"].as_str().unwrap_or("").to_owned();
@@ -2619,6 +2653,17 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
             message_data["meta"] = meta;
         }
         if let Some((_, kept)) = &references { message_data["references"] = kept.clone(); }
+        // Auto-title from the first prompt while the conversation still carries
+        // a default title. The storage write skips a renamed row and any
+        // conversation that already has a user message, so this cannot fire
+        // twice or overwrite a user rename.
+        if auto_titles_enabled(&st.db.settings().unwrap_or(Value::Null)) {
+            if let Some(name) = session["agentId"].as_str().and_then(|id| st.db.agent_get(id).ok()).and_then(|a| a["name"].as_str().map(str::to_owned)) {
+                if let Some(title) = experiments::automatic_title(&session, &name, &text) {
+                    if let Ok(Some(summary)) = st.db.session_auto_title(&sid, &title) { st.emit("session.changed", summary).await; }
+                }
+            }
+        }
         let user_message = st.db
             .append_message_with_data(&sid, &turn, "user", &text, &message_data)
             .map_err(|e| {
@@ -2629,13 +2674,6 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
                     StatusCode::INTERNAL_SERVER_ERROR,
                 )
             })?;
-        if st.db.settings().unwrap_or(Value::Null)["experimental.autoTitles"] == true {
-            if let Some(name) = session["agentId"].as_str().and_then(|id| st.db.agent_get(id).ok()).and_then(|a| a["name"].as_str().map(str::to_owned)) {
-                if let Some(title) = experiments::automatic_title(&session, &name, &text) {
-                    if let Ok(summary) = st.db.session_rename(&sid, &title) { st.emit("session.changed", summary).await; }
-                }
-            }
-        }
         if !user_message.is_null() { st.emit("message.completed", json!({"sessionId":sid,"turnId":turn,"messageId":user_message["id"],"role":"user","message":user_message})).await; }
         let snapshot_id = Uuid::new_v4().to_string();
         let requested = safe_requested_options(&exec_options);
@@ -4060,11 +4098,13 @@ mod phase2a_tests {
         events: StdMutex<HashMap<String, tokio::sync::mpsc::Sender<AgentEvent>>>,
         instructions: StdMutex<HashMap<String, String>>,
         prompts: StdMutex<Vec<String>>,
+        new_sessions: StdMutex<Vec<String>>,
     }
     #[async_trait::async_trait]
     impl AgentAdapter for TeamAdapter {
         async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
         async fn new_session(&self, _: &RuntimeSpec, request: NewSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+            self.new_sessions.lock().unwrap().push(request.session_id.clone());
             self.instructions.lock().unwrap().insert(request.session_id.clone(), request.exec_options.instructions.clone().unwrap_or_default());
             self.events.lock().unwrap().insert(request.session_id.clone(), events);
             Ok(SessionHandle { session_id:request.session_id.clone(), provider_session_id:format!("provider-{}", request.session_id), capabilities:bloblex_agent_core::AgentCapabilities::default() })
@@ -4133,7 +4173,7 @@ mod phase2a_tests {
         assert!(sent.get("isError").is_none() && sent["content"][0]["text"].as_str().unwrap().starts_with("Sent to Mate in \"Check the build\""), "{sent}");
         let side = st.db.side_session(&mate_id, &lead_id).unwrap().expect("side conversation");
         // Without a topic, the conversation is titled from the brief's first words.
-        assert_eq!(st.db.session_detail(&side).unwrap()["link"], json!({"kind":"side","peerAgentId":lead_id,"peerName":"Lead","originSessionId":main,"topic":"Check the build"}));
+        assert_eq!(st.db.session_detail(&side).unwrap()["link"], json!({"kind":"side","peerAgentId":lead_id,"peerName":"Lead","originSessionId":main,"spawnedFromSessionId":main,"topic":"Check the build"}));
         assert_eq!(st.db.session_detail(&side).unwrap()["title"], "Check the build");
         assert!(adapter.instructions.lock().unwrap()[&side].contains("Topic of this conversation: Check the build."));
         assert!(lead_instructions.contains("list_conversations"));
@@ -4405,7 +4445,7 @@ mod phase2a_tests {
     }
 
     #[tokio::test]
-    async fn experimental_titles_are_opt_in_and_emit_on_the_first_main_prompt() {
+    async fn auto_title_rules() {
         let (mut st, mut events) = state();
         let runtime = json!({"id":"rt-test","provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]});
         st.db.upsert_runtime(&runtime).unwrap();
@@ -4415,25 +4455,56 @@ mod phase2a_tests {
         st.db.set_setting("exec_gate.codex.instructions", &json!(true)).unwrap();
         let data_dir = std::env::temp_dir().join(format!("bloblex-titles-{}", Uuid::new_v4()));
         *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
-        for enabled in [false, true] {
-            st.db.set_setting("experimental.autoTitles", &json!(enabled)).unwrap();
-            let name = if enabled { "Enabled" } else { "Disabled" };
-            let agent = st.db.agent_create(&json!({"name":name,"runtimeId":"rt-test"})).unwrap().0;
-            let opened = dispatch(&st, "agent.conversation", json!({"agentId":agent["id"]})).await.unwrap();
-            let sid = opened["session"]["id"].as_str().unwrap();
-            dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"Fix the build and check tests please!"})).await.unwrap();
-            wait_for_messages(&st, sid, |m| m.iter().any(|m| m["role"] == "assistant")).await;
-            assert_eq!(st.db.session_detail(sid).unwrap()["title"], if enabled { "Fix the build and check tests" } else { name });
-            if enabled {
-                let mut titled = false;
-                while let Ok(event) = events.try_recv() { if event.event_type == "session.changed" && event.payload["title"] == "Fix the build and check tests" { titled = true; } }
-                assert!(titled);
-                dispatch(&st, "session.rename", json!({"sessionId":sid,"title":"Custom title"})).await.unwrap();
-                dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"Something else"})).await.unwrap();
-                wait_for_messages(&st, sid, |m| m.iter().filter(|m| m["role"] == "assistant").count() >= 2).await;
-                assert_eq!(st.db.session_detail(sid).unwrap()["title"], "Custom title");
-            }
-        }
+        let agent_id = st.db.agent_create(&json!({"name":"Titler","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+
+        // On by default: the first prompt titles a conversation with a default name.
+        let opened = dispatch(&st, "agent.conversation", json!({"agentId":agent_id})).await.unwrap();
+        let sid = opened["session"]["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"Fix the build and check tests please!"})).await.unwrap();
+        wait_for_messages(&st, &sid, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert_eq!(st.db.session_detail(&sid).unwrap()["title"], "Fix the build and check tests please");
+        let mut titled = false;
+        while let Ok(event) = events.try_recv() { if event.event_type == "session.changed" && event.payload["title"] == "Fix the build and check tests please" { titled = true; } }
+        assert!(titled, "the auto title is emitted as session.changed");
+
+        // A rename wins, and the second prompt cannot retitle the conversation.
+        dispatch(&st, "session.rename", json!({"sessionId":sid,"title":"Custom title"})).await.unwrap();
+        dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"Something else"})).await.unwrap();
+        wait_for_messages(&st, &sid, |m| m.iter().filter(|m| m["role"] == "assistant").count() >= 2).await;
+        assert_eq!(st.db.session_detail(&sid).unwrap()["title"], "Custom title");
+
+        // A lazily created conversation starts as "New chat" and is still eligible.
+        let lazy = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap();
+        let lazy_id = lazy["session"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(lazy["session"]["title"], "New chat");
+        dispatch(&st, "session.prompt", json!({"sessionId":lazy_id,"text":"Draft the release notes"})).await.unwrap();
+        wait_for_messages(&st, &lazy_id, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert_eq!(st.db.session_detail(&lazy_id).unwrap()["title"], "Draft the release notes");
+
+        // Never a side conversation, even while it still carries a default name.
+        st.db.create_session_for_agent("side-title", "rt-test", "codex", ".", "New chat", Some(&agent_id)).unwrap();
+        st.db.set_session_link("side-title", &json!({"kind":"side","peerAgentId":"other"})).unwrap();
+        assert!(st.db.session_auto_title("side-title", "Should not apply").unwrap().is_none());
+        assert_eq!(st.db.session_detail("side-title").unwrap()["title"], "New chat");
+
+        // Off when conversations.autoTitle is false.
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"conversations.autoTitle","value":"nope"})).await.unwrap_err().1.code, "invalid_argument");
+        st.db.set_setting("conversations.autoTitle", &json!(false)).unwrap();
+        let off_agent = st.db.agent_create(&json!({"name":"Untitled","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        let off = dispatch(&st, "agent.conversation", json!({"agentId":off_agent})).await.unwrap();
+        let off_id = off["session"]["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "session.prompt", json!({"sessionId":off_id,"text":"Name me"})).await.unwrap();
+        wait_for_messages(&st, &off_id, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert_eq!(st.db.session_detail(&off_id).unwrap()["title"], "Untitled");
+
+        // An explicit true turns them back on; the legacy flag also turns them on.
+        st.db.set_setting("conversations.autoTitle", &json!(true)).unwrap();
+        let on_agent = st.db.agent_create(&json!({"name":"Named","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        let on = dispatch(&st, "agent.conversation", json!({"agentId":on_agent})).await.unwrap();
+        let on_id = on["session"]["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "session.prompt", json!({"sessionId":on_id,"text":"Ship the release"})).await.unwrap();
+        wait_for_messages(&st, &on_id, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert_eq!(st.db.session_detail(&on_id).unwrap()["title"], "Ship the release");
         let _ = std::fs::remove_dir_all(data_dir);
     }
     struct WorkflowCatalogAdapter { seen_args: Arc<StdMutex<Vec<Vec<String>>>> }
@@ -8075,5 +8146,233 @@ mod phase2a_tests {
         let cleared = dispatch(&st, "agent.update", json!({"agentId":id,"notificationLevel":null})).await.unwrap();
         assert_eq!(cleared["agent"]["notificationLevel"], "all");
         assert_eq!(dispatch(&st, "agent.update", json!({"agentId":id,"notificationLevel":"loud"})).await.unwrap_err().1.code, "invalid_argument");
+    }
+
+    /// An online `rt-test` codex runtime wired to the scripted `TeamAdapter`.
+    async fn online_team_state() -> (AppState, Arc<TeamAdapter>) {
+        let (mut st, _) = state();
+        let runtime = json!({"id":"rt-test","provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await = vec![runtime];
+        let adapter = Arc::new(TeamAdapter::default());
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter.clone(), claude:Arc::new(ClaudeAdapter::default()) });
+        st.db.set_setting("exec_gate.codex.instructions", &json!(true)).unwrap();
+        (st, adapter)
+    }
+
+    #[tokio::test]
+    async fn conversation_create_is_lazy() {
+        let (st, adapter) = online_team_state().await;
+        let data_dir = std::env::temp_dir().join(format!("bloblex-lazy-{}", Uuid::new_v4()));
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        let agent_id = st.db.agent_create(&json!({"name":"Lazy","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+
+        let created = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap();
+        let sid = created["session"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(created["session"]["state"], "idle");
+        assert_eq!(created["session"]["resumable"], false);
+        assert!(created["session"]["providerSessionId"].is_null());
+        assert_eq!(created["session"]["title"], "New chat");
+        assert!(!adapter.instructions.lock().unwrap().contains_key(&sid), "no provider is spawned before the first prompt");
+        assert_eq!(adapter.new_sessions.lock().unwrap().iter().filter(|id| *id == &sid).count(), 0);
+
+        // The first prompt starts exactly one provider session, silently.
+        dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"Hello there"})).await.unwrap();
+        let messages = wait_for_messages(&st, &sid, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert!(adapter.instructions.lock().unwrap().contains_key(&sid), "the first prompt starts the provider");
+        assert_eq!(adapter.new_sessions.lock().unwrap().iter().filter(|id| *id == &sid).count(), 1, "the provider starts exactly once");
+        assert!(!messages.iter().any(|m| m["role"] == "notice" && m["meta"]["kind"] == "context_reset"), "{messages:?}");
+        let resets = st.db.replay_events(0, 2000).unwrap().into_iter().filter(|event| event["type"] == "session.context.reset" && event["payload"]["sessionId"] == sid.as_str()).count();
+        assert_eq!(resets, 0, "a lazy first activation does not announce a context reset");
+        assert!(!st.db.session_lazy_start(&sid).unwrap(), "the lazy marker is cleared once the provider installs");
+
+        // A second conversation with the same bot is independent and also lazy.
+        let second = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap();
+        assert_ne!(second["session"]["id"], sid);
+        assert!(!adapter.instructions.lock().unwrap().contains_key(second["session"]["id"].as_str().unwrap()));
+        // A title can be given at creation.
+        let named = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id,"title":"Release notes"})).await.unwrap();
+        assert_eq!(named["session"]["title"], "Release notes");
+        // An unknown bot is not found; an archived one is invalid.
+        let missing = Uuid::new_v4().to_string();
+        assert_eq!(dispatch(&st, "agent.conversation.create", json!({"agentId":missing})).await.unwrap_err().1.code, "not_found");
+        st.db.agent_archive(&agent_id).unwrap();
+        assert_eq!(dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap_err().1.code, "invalid_argument");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn agent_conversations_tree() {
+        let (st, _) = online_team_state().await;
+        let data_dir = std::env::temp_dir().join(format!("bloblex-tree-{}", Uuid::new_v4()));
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        let alpha = st.db.agent_create(&json!({"name":"Alpha","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        let beta = st.db.agent_create(&json!({"name":"Beta","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        let a_main = dispatch(&st, "agent.conversation", json!({"agentId":alpha})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+        let b_main = dispatch(&st, "agent.conversation", json!({"agentId":beta})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+
+        // Alpha asks Beta; Beta asks Alpha back.
+        assert!(call_tool(&st, &a_main, "message_blob", json!({"blob":"Beta","message":"Check the build","topic":"Build check"})).await.get("isError").is_none());
+        let s_ab = st.db.side_session(&beta, &alpha).unwrap().expect("Alpha started this one");
+        wait_for_messages(&st, &s_ab, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert!(call_tool(&st, &b_main, "message_blob", json!({"blob":"Alpha","message":"Build is green","topic":"Build answer"})).await.get("isError").is_none());
+        let s_ba = st.db.side_session(&alpha, &beta).unwrap().expect("Beta started this one");
+        wait_for_messages(&st, &s_ba, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+
+        let find = |list: &Value, id: &str| list.as_array().unwrap().iter().find(|c| c["id"] == id).cloned().unwrap_or(Value::Null);
+        let alpha_list = dispatch(&st, "agent.conversations", json!({"agentId":alpha})).await.unwrap()["conversations"].clone();
+        let main = find(&alpha_list, &a_main);
+        assert_eq!(main["kind"], "main");
+        assert_eq!(main["role"], Value::Null);
+        assert_eq!(main["parentId"], Value::Null);
+        let sent = find(&alpha_list, &s_ab);
+        assert_eq!(sent["kind"], "side");
+        assert_eq!(sent["role"], "sender");
+        assert_eq!(sent["parentId"], a_main.as_str());
+        assert_eq!(sent["topic"], "Build check");
+        assert_eq!(sent["peerAgentId"], alpha.as_str());
+        let received = find(&alpha_list, &s_ba);
+        assert_eq!(received["role"], "receiver");
+        assert_eq!(received["parentId"], Value::Null, "an origin outside this bot's set is a root");
+
+        let beta_list = dispatch(&st, "agent.conversations", json!({"agentId":beta})).await.unwrap()["conversations"].clone();
+        assert_eq!(find(&beta_list, &b_main)["kind"], "main");
+        assert_eq!(find(&beta_list, &s_ab)["role"], "receiver");
+        let beta_sent = find(&beta_list, &s_ba);
+        assert_eq!(beta_sent["role"], "sender");
+        assert_eq!(beta_sent["parentId"], b_main.as_str());
+
+        // Archived conversations are hidden unless asked for.
+        st.db.session_archive(&s_ab, true).unwrap();
+        let hidden = dispatch(&st, "agent.conversations", json!({"agentId":beta})).await.unwrap()["conversations"].clone();
+        assert_eq!(find(&hidden, &s_ab)["id"], Value::Null);
+        let all = dispatch(&st, "agent.conversations", json!({"agentId":beta,"includeArchived":true})).await.unwrap()["conversations"].clone();
+        assert_eq!(find(&all, &s_ab)["id"], s_ab.as_str());
+        assert_eq!(dispatch(&st, "agent.conversations", json!({"agentId":Uuid::new_v4().to_string()})).await.unwrap_err().1.code, "not_found");
+        assert_eq!(dispatch(&st, "agent.conversations", json!({"agentId":beta,"includeArchived":"yes"})).await.unwrap_err().1.code, "invalid_argument");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn spawned_from_is_stable() {
+        let (st, _) = online_team_state().await;
+        let data_dir = std::env::temp_dir().join(format!("bloblex-spawn-{}", Uuid::new_v4()));
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        let alpha = st.db.agent_create(&json!({"name":"Alpha","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        let beta = st.db.agent_create(&json!({"name":"Beta","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        let m1 = dispatch(&st, "agent.conversation.create", json!({"agentId":alpha})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+        let m2 = dispatch(&st, "agent.conversation.create", json!({"agentId":alpha})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+
+        call_tool(&st, &m1, "message_blob", json!({"blob":"Beta","message":"First brief","topic":"Thread"})).await;
+        let side = st.db.side_session(&beta, &alpha).unwrap().expect("side conversation");
+        wait_for_messages(&st, &side, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        let first = st.db.session_detail(&side).unwrap()["link"].clone();
+        assert_eq!(first["spawnedFromSessionId"], m1.as_str());
+        assert_eq!(first["originSessionId"], m1.as_str());
+
+        // Continuing from the other conversation moves the reply target only.
+        call_tool(&st, &m2, "message_blob", json!({"blob":"Beta","message":"Again","conversation":side})).await;
+        let second = st.db.session_detail(&side).unwrap()["link"].clone();
+        assert_eq!(second["spawnedFromSessionId"], m1.as_str(), "the thread's origin is immutable");
+        assert_eq!(second["originSessionId"], m2.as_str(), "the reply now goes to the newer conversation");
+        assert_eq!(second["topic"], "Thread", "continuing keeps the topic");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn side_fallback_prefers_current_spawn() {
+        let (st, _) = online_team_state().await;
+        let data_dir = std::env::temp_dir().join(format!("bloblex-fallback-{}", Uuid::new_v4()));
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        let alpha = st.db.agent_create(&json!({"name":"Alpha","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        let beta = st.db.agent_create(&json!({"name":"Beta","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        let m1 = dispatch(&st, "agent.conversation.create", json!({"agentId":alpha})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+        let m2 = dispatch(&st, "agent.conversation.create", json!({"agentId":alpha})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+
+        call_tool(&st, &m1, "message_blob", json!({"blob":"Beta","message":"First brief","topic":"Alpha thread"})).await;
+        let s1 = st.db.side_session_for(&beta, &alpha, &m1).unwrap().unwrap();
+        wait_for_messages(&st, &m1, |m| m.iter().any(|m| m["meta"]["kind"] == "blob_reply")).await;
+        call_tool(&st, &m2, "message_blob", json!({"blob":"Beta","message":"Second brief","topic":"Beta thread"})).await;
+        let s2 = st.db.side_session_for(&beta, &alpha, &m2).unwrap().unwrap();
+        assert_ne!(s1, s2, "a topic starts a separate thread");
+        wait_for_messages(&st, &m2, |m| m.iter().any(|m| m["meta"]["kind"] == "blob_reply")).await;
+
+        // Without a topic or id, the brief lands in the thread this conversation
+        // started, not in the newer unrelated one.
+        assert_eq!(st.db.side_session_for(&beta, &alpha, &m1).unwrap().as_deref(), Some(s1.as_str()), "the fallback prefers the thread this conversation started");
+        let third = call_tool(&st, &m1, "message_blob", json!({"blob":"Beta","message":"Follow up without a topic"})).await;
+        assert!(third.get("isError").is_none(), "{third}");
+        let landed = wait_for_messages(&st, &s1, |m| m.iter().any(|m| m["content"] == "Follow up without a topic")).await;
+        assert!(landed.iter().any(|m| m["content"] == "Follow up without a topic"));
+        let other = st.db.session_detail(&s2).unwrap();
+        assert!(!other["messages"].as_array().unwrap().iter().any(|m| m["content"] == "Follow up without a topic"));
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn new_sessions_carry_project_id() {
+        let (st, _) = online_team_state().await;
+        let data_dir = std::env::temp_dir().join(format!("bloblex-stamp-{}", Uuid::new_v4()));
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        // A project with no folder: the label can only come from the stamp.
+        let project = st.db.project_create("Beacon", None).unwrap().0;
+        let project_id = project["id"].as_str().unwrap().to_owned();
+        let alpha = st.db.agent_create(&json!({"name":"Alpha","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        let beta = st.db.agent_create(&json!({"name":"Beta","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        for id in [&alpha, &beta] { dispatch(&st, "agent.team.update", json!({"agentId":id,"projectId":project_id})).await.unwrap(); }
+
+        let main = dispatch(&st, "agent.conversation", json!({"agentId":alpha})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(st.db.session_detail(&main).unwrap()["workspaceLabel"], "Beacon");
+        // A side conversation is stamped with the target bot's project too.
+        call_tool(&st, &main, "message_blob", json!({"blob":"Beta","message":"Stamped brief","topic":"Stamp"})).await;
+        let side = st.db.side_session(&beta, &alpha).unwrap().unwrap();
+        wait_for_messages(&st, &side, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert_eq!(st.db.session_detail(&side).unwrap()["workspaceLabel"], "Beacon");
+        // The panel filter matches the stamp.
+        let listed = dispatch(&st, "agent.conversations", json!({"agentId":alpha,"projectId":project_id})).await.unwrap();
+        assert!(listed["conversations"].as_array().unwrap().iter().any(|c| c["id"] == main.as_str()));
+        let other = dispatch(&st, "agent.conversations", json!({"agentId":alpha,"projectId":"other"})).await.unwrap();
+        assert!(other["conversations"].as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn team_update_project_move_does_not_archive() {
+        let (st, _) = state();
+        let project = st.db.project_create("Second", None).unwrap().0;
+        let agent_id = st.db.agent_create(&json!({"name":"Mover","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        st.db.create_session_for_agent("mover-main", "rt-test", "codex", ".", "Mover", Some(&agent_id)).unwrap();
+        st.db.update_session_state("mover-main", "idle").unwrap();
+        dispatch(&st, "agent.team.update", json!({"agentId":agent_id,"projectId":project["id"]})).await.unwrap();
+        assert_eq!(st.db.session_detail("mover-main").unwrap()["archived"], false, "a project move keeps the conversations");
+        assert_eq!(st.db.main_session(&agent_id).unwrap().as_deref(), Some("mover-main"));
+    }
+
+    #[tokio::test]
+    async fn workspace_label_and_slug_dir() {
+        let (st, _) = state();
+        let data_dir = std::env::temp_dir().join(format!("bloblex-workspace-{}", Uuid::new_v4()));
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        let agent = st.db.agent_create(&json!({"name":"Lead Bot","runtimeId":"rt-test"})).unwrap().0;
+        let id = agent["id"].as_str().unwrap().to_owned();
+        let path = team::workspace_for(&st, &agent);
+        let id8: String = id.chars().take(8).collect();
+        assert!(path.ends_with(format!("lead-bot-{id8}")), "a new pathless workspace reads as the bot: {path:?}");
+        assert!(path.is_dir());
+
+        // An existing folder named after the raw agent id keeps being used.
+        let agent2 = st.db.agent_create(&json!({"name":"Old Bot","runtimeId":"rt-test"})).unwrap().0;
+        let legacy = data_dir.join("workspaces").join(agent2["id"].as_str().unwrap());
+        std::fs::create_dir_all(&legacy).unwrap();
+        assert_eq!(team::workspace_for(&st, &agent2), legacy);
+
+        // A pathless conversation is "Casual"; a project stamp supplies the name.
+        st.db.create_session_for_agent("casual", "rt-test", "codex", ".", "Chat", Some(&id)).unwrap();
+        assert_eq!(st.db.session_detail("casual").unwrap()["workspaceLabel"], "Casual");
+        let project = st.db.project_create("Beacon", Some(&data_dir.to_string_lossy())).unwrap().0;
+        st.db.create_session_for_agent("labelled", "rt-test", "codex", &data_dir.to_string_lossy(), "Chat", Some(&id)).unwrap();
+        st.db.merge_session_data("labelled", &json!({"projectId":project["id"]})).unwrap();
+        assert_eq!(st.db.session_detail("labelled").unwrap()["workspaceLabel"], "Beacon");
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 }

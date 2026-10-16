@@ -99,9 +99,34 @@ pub fn workspace_for(st: &AppState, agent: &Value) -> PathBuf {
         if let Some(path) = project["path"].as_str().map(PathBuf::from).filter(|path| path.is_dir()) { return path; }
     }
     let base = st.team.data_dir.lock().unwrap().clone().unwrap_or_else(std::env::temp_dir);
-    let dir = base.join("workspaces").join(agent["id"].as_str().unwrap_or("blob"));
+    let workspaces = base.join("workspaces");
+    let agent_id = agent["id"].as_str().unwrap_or("blob");
+    // A folder named after the raw agent id is the older layout; keep using it,
+    // because Claude and Codex resume is bound to the working directory and a
+    // move would strand saved sessions.
+    let legacy = workspaces.join(agent_id);
+    if legacy.is_dir() { return legacy; }
+    let dir = workspaces.join(workspace_dir_name(&agent_name(agent), agent_id));
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// The on-disk name of a pathless bot's workspace: a short ASCII slug of the
+/// bot's name plus the first eight characters of its id, so the folder reads as
+/// the bot instead of a bare UUID.
+fn workspace_dir_name(name: &str, agent_id: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for character in name.chars().flat_map(char::to_lowercase) {
+        let mapped = if character.is_ascii_alphanumeric() { last_dash = false; Some(character) } else if !last_dash && !slug.is_empty() { last_dash = true; Some('-') } else { None };
+        if let Some(character) = mapped {
+            if slug.len() >= 32 { break; }
+            slug.push(character);
+        }
+    }
+    let slug = slug.trim_matches('-');
+    let id8: String = agent_id.chars().take(8).collect();
+    if slug.is_empty() { format!("bot-{id8}") } else { format!("{slug}-{id8}") }
 }
 
 /// Bitbots context appended to every blob session's system instructions.
@@ -439,8 +464,9 @@ async fn message_blob(st: &AppState, session_id: &str, args: &Value) -> Result<S
     let wanted = args["conversation"].as_str().map(str::trim).filter(|id| !id.is_empty());
     let existing = match wanted {
         Some(id) => Some(continuable(st, id, &from_id, &target_id, &target_name)?),
-        // Without a topic or an id, keep talking in the latest conversation with them.
-        None if topic.is_none() => st.db.side_session(&target_id, &from_id).map_err(|error| error.to_string())?,
+        // Without a topic or an id, keep talking in the latest conversation with
+        // them, preferring the one this conversation started.
+        None if topic.is_none() => st.db.side_session_for(&target_id, &from_id, session_id).map_err(|error| error.to_string())?,
         None => None,
     };
     let (side, title) = match existing {
@@ -454,7 +480,7 @@ async fn message_blob(st: &AppState, session_id: &str, args: &Value) -> Result<S
         }
         None => {
             let title = topic.unwrap_or_else(|| topic_from(&message));
-            let link = json!({"kind":"side","peerAgentId":from_id,"peerName":from_name,"originSessionId":session_id,"topic":title});
+            let link = json!({"kind":"side","peerAgentId":from_id,"peerName":from_name,"originSessionId":session_id,"spawnedFromSessionId":session_id,"topic":title});
             let created = new_session(st, json!({"agentId":target_id,"projectPath":workspace_for(st, &target),"title":title,"link":link})).await
                 .map_err(|error| format!("Could not open a conversation with {target_name}: {}", error.1.message))?;
             (created["id"].as_str().unwrap_or("").to_owned(), title)
@@ -648,6 +674,51 @@ pub async fn agent_conversation(st: &AppState, p: &Value) -> Result<Value, Dispa
     Ok(json!({"session": st.db.session_detail(id).map_err(agent_error)?, "created": true}))
 }
 
+/// A new conversation with a bot, created ahead of its first message. Nothing
+/// is spawned: the row is persisted (idle, not resumable, lazy) and the first
+/// prompt's activation starts the provider.
+pub async fn agent_conversation_create(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
+    let agent_id = p["agentId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
+    let agent = st.db.agent_get(agent_id).map_err(agent_error)?;
+    if agent["archived"] == true { return Err(derr("invalid_argument", &format!("archived {} have no conversation", entity_noun(true)), StatusCode::BAD_REQUEST)); }
+    let title = p["title"].as_str().map(str::trim).filter(|title| !title.is_empty()).unwrap_or("New chat").to_owned();
+    if title.chars().count() > 120 { return Err(derr("invalid_argument", "title must be at most 120 characters", StatusCode::BAD_REQUEST)); }
+    let created = new_session(st, json!({"agentId":agent_id,"projectPath":workspace_for(st, &agent),"title":title,"lazy":true})).await?;
+    let id = created["id"].as_str().unwrap_or("");
+    Ok(json!({"session": st.db.session_detail(id).map_err(agent_error)?}))
+}
+
+/// Every conversation a bot has in a project: its main conversations plus the
+/// side conversations it started as the asking peer, nested by the session that
+/// spawned them.
+pub async fn agent_conversations(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
+    let agent_id = p["agentId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
+    st.db.agent_get(agent_id).map_err(agent_error)?;
+    let include_archived = match p.get("includeArchived") {
+        None | Some(Value::Null) => false,
+        Some(value) => value.as_bool().ok_or_else(|| derr("invalid_argument", "includeArchived must be a boolean", StatusCode::BAD_REQUEST))?,
+    };
+    let project_id = match p.get("projectId") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "projectId must be a string", StatusCode::BAD_REQUEST))?),
+    };
+    let rows = st.db.agent_conversations(agent_id, project_id, include_archived).map_err(agent_error)?;
+    let ids = rows.iter().filter_map(|row| row["id"].as_str().map(str::to_owned)).collect::<Vec<_>>();
+    let conversations = rows.into_iter().map(|row| {
+        let kind = row["kind"].as_str().unwrap_or("main").to_owned();
+        let peer = row["peerAgentId"].as_str();
+        let role = if kind == "side" { if peer == Some(agent_id) { json!("sender") } else { json!("receiver") } } else { Value::Null };
+        let parent = row["spawnedFromSessionId"].as_str().or_else(|| row["originSessionId"].as_str());
+        let parent_id = parent.filter(|id| ids.iter().any(|known| known == id)).map(|id| json!(id)).unwrap_or(Value::Null);
+        json!({
+            "id": row["id"], "title": row["title"], "state": row["state"], "createdAt": row["createdAt"], "updatedAt": row["updatedAt"],
+            "archived": row["archived"], "projectId": row["projectId"], "kind": kind, "agentId": row["agentId"], "peerAgentId": row["peerAgentId"],
+            "topic": row["topic"], "parentId": parent_id, "role": role, "messageCount": row["messageCount"]
+        })
+    }).collect::<Vec<_>>();
+    Ok(json!({"conversations": conversations}))
+}
+
 pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, DispatchError> {
     match method {
         "project.list" => Ok(json!({"projects": st.db.project_list().map_err(agent_error)?})),
@@ -669,20 +740,15 @@ pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, D
         }
         "agent.team.update" => {
             let id = p["agentId"].as_str().unwrap_or("");
-            let before = st.db.agent_get(id).map_err(agent_error)?;
             let (agent, events) = st.db.agent_set_team(id, p).map_err(agent_error)?;
             st.broadcast_persisted(events);
-            // A blob that moves to another project starts a fresh conversation there.
-            if before["projectId"] != agent["projectId"] {
-                if let Ok(Some(main)) = st.db.main_session(id) {
-                    if !session_busy(st, &main).await {
-                        if let Ok(session) = st.db.session_archive(&main, true) { st.emit("session.changed", session).await; }
-                    }
-                }
-            }
+            // A bot that changes project keeps its conversations; the panel
+            // filters them by project instead of archiving the old main one.
             Ok(json!({"agent": agent}))
         }
         "agent.conversation" => agent_conversation(st, p).await,
+        "agent.conversation.create" => agent_conversation_create(st, p).await,
+        "agent.conversations" => agent_conversations(st, p).await,
         _ => Err(derr("not_found", "unknown method", StatusCode::NOT_FOUND)),
     }
 }

@@ -2065,10 +2065,60 @@ impl Storage {
         let flag: Option<i64> = c.query_row("SELECT json_extract(data,'$.lazyStart') FROM sessions WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten();
         Ok(flag == Some(1))
     }
-    /// Clears the lazy-start marker once the provider context is installed.
+    /// Clears the lazy-start marker once a prompt has been delivered.
     pub fn clear_session_lazy_start(&self, id: &str) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         c.execute("UPDATE sessions SET data=json_remove(data,'$.lazyStart') WHERE id=?1", [id])?;
+        Ok(())
+    }
+    /// How many prompts have reached the adapter for the current provider
+    /// context. Most providers never save a session that received no prompt,
+    /// so the count decides whether a provider id is resumable and whether
+    /// replacing the context actually loses anything.
+    pub fn session_provider_turns(&self, id: &str) -> Result<u32, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let turns: Option<i64> = c.query_row("SELECT json_extract(data,'$.providerTurns') FROM sessions WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten();
+        Ok(turns.unwrap_or(0).max(0) as u32)
+    }
+    /// Whether the current provider context has had a delivered prompt, for the
+    /// decisions that must not lose a real context-loss notice. A session stored
+    /// before `providerTurns` existed has no such key (absent, not 0): for those
+    /// the stored user and assistant messages stand in, but only when the row
+    /// already held a provider context (a saved handle or `resumable`). A
+    /// brand-new session that is still receiving its first message has neither,
+    /// so its first activation stays silent. An explicit 0 still means no turns.
+    pub fn session_had_provider_turns(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let row: Option<(Option<i64>, Option<String>, bool)> = c
+            .query_row("SELECT json_extract(data,'$.providerTurns'),provider_session_id,resumable FROM sessions WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?;
+        let Some((turns, provider_id, resumable)) = row else { return Ok(false); };
+        if let Some(turns) = turns { return Ok(turns > 0); }
+        if !resumable && !provider_id.is_some_and(|value| !value.is_empty()) { return Ok(false); }
+        let has_message: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND role IN ('user','assistant'))", [id], |r| r.get(0))?;
+        Ok(has_message)
+    }
+    /// Records that a prompt reached the adapter for the current provider
+    /// context and returns the new count.
+    pub fn increment_session_provider_turns(&self, id: &str) -> Result<u32, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute(
+            "UPDATE sessions SET data=json_set(COALESCE(NULLIF(data,''),'{}'),'$.providerTurns',COALESCE(json_extract(data,'$.providerTurns'),0)+1) WHERE id=?1",
+            [id],
+        )?;
+        if changed == 0 { return Err(StorageError::AgentNotFound); }
+        let turns: Option<i64> = c.query_row("SELECT json_extract(data,'$.providerTurns') FROM sessions WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten();
+        Ok(turns.unwrap_or(0).max(0) as u32)
+    }
+    /// Starts a new provider context: the previous context's turns no longer apply.
+    pub fn reset_session_provider_turns(&self, id: &str) -> Result<(), StorageError> {
+        self.merge_session_data(id, &json!({"providerTurns": 0}))
+    }
+    /// Whether a provider handle may be resumed. Only a context that has had a
+    /// prompt qualifies; providers usually do not save an empty session.
+    pub fn set_session_resumable(&self, id: &str, resumable: bool) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE sessions SET resumable=?2 WHERE id=?1", params![id, resumable])?;
         Ok(())
     }
     /// The id of the project whose folder is exactly `path`, if any.
@@ -2910,12 +2960,14 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.query_row("SELECT COALESCE(started_at,created_at) FROM turns WHERE id=?1", [id], |row| row.get(0)).optional()?)
     }
+    /// Discards the saved provider handle. That also starts a new provider
+    /// context, so the delivered-prompt count for the old one is reset.
     pub fn clear_session_provider_id(&self, id: &str) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [id], |r| r.get(0))?;
         if !exists { return Ok(()); }
         c.execute(
-            "UPDATE sessions SET provider_session_id=NULL,resumable=0,updated_at=?2 WHERE id=?1",
+            "UPDATE sessions SET provider_session_id=NULL,resumable=0,data=json_set(COALESCE(NULLIF(data,''),'{}'),'$.providerTurns',0),updated_at=?2 WHERE id=?1",
             params![id, Utc::now().to_rfc3339()],
         )?;
         Ok(())
@@ -3444,6 +3496,13 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let (used, size, _, _) = session_context_locked(&c, id)?;
         Ok((used.and_then(|value| u64::try_from(value).ok()), size.and_then(|value| u64::try_from(value).ok())))
+    }
+    /// Clears the saved context counters after a provider context was replaced
+    /// silently. The latest context event becomes a null measurement, which is
+    /// what the summary and replay read; it is not a visible reset event.
+    pub fn clear_session_context_quietly(&self, id: &str) -> Result<(), StorageError> {
+        self.push_event("session.context.updated", &json!({"sessionId":id,"contextUsed":Value::Null,"contextSize":Value::Null,"contextModel":Value::Null,"contextEstimated":false}))?;
+        Ok(())
     }
     // Context counters plus the model label and estimated flag; a named type would not add meaning.
     #[allow(clippy::type_complexity)]

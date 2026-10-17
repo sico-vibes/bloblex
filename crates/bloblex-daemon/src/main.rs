@@ -1818,7 +1818,10 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
         }
     };
     st.db
-        .set_session_provider_id(&id, &handle.provider_session_id, handle.capabilities.resume)
+        // A brand-new provider context has had no prompt yet. Providers usually
+        // do not save such a session, so it is not offered for `--resume` until
+        // the first prompt is delivered.
+        .set_session_provider_id(&id, &handle.provider_session_id, false)
         .map_err(|e| {
             derr(
                 "internal",
@@ -1848,9 +1851,10 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
         st.emit("session.changed", session_event).await;
     }
     Ok(
-        json!({"id":id,"runtimeId":runtime_id,"agentId":agent_id,"provider":provider,"providerSessionId":handle.provider_session_id,"projectPath":p["projectPath"],"title":title,"state":"idle","resumable":handle.capabilities.resume,"turns":[],"messages":[],"tools":[],"files":[]}),
+        json!({"id":id,"runtimeId":runtime_id,"agentId":agent_id,"provider":provider,"providerSessionId":handle.provider_session_id,"projectPath":p["projectPath"],"title":title,"state":"idle","resumable":false,"turns":[],"messages":[],"tools":[],"files":[]}),
     )
 }
+#[allow(clippy::too_many_arguments)]
 async fn resume_or_start_fresh(
     st: &AppState,
     adapter: Arc<dyn AgentAdapter>,
@@ -1859,6 +1863,7 @@ async fn resume_or_start_fresh(
     provider_session_id: String,
     project_path: PathBuf,
     exec_options: ExecOptions,
+    previous_had_turns: bool,
 ) -> Result<(SessionHandle, tokio::sync::mpsc::Receiver<AgentEvent>, bool), bloblex_agent_core::AdapterError> {
     let (tx, rx) = tokio::sync::mpsc::channel(256);
     match adapter
@@ -1879,15 +1884,23 @@ async fn resume_or_start_fresh(
             st.db
                 .clear_session_provider_id(session_id)
                 .map_err(|error| bloblex_agent_core::AdapterError::Other(error.to_string()))?;
-            st.emit("session.context.reset", json!({"sessionId":session_id})).await;
-            st.emit(
-                "session.resume_rejected",
-                json!({
-                    "sessionId": session_id,
-                    "outcomeNote": "The saved provider session expired. A new provider session was started."
-                }),
-            )
-            .await;
+            // The new context starts with no measurement, whether or not the
+            // replacement is announced.
+            let _ = st.db.clear_session_context_quietly(session_id);
+            // Only a context that had a delivered prompt is worth announcing:
+            // a provider session that never ran a turn was never saved, so its
+            // replacement is not a context loss.
+            if previous_had_turns {
+                st.emit("session.context.reset", json!({"sessionId":session_id})).await;
+                st.emit(
+                    "session.resume_rejected",
+                    json!({
+                        "sessionId": session_id,
+                        "outcomeNote": "The saved provider session expired. A new provider session was started."
+                    }),
+                )
+                .await;
+            }
             let (fresh_tx, fresh_rx) = tokio::sync::mpsc::channel(256);
             let handle = adapter
                 .new_session(
@@ -1934,11 +1947,9 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
     };
     let can_resume_saved_provider = row["resumable"].as_bool().unwrap_or(false)
         && row["providerSessionId"].as_str().is_some_and(|id| !id.is_empty());
-    // A conversation created lazily has never had a provider context: its first
-    // activation starts one, and that is not a context loss, so it stays silent.
-    let lazy_first_activation = !can_resume_saved_provider
-        && row["providerSessionId"].as_str().is_none_or(str::is_empty)
-        && st.db.session_lazy_start(&sid).unwrap_or(false);
+    // A provider context that never received a prompt was never saved by the
+    // provider, so replacing it loses nothing and is announced silently.
+    let previous_had_turns = st.db.session_had_provider_turns(&sid).unwrap_or(false);
     let rt = st
         .runtimes
         .read()
@@ -2003,14 +2014,17 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
     if provider=="codex" {let baseline=st.db.codex_thread_instruction_sha256(&sid).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;adapter.set_instruction_hash_context(&sid,desired_instruction_hash,baseline).await;}
     let startup_options=exec_options.clone();
     let resume_result = if can_resume_saved_provider {
-        resume_or_start_fresh(st,adapter.clone(),&spec,&sid,native_id,project.clone(),exec_options)
+        resume_or_start_fresh(st,adapter.clone(),&spec,&sid,native_id,project.clone(),exec_options,previous_had_turns)
             .await
     } else {
         // Starting a fresh provider context must not inherit context usage
-        // reported for the previous provider context. A lazy conversation's
-        // first activation has no earlier context to lose, so it stays silent.
+        // reported for the previous provider context. A context that never had
+        // a prompt lost nothing, so it stays silent.
         st.db.clear_session_provider_id(&sid).map_err(agent_error)?;
-        if !lazy_first_activation { st.emit("session.context.reset", json!({"sessionId":sid})).await; }
+        // A new provider context starts with no measurement even when the
+        // replacement is silent.
+        let _ = st.db.clear_session_context_quietly(&sid);
+        if previous_had_turns { st.emit("session.context.reset", json!({"sessionId":sid})).await; }
         let (tx, rx) = tokio::sync::mpsc::channel(256);
         adapter.new_session(&spec,NewSessionRequest{session_id:sid.clone(),project_path:project.clone(),exec_options},tx)
             .await.map(|handle| (handle,rx,true))
@@ -2034,8 +2048,10 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
             && st.db.session_detail(&sid).is_ok_and(|session| session["archived"] != true && session["modelLock"] == model_lock)
             && !st.sessions.lock().await.contains_key(&sid);
         if installed {
-            st.db.set_session_provider_id(&sid, &handle.provider_session_id, handle.capabilities.resume).map_err(agent_error)?;
-            if lazy_first_activation { let _ = st.db.clear_session_lazy_start(&sid); }
+            // Only a context that has run a prompt is offered for `--resume`;
+            // the first delivered prompt turns this on (see `note_prompt_delivered`).
+            let had_turns = st.db.session_had_provider_turns(&sid).unwrap_or(false);
+            st.db.set_session_provider_id(&sid, &handle.provider_session_id, handle.capabilities.resume && had_turns).map_err(agent_error)?;
             st.sessions.lock().await.insert(sid.clone(), ActiveSession {
                 handle: handle.clone(),
                 runtime: spec.clone(),
@@ -2068,10 +2084,9 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
     // A resume that fell back to a brand-new provider session lost the earlier
     // context. The adapter cannot announce this itself on this path, so the
     // daemon appends the same transcript notice the `ContextChanged` event path
-    // uses. This cannot also fire for the Codex adapter's own crash fallback:
-    // that path runs on `prompt`, not on `session.resume`. A lazy conversation's
-    // first activation lost nothing, so it announces nothing.
-    if resume_fallback && !lazy_first_activation {
+    // uses. Only a context that had a delivered prompt lost anything; a warm-up
+    // of a never-used provider session starts fresh silently.
+    if resume_fallback && previous_had_turns {
         memory::forget_catalog(st, &sid);
         skills::forget_index(st, &sid);
         team::note(st, &sid, context_change_notice(ContextChangeReason::FreshSession), json!({"kind":"context_reset","reason":"fresh_session","contextLost":true})).await;
@@ -2747,6 +2762,18 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     Ok(json!({"turnId":turn,"accepted":true,"state":next_state}))
 }
 
+/// Records that a prompt reached the adapter for the current provider context.
+/// The first prompt clears a lazy marker and makes a resumable provider handle
+/// eligible for `--resume`; providers generally do not save a session that
+/// never received one.
+async fn note_prompt_delivered(st: &AppState, sid: &str) {
+    let Ok(turns) = st.db.increment_session_provider_turns(sid) else { return };
+    if turns != 1 { return; }
+    let _ = st.db.clear_session_lazy_start(sid);
+    let resumable = st.sessions.lock().await.get(sid).is_some_and(|active| active.handle.capabilities.resume);
+    if resumable { let _ = st.db.set_session_resumable(sid, true); }
+}
+
 /// Phase B: activate the provider, apply the requested launch mode, then deliver
 /// the prompt. Every failure here is finalised as a turn error (or a
 /// cancellation) exactly once.
@@ -2884,6 +2911,8 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         finish_turn_failed(st, &sid, &turn, failure_class, public_message, detail, "error").await;
         team::after_turn(st, &sid, Some(turn.clone()), "turn.error", after_detail);
         retry::after_failed_turn(st, &sid, Some(&turn)).await;
+    } else {
+        note_prompt_delivered(st, &sid).await;
     }
 }
 
@@ -3229,7 +3258,7 @@ async fn forward_events_with_timeouts(
             } => {
                 let _ = st
                     .db
-                    .set_session_provider_id(&sid, &provider_session_id, true);
+                    .set_session_provider_id(&sid, &provider_session_id, st.db.session_had_provider_turns(&sid).unwrap_or(false));
                 if let Some(active) = st.sessions.lock().await.get_mut(&sid) {
                     active.handle.provider_session_id = provider_session_id.clone();
                 }
@@ -3521,6 +3550,15 @@ async fn forward_events_with_timeouts(
                 continue;
             }
             AgentEvent::ContextChanged { reason, context_lost } => {
+                // The context that is being replaced counts: a provider session
+                // that never received a prompt (Codex crash/respawn before the
+                // first turn) is replaced silently.
+                let previous_had_turns = st.db.session_had_provider_turns(&sid).unwrap_or(false);
+                if matches!(reason, ContextChangeReason::FreshSession) {
+                    let _ = st.db.reset_session_provider_turns(&sid);
+                    if !previous_had_turns { let _ = st.db.clear_session_context_quietly(&sid); }
+                }
+                if !previous_had_turns { continue; }
                 let notice = context_change_notice(reason);
                 let meta = json!({"kind":"context_reset","reason":reason.as_str(),"contextLost":context_lost});
                 memory::forget_catalog(&st, &sid);
@@ -4819,10 +4857,11 @@ mod phase2a_tests {
         let(st,mut events)=state();
         st.db.create_session("resume-test","rt-test","codex",".","Resume test").unwrap();
         st.db.set_session_provider_id("resume-test","saved-provider-session",true).unwrap();
+        st.db.merge_session_data("resume-test", &json!({"providerTurns":1})).unwrap();
         st.db.push_event("session.context.updated", &json!({"sessionId":"resume-test","contextUsed":420,"contextSize":1000})).unwrap();
         let adapter=Arc::new(LifecycleAdapter{reject_resume:true,allow_resume:false,resume_calls:Default::default(),new_calls:Default::default(),close_calls:Default::default()});
         let runtime=RuntimeSpec{runtime_id:"rt-test".into(),provider:"codex".into(),executable:PathBuf::from("fake"),args:vec![],cwd:None};
-        let(handle,_rx,fallback)=resume_or_start_fresh(&st,adapter.clone(),&runtime,"resume-test","saved-provider-session".into(),PathBuf::from("."),ExecOptions::default()).await.unwrap();
+        let(handle,_rx,fallback)=resume_or_start_fresh(&st,adapter.clone(),&runtime,"resume-test","saved-provider-session".into(),PathBuf::from("."),ExecOptions::default(),true).await.unwrap();
         assert!(fallback);
         assert_eq!(handle.provider_session_id,"fresh-provider-session");
         assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst),1);
@@ -5059,6 +5098,35 @@ mod phase2a_tests {
     async fn wait_until(mut done: impl FnMut() -> bool) -> bool {
         for _ in 0..250 { if done() { return true; } tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
         false
+    }
+    /// Warm a conversation and wait until its provider handle is installed.
+    async fn warm_until_installed(st: &AppState, sid: &str) {
+        let warmed = dispatch(st, "session.warm", json!({"sessionId":sid})).await.unwrap();
+        assert_eq!(warmed["warming"], true, "warm-up was refused for {sid}: {warmed}");
+        for _ in 0..250 {
+            if st.sessions.lock().await.contains_key(sid) { return; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("warm-up never installed {sid}");
+    }
+    /// Wait until a warmed conversation has been closed by eviction.
+    async fn wait_until_closed(st: &AppState, sid: &str) {
+        for _ in 0..250 {
+            if !st.sessions.lock().await.contains_key(sid) { return; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("{sid} was never evicted");
+    }
+    fn context_reset_notices(st: &AppState, sid: &str) -> usize {
+        st.db.session_detail(sid).ok()
+            .and_then(|session| session["messages"].as_array().cloned())
+            .map(|messages| messages.iter().filter(|m| m["role"] == "notice" && m["meta"]["kind"] == "context_reset").count())
+            .unwrap_or(0)
+    }
+    fn context_reset_events(st: &AppState, sid: &str) -> usize {
+        st.db.replay_events(0, 5000).unwrap().iter()
+            .filter(|event| event["type"] == "session.context.reset" && event["payload"]["sessionId"] == sid)
+            .count()
     }
 
     #[tokio::test]
@@ -5312,13 +5380,131 @@ mod phase2a_tests {
     }
 
     #[tokio::test]
+    async fn warming_a_never_prompted_conversation_repeatedly_announces_nothing() {
+        let (mut st, _) = state();
+        online_rt_test(&mut st).await;
+        let adapter = Arc::new(SendAdapter::new(false, false));
+        install_send_adapter(&mut st, &adapter);
+        // A saved handle with no delivered prompt is the state a warm-up used to
+        // leave behind: the provider never saved it, so a later resume either
+        // gets rejected or starts fresh.
+        idle_send_session(&st, "warm-silent").await;
+        for (id, name) in [("warm-other-a", "A"), ("warm-other-b", "B"), ("warm-other-c", "C")] {
+            st.db.create_session(id, "rt-test", "codex", ".", name).unwrap();
+            st.db.update_session_state(id, "idle").unwrap();
+        }
+
+        for _ in 0..3 {
+            warm_until_installed(&st, "warm-silent").await;
+            // Warming three others evicts the never-prompted conversation.
+            for id in ["warm-other-a", "warm-other-b", "warm-other-c"] {
+                warm_until_installed(&st, id).await;
+            }
+            wait_until_closed(&st, "warm-silent").await;
+        }
+
+        assert_eq!(context_reset_notices(&st, "warm-silent"), 0, "a warm-up with no prompt must not write a notice");
+        assert_eq!(context_reset_events(&st, "warm-silent"), 0, "a warm-up with no prompt must not reset the context meter");
+        assert_eq!(st.db.session_provider_turns("warm-silent").unwrap(), 0);
+        assert_eq!(st.db.session_detail("warm-silent").unwrap()["state"], "closed");
+    }
+
+    #[tokio::test]
+    async fn lazy_warm_then_prompt_starts_once_and_announces_nothing() {
+        let (mut st, _) = state();
+        online_rt_test(&mut st).await;
+        let adapter = Arc::new(SendAdapter::new(false, false));
+        install_send_adapter(&mut st, &adapter);
+        st.db.create_session("lazy-warm", "rt-test", "codex", ".", "Lazy").unwrap();
+        st.db.update_session_state("lazy-warm", "idle").unwrap();
+        st.db.merge_session_data("lazy-warm", &json!({"lazyStart":true})).unwrap();
+
+        warm_until_installed(&st, "lazy-warm").await;
+        assert!(st.db.session_lazy_start("lazy-warm").unwrap(), "a warm-up alone does not consume the lazy start");
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(adapter.resume_calls(), 0);
+        assert_eq!(context_reset_notices(&st, "lazy-warm"), 0);
+        assert_eq!(context_reset_events(&st, "lazy-warm"), 0);
+
+        let accepted = dispatch(&st, "session.prompt", json!({"sessionId":"lazy-warm","text":"Hello"})).await.unwrap();
+        assert_eq!(accepted["accepted"], true);
+        assert!(wait_until(|| !adapter.prompts().is_empty()).await);
+        assert!(wait_until(|| st.db.session_lazy_start("lazy-warm").ok() == Some(false)).await);
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the prompt reuses the warmed provider session");
+        assert_eq!(adapter.resume_calls(), 0, "a lazy first prompt starts once");
+        assert_eq!(st.db.session_provider_turns("lazy-warm").unwrap(), 1);
+        assert!(st.db.session_detail("lazy-warm").unwrap()["resumable"].as_bool().unwrap(), "a prompted provider context is resumable");
+        assert_eq!(context_reset_notices(&st, "lazy-warm"), 0);
+        assert_eq!(context_reset_events(&st, "lazy-warm"), 0);
+    }
+
+    #[tokio::test]
+    async fn resume_rejection_announces_once_after_a_delivered_turn() {
+        let (mut st, _) = state();
+        online_rt_test(&mut st).await;
+        let adapter = Arc::new(LifecycleAdapter { reject_resume: true, allow_resume: false, resume_calls: Default::default(), new_calls: Default::default(), close_calls: Default::default() });
+        st.adapters = Arc::new(Adapters { acp: Arc::new(AcpAdapter::default()), codex: adapter.clone(), claude: Arc::new(ClaudeAdapter::default()) });
+        idle_send_session(&st, "resume-once").await;
+        st.db.merge_session_data("resume-once", &json!({"providerTurns":1})).unwrap();
+        for (id, name) in [("resume-other-a", "A"), ("resume-other-b", "B"), ("resume-other-c", "C")] {
+            st.db.create_session(id, "rt-test", "codex", ".", name).unwrap();
+            st.db.update_session_state(id, "idle").unwrap();
+        }
+
+        warm_until_installed(&st, "resume-once").await;
+        assert_eq!(context_reset_notices(&st, "resume-once"), 1, "losing a context that had a turn is announced exactly once");
+        assert_eq!(context_reset_events(&st, "resume-once"), 1);
+        let rejected = st.db.replay_events(0, 5000).unwrap().into_iter()
+            .filter(|event| event["type"] == "session.resume_rejected" && event["payload"]["sessionId"] == "resume-once")
+            .count();
+        assert_eq!(rejected, 1, "the resume-rejected event is kept for a used context");
+        assert_eq!(st.db.session_provider_turns("resume-once").unwrap(), 0, "the fallback starts a new provider context");
+
+        // The fallback context has no prompt yet, so a second warm-up is silent.
+        for id in ["resume-other-a", "resume-other-b", "resume-other-c"] {
+            warm_until_installed(&st, id).await;
+        }
+        wait_until_closed(&st, "resume-once").await;
+        warm_until_installed(&st, "resume-once").await;
+        assert_eq!(context_reset_notices(&st, "resume-once"), 1);
+        assert_eq!(context_reset_events(&st, "resume-once"), 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_rows_without_provider_turns_keep_the_context_loss_notice() {
+        let (mut st, _) = state();
+        online_rt_test(&mut st).await;
+        let adapter = Arc::new(LifecycleAdapter { reject_resume: true, allow_resume: false, resume_calls: Default::default(), new_calls: Default::default(), close_calls: Default::default() });
+        st.adapters = Arc::new(Adapters { acp: Arc::new(AcpAdapter::default()), codex: adapter.clone(), claude: Arc::new(ClaudeAdapter::default()) });
+        // A row written before `providerTurns` existed: the key is absent, not 0,
+        // but the row has a saved provider handle and a stored user message, so
+        // replacing its (rejected) context is a real loss and is announced once.
+        st.db.create_session("legacy-used", "rt-test", "codex", ".", "Legacy used").unwrap();
+        st.db.set_session_provider_id("legacy-used", "saved-legacy-context", true).unwrap();
+        st.db.update_session_state("legacy-used", "idle").unwrap();
+        st.db.append_message("legacy-used", "legacy-turn", "user", "An earlier question").unwrap();
+        // The same legacy shape with no stored message had no turn, so the
+        // replacement stays silent.
+        st.db.create_session("legacy-empty", "rt-test", "codex", ".", "Legacy empty").unwrap();
+        st.db.set_session_provider_id("legacy-empty", "saved-empty-context", true).unwrap();
+        st.db.update_session_state("legacy-empty", "idle").unwrap();
+
+        warm_until_installed(&st, "legacy-used").await;
+        assert_eq!(context_reset_notices(&st, "legacy-used"), 1, "a legacy context with a stored message is announced exactly once");
+        assert_eq!(context_reset_events(&st, "legacy-used"), 1);
+        warm_until_installed(&st, "legacy-empty").await;
+        assert_eq!(context_reset_notices(&st, "legacy-empty"), 0, "a legacy row with no messages had no turn");
+        assert_eq!(context_reset_events(&st, "legacy-empty"), 0);
+    }
+
+    #[tokio::test]
     async fn daemon_generic_resume_error_preserves_saved_provider_pointer(){
         let(st,_events)=state();
         st.db.create_session("resume-generic","rt-test","codex",".","Resume test").unwrap();
         st.db.set_session_provider_id("resume-generic","saved-provider-session",true).unwrap();
         let adapter=Arc::new(LifecycleAdapter{reject_resume:false,allow_resume:false,resume_calls:Default::default(),new_calls:Default::default(),close_calls:Default::default()});
         let runtime=RuntimeSpec{runtime_id:"rt-test".into(),provider:"codex".into(),executable:PathBuf::from("fake"),args:vec![],cwd:None};
-        let error=resume_or_start_fresh(&st,adapter.clone(),&runtime,"resume-generic","saved-provider-session".into(),PathBuf::from("."),ExecOptions::default()).await.unwrap_err();
+        let error=resume_or_start_fresh(&st,adapter.clone(),&runtime,"resume-generic","saved-provider-session".into(),PathBuf::from("."),ExecOptions::default(),true).await.unwrap_err();
         assert!(matches!(error,bloblex_agent_core::AdapterError::Protocol(_)));
         assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst),0);
         assert_eq!(st.db.session_detail("resume-generic").unwrap()["providerSessionId"],"saved-provider-session");
@@ -5694,6 +5880,7 @@ mod phase2a_tests {
     async fn context_changed_persists_one_notice_and_only_resets_when_context_is_lost() {
         async fn drive(st: &AppState, sid: &str, event: AgentEvent, events: &mut broadcast::Receiver<EventEnvelope>) -> Vec<String> {
             st.db.create_session(sid, "rt-test", "codex", ".", "Context").unwrap();
+            st.db.merge_session_data(sid, &json!({"providerTurns":1})).unwrap();
             st.db.update_session_state(sid, "idle").unwrap();
             let handle = SessionHandle { session_id: sid.into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
             st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime: RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None }, adapter: Arc::new(PolicyAdapter::default()), launch_approval_mode: ApprovalMode::Ask });
@@ -5726,6 +5913,38 @@ mod phase2a_tests {
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0]["content"], "Started a fresh session. The agent no longer has earlier context.");
         assert_eq!(notices[0]["meta"], json!({"kind":"context_reset","reason":"fresh_session","contextLost":true}));
+    }
+    #[tokio::test]
+    async fn context_changed_stays_silent_until_a_prompt_has_been_delivered() {
+        async fn drive(st: &AppState, sid: &str, turns: u32, events: &mut broadcast::Receiver<EventEnvelope>) -> Vec<String> {
+            st.db.create_session(sid, "rt-test", "codex", ".", "Context").unwrap();
+            st.db.merge_session_data(sid, &json!({"providerTurns": turns})).unwrap();
+            st.db.update_session_state(sid, "idle").unwrap();
+            let handle = SessionHandle { session_id: sid.into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+            st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime: RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None }, adapter: Arc::new(PolicyAdapter::default()), launch_approval_mode: ApprovalMode::Ask });
+            let (tx, rx) = tokio::sync::mpsc::channel(4);
+            let task = tokio::spawn(forward_events(st.clone(), sid.into(), "codex".into(), "rt-test".into(), rx));
+            tx.send(AgentEvent::ContextChanged { reason: ContextChangeReason::FreshSession, context_lost: true }).await.unwrap();
+            drop(tx);
+            task.await.unwrap();
+            let mut types = Vec::new();
+            while let Ok(event) = events.try_recv() { if event.payload["sessionId"] == sid { types.push(event.event_type.clone()); } }
+            types
+        }
+        let (st, mut events) = state();
+        // A Codex crash/respawn that replaces a provider session with no turn is silent.
+        let silent = drive(&st, "s-context-untouched", 0, &mut events).await;
+        assert!(!silent.contains(&"message.completed".to_owned()), "{silent:?}");
+        assert!(!silent.contains(&"session.replaced".to_owned()), "{silent:?}");
+        assert!(!silent.contains(&"session.context.reset".to_owned()), "{silent:?}");
+        assert_eq!(st.db.session_detail("s-context-untouched").unwrap()["messages"].as_array().unwrap().len(), 0);
+
+        // The same replacement after a delivered turn keeps its one notice.
+        let loud = drive(&st, "s-context-used", 1, &mut events).await;
+        assert_eq!(loud.iter().filter(|kind| *kind == "message.completed").count(), 1);
+        assert_eq!(loud.iter().filter(|kind| *kind == "session.replaced").count(), 1);
+        assert_eq!(loud.iter().filter(|kind| *kind == "session.context.reset").count(), 1);
+        assert_eq!(st.db.session_provider_turns("s-context-used").unwrap(), 0, "the replacement starts a new provider context");
     }
     #[tokio::test]
     async fn session_started_refreshes_saved_and_active_provider_session_ids() {
@@ -8496,7 +8715,8 @@ mod phase2a_tests {
         assert!(!messages.iter().any(|m| m["role"] == "notice" && m["meta"]["kind"] == "context_reset"), "{messages:?}");
         let resets = st.db.replay_events(0, 2000).unwrap().into_iter().filter(|event| event["type"] == "session.context.reset" && event["payload"]["sessionId"] == sid.as_str()).count();
         assert_eq!(resets, 0, "a lazy first activation does not announce a context reset");
-        assert!(!st.db.session_lazy_start(&sid).unwrap(), "the lazy marker is cleared once the provider installs");
+        assert!(wait_until(|| st.db.session_lazy_start(&sid).ok() == Some(false)).await, "the lazy marker is cleared by the first delivered prompt");
+        assert_eq!(st.db.session_provider_turns(&sid).unwrap(), 1, "the first prompt counts as a delivered turn");
 
         // A second conversation with the same bot is independent and also lazy.
         let second = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap();

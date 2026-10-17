@@ -72,3 +72,35 @@
 .remote-rename { width: 100%; height: 26px; padding: 0 8px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: transparent; font: inherit; font-size: var(--fs-sm); }
 .remote-rename:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 @media (prefers-reduced-motion: reduce) { .remote-request { animation: none; } }
+
+/* How devices connect: Tailscale or Direct. */
+.remote-method { padding: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.remote-method-option { min-width: 0; padding: 12px; display: flex; align-items: flex-start; gap: 10px; color: var(--text-2); text-align: left; border: 1px solid var(--line); border-radius: var(--radius-md); background: transparent; cursor: pointer; }
+.remote-method-option:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-hover); }
+.remote-method-option.on { color: var(--text-1); border-color: var(--user-accent, var(--text-1)); background: var(--surface-selected); }
+.remote-method-option:disabled { opacity: .5; cursor: default; }
+.remote-method-option:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.remote-method-icon { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 8px; background: var(--surface-raised); }
+.remote-method-copy { min-width: 0; display: grid; gap: 3px; }
+.remote-method-copy strong { font-size: var(--fs-sm); font-weight: 600; }
+.remote-method-copy small { color: var(--text-3); font-size: var(--fs-xs); line-height: 1.45; }
+.remote-method-note { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size: var(--fs-xs); }
+/* Native: sign-in, addresses and certificate. */
+.remote-account { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); }
+.remote-account-form { padding: 14px 16px; display: grid; gap: 10px; }
+.remote-account-intro, .remote-native-note { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.5; }
+.remote-native-note { padding: 10px 16px 0; }
+.remote-native-addresses { padding: 14px 16px; display: flex; gap: 18px; align-items: flex-start; border-top: 1px solid var(--line); }
+.remote-native-copy { min-width: 0; flex: 1; display: grid; gap: 8px; }
+.remote-native-copy > strong { font-size: var(--fs-sm); }
+.remote-native-urls { display: grid; gap: 6px; justify-items: start; }
+.remote-native-urls .remote-address { max-width: 100%; }
+.remote-native-fingerprint { display: grid; gap: 4px; }
+.remote-native-fingerprint > span { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-xs); }
+.remote-native-fingerprint code { overflow-wrap: anywhere; color: var(--text-3); font-size: var(--fs-2xs); line-height: 1.5; }
+.remote-native-fingerprint button { justify-self: start; display: inline-flex; align-items: center; gap: 5px; }
+.remote-native-reached { color: var(--status-ok, #5fd38d); font-size: var(--fs-xs); }
+.remote-port-input { width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) { .remote-method { grid-template-columns: 1fr; } .remote-native-addresses { flex-direction: column; } }
+:root[data-bitbots="on"] .remote-method-option { border: 2px solid var(--bb-line); border-radius: 0; }
+:root[data-bitbots="on"] .remote-method-option.on { border: 2px dotted var(--bb-accent); }

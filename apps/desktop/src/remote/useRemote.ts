@@ -7,6 +7,7 @@ import {
   type PairingRequest,
   type RemoteActivityEntry,
   type RemoteDevice,
+  type RemoteMethodId,
   type RemoteSecurityOptions,
   type RemoteStatus,
   type RemoteTier,
@@ -164,6 +165,12 @@ export function useRemote(enabled = true) {
     updateDevice: (deviceId: string, patch: { tier?: RemoteTier; name?: string }) => run(async () => { await rpc('remote.devices.update', { deviceId, ...patch }) }),
     revokeDevice: (deviceId: string) => run(async () => { await rpc('remote.devices.revoke', { deviceId }) }),
     setSecurity: (patch: Partial<RemoteSecurityOptions>) => run(async () => { await rpc('remote.security.set', { ...state.security, ...patch }) }),
+    /** Native Remote: which method is active (Remote must be off to switch). */
+    setMethod: (method: RemoteMethodId) => run(async () => { await rpc('remote.method.set', { method }) }),
+    /** Native Remote: the username and password devices sign in with. */
+    setNativeAccount: (username: string, password: string) => run(async () => { await rpc('remote.native.account.set', { username, password }) }),
+    setNativePort: (port: number) => run(async () => { await rpc('remote.native.port.set', { port }) }),
+    regenerateNativeCert: () => run(async () => { await rpc('remote.native.cert.regenerate') }),
     /** Preview only: act as the phone submitting the code. */
     simulatePairing: () => run(async () => { await rpc('remote.preview.pair') }),
     dismissPaired: () => setState((current) => ({ ...current, lastOutcome: null })),

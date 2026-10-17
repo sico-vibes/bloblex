@@ -9,6 +9,7 @@ import { SettingsGroup, SettingsRow } from './SettingsParts'
 import { StatusDot } from './StatusDot'
 import { QrGlyph } from './QrGlyph'
 import { useEntityNoun } from './vocabulary'
+import { NativeAccountGroup, NativeAddresses, NativePortRow, RemoteMethodSwitch } from './NativeRemote'
 import './remoteSettings.css'
 
 const TIER_LABEL: Record<RemoteTier, string> = { viewer: 'View only', chat: 'Chat', operator: 'Chat and approve' }
@@ -117,7 +118,7 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
     <span className={`remote-hero-art${on && status?.link === 'online' ? ' live' : ''}`} aria-hidden="true"><Monitor size={24} /><i /><Smartphone size={20} /></span>
     <div>
       <h3>Use your {nouns} from anywhere</h3>
-      <p>Open Bitbots on your phone, a tablet or another computer and chat with your {nouns} while this computer does the work. It travels over your private Tailscale network, so only your own devices can reach it.</p>
+      <p>Open Bitbots on your phone, a tablet or another computer and chat with your {nouns} while this computer does the work. Use your private Tailscale network, or connect directly with a password.</p>
     </div>
   </div>
 
@@ -130,13 +131,22 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
     </>
   }
 
+  const native = status?.method === 'native'
+  const nativeStatus = status?.native
   const tailscale = status?.tailscale ?? 'ready'
-  const fix = tailscale !== 'ready' ? TAILSCALE_FIX[tailscale] : null
+  const fix = !native && tailscale !== 'ready' ? TAILSCALE_FIX[tailscale] : null
+  const needsAccount = native && !nativeStatus?.accountSet
   const request = state.request && Date.parse(state.request.expiresAt) > now ? state.request : null
 
   return <>
     {previewMode && <p className="remote-preview-note" role="note">Preview. This page is simulated: no Tailscale, no network and no real devices are involved.</p>}
     {intro}
+
+    <SettingsGroup title="How devices connect">
+      <RemoteMethodSwitch method={native ? 'native' : 'tailscale'} locked={on} onChange={(method) => void remote.setMethod(method)} />
+    </SettingsGroup>
+
+    {native && <NativeAccountGroup native={nativeStatus} busy={state.busy} onSave={(username, password) => remote.setNativeAccount(username, password)} />}
 
     <SettingsGroup title="Remote access">
       {fix && !on && <div className="remote-fix" role="status">
@@ -144,20 +154,24 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
         <ol>{fix.steps.map((step) => <li key={step}>{step}</li>)}</ol>
         <button type="button" className="secondary-button small" disabled={state.busy} onClick={() => void remote.reload()}><RefreshCw size={13} aria-hidden="true" />Check again</button>
       </div>}
-      <SettingsRow label="Allow remote devices" hint="Paired devices on your Tailscale network can reach this computer's bots. Turn it off and every device is disconnected at once.">
-        <button type="button" role="switch" aria-checked={on} aria-label="Allow remote devices" className={`toggle ${on ? 'on' : ''}`} disabled={state.busy || status?.link === 'starting' || (!on && !!fix)}
+      {needsAccount && !on && <p className="remote-native-note" role="note">Set a username and password above first.</p>}
+      {native && nativeStatus?.loginPaused && <p className="settings-banner error" role="alert">Too many wrong passwords. Sign-ins are paused{nativeStatus.pausedUntil ? ` until ${new Date(nativeStatus.pausedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}. If that wasn’t you, change the password.</p>}
+      <SettingsRow label="Allow remote devices" hint={native ? 'Devices that sign in and that you approve can reach this computer’s bots. Turn it off and every device is disconnected at once.' : 'Paired devices on your Tailscale network can reach this computer’s bots. Turn it off and every device is disconnected at once.'}>
+        <button type="button" role="switch" aria-checked={on} aria-label="Allow remote devices" className={`toggle ${on ? 'on' : ''}`} disabled={state.busy || status?.link === 'starting' || (!on && (!!fix || needsAccount))}
           onClick={() => { if (on) void remote.disable(); else setConsent(true) }}><i /></button>
       </SettingsRow>
       {on && status && <div className="remote-status" role="status" aria-live="polite">
         <StatusDot status={status.link === 'online' ? 'working' : status.link === 'error' ? 'failed' : 'waiting'} label={status.link} />
         <div>
           <strong>{status.link === 'online' ? `Online as ${status.hostName}` : status.link === 'starting' ? 'Starting…' : 'Not connected'}</strong>
-          {status.link === 'online' && status.url
+          {status.link === 'online' && (status.url || native)
             ? <small>{status.connectedCount} of {status.deviceCount} device{status.deviceCount === 1 ? '' : 's'} connected</small>
-            : <small>{status.error ?? (fix ? fix.title : 'Waiting for Tailscale to publish the address.')}</small>}
+            : <small>{status.error ?? (fix ? fix.title : native ? 'Starting the listener…' : 'Waiting for Tailscale to publish the address.')}</small>}
         </div>
-        {status.link === 'online' && status.url && <CopyAddress url={status.url} />}
+        {!native && status.link === 'online' && status.url && <CopyAddress url={status.url} />}
       </div>}
+      {native && on && nativeStatus && <NativeAddresses native={nativeStatus} busy={state.busy} onRegenerate={() => void remote.regenerateNativeCert()} />}
+      {native && !on && nativeStatus && <NativePortRow port={nativeStatus.port} busy={state.busy} onSave={(port) => void remote.setNativePort(port)} />}
       {on && <SettingsRow label="Keep this computer awake" hint="Remote only works while this computer is on and online. Sleep makes it unreachable.">
         <button type="button" className="secondary-button small" onClick={onOpenPower}>Power settings</button>
       </SettingsRow>}
@@ -173,7 +187,7 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
         <span className="remote-paired-icon" aria-hidden="true"><DeviceIcon kind={request.kind} /></span>
         <div className="remote-request-copy">
           <strong id="remote-request-title">{request.name} wants to connect</strong>
-          <small>{request.platform}{request.login ? ` · signed in to Tailscale as ${request.login}` : ''} · answer within {countdown(request.expiresAt, now)}</small>
+          <small>{request.platform}{request.login ? ` · signed in to Tailscale as ${request.login}` : ''}{native ? ' · signed in with your password' : ''} · answer within {countdown(request.expiresAt, now)}</small>
           <div className="remote-request-actions">
             <Select ariaLabel="What this device may do" variant="field" value={requestTier} onChange={(value) => setRequestTier(value as RemoteTier)} options={tierOptions} />
             <button type="button" className="ghost-button small" disabled={state.busy} onClick={() => void remote.rejectPairing(request.pairingId)}>Reject</button>
@@ -181,7 +195,8 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
           </div>
         </div>
       </div>}
-      {!state.offer && !request && !state.justPaired && <SettingsRow label="Pair a phone, tablet or browser" hint="Show a code here, open the address on the device and type the code. You then approve the device on this computer.">
+      {native && !request && !state.justPaired && <SettingsRow label="Connect a phone, tablet or browser" hint="Open one of the addresses above on the device and sign in. It then asks here to be let in, and you choose what it may do." />}
+      {!native && !state.offer && !request && !state.justPaired && <SettingsRow label="Pair a phone, tablet or browser" hint="Show a code here, open the address on the device and type the code. You then approve the device on this computer.">
         <button type="button" className="primary-button small" disabled={state.busy || status?.link !== 'online'} onClick={() => void remote.beginPairing()}>Show pairing code</button>
       </SettingsRow>}
       {state.offer && !request && <div className="remote-pair">
@@ -233,7 +248,7 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
     {state.error && <p className="settings-banner error" role="alert">{state.error}</p>}
 
     {consent && <ConfirmDialog title="Turn on Remote?" confirmLabel="Turn on" cancelLabel="Not now"
-      body={`Bitbots will be published on your private Tailscale network. Only devices signed in to your Tailscale can reach it, and each one must be paired and approved by you here. A message from a paired device can make a ${noun} work on this computer, within the approval mode you have set. You can turn this off at any time.`}
+      body={native ? `Bitbots will listen on this computer’s network addresses. Anyone who can reach the port sees a sign-in page; only someone with your password, and a device you then approve here, gets in. Wrong passwords are slowed down and locked out. A message from an approved device can make a ${noun} work on this computer, within the approval mode you have set. You can turn this off at any time.` : `Bitbots will be published on your private Tailscale network. Only devices signed in to your Tailscale can reach it, and each one must be paired and approved by you here. A message from a paired device can make a ${noun} work on this computer, within the approval mode you have set. You can turn this off at any time.`}
       onConfirm={() => { setConsent(false); void remote.enable() }} onCancel={() => setConsent(false)} />}
     {revoking && <ConfirmDialog title={`Remove ${revoking.name}?`} confirmLabel="Remove" cancelLabel="Keep" tone="danger"
       body="It is signed out now and has to pair again to come back. Conversations stay on this computer."

@@ -1,12 +1,12 @@
 # Bitbots session handoff
 
-> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.30` ([docs/releases/0.1.0-beta.30.md](docs/releases/0.1.0-beta.30.md)); `main` is ahead with the unreleased FIX34-FIX36 wave. The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
+> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.31` ([docs/releases/0.1.0-beta.31.md](docs/releases/0.1.0-beta.31.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
 
 Current as of 17 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
 ## Beta.30 review wave FIX34-FIX36 (17 October 2026, after beta.30)
 
-**State.** On `main`, not released and not pushed: `c60d058` to `1c57d94`, on top of the beta.30 record (`1937bc8`). The owner's beta.30 review (screenshots plus two briefs) became the FIX34-FIX36 specs below. Owner decisions in planning: Native Remote with a built-in certificate (fingerprint shown) and a password **plus** desktop approval of each new device; a **new** built-in Manager (the old team leader becomes an ordinary bot); the Manager needs approval for **every** consequential action (project, bot, task). The Native amendment is in [AGENTS.md](AGENTS.md) (17 October, later). Lanes as in the 16 October amendment: the Director wrote all UI and docs; OpenCode `deepseek-v4.1-flash` (high) wrote the backend in worktrees `C:\fx5x`, each diff reviewed and gated on `main` before commit.
+**State.** Released as manual-only [v0.1.0-beta.31](docs/releases/0.1.0-beta.31.md) (tag at `c07cc24`, pushed with `main`; installer SHA-256 `7d44c0e8df46933f595605e6d1690cc94f57cf29db7b3ee0bb059ea09e761422`, unsigned; the signed updater feed stays at beta.6). The packages are `c60d058` to `1c57d94`, on top of the beta.30 record (`1937bc8`). The owner's beta.30 review (screenshots plus two briefs) became the FIX34-FIX36 specs below. Owner decisions in planning: Native Remote with a built-in certificate (fingerprint shown) and a password **plus** desktop approval of each new device; a **new** built-in Manager (the old team leader becomes an ordinary bot); the Manager needs approval for **every** consequential action (project, bot, task). The Native amendment is in [AGENTS.md](AGENTS.md) (17 October, later). Lanes as in the 16 October amendment: the Director wrote all UI and docs; OpenCode `deepseek-v4.1-flash` (high) wrote the backend in worktrees `C:\fx5x`, each diff reviewed and gated on `main` before commit.
 
 ### What landed
 
@@ -34,9 +34,9 @@ Current as of 17 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V
 ### Known issues and next steps
 
 1. Live checks with the owner, in this order: Tailscale Remote, Direct from a phone on mobile data, an expired Claude sign-in, the Manager's first-run interview and a project set up through proposals.
-2. Release `beta.31` only on the owner's word; then clean up `C:\fx56`, `C:\fx58` and the other merged lane worktrees and branches (AGENTS.md, 14 October amendment).
+2. Cleanup after beta.31 is done except `C:\fxt` (about 67 GB of the lanes' Cargo targets), which the tool's safety check would not delete; the owner can remove it with `C:\fxtarget` and `C:\fxtarget2`.
 3. `manager.profile.set` relabels a fact as "corrected" when only its lock changes; harmless, a lane tidy-up.
-4. Carried over: the desktop-crate clippy lints and the `C:\fxtarget*`/`C:\fxt\*` folders the owner can delete when no lane runs.
+4. Carried over: the desktop-crate clippy lints.
 
 ## Owner review wave FIX26-FIX33 (15-17 October 2026, after beta.29)
 

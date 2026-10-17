@@ -467,3 +467,10 @@ button.compact-copy:active { transform: none; }
 /* ── C13: the Remote settings row ────────────────────────────────────── */
 .companion-remote-copy { display: inline-flex; align-items: center; gap: 6px; }
 .companion-remote-copy .bot-status { flex: 0 0 auto; }
+
+/* Which conversation the companion shows, and the bot's project. */
+.companion-convo-picker { margin: 0 0 8px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.companion-convo-picker .select-root, .companion-convo-picker > :last-child { min-width: 0; flex: 1; }
+.companion-convo-project, .companion-convo-none { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.companion-project { padding: 0 6px; overflow: hidden; color: var(--text-3); border: 1px solid var(--line); border-radius: var(--radius-pill); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+:root[data-bitbots="on"] .companion-project { border: 2px solid var(--bb-line); border-radius: 0; }

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { inflate, placeCard, type CardPlacement, type Placement, type Rect } from './placement'
+import { clampToViewport, inflate, placeCard, type CardPlacement, type Placement, type Rect } from './placement'
 import './tour.css'
 
 export interface CoachmarkProps {
@@ -46,7 +46,8 @@ export function Coachmark({ target, placement = 'bottom', spotlight = false, pad
   }, [target, size, placement, spotlight, pad])
 
   if (!target) return null
-  const hole = inflate(target, pad)
+  // The spot's 2 px border and 4 px ring need room inside the window.
+  const hole = clampToViewport(inflate(target, pad), { width: window.innerWidth, height: window.innerHeight }, 6)
   const style = placed ? { transform: `translate3d(${Math.round(placed.x)}px, ${Math.round(placed.y)}px, 0)` } : { transform: 'translate3d(-9999px, 0, 0)' }
   return createPortal(<div className={`coach ${modal ? 'modal' : ''} ${className}`} data-spotlight={spotlight ? 'true' : 'false'}>
     {modal && <>

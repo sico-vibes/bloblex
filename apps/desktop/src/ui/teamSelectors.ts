@@ -275,3 +275,15 @@ export function hydrationOrder(sessions: readonly Session[], selectedAgentId: st
     .filter((session) => !session.archived && !Array.isArray(session.messages) && !Array.isArray(session.turns))
     .sort((a, b) => Number(b.agentId === selectedAgentId && !!selectedAgentId) - Number(a.agentId === selectedAgentId && !!selectedAgentId) || time(b) - time(a))
 }
+
+/**
+ * A conversation nothing has been said in yet: not a bot-to-bot or scheduled
+ * one, not running, and its loaded messages hold no user or bot message. When
+ * its messages are not loaded yet it is not treated as empty.
+ */
+export function isEmptyConversation(session: Session | null | undefined): boolean {
+  if (!session || isSideSession(session) || isAutomationSession(session) || session.archived) return false
+  if (['working', 'starting', 'waiting_permission', 'cancelling'].includes(String(session.state ?? ''))) return false
+  if (!Array.isArray(session.messages)) return false
+  return !session.messages.some((message) => message.role === 'user' || message.role === 'assistant')
+}

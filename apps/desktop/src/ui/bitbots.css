@@ -301,7 +301,7 @@
 :root[data-bitbots="on"] .profile-button,
 :root[data-bitbots="on"] .team-row { border: 2px solid transparent; }
 :root[data-bitbots="on"] .blob-block.selected,
-:root[data-bitbots="on"] .team-row.selected { border: 2px dotted var(--bb-accent); background: var(--bb-selected); }
+:root[data-bitbots="on"] .team-row.selected { border: 2px dotted var(--bb-accent); background: var(--bb-selected); box-shadow: none; }
 :root[data-bitbots="on"] .pinned-row.selected .pinned-main { background: var(--bb-selected); border-color: var(--bb-line-strong); }
 :root[data-bitbots="on"] .blob-block:not(.selected) .bot-row:hover,
 :root[data-bitbots="on"] .pinned-row:hover,
@@ -352,6 +352,8 @@
   font-weight: 700;
 }
 :root[data-bitbots="on"] .conversation-auto-title { border-left: 2px dotted var(--bb-line-strong); color: var(--bb-ink-3); }
+:root[data-bitbots="on"] .conversation-crumb { border-left: 2px dotted var(--bb-line-strong); color: var(--bb-ink-3); }
+:root[data-bitbots="on"] .conversation-crumb-project { color: var(--bb-ink-2, var(--text-2)); }
 :root[data-bitbots="on"] .role-chip { border: 2px solid var(--bb-line); background: var(--bb-raised); color: var(--bb-ink-2); }
 :root[data-bitbots="on"] .model-pill { border: 2px solid var(--bb-line); background: var(--bb-input); color: var(--bb-ink-2); }
 :root[data-bitbots="on"] .approval-pill { border: 2px solid var(--bb-line); color: var(--bb-ink-2); }

@@ -24,6 +24,11 @@
 .team-row .team-row-name strong { flex: 0 1 auto; }
 .team-row .team-row-name .role-chip { flex: 0 1000 auto; min-width: 28px; }
 .team-row.selected .leader-badge { border-color: var(--surface-selected); }
+/* The open bot: a tinted row with a hairline; in light mode a white card on the grey sidebar. */
+.team-row:not(.selected):hover { background: var(--surface-hover); }
+.team-row.selected { background: var(--surface-selected); box-shadow: inset 0 0 0 1px var(--line); }
+:root[data-theme="light"] .team-row.selected { background: #ffffff; box-shadow: 0 1px 2px rgba(0, 0, 0, .06), inset 0 0 0 1px var(--line-strong); }
+:root[data-theme="light"] .team-row.selected .leader-badge { border-color: #ffffff; }
 .role-chip { max-width: 140px; padding: 1px 6px; overflow: hidden; flex: 0 1 auto; color: var(--text-2); border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); font-size: var(--fs-2xs); font-weight: 500; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
 .bot-row-preview.waiting { color: var(--warning); }
 .team-hidden-toggle { margin: 6px 6px 10px; padding: 6px 8px; display: flex; align-items: center; gap: 6px; color: var(--text-3); border: 0; border-radius: 8px; background: transparent; font-size: var(--fs-2xs); cursor: pointer; }

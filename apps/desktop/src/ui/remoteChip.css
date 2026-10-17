@@ -1,11 +1,23 @@
+/* Remote in the sidebar foot: a small card like the usage meter. */
 .remote-chip {
-  width: calc(100% - 16px); margin: 0 8px 4px; padding: 6px 10px; display: flex; align-items: center; gap: 8px; text-align: left; cursor: pointer;
-  color: var(--text-3); border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; font-size: var(--fs-2xs);
-  transition: color 140ms ease, background 140ms ease;
+  width: calc(100% - 16px); margin: 0 8px 6px; padding: 7px 10px 7px 8px; display: flex; align-items: center; gap: 10px; text-align: left; cursor: pointer;
+  color: var(--text-2); border: 1px solid var(--line); border-radius: var(--radius-md); background: transparent;
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
 }
-.remote-chip:hover { color: var(--text-2); background: var(--surface-hover); }
+.remote-chip:hover { color: var(--text-1); border-color: var(--line-strong); background: var(--surface-hover); }
 .remote-chip:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.remote-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Off is a hollow, neutral ring: the shape says "nothing is happening" and the
-   grey keeps the chrome monochrome. An active link uses the working dot. */
-.remote-chip.off .remote-chip-dot { border-color: var(--text-3); }
+.remote-chip-icon { position: relative; width: 26px; height: 26px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border-radius: 8px; background: var(--surface-selected); }
+.remote-chip-light { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border: 2px solid var(--surface-sidebar, var(--surface-panel)); border-radius: 50%; background: var(--text-3); }
+.remote-chip.tone-live .remote-chip-light { background: var(--status-ok, #5fd38d); }
+.remote-chip.tone-live .remote-chip-icon { color: var(--text-1); }
+.remote-chip.tone-waiting .remote-chip-light { background: var(--warning); }
+.remote-chip-copy { min-width: 0; flex: 1; display: grid; gap: 1px; }
+.remote-chip-title { display: flex; align-items: center; gap: 6px; color: var(--text-1); font-size: var(--fs-xs); font-weight: 500; }
+.remote-chip-title em { padding: 0 6px; color: var(--text-3); border-radius: var(--radius-pill); background: var(--surface-selected); font-size: var(--fs-2xs); font-style: normal; font-weight: 500; }
+.remote-chip.tone-live .remote-chip-title em { color: var(--status-ok, #5fd38d); background: color-mix(in srgb, var(--status-ok, #5fd38d) 14%, transparent); }
+.remote-chip.tone-waiting .remote-chip-title em { color: var(--warning); background: var(--surface-warning); }
+.remote-chip-detail { overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
+@media (prefers-reduced-motion: no-preference) { .remote-chip.tone-waiting .remote-chip-light { animation: remote-chip-pulse 1.4s ease-in-out infinite; } }
+@keyframes remote-chip-pulse { 50% { opacity: .35; } }
+:root[data-bitbots="on"] .remote-chip { border: 2px solid var(--bb-line); border-radius: 0; }
+:root[data-bitbots="on"] .remote-chip-icon, :root[data-bitbots="on"] .remote-chip-title em { border-radius: 0; }

@@ -7,7 +7,7 @@ import type { Agent, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
 import { agentColorHex } from './agentColor'
-import { ancestorIds, conversationTree, sessionIsBusy, sideTitle, type ConversationNode } from './teamSelectors'
+import { ancestorIds, conversationTree, isEmptyConversation, sessionIsBusy, sideTitle, type ConversationNode } from './teamSelectors'
 import './conversationsPanel.css'
 
 function Face({ agent, name }: { agent: Agent | null | undefined; name: string }) {
@@ -51,7 +51,8 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
   onDelete: (session: Session) => void
   onClose: () => void
 }) {
-  const tree = useMemo(() => conversationTree(sessions, agent.id, agent.projectId ?? null), [sessions, agent.id, agent.projectId])
+  // Conversations nothing was said in are not listed, except the open one.
+  const tree = useMemo(() => conversationTree(sessions.filter((session) => session.id === selectedSessionId || !isEmptyConversation(session)), agent.id, agent.projectId ?? null), [sessions, agent.id, agent.projectId, selectedSessionId])
   const activeId = sideSessionId ?? selectedSessionId
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -96,7 +97,7 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
           <button type="button" className="convo-action danger" aria-label={`Delete ${title}`} title="Delete" disabled={busy} onClick={() => onDelete(session)}><Trash2 size={12} aria-hidden="true" /></button>
         </span>}
       </div>
-      {open && node.children.length > 0 && <ul role="group" className="convo-children">{node.children.map((child) => renderNode(child, depth + 1))}</ul>}
+      {open && node.children.length > 0 && <ul role="group" className="convo-children" style={{ ['--parent-depth' as string]: depth }}>{node.children.map((child) => renderNode(child, depth + 1))}</ul>}
     </li>
   }
 

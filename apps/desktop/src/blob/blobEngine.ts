@@ -167,6 +167,8 @@ export const BODY_RADIUS = 0.4
 /** Badge centre relative to the body centre, in units of the body radius. */
 export class BlobEngine {
   isMini = false
+  /** Glance around on its own instead of following the cursor (an avatar that is not the selected one). */
+  wanders = false
   reducedMotion = false
   bodyColor: RGB = C.idle
   /** The resolved silhouette and face. */
@@ -447,7 +449,7 @@ export class BlobEngine {
     if (this.state === 'sleeping') { ty = 0; tp = -0.14 }
     if (this.state === 'dizzy' && motion) ty = Math.sin(t * 9) * 0.25
 
-    if (this.isMini && !this.cfg.look && !this.cfg.scans && this.state !== 'sleeping' && this.state !== 'dizzy' && motion) {
+    if ((this.isMini || this.wanders) && !this.cfg.look && !this.cfg.scans && this.state !== 'sleeping' && this.state !== 'dizzy' && motion) {
       if (n > this.miniLookNextTime) {
         this.miniLookTarget = { x: -0.88 + Math.random() * 1.76, y: -0.55 + Math.random() * 1.0 }
         this.miniLookNextTime = n + 0.5 + Math.random() * 1.5

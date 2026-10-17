@@ -23,6 +23,8 @@ export interface BlobCanvasProps {
   greeting?: boolean
   /** Small peer avatars: flatter shading, larger eyes and a wandering gaze. */
   mini?: boolean
+  /** Follow the cursor with the eyes. Off, the gaze wanders on its own. Default on. */
+  track?: boolean
   /** Extra transparent canvas above the logical body, without enlarging its hit or layout box. */
   effectOverscanTop?: number
   decorative?: boolean
@@ -83,7 +85,7 @@ const LOVE_COOLDOWN_MS = 6000
  * avatar, so a blob keeps one face language everywhere. With `greeting`, the
  * canvas plays the companion welcome scene instead.
  */
-function ClassicBlobCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, effectOverscanTop = 0, decorative = false, look = null, soundCues = false, onGreetingComplete, onDizzy, onDizzyRecovery }: BlobCanvasProps) {
+function ClassicBlobCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, track = true, effectOverscanTop = 0, decorative = false, look = null, soundCues = false, onGreetingComplete, onDizzy, onDizzyRecovery }: BlobCanvasProps) {
   const effectiveMood = moodWithFileReference(mood, fileStage)
   const canvas = useRef<HTMLCanvasElement>(null)
   const frame = useRef<HTMLSpanElement>(null)
@@ -105,6 +107,7 @@ function ClassicBlobCanvas({ color, size = 52, mood = 'idle', className = '', la
   const dizzyActive = useRef(false)
   const taps = useRef<number[]>([])
   const greetingEnabledRef = useRef(greeting)
+  const trackRef = useRef(track)
 
   useEffect(() => {
     moodRef.current = effectiveMood
@@ -117,6 +120,13 @@ function ClassicBlobCanvas({ color, size = 52, mood = 'idle', className = '', la
     engineRef.current!.isMini = mini
     scheduleRef.current?.()
   }, [color, mini])
+  useEffect(() => {
+    const engine = engineRef.current!
+    trackRef.current = track
+    engine.wanders = !track
+    if (!track) { engine.lookX = 0; engine.lookY = 0 }
+    scheduleRef.current?.()
+  }, [track])
 
   useEffect(() => {
     engineRef.current!.setLook(look)
@@ -206,7 +216,7 @@ function ClassicBlobCanvas({ color, size = 52, mood = 'idle', className = '', la
 
     // Gaze: tanh of the cursor's distance from the character.
     const onWindowPointerMove = (event: PointerEvent) => {
-      if (greeting || engine.isMini) return
+      if (greeting || engine.isMini || !trackRef.current) return
       const rect = element.getBoundingClientRect()
       if (!rect.width) return
       const lookX = Math.tanh((event.clientX - (rect.left + rect.width / 2)) / 260)

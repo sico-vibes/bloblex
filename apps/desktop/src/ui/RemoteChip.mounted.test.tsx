@@ -46,7 +46,11 @@ beforeEach(() => {
 })
 afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null; h.listeners.clear() })
 
-const chipText = () => host?.querySelector('.remote-chip-text')?.textContent ?? null
+const chipText = () => {
+  const state = host?.querySelector('.remote-chip-title em')?.textContent
+  const detail = host?.querySelector('.remote-chip-detail')?.textContent
+  return state === undefined ? null : `${state} · ${detail}`
+}
 
 describe('RemoteChip', () => {
   it('renders nothing when this build has no remote support', async () => {
@@ -59,37 +63,37 @@ describe('RemoteChip', () => {
     const view = await mount()
     const chip = view.host.querySelector('.remote-chip')!
     expect(chip).not.toBeNull()
-    expect(chipText()).toBe('Remote off')
+    expect(chipText()).toBe('Off · Use your bots from your phone')
     expect(chip.getAttribute('data-tour')).toBe('remote')
-    expect(chip.querySelector('.bot-status-waiting')).not.toBeNull()
+    expect(chip.classList.contains('tone-off')).toBe(true)
   })
 
   it('shows "Remote on, 2 devices" with the working dot when online', async () => {
     h.rpc.mockImplementation(async () => status({ enabled: true, link: 'online', deviceCount: 2, connectedCount: 2 }))
     const view = await mount()
-    expect(chipText()).toBe('Remote on, 2 devices')
-    expect(view.host.querySelector('.bot-status-working')).not.toBeNull()
+    expect(chipText()).toBe('On · 2 devices connected')
+    expect(view.host.querySelector('.remote-chip.tone-live')).not.toBeNull()
   })
 
   it('says "Remote on, no devices" when none are paired', async () => {
     h.rpc.mockImplementation(async () => status({ enabled: true, link: 'online', deviceCount: 0 }))
     await mount()
-    expect(chipText()).toBe('Remote on, no devices')
+    expect(chipText()).toBe('On · No devices yet')
   })
 
   it('says "Remote connecting" while the link is starting', async () => {
     h.rpc.mockImplementation(async () => status({ enabled: true, link: 'starting' }))
     await mount()
-    expect(chipText()).toBe('Remote connecting')
+    expect(chipText()).toBe('Starting · Connecting…')
   })
 
   it('re-reads the status when a remote event arrives', async () => {
     const view = await mount()
-    expect(chipText()).toBe('Remote off')
+    expect(chipText()).toBe('Off · Use your bots from your phone')
     h.rpc.mockImplementation(async () => status({ enabled: true, link: 'online', deviceCount: 3 }))
     act(() => { for (const listener of h.listeners) listener({ type: 'remote.changed' }) })
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)) })
-    expect(chipText()).toBe('Remote on, 3 devices')
+    expect(chipText()).toBe('On · 3 paired, none connected')
     act(() => view.host.querySelector<HTMLButtonElement>('.remote-chip')!.click())
     expect(view.onOpen).toHaveBeenCalledOnce()
   })

@@ -25,7 +25,7 @@ function seedFraction(seed: string | null | undefined) {
  * pixel-LED robot head. State shows on the robot's own face, so there are no
  * corner glyphs. The antenna is always off and the speed always 1.
  */
-export function BitbotCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, decorative = false, look = null, onGreetingComplete, onDizzy, onDizzyRecovery }: BlobCanvasProps) {
+export function BitbotCanvas({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, track = true, decorative = false, look = null, onGreetingComplete, onDizzy, onDizzyRecovery }: BlobCanvasProps) {
   const effectiveMood = moodWithFileReference(mood, fileStage)
   const bot = useMemo(() => resolveBot(look, color), [look, color])
   const [dizzy, setDizzy] = useState(false)
@@ -115,7 +115,7 @@ export function BitbotCanvas({ color, size = 52, mood = 'idle', className = '', 
       paused={!animate}
       antenna={false}
       floorShadow={!mini}
-      interactive={!greeting}
+      interactive={!greeting && track}
       seed={seedFraction(look?.seed)}
       // Spread conditionally: an explicit undefined would override the library's own role and label.
       {...(decorative ? { 'aria-hidden': true, role: 'presentation' } : { 'aria-label': `${label}, ${effectiveMood}` })}

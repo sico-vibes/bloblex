@@ -27,9 +27,20 @@
 .convo-pair { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; color: var(--text-3); }
 .convo-face-dot { width: 16px; height: 16px; display: inline-grid; place-items: center; color: var(--text-1); border-radius: 50%; background: var(--surface-selected-strong); font-size: 9px; font-weight: 600; }
 .convo-row.side .convo-title { font-size: var(--fs-xs); }
-.convo-actions { position: absolute; right: 4px; top: 50%; display: flex; gap: 1px; padding-left: 10px; background: linear-gradient(90deg, transparent, var(--surface-hover) 10px); opacity: 0; transform: translateY(-50%); pointer-events: none; transition: opacity 100ms ease; }
-.convo-row.active .convo-actions { background: linear-gradient(90deg, transparent, var(--surface-selected) 10px); }
+.convo-actions { position: absolute; right: 4px; top: 50%; display: flex; gap: 1px; opacity: 0; transform: translateY(-50%); pointer-events: none; transition: opacity 100ms ease; }
 .convo-row:hover .convo-actions, .convo-row:focus-within .convo-actions { opacity: 1; pointer-events: auto; }
+/* While the actions show, the time steps aside and the title stops short of them. */
+.convo-row.main:hover .convo-time, .convo-row.main:focus-within .convo-time { visibility: hidden; }
+.convo-row.main:hover .convo-open, .convo-row.main:focus-within .convo-open { padding-right: 82px; }
+
+/* Branches drawn like a file tree: a guide down from the parent's arrow and a
+   rounded elbow into each child. --parent-depth is the parent row's depth. */
+.convo-children > .convo-item { position: relative; }
+.convo-children > .convo-item::before,
+.convo-children > .convo-item::after { position: absolute; left: calc(var(--parent-depth, 0) * 14px + 9px); content: ""; pointer-events: none; }
+.convo-children > .convo-item::before { top: 0; bottom: 0; border-left: 1px solid var(--line-strong); }
+.convo-children > .convo-item:last-child::before { display: none; }
+.convo-children > .convo-item::after { top: 0; width: 10px; height: 17px; border-left: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); border-bottom-left-radius: 6px; }
 .convo-action { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
 .convo-action:hover:not(:disabled) { color: var(--text-1); background: var(--surface-selected-strong); }
 .convo-action.danger:hover:not(:disabled) { color: var(--danger-ink); }
@@ -41,4 +52,5 @@
 :root[data-bitbots="on"] .convo-row.active { border: 2px dotted var(--bb-accent); background: var(--bb-selected); }
 :root[data-bitbots="on"] .convo-row:hover { background: var(--bb-hover); }
 :root[data-bitbots="on"] .convo-rename { border: 2px solid var(--bb-line-strong); border-radius: 0; }
+:root[data-bitbots="on"] .convo-children > .convo-item::before, :root[data-bitbots="on"] .convo-children > .convo-item::after { border-color: var(--bb-line-strong); border-style: dotted; border-bottom-left-radius: 0; }
 @media (prefers-reduced-motion: reduce) { .convo-twisty svg, .convo-actions { transition: none; } }

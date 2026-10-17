@@ -273,7 +273,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
         }
       }}>
       <span className="team-row-avatar">
-        <BlobCanvas color={agentColorHex(agent.color)} size={50} mood={status.mood} look={agentLook(agent)} label={agent.name} />
+        <BlobCanvas color={agentColorHex(agent.color)} size={50} mood={status.mood} look={agentLook(agent)} label={agent.name} track={selected} />
         {agent.leader && <span className="leader-badge" title="Team leader" aria-hidden="true"><Star size={8} strokeWidth={0} fill="currentColor" /></span>}
       </span>
       <span className="bot-row-copy">

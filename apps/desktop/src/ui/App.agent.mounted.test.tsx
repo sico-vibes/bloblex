@@ -1149,7 +1149,7 @@ describe('opt-in conversation experiments', () => {
     await click(buttonNamed(view.host, 'Retry as a new prompt')); await view.settle()
     expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId: 'session-claude', text: 'Latest prompt' })
     expect(experimentalSession.messages?.map((m) => m.content)).toEqual(['Original prompt', 'First reply', 'Latest prompt', 'Latest reply'])
-    expect(view.host.querySelector('.conversation-auto-title')?.textContent).toBe('Review the saved changes')
+    expect(view.host.querySelector('.conversation-crumb-title')?.textContent).toBe('Review the saved changes')
   })
   it('keeps Retry out of the hover toolbar; it stays in the message menu', async () => {
     prepare(true)

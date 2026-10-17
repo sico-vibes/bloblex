@@ -138,6 +138,11 @@
 .first-run-prompt { min-height: 46px; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-2); border-bottom: 1px solid var(--line); background: var(--surface-panel); font-size: var(--fs-xs); }
 .chat-header { height: 52px; flex: 0 0 auto; padding: 0 10px 0 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .chat-title { min-width: 0; display: flex; align-items: center; gap: 2px; }
+.chat-convos-toggle { margin-right: 4px; flex: 0 0 auto; }
+.conversation-crumb { min-width: 0; margin-left: 8px; padding-left: 10px; display: inline-flex; align-items: baseline; gap: 6px; overflow: hidden; color: var(--text-3); font-size: 13px; white-space: nowrap; border-left: 1px solid var(--line); }
+.conversation-crumb-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+.conversation-crumb-sep { flex: 0 0 auto; color: var(--text-3); }
+.conversation-crumb-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .runtime-problem-anchor { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; vertical-align: middle; }
 .runtime-problem-marker { padding: 2px; display: inline-grid; place-items: center; color: var(--status-danger); border: 0; border-radius: 4px; background: transparent; line-height: 1; cursor: pointer; }
 .runtime-problem-marker:hover, .runtime-problem-marker:focus-visible { color: var(--status-danger-text); background: var(--surface-danger); outline: 2px solid color-mix(in srgb, var(--status-danger) 55%, transparent); outline-offset: 1px; }

@@ -26,16 +26,16 @@ describe('QuickSwitcher mounted keyboard flow', () => {
     const input = host.querySelector('input')!
     const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
     act(() => { valueSetter?.call(input, 'build'); input.dispatchEvent(new InputEvent('input', { bubbles: true })) })
-    const expectedRow = host.querySelector<HTMLElement>('[data-result-id="one"]')!
+    const expectedRow = host.querySelector<HTMLElement>('[data-result-id="blob"]')!
     expectedRow.scrollIntoView = vi.fn()
     act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })))
     const active = host.querySelector('[role="option"][aria-selected="true"]')
-    expect(active?.getAttribute('data-result-id')).toBe('one')
+    expect(active?.getAttribute('data-result-id')).toBe('blob')
     expect(input.getAttribute('aria-activedescendant')).toBe(active?.id)
     expect(expectedRow.scrollIntoView).toHaveBeenCalled()
     act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
     expect(opened).toHaveBeenCalledOnce()
-    expect((opened.mock.calls[0]?.[0] as QuickSwitcherItem).id).toBe('one')
+    expect((opened.mock.calls[0]?.[0] as QuickSwitcherItem).id).toBe('blob')
     act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
     expect(closed).toHaveBeenCalled()
     expect(document.activeElement).toBe(trigger)

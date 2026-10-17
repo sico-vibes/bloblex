@@ -46,10 +46,35 @@ function legacySort(items: Ordered[]) {
  * last message, so the summary reads under the reply it produced; older
  * records without a turn keep their position from the mixed ordering.
  */
+const isContextNotice = (message: JsonRecord) => message.role === 'notice' && (message.meta as JsonRecord | undefined)?.kind === 'context_reset'
+
+/**
+ * A context divider only means something after the conversation has said
+ * something: drop the ones before the first message, and any that repeat the
+ * divider right before it word for word.
+ */
+export function withoutStaleContextNotices<T extends JsonRecord>(messages: readonly T[]): T[] {
+  let spoken = false
+  let lastNotice: string | null = null
+  const out: T[] = []
+  for (const message of messages) {
+    if (isContextNotice(message)) {
+      const text = String(message.content ?? message.text ?? '')
+      if (!spoken || lastNotice === text) continue
+      lastNotice = text
+      out.push(message)
+      continue
+    }
+    if (message.role === 'user' || message.role === 'assistant') { spoken = true; lastNotice = null }
+    out.push(message)
+  }
+  return out
+}
+
 export function buildConversationItems(session: Session): ConversationItem[] {
   const all = session.messages ?? session.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages as JsonRecord[] : []) ?? session.events ?? []
   // A model's private reasoning (OpenCode stores it as a 'thinking' message) is not part of the conversation.
-  const messages = all.filter((message) => !HIDDEN_MESSAGE_ROLES.has(String(message.role ?? '').toLowerCase()))
+  const messages = withoutStaleContextNotices(all.filter((message) => !HIDDEN_MESSAGE_ROLES.has(String(message.role ?? '').toLowerCase())))
   const messageItems: Ordered[] = messages.map((message, index) => ({ kind: 'message', id: `message:${String(message.id ?? `${message.turnId ?? ''}:${message.role ?? ''}:${index}`)}`, value: message, ...orderOf(message), tie: index, turnId: turnOf(message) }))
   const activities: Ordered[] = [
     ...(session.tools ?? []).filter((tool) => !HIDDEN_TOOL_KINDS.has(String(tool.kind ?? '').toLowerCase())).map((activity, index): Ordered => ({ kind: 'activity', id: `tool:${String(activity.id ?? `${activity.turnId ?? ''}:${index}`)}`, activity, activityKind: 'tool', ...orderOf(activity), tie: 10_000 + index, turnId: turnOf(activity) })),

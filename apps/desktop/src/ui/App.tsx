@@ -12,7 +12,7 @@ import { PixelClouds } from './PixelClouds'
 import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, setCompanionSoundVolume, unlockCompanionAudioFromGesture } from '../blob/soundCues'
 import { playDictationCue } from './dictationSound'
 import { CompanionFsm, type CompanionMode } from '../blob/companionFsm'
-import { buildConversationItems, groupConversationActivity, type ConversationItem, type GroupedConversationItem } from './conversation'
+import { buildConversationItems, groupConversationActivity, withoutStaleContextNotices, type ConversationItem, type GroupedConversationItem } from './conversation'
 import { compactMoodLabel, deriveCompanionStatus } from './companionStatus'
 import { AnalyticsView } from './AnalyticsView'
 import { SchedulesView, type AutomationInput } from './SchedulesView'
@@ -27,6 +27,7 @@ import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
 import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
+import { botProjectName, CompanionConversationPicker } from './CompanionConversationPicker'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, CompanionTeammatesSetting, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { NeedsYouBadge, PermissionQueueBar, nextWaitingAgent, waitingAgentsOf } from './CompanionAttention'
 import { CompanionActivitySummary, CompanionRemoteRow, useWorkingSince, CompanionSettingCopy } from './CompanionPanels'
@@ -43,7 +44,7 @@ import { fetchCached, invalidateCatalog } from './catalogCache'
 import { ConversationsPanel } from './ConversationsPanel'
 import { SessionRail } from './SessionRail'
 import { ChangeBanner } from './ChangeBanner'
-import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
+import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isEmptyConversation, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
@@ -72,6 +73,8 @@ import { usePlatform } from '../transport/platform'
 import { stampCompanionDragRegions } from './companionDrag'
 import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, waitingBlobCount, type ExperimentName } from './experiments'
 import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, type MessageSearchResult } from './ExperimentalFeatures'
+import { markWhatsNewSeen, readSeenVersion, releaseNotes, shouldShowWhatsNew, WhatsNewDialog } from './WhatsNew'
+import { appVersion } from '../appRelease'
 import { ConnectionBanner } from './ConnectionBanner'
 import { removeUndoToast, useUndoToasts, useUndoable } from './undo'
 import { messageExcerpt, MessageActions, MessageContextMenu, MessageReactionBadges, originalMessageText, ReplyContextStrip, type ReplyTarget } from './MessageActions'
@@ -153,6 +156,9 @@ export function App() {
   const [runtimeLogos, setRuntimeLogos] = useState(false)
   const [experiments, setExperiments] = useState(DEFAULT_EXPERIMENTS)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  // What's new opens once by itself when the app has moved to a newer version.
+  const [whatsNewOpen, setWhatsNewOpen] = useState(() => !companion && shouldShowWhatsNew(readSeenVersion(), appVersion, releaseNotes()))
+  useEffect(() => { if (!companion && (!readSeenVersion() || whatsNewOpen)) markWhatsNewSeen() }, [companion, whatsNewOpen])
   const [messageSearchOpen, setMessageSearchOpen] = useState(false)
   const [messageMenu, setMessageMenu] = useState<MessageMenuTarget | null>(null)
   const messageMenuAnchor = useRef<HTMLElement | null>(null)
@@ -1134,10 +1140,43 @@ export function App() {
     }
   }, [activeSelectedAgent, selectedSession, selectedRuntimeId, activeSessionId, selectedSessionId])
 
+  // A bot with no conversation opens straight into one (its project is already
+  // known), so the composer is there to type in. Nothing is said in it until
+  // the first message.
+  const autoCreatedFor = useRef(new Set<string>())
+  useEffect(() => {
+    if (companion || connection !== 'connected' || !activeSelectedAgent || selectedSession || sideSessionId || !runtimeUsable(selectedRuntime)) return
+    if (autoCreatedFor.current.has(activeSelectedAgent.id)) return
+    const agent = activeSelectedAgent
+    autoCreatedFor.current.add(agent.id)
+    // The same get-or-create a click on the bot uses; try again later if it could not run yet.
+    void ensureConversation(agent).then((result) => { if (!result) autoCreatedFor.current.delete(agent.id) })
+  }, [companion, connection, activeSelectedAgent, selectedSession, sideSessionId, selectedRuntime])
+
+  // A conversation left without a single message is not kept: leaving it
+  // removes it, so the list only holds conversations that happened.
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
+  const pendingSendsRef = useRef(pendingSends)
+  pendingSendsRef.current = pendingSends
+  const lastOpenId = useRef<string | null>(null)
+  useEffect(() => {
+    const previous = lastOpenId.current
+    lastOpenId.current = selectedSession?.id ?? null
+    if (!previous || previous === selectedSession?.id || companion) return
+    const left = sessionsRef.current.find((session) => session.id === previous)
+    if (!left || !isEmptyConversation(left) || pendingSendsRef.current.some((item) => item.sessionId === previous)) return
+    if ((snapshot?.queues?.[previous]?.items ?? []).length > 0) return
+    autoCreatedFor.current.delete(String(left.agentId ?? ''))
+    void rpc('session.delete.schedule', { sessionId: previous }).then(() => {
+      setSnapshot((current) => current ? { ...current, sessions: (current.sessions ?? []).filter((session) => session.id !== previous) } : current)
+    }).catch(() => undefined)
+  }, [selectedSession?.id, companion])
+
   // Start the open conversation's coding agent a moment after it is shown, so the
   // first message does not wait for it. The daemon refuses side, archived and
   // busy conversations and keeps at most two warmed, so this is cheap to ask.
-  const warmSessionId = !companion && connection === 'connected' && selectedSession && !sideSession && !selectedSession.archived ? selectedSession.id : null
+  const warmSessionId = !companion && connection === 'connected' && selectedSession && !sideSession && !selectedSession.archived && !isEmptyConversation(selectedSession) ? selectedSession.id : null
   useEffect(() => {
     if (!warmSessionId) return
     const timer = window.setTimeout(() => { void rpc('session.warm', { sessionId: warmSessionId }).catch(() => undefined) }, 400)
@@ -1448,8 +1487,9 @@ export function App() {
   /** One conversation per blob: "new" opens it, or asks before starting fresh. */
   /**
    * A new conversation with the bot, next to the existing ones (nothing is
-   * archived). It is saved at once and its coding agent starts with the first
-   * message. An empty open conversation is reused instead of adding another.
+   * archived). Its coding agent starts with the first message, and it is
+   * removed again if it is left with nothing said. An empty open conversation
+   * is reused instead of adding another.
    */
   const newSession = (agentId?: string, _anchor?: HTMLElement | null) => {
     const agent = agents.find((item) => item.id === (agentId ?? activeSelectedAgent?.id) && !item.archived)
@@ -1459,18 +1499,19 @@ export function App() {
     if (current && !isSideSession(current) && (current.messages ?? []).length === 0 && current.agentId === agent.id) { selectAgent(agent); return }
     void createConversation(agent)
   }
-  const createConversation = async (agent: Agent) => {
+  const createConversation = async (agent: Agent, options: { quiet?: boolean } = {}) => {
     try {
       const result = await rpc<{ session?: Session }>('agent.conversation.create', { agentId: agent.id })
       if (!result.session?.id) return
-      upsertSession(result.session)
+      // A new conversation has nothing in it yet; saying so lets the empty rules apply at once.
+      upsertSession({ ...result.session, messages: result.session.messages ?? [] })
       setSideSessionId(null)
       setSelectedAgentId(agent.id)
       setSelectedSessionId(result.session.id)
       void setActiveSession(result.session.id)
-      setRosterAnnouncement(`Started a new conversation with ${agent.name}.`)
+      if (!options.quiet) setRosterAnnouncement(`Started a new conversation with ${agent.name}.`)
       requestAnimationFrame(() => composerRef.current?.focus())
-    } catch (reason) { setError(messageOf(reason)) }
+    } catch (reason) { if (!options.quiet) setError(messageOf(reason)) }
   }
   const renameConversation = async (session: Session, title: string) => {
     try { await rpc('session.rename', { sessionId: session.id, title }); await refresh() } catch (reason) { setError(messageOf(reason)) }
@@ -2042,7 +2083,7 @@ export function App() {
         // A live turn queues the message in the daemon instead of failing with a conflict.
         const live = ['working', 'starting', 'waiting_permission'].includes(sessions.find((item) => item.id === sessionId)?.state ?? '')
         return rpc(live ? 'session.queue.add' : 'session.prompt', { sessionId, text }).then(() => { if (live) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
-      }} queuedCount={companionSession ? snapshot?.queues?.[companionSession.id]?.items.length ?? 0 : 0} onLoadQueue={(sessionId) => void loadQueue(sessionId)} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} />
+      }} queuedCount={companionSession ? snapshot?.queues?.[companionSession.id]?.items.length ?? 0 : 0} onLoadQueue={(sessionId) => void loadQueue(sessionId)} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} onSelectConversation={(chosen) => { setSideSessionId(null); setSelectedAgentId(String(chosen.agentId ?? '')); setSelectedSessionId(chosen.id); void setActiveSession(chosen.id) }} />
     </>
   }
 
@@ -2109,27 +2150,30 @@ export function App() {
   const hashCandidates = hashRef ? conversationMatches(blobSideSessions, agents, hashRef.query) : []
   const visibleSessions = sessions.filter((session) => session.archived !== true)
   const quickSwitcherItems: QuickSwitcherItem[] = [
-    ...activeAgents(agents).map((agent) => ({ id: agent.id, kind: 'blob' as const, title: agent.name, subtitle: agent.description, searchText: `${agent.name} ${agent.description}` })),
+    ...activeAgents(agents).map((agent) => ({ id: agent.id, kind: 'blob' as const, title: agent.name, subtitle: [agent.role?.trim(), agent.description].filter(Boolean).join(' · '), searchText: `${agent.name} ${agent.role ?? ''} ${agent.description}`, color: agentColorHex(agent.color) })),
     ...visibleSessions.map((session) => {
       const owner = agents.find((agent) => agent.id === session.agentId)
       const title = sessionDisplayTitle(session)
-      const subtitle = owner?.name ?? labelize(session.provider, Noun)
+      const place = conversationPlaceName(session, agents, projects)
+      const subtitle = [owner?.name ?? labelize(session.provider, Noun), place].filter(Boolean).join(' · ')
       return { id: session.id, kind: 'conversation' as const, title, subtitle, searchText: `${title} ${subtitle} ${session.projectPath ?? ''}`, recentAt: session.updatedAt ?? session.createdAt ?? null }
     }),
     ...activeAgents(agents).flatMap((agent) => projectGroups(visibleSessions, agent.id).filter((project) => project.key !== null).map((project) => ({ id: `${agent.id}:${project.key}`, kind: 'project' as const, title: project.label, subtitle: agent.name, searchText: `${project.label} ${agent.name} ${project.path}` }))),
-    ...(activeSelectedAgent ? [{ id: 'new-session', kind: 'action' as const, title: 'New session', subtitle: `For ${activeSelectedAgent.name}`, searchText: `New session ${activeSelectedAgent.name}` }] : []),
-    { id: 'new-blob', kind: 'action', title: `New ${noun}`, subtitle: '', searchText: `New ${noun}` },
-    { id: 'usage', kind: 'action', title: 'Usage', subtitle: '', searchText: 'Usage limits' },
-    { id: 'settings', kind: 'action', title: 'Settings', subtitle: '', searchText: 'Settings' },
-    ...(experiments.search ? [{ id: 'search-messages', kind: 'action' as const, title: 'Search messages', subtitle: 'Across all conversations', searchText: 'Search messages text history' }] : []),
-    { id: 'find-agents', kind: 'action', title: 'Find coding agents', subtitle: '', searchText: 'Find coding agents runtime' },
-    { id: 'change-look', kind: 'action', title: 'Change look', subtitle: 'Bitbots or Blobots', searchText: 'Change look appearance theme style bitbots blobots accent colour' },
-    { id: 'remote-devices', kind: 'action', title: 'Remote devices', subtitle: 'Reach your bots from a phone', searchText: 'Remote devices phone tablet browser pair relay mobile settings' },
-    { id: 'take-tour', kind: 'action', title: 'Take the tour', subtitle: 'Five quick stops', searchText: 'Take the tour guide onboarding help' },
-    { id: 'shortcuts', kind: 'action', title: 'Keyboard shortcuts', subtitle: 'Ctrl+/', searchText: 'Keyboard shortcuts keys hotkeys' },
-    { id: 'toggle-details', kind: 'action', title: 'Toggle details panel', subtitle: '', searchText: 'Toggle details panel inspector' },
+    ...(activeSelectedAgent ? [{ id: 'new-session', kind: 'action' as const, category: 'Create' as const, icon: 'new-conversation' as const, title: 'New conversation', subtitle: `With ${activeSelectedAgent.name}`, searchText: `New conversation session chat ${activeSelectedAgent.name}` }] : []),
+    { id: 'new-blob', kind: 'action', category: 'Create', icon: 'new-bot', title: `New ${noun}`, subtitle: '', searchText: `New ${noun} create` },
+    ...(experiments.search ? [{ id: 'search-messages', kind: 'action' as const, category: 'Go to' as const, icon: 'search' as const, title: 'Search messages', subtitle: 'Across all conversations', searchText: 'Search messages text history' }] : []),
+    { id: 'usage', kind: 'action', category: 'Go to', icon: 'usage', title: 'Usage', subtitle: 'Plan limits and tokens', searchText: 'Usage limits quota tokens' },
+    { id: 'remote-devices', kind: 'action', category: 'Go to', icon: 'remote', title: 'Remote devices', subtitle: 'Reach your bots from a phone', searchText: 'Remote devices phone tablet browser pair mobile settings' },
+    { id: 'settings', kind: 'action', category: 'Settings', icon: 'settings', title: 'Settings', subtitle: '', searchText: 'Settings preferences' },
+    { id: 'change-look', kind: 'action', category: 'Settings', icon: 'look', title: 'Change look', subtitle: 'Bitbots or Blobots, colours', searchText: 'Change look appearance theme style bitbots blobots accent colour' },
+    { id: 'find-agents', kind: 'action', category: 'Settings', icon: 'agents', title: 'Find coding agents', subtitle: 'Scan for Claude Code, Codex and OpenCode', searchText: 'Find coding agents runtime scan claude codex opencode' },
+    { id: 'toggle-details', kind: 'action', category: 'Settings', icon: 'details', title: 'Toggle details panel', subtitle: '', searchText: 'Toggle details panel inspector rail' },
+    { id: 'whats-new', kind: 'action', category: 'Help', icon: 'whats-new', title: 'What’s new', subtitle: 'Release notes', searchText: 'What is new changelog release notes version' },
+    { id: 'take-tour', kind: 'action', category: 'Help', icon: 'tour', title: 'Take the tour', subtitle: 'Six quick stops', searchText: 'Take the tour guide onboarding help' },
+    { id: 'shortcuts', kind: 'action', category: 'Help', icon: 'shortcuts', title: 'Keyboard shortcuts', subtitle: '', hint: 'Ctrl+/', searchText: 'Keyboard shortcuts keys hotkeys' },
   ]
   const chooseQuickSwitcherItem = (item: QuickSwitcherItem) => {
+    if (item.id === 'whats-new') { setWhatsNewOpen(true); return }
     if (item.id === 'search-messages' && experiments.search) { setMessageSearchOpen(true); return }
     if (item.kind === 'blob') {
       const agent = agents.find((candidate) => candidate.id === item.id && !candidate.archived)
@@ -2253,6 +2297,7 @@ export function App() {
           onSchedules={() => { setAnalyticsOpen(false); setSchedulesAgentId(null); setSchedulesOpen(true) }}
           onRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }}
           onBackup={() => { setSettingsInitialPage('Backup'); setSettingsFocus(null); setSettingsSheet(true) }}
+          onWhatsNew={() => setWhatsNewOpen(true)}
           schedulesActive={schedulesOpen}
           onSettings={() => { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }}
           onQuit={() => void quitBloblex()}
@@ -2270,16 +2315,16 @@ export function App() {
         {schedulesOpen ? <SchedulesView automations={snapshot?.automations ?? []} agents={agents} connected={connection === 'connected'} paused={schedulesPaused} nowMs={schedulesNowMs} agentId={schedulesAgentId} loadError={schedulesError} onBack={() => setSchedulesOpen(false)} onCreate={createAutomation} onUpdate={updateAutomation} onSetEnabled={setAutomationEnabled} onRunNow={runAutomationNow} onDelete={deleteAutomation} onLoadRuns={loadAutomationRuns} onPreview={previewAutomation} onSetPaused={setAutomationsPaused} onOpenSession={openAutomationSession} /> : analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} quotas={snapshot?.quotas ?? []} connected={connection === 'connected'} onRefreshQuota={refreshQuota} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} onOpenMemory={() => { setSettingsInitialPage('Memory'); setSettingsFocus(null); setSettingsSheet(true) }} onOpenSkills={() => { setSettingsInitialPage('Skills'); setSettingsFocus(null); setSettingsSheet(true) }} changes={draft && baseline ? changedFields(draft, baseline) : []} onDuplicate={editingAgent ? () => void duplicateAgent(editingAgent) : undefined} onExport={editingAgent ? () => void exportBlob(editingAgent) : undefined} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} projects={projects} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         <header className="chat-header">
           <div className="chat-title">
+            {activeSelectedAgent && !convosOpen && !sideSession && <button className="icon-button chat-convos-toggle" title="Show conversations" aria-label="Show conversations" onClick={() => setConvosVisible(true)}><PanelLeft size={16} /></button>}
             {sideSession
               ? <SideConversationHeader peer={sidePeer} peerName={sidePeer?.name ?? sideSession.link?.peerName ?? 'Teammate'} target={sideAgent} targetName={sideAgent?.name ?? 'Teammate'} topic={sideTopic(sideSession)} />
               : activeSelectedAgent
-                ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title={`${Noun} settings`} onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button><RuntimeProblemMarker runtime={selectedRuntime} onOpenSettings={() => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) }} />{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}{experiments.autoTitles && selectedSession?.title && selectedSession.title !== activeSelectedAgent.name && <span className="conversation-auto-title" title={selectedSession.title}>{selectedSession.title}</span>}</>
+                ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title={`${Noun} settings`} onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button><RuntimeProblemMarker runtime={selectedRuntime} onOpenSettings={() => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) }} />{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}{selectedSession && <ConversationCrumb project={currentProjectName} title={selectedSession.title && selectedSession.title !== activeSelectedAgent.name ? selectedSession.title : 'New chat'} />}</>
                 : hasActiveBlobs ? <strong className="chat-title-text">{agentName}</strong> : null}
           </div>
           <div className="header-actions" hidden={!hasActiveBlobs && !selectedSession}>
             <ApprovalPill mode={headerMode} />
             {!sideSession && <button className="icon-button" title={conversationEmpty ? 'This conversation is already fresh' : 'Start a fresh conversation'} aria-label="New conversation" disabled={!canStartSession || conversationEmpty} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>}
-            {activeSelectedAgent && !convosOpen && <button className="icon-button" title="Show conversations" aria-label="Show conversations" onClick={() => setConvosVisible(true)}><PanelLeft size={16} /></button>}
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setMoreOpen(false); restoreMoreFocus() } }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
@@ -2393,7 +2438,7 @@ export function App() {
         <SessionRail session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} onOpenRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
       </aside>
 
-      {!companion && <ContextualHints enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet} />}
+      {!companion && <ContextualHints enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet && !quickSwitcherOpen && !whatsNewOpen} />}
       {!companion && <TourHost enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet} justOnboarded={onboardingCompleteThisRun} agentColor={activeSelectedAgent?.color ?? '#b7a7f4'} />}
       {!companion && usageBarEnabled && <QuotaBar quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={() => void showUsage()} />}
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} quotas={snapshot?.quotas ?? []} loading={busy && usageSummary === null} quotaRefreshing={quotaRefreshing} onRefreshQuota={refreshQuota} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onOpenHistory={() => { setUsageSheet(false); setAnalyticsOpen(true) }} onClose={() => setUsageSheet(false)} />}
@@ -2441,6 +2486,7 @@ export function App() {
           requestAnimationFrame(() => { setComposer(draftText); composerRef.current?.focus() })
         } catch (reason) { setHandoffError(messageOf(reason)) } finally { setHandoffBusy(false) }
       })()} />}
+      {whatsNewOpen && !companion && <WhatsNewDialog onClose={() => setWhatsNewOpen(false)} onOpenLink={(url) => void openSafeLink(url)} />}
       {shortcutsOpen && experiments.shortcuts && <ShortcutSheet speechEnabled={speechEnabled} onClose={() => setShortcutsOpen(false)} />}
       <UndoToasts toasts={undoToasts} onRemove={removeUndoToast} onError={setError} />
       {revertTarget && <ConfirmDialog title={`Revert ${String(revertTarget.file.path)}?`} body="Only this turn’s saved change will be reversed. Later edits that conflict with it prevent the revert." confirmLabel="Revert change" cancelLabel="Keep it" tone="warning" onConfirm={async () => {
@@ -2513,13 +2559,19 @@ function ImportBlobDialog({ blob, runtimes, onCancel, onCreate }: { blob: Shared
   </section></div>
 }
 
+/** "Project / Conversation" beside the bot's name in the chat header. */
+function ConversationCrumb({ project, title }: { project: string | null; title: string }) {
+  const text = project ? `${project} / ${title}` : title
+  return <span className="conversation-crumb" title={text}>{project && <><span className="conversation-crumb-project">{project}</span><span className="conversation-crumb-sep" aria-hidden="true">/</span></>}<span className="conversation-crumb-title">{title}</span></span>
+}
+
 function EmptyConversation({ connected, hasRuntime, hasAgent, runtimeReady, runtimeStatus, accent, mood, agentName, look, onNewSession, onCreate, onRefresh }: { connected: boolean; hasRuntime: boolean; hasAgent: boolean; runtimeReady: boolean; runtimeStatus?: string; accent: string; mood: BlobMood; agentName: string; look: BlobLook | null; onNewSession: (anchor?: HTMLElement | null) => void; onCreate: () => void; onRefresh: () => void }) {
   const noun = useEntityNoun()
   const canvas = hasAgent ? <BlobCanvas color={accent} size={128} mood={connected ? mood : 'offline'} effectOverscanTop={135} look={look} label={agentName} /> : <BlobCanvas color="#e6e9ee" size={128} mood={connected ? 'idle' : 'offline'} effectOverscanTop={135} label="Bitbots" />
   const needsRuntimeRecovery = hasAgent && !runtimeReady
   const heading = !connected ? 'Connect to your local runtime' : needsRuntimeRecovery ? 'Coding agent needs attention' : hasAgent ? `Start a conversation with ${agentName}` : hasRuntime ? `Create your first ${noun}` : 'Find your coding agent'
-  const description = !connected ? 'Bitbots keeps its daemon and agent sessions on this device. Reconnect to load the latest state.' : needsRuntimeRecovery ? runtimeStatus === 'error' ? 'Update or repair this CLI in Settings → Coding agents, then scan again.' : 'This coding agent is offline. Open Settings → Coding agents and scan again before starting a conversation.' : hasAgent ? 'Choose a project folder. Your selected CLI starts a real session there.' : hasRuntime ? `A ${noun} is a teammate that runs on one of the coding agents installed here. Give it a name and a project, and it is ready to work.` : 'We only show agents installed on this device. Refresh to scan for Claude Code, Codex, or OpenCode.'
-  const label = !connected ? 'Try again' : needsRuntimeRecovery ? 'Scan again' : hasAgent ? 'Choose a project' : hasRuntime ? `Create your first ${noun}` : 'Scan for agents'
+  const description = !connected ? 'Bitbots keeps its daemon and agent sessions on this device. Reconnect to load the latest state.' : needsRuntimeRecovery ? runtimeStatus === 'error' ? 'Update or repair this CLI in Settings → Coding agents, then scan again.' : 'This coding agent is offline. Open Settings → Coding agents and scan again before starting a conversation.' : hasAgent ? 'It works in this bot’s project. Your coding agent starts when you send the first message.' : hasRuntime ? `A ${noun} is a teammate that runs on one of the coding agents installed here. Give it a name and a project, and it is ready to work.` : 'We only show agents installed on this device. Refresh to scan for Claude Code, Codex, or OpenCode.'
+  const label = !connected ? 'Try again' : needsRuntimeRecovery ? 'Scan again' : hasAgent ? 'New conversation' : hasRuntime ? `Create your first ${noun}` : 'Scan for agents'
   return <div className="empty-conversation"><PixelClouds className="empty-clouds" /><div className="empty-art">{canvas}</div><h1>{heading}</h1><p className="empty-description">{description}</p><button className="primary-button" onClick={(event) => { if (!connected || needsRuntimeRecovery || !hasAgent && !hasRuntime) onRefresh(); else if (hasAgent) onNewSession(event.currentTarget); else onCreate() }} disabled={!connected && !hasRuntime}>{!hasAgent && hasRuntime && connected ? <Plus size={15} /> : <FolderOpen size={15} />}{label}</button></div>
 }
 
@@ -2745,7 +2797,7 @@ function recordFrom(value: unknown): Record<string, unknown> { return value && t
 const COMPACT_HOLD_TO_DRAG_MS = 220
 const COMPACT_DRAG_SLOP_PX = 4
 
-function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void }) {
+function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void }) {
   const sessionModelLock = session?.modelLock
   const nouns = useEntityNoun({ plural: true })
   const platform = usePlatform()
@@ -3314,7 +3366,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const inputTokens = typeof usage?.inputTokens === 'number' ? usage.inputTokens : null
   const outputTokens = typeof usage?.outputTokens === 'number' ? usage.outputTokens : null
   const tokenGlance = inputTokens !== null && outputTokens !== null ? formatCount(inputTokens + outputTokens) : inputTokens !== null ? `${formatCount(inputTokens)} in · out ?` : outputTokens !== null ? `in ? · ${formatCount(outputTokens)} out` : 'Unknown'
-  const recentMessages = (session?.messages ?? []).filter((message) => message.role !== 'thinking')
+  const recentMessages = withoutStaleContextNotices((session?.messages ?? []).filter((message) => message.role !== 'thinking'))
   const sessionMessageIds = new Set(recentMessages.map((message) => message.id).filter((id): id is string => typeof id === 'string'))
   // C10: the chat shows the last eight, plus eight more per "Load earlier".
   const chatWindowInfo = earlierWindow(chatWindow, recentMessages.length)
@@ -3414,7 +3466,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
               <span className="card-bot"><span className="focus-glow" aria-hidden="true" />{focusBlob(58)}</span>
               <button className="icon-btn jump" aria-label="Open in Bitbots" title="Open in Bitbots" onClick={onOpenMain}><ArrowUpRight size={9} /></button>
               <div className="card-stack">
-                <div className="who"><span className="name">{name}</span><RuntimeProblemMarker runtime={runtime} onOpenSettings={onOpenSettings} />{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}{agent?.leader && <span className="companion-leader" title="Team leader" aria-label="Team leader">★</span>}<span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
+                <div className="who"><span className="name">{name}</span><RuntimeProblemMarker runtime={runtime} onOpenSettings={onOpenSettings} />{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}{agent?.leader && <span className="companion-leader" title="Team leader" aria-label="Team leader">★</span>}{botProjectName(agent, projects) && <span className="companion-project" title="Project">{botProjectName(agent, projects)}</span>}<span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
                 <FocusTicker steps={focusSteps} current={statusLine} shimmering={shimmering} />
                 {focusTeam ? <button type="button" className="glance team-glance" onClick={() => onOpenSession?.(focusTeam.sessionId)} title="Open the side conversation in Bitbots">{focusTeam.peer && <BlobCanvas decorative color={agentColorHex(focusTeam.peer.color)} size={14} mini look={agentLook(focusTeam.peer)} label={focusTeam.peer.name} />}<span>{focusTeam.text}</span></button>
                   : <div className="glance" title={`Reported tokens across all ${nouns}. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}><span>All {nouns}: Tokens <b>{tokenGlance}</b></span></div>}
@@ -3433,6 +3485,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
               {Array.isArray(sideSession.messages) && sideSession.messages.length === 0 && <p className="companion-empty">No messages yet.</p>}
             </div>
           </div> : view === 'chat' ? <div className="island-card chat-card companion-chat-view">
+            {onSelectConversation && <CompanionConversationPicker agent={agent} sessions={sessions} projects={projects} current={session} onPick={onSelectConversation} />}
             <span className="card-bot small">{focusBlob(44)}</span>
             <div className="chat-body">
               <div className="chat-log" ref={chatLogRef} data-companion-no-drag="" onScroll={onChatScroll}>
@@ -3469,6 +3522,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
             </div>
           </div> : view === 'activity' ? <div className="island-card list-card companion-activity-view">
             <div className="list-head"><strong>Activity</strong><button className="link-btn" onClick={onOpenMain}>View conversation</button></div>
+            {onSelectConversation && <CompanionConversationPicker agent={agent} sessions={sessions} projects={projects} current={session} onPick={onSelectConversation} />}
             <CompanionActivitySummary agents={agents} sessions={sessions} runtimes={runtimes} connected={connected} workingSince={workingSince} now={clock} onOpen={(sessionId) => { if (sessionId) onOpenSession?.(sessionId) }} />
             <CompanionTeamActivity agent={agent} agents={agents} sessions={sessions} onOpen={(sessionId) => onOpenSession?.(sessionId)} />
             {activityDetails && (recentSteps.length ? <ActivitySteps items={recentSteps} /> : <p className="companion-empty">No commands, tools or file changes reported for this conversation.</p>)}

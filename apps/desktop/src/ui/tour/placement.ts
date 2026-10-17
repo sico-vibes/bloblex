@@ -74,6 +74,18 @@ export function inflate(rect: Rect, pad: number): Rect {
   return { x: rect.x - pad, y: rect.y - pad, width: rect.width + pad * 2, height: rect.height + pad * 2 }
 }
 
+/**
+ * Keep a spotlight inside the window, leaving `margin` for its border and
+ * ring, so a target flush with the window edge (the sidebar) is not clipped.
+ */
+export function clampToViewport(rect: Rect, viewport: { width: number; height: number }, margin: number): Rect {
+  const left = Math.max(margin, rect.x)
+  const top = Math.max(margin, rect.y)
+  const right = Math.min(viewport.width - margin, rect.x + rect.width)
+  const bottom = Math.min(viewport.height - margin, rect.y + rect.height)
+  return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) }
+}
+
 export function rectsEqual(a: Rect | null, b: Rect | null): boolean {
   if (a === b) return true
   if (!a || !b) return false

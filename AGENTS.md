@@ -1,5 +1,13 @@
 # Bitbots collaboration instructions
 
+# Amendment (18 October 2026): DeepSeek lanes write all code for FIX37
+
+Owner directive, for the FIX37 wave (the beta.31 review) and until the owner says otherwise.
+
+- **All code goes to OpenCode `opencode-go/deepseek-v4.1-flash` (high), UI included.** This amends the 16 October split, where the Director wrote UI. The Director writes the briefs, reviews every diff, verifies the result (gates on `main`, browser preview) and sends work back until it is right; it does not write production code or tests itself.
+- **Several lanes may run at once**, one worktree and one Cargo target each, with briefs that keep their files apart where possible. Lanes never run `git commit`; the Director merges, gates, commits and releases.
+- Everything else in the amendments below stands.
+
 # Amendment (17 October 2026, later): Native Remote, without Tailscale
 
 Owner directive (request of 17 October 2026, decisions made in planning). It amends the Remote amendment below where they differ; everything not changed here stands.

@@ -36,3 +36,6 @@ Add the new RPCs/events to `apps/desktop/src/remote/tiers.json` (`manager.profil
 
 ## Report
 `docs/FIX36_D3_REPORT.md`.
+
+## Also: a small D2 hardening (Director's review)
+In `crates/bloblex-daemon/src/proposals.rs` `apply_project`: a project folder path (both `existing` and `new`) must be an **absolute** path; reject relative paths with `invalid_argument` ("Choose a full folder path."). For `new`, refuse a path that already exists as a file. Add tests for both.

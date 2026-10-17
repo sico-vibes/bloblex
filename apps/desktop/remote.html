@@ -8,16 +8,11 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="manifest" href="/remote.webmanifest" />
-    <link rel="apple-touch-icon" href="/src/assets/bloblex-128.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <title>Bitbots Remote</title>
-    <script>
-      (() => {
-        try {
-          const light = matchMedia('(prefers-color-scheme: light)').matches
-          document.documentElement.dataset.theme = light ? 'light' : 'dark'
-        } catch { /* default dark */ }
-      })()
-    </script>
+    <!-- No inline script: the host serves a strict `script-src 'self'` policy. The
+         prefers-color-scheme theme handshake lives in `src/remote/main.tsx`. -->
   </head>
   <body>
     <div id="root"></div>

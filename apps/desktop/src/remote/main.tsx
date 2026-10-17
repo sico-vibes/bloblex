@@ -6,10 +6,17 @@ import '../ui/accent.css'
 import '../ui/polish.css'
 import './remote.css'
 import { RemoteApp } from './RemoteApp'
+import { registerRemoteServiceWorker } from './serviceWorker'
 
-if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-  // The worker is a stub (network only); registration proves the PWA wiring.
-  navigator.serviceWorker.register('/remote-sw.js').catch(() => undefined)
-}
+// The theme handshake used to be an inline script in `remote.html`; the host
+// serves a strict `script-src 'self'`, so it lives here (spec §4, CSP note).
+try {
+  const light = matchMedia('(prefers-color-scheme: light)').matches
+  document.documentElement.dataset.theme = light ? 'light' : 'dark'
+} catch { /* default dark */ }
+
+registerRemoteServiceWorker()
+
+export { applyUpdate, onUpdateReady, updateIsReady } from './serviceWorker'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><RemoteApp /></React.StrictMode>)

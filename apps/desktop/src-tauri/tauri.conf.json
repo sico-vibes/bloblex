@@ -7,7 +7,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run build:remote",
     "frontendDist": "../dist"
   },
   "app": {
@@ -42,7 +42,7 @@
       "../../../assets/icon/bloblex.ico",
       "../../../assets/icon/bloblex-master.png"
     ],
-    "resources": [],
+    "resources": { "../dist-remote/": "remote-web/" },
     "externalBin": ["binaries/bitbotsd", "binaries/bitbots-hook"],
     "targets": ["nsis"],
     "windows": {

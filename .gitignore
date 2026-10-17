@@ -1,5 +1,6 @@
 node_modules/
 apps/desktop/dist/
+apps/desktop/dist-remote/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/binaries/bitbotsd-*.exe
 target/

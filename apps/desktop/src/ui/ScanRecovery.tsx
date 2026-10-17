@@ -8,6 +8,7 @@ import type { Runtime } from '../types'
 import { PROVIDER_GUIDES } from './providerGuides'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { friendlyError } from './errorCopy'
+import { SignInHelp } from './SignInHelp'
 
 export const SCAN_PROVIDERS = ['claude', 'codex', 'opencode'] as const
 export type ScanProvider = (typeof SCAN_PROVIDERS)[number]
@@ -77,6 +78,7 @@ export function ScanRecovery({ runtimes, scanning, error, onScan }: {
       return <article key={provider} className="scan-recovery-provider" data-provider={provider}>
         <div className="scan-recovery-head"><ProviderLogo provider={provider} /><strong>{name}</strong>{found && <Check size={15} aria-label="Found" />}</div>
         <small>{guide.installSummary}</small>
+        {!found && <SignInHelp provider={provider} mode="install" compact />}
         {guide.installCommands.map((item) => <div className="scan-recovery-command" key={item.label}>
           <span>{item.label}</span><code>{item.command}</code>
           <CopyCommandButton command={item.command} label={`${name} ${item.label}`} />

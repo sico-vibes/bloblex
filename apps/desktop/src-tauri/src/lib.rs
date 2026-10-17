@@ -1103,6 +1103,138 @@ fn get_active_runtime(state: State<'_, AppState>) -> Option<String> {
         .and_then(|active| active.clone())
 }
 
+/// The provider display name used in the terminal window title.
+fn runtime_terminal_name(provider: &str) -> Result<&'static str, String> {
+    match provider {
+        "claude" => Ok("Claude Code"),
+        "codex" => Ok("Codex"),
+        "opencode" => Ok("OpenCode"),
+        _ => Err(format!("Unknown coding agent: {provider}")),
+    }
+}
+
+/// The login command for one provider. Claude Code opens its own prompt and the
+/// user types `/login`, so it gets a one-line hint first.
+fn provider_login_script(provider: &str) -> Result<&'static str, String> {
+    match provider {
+        "claude" => Ok("echo 'Bitbots: at the Claude Code prompt type /login, finish signing in, then retry here.'; claude"),
+        "codex" => Ok("codex login"),
+        "opencode" => Ok("opencode auth login"),
+        _ => Err(format!("Unknown coding agent: {provider}")),
+    }
+}
+
+const OPENCODE_DOCS: &str = "https://opencode.ai/docs/";
+
+/// The install command for one provider, with its login command chained in the
+/// same window. OpenCode is npm-only, so a missing npm is an error that names
+/// its docs rather than a command that cannot work.
+fn provider_install_script(provider: &str, npm_available: bool) -> Result<String, String> {
+    let install = match provider {
+        "claude" => "irm https://claude.ai/install.ps1 | iex",
+        "codex" => "irm https://chatgpt.com/codex/install.ps1 | iex",
+        "opencode" => {
+            if !npm_available {
+                return Err(format!("OpenCode is installed with npm, which is not on PATH. Install Node.js first, or see {OPENCODE_DOCS}."));
+            }
+            "npm install -g opencode-ai"
+        }
+        _ => return Err(format!("Unknown coding agent: {provider}")),
+    };
+    Ok(format!("{install}; {}", provider_login_script(provider)?))
+}
+
+/// A terminal launch, built from the fixed table. `args` is the exact argv the
+/// shell command is spawned with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalLaunch {
+    program: String,
+    args: Vec<String>,
+    /// The window the renderer is told about: `wt` or `powershell`.
+    terminal: &'static str,
+    /// True only for the direct `powershell.exe` fallback, which must open its
+    /// own console window (`CREATE_NEW_CONSOLE`). `wt.exe` opens one itself.
+    new_console: bool,
+}
+
+/// The value `runtime_terminal` resolves to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalLaunched {
+    launched: bool,
+    terminal: &'static str,
+}
+
+/// Build the launch for one provider and action. Nothing is spawned here, which
+/// is what lets the table be tested.
+fn terminal_launch(provider: &str, action: &str, npm_available: bool, wt_available: bool) -> Result<TerminalLaunch, String> {
+    let name = runtime_terminal_name(provider)?;
+    let script = match action {
+        "login" => provider_login_script(provider)?.to_owned(),
+        "install" => provider_install_script(provider, npm_available)?,
+        other => return Err(format!("Unknown terminal action: {other}")),
+    };
+    let title = format!("Bitbots: {name} sign-in");
+    if wt_available {
+        // Windows Terminal parses its own argument list before PowerShell sees
+        // the script, and an unescaped `;` there is wt's command separator: it
+        // would split `echo ...; claude` (and every chained install) into two
+        // commands. wt's documented escape is `\;`.
+        Ok(TerminalLaunch {
+            program: "wt.exe".into(),
+            args: vec![
+                "new-tab".into(),
+                "--title".into(),
+                title,
+                "powershell".into(),
+                "-NoExit".into(),
+                "-Command".into(),
+                script.replace(';', "\\;"),
+            ],
+            terminal: "wt",
+            new_console: false,
+        })
+    } else {
+        // Spawn PowerShell directly so Windows gives it a console of its own
+        // with `CREATE_NEW_CONSOLE`; the script is one argv entry, quoted by
+        // `std::process::Command`, so nothing re-parses the `|` or `;` in it.
+        Ok(TerminalLaunch {
+            program: "powershell.exe".into(),
+            args: vec!["-NoExit".into(), "-Command".into(), script],
+            terminal: "powershell",
+            new_console: true,
+        })
+    }
+}
+
+/// Whether a program exists on PATH. Used only to pick the terminal and to
+/// refuse an OpenCode install without npm.
+fn program_on_path(program: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else { return false; };
+    std::env::split_paths(&path).any(|directory| directory.join(program).is_file())
+}
+
+/// Opens a visible terminal window with the provider's login or install
+/// command. Only the provider and action come from the renderer; the command
+/// text itself is always ours.
+#[tauri::command]
+fn runtime_terminal(provider: String, action: String) -> Result<TerminalLaunched, String> {
+    let launch = terminal_launch(&provider, &action, program_on_path("npm.cmd"), program_on_path("wt.exe"))?;
+    let mut command = Command::new(&launch.program);
+    command.args(&launch.args);
+    // The direct PowerShell fallback is a console app with no window of its own,
+    // so ask Windows for one. `wt.exe` opens its own window and must not get the
+    // flag, and this is no CREATE_NO_WINDOW anywhere.
+    #[cfg(windows)]
+    if launch.new_console {
+        command.creation_flags(0x00000010); // CREATE_NEW_CONSOLE
+    }
+    command
+        .spawn()
+        .map_err(|error| format!("Could not open a terminal window: {error}"))?;
+    Ok(TerminalLaunched { launched: true, terminal: launch.terminal })
+}
+
 #[tauri::command]
 fn toggle_companion(app: AppHandle) -> Result<bool, String> {
     let window = app
@@ -2367,6 +2499,7 @@ pub fn run() {
             get_active_session,
             set_active_runtime,
             get_active_runtime,
+            runtime_terminal,
             toggle_companion,
             companion_visible,
             set_companion_mode,
@@ -2478,5 +2611,120 @@ mod markdown_export_tests {
         let leftovers = std::fs::read_dir(&dir).unwrap().flatten().filter(|entry| entry.file_name().to_string_lossy().starts_with('.')).count();
         assert_eq!(leftovers, 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod runtime_terminal_tests {
+    use super::{provider_install_script, terminal_launch, TerminalLaunch, OPENCODE_DOCS};
+
+    fn argv(provider: &str, action: &str, npm: bool, wt: bool) -> Vec<String> {
+        let launch = terminal_launch(provider, action, npm, wt).unwrap();
+        assert_eq!(launch.program, if launch.terminal == "wt" { "wt.exe" } else { "powershell.exe" });
+        launch.args
+    }
+
+    #[test]
+    fn provider_and_action_are_allowlisted() {
+        for provider in ["claude", "codex", "opencode"] {
+            for action in ["login", "install"] {
+                assert!(terminal_launch(provider, action, true, true).is_ok(), "{provider}/{action} must be allowed");
+                assert!(terminal_launch(provider, action, true, false).is_ok(), "{provider}/{action} must be allowed without wt");
+            }
+        }
+        for provider in ["", "powershell", "Claude", "claude;calc", "../claude", "unknown"] {
+            assert!(terminal_launch(provider, "login", true, true).is_err(), "{provider} must be rejected");
+        }
+        for action in ["", "shell", "Login", "login;calc", "--version"] {
+            assert!(terminal_launch("claude", action, true, true).is_err(), "{action} must be rejected");
+        }
+    }
+
+    #[test]
+    fn login_argv_per_provider_in_a_windows_terminal_tab() {
+        assert_eq!(
+            argv("claude", "login", true, true),
+            vec![
+                "new-tab",
+                "--title",
+                "Bitbots: Claude Code sign-in",
+                "powershell",
+                "-NoExit",
+                "-Command",
+                // wt's own `;` separator is escaped for wt, not for PowerShell.
+                "echo 'Bitbots: at the Claude Code prompt type /login, finish signing in, then retry here.'\\; claude",
+            ]
+        );
+        assert_eq!(
+            argv("codex", "login", true, true),
+            vec!["new-tab", "--title", "Bitbots: Codex sign-in", "powershell", "-NoExit", "-Command", "codex login"]
+        );
+        assert_eq!(
+            argv("opencode", "login", true, true),
+            vec!["new-tab", "--title", "Bitbots: OpenCode sign-in", "powershell", "-NoExit", "-Command", "opencode auth login"]
+        );
+    }
+
+    #[test]
+    fn wt_escapes_every_semicolon_in_the_script() {
+        for provider in ["claude", "codex", "opencode"] {
+            for action in ["login", "install"] {
+                let launch = terminal_launch(provider, action, true, true).unwrap();
+                let script = &launch.args[6];
+                assert_eq!(
+                    script.matches(';').count(),
+                    script.matches("\\;").count(),
+                    "every `;` must be escaped before wt sees it: {provider}/{action}: {script}"
+                );
+                assert_eq!(launch.terminal, "wt");
+                assert!(!launch.new_console, "wt opens its own window");
+            }
+        }
+        // The chained Claude login really does carry a separator to escape.
+        assert!(terminal_launch("claude", "login", true, true).unwrap().args[6].contains("\\; claude"));
+    }
+
+    #[test]
+    fn install_argv_chains_the_login_command() {
+        assert_eq!(
+            argv("claude", "install", true, true)[6],
+            "irm https://claude.ai/install.ps1 | iex\\; echo 'Bitbots: at the Claude Code prompt type /login, finish signing in, then retry here.'\\; claude"
+        );
+        assert_eq!(
+            argv("codex", "install", true, true)[6],
+            "irm https://chatgpt.com/codex/install.ps1 | iex\\; codex login"
+        );
+        assert_eq!(
+            argv("opencode", "install", true, true)[6],
+            "npm install -g opencode-ai\\; opencode auth login"
+        );
+    }
+
+    #[test]
+    fn opencode_install_without_npm_names_the_docs() {
+        let error = provider_install_script("opencode", false).unwrap_err();
+        assert!(error.contains(OPENCODE_DOCS));
+        assert!(!error.to_lowercase().contains("password"));
+    }
+
+    #[test]
+    fn the_fallback_spawns_powershell_directly_with_a_new_console() {
+        let launch: TerminalLaunch = terminal_launch("codex", "install", false, false).unwrap();
+        assert_eq!(launch.terminal, "powershell");
+        assert!(
+            launch.new_console,
+            "the direct PowerShell fallback needs CREATE_NEW_CONSOLE"
+        );
+        assert_eq!(launch.program, "powershell.exe");
+        // One argv entry, unquoted: `std::process::Command` quotes it, and no
+        // cmd.exe is in the path to read the `|` or `;` itself.
+        assert_eq!(
+            launch.args,
+            vec![
+                "-NoExit",
+                "-Command",
+                "irm https://chatgpt.com/codex/install.ps1 | iex; codex login",
+            ]
+        );
     }
 }

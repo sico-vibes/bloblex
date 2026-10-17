@@ -28,6 +28,7 @@ import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
 import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { botProjectName, CompanionConversationPicker } from './CompanionConversationPicker'
+import { SignInHelp } from './SignInHelp'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, CompanionTeammatesSetting, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { NeedsYouBadge, PermissionQueueBar, nextWaitingAgent, waitingAgentsOf } from './CompanionAttention'
 import { CompanionActivitySummary, CompanionRemoteRow, useWorkingSince, CompanionSettingCopy } from './CompanionPanels'
@@ -2351,7 +2352,7 @@ export function App() {
                   ? <ActivitySummaryLine group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
                   : item.kind === 'message'
                     ? (team && experiments.search && !team.props.id ? <div id={`conversation-message-${encodeURIComponent(item.id)}`}>{team}</div> : team) ?? <MessageItem id={`conversation-message-${encodeURIComponent(item.id)}`} message={item.value!} accent={accent} agentName={agentName} showAvatar={!isUserMessage(item.value) && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))} mood={index === lastAgentIndex ? selectedMood : 'idle'} agents={agents} onOpenReference={openSideConversation} sourceSessionId={selectedSession?.id ?? ''} sourceMessages={sessionMessages} onJumpToMessage={jumpToMessage} onContextMenu={item.value?.role === 'user' && !sideSession ? (event) => openUserMessageMenu(event, item.value!) : undefined} onToggleReaction={experiments.messageActions && !sideSession && item.value?.id ? (emoji) => { void toggleMessageReaction(selectedSession.id, String(item.value!.id), emoji).catch(() => setError('Could not save your reaction. Try again.')) } : undefined} />
-                    : <ActivityItem item={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
+                    : <ActivityItem item={item} onDiff={(path, content) => setDiffViewer({ path, content })} runtime={selectedRuntime} onSignedIn={() => void refresh()} />
                 const message = item.kind === 'message' ? item.value : undefined
                 const text = originalMessageText(message?.content ?? message?.text)
                 const messageMeta = message?.meta && typeof message.meta === 'object' ? message.meta as Record<string, unknown> : {}
@@ -2714,7 +2715,7 @@ function mergeHydratedSession(snapshot: Snapshot, id: string, fullSession: Sessi
   return { ...snapshot, sessions: [...sessions.filter((session) => session.id !== id), merged] }
 }
 
-function ActivityItem({ item, onDiff }: { item: ConversationItem; onDiff?: (path: string, content: string) => void }) {
+function ActivityItem({ item, onDiff, runtime, onSignedIn }: { item: ConversationItem; onDiff?: (path: string, content: string) => void; runtime?: Runtime | null; onSignedIn?: () => void }) {
   const activity = item.activity ?? {}
   const file = item.activityKind === 'file'
   const failed = ['error', 'failed', 'rejected'].includes(String(activity.state ?? activity.status ?? '').toLowerCase()) || item.activityKind === 'turn'
@@ -2727,6 +2728,7 @@ function ActivityItem({ item, onDiff }: { item: ConversationItem; onDiff?: (path
   return <article className={`activity-card timeline-activity ${failed ? 'error' : ''}`}>
     <div className="activity-heading">{file ? <FileText size={15} /> : <Terminal size={15} />}<strong>{title}</strong><span>{labelize(activity.state ?? activity.status, file ? 'Reported' : 'Activity')}</span>{time && !Number.isNaN(time.valueOf()) && <time>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>}</div>
     {friendly?.detail && <p>{friendly.detail}</p>}
+    {friendly?.action?.kind === 'sign-in' && runtime && <SignInHelp provider={runtime.provider} runtimeId={runtime.id} onChecked={onSignedIn} />}
     {detail && <p>{detail}</p>}
     {typeof activity.exitCode === 'number' && <small>Exit code {activity.exitCode}</small>}
     {typeof activity.diff === 'string' && <button type="button" className="ghost-button small activity-diff-button" onClick={() => onDiff?.(String(activity.path ?? activity.filePath ?? activity.title ?? 'Reported change'), activity.diff as string)}>View reported diff</button>}

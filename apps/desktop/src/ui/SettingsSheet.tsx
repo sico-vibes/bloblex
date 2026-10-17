@@ -19,6 +19,7 @@ import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
 import { applyAppearance } from './appearance'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
+import { needsSignIn, SignInHelp } from './SignInHelp'
 import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTime, type DiscoveryStatus } from './runtimeDiscovery'
 import { ScanRecovery } from './ScanRecovery'
 import { ConfirmDialog } from './BlobPage'
@@ -642,6 +643,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                     <span className="settings-value">{owned.length === 1 ? `1 ${noun}` : `${owned.length} ${nouns}`}</span>
                     {open ? <ChevronDown size={15} className="row-chevron" aria-hidden="true" /> : <ChevronRight size={15} className="row-chevron" aria-hidden="true" />}
                   </button>
+                  {needsSignIn(runtime) && <div className="runtime-sign-in"><SignInHelp provider={runtime.provider} runtimeId={runtime.id} onChecked={() => void onRefresh()} /></div>}
                   {open && <div className="runtime-entry-body">
                     <dl className="settings-facts">
                       <div><dt>Status</dt><dd>{labelize(runtime.status, 'Unknown')}</dd></div>

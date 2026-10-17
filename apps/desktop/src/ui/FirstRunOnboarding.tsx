@@ -7,6 +7,7 @@ import { PROVIDER_GUIDES } from './providerGuides'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
 import { CheckAgainButton } from './ScanRecovery'
+import { SignInHelp } from './SignInHelp'
 import { friendlyError } from './errorCopy'
 import { rpc } from '../tauri'
 import { parseModelCatalog, type CatalogModel } from '../executionContract'
@@ -124,6 +125,8 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
           {found && <span className={`onboarding-runtime-state ${notSignedIn ? 'warn' : 'ok'}`}>{notSignedIn ? 'Sign-in needed' : <><Check size={12} aria-hidden="true" />Ready</>}</span>}
           <CheckAgainButton compact name={providerName} found={found} scanning={scanning} onScan={onScan} />
         </div>
+        {!found && <SignInHelp provider={provider} mode="install" onChecked={onScan} />}
+        {notSignedIn && <SignInHelp provider={provider} runtimeId={matches[0]?.id} onChecked={onScan} />}
         {!found && <div className="onboarding-guide-block"><small>{guide.installSummary}</small>{guide.installCommands.map((item) => <div className="onboarding-command" key={item.label}><span>{item.label}</span><code>{item.command}</code>{copyButton(item.command, 'Copy ' + providerName + ' install command for ' + item.label)}<a className="onboarding-doc-link" href={item.docsUrl ?? guide.installDocsUrl}>Docs</a></div>)}</div>}
         {notSignedIn && <div className="onboarding-guide-block"><small>{guide.signInSummary}</small><div className="onboarding-command"><span>Sign in</span><code>{guide.signInCommand}</code>{copyButton(guide.signInCommand, 'Copy ' + providerName + ' sign-in command')}<a className="onboarding-doc-link" href={guide.signInDocsUrl}>Docs</a></div></div>}
       </article>

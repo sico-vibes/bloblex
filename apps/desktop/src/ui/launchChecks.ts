@@ -3,11 +3,14 @@ export type LaunchCheck = { id: string; label: string; state: LaunchCheckState; 
 export type LaunchStep = { id: string; label: string; timeoutMs: number; run: (signal: AbortSignal) => Promise<string> }
 export type RuntimeAuthSummary = { state: 'authenticated' | 'unauthenticated' | 'unknown'; label: string }
 
+/** The daemon's flag for a sign-in that failed during a turn (an expired login the CLI still reports as signed in). */
+export const SIGN_IN_FAILED = 'sign_in_failed'
+
 export function runtimeAuthSummary(runtime: { provider: string; authState?: string; gatewayAuthStates?: Record<string, string> }): RuntimeAuthSummary {
   const state = (value?: string): RuntimeAuthSummary['state'] => {
     const normalized = value?.toLowerCase()
     if (normalized === 'authenticated' || normalized === 'signed_in') return 'authenticated'
-    if (normalized === 'unauthenticated' || normalized === 'signed_out') return 'unauthenticated'
+    if (normalized === 'unauthenticated' || normalized === 'signed_out' || normalized === SIGN_IN_FAILED) return 'unauthenticated'
     return 'unknown'
   }
   const gateways = runtime.provider.toLowerCase() === 'opencode' ? Object.entries(runtime.gatewayAuthStates ?? {}) : []
@@ -22,6 +25,7 @@ export function runtimeAuthSummary(runtime: { provider: string; authState?: stri
         : parts.every((part) => part.gatewayState === 'unauthenticated') ? 'unauthenticated' : 'unknown'
     return { state: summaryState, label: parts.map((part) => part.label).join(' · ') }
   }
+  if (runtime.authState?.toLowerCase() === SIGN_IN_FAILED) return { state: 'unauthenticated', label: 'Sign in again' }
   const fallback = state(runtime.authState)
   return { state: fallback, label: fallback === 'authenticated' ? 'Signed in' : fallback === 'unauthenticated' ? 'Not signed in' : 'Sign-in status unknown' }
 }

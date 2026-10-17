@@ -387,6 +387,13 @@
       "params": null
     },
     {
+      "method": "runtime.auth.clear",
+      "class": "never",
+      "minTier": null,
+      "why": "Clearing a sign-in failure re-runs coding agent discovery on the host; a remote device must not do that.",
+      "params": null
+    },
+    {
       "method": "session.new",
       "class": "never",
       "minTier": null,

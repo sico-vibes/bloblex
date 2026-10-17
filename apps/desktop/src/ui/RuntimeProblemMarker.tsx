@@ -7,7 +7,13 @@ import { friendlyError } from './errorCopy'
 
 /** A failed local CLI check affects only blobs attached to that runtime. */
 export function runtimeProblem(runtime: Runtime | null | undefined) {
-  if (!runtime || String(runtime.status ?? '').toLowerCase() !== 'error') return null
+  if (!runtime) return null
+  if (String(runtime.authState ?? '').toLowerCase() === 'sign_in_failed') return {
+    label: `${runtime.provider} · Sign in again`,
+    reason: 'Its sign-in expired, so messages to it fail.',
+    recovery: 'Open Settings → Coding agents and choose Sign in.',
+  }
+  if (String(runtime.status ?? '').toLowerCase() !== 'error') return null
   const probe = runtimeProbeDetail(runtime)
   return {
     label: probe?.step ?? `${runtime.provider} · Runtime check`,

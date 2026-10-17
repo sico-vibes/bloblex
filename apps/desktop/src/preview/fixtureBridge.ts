@@ -953,6 +953,8 @@ export async function inspectLocalFile(path: string) { return { path, fileName: 
 export async function openInEditor() {}
 export async function revealInExplorer() {}
 export async function resolveProjectFile(path: string) { return path }
+// The preview opens no window; the shape is what the sign-in sheet expects.
+export async function runtimeTerminal(_provider: string, _action: string) { return { launched: true, terminal: 'wt' as const } }
 export async function showMainWindow() {}
 export async function showMainSettings(_sessionId?: string | null, _page?: string) {}
 export async function setActiveSession() {}

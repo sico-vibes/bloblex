@@ -242,6 +242,11 @@ export async function inspectLocalFile(path: string): Promise<{ path: string; fi
 export async function openInEditor(path: string, projectRoot?: string | null): Promise<void> { void path; void projectRoot; throw notAvailable() }
 export async function revealInExplorer(path: string, projectRoot?: string | null): Promise<void> { void path; void projectRoot; throw notAvailable() }
 export async function resolveProjectFile(path: string, projectRoot?: string | null): Promise<string> { void path; void projectRoot; throw notAvailable() }
+export type RuntimeTerminalProvider = 'claude' | 'codex' | 'opencode'
+export type RuntimeTerminalAction = 'login' | 'install'
+export type RuntimeTerminalResult = { launched: boolean; terminal: 'wt' | 'powershell' }
+/** Sign-in terminals run on the host, never on a device. */
+export async function runtimeTerminal(provider: RuntimeTerminalProvider, action: RuntimeTerminalAction): Promise<never> { void provider; void action; throw notAvailable() }
 
 // ---------------------------------------------------------------------------
 // Updates belong to the host install, not to a device.

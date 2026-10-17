@@ -3294,7 +3294,10 @@ impl Storage {
                     Some(Utc::now().to_rfc3339())
                 },
                 failure_class.filter(|class| matches!(*class, "provider_error" | "permission_denied" | "cancelled" | "timeout" | "budget_stop" | "config_unsupported" | "other")),
-                failure_class.filter(|class| *class == "context")
+                // `failure_class_v2` has no CHECK constraint, so the classes
+                // added after the original column (`context`, and the
+                // `unauthenticated` class for an expired CLI sign-in) live here.
+                failure_class.filter(|class| matches!(*class, "context" | "unauthenticated"))
             ],
         )?;
         if matches!(state, "completed" | "error" | "cancelled") {
@@ -5867,6 +5870,18 @@ mod tests {
         db.update_turn_outcome("turn", "error", Some("context")).unwrap();
         assert_eq!(db.turn_failure_class("turn").unwrap().as_deref(), Some("context"));
         assert_eq!(analytics_failure_class(Some("context")), "context");
+    }
+    #[test]
+    fn unauthenticated_failure_class_round_trips_in_the_additive_column() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"runtime","provider":"claude"})).unwrap();
+        db.create_session("session", "runtime", "claude", ".", "Sign-in").unwrap();
+        db.create_turn("turn", "session").unwrap();
+        db.update_turn_outcome("turn", "error", Some("unauthenticated")).unwrap();
+        assert_eq!(db.turn_failure_class("turn").unwrap().as_deref(), Some("unauthenticated"));
+        let detail = db.session_detail("session").unwrap();
+        let turn = detail["turns"].as_array().unwrap().iter().find(|turn| turn["id"] == "turn").unwrap().clone();
+        assert_eq!(turn["failureClass"], "unauthenticated");
     }
 
     #[test]

@@ -141,6 +141,8 @@ export interface Runtime extends JsonRecord {
   version?: string
   status?: string
   authState?: string
+  /** RFC 3339 time of the turn whose CLI sign-in failed; absent otherwise. */
+  authFailedAt?: string
   gatewayAuthStates?: Record<string, string>
   probeError?: string | null
   probeStep?: string | null

@@ -174,3 +174,6 @@
 .scan-check { display: flex; align-items: center; gap: 10px; }
 .scan-check-time { color: var(--text-3); font-size: var(--fs-xs); }
 .scan-check-result { color: var(--text-2); font-size: var(--fs-sm); }
+
+/* An expired or missing sign-in under a coding agent's row. */
+.runtime-sign-in { padding: 0 16px 12px 52px; }

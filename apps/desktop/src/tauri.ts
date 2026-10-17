@@ -137,6 +137,21 @@ export async function resolveProjectFile(path: string, projectRoot?: string | nu
   return invoke<string>('resolve_project_file', { path, projectRoot: projectRoot ?? null })
 }
 
+/** The providers and actions `runtimeTerminal` accepts; never a command string. */
+export type RuntimeTerminalProvider = 'claude' | 'codex' | 'opencode'
+export type RuntimeTerminalAction = 'login' | 'install'
+export type RuntimeTerminalResult = { launched: boolean; terminal: 'wt' | 'powershell' }
+
+/**
+ * Opens a visible terminal window running the provider's fixed login or install
+ * command, so an expired CLI sign-in can be fixed without leaving the app. The
+ * command text lives in the native table; only these two values cross.
+ */
+export async function runtimeTerminal(provider: RuntimeTerminalProvider, action: RuntimeTerminalAction): Promise<RuntimeTerminalResult> {
+  if (!inDesktop) throw new Error('Sign-in terminals are available only in the desktop app.')
+  return invoke<RuntimeTerminalResult>('runtime_terminal', { provider, action })
+}
+
 export async function showMainWindow(sessionId?: string | null): Promise<void> {
   if (!inDesktop) return
   await invoke('show_main_window', { sessionId: sessionId ?? await getActiveSession() })

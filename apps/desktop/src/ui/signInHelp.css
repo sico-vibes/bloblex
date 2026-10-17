@@ -1,0 +1,7 @@
+/* Sign in / Install buttons for a coding agent. */
+.sign-in-help { margin-top: 8px; display: grid; gap: 6px; }
+.sign-in-help.compact { margin-top: 0; }
+.sign-in-help-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.sign-in-help-actions button { display: inline-flex; align-items: center; gap: 6px; }
+.sign-in-help-note { color: var(--text-3); font-size: var(--fs-2xs); line-height: 1.45; }
+.sign-in-help-problem { color: var(--danger-ink); font-size: var(--fs-xs); }

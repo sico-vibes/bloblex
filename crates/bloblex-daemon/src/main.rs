@@ -20,7 +20,7 @@ use bloblex_protocol::{
 };
 use bloblex_security::{capability_matches, is_loopback, new_capability};
 use bloblex_storage::Storage;
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::{
@@ -167,6 +167,7 @@ fn failure_public_message(failure_class: &str) -> &'static str {
         "context" => "Context window is full. Start a new conversation.",
         "config_unsupported" => "Requested execution settings were unsupported.",
         "provider_error" => "The provider reported a turn error.",
+        "unauthenticated" => "The coding agent's sign-in expired.",
         "provider_unavailable" => "The coding agent could not start.",
         "permission_denied" => "A required permission was denied.",
         _ => "The turn could not be completed.",
@@ -432,13 +433,130 @@ fn persist_runtime_discovery(
     db: &Storage,
     discovered: Vec<bloblex_runtime::DiscoveredRuntime>,
 ) -> Result<Vec<Value>, bloblex_storage::StorageError> {
+    // A probe can only see what the CLI claims, and an expired refresh token
+    // still answers `loggedIn: true`. A sign-in failure observed during a turn
+    // therefore survives discovery until a successful turn or
+    // `runtime.auth.clear` clears it.
+    let saved = db.runtimes().unwrap_or_default();
     let mut values = Vec::with_capacity(discovered.len());
     for runtime in discovered {
-        let value = serde_json::to_value(runtime).unwrap_or(Value::Null);
+        let mut value = serde_json::to_value(runtime).unwrap_or(Value::Null);
+        if let Some(previous) = saved.iter().find(|previous| previous["id"] == value["id"]) {
+            if previous["authState"] == SIGN_IN_FAILED {
+                inherit_sign_in_failure(&mut value, previous);
+            }
+        }
         db.upsert_runtime(&value)?;
         values.push(value);
     }
     Ok(values)
+}
+
+/// The stored runtime `authState` for a sign-in that failed during a turn. It
+/// is a data field on the runtime row, so no schema migration is needed.
+const SIGN_IN_FAILED: &str = "sign_in_failed";
+/// The stored runtime `authState` for a clear whose discovery found no answer.
+const AUTH_UNKNOWN: &str = "unknown";
+/// A turn completed, which proves the CLI sign-in works again.
+const AUTH_AUTHENTICATED: &str = "authenticated";
+
+fn inherit_sign_in_failure(value: &mut Value, previous: &Value) {
+    let Some(fields) = value.as_object_mut() else { return; };
+    fields.insert("authState".into(), json!(SIGN_IN_FAILED));
+    if let Some(failed_at) = previous.get("authFailedAt") {
+        fields.insert("authFailedAt".into(), failed_at.clone());
+    }
+}
+
+/// Replaces one runtime in the published roster and emits `runtime.changed`.
+async fn publish_runtime_value(st: &AppState, runtime: Value) {
+    publish_runtime_values(st, vec![runtime]).await;
+}
+
+async fn publish_runtime_values(st: &AppState, values: Vec<Value>) {
+    if values.is_empty() {
+        return;
+    }
+    let roster = {
+        let mut runtimes = st.runtimes.write().await;
+        for value in values {
+            match runtimes.iter_mut().find(|runtime| runtime["id"] == value["id"]) {
+                Some(slot) => *slot = value,
+                None => runtimes.push(value),
+            }
+        }
+        runtimes.clone()
+    };
+    st.emit("runtime.changed", json!({"runtimes": roster})).await;
+}
+
+/// Marks a runtime whose CLI sign-in failed during a turn. The marker is
+/// idempotent: it is written once and then survives until a successful turn or
+/// `runtime.auth.clear`.
+async fn mark_runtime_sign_in_failed(st: &AppState, runtime_id: &str) {
+    if runtime_id.is_empty() {
+        return;
+    }
+    let Ok(saved) = st.db.runtimes() else { return; };
+    let Some(mut runtime) = saved.into_iter().find(|runtime| runtime["id"] == runtime_id) else { return; };
+    if runtime["authState"] == SIGN_IN_FAILED {
+        return;
+    }
+    let failed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let Some(fields) = runtime.as_object_mut() else { return; };
+    fields.insert("authState".into(), json!(SIGN_IN_FAILED));
+    fields.insert("authFailedAt".into(), json!(failed_at));
+    if st.db.upsert_runtime(&runtime).is_err() {
+        return;
+    }
+    publish_runtime_value(st, runtime).await;
+}
+
+/// Clears the marker after a turn on that runtime completed successfully.
+async fn clear_runtime_sign_in_failed_after_success(st: &AppState, runtime_id: &str) {
+    let Ok(saved) = st.db.runtimes() else { return; };
+    let Some(mut runtime) = saved.into_iter().find(|runtime| runtime["id"] == runtime_id) else { return; };
+    if runtime["authState"] != SIGN_IN_FAILED {
+        return;
+    }
+    let Some(fields) = runtime.as_object_mut() else { return; };
+    fields.insert("authState".into(), json!(AUTH_AUTHENTICATED));
+    fields.remove("authFailedAt");
+    if st.db.upsert_runtime(&runtime).is_err() {
+        return;
+    }
+    publish_runtime_value(st, runtime).await;
+}
+
+/// `runtime.auth.clear`: forget a sign-in failure and ask the CLI again. The
+/// marker is removed first so discovery's answer (not the stale marker) is what
+/// gets stored.
+async fn runtime_auth_clear(
+    st: &AppState,
+    runtime_id: &str,
+    discovery: impl std::future::Future<Output = Vec<bloblex_runtime::DiscoveredRuntime>>,
+) -> Result<Vec<Value>, DispatchError> {
+    let Ok(saved) = st.db.runtimes() else {
+        return Err(derr("internal", "Could not read the coding agents.", StatusCode::INTERNAL_SERVER_ERROR));
+    };
+    let Some(mut runtime) = saved.into_iter().find(|runtime| runtime["id"] == runtime_id) else {
+        return Err(derr("not_found", "Coding agent not found.", StatusCode::NOT_FOUND));
+    };
+    if runtime["authState"] == SIGN_IN_FAILED {
+        let Some(fields) = runtime.as_object_mut() else {
+            return Err(derr("internal", "Could not clear the sign-in flag.", StatusCode::INTERNAL_SERVER_ERROR));
+        };
+        fields.insert("authState".into(), json!(AUTH_UNKNOWN));
+        fields.remove("authFailedAt");
+        st.db.upsert_runtime(&runtime).map_err(|_| derr("internal", "Could not clear the sign-in flag.", StatusCode::INTERNAL_SERVER_ERROR))?;
+        publish_runtime_value(st, runtime).await;
+        let found = discovery.await.into_iter().filter(|found| found.id == runtime_id).collect::<Vec<_>>();
+        if !found.is_empty() {
+            let values = persist_runtime_discovery(&st.db, found).map_err(|_| derr("internal", "Could not save the coding agent scan.", StatusCode::INTERNAL_SERVER_ERROR))?;
+            publish_runtime_values(st, values).await;
+        }
+    }
+    Ok(st.runtimes.read().await.clone())
 }
 
 async fn publish_runtime_discovery(
@@ -760,6 +878,11 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let values = refresh_runtime_discovery(st, bloblex_runtime::discover()).await.map_err(|_| derr("internal", "Could not save the coding agent scan.", StatusCode::INTERNAL_SERVER_ERROR))?;
             let prewarm = st.clone();
             tokio::spawn(async move { catalog::prewarm_all(&prewarm).await; });
+            Ok(json!({"runtimes":values}))
+        }
+        "runtime.auth.clear" => {
+            let runtime_id = p["runtimeId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "runtimeId is required", StatusCode::BAD_REQUEST))?;
+            let values = runtime_auth_clear(st, runtime_id, bloblex_runtime::discover()).await?;
             Ok(json!({"runtimes":values}))
         }
         "quota.list" => st.db.quota_snapshots().map(|quotas| json!({"quotas":quotas})).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)),
@@ -2899,7 +3022,11 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         let permission_denied = st.denied_turns.lock().await.remove(&turn);
         let failure_class = adapter_failure_class(&e, permission_denied);
         let (detail, sign_in) = failure_detail_and_sign_in(&provider, failure_class, &e.to_string());
+        // An expired CLI sign-in is its own failure class: the app can offer a
+        // sign-in path instead of a generic provider error.
+        let failure_class = if sign_in { "unauthenticated" } else { failure_class };
         let public_message = if sign_in { "The coding agent's sign-in expired." } else { failure_public_message(failure_class) };
+        if sign_in { mark_runtime_sign_in_failed(st, &active.runtime.runtime_id).await; }
         let gate = gate_for_session(st, &sid).await;
         let _guard = gate.lock().await;
         if !session_gate_is_current(st, &sid, &gate).await || session_is_deleted(st, &sid).await
@@ -3489,6 +3616,8 @@ async fn forward_events_with_timeouts(
                     let _ = st.db.update_turn_state(t, "completed");
                     finish_turn_delivery(&st, t, true).await;
                 }
+                // A completed turn proves the CLI sign-in works again.
+                clear_runtime_sign_in_failed_after_success(&st, &runtime_id).await;
                 let _ = st.db.update_session_state(&sid, "completed");
                 st.active_turns.lock().await.remove(&sid);
                 if let Ok(summary) = st.db.session_event_summary(&sid) {
@@ -3571,16 +3700,18 @@ async fn forward_events_with_timeouts(
                 continue;
             }
             AgentEvent::Error { message: provider_message } => {
-                let denied = if let Some(t) = turn.as_deref() {
-                    let denied = st.denied_turns.lock().await.remove(t);
-                    let class = if denied { "permission_denied" } else { "provider_error" };
-                    let _ = st.db.update_turn_outcome(t, "error", Some(class));
-                    finish_turn_delivery(&st, t, true).await;
-                    denied
-                } else { false };
-                let failure_class = if denied { "permission_denied" } else { "provider_error" };
-                let (detail, sign_in) = failure_detail_and_sign_in(&provider, failure_class, &provider_message);
+                let denied = if let Some(t) = turn.as_deref() { st.denied_turns.lock().await.remove(t) } else { false };
+                let preliminary_class = if denied { "permission_denied" } else { "provider_error" };
+                let (detail, sign_in) = failure_detail_and_sign_in(&provider, preliminary_class, &provider_message);
+                // An expired CLI sign-in is its own failure class: the app can
+                // offer a sign-in path instead of a generic provider error.
+                let failure_class = if sign_in { "unauthenticated" } else { preliminary_class };
                 let message = if sign_in { "The coding agent's sign-in expired." } else { failure_public_message(failure_class) };
+                if let Some(t) = turn.as_deref() {
+                    let _ = st.db.update_turn_outcome(t, "error", Some(failure_class));
+                    finish_turn_delivery(&st, t, true).await;
+                }
+                if sign_in { mark_runtime_sign_in_failed(&st, &runtime_id).await; }
                 let _ = st.db.update_session_state(&sid, "error");
                 st.active_turns.lock().await.remove(&sid);
                 if let Ok(summary) = st.db.session_event_summary(&sid) {
@@ -5677,6 +5808,149 @@ mod phase2a_tests {
         assert_eq!(turn["failureClass"], "provider_error");
         assert_eq!(turn["detail"], "429 rate limit exceeded; retry later");
     }
+
+    /// A discovered runtime JSON payload for the storage/discovery round trips.
+    fn discovered_runtime(id: &str, provider: &str, auth_state: &str) -> bloblex_runtime::DiscoveredRuntime {
+        let protocol = if provider == "claude" { "claude_stream" } else { "codex_app_server" };
+        serde_json::from_value(json!({
+            "id": id,
+            "hostId": "host_windows_local",
+            "provider": provider,
+            "displayName": provider,
+            "protocolFamily": protocol,
+            "executablePath": "C:/fake/cli.exe",
+            "launchArgs": [],
+            "version": null,
+            "authState": auth_state,
+            "gatewayAuthStates": {},
+            "status": "online",
+            "capabilities": {}
+        })).unwrap()
+    }
+
+    /// End-to-end: a turn fails on an expired CLI sign-in, then a later turn on
+    /// that runtime completes and clears the flag.
+    #[tokio::test]
+    async fn expired_sign_in_is_classified_and_a_completed_turn_clears_it() {
+        let (st, mut events) = state();
+        st.db.create_session("s-signin", "rt-test", "claude", ".", "Sign-in").unwrap();
+        st.db.create_turn("t-signin", "s-signin").unwrap();
+        st.db.update_session_state("s-signin", "working").unwrap();
+        st.active_turns.lock().await.insert("s-signin".into(), "t-signin".into());
+        let adapter = Arc::new(PolicyAdapter::default());
+        let handle = SessionHandle { session_id: "s-signin".into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "claude".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
+        st.sessions.lock().await.insert("s-signin".into(), ActiveSession { handle, runtime, adapter, launch_approval_mode: ApprovalMode::Ask });
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let task = tokio::spawn(forward_events(st.clone(), "s-signin".into(), "claude".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::Error { message: "Failed to authenticate: OAuth session expired and could not be refreshed".into() }).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+
+        let mut flagged_before_the_error = false;
+        let error_event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event_type == "runtime.changed" {
+                    flagged_before_the_error = event.payload["runtimes"].as_array().unwrap().iter()
+                        .any(|runtime| runtime["id"] == "rt-test" && runtime["authState"] == "sign_in_failed");
+                }
+                if event.event_type == "turn.error" { break event; }
+            }
+        }).await.unwrap();
+        assert!(flagged_before_the_error, "runtime.changed must flag the runtime before the turn error");
+        assert_eq!(error_event.payload["failureClass"], "unauthenticated");
+        assert!(error_event.payload["detail"].as_str().unwrap().contains("/login"));
+        let stored = st.db.runtimes().unwrap();
+        let flagged = stored.iter().find(|runtime| runtime["id"] == "rt-test").unwrap();
+        assert_eq!(flagged["authState"], "sign_in_failed");
+        assert!(flagged["authFailedAt"].as_str().unwrap().contains('T'), "authFailedAt must be RFC 3339");
+        let saved = st.db.session_detail("s-signin").unwrap();
+        let recorded = saved["turns"].as_array().unwrap().iter().find(|entry| entry["id"] == "t-signin").unwrap();
+        assert_eq!(recorded["failureClass"], "unauthenticated");
+
+        // A later turn that completes on the same runtime clears the flag.
+        st.db.create_session("s-signin-ok", "rt-test", "claude", ".", "Sign-in ok").unwrap();
+        st.db.create_turn("t-signin-ok", "s-signin-ok").unwrap();
+        st.db.update_session_state("s-signin-ok", "working").unwrap();
+        st.active_turns.lock().await.insert("s-signin-ok".into(), "t-signin-ok".into());
+        st.sessions.lock().await.insert("s-signin-ok".into(), ActiveSession {
+            handle: SessionHandle { session_id: "s-signin-ok".into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() },
+            runtime: RuntimeSpec { runtime_id: "rt-test".into(), provider: "claude".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None },
+            adapter: Arc::new(PolicyAdapter::default()),
+            launch_approval_mode: ApprovalMode::Ask,
+        });
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let task = tokio::spawn(forward_events(st.clone(), "s-signin-ok".into(), "claude".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        let cleared = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event_type == "runtime.changed" {
+                    let roster = event.payload["runtimes"].as_array().unwrap();
+                    if roster.iter().any(|runtime| runtime["id"] == "rt-test" && runtime["authState"] == "authenticated") { break true; }
+                }
+            }
+        }).await.unwrap();
+        assert!(cleared, "a completed turn must clear the flag");
+        let stored = st.db.runtimes().unwrap();
+        let cleared = stored.iter().find(|runtime| runtime["id"] == "rt-test").unwrap();
+        assert_eq!(cleared["authState"], "authenticated");
+        assert!(cleared.get("authFailedAt").is_none(), "the cleared runtime keeps no failure time");
+    }
+
+    /// The path `runtime.refresh` takes: a live probe that answers
+    /// `authenticated` must not lift a failure we saw first-hand.
+    #[tokio::test]
+    async fn runtime_refresh_keeps_a_sign_in_failure() {
+        let (st, mut events) = state();
+        st.db.upsert_runtime(&json!({"id":"rt-test","provider":"claude","status":"online","authState":"sign_in_failed","authFailedAt":"2026-10-17T10:00:00Z"})).unwrap();
+        *st.runtimes.write().await = st.db.runtimes().unwrap();
+        let discovered = vec![discovered_runtime("rt-test", "claude", "authenticated")];
+        let values = refresh_runtime_discovery(&st, async move { discovered }).await.unwrap();
+        assert_eq!(values[0]["authState"], "sign_in_failed");
+        assert_eq!(values[0]["authFailedAt"], "2026-10-17T10:00:00Z");
+        assert_eq!(st.runtimes.read().await[0]["authState"], "sign_in_failed");
+        assert_eq!(events.recv().await.unwrap().event_type, "runtime.changed");
+        let stored = st.db.runtimes().unwrap();
+        assert_eq!(stored[0]["authState"], "sign_in_failed");
+    }
+
+    /// `runtime.auth.clear` drops the marker and then takes the CLI's answer.
+    #[tokio::test]
+    async fn runtime_auth_clear_reruns_discovery_for_that_runtime() {
+        let (st, mut events) = state();
+        st.db.upsert_runtime(&json!({"id":"rt-test","provider":"claude","status":"online","authState":"sign_in_failed","authFailedAt":"2026-10-17T10:00:00Z"})).unwrap();
+        *st.runtimes.write().await = st.db.runtimes().unwrap();
+        let discovered = vec![discovered_runtime("rt-test", "claude", "authenticated")];
+        let values = runtime_auth_clear(&st, "rt-test", async move { discovered }).await.unwrap();
+        assert_eq!(values[0]["authState"], "authenticated");
+        assert!(values[0].get("authFailedAt").is_none());
+        // The clear publishes once, then the discovery answer publishes again.
+        let mut saw_cleared = false;
+        while let Ok(event) = events.try_recv() {
+            if event.event_type != "runtime.changed" { continue; }
+            let roster = event.payload["runtimes"].as_array().unwrap();
+            if roster.iter().any(|runtime| runtime["id"] == "rt-test" && runtime["authState"] == "authenticated") { saw_cleared = true; }
+        }
+        assert!(saw_cleared, "the clear must publish the discovered state");
+        let stored = st.db.runtimes().unwrap();
+        let cleared = stored.iter().find(|runtime| runtime["id"] == "rt-test").unwrap();
+        assert_eq!(cleared["authState"], "authenticated");
+        assert!(cleared.get("authFailedAt").is_none());
+        // A clear whose discovery finds nothing leaves the runtime unknown, not flagged.
+        st.db.upsert_runtime(&json!({"id":"rt-test","provider":"claude","status":"online","authState":"sign_in_failed","authFailedAt":"2026-10-17T10:05:00Z"})).unwrap();
+        *st.runtimes.write().await = st.db.runtimes().unwrap();
+        let values = runtime_auth_clear(&st, "rt-test", async { Vec::new() }).await.unwrap();
+        assert_eq!(values[0]["authState"], "unknown");
+        assert!(values[0].get("authFailedAt").is_none());
+        assert!(runtime_auth_clear(&st, "rt-missing", async { Vec::new() }).await.is_err());
+        assert_eq!(dispatch(&st, "runtime.auth.clear", json!({"runtimeId":""})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "runtime.auth.clear", json!({"runtimeId":"rt-missing"})).await.unwrap_err().1.code, "not_found");
+    }
+
     #[tokio::test]
     async fn timeout_event_includes_only_sanitized_claude_process_diagnostics() {
         let (st, mut events) = state();

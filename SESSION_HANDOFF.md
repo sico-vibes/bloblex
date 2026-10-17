@@ -1,8 +1,43 @@
 # Bitbots session handoff
 
-> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.23` ([docs/releases/0.1.0-beta.23.md](docs/releases/0.1.0-beta.23.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (12 October and 14 October amendments). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
+> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.29` ([docs/releases/0.1.0-beta.29.md](docs/releases/0.1.0-beta.29.md)); later work on local `main` is unreleased. The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
 
-Current as of 13 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+Current as of 17 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+
+## Owner review wave FIX26-FIX33 (15-17 October 2026, after beta.29)
+
+**State.** Every package below is committed on local `main`, from `25e694c` to `54b674e`, on top of the beta.29 record `cda9f46`. **Nothing is pushed or released.** No lane worktree is left; `git worktree list` shows only this checkout. Lanes followed the 16 October amendment in [AGENTS.md](AGENTS.md): the Director wrote all UI, and OpenCode `deepseek-v4.1-flash` (high) wrote the backend from a spec per package, with each diff reviewed and gated on `main` before commit. The plan is in the FIX specs listed below; owner decisions were Tailscale for Remote, a Bitbots skills pool shared over MCP, a backup holding bots, memory, skills, automations and settings (no projects, no conversations), and the word "bot" in both looks.
+
+### What landed
+
+| Package | Commits | What it does | Spec / report |
+|---|---|---|---|
+| FIX26 UI review | `25e694c` | About 33 screenshot items: "?" tooltips instead of small print, model search, chips that open bot-to-bot chats, onboarding first-bot editor, companion drag from empty space, companion composer and message actions, "bot" everywhere, effort icons, permission icons, single-column bot editor. | — |
+| FIX28 speed + FIX33 small backend | `0dc6531`, `0f54c7b`, `00fbcd0`, `fcf0e61` | Model catalog cache (fresh 15 min, stale up to 7 days, single-flight, persisted, `CachedOnly` on every send path, boot prewarm, `runtime.models.changed`). The UI catalog cache makes model and effort switching instant after boot. A send is accepted at once and the coding agent starts behind it; the composer never waits and shows "Sending…". `session.warm` when a conversation is opened. Cloud dictation client kept warm (no request to the endpoint ahead of time). `session.environment`. | `docs/FIX28_CATALOG_SPEC.md`, `FIX28_SEND_SPEC.md`, `FIX33_SMALL_BACKEND_SPEC.md` + reports |
+| FIX27 conversations | `e34f10e`, `869d878`, `2e12c51`, `7708f2a` | Many conversations per bot (`agent.conversation.create`, `agent.conversations`), auto-titles, a stable bot-to-bot tree (`spawnedFromSessionId`), readable workspace names. UI: a collapsible per-bot Conversations column with branches, a session rail (Environment, Context, Outputs, Changes) and a latest-changes banner with Undo. | `docs/FIX27_CONVERSATIONS_SPEC.md` + report |
+| FIX32 skills | `c5337b6`, `05fc503`, `245a816` | One skills pool under the data folder, imported from Claude Code, Codex, OpenCode or a folder; MCP tools `list_skills`, `load_skill`, `read_skill_file`; a `<bloblex_skills>` routing block in the per-turn suffix, re-sent only when it changes; per-bot opt-outs; no double loading of native copies. UI: Settings › Skills, a Skills group on the bot page, "Used skill: name" in a turn's steps. | `docs/FIX32_SKILLS_SPEC.md` + report |
+| FIX31 backup | `c480815`, `05fc503` | One checksummed `.bitbots-backup.json`; preview with conflicts and warnings, then import with rename/replace/skip in one transaction; settings through an allowlist; secrets, sign-ins, `remote.*` and dictation consent never included; automations come back paused. UI: Settings › Backup, also in the profile menu. | `docs/FIX31_BACKUP_SPEC.md` + report |
+| FIX29 Remote over Tailscale | `6b2ef85` (WP6a policy), `5275cbd` (WP6d contract), `650e275` (Settings › Remote), `fa7c5a7` (WP6c PWA), `f4f9417` (phone client), `d793812` (WP6c-1 build fix), `54b674e` (WP6b gateway) | One policy file `apps/desktop/src/remote/tiers.json` used by Rust and TypeScript (76 shared golden cases). A gateway inside `bitbotsd` on `127.0.0.1:<remote.port>` published with `tailscale serve` (443, else 8443; never Funnel, never `serve reset`), owner-confirmed pairing, device cookies stored as SHA-256, Origin and Tailscale-login checks, tiers, quiet hours, redaction, event replay. A separate PWA build (`npm run build:remote` → `dist-remote`, shipped as the `remote-web` resource) with a real service worker. The phone client pairs, waits for approval, and follows its tier. | `docs/FIX29_WP6{A,B,C,C1,D}_*_SPEC.md` + reports; design in `docs/remote/` |
+
+### Gates on `54b674e`
+
+- Rust workspace excluding the desktop crate (`RUST_MIN_STACK=33554432 cargo test --workspace --exclude bloblex-desktop --no-fail-fast`): **662 passed, 0 failed**. Clippy with `-D warnings`: clean.
+- Desktop crate library (`cargo test -p bloblex-desktop --lib`, from this checkout): 53 passed.
+- Desktop UI: `npx tsc -b` clean; Vitest **1046 passed** in 146 files; `npm run build` and `npm run build:remote` succeed.
+- Browser preview checks (fixture bridge): every FIX26 item, the conversations column, rail and banner, Settings › Skills, › Backup and › Remote, and the phone client at 375 px.
+
+### Not verified
+
+- **Remote, live.** No real Tailscale: the gateway's 75 remote tests use a fake CLI and temp databases. The installed CLI's `serve --help` text, real `status --json` shapes, the 443→8443 fallback, cookie behaviour on iOS Safari and an installed PWA are all unchecked. **The remote AGENTS.md amendment ([docs/remote/AGENTS_AMENDMENT_DRAFT.md](docs/remote/AGENTS_AMENDMENT_DRAFT.md)) still needs the owner's sign-off before Remote ships.**
+- Live CLI timing for the catalog cache and the non-blocking send; boot prewarm against real CLIs; a real bot calling `load_skill`; a backup exported and imported into a fresh data folder; the native windows (companion drag, rail, banner) in the real app.
+
+### Known issues and next steps
+
+1. **Live Remote test** with the owner's Tailscale and phone: enable, pair, install the PWA, chat as `chat`, approve as `operator`, revoke. Then the owner signs the AGENTS amendment.
+2. `cargo clippy -p bloblex-desktop` has lints that predate this wave (an error in `power.rs:222` "this loop never actually loops", warnings in `lib.rs`, `speech.rs`, `updates.rs`). The clippy gate excludes the desktop crate, so nothing fails; a lane cleanup is worthwhile.
+3. `cargo clippy --all-targets` reports a `needless_borrow` in the FIX32 skills tests in `main.rs`; same lane cleanup.
+4. A fresh checkout builds the desktop crate only after `dist/` and the sidecars exist; `dist-remote` now gets a placeholder from `build.rs` (WP6c-1).
+5. Lanes on this machine: `C:\fxtarget` and `C:\fxtarget2` are private Cargo target folders used by lane worktrees; they can be deleted when no lane runs.
 
 ## Owner review follow-up and Bitbots (13 October 2026, after beta.19)
 

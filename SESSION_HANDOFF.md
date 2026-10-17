@@ -1,8 +1,42 @@
 # Bitbots session handoff
 
-> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.30` ([docs/releases/0.1.0-beta.30.md](docs/releases/0.1.0-beta.30.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
+> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.30` ([docs/releases/0.1.0-beta.30.md](docs/releases/0.1.0-beta.30.md)); `main` is ahead with the unreleased FIX34-FIX36 wave. The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
 
 Current as of 17 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+
+## Beta.30 review wave FIX34-FIX36 (17 October 2026, after beta.30)
+
+**State.** On `main`, not released and not pushed: `c60d058` to `1c57d94`, on top of the beta.30 record (`1937bc8`). The owner's beta.30 review (screenshots plus two briefs) became the FIX34-FIX36 specs below. Owner decisions in planning: Native Remote with a built-in certificate (fingerprint shown) and a password **plus** desktop approval of each new device; a **new** built-in Manager (the old team leader becomes an ordinary bot); the Manager needs approval for **every** consequential action (project, bot, task). The Native amendment is in [AGENTS.md](AGENTS.md) (17 October, later). Lanes as in the 16 October amendment: the Director wrote all UI and docs; OpenCode `deepseek-v4.1-flash` (high) wrote the backend in worktrees `C:\fx5x`, each diff reviewed and gated on `main` before commit.
+
+### What landed
+
+| Package | Commits | What it does | Spec / report |
+|---|---|---|---|
+| FIX34 fixes and polish | `c60d058`, `cc77c1c`, `c1fe315`, `4d22228` | The phone web app loads (`/` serves `remote.html`). No "fresh session" notice for a context that never had a turn; repeated notices collapse. Empty "New chat" rows are not kept; a bot with a project opens straight into a composer. An expired coding-agent sign-in is flagged on the runtime with **Sign in again** / **Install** buttons that open a terminal running a fixed command. UI polish: Project / Conversation header, Remote banner, selected-row highlight, only the selected bot tracks the cursor, grouped profile menu with **What's new**, tour clamp, command palette categories and icons, row actions over the time, tree lines for branches, companion conversation picker and project name. | `docs/FIX34_A1_REMOTE_WEB_SPEC.md`, `FIX34_A2_FRESH_SESSION_SPEC.md`, `FIX34_A5_SIGN_IN_SPEC.md` + reports |
+| FIX35 Native Remote ("Direct") | `ce0d04f`, `4199961`, `40609e3` | A second Remote method without Tailscale: HTTPS on the host's interfaces (`remote.nativePort`, default 48621) with a self-made certificate, Argon2id password sign-in plus owner approval, per-source rate limits, lockouts and a global pause, `Origin`/`Host` checks. Connectivity: UPnP mapping with consent (removed on disable and shutdown), the `Bitbots-Remote` firewall rule through one elevated prompt, carrier-NAT and private-address detection, a typed public address, and `/api/ping` "reached from". UI: method switch, sign-in, addresses with QR and fingerprint, a "Reaching this computer from away" checklist; the phone gets a username/password screen. Tests bind loopback only (they had raised Windows Firewall prompts). | `docs/FIX35_C1_NATIVE_REMOTE_SPEC.md`, `FIX35_C2_CONNECTIVITY_SPEC.md`, `FIX35_C3`-`C6` follow-ups + `FIX35_C1_REPORT.md`, `FIX35_C2_REPORT.md`; [docs/remote/PROTOCOL.md §13](docs/remote/PROTOCOL.md), [THREAT_MODEL.md §12-13](docs/remote/THREAT_MODEL.md) |
+| FIX36 the Manager | `558440b`, `5353a9d`, `ccbdb1d`, `8e6db02`, `ca653dd`, `e1b80ec`, `1c57d94` | One permanent global Manager (`systemRole: "manager"`, no project, cannot be deleted or demoted; name, look, model and personality editable), pinned above every project. Proposal cards for projects, bots, tasks, playbook and locked-profile changes, editable before **Approve**; `ask_user` questions for every provider. What it knows about the user (facts with lock) and a versioned playbook ride in a per-turn suffix and a one-off handover after a model change ("New model, same Manager"). UI: onboarding "Meet your Manager", a one-time setup card for existing users, Settings › Manager (facts, playbook with history, diff and restore), "New project with the Manager" and "Import project folder…". A pending approval now pulls focus once instead of locking the selection. | `docs/FIX36_D1_MANAGER_SPEC.md`, `FIX36_D2_PROPOSALS_SPEC.md`, `FIX36_D3_KNOWLEDGE_SPEC.md` + reports |
+
+### Gates on `1c57d94`
+
+- Rust workspace excluding the desktop crate: **719 passed, 0 failed** (on `e1b80ec`; `1c57d94` changed only UI). Clippy with `-D warnings`: clean.
+- Desktop crate library: 59 passed (on `40609e3`; no native change since).
+- Desktop UI: `npx tsc -b` clean; Vitest **1091 passed** in 154 files; `npm run build` and `npm run build:remote` succeed.
+- Browser preview (fixture bridge): Settings › Remote Direct steps, Settings › Manager with the playbook diff, the Manager-led new project. The phone sign-in screen is covered by mounted tests only.
+
+### Not verified
+
+- **Native Remote, live.** No real router, no phone on mobile data, no outside attacker. UPnP, the firewall prompt and the certificate's key-file permissions are tested against fakes only. The independent review in [THREAT_MODEL.md §13](docs/remote/THREAT_MODEL.md) is owed before a non-beta release.
+- **Remote over Tailscale, live** (still owed from beta.30).
+- **Expired sign-in**: the terminal button and re-check, against a really expired Claude sign-in.
+- **The Manager with a real coding agent**: the first-run interview, proposals created by the model, the handover after a model change.
+- That the Windows Firewall prompts during test runs have stopped (expected from the loopback bind).
+
+### Known issues and next steps
+
+1. Live checks with the owner, in this order: Tailscale Remote, Direct from a phone on mobile data, an expired Claude sign-in, the Manager's first-run interview and a project set up through proposals.
+2. Release `beta.31` only on the owner's word; then clean up `C:\fx56`, `C:\fx58` and the other merged lane worktrees and branches (AGENTS.md, 14 October amendment).
+3. `manager.profile.set` relabels a fact as "corrected" when only its lock changes; harmless, a lane tidy-up.
+4. Carried over: the desktop-crate clippy lints and the `C:\fxtarget*`/`C:\fxt\*` folders the owner can delete when no lane runs.
 
 ## Owner review wave FIX26-FIX33 (15-17 October 2026, after beta.29)
 

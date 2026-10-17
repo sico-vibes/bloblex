@@ -559,3 +559,39 @@ gateway that must apply it does not exist yet.
    requests get `device_revoked`. There is no relay to tell.
 10. **One live event socket per device.** A second socket for the same device closes the first
     and writes an activity line, which also shows a copied cookie in use.
+
+## 13. Native method (17 October 2026)
+
+Native ("Direct" in the UI) is the second way in, with the same gateway router, policy, cookie,
+pairing records and event stream as Tailscale. Only one method is active (`remote.method`,
+`tailscale` or `native`); switching needs Remote off. Threats and limits are in
+[THREAT_MODEL.md §12](THREAT_MODEL.md).
+
+**Listener.** While Native is on, the gateway binds `0.0.0.0` and `[::]` (when available) on
+`remote.nativePort` (default 48621) and speaks TLS only (rustls, certificate generated with
+rcgen, SANs: the hostname, interface addresses, loopback and the known external address). The
+fingerprint is in `remote.status.native.fingerprint`. Plain HTTP connections are dropped. The
+Tailscale listener stays loopback-only and is not running at the same time.
+
+**Checks.** As §4.1, except that `Origin` and `Host` must name one of the certificate's own
+addresses on the Native port; an origin that belongs to the other method is refused.
+
+**Routes added or changed:**
+
+| Route | Purpose |
+|---|---|
+| `POST /api/login` | `{username, password, name, kind, platform}`. A wrong pair is `401 login_invalid` (same answer for an unknown username); a locked-out source or a global pause is `429 rate_limited`. A device that already holds a valid cookie gets `200 {state:"approved"}`. Otherwise it starts the owner's approval exactly like `POST /api/pair` (`202 {state:"pending"}`, `remote.pairing.requested` with `method:"native"`), then `GET /api/pair` reports the outcome and sets the cookie. |
+| `GET /api/ping` | Unauthenticated self-test, outside the `Origin` check so it can be opened from an address bar. Answers `{"ok":true}` only; records `native.lastReachedAt` and `lastReachedFrom` (a public address, or "this network") and emits `remote.changed`. Rate-limited. |
+| `GET /api/me` | Unchanged when signed in, plus `method`. A refusal (`unauthorized`, `device_revoked`) now also carries `"method"` so a signed-out client shows the matching screen: username and password for `native`, the pairing code for `tailscale`. |
+
+**Desktop-only methods** (all `never` remote, on the loopback API): `remote.method.set
+{method}`, `remote.native.account.set {username, password}` (stores an Argon2id hash only),
+`remote.native.port.set {port}`, `remote.native.cert.regenerate`, `remote.native.upnp.set
+{enabled}` (consent; maps or unmaps at once while on), `remote.native.externalIp.set {ip|null}`
+(the owner's typed address), `remote.native.firewall.add` and `remote.native.firewall.remove`
+(one elevated prompt each; `{result: added|removed|declined|failed|unsupported}`).
+
+**Status.** `remote.status.native` carries `port, urls, fingerprint, accountSet, username,
+listening, loginPaused, pausedUntil, lastReachedAt, lastReachedFrom, upnp {consent, state,
+error?}, firewall (allowed|missing|unsupported|unknown), externalIp, externalIpSource
+(upnp|manual), cgnat, cgnatReason (carrier_nat|private)`. Never the password hash or the key.

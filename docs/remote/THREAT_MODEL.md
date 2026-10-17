@@ -159,3 +159,46 @@ Source: [REVIEW_NOTES.md](REVIEW_NOTES.md). These rows continue the table in sec
 - [ ] One live event socket per device enforced.
 - [ ] Activity entry templates covered by a test.
 - [ ] Tailscale status JSON never logged.
+
+## 12. Native (Direct) threats: a port on the public internet (17 October 2026)
+
+Native is the second Remote method ([AGENTS.md](../../AGENTS.md), amendment of 17 October 2026,
+later). While it is on, the gateway's own listener binds the host's interfaces on
+`remote.nativePort` (default 48621), serves HTTPS only with a certificate Bitbots generates, and
+may be reachable from the whole internet once the owner forwards the port (by hand or through
+UPnP with consent). Everything in §4–§11 still applies; this section covers what is new. Facts
+below come from the lane reports ([FIX35_C1](../FIX35_C1_REPORT.md), [FIX35_C2](../FIX35_C2_REPORT.md))
+and the Director's review; none of it has been tested against a live router, a real phone on
+mobile data or an outside attacker.
+
+| # | Abuse | Mitigation | Residual risk |
+|---|---|---|---|
+| N1 | Password guessing from the internet | Argon2id hash only; a wrong username still runs one verify against a dummy hash (no timing oracle); 5 failures per source in 15 min → that source gets `429` for 15 min; 30 failures across all sources in 1 h → every sign-in pauses for 30 min and the desktop shows it; a content-free activity line when a limit starts (not one per guess, so the 500-row log cannot be flooded) | A slow, distributed guesser below the global limit against a weak password. The UI requires 12+ characters, not the username |
+| N2 | A correct password from a stranger's device | A new device still needs the owner's approval on the desktop, with the tier picked there (Chat preselected); approvals from remote stay off by default | An owner who approves without reading the request |
+| N3 | Flooding unauthenticated routes (`/api/login`, `/api/pair`, `/api/ping`, static files) | Per-source token bucket, 30 requests / 10 s with burst 60, before any work | A botnet spread across many addresses; the daemon is not a hardened public web server |
+| N4 | Man in the middle on first contact | TLS is mandatory (plain HTTP refused); the browser warns once because the certificate is self-made, and Settings › Remote shows the SHA-256 fingerprint to compare | An owner who clicks through the warning without comparing the fingerprint on a hostile network |
+| N5 | Theft of the TLS key | The key lives in the data folder with user-only access (`icacls /inheritance:r /grant:r <user>:F` on Windows, mode 0600 elsewhere); "New certificate" replaces it and changes the fingerprint | Malware running as the user can read it, and the cookie store too |
+| N6 | Cross-site use of a device cookie, or a hostile name pointed at the host (DNS rebinding) | `Origin` and `Host` must name the certificate's own addresses; a Tailscale origin is refused under Native and the reverse; cookies keep `Secure`, `HttpOnly`, `SameSite=Strict` | None known beyond §9 |
+| N7 | UPnP opens more than Bitbots asked for, or leaves a mapping behind | Only with the owner's consent; maps only `remote.nativePort` over TCP; removed on disable and at daemon shutdown; the lease is renewed while on | A crash between mapping and removal leaves the forward until the lease ends; a router with a broken UPnP stack |
+| N8 | Firewall changes without the owner knowing | One inbound rule, `Bitbots-Remote`, for the Native port only, added and removed only through an elevated prompt the owner accepts; no console window | The owner widens the rule by hand |
+| N9 | Bitbots contacting third parties (IP echo, relays, DNS) | None: the external address comes from the router (UPnP) or the owner; carrier-NAT and private addresses are detected locally; the self-test is the owner opening `/api/ping` from a phone | — |
+| N10 | `/api/ping` as a probe | Answers only `{"ok":true}`; records "reached from" as a public address or "this network"; rate-limited like other unauthenticated routes | Anyone who can reach the port learns that something answers there, which the sign-in page shows anyway |
+| N11 | A signed-out device learns which method is on | `/api/me` refusals name `native` or `tailscale` and nothing else (no host name, no device data) | The method is visible from the address anyway |
+| N12 | Test runs open firewall prompts or bind the internet | Under `#[cfg(test)]` the listener binds `127.0.0.1` only; no test runs real `netsh`, PowerShell or UPnP discovery | — |
+
+## 13. Checklist additions for Native (owed before a non-beta release)
+
+Implementer-tested means the lane's own unit tests, re-run by the Director on `main`; nothing
+here is independently reviewed yet.
+
+- [x] Native refuses plain HTTP; a non-TLS client gets nothing usable (implementer-tested).
+- [x] Argon2id verify with a dummy hash for unknown usernames; uniform `login_invalid` (implementer-tested).
+- [x] Per-source lockout and global pause, with one activity line each (implementer-tested).
+- [x] `Origin`/`Host` checks per method (implementer-tested).
+- [x] UPnP mapping removed on disable and shutdown, against a fake gateway (implementer-tested).
+- [x] Firewall add/remove argv asserted against fakes; one rule name, one prompt (implementer-tested).
+- [x] Tests bind loopback only (implementer-tested; the owner's firewall prompts stopping is not yet observed).
+- [ ] An independent review of the TLS listener, sign-in, lockouts and `Origin`/`Host` handling.
+- [ ] A live test from a phone on mobile data: port forward, certificate warning and fingerprint check, sign-in, approval.
+- [ ] A live UPnP test on a real router, including that the mapping is gone after Remote turns off.
+- [ ] A check that the key file's permissions are applied on a real Windows install.

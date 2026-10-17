@@ -29,6 +29,8 @@ import { RuntimeProblemMarker } from './RuntimeProblemMarker'
 import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { botProjectName, CompanionConversationPicker } from './CompanionConversationPicker'
 import { SignInHelp } from './SignInHelp'
+import { ProposalCard } from './ProposalCard'
+import { managerOf } from './teamSelectors'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, CompanionTeammatesSetting, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { NeedsYouBadge, PermissionQueueBar, nextWaitingAgent, waitingAgentsOf } from './CompanionAttention'
 import { CompanionActivitySummary, CompanionRemoteRow, useWorkingSince, CompanionSettingCopy } from './CompanionPanels'
@@ -2375,7 +2377,9 @@ export function App() {
               {visiblePendingSends.map((item) => <article key={item.id} className="message-row user pending" aria-label="You, sending" aria-busy="true">
                 <div className="message-content"><div className="message-bubble-wrap"><div className="message-bubble"><SafeMessageText text={item.text} /></div></div><div className="message-pending-note" role="status">{item.attachments ? `Sending with ${item.attachments} ${item.attachments === 1 ? 'file' : 'files'}…` : 'Sending…'}</div></div>
               </article>)}
-              {activePermission && (activePermission.kind === 'question'
+              {activePermission && (activePermission.kind === 'proposal'
+                ? <ProposalCard key={activePermission.id} request={activePermission} managerName={managerOf(agents)?.name} projects={projects} onDecided={() => void refresh()} onError={setError} />
+                : activePermission.kind === 'question'
                 ? <QuestionCard request={activePermission} onAnswer={(answers) => answerQuestion(activePermission, answers)} onDismiss={() => void answerQuestion(activePermission, null)} />
                 : <ApprovalCard permission={activePermission} focusOnMount={approvalFocusOnMount} onReply={(choice) => answerPermission(activePermission, choice)} />)}
               {!sideSession && lastTurnWasPlan && !latestPlanId && <div className="plan-ready-bar" role="status"><span>Plan mode is on. Approve the plan to let {agentName} start building.</span><button type="button" className="primary-button small" onClick={() => void approvePlan()}>Approve &amp; build</button></div>}
@@ -3451,7 +3455,9 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
                 onPrev={() => { const at = Math.max(0, permissionQueue.findIndex((item) => item.id === permission.id)); onPickPermission?.(permissionQueue[(at - 1 + permissionQueue.length) % permissionQueue.length]?.id ?? permission.id) }}
                 onNext={() => { const at = Math.max(0, permissionQueue.findIndex((item) => item.id === permission.id)); onPickPermission?.(permissionQueue[(at + 1) % permissionQueue.length]?.id ?? permission.id) }}
                 onLater={() => { playCompanionCue('tick'); onSnoozePermission?.(permission.id) }} />}
-              {permission.kind === 'question'
+              {permission.kind === 'proposal'
+                ? <ProposalCard key={permission.id} request={permission} managerName={managerOf(agents)?.name} projects={projects} onDecided={(decision) => playCompanionCue(decision === 'approve' ? 'approve' : 'tick')} onError={(message) => onError?.(message)} />
+                : permission.kind === 'question'
                 ? <QuestionCard request={permission} onAnswer={(answers) => { playCompanionCue('approve'); return onAnswerQuestion?.(permission, answers) }} onDismiss={() => void onAnswerQuestion?.(permission, null)} />
                 : <ApprovalCard permission={permission} variant="companion" onReply={(choice) => replyToPermission(permission, choice)} />}
               {session && <button className="btn ghost" onClick={cancelCompanionTurn} disabled={sending}>Cancel turn</button>}

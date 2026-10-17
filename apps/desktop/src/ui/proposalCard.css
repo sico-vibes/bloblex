@@ -1,0 +1,26 @@
+/* A Manager proposal waiting for the owner. */
+.proposal-card { max-width: 640px; margin: 4px 0; display: grid; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--surface-raised); overflow: hidden; }
+.proposal-head { padding: 10px 12px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+.proposal-head > div { min-width: 0; flex: 1; display: grid; gap: 1px; }
+.proposal-head small { color: var(--text-3); font-size: var(--fs-2xs); }
+.proposal-head strong { font-size: var(--fs-sm); font-weight: 600; }
+.proposal-head button { display: inline-flex; align-items: center; gap: 5px; }
+.proposal-icon { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-1); border-radius: 8px; background: var(--surface-selected); }
+.proposal-body { padding: 10px 12px; display: grid; gap: 10px; }
+.proposal-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.proposal-field { min-width: 0; display: grid; gap: 4px; }
+.proposal-field > span { color: var(--text-3); font-size: var(--fs-2xs); }
+.proposal-field input, .proposal-field textarea { width: 100%; padding: 6px 8px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-input); font: inherit; font-size: var(--fs-sm); }
+.proposal-field textarea { resize: vertical; }
+.proposal-field input:focus-visible, .proposal-field textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.proposal-field button { justify-self: start; display: inline-flex; align-items: center; gap: 5px; }
+.proposal-value { margin: 0; color: var(--text-1); font-size: var(--fs-sm); line-height: 1.5; overflow-wrap: anywhere; }
+.proposal-value.multiline { max-height: 140px; overflow: auto; color: var(--text-2); white-space: pre-wrap; }
+.proposal-value.mono { font-family: var(--font-mono); font-size: var(--fs-xs); }
+.proposal-reason { margin: 0; color: var(--text-2); font-size: var(--fs-sm); }
+.proposal-preview { max-height: 220px; margin: 0; padding: 10px; overflow: auto; color: var(--text-2); border-radius: var(--radius-sm); background: var(--surface-sunken, var(--surface-panel)); font-size: var(--fs-xs); white-space: pre-wrap; }
+.proposal-actions { padding: 10px 12px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); }
+.proposal-hint { margin-right: auto; color: var(--text-3); font-size: var(--fs-xs); }
+@media (max-width: 520px) { .proposal-row { grid-template-columns: 1fr; } }
+:root[data-bitbots="on"] .proposal-card { border: 2px solid var(--bb-line-strong); border-radius: 0; }
+:root[data-bitbots="on"] .proposal-icon, :root[data-bitbots="on"] .proposal-field input, :root[data-bitbots="on"] .proposal-field textarea { border-radius: 0; }

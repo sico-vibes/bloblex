@@ -194,6 +194,7 @@ describe('remote event policy parity with the daemon', () => {
       'message.delta',
       'permission.requested',
       'permission.resolved',
+      'proposal.changed',
       'queue.changed',
       'quota.updated',
       'replay.gap',

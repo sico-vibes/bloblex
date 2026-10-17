@@ -1,11 +1,12 @@
-//! OpenCode's non-blocking `ask_user` bridge tool and the expiry sweep for the
-//! cards it leaves behind.
+//! The non-blocking `ask_user` bridge tool and the expiry sweep for the cards
+//! it leaves behind.
 //!
 //! The bridge's tool call times out after about a minute, so the tool cannot
 //! wait for a human. It persists the question as a normal question card, returns
 //! at once, and lets the turn finish. The answer travels back through the
-//! durable queue as the agent's next prompt. Claude and Codex keep their native
-//! question paths untouched.
+//! durable queue as the agent's next prompt. FIX36 D2: this is available to
+//! every provider's own conversation, not only OpenCode; Claude and Codex may
+//! also use their native question paths.
 
 use crate::{derr, team, AppState, DispatchError};
 use axum::http::StatusCode;
@@ -37,11 +38,11 @@ fn expiry_at(st: &AppState) -> String {
     (Utc::now() + Duration::seconds(expiry_secs(st))).to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-/// The MCP tool description, registered only for OpenCode main conversations.
+/// The MCP tool description, offered in every bot's own conversation.
 pub fn tool_schema() -> Value {
     json!({
         "name": "ask_user",
-        "description": "Ask the user one to four structured questions. The questions appear as a card in the chat; they may take a while to answer, so call this and then end your turn. Do not wait or poll. The user's answer arrives later as your next message.",
+        "description": "Ask the user one to six structured questions. The questions appear as a card in the chat; they may take a while to answer, so call this and then end your turn. Do not wait or poll. The user's answer arrives later as your next message.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -49,16 +50,16 @@ pub fn tool_schema() -> Value {
                 "questions": {
                     "type": "array",
                     "minItems": 1,
-                    "maxItems": 4,
+                    "maxItems": 6,
                     "items": {
                         "type": "object",
                         "properties": {
-                            "header": {"type": "string", "description": "A short label for this question, up to 40 characters."},
+                            "id": {"type": "string", "description": "An id for this question, up to 64 characters (optional; one is chosen for you)."},
+                            "header": {"type": "string", "description": "A short label for this question, up to 40 characters (optional)."},
                             "question": {"type": "string", "description": "The question itself, up to 400 characters."},
                             "options": {
                                 "type": "array",
-                                "minItems": 2,
-                                "maxItems": 4,
+                                "maxItems": 10,
                                 "items": {
                                     "type": "object",
                                     "properties": {
@@ -72,7 +73,7 @@ pub fn tool_schema() -> Value {
                             "multiSelect": {"type": "boolean", "description": "Allow more than one option."},
                             "allowOther": {"type": "boolean", "description": "Allow a free-text answer. Defaults to true."}
                         },
-                        "required": ["header", "question", "options"],
+                        "required": ["question"],
                         "additionalProperties": false
                     }
                 }
@@ -87,9 +88,6 @@ pub fn tool_schema() -> Value {
 pub async fn ask_user_tool(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
     let session = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.".to_owned())?;
     if session["archived"] == true { return Err("This conversation is archived.".into()); }
-    if session["provider"].as_str() != Some("opencode") {
-        return Err("ask_user is only available to OpenCode main conversations.".into());
-    }
     match session["link"]["kind"].as_str() {
         Some("side") => return Err("ask_user is not available in side conversations.".into()),
         Some("automation") => return Err("ask_user is not available to scheduled runs.".into()),
@@ -168,27 +166,34 @@ fn reject_unknown(object: &Value, allowed: &[&str], context: &str) -> Result<(),
 fn validate_args(args: &Value) -> Result<(String, Value), String> {
     reject_unknown(args, &["title", "questions"], "ask_user input")?;
     let title = optional_string(args, "title", 120)?.unwrap_or_else(|| "A question".to_owned());
-    let list = args["questions"].as_array().filter(|list| (1..=4).contains(&list.len())).ok_or("questions must be an array of 1 to 4 items.")?;
+    let list = args["questions"].as_array().filter(|list| (1..=6).contains(&list.len())).ok_or("questions must be an array of 1 to 6 items.")?;
     let mut questions = Vec::with_capacity(list.len());
+    let mut seen_ids = std::collections::BTreeSet::new();
     for (index, item) in list.iter().enumerate() {
-        reject_unknown(item, &["header", "question", "options", "multiSelect", "allowOther"], "a question")?;
-        let header = required_string(item, "header", 40)?;
+        reject_unknown(item, &["id", "header", "question", "options", "multiSelect", "allowOther"], "a question")?;
         let question = required_string(item, "question", 400)?;
-        let options = item["options"].as_array().filter(|options| (2..=4).contains(&options.len())).ok_or("each question needs 2 to 4 options.")?;
-        let mut normalized_options = Vec::with_capacity(options.len());
-        for option in options {
-            reject_unknown(option, &["label", "description"], "an option")?;
-            let label = required_string(option, "label", 80)?;
-            let description = optional_string(option, "description", 200)?.unwrap_or_default();
-            normalized_options.push(json!({"label": label, "description": description}));
-        }
+        let header = optional_string(item, "header", 40)?.unwrap_or_default();
+        let id = optional_string(item, "id", 64)?.unwrap_or_else(|| format!("q{}", index + 1));
+        if !seen_ids.insert(id.clone()) { return Err(format!("question ids must be unique; \"{id}\" is repeated.")); }
+        let options = match item.get("options") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(options)) if options.len() <= 10 => options.iter().map(|option| {
+                reject_unknown(option, &["label", "description"], "an option")?;
+                let label = required_string(option, "label", 80)?;
+                let description = optional_string(option, "description", 200)?.unwrap_or_default();
+                Ok::<Value, String>(json!({"label": label, "description": description}))
+            }).collect::<Result<Vec<_>, String>>()?,
+            Some(Value::Array(_)) => return Err("each question may have at most 10 options.".into()),
+            Some(_) => return Err("options must be an array.".into()),
+        };
         let multi_select = bool_field(item, "multiSelect")?.unwrap_or(false);
         let allow_other = bool_field(item, "allowOther")?.unwrap_or(true);
+        if options.is_empty() && !allow_other { return Err("a question with no options must allow a free-text answer.".into()); }
         questions.push(json!({
-            "id": format!("q{}", index + 1),
+            "id": id,
             "header": header,
             "question": question,
-            "options": normalized_options,
+            "options": options,
             "multiSelect": multi_select,
             "allowOther": allow_other
         }));

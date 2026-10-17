@@ -424,6 +424,7 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
         id TEXT PRIMARY KEY NOT NULL,
         name TEXT NOT NULL,
         path TEXT,
+        description TEXT NOT NULL DEFAULT '',
         sort_order INTEGER NOT NULL DEFAULT 0,
         collapsed INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -441,6 +442,10 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name=?1)", [column], |r| r.get(0))?;
         if !exists { c.execute(ddl, [])?; }
     }
+    // FIX36 D2: a project carries the one-sentence purpose the Manager proposes.
+    // Additive on older databases, like the agents columns above.
+    let has_project_description: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name='description')", [], |r| r.get(0))?;
+    if !has_project_description { c.execute("ALTER TABLE projects ADD COLUMN description TEXT NOT NULL DEFAULT ''", [])?; }
     // At most one built-in Manager, enforced by a partial unique index rather
     // than by convention: a second `system_role='manager'` row cannot exist.
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_manager ON agents(system_role) WHERE system_role='manager'", [])?;
@@ -677,6 +682,29 @@ fn ensure_remote_schema(c: &Connection) -> Result<(), StorageError> {
 /// The newest `REMOTE_ACTIVITY_LIMIT` activity rows are kept; older rows are
 /// dropped on every insert so the table cannot grow without bound.
 pub const REMOTE_ACTIVITY_LIMIT: usize = 500;
+
+/// FIX36 D2: the Manager's proposals (projects, bots, tasks, playbook changes).
+/// Additive and idempotent like the other `ensure_*` schemas. A proposal is also
+/// surfaced as a normal permission card, so the table is the durable record and
+/// `permission_requests` carries the visible card; both move together in
+/// `insert_proposal`/`proposal_decide`/`expire_due_proposals`.
+fn ensure_proposal_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS proposals(
+            id TEXT PRIMARY KEY NOT NULL,
+            session_id TEXT NOT NULL,
+            agent_id TEXT,
+            kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook')),
+            payload TEXT NOT NULL CHECK(json_valid(payload)),
+            status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
+            result TEXT CHECK(result IS NULL OR json_valid(result)),
+            created_at TEXT NOT NULL,
+            decided_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status, created_at);",
+    )?;
+    Ok(())
+}
 
 const REMOTE_DEVICE_COLUMNS: &str =
     "id,name,kind,platform,tier,login,paired_at,last_seen_at,revoked_at,signed_out_at";
@@ -1302,6 +1330,7 @@ impl Storage {
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
                 ensure_remote_schema(&conn)?;
+                ensure_proposal_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==11 {
@@ -1316,6 +1345,7 @@ impl Storage {
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
                 ensure_remote_schema(&conn)?;
+                ensure_proposal_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==10 {
@@ -1331,6 +1361,7 @@ impl Storage {
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
                 ensure_remote_schema(&conn)?;
+                ensure_proposal_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1349,6 +1380,7 @@ impl Storage {
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
                 ensure_remote_schema(&conn)?;
+                ensure_proposal_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1462,6 +1494,7 @@ impl Storage {
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
                 ensure_remote_schema(&conn)?;
+                ensure_proposal_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -1562,6 +1595,10 @@ impl Storage {
         if let Some(path) = input.get("path") {
             let path = match path { Value::Null => None, Value::String(p) if !p.trim().is_empty() => Some(p.trim().to_owned()), _ => return Err(StorageError::InvalidAgent) };
             tx.execute("UPDATE projects SET path=?2,updated_at=?3 WHERE id=?1", params![id, path, now])?;
+        }
+        if let Some(description) = input.get("description") {
+            let description = match description { Value::Null => String::new(), Value::String(d) if d.chars().count() <= 255 => d.trim().to_owned(), _ => return Err(StorageError::InvalidAgent) };
+            tx.execute("UPDATE projects SET description=?2,updated_at=?3 WHERE id=?1", params![id, description, now])?;
         }
         if let Some(collapsed) = input.get("collapsed") {
             tx.execute("UPDATE projects SET collapsed=?2 WHERE id=?1", params![id, collapsed.as_bool().ok_or(StorageError::InvalidAgent)?])?;
@@ -1747,7 +1784,7 @@ impl Storage {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let rows: Vec<(String, String)> = {
-            let mut q = tx.prepare("SELECT id,session_id FROM permission_requests WHERE status='pending' AND expires_at IS NOT NULL AND expires_at<=?1")?;
+            let mut q = tx.prepare("SELECT id,session_id FROM permission_requests WHERE status='pending' AND expires_at IS NOT NULL AND expires_at<=?1 AND json_extract(data,'$.kind') IS NOT 'proposal'")?;
             let collected = q.query_map([now], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
             collected
         };
@@ -1760,6 +1797,84 @@ impl Storage {
     pub fn permission_kind(&self, id: &str) -> Result<Option<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.query_row("SELECT json_extract(data,'$.kind') FROM permission_requests WHERE id=?1", [id], |r| r.get::<_, Option<String>>(0)).optional()?.flatten())
+    }
+    /// Record a pending proposal and surface it as a normal permission card
+    /// (`kind: "proposal"`), so the main window, companion, tray badge and
+    /// approval counts already include it. `record` names the proposal
+    /// (`id`/`sessionId`/`agentId`/`kind`/`payload`); `permission` is the full
+    /// card data the daemon built. Both rows are written together.
+    pub fn insert_proposal(&self, record: &Value, permission: &Value, created_at: &str, expires_at: &str) -> Result<(), StorageError> {
+        let id = record["id"].as_str().filter(|id| !id.is_empty()).ok_or(StorageError::InvalidAgent)?;
+        let session = record["sessionId"].as_str().filter(|id| !id.is_empty()).ok_or(StorageError::InvalidAgent)?;
+        let kind = record["kind"].as_str().ok_or(StorageError::InvalidAgent)?;
+        let agent_id = record["agentId"].as_str();
+        let payload = &record["payload"];
+        if !["project", "bot", "task", "playbook"].contains(&kind) { return Err(StorageError::InvalidAgent); }
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
+        if !exists { return Err(StorageError::AgentNotFound); }
+        tx.execute(
+            "INSERT INTO proposals(id,session_id,agent_id,kind,payload,status,created_at) VALUES(?1,?2,?3,?4,?5,'pending',?6)",
+            params![id, session, agent_id, kind, payload.to_string(), created_at],
+        )?;
+        tx.execute(
+            "INSERT INTO permission_requests(id,session_id,provider_request_id,status,data,expires_at) VALUES(?1,?2,?3,'pending',?4,?5)",
+            params![id, session, format!("proposal:{id}"), permission.to_string(), expires_at],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// The stored proposal record, or `AgentNotFound` when it does not exist.
+    pub fn proposal_get(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row(
+            "SELECT json_object('id',id,'sessionId',session_id,'agentId',agent_id,'kind',kind,'payload',json(payload),'status',status,'result',json(COALESCE(result,'null')),'createdAt',created_at,'decidedAt',decided_at) FROM proposals WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        ).optional()?;
+        Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)
+    }
+    /// Claims a pending proposal for a decision (only one caller wins) and
+    /// resolves its permission card in the same transaction. `choice` is the
+    /// card's resolution label (`approve`/`reject`). Returns false when the
+    /// proposal was not pending.
+    pub fn proposal_decide(&self, id: &str, status: &str, result: Option<&Value>, decision: &str, decided_at: &str) -> Result<bool, StorageError> {
+        if !["approved", "rejected"].contains(&status) { return Err(StorageError::InvalidAgent); }
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
+            "UPDATE proposals SET status=?2,result=?3,decided_at=?4 WHERE id=?1 AND status='pending'",
+            params![id, status, result.map(Value::to_string), decided_at],
+        )?;
+        if changed != 1 { tx.rollback()?; return Ok(false); }
+        tx.execute(
+            "UPDATE permission_requests SET status='resolved',data=json_set(data,'$.status','resolved','$.choice',?2) WHERE id=?1 AND status IN ('pending','resolving')",
+            params![id, decision],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+    /// Marks every pending proposal whose 24-hour life has lapsed as `expired`,
+    /// resolving its permission card too, and returns one row per proposal so
+    /// the caller can announce the change. `cutoff` is the oldest `created_at`
+    /// still alive (an injectable clock: the daemon passes `now - 24h`).
+    pub fn expire_due_proposals(&self, cutoff: &str, decided_at: &str) -> Result<Vec<Value>, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let rows: Vec<(String, String, Option<String>, String, String)> = {
+            let mut q = tx.prepare("SELECT id,session_id,agent_id,kind,payload FROM proposals WHERE status='pending' AND created_at<=?1")?;
+            let collected = q.query_map([cutoff], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<Result<Vec<_>, _>>()?;
+            collected
+        };
+        for (id, _, _, _, _) in &rows {
+            tx.execute("UPDATE proposals SET status='expired',decided_at=?2 WHERE id=?1 AND status='pending'", params![id, decided_at])?;
+            tx.execute("UPDATE permission_requests SET status='expired',data=json_set(data,'$.status','expired') WHERE id=?1 AND status IN ('pending','resolving')", [id])?;
+        }
+        tx.commit()?;
+        Ok(rows.into_iter().map(|(id, session_id, agent_id, kind, payload)| json!({
+            "id": id, "sessionId": session_id, "agentId": agent_id, "kind": kind, "payload": serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null)
+        })).collect())
     }
     /// The latest assistant text of a turn, used to relay a side reply.
     pub fn turn_reply(&self, session: &str, turn: &str) -> Result<Option<String>, StorageError> {
@@ -3919,7 +4034,7 @@ impl Storage {
         }
         let permissions = query_jsons(
             c,
-            "SELECT json_object('id',p.id,'sessionId',p.session_id,'runtimeId',s.runtime_id,'title',json_extract(p.data,'$.title'),'detail',json_extract(p.data,'$.detail'),'choices',json_extract(p.data,'$.choices'),'kind',json_extract(p.data,'$.kind'),'questions',json_extract(p.data,'$.questions'),'status',p.status,'expiresAt',p.expires_at) FROM permission_requests p JOIN sessions s ON s.id=p.session_id WHERE p.status='pending' AND s.archived=0 ORDER BY p.rowid",
+            "SELECT json_object('id',p.id,'sessionId',p.session_id,'runtimeId',s.runtime_id,'title',json_extract(p.data,'$.title'),'detail',json_extract(p.data,'$.detail'),'choices',json_extract(p.data,'$.choices'),'kind',json_extract(p.data,'$.kind'),'questions',json_extract(p.data,'$.questions'),'proposal',json_extract(p.data,'$.proposal'),'status',p.status,'expiresAt',p.expires_at) FROM permission_requests p JOIN sessions s ON s.id=p.session_id WHERE p.status='pending' AND s.archived=0 ORDER BY p.rowid",
             "",
         )?;
         let usage = self.usage_rows_locked(c)?;
@@ -4902,7 +5017,7 @@ pub fn file_detail(path: &str, raw: &Value) -> Value {
 fn runtime_exists(c:&Connection,id:&str)->Result<bool,StorageError>{Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM runtimes WHERE id=?1)",[id],|r|r.get(0))?)}
 fn ensure_name_free(c:&Connection,key:&str,except:Option<&str>)->Result<(),StorageError>{let n:i64=c.query_row("SELECT count(*) FROM agents WHERE name_key=?1 AND archived=0 AND (?2 IS NULL OR id!=?2)",params![key,except],|r|r.get(0))?;if n>0{Err(StorageError::AgentConflict)}else{Ok(())}}
 fn project_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
-    query_jsons(c, "SELECT json_object('id',id,'name',name,'path',path,'sortOrder',sort_order,'collapsed',json(CASE WHEN collapsed=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM projects WHERE ?1=?1 ORDER BY sort_order,created_at,id", "")
+    query_jsons(c, "SELECT json_object('id',id,'name',name,'path',path,'description',description,'sortOrder',sort_order,'collapsed',json(CASE WHEN collapsed=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM projects WHERE ?1=?1 ORDER BY sort_order,created_at,id", "")
 }
 fn push_team_event(tx: &Transaction<'_>, event_type: &str, payload: &Value) -> Result<Value, StorageError> {
     let id = Uuid::new_v4().to_string();
@@ -7006,5 +7121,38 @@ mod memory_tests {
         let replaced = json!({"bots":[{"exportId":"export-2","resolution":"replace","replaceAgentId":manager_id,"leader":false,"fields":{"name":"Manager","runtimeId":"rt-manager","description":"Still runs the team."}}],"memory":[],"automations":[],"settings":[]});
         assert_eq!(db.backup_import(&replaced).unwrap()["bots"], 1);
         assert_eq!(db.agent_get(&manager_id).unwrap()["systemRole"], "manager");
+    }
+
+    #[test]
+    fn proposals_are_cards_the_question_sweep_ignores_and_a_decision_resolves_them() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-prop","provider":"codex","status":"online"})).unwrap();
+        db.create_session_for_agent("s-prop","rt-prop","codex",".","Manager",None).unwrap();
+        // A proposal is written to both tables: the durable record and the card.
+        let permission = json!({"id":"prop-1","sessionId":"s-prop","kind":"proposal","category":"proposal","title":"Create the project X","detail":null,"risk":"none","choices":["approve","reject"],"proposal":{"id":"prop-1","kind":"project","payload":{"name":"X"}},"status":"pending"});
+        db.insert_proposal(&json!({"id":"prop-1","sessionId":"s-prop","agentId":null,"kind":"project","payload":{"name":"X"}}),&permission,"2026-01-01T00:00:00.000Z","2000-01-01T00:00:00.000Z").unwrap();
+        assert_eq!(db.proposal_get("prop-1").unwrap()["status"].as_str(), Some("pending"));
+        assert_eq!(db.permission_kind("prop-1").unwrap().as_deref(), Some("proposal"));
+        assert_eq!(db.snapshot().unwrap()["permissions"][0]["proposal"]["kind"], "project");
+        // An expired proposal card is not a lapsed *question*: the question sweep
+        // leaves it for `expire_due_proposals`.
+        assert!(db.expire_due_questions("2030-01-01T00:00:00.000Z").unwrap().is_empty());
+        db.insert_question("q-1","s-prop","mcp:x","Old",&json!([]),Some("2000-01-01T00:00:00.000Z")).unwrap();
+        assert_eq!(db.expire_due_questions("2030-01-01T00:00:00.000Z").unwrap().len(), 1);
+        // The 24-hour cutoff lapses the proposal and its card together.
+        let expired = db.expire_due_proposals("2026-06-01T00:00:00.000Z","2026-06-01T00:00:00.000Z").unwrap();
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0]["id"].as_str(), Some("prop-1"));
+        assert_eq!(db.proposal_get("prop-1").unwrap()["status"].as_str(), Some("expired"));
+        assert_eq!(db.permission_get("prop-1").unwrap()["status"].as_str(), Some("expired"));
+        // Only a pending proposal can be decided, and a decision resolves the card.
+        assert!(!db.proposal_decide("prop-1","approved",Some(&json!({})),"approve","2026-07-01T00:00:00.000Z").unwrap());
+        db.insert_proposal(&json!({"id":"prop-2","sessionId":"s-prop","agentId":null,"kind":"bot","payload":{"name":"Scout"}}),&json!({"id":"prop-2","kind":"proposal","choices":["approve","reject"]}),"2026-06-01T00:00:00.000Z","2026-07-01T00:00:00.000Z").unwrap();
+        assert!(db.proposal_decide("prop-2","approved",Some(&json!({"agentId":"a"})),"approve","2026-06-02T00:00:00.000Z").unwrap());
+        let row = db.proposal_get("prop-2").unwrap();
+        assert_eq!(row["status"].as_str(), Some("approved"));
+        assert_eq!(row["result"]["agentId"], "a");
+        assert_eq!(db.permission_get("prop-2").unwrap()["choice"], "approve");
+        assert!(!db.proposal_decide("prop-2","rejected",None,"reject","2026-06-03T00:00:00.000Z").unwrap(), "the second decision loses");
     }
 }

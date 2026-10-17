@@ -200,6 +200,9 @@ sessions.push({
   ],
 })
 const teamQuestion: PermissionRequest = { id: 'perm-question', sessionId: teamMainId, runtimeId: 'runtime-codex', status: 'pending', kind: 'question', title: 'Codex has a question', choices: ['answer', 'dismiss'], questions: [{ id: 'q-direction', header: 'Direction', question: 'Which direction should the effort picker follow?', options: [{ label: 'PostHog fork', description: 'Closest behaviour, MIT licensed' }, { label: '21st.dev model select', description: 'One popover for effort, context and fast' }, { label: 'Build our own' }], multiSelect: false, allowOther: true }] }
+// FIX36 D2: a Manager proposal surfaces as a `kind: "proposal"` permission card.
+let fixtureProposalPending = true
+const teamProposal: PermissionRequest = { id: 'perm-proposal', sessionId: teamMainId, runtimeId: 'runtime-opencode', status: 'pending', kind: 'proposal', title: 'Create the bot "Scout"', detail: 'Research · opencode', choices: ['approve', 'reject'], proposal: { id: 'perm-proposal', kind: 'bot', payload: { name: 'Scout', role: 'Research', provider: 'opencode' } } }
 
 let sequence = 1
 let agentSerial = 6
@@ -246,7 +249,7 @@ function currentSnapshot(): Snapshot {
     sessions: sessions.filter((session) => !session.archived).map((session) => ({ ...session })),
     permissions: search.has('approval')
       ? [{ id: 'perm-1', sessionId: 'session-codex', runtimeId: 'runtime-codex', status: 'pending', title: 'Run shell command', command: 'npm test -- invoice', choices: ['allow_once', 'allow_session', 'deny'] }]
-      : sessions.some((session) => session.id === teamMainId && session.state === 'waiting_permission') ? [teamQuestion] : [],
+      : [...(fixtureProposalPending ? [teamProposal] : []), ...(sessions.some((session) => session.id === teamMainId && session.state === 'waiting_permission') ? [teamQuestion] : [])],
     projects: projects.map((project) => ({ ...project })),
     usageSummary: { inputTokens: 182_400, outputTokens: 24_900 },
     quotas: fixtureQuotas(),
@@ -921,6 +924,13 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     sessions = sessions.map((session) => session.id === teamMainId ? { ...session, state: 'idle' } : session)
     notifyFixtureDaemon('permission.resolved', { permissionId: 'perm-question' })
     return { resolved: true } as T
+  }
+  if (method === 'proposal.decide' && params.id === 'perm-proposal') {
+    const decision = params.decision === 'approve' ? 'approved' : 'rejected'
+    fixtureProposalPending = false
+    notifyFixtureDaemon('permission.resolved', { permissionId: 'perm-proposal', choice: params.decision === 'approve' ? 'approve' : 'reject' })
+    notifyFixtureDaemon('proposal.changed', { id: 'perm-proposal', kind: 'bot', sessionId: teamMainId, status: decision })
+    return { id: 'perm-proposal', decision } as T
   }
   if (method === 'usage.analytics') return answerUsageAnalytics(params, flags().get('analytics')) as T
   return {} as T

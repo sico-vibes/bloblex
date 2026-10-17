@@ -358,9 +358,11 @@ pub async fn sweep_loop(st: AppState) {
         tokio::select! {
             _ = interval.tick() => {
                 sweep(&st).await;
-                // Questions left by OpenCode's `ask_user` expire on the same
-                // periodic sweep, so no separate loop is needed.
+                // Questions left by `ask_user` expire on the same periodic
+                // sweep, so no separate loop is needed.
                 crate::questions::sweep(&st).await;
+                // FIX36 D2: lapsed Manager proposals expire on the same tick.
+                crate::proposals::sweep(&st).await;
             },
             _ = st.stopping.notified() => break,
         }

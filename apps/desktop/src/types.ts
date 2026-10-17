@@ -309,8 +309,17 @@ export interface PermissionRequest extends JsonRecord {
   tool?: string
   command?: string
   choices?: string[]
-  kind?: 'question' | string | null
+  kind?: 'question' | 'proposal' | string | null
   questions?: UserQuestion[] | null
+  /** FIX36 D2: an action the Manager has proposed for the owner to approve. */
+  proposal?: ProposalCard | null
+}
+
+/** The Manager's proposal carried by a `kind: "proposal"` permission card. */
+export interface ProposalCard extends JsonRecord {
+  id: string
+  kind: 'project' | 'bot' | 'task' | 'playbook' | string
+  payload?: JsonRecord
 }
 
 export interface DaemonEvent extends JsonRecord {

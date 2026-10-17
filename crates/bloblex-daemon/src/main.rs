@@ -48,6 +48,7 @@ mod automations;
 mod backup;
 mod memory;
 mod questions;
+mod proposals;
 mod skills;
 // Remote mode (P1): the gateway, its policy and its `remote.*` API.
 mod remote;
@@ -1104,6 +1105,11 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "permission.reply" => {
             let id = p["permissionId"].as_str().unwrap_or("");
             let choice = p["choice"].as_str().unwrap_or("");
+            // A proposal has its own decision route; the permission card is only
+            // its surface.
+            if st.db.permission_kind(id).ok().flatten().as_deref() == Some("proposal") {
+                return Err(derr("invalid_argument", "Decide a proposal with proposal.decide.", StatusCode::BAD_REQUEST));
+            }
             let Some((session_id, provider_id)) = st
                 .db
                 .begin_permission_reply(id, choice)
@@ -1167,6 +1173,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.emit("permission.resolved", json!({"permissionId":id,"choice":choice})).await;
             Ok(json!({"resolved":true}))
         }
+        "proposal.decide" => crate::proposals::decide(st, &p).await,
         "budget.list" | "budget.set" | "budget.delete" => Err(derr("unsupported", "budget controls have been retired; historical records are preserved", StatusCode::NOT_FOUND)),
         "usage.summary" => st.db.usage_summary(&p).map_err(|e| {
             derr(
@@ -8727,7 +8734,7 @@ mod phase2a_tests {
     }
 
     #[tokio::test]
-    async fn ask_user_is_listed_only_for_opencode_main_conversations() {
+    async fn ask_user_is_listed_for_every_providers_own_conversation() {
         let (st, _) = state();
         let runtime = json!({"id":"rt-open","provider":"opencode","status":"online","executablePath":"unused-test-runtime","launchArgs":[]});
         st.db.upsert_runtime(&runtime).unwrap();
@@ -8737,14 +8744,35 @@ mod phase2a_tests {
         let agent_id = agent["id"].as_str().unwrap().to_owned();
 
         st.db.create_session_for_agent("open-main", "rt-open", "opencode", ".", "Open chat", Some(&agent_id)).unwrap();
+        st.db.update_session_state("open-main", "idle").unwrap();
         st.db.create_session_for_agent("codex-main", "rt-test", "codex", ".", "Codex chat", None).unwrap();
+        st.db.update_session_state("codex-main", "idle").unwrap();
+        st.db.create_session_for_agent("claude-main", "rt-test", "claude", ".", "Claude chat", None).unwrap();
+        st.db.update_session_state("claude-main", "idle").unwrap();
         st.db.create_session_for_agent("auto-run", "rt-open", "opencode", ".", "Auto", Some(&agent_id)).unwrap();
         st.db.set_session_link("auto-run", &json!({"kind":"automation","automationId":"a","runId":"r","approvalMode":"auto"})).unwrap();
         st.db.create_session_for_agent("side-run", "rt-open", "opencode", ".", "Side", Some(&agent_id)).unwrap();
         st.db.set_session_link("side-run", &json!({"kind":"side","peerAgentId":"p","originSessionId":"open-main"})).unwrap();
 
-        assert!(tools_listed(&team::mcp_rpc(&st, "open-main", "mcp.tools.list", &json!({})).await.unwrap()));
-        for session in ["codex-main", "side-run"] {
+        // FIX36 D2: every provider's own conversation may ask, not only OpenCode.
+        for session in ["open-main", "codex-main", "claude-main"] {
+            assert!(tools_listed(&team::mcp_rpc(&st, session, "mcp.tools.list", &json!({})).await.unwrap()), "ask_user must be listed for {session}");
+            let result = call_tool(&st, session, "ask_user", json!({"title":"Pick","questions":[{"header":"h","question":"q","options":[{"label":"a"},{"label":"b"}]}]})).await;
+            assert_eq!(result["isError"], Value::Null, "{session}: {result}");
+            let card = ask_user_card(&st, session);
+            assert_eq!(card["kind"], "question", "{session} surfaces a question card");
+            assert_eq!(card["status"], "pending");
+        }
+        // A non-OpenCode answer still travels back as the conversation's next message.
+        install_fake_active_session(&st, "codex-main", "codex", "rt-test").await;
+        let codex_card = ask_user_card(&st, "codex-main");
+        let codex_id = codex_card["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "permission.reply", json!({"permissionId":codex_id,"choice":"answer","answers":{"q1":["Blue"]}})).await.unwrap();
+        let messages = wait_for_messages(&st, "codex-main", |m| m.iter().any(|m| m["meta"]["kind"] == "question_answer")).await;
+        assert!(messages.iter().any(|m| m["meta"]["questionId"] == codex_id.as_str() && m["content"].as_str().unwrap().contains("h: Blue")));
+
+        // Side conversations and automation runs still never see the tool.
+        for session in ["side-run"] {
             assert!(!tools_listed(&team::mcp_rpc(&st, session, "mcp.tools.list", &json!({})).await.unwrap()), "ask_user must not be listed for {session}");
             let result = call_tool(&st, session, "ask_user", json!({"questions":[{"header":"h","question":"q","options":[{"label":"a"},{"label":"b"}]}]})).await;
             assert_eq!(result["isError"], true, "ask_user must be rejected for {session}");
@@ -8767,10 +8795,12 @@ mod phase2a_tests {
 
         for bad in [
             json!({"questions":[]}),
-            json!({"questions":[{"header":"h","question":"q","options":[{"label":"only one"}]}]}),
+            json!({"questions":(0..7).map(|i| json!({"header":"h","question":format!("q{i}"),"options":[{"label":"a"}]})).collect::<Vec<_>>()}),
+            json!({"questions":[{"header":"h","question":"q","options":(0..11).map(|i| json!({"label":format!("o{i}")})).collect::<Vec<_>>()}]}),
             json!({"questions":[{"header":"h","question":"q","options":[{"label":"a"},{"label":"b"}],"nope":true}]}),
             json!({"questions":[{"header":&"h".repeat(41),"question":"q","options":[{"label":"a"},{"label":"b"}]}]}),
             json!({"questions":[{"header":"h","question":"q","options":[{"label":&"x".repeat(81)},{"label":"b"}]}]}),
+            json!({"questions":[{"header":"h","question":"q","options":[],"allowOther":false}]}),
         ] {
             assert_eq!(call_tool(&st, "open-main", "ask_user", bad).await["isError"], true);
         }
@@ -8856,6 +8886,197 @@ mod phase2a_tests {
         let notices = st.db.session_detail("open-main").unwrap();
         assert!(notices["messages"].as_array().unwrap().iter().any(|m| m["meta"]["kind"] == "question_expired" && m["content"] == "A question expired without an answer."));
         assert_eq!(dispatch(&st, "permission.reply", json!({"permissionId":"expired-card","choice":"answer","answers":{"q1":["x"]}})).await.unwrap_err().1.code, "conflict");
+    }
+
+    // ── FIX36 D2: the Manager proposes, the owner approves ────────────────
+
+    fn proposal_cards(st: &AppState) -> Vec<Value> {
+        st.db.snapshot().unwrap()["permissions"].as_array().cloned().unwrap_or_default().into_iter().filter(|card| card["kind"] == "proposal").collect()
+    }
+    fn newest_proposal_id(st: &AppState) -> String {
+        proposal_cards(st).last().expect("a pending proposal card")["id"].as_str().unwrap().to_owned()
+    }
+    fn proposal_card(st: &AppState, id: &str) -> Value {
+        proposal_cards(st).into_iter().find(|card| card["id"] == id).unwrap_or(Value::Null)
+    }
+    /// A Manager with one worker and their conversations, plus the fake adapter
+    /// and temp data dir the delegation paths need.
+    async fn proposal_state() -> (AppState, broadcast::Receiver<EventEnvelope>, std::path::PathBuf, String, String) {
+        let (mut st, rx) = state();
+        let runtime_id = "rt-d2";
+        st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
+        *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:Arc::new(TeamAdapter::default()), claude:Arc::new(ClaudeAdapter::default()) });
+        let data_dir = std::env::temp_dir().join(format!("bloblex-d2-{}", Uuid::new_v4()));
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        let boss = dispatch(&st, "manager.ensure", json!({"name":"Boss","runtimeId":runtime_id})).await.unwrap()["manager"].clone();
+        let boss_id = boss["id"].as_str().unwrap().to_owned();
+        let worker = st.db.agent_create(&json!({"name":"Worker","runtimeId":runtime_id})).unwrap().0;
+        let worker_id = worker["id"].as_str().unwrap().to_owned();
+        st.db.create_session_for_agent("boss-main", runtime_id, "codex", ".", "Boss", Some(&boss_id)).unwrap();
+        st.db.update_session_state("boss-main", "idle").unwrap();
+        st.db.create_session_for_agent("worker-main", runtime_id, "codex", ".", "Worker", Some(&worker_id)).unwrap();
+        st.db.update_session_state("worker-main", "idle").unwrap();
+        (st, rx, data_dir, boss_id, worker_id)
+    }
+
+    #[tokio::test]
+    async fn manager_proposals_wait_for_approval_and_create_nothing_first() {
+        let (st, _rx, _data, boss_id, worker_id) = proposal_state().await;
+
+        // The Manager-only tools are gated; a non-manager is refused with the Manager's name.
+        for tool in ["propose_project", "propose_bot", "assign_task"] {
+            let refused = call_tool(&st, "worker-main", tool, json!({"name":"X","brief":"do it","provider":"codex"})).await;
+            assert_eq!(refused["isError"], true, "{tool} must be refused for an ordinary bot");
+            assert_eq!(refused["content"][0]["text"], "Only the Manager can list projects or change bots. Ask the Manager (@Boss).");
+        }
+        let worker_tools = tool_names(&team::mcp_rpc(&st, "worker-main", "mcp.tools.list", &json!({})).await.unwrap());
+        let boss_tools = tool_names(&team::mcp_rpc(&st, "boss-main", "mcp.tools.list", &json!({})).await.unwrap());
+        for tool in ["propose_project", "propose_bot", "assign_task", "project_status"] {
+            assert!(boss_tools.contains(&tool.to_owned()), "{tool} is offered to the Manager");
+            assert!(!worker_tools.contains(&tool.to_owned()), "{tool} is hidden from an ordinary bot");
+        }
+
+        // propose_project: a pending proposal, a permission card, no project.
+        let project = call_tool(&st, "boss-main", "propose_project", json!({"name":"Yummy","description":"A tasty project.","folder":{"mode":"new","parentHint":"somewhere"}})).await;
+        assert!(project["content"][0]["text"].as_str().unwrap().starts_with("Waiting for the user's approval (proposal "), "{project}");
+        let project_prop = newest_proposal_id(&st);
+        assert!(st.db.project_list().unwrap().is_empty(), "nothing is created before approval");
+        let card = proposal_card(&st, &project_prop);
+        assert_eq!(card["kind"], "proposal");
+        assert_eq!(card["proposal"]["kind"], "project");
+        assert_eq!(card["proposal"]["payload"]["name"], "Yummy");
+        assert_eq!(card["choices"], json!(["approve", "reject"]));
+        assert!(card["expiresAt"].is_string());
+        assert_eq!(st.db.proposal_get(&project_prop).unwrap()["status"].as_str(), Some("pending"));
+
+        // propose_bot: still nothing created.
+        let bot = call_tool(&st, "boss-main", "propose_bot", json!({"name":"Scout","role":"Research","description":"Reads things.","provider":"codex"})).await;
+        assert_eq!(bot["isError"], Value::Null, "{bot}");
+        let bot_prop = newest_proposal_id(&st);
+        assert_eq!(st.db.agent_list(false, None).unwrap().len(), 2, "manager + worker only");
+
+        // assign_task: no side conversation yet.
+        let task = call_tool(&st, "boss-main", "assign_task", json!({"bot":"Worker","brief":"Investigate the flaky test."})).await;
+        assert_eq!(task["isError"], Value::Null, "{task}");
+        assert_eq!(st.db.side_session(&worker_id, &boss_id).unwrap(), None, "no conversation before approval");
+        assert_eq!(proposal_cards(&st).len(), 3, "three pending proposals, each a card");
+        assert_eq!(st.db.proposal_get(&bot_prop).unwrap()["kind"].as_str(), Some("bot"));
+    }
+
+    #[tokio::test]
+    async fn approving_a_project_proposal_with_edits_creates_it_and_rejecting_creates_nothing() {
+        let (st, mut events, data_dir, _boss, _worker) = proposal_state().await;
+
+        let _ = call_tool(&st, "boss-main", "propose_project", json!({"name":"Yummy","description":"A tasty project.","folder":{"mode":"new","parentHint":"somewhere"}})).await;
+        let project_prop = newest_proposal_id(&st);
+
+        // mode "new" without a chosen folder is refused, and the proposal stays pending.
+        assert_eq!(dispatch(&st, "proposal.decide", json!({"id":project_prop,"decision":"approve"})).await.unwrap_err().1.code, "invalid_argument");
+        assert!(st.db.project_list().unwrap().is_empty());
+        assert_eq!(st.db.proposal_get(&project_prop).unwrap()["status"].as_str(), Some("pending"), "a refused approval can be retried");
+
+        // The owner picks the folder: the directory is created, then the project.
+        let target = data_dir.join("yummy");
+        let decided = dispatch(&st, "proposal.decide", json!({"id":project_prop,"decision":"approve","edits":{"folder":{"path":target.to_string_lossy()}}})).await.unwrap();
+        assert_eq!(decided["decision"], "approved");
+        assert!(target.is_dir(), "the folder was created");
+        let projects = st.db.project_list().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["name"], "Yummy");
+        assert_eq!(projects[0]["description"], "A tasty project.");
+        assert_eq!(st.db.proposal_get(&project_prop).unwrap()["status"].as_str(), Some("approved"));
+        assert!(proposal_card(&st, &project_prop).is_null(), "the approved card is gone");
+        // The Manager sees the outcome; the surfaces see the change.
+        let messages = st.db.session_detail("boss-main").unwrap()["messages"].as_array().cloned().unwrap_or_default();
+        assert!(messages.iter().any(|m| m["meta"]["kind"] == "proposal" && m["content"] == "Approved: created project Yummy"), "{messages:?}");
+        let (mut changed, mut resolved) = (false, false);
+        while let Ok(event) = events.try_recv() {
+            if event.event_type == "proposal.changed" && event.payload["id"] == project_prop.as_str() && event.payload["status"] == "approved" { changed = true; }
+            if event.event_type == "permission.resolved" && event.payload["permissionId"] == project_prop.as_str() { resolved = true; }
+        }
+        assert!(changed && resolved, "proposal.changed and permission.resolved are emitted");
+
+        // Reject creates nothing, and a second decision is a conflict.
+        let _ = call_tool(&st, "boss-main", "propose_project", json!({"name":"Nope","folder":{"mode":"existing","path":target.to_string_lossy()}})).await;
+        let rejected_prop = newest_proposal_id(&st);
+        assert_eq!(dispatch(&st, "proposal.decide", json!({"id":rejected_prop,"decision":"reject"})).await.unwrap()["decision"], "rejected");
+        assert_eq!(st.db.project_list().unwrap().len(), 1, "a rejected proposal creates nothing");
+        assert_eq!(st.db.proposal_get(&rejected_prop).unwrap()["status"].as_str(), Some("rejected"));
+        let messages = st.db.session_detail("boss-main").unwrap()["messages"].as_array().cloned().unwrap_or_default();
+        assert!(messages.iter().any(|m| m["content"] == "Rejected: create project Nope"), "{messages:?}");
+        assert_eq!(dispatch(&st, "proposal.decide", json!({"id":rejected_prop,"decision":"reject"})).await.unwrap_err().1.code, "conflict");
+        // The card is not answered like a provider permission.
+        assert_eq!(dispatch(&st, "permission.reply", json!({"permissionId":rejected_prop,"choice":"approve"})).await.unwrap_err().1.code, "invalid_argument");
+    }
+
+    #[tokio::test]
+    async fn approving_a_bot_proposal_creates_the_edited_bot_and_assign_task_matches_message_blob() {
+        let (st, _rx, _data, boss_id, worker_id) = proposal_state().await;
+        st.db.set_setting("exec_gate.codex.instructions", &json!(true)).unwrap();
+
+        // Approve a bot with the owner's edits applied.
+        let _ = call_tool(&st, "boss-main", "propose_bot", json!({"name":"Scout","role":"Research","description":"Reads things.","instructions":"Be thorough.","provider":"codex"})).await;
+        let bot_prop = newest_proposal_id(&st);
+        let decided = dispatch(&st, "proposal.decide", json!({"id":bot_prop,"decision":"approve","edits":{"name":"Scout Prime","role":"Lead Researcher"}})).await.unwrap();
+        assert_eq!(decided["decision"], "approved");
+        let agents = st.db.agent_list(false, None).unwrap();
+        assert_eq!(agents.len(), 3);
+        let scout = agents.iter().find(|agent| agent["name"] == "Scout Prime").expect("the edited bot exists");
+        assert_eq!(scout["role"], "Lead Researcher");
+        assert_eq!(scout["description"], "Reads things.");
+        assert_eq!(scout["instructions"], "Be thorough.");
+        assert_ne!(scout["effectiveApprovalMode"], "bypass");
+
+        // assign_task approve: a side conversation exactly like message_blob.
+        let _ = call_tool(&st, "boss-main", "assign_task", json!({"bot":"Worker","brief":"Check the build\nDetails follow."})).await;
+        let task_prop = newest_proposal_id(&st);
+        let decided = dispatch(&st, "proposal.decide", json!({"id":task_prop,"decision":"approve"})).await.unwrap();
+        assert_eq!(decided["result"]["bot"], "Worker");
+        let side = decided["result"]["sideSessionId"].as_str().unwrap().to_owned();
+        let link = st.db.session_detail(&side).unwrap()["link"].clone();
+        assert_eq!(link["kind"], "side");
+        assert_eq!(link["peerAgentId"], boss_id.as_str());
+        assert_eq!(link["spawnedFromSessionId"], "boss-main");
+        assert_eq!(link["originSessionId"], "boss-main");
+        wait_for_messages(&st, &side, |messages| messages.iter().any(|message| message["role"] == "user")).await;
+        assert_eq!(st.db.side_session(&worker_id, &boss_id).unwrap().as_deref(), Some(side.as_str()));
+
+        // assign_task reject: nothing is delivered.
+        let before = st.db.session_list(false).unwrap().len();
+        let _ = call_tool(&st, "boss-main", "assign_task", json!({"bot":"Worker","brief":"Never sent"})).await;
+        let rejected_prop = newest_proposal_id(&st);
+        assert_eq!(dispatch(&st, "proposal.decide", json!({"id":rejected_prop,"decision":"reject"})).await.unwrap()["decision"], "rejected");
+        assert_eq!(st.db.session_list(false).unwrap().len(), before, "a rejected task opens no conversation");
+    }
+
+    #[tokio::test]
+    async fn lapsed_proposals_expire_after_a_day_and_cannot_be_decided() {
+        let (st, mut events, _data, _boss, _worker) = proposal_state().await;
+        let _ = call_tool(&st, "boss-main", "propose_project", json!({"name":"Slow","folder":{"mode":"new"}})).await;
+        let prop = newest_proposal_id(&st);
+        assert!(proposal_card(&st, &prop).is_object());
+
+        // A 24-hour clock: the proposal is exactly 25 hours old at the sweep.
+        proposals::sweep_at(&st, Utc::now() + chrono::Duration::hours(25)).await;
+        assert_eq!(st.db.proposal_get(&prop).unwrap()["status"].as_str(), Some("expired"));
+        assert!(proposal_card(&st, &prop).is_null(), "the lapsed card is gone");
+        assert!(st.db.project_list().unwrap().is_empty());
+        let messages = st.db.session_detail("boss-main").unwrap()["messages"].as_array().cloned().unwrap_or_default();
+        assert!(messages.iter().any(|m| m["content"] == "Expired: create project Slow"), "{messages:?}");
+        assert_eq!(dispatch(&st, "proposal.decide", json!({"id":prop,"decision":"approve","edits":{"folder":{"path":"."}}})).await.unwrap_err().1.code, "conflict");
+        let (mut expired_event, mut changed) = (false, false);
+        while let Ok(event) = events.try_recv() {
+            if event.event_type == "permission.resolved" && event.payload["permissionId"] == prop.as_str() && event.payload["status"] == "expired" { expired_event = true; }
+            if event.event_type == "proposal.changed" && event.payload["status"] == "expired" { changed = true; }
+        }
+        assert!(expired_event && changed, "expiry emits permission.resolved and proposal.changed");
+
+        // A proposal created now is untouched by a sweep run at "now".
+        let _ = call_tool(&st, "boss-main", "propose_project", json!({"name":"Fresh","folder":{"mode":"new"}})).await;
+        let fresh = newest_proposal_id(&st);
+        proposals::sweep_at(&st, Utc::now()).await;
+        assert_eq!(st.db.proposal_get(&fresh).unwrap()["status"].as_str(), Some("pending"));
     }
 
     #[tokio::test]

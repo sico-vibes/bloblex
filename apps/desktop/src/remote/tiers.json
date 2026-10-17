@@ -303,6 +303,13 @@
       "params": "permissionReply"
     },
     {
+      "method": "proposal.decide",
+      "class": "approve",
+      "minTier": "operator",
+      "why": "Approves or rejects a Manager proposal; only when the host allows approvals from remote.",
+      "params": null
+    },
+    {
       "method": "settings.set",
       "class": "never",
       "minTier": null,
@@ -747,6 +754,7 @@
     "turn.error": "allow",
     "permission.requested": "allow",
     "permission.resolved": "allow",
+    "proposal.changed": "allow",
     "agent.changed": "allow",
     "queue.changed": "allow",
     "usage.updated": "allow",

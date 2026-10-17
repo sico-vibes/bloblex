@@ -146,6 +146,7 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
     });
     if agent["systemRole"].as_str() == Some("manager") {
         lines.push(format!("You are {name}, the user's Manager. You work across all projects (list them with `list_projects`), know every {noun} (`list_blobs`), plan work, delegate with `message_blob`, and you ask the user before creating projects, {nouns} or assigning tasks."));
+        lines.push("Consequential actions are proposed, not done: call `propose_project`, `propose_bot` or `assign_task`, which create nothing until the user approves the card, then end your turn. Use `project_status` to see a project's bots.".to_owned());
     } else {
         match st.db.manager_agent().ok().flatten() {
             Some(manager) => lines.push(format!("You cannot create projects or {nouns}; the Manager does that. If the user asks you to, say so briefly and tag the Manager as @{} so the user can ask them.", agent_name(&manager))),
@@ -214,6 +215,9 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
     if is_manager {
         list.push(json!({"name":"list_projects","description":format!("List the projects a {noun} can belong to: id, name, folder and description. Only the Manager may call it; a bot cannot join or create a project itself."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
         list.push(json!({"name":"update_blob","description":format!("Update an existing {noun}'s role, description or instructions. Only the Manager may change {nouns}; it cannot change a {noun}'s runtime, permission mode or project, and cannot archive or delete one."),"inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":format!("The {noun}'s name or id.")},"role":{"type":"string","description":"A new role label (optional, up to 40 characters)."},"description":{"type":"string","description":"A new purpose (optional, up to 255 characters)."},"instructions":{"type":"string","description":"New instructions (optional, up to 4000 characters)."}},"required":["blob"],"additionalProperties":false}}));
+        // FIX36 D2: every consequential action is proposed and waits for the
+        // owner's approval. The tools return at once with a proposal id.
+        list.extend(crate::proposals::tool_schemas());
     }
     // OpenCode has no native question tool over ACP, so the bridge offers one.
     if ask_user { list.push(crate::questions::tool_schema()); }
@@ -234,12 +238,11 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
     // are allowed, but only while the feature is on and only blob scope.
     let session = st.db.session_detail(session_id).ok();
     let is_automation = session.as_ref().map(|row| row["link"]["kind"] == "automation").unwrap_or(false);
-    // `ask_user` exists only where the provider has no native question tool:
-    // OpenCode main conversations, never automation runs or side conversations.
+    // `ask_user` is offered in a bot's own conversation, whatever the provider
+    // (FIX36 D2 removed the OpenCode-only gate). It stays out of automation runs
+    // and side conversations, where there is no user to answer.
     let ask_user = session.as_ref().is_some_and(|row| {
-        row["archived"] != true
-            && row["provider"].as_str() == Some("opencode")
-            && !matches!(row["link"]["kind"].as_str(), Some("side" | "automation"))
+        row["archived"] != true && !matches!(row["link"]["kind"].as_str(), Some("side" | "automation"))
     });
     let memory_enabled = crate::memory::enabled(st);
     if is_automation && method.starts_with("automation.") {
@@ -265,11 +268,15 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "message_blob" => message_blob(st, session_id, args).await,
                 "list_projects" if is_manager => list_projects(st).await,
                 "update_blob" if is_manager => update_blob(st, args).await,
-                "list_projects" | "update_blob" => Err(non_manager_error(st)),
+                "propose_project" if is_manager => crate::proposals::propose_project(st, session_id, args).await,
+                "propose_bot" if is_manager => crate::proposals::propose_bot(st, session_id, args).await,
+                "assign_task" if is_manager => crate::proposals::assign_task(st, session_id, args).await,
+                "project_status" if is_manager => crate::proposals::project_status(st, args).await,
+                "list_projects" | "update_blob" | "propose_project" | "propose_bot" | "assign_task" | "project_status" => Err(non_manager_error(st)),
                 "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
                 "ask_user" if ask_user => crate::questions::ask_user_tool(st, session_id, args).await,
-                "ask_user" => Err("ask_user is only available to OpenCode main conversations.".into()),
+                "ask_user" => Err("ask_user is available in a bot's own conversation; not in side conversations or scheduled runs.".into()),
                 "memory_search" if memory_enabled => crate::memory::tool_search(st, session_id, args).await,
                 "memory_get" if memory_enabled => crate::memory::tool_get(st, session_id, args).await,
                 "memory_write" if memory_enabled => crate::memory::tool_write(st, session_id, args).await,
@@ -333,7 +340,7 @@ fn bounded_text(args: &Value, key: &str, limit: usize) -> Result<Option<String>,
 }
 
 /// The error a non-manager gets when it tries to list projects or change blobs.
-fn non_manager_error(st: &AppState) -> String {
+pub(crate) fn non_manager_error(st: &AppState) -> String {
     match st.db.manager_agent().ok().flatten() {
         Some(manager) => { let name = agent_name(&manager); format!("Only the Manager can list projects or change {}. Ask the Manager (@{name}).", entity_noun(true)) }
         None => format!("Only the Manager can list projects or change {}, and this team has no Manager yet. Ask the user to set one up.", entity_noun(true)),
@@ -380,7 +387,22 @@ async fn update_blob(st: &AppState, args: &Value) -> Result<String, String> {
     Ok(format!("Updated {} {}.", entity_noun(false), target["name"].as_str().unwrap_or(wanted)))
 }
 
+/// One delivered brief: the side conversation it opened (or continued), its
+/// topic, and the teammate's name. Shared by `message_blob` and by FIX36 D2's
+/// `assign_task` approval, so a task is delivered exactly like a message.
+pub(crate) struct Delegation {
+    pub side: String,
+    pub title: String,
+    pub target_name: String,
+}
+
 async fn message_blob(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
+    let delegation = delegate(st, session_id, args).await?;
+    let (target_name, title, side) = (&delegation.target_name, &delegation.title, &delegation.side);
+    Ok(format!("Sent to {target_name} in \"{title}\" (conversation {side}). They are working on it; their reply will arrive here as a message starting with \"[Reply from {target_name}]\". Tell the user you asked {target_name} and end your turn now."))
+}
+
+pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> Result<Delegation, String> {
     let message = args["message"].as_str().map(str::trim).filter(|m| !m.is_empty()).ok_or("message is required.")?.to_owned();
     if message.len() > 200_000 { return Err("The message is too long; keep briefs under 200 KB.".into()); }
     let from_row = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.")?;
@@ -428,7 +450,7 @@ async fn message_blob(st: &AppState, session_id: &str, args: &Value) -> Result<S
     tokio::spawn(async move {
         deliver(&state, &side_for_task, message, json!({"kind":"blob_message","fromAgentId":from_id,"fromName":from_name}), depth).await;
     });
-    Ok(format!("Sent to {target_name} in \"{title}\" (conversation {side}). They are working on it; their reply will arrive here as a message starting with \"[Reply from {target_name}]\". Tell the user you asked {target_name} and end your turn now."))
+    Ok(Delegation { side, title, target_name })
 }
 
 /// A conversation id the sender may continue: one they started with this teammate.

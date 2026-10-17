@@ -6,6 +6,8 @@ import '../ui/accent.css'
 import '../ui/polish.css'
 import './remote.css'
 import { RemoteApp } from './RemoteApp'
+import { previewMode } from '../tauri'
+import { remoteDevice } from './remoteTauri'
 import { registerRemoteServiceWorker } from './serviceWorker'
 
 // The theme handshake used to be an inline script in `remote.html`; the host
@@ -19,4 +21,4 @@ registerRemoteServiceWorker()
 
 export { applyUpdate, onUpdateReady, updateIsReady } from './serviceWorker'
 
-ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><RemoteApp /></React.StrictMode>)
+ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><RemoteApp device={previewMode ? undefined : remoteDevice} /></React.StrictMode>)

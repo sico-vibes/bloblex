@@ -23,6 +23,7 @@ import { normalizeAnalytics } from '../ui/analyticsFormat'
 import type { SettingsPageName } from '../ui/settingsIndex'
 import type { UpdateCheckResult, UpdateInfo, UpdatePreferences, UpdateProgress, UpdatesState } from '../updatesContract'
 import { createRemoteTransport, type RemoteConnectionStatus, type RemoteTransport } from './remoteTransport'
+import type { RemoteDeviceApi } from './deviceApi'
 
 /** The desktop module's unlisten type; duplicated so no `@tauri-apps` import is needed. */
 export type UnlistenFn = () => void
@@ -70,12 +71,14 @@ export async function fetchSnapshot() {
 
 const eventHandlers = new Set<(event: DaemonEvent) => void>()
 const connectionHandlers = new Set<(connected: boolean) => void>()
+const statusHandlers = new Set<(status: RemoteConnectionStatus) => void>()
 let unsubscribe: UnlistenFn | null = null
 let lastStatus: RemoteConnectionStatus = 'connecting'
 
 function publishConnection(status: RemoteConnectionStatus): void {
   if (status === lastStatus) return
   lastStatus = status
+  for (const handler of [...statusHandlers]) handler(status)
   const connected = status === 'online'
   for (const handler of [...connectionHandlers]) handler(connected)
 }
@@ -89,7 +92,7 @@ function ensureSubscription(): void {
 }
 
 function releaseSubscription(): void {
-  if (eventHandlers.size > 0 || connectionHandlers.size > 0) return
+  if (eventHandlers.size > 0 || connectionHandlers.size > 0 || statusHandlers.size > 0) return
   unsubscribe?.()
   unsubscribe = null
 }
@@ -105,6 +108,20 @@ export async function listenForDaemonConnection(handler: (connected: boolean) =>
   ensureSubscription()
   handler(lastStatus === 'online')
   return () => { connectionHandlers.delete(handler); releaseSubscription() }
+}
+
+/** The phone client's view of its host: identity, pairing, sign-out, connection (see deviceApi.ts). */
+export const remoteDevice: RemoteDeviceApi = {
+  me: () => transport().me(),
+  pair: (input) => transport().pair(input),
+  pairStatus: () => transport().pairStatus(),
+  logout: () => transport().logout(),
+  onConnection(handler) {
+    statusHandlers.add(handler)
+    ensureSubscription()
+    handler(lastStatus)
+    return () => { statusHandlers.delete(handler); releaseSubscription() }
+  },
 }
 
 // ---------------------------------------------------------------------------

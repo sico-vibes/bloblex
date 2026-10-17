@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Bell, ChevronDown, Download, Laptop, Monitor, Plus, QrCode, Send, ShieldAlert, Smartphone, WifiOff } from 'lucide-react'
-import { fetchSnapshot, listenForDaemonEvents, rpc } from '../tauri'
+import { ArrowLeft, Download, LogOut, Monitor, RefreshCw, Send, ShieldAlert, Smartphone, WifiOff } from 'lucide-react'
+import { fetchSnapshot, listenForDaemonEvents, previewMode, rpc } from '../tauri'
 import type { Agent, PermissionRequest, Session, Snapshot } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -11,46 +11,15 @@ import { StatusDot } from '../ui/StatusDot'
 import { mainSessionFor } from '../ui/teamSelectors'
 import { useEntityNoun } from '../ui/vocabulary'
 import logo from '../assets/bloblex-128.png'
-import type { RemoteHost, RemoteHostState, RemoteTier } from './remoteContract'
+import type { RemoteTier } from './remoteContract'
+import type { RemoteConnectionStatus, RemoteMe } from './remoteTransport'
+import { codeFromHash, createPreviewDeviceApi, describeThisDevice, errorCode, type RemoteDeviceApi } from './deviceApi'
+import { applyUpdate, onUpdateReady } from './serviceWorker'
 
-type Screen = 'connect' | 'bots' | 'chat' | 'device'
-const KEY = 'bitbots.remote.client'
-
-interface ClientPrefs { paired: boolean; deviceName: string; notifications: boolean }
-
-function readPrefs(): ClientPrefs {
-  try {
-    const raw = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<ClientPrefs>
-    return { paired: raw.paired === true, deviceName: typeof raw.deviceName === 'string' && raw.deviceName ? raw.deviceName : 'This phone', notifications: raw.notifications === true }
-  } catch { return { paired: false, deviceName: 'This phone', notifications: false } }
-}
-function writePrefs(next: ClientPrefs) { try { localStorage.setItem(KEY, JSON.stringify(next)) } catch { /* private mode */ } }
-
-const HOST_WORD: Record<RemoteHostState, string> = { online: 'Online', asleep: 'Asleep', offline: 'Offline', reconnecting: 'Reconnecting' }
+type Screen = 'checking' | 'connect' | 'waiting' | 'bots' | 'chat' | 'device'
 const TIER_WORD: Record<RemoteTier, string> = { viewer: 'View only', chat: 'Chat', operator: 'Chat and approve' }
-
-// FIX29 UI: Director — the list of computers lives on this device; there is no
-// host-side `remote.hosts.*` method (docs/remote/PROTOCOL.md:164, ARCHITECTURE.md:152-157).
-// These entries stand in for the device's own store until the client is rewritten.
-const agoIso = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
-const PREVIEW_HOSTS: RemoteHost[] = [
-  { id: 'host-work', name: 'Work PC', os: 'windows', state: 'online', lastSeenAt: agoIso(0), botCount: 5, waitingCount: 1, tier: 'chat' },
-  { id: 'host-home', name: 'Home laptop', os: 'windows', state: 'asleep', lastSeenAt: agoIso(2), botCount: 3, waitingCount: 0, tier: 'chat' },
-  { id: 'host-studio', name: 'Studio Mac', os: 'macos', state: 'offline', lastSeenAt: agoIso(26), botCount: 2, waitingCount: 0, tier: 'viewer' },
-]
-
-function ago(iso: string | null): string {
-  if (!iso) return 'a while ago'
-  const seconds = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000))
-  if (seconds < 90) return 'just now'
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min ago`
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)} h ago`
-  return `${Math.round(seconds / 86_400)} d ago`
-}
-
-function hostStatus(state: RemoteHostState) {
-  return <StatusDot status={state === 'online' ? 'working' : state === 'reconnecting' ? 'waiting' : 'offline'} label={HOST_WORD[state]} />
-}
+/** How often the waiting screen asks whether the owner has decided (PROTOCOL §4.3). */
+export const PAIR_POLL_MS = 2000
 
 /** One line under a name, never a repeat of the role chip next to it. */
 function subtitle(agent: Agent, sessions: Session[], state: ReturnType<typeof blobState>): string {
@@ -63,149 +32,220 @@ function plain(text: string): string {
   return text.replace(/\*\*(.+?)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1')
 }
 
-function formatCode(value: string): string {
+export function formatCode(value: string): string {
   const clean = value.toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 8)
   return clean.length > 4 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean
 }
 
+const messageOf = (reason: unknown, fallback: string) => reason instanceof Error && reason.message ? reason.message : fallback
+
+/** Words for a refused send, by the gateway's code. */
+function sendProblem(reason: unknown, hostName: string): string {
+  switch (errorCode(reason)) {
+    case 'quiet_hours': return `Quiet hours are on at ${hostName}, so this device can only read right now.`
+    case 'tier_required': return 'This device can only view. Ask for Chat on the computer, in Settings › Remote.'
+    case 'rate_limited': return 'Too many messages at once. Wait a moment and try again.'
+    case 'network': return `Could not reach ${hostName}. Your message was not sent.`
+    default: return messageOf(reason, 'The message was not sent.')
+  }
+}
+
 /**
- * The phone/browser side of Remote mode (preview). A phone-first shell: connect,
- * pick a computer, pick a bot, chat. It talks only through the same `rpc`
- * bridge as the desktop UI, here answered by the simulator, and it is labelled
- * as a preview everywhere it could be mistaken for a live connection.
+ * The phone/browser side of Remote mode: pair with the computer (the owner
+ * approves it there), then see the bots, chat and, when allowed, approve. It
+ * talks through `rpc` and the event stream like the desktop UI; `device`
+ * answers who this device is, pairing and the connection state.
  */
-export function RemoteApp() {
+export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { device?: RemoteDeviceApi; pollMs?: number } = {}) {
+  const device = useMemo(() => deviceProp ?? createPreviewDeviceApi(), [deviceProp])
   const noun = useEntityNoun()
   const nouns = useEntityNoun({ plural: true })
-  const [prefs, setPrefs] = useState<ClientPrefs>(readPrefs)
-  const [screen, setScreen] = useState<Screen>(prefs.paired ? 'bots' : 'connect')
-  const hosts = PREVIEW_HOSTS
-  const [hostId, setHostId] = useState<string | null>(null)
+  const [screen, setScreen] = useState<Screen>('checking')
+  const [me, setMe] = useState<RemoteMe | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [pendingName, setPendingName] = useState('')
+  const [connection, setConnection] = useState<RemoteConnectionStatus>('connecting')
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [agentId, setAgentId] = useState<string | null>(null)
-  const [sheet, setSheet] = useState<null | 'hosts'>(null)
-  const [busy, setBusy] = useState(false)
+  const [updateReady, setUpdateReady] = useState(false)
 
-  const host = hosts.find((item) => item.id === hostId) ?? hosts.find((item) => item.state === 'online') ?? hosts[0] ?? null
+  const signedIn = me !== null
+  const hostName = me?.host.name ?? 'your computer'
+  const tier: RemoteTier = me?.device.tier ?? 'viewer'
   const agents = useMemo(() => (snapshot?.agents ?? []).filter((agent) => !agent.archived && agent.hidden !== true), [snapshot])
   const sessions = snapshot?.sessions ?? []
   const runtimes = snapshot?.runtimes ?? []
-  const online = host?.state === 'online'
+  const online = connection === 'online'
 
-  const refresh = useCallback(async () => {
-    try {
-      const snap = await fetchSnapshot()
-      setSnapshot(snap)
-      setHostId((current) => current ?? PREVIEW_HOSTS.find((item) => item.state === 'online')?.id ?? PREVIEW_HOSTS[0]?.id ?? null)
-    } catch { /* the preview bridge can fail only while reloading */ }
+  const signOut = useCallback((message: string | null) => {
+    setMe(null)
+    setSnapshot(null)
+    setNotice(message)
+    setScreen('connect')
   }, [])
 
+  const check = useCallback(async () => {
+    try {
+      const next = await device.me()
+      setMe(next)
+      setScreen((current) => current === 'checking' || current === 'connect' || current === 'waiting' ? 'bots' : current)
+    } catch (reason) {
+      const code = errorCode(reason)
+      if (code === 'device_revoked') { signOut('This device was removed on the computer. Pair it again to come back.'); return }
+      if (code === 'network') { setNotice('Could not reach the computer. Check that it is awake and on Tailscale.'); setScreen('connect'); return }
+      // Not paired: a pairing may still be waiting for the owner.
+      const state = await device.pairStatus().catch(() => 'expired' as const)
+      setScreen(state === 'pending' ? 'waiting' : 'connect')
+    }
+  }, [device, signOut])
+
+  useEffect(() => { void check() }, [check])
+  useEffect(() => device.onConnection((status) => {
+    setConnection(status)
+    if (status === 'signed_out') signOut('This device was signed out. Pair it again to come back.')
+  }), [device, signOut])
+  useEffect(() => onUpdateReady(() => setUpdateReady(true)), [])
+
+  const refresh = useCallback(async () => {
+    try { setSnapshot(await fetchSnapshot()) } catch (reason) {
+      const code = errorCode(reason)
+      if (code === 'unauthorized' || code === 'device_revoked') signOut('This device was signed out. Pair it again to come back.')
+    }
+  }, [signOut])
+
   useEffect(() => {
-    if (!prefs.paired) return
+    if (!signedIn) return
     void refresh()
     let stop: (() => void) | null = null
+    let timer: number | null = null
     void listenForDaemonEvents((event) => {
-      if (event.type.startsWith('remote.') || event.type.startsWith('session.') || event.type.startsWith('permission.')) void refresh()
+      if (!/^(session|message|turn|permission|agent|queue)\./.test(event.type)) return
+      // Coalesce a burst of events into one snapshot read.
+      if (timer !== null) return
+      timer = window.setTimeout(() => { timer = null; void refresh() }, 250)
     }).then((fn) => { stop = fn }).catch(() => undefined)
-    return () => stop?.()
-  }, [prefs.paired, refresh])
+    return () => { stop?.(); if (timer !== null) window.clearTimeout(timer) }
+  }, [signedIn, refresh])
 
-  const connect = async (code: string, deviceName: string) => {
-    setBusy(true)
-    await new Promise((resolve) => window.setTimeout(resolve, 900))
-    const next = { ...prefs, paired: true, deviceName: deviceName.trim() || 'This phone' }
-    writePrefs(next)
-    setPrefs(next)
-    setBusy(false)
-    void code
-    setScreen('bots')
+  // While the owner decides, ask every two seconds.
+  useEffect(() => {
+    if (screen !== 'waiting') return
+    const timer = window.setInterval(() => {
+      void device.pairStatus().then((state) => {
+        if (state === 'approved') void check()
+        else if (state === 'rejected') { setNotice('The computer declined this device.'); setScreen('connect') }
+        else if (state === 'expired') { setNotice('The code expired before it was approved. Show a new one on the computer.'); setScreen('connect') }
+      }).catch(() => undefined)
+    }, pollMs)
+    return () => window.clearInterval(timer)
+  }, [screen, device, check, pollMs])
+
+  const connect = async (code: string, name: string) => {
+    setNotice(null)
+    const about = describeThisDevice(typeof navigator === 'undefined' ? '' : navigator.userAgent)
+    const deviceName = name.trim() || (about.kind === 'phone' ? 'My phone' : about.kind === 'tablet' ? 'My tablet' : 'My browser')
+    try {
+      await device.pair({ code: code.replace('-', ''), name: deviceName, ...about })
+      setPendingName(deviceName)
+      setScreen('waiting')
+      try { history.replaceState(null, '', location.pathname) } catch { /* not in a browser */ }
+    } catch (reason) {
+      setNotice(errorCode(reason) === 'network' ? 'Could not reach the computer. Check that it is awake and on Tailscale.' : 'That code did not work. Check it, or show a new one on the computer.')
+    }
   }
 
-  const chooseHost = async (id: string) => {
-    setSheet(null)
-    setHostId(id)
-    setScreen('bots')
-    void refresh()
+  const logout = async () => {
+    await device.logout().catch(() => undefined)
+    signOut(null)
   }
 
-  const forget = () => {
-    const next = { ...prefs, paired: false }
-    writePrefs(next)
-    setPrefs(next)
-    setScreen('connect')
-  }
-
-  const waiting = agents.filter((agent) => blobState(agent, sessions, runtimes, !!online) === 'waiting')
+  const waiting = agents.filter((agent) => blobState(agent, sessions, runtimes, online) === 'waiting')
   const activeAgent = agents.find((agent) => agent.id === agentId) ?? null
+  const preApproval = screen === 'checking' || screen === 'connect' || screen === 'waiting'
 
   return <div className="rm-stage">
     <div className="rm-phone" data-screen={screen}>
-      <p className="rm-ribbon" role="note">Preview · simulated, not connected to a relay</p>
-      {screen === 'connect' && <ConnectScreen busy={busy} onConnect={connect} nouns={nouns} />}
-      {screen !== 'connect' && <>
+      {previewMode && <p className="rm-ribbon" role="note">Preview · simulated, not connected to a computer</p>}
+      {updateReady && <p className="rm-update" role="status">A new version is ready.<button type="button" onClick={applyUpdate}>Reload</button></p>}
+      {screen === 'checking' && <main className="rm-connect rm-checking" aria-busy="true"><img src={logo} alt="" width="56" height="56" /><p>Connecting…</p></main>}
+      {screen === 'connect' && <ConnectScreen notice={notice} onConnect={connect} nouns={nouns} />}
+      {screen === 'waiting' && <WaitingScreen name={pendingName} onCancel={() => setScreen('connect')} />}
+      {!preApproval && <>
         <header className="rm-top">
           {screen === 'chat'
-            ? <button type="button" className="rm-icon" aria-label="Back to bots" onClick={() => setScreen('bots')}><ArrowLeft size={19} /></button>
+            ? <button type="button" className="rm-icon" aria-label={`Back to ${nouns}`} onClick={() => setScreen('bots')}><ArrowLeft size={19} /></button>
             : <img className="rm-logo" src={logo} alt="" width="26" height="26" />}
           {screen === 'chat' && activeAgent
-            ? <div className="rm-title"><strong>{activeAgent.name}</strong><small>{peerLine(activeAgent, sessions, blobState(activeAgent, sessions, runtimes, !!online))}</small></div>
-            : <button type="button" className="rm-host" onClick={() => setSheet('hosts')} aria-haspopup="dialog" aria-label={`Computer: ${host?.name ?? 'none'}. Switch computer`}>
-              {host && hostStatus(host.state)}
-              <span><strong>{host?.name ?? 'No computer'}</strong>{host && <small>{HOST_WORD[host.state]}</small>}</span>
-              <ChevronDown size={15} aria-hidden="true" />
-            </button>}
+            ? <div className="rm-title"><strong>{activeAgent.name}</strong><small>{peerLine(activeAgent, sessions, blobState(activeAgent, sessions, runtimes, online))}</small></div>
+            : <div className="rm-host" aria-label={`Computer: ${hostName}, ${online ? 'online' : 'not connected'}`}>
+              <StatusDot status={online ? 'working' : connection === 'reconnecting' || connection === 'connecting' ? 'waiting' : 'offline'} />
+              <span><strong>{hostName}</strong><small>{online ? TIER_WORD[tier] : connection === 'offline' ? 'Offline' : 'Connecting…'}</small></span>
+            </div>}
         </header>
+        {!online && <p className="rm-connection" role="status">{connection === 'offline' ? `Offline. Bitbots will reconnect to ${hostName} when the network is back.` : `Reconnecting to ${hostName}…`}</p>}
+        {me?.quietHoursActive && <p className="rm-connection quiet" role="status">Quiet hours: this device can read but not send.</p>}
         <main className="rm-main">
-          {screen === 'bots' && <BotsScreen host={host} agents={agents} sessions={sessions} runtimes={runtimes} online={!!online} waiting={waiting} nouns={nouns} onOpen={(id) => { setAgentId(id); setScreen('chat') }} onRetry={() => void refresh()} onSwitch={() => setSheet('hosts')} />}
-          {screen === 'chat' && activeAgent && <ChatScreen agent={activeAgent} session={mainSessionFor(sessions, activeAgent.id)} permissions={snapshot?.permissions ?? []} host={host} online={!!online} noun={noun} />}
-          {screen === 'device' && <DeviceScreen prefs={prefs} host={host} onPrefs={(next) => { writePrefs(next); setPrefs(next) }} onForget={forget} />}
+          {screen === 'bots' && <BotsScreen hostName={hostName} agents={agents} sessions={sessions} runtimes={runtimes} online={online} loaded={snapshot !== null} waiting={waiting} nouns={nouns} onOpen={(id) => { setAgentId(id); setScreen('chat') }} onRetry={() => void refresh()} />}
+          {screen === 'chat' && activeAgent && <ChatScreen agent={activeAgent} session={mainSessionFor(sessions, activeAgent.id)} permissions={snapshot?.permissions ?? []} hostName={hostName} online={online} tier={tier}
+            canApprove={tier === 'operator' && me?.approvalsFromRemote === true} quiet={me?.quietHoursActive === true} nouns={nouns} />}
+          {screen === 'device' && me && <DeviceScreen me={me} noun={noun} onLogout={() => void logout()} />}
         </main>
         <nav className="rm-tabs" aria-label="Sections">
           <button type="button" className={screen === 'bots' || screen === 'chat' ? 'on' : ''} onClick={() => setScreen('bots')}><Monitor size={19} aria-hidden="true" /><span>{nouns.charAt(0).toUpperCase() + nouns.slice(1)}</span>{waiting.length > 0 && <i className="rm-badge" aria-label={`${waiting.length} need you`}>{waiting.length}</i>}</button>
           <button type="button" className={screen === 'device' ? 'on' : ''} onClick={() => setScreen('device')}><Smartphone size={19} aria-hidden="true" /><span>This device</span></button>
         </nav>
       </>}
-      {sheet === 'hosts' && <HostSheet hosts={hosts} current={host?.id ?? null} onClose={() => setSheet(null)} onChoose={(id) => void chooseHost(id)} onAdd={() => { setSheet(null); setScreen('connect') }} />}
     </div>
   </div>
 }
 
-function ConnectScreen({ busy, onConnect, nouns }: { busy: boolean; onConnect: (code: string, name: string) => void; nouns: string }) {
-  const [code, setCode] = useState('')
+function ConnectScreen({ notice, onConnect, nouns }: { notice: string | null; onConnect: (code: string, name: string) => Promise<void>; nouns: string }) {
+  const [code, setCode] = useState(() => formatCode(codeFromHash(typeof location === 'undefined' ? '' : location.hash)))
   const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
   const complete = code.replace('-', '').length === 8
+  const submit = async () => {
+    if (!complete || busy) return
+    setBusy(true)
+    try { await onConnect(code, name) } finally { setBusy(false) }
+  }
   return <main className="rm-connect">
     <img src={logo} alt="" width="56" height="56" />
     <h1>Connect to your computer</h1>
-    <p>Open Bitbots on the computer, go to Settings &gt; Remote and choose “Show pairing code”. Then enter it here.</p>
+    <p>On the computer, open Bitbots, go to Settings › Remote and choose “Show pairing code”. Scanning its QR code fills the code in for you.</p>
+    {notice && <p className="rm-notice" role="alert">{notice}</p>}
     <label className="rm-field">Pairing code
       <input className="rm-code" inputMode="text" autoCapitalize="characters" autoComplete="off" spellCheck={false} placeholder="XXXX-XXXX" value={code}
-        onChange={(event) => setCode(formatCode(event.target.value))} aria-describedby="rm-code-hint" />
+        onChange={(event) => setCode(formatCode(event.target.value))} aria-describedby="rm-code-hint" onKeyDown={(event) => { if (event.key === 'Enter') void submit() }} />
     </label>
     <label className="rm-field">Name this device
-      <input autoComplete="off" placeholder="This phone" value={name} maxLength={40} onChange={(event) => setName(event.target.value)} />
+      <input autoComplete="off" placeholder="My phone" value={name} maxLength={40} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void submit() }} />
     </label>
-    <button type="button" className="rm-primary" disabled={!complete || busy} onClick={() => onConnect(code, name)}>{busy ? 'Connecting…' : 'Connect'}</button>
-    <button type="button" className="rm-secondary" disabled title="Needs a camera; not available in the preview"><QrCode size={16} aria-hidden="true" />Scan QR code</button>
-    <p id="rm-code-hint" className="rm-hint">Codes work once and expire after five minutes. Your messages are sealed between this device and your computer; the relay only passes them along. Any 8 characters work in this preview. Your {nouns} stay on your computer.</p>
+    <button type="button" className="rm-primary" disabled={!complete || busy} onClick={() => void submit()}>{busy ? 'Connecting…' : 'Connect'}</button>
+    <p id="rm-code-hint" className="rm-hint">Codes work once and expire after five minutes. Your computer asks you to approve this device before it can see anything. Your {nouns} stay on your computer.</p>
   </main>
 }
 
-function BotsScreen({ host, agents, sessions, runtimes, online, waiting, nouns, onOpen, onRetry, onSwitch }: {
-  host: RemoteHost | null; agents: Agent[]; sessions: Session[]; runtimes: NonNullable<Snapshot['runtimes']>; online: boolean; waiting: Agent[]; nouns: string
-  onOpen: (id: string) => void; onRetry: () => void; onSwitch: () => void
+function WaitingScreen({ name, onCancel }: { name: string; onCancel: () => void }) {
+  return <main className="rm-connect rm-waiting" aria-live="polite">
+    <span className="rm-waiting-icon" aria-hidden="true"><Monitor size={26} /></span>
+    <h1>Approve on your computer</h1>
+    <p>Bitbots on your computer is asking whether to let <b>{name || 'this device'}</b> in. Choose what it may do and approve it there.</p>
+    <span className="rm-waiting-dots" aria-hidden="true"><i /><i /><i /></span>
+    <button type="button" className="rm-secondary" onClick={onCancel}>Use a different code</button>
+  </main>
+}
+
+function BotsScreen({ hostName, agents, sessions, runtimes, online, loaded, waiting, nouns, onOpen, onRetry }: {
+  hostName: string; agents: Agent[]; sessions: Session[]; runtimes: NonNullable<Snapshot['runtimes']>; online: boolean; loaded: boolean; waiting: Agent[]; nouns: string
+  onOpen: (id: string) => void; onRetry: () => void
 }) {
-  if (host && host.state !== 'online') {
+  if (!online && !loaded) {
     return <section className="rm-away" aria-live="polite">
       <span className="rm-away-icon"><WifiOff size={24} aria-hidden="true" /></span>
-      <h2>{host.name} is {host.state === 'asleep' ? 'asleep' : host.state === 'reconnecting' ? 'reconnecting' : 'offline'}</h2>
-      <p>{host.state === 'asleep'
-        ? `It went to sleep ${ago(host.lastSeenAt)}. Wake the computer and it will show up here. To prevent this, turn on Keep awake in Settings > Remote on that computer.`
-        : `Last seen ${ago(host.lastSeenAt)}. Your ${nouns} are there, but Bitbots can't reach the computer right now. Nothing you type is queued.`}</p>
-      <div className="rm-away-actions">
-        <button type="button" className="rm-primary" onClick={onRetry}>Check again</button>
-        <button type="button" className="rm-secondary" onClick={onSwitch}><Laptop size={16} aria-hidden="true" />Switch computer</button>
-      </div>
+      <h2>Can’t reach {hostName}</h2>
+      <p>Your {nouns} are there, but this device can’t reach the computer right now. Check that it is awake and signed in to Tailscale. Nothing you type is queued.</p>
+      <div className="rm-away-actions"><button type="button" className="rm-primary" onClick={onRetry}><RefreshCw size={16} aria-hidden="true" />Check again</button></div>
     </section>
   }
   return <section>
@@ -226,88 +266,75 @@ function BotsScreen({ host, agents, sessions, runtimes, online, waiting, nouns, 
         </li>
       })}
     </ul>
-    {agents.length === 0 && <p className="rm-empty">No {nouns} on this computer yet. Create one in Bitbots on the computer and it will appear here.</p>}
+    {loaded && agents.length === 0 && <p className="rm-empty">No {nouns} on this computer yet. Create one in Bitbots on the computer and it will appear here.</p>}
   </section>
 }
 
-function ChatScreen({ agent, session, permissions, host, online, noun }: { agent: Agent; session: Session | null; permissions: PermissionRequest[]; host: RemoteHost | null; online: boolean; noun: string }) {
+function ChatScreen({ agent, session, permissions, hostName, online, tier, canApprove, quiet, nouns }: {
+  agent: Agent; session: Session | null; permissions: PermissionRequest[]; hostName: string; online: boolean; tier: RemoteTier; canApprove: boolean; quiet: boolean; nouns: string
+}) {
   const [draft, setDraft] = useState('')
   const [sent, setSent] = useState<Array<{ id: string; text: string }>>([])
+  const [problem, setProblem] = useState<string | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
-  const tier: RemoteTier = host?.tier ?? 'chat'
-  const canSend = online && tier !== 'viewer'
+  const canSend = online && tier !== 'viewer' && !quiet && !!session
   const messages = (session?.messages ?? []).filter((message) => (message.role === 'user' || message.role === 'assistant') && String(message.content ?? '').trim())
+  // A sent message shows at once and gives way to the copy the computer saved.
+  const saved = new Set(messages.filter((message) => message.role === 'user').map((message) => String(message.content).trim()))
+  const local = sent.filter((message) => !saved.has(message.text))
   const pending = permissions.find((item) => item.sessionId === session?.id && item.kind !== 'question') ?? null
-  useEffect(() => { logRef.current?.scrollTo({ top: logRef.current.scrollHeight }) }, [messages.length, sent.length])
+  useEffect(() => { logRef.current?.scrollTo({ top: logRef.current.scrollHeight }) }, [messages.length, local.length])
   const send = async () => {
     const text = draft.trim()
     if (!text || !canSend || !session) return
     setDraft('')
-    setSent((current) => [...current, { id: `local-${Date.now()}`, text }])
-    try { await rpc('session.prompt', { sessionId: session.id, text }) } catch { /* the preview bridge may not model prompts */ }
+    setProblem(null)
+    const id = `local-${Date.now()}`
+    setSent((current) => [...current, { id, text }])
+    try { await rpc('session.prompt', { sessionId: session.id, text }) } catch (reason) {
+      setSent((current) => current.filter((message) => message.id !== id))
+      setDraft(text)
+      setProblem(sendProblem(reason, hostName))
+    }
   }
+  const placeholder = !online ? 'Not connected' : tier === 'viewer' ? 'View only on this device' : quiet ? 'Quiet hours: reading only' : `Message ${agent.name}`
   return <section className="rm-chat">
     <div className="rm-log" ref={logRef} role="log" aria-live="polite" aria-label={`Conversation with ${agent.name}`}>
-      {messages.length === 0 && sent.length === 0 && <p className="rm-empty">Nothing here yet. Say hello to {agent.name}.</p>}
+      {messages.length === 0 && local.length === 0 && <p className="rm-empty">Nothing here yet. Say hello to {agent.name}.</p>}
       {messages.slice(-30).map((message) => <p key={message.id} className={`rm-msg ${message.role}`}>{plain(String(message.content))}</p>)}
-      {sent.map((message) => <p key={message.id} className="rm-msg user">{message.text}</p>)}
+      {local.map((message) => <p key={message.id} className="rm-msg user pending">{message.text}</p>)}
     </div>
-    {pending && (tier === 'operator'
+    {pending && (canApprove
       ? <div className="rm-approval"><ApprovalCard permission={pending} focusOnMount={false} onReply={async (choice) => { await rpc('permission.reply', { permissionId: pending.id, choice }); return true }} /></div>
       : <div className="rm-approval locked" role="status">
         <ShieldAlert size={18} aria-hidden="true" />
-        <div><strong>{agent.name} is asking permission</strong><small>This device can’t approve. Approve it on {host?.name ?? 'your computer'}, or ask for “Chat and approve” in Settings &gt; Remote.</small></div>
+        <div><strong>{agent.name} is asking permission</strong><small>{tier === 'operator' ? `Approving from devices is off on ${hostName}. Approve it on the computer.` : `This device can’t approve. Approve it on ${hostName}, or give this device “Chat and approve” in Settings › Remote.`}</small></div>
       </div>)}
+    {problem && <p className="rm-send-problem" role="alert">{problem}</p>}
     <form className="rm-composer" onSubmit={(event) => { event.preventDefault(); void send() }}>
-      <textarea rows={1} value={draft} placeholder={!online ? 'Computer is offline' : tier === 'viewer' ? 'View only on this device' : `Message ${agent.name}`} disabled={!canSend}
+      <textarea rows={1} value={draft} placeholder={placeholder} disabled={!canSend}
         aria-label={`Message ${agent.name}`} onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
       <button type="submit" className="rm-send" aria-label="Send" disabled={!canSend || !draft.trim()}><Send size={17} aria-hidden="true" /></button>
     </form>
-    <p className="rm-tier">{TIER_WORD[tier]} · a message here runs on {host?.name ?? 'your computer'}, within its approval mode. {noun === 'bot' ? 'Bots' : 'Blobs'} never leave it.</p>
+    <p className="rm-tier">{TIER_WORD[tier]} · a message here runs on {hostName}, within its approval mode. Your {nouns} never leave it.</p>
   </section>
 }
 
-function DeviceScreen({ prefs, host, onPrefs, onForget }: { prefs: ClientPrefs; host: RemoteHost | null; onPrefs: (next: ClientPrefs) => void; onForget: () => void }) {
+function DeviceScreen({ me, noun, onLogout }: { me: RemoteMe; noun: string; onLogout: () => void }) {
   return <section className="rm-device">
-    <h2>{prefs.deviceName}</h2>
+    <h2>{me.device.name}</h2>
     <dl className="rm-facts">
-      <div><dt>Connected to</dt><dd>{host?.name ?? 'No computer'}</dd></div>
-      <div><dt>This device may</dt><dd>{TIER_WORD[host?.tier ?? 'chat']}</dd></div>
-      <div><dt>Connection</dt><dd>Sealed end to end, through a relay</dd></div>
+      <div><dt>Connected to</dt><dd>{me.host.name}</dd></div>
+      <div><dt>This device may</dt><dd>{TIER_WORD[me.device.tier]}</dd></div>
+      <div><dt>Approvals from here</dt><dd>{me.device.tier === 'operator' && me.approvalsFromRemote ? 'Allowed' : 'On the computer only'}</dd></div>
+      <div><dt>Connection</dt><dd>Your private Tailscale network</dd></div>
     </dl>
     <div className="rm-card">
       <span className="rm-card-icon"><Download size={18} aria-hidden="true" /></span>
       <div><strong>Install Bitbots on this device</strong><small>On iPhone choose Share, then “Add to Home Screen”. On Android choose “Install app” in the browser menu. It opens full screen like an app.</small></div>
     </div>
-    <div className="rm-card">
-      <span className="rm-card-icon"><Bell size={18} aria-hidden="true" /></span>
-      <div><strong>Tell me when a bot needs me</strong><small>A quiet notification with no message text. You can change this any time.</small></div>
-      <button type="button" role="switch" aria-checked={prefs.notifications} aria-label="Notifications" className={`rm-switch ${prefs.notifications ? 'on' : ''}`} onClick={() => onPrefs({ ...prefs, notifications: !prefs.notifications })}><i /></button>
-    </div>
-    <button type="button" className="rm-danger" onClick={onForget}><Plus size={16} aria-hidden="true" style={{ transform: 'rotate(45deg)' }} />Forget this computer</button>
+    <p className="rm-hint rm-device-hint">What this device may do is set on the computer, in Settings › Remote. A {noun} that needs approval waits there unless this device may approve.</p>
+    <button type="button" className="rm-danger" onClick={onLogout}><LogOut size={16} aria-hidden="true" />Sign out of {me.host.name}</button>
   </section>
-}
-
-function HostSheet({ hosts, current, onClose, onChoose, onAdd }: { hosts: RemoteHost[]; current: string | null; onClose: () => void; onChoose: (id: string) => void; onAdd: () => void }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-  return <div className="rm-sheet-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-    <section className="rm-sheet" role="dialog" aria-modal="true" aria-label="Your computers">
-      <span className="rm-grab" aria-hidden="true" />
-      <h2>Your computers</h2>
-      <ul>
-        {hosts.map((item) => <li key={item.id}>
-          <button type="button" className={item.id === current ? 'on' : ''} onClick={() => onChoose(item.id)}>
-            {hostStatus(item.state)}
-            <span><strong>{item.name}</strong><small>{HOST_WORD[item.state]}{item.state === 'online' ? ` · ${item.botCount} · ${item.waitingCount} waiting` : ` · last seen ${ago(item.lastSeenAt)}`}</small></span>
-          </button>
-        </li>)}
-      </ul>
-      <button type="button" className="rm-secondary" onClick={onAdd}><Plus size={16} aria-hidden="true" />Add a computer</button>
-    </section>
-  </div>
 }

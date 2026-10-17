@@ -45,8 +45,9 @@ describe('remote build output', () => {
 
   it('emits hashed asset names', () => {
     const assets = readdirSync(join(DIST, 'assets'))
-    expect(assets.some((name) => /-[A-Za-z0-9_]{5,}\.js$/.test(name))).toBe(true)
-    expect(assets.some((name) => /-[A-Za-z0-9_]{5,}\.css$/.test(name))).toBe(true)
+    // Vite's 8-character hash may itself contain '-' or '_'.
+    expect(assets.some((name) => /-[A-Za-z0-9_-]{8}\.js$/.test(name))).toBe(true)
+    expect(assets.some((name) => /-[A-Za-z0-9_-]{8}\.css$/.test(name))).toBe(true)
   })
 
   it('has no @tauri-apps code and no __TAURI marker anywhere', () => {

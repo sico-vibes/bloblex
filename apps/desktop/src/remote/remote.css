@@ -24,7 +24,7 @@ button, input, textarea { font: inherit; }
 .rm-title { min-width: 0; display: grid; gap: 1px; }
 .rm-title strong { overflow: hidden; font-size: 16px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .rm-title small { overflow: hidden; color: var(--text-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.rm-host { min-height: 44px; padding: 0 12px 0 10px; display: flex; align-items: center; gap: 10px; color: var(--text-1); text-align: left; border: 1px solid var(--line); border-radius: 22px; background: var(--surface-raised); }
+.rm-host { min-width: 0; min-height: 44px; padding: 0 12px 0 10px; display: flex; align-items: center; gap: 10px; color: var(--text-1); text-align: left; border: 1px solid var(--line); border-radius: 22px; background: var(--surface-raised); }
 .rm-host span { display: grid; gap: 0; line-height: 1.2; }
 .rm-host strong { font-size: 14px; font-weight: 600; }
 .rm-host small { color: var(--text-3); font-size: 11px; }
@@ -116,6 +116,24 @@ button, input, textarea { font: inherit; }
 .rm-switch.on { background: var(--user-accent, var(--text-1)); }
 .rm-switch.on i { transform: translateX(20px); background: var(--user-accent-ink, var(--text-inverse)); }
 
+/* Pairing, connection and update notes */
+.rm-checking { place-items: center; align-content: center; text-align: center; }
+.rm-notice { padding: 10px 12px; color: var(--danger-ink) !important; font-size: 13.5px !important; border: 1px solid color-mix(in srgb, var(--status-danger) 40%, transparent); border-radius: 12px; }
+.rm-waiting { justify-items: center; text-align: center; padding-top: 56px; }
+.rm-waiting-icon { width: 64px; height: 64px; display: grid; place-items: center; color: var(--text-1); border-radius: 50%; background: var(--surface-selected); }
+.rm-waiting-dots { margin: 8px 0; display: inline-flex; gap: 6px; }
+.rm-waiting-dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); animation: rm-dot 1.2s ease-in-out infinite; }
+.rm-waiting-dots i:nth-child(2) { animation-delay: .15s; }
+.rm-waiting-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes rm-dot { 0%, 80%, 100% { opacity: .3; transform: none; } 40% { opacity: 1; transform: translateY(-3px); } }
+.rm-connection { margin: 0; padding: 7px 14px; color: var(--text-2); font-size: 12.5px; text-align: center; background: var(--surface-panel); border-bottom: 1px solid var(--line); }
+.rm-connection.quiet { color: var(--status-working-text); }
+.rm-update { margin: 0; padding: 6px 8px 6px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; background: var(--surface-selected); border-bottom: 1px solid var(--line); }
+.rm-update button { min-height: 32px; padding: 0 12px; color: var(--text-1); font-weight: 600; border: 1px solid var(--line-strong); border-radius: 10px; background: transparent; }
+.rm-msg.pending { opacity: .7; }
+.rm-send-problem { margin: 0 12px 8px; padding: 8px 12px; color: var(--danger-ink); font-size: 13px; line-height: 1.45; border-radius: 12px; background: color-mix(in srgb, var(--status-danger) 10%, transparent); }
+.rm-device-hint { margin: 4px 2px 0; line-height: 1.5; }
+
 /* Host sheet */
 .rm-sheet-backdrop { position: absolute; inset: 0; z-index: 20; display: flex; align-items: flex-end; background: rgba(0, 0, 0, .5); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); animation: rm-fade 180ms ease-out both; }
 .rm-sheet { width: 100%; padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); display: grid; gap: 10px; border-radius: 24px 24px 0 0; background: var(--surface-overlay); animation: rm-rise 240ms cubic-bezier(.2, .8, .2, 1) both; }
@@ -131,4 +149,4 @@ button, input, textarea { font: inherit; }
 @keyframes rm-rise { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 :focus-visible { outline: 2px solid var(--user-accent, var(--text-1)); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { .rm-sheet, .rm-sheet-backdrop, .rm-bot, .rm-switch, .rm-switch i { animation: none; transition: none; } }
+@media (prefers-reduced-motion: reduce) { .rm-waiting-dots i, .rm-sheet, .rm-sheet-backdrop, .rm-bot, .rm-switch, .rm-switch i { animation: none; transition: none; } }

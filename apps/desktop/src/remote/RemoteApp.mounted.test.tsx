@@ -28,7 +28,7 @@ vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => <span /> }))
 import { RemoteApp } from './RemoteApp'
 
 const refused = (code: string) => Object.assign(new Error(code), { code })
-const meFor = (tier: RemoteMe['device']['tier'], extra: Partial<RemoteMe> = {}): RemoteMe => ({ protocolVersion: 1, device: { id: 'd1', name: 'Pixel 8', tier }, host: { name: 'Work PC' }, approvalsFromRemote: false, quietHoursActive: false, ...extra })
+const meFor = (tier: RemoteMe['device']['tier'], extra: Partial<RemoteMe> = {}): RemoteMe => ({ protocolVersion: 1, device: { id: 'd1', name: 'Pixel 8', tier }, host: { name: 'Work PC' }, approvalsFromRemote: false, quietHoursActive: false, method: 'tailscale', ...extra })
 
 function fakeDevice(start: RemoteMe | 'unpaired' | 'revoked', pairStates: RemotePairState[] = ['pending', 'approved']) {
   let current = start

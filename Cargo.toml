@@ -26,22 +26,28 @@ edition = "2021"
 license = "UNLICENSED"
 
 [workspace.dependencies]
+argon2 = "0.5"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde", "clock"] }
 chrono-tz = "0.10"
 futures-util = "0.3"
+if-addrs = "0.15"
 rand = "0.9"
+rcgen = "0.14"
 regex = "1"
 rusqlite = { version = "0.37", features = ["bundled", "chrono", "backup"] }
 reqwest = { version = "0.12", features = ["json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-tungstenite = "0.27"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

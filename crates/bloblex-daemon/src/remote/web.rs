@@ -5,6 +5,7 @@
 //! pipeline; §6 defines the event socket. The gateway binds `127.0.0.1` only,
 //! calls `dispatch()` in process, and never sees the daemon capability.
 
+use super::native;
 use super::pairing::{DEVICE_COOKIE, PAIR_COOKIE};
 use super::policy::{self, RedactOptions, RemoteCall, Tier};
 use super::{audit, now_rfc3339, RemoteState, MAX_REQUEST_BYTES};
@@ -13,7 +14,7 @@ use axum::{
     body::Bytes,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Request, State,
+        ConnectInfo, Extension, Request, State,
     },
     http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
     middleware::{self, Next},
@@ -25,9 +26,10 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 /// The request body cap. Rejected bodies get `payload_too_large`.
@@ -79,6 +81,7 @@ pub struct DeviceAuth {
 pub fn router(state: WebState) -> Router {
     let api = Router::new()
         .route("/pair", post(pair_post).get(pair_get))
+        .route("/login", post(login_post))
         .route("/me", get(me_get))
         .route("/rpc", post(rpc_post))
         .route("/events", get(events_get))
@@ -89,22 +92,96 @@ pub fn router(state: WebState) -> Router {
         .fallback(static_file)
         .layer(axum::extract::DefaultBodyLimit::max(HARD_BODY_LIMIT))
         .layer(middleware::from_fn(security_headers))
+        .layer(middleware::from_fn_with_state(state.clone(), abuse_limit))
         .with_state(state)
 }
 
 /// Every `/api/*` request must carry the serve origin. The WebSocket upgrade is
-/// an `/api/*` request, so it is checked here too (PROTOCOL §4.1 step 1).
+/// an `/api/*` request, so it is checked here too (PROTOCOL §4.1 step 1). On
+/// Native the `Host` must also be one of the certificate's authorities.
 async fn require_origin(State(state): State<WebState>, request: Request, next: Next) -> Response {
     let origin = request.headers().get(header::ORIGIN).and_then(|value| value.to_str().ok()).map(str::to_owned);
-    let expected = state.remote.serve_origin();
-    match (origin, expected) {
-        (Some(origin), Some(expected)) if origin == expected => next.run(request).await,
-        _ => (
-            StatusCode::FORBIDDEN,
-            Json(remote_error("", "unauthorized", "This request did not come from this computer's Bitbots Remote address.")),
-        )
-            .into_response(),
+    let accepted = state.remote.accepted_origins(&state.daemon);
+    let origin_ok = origin.as_deref().is_some_and(|origin| accepted.iter().any(|candidate| candidate == origin));
+    if !origin_ok {
+        return forbidden_origin();
     }
+    if state.remote.active_method(&state.daemon) == super::METHOD_NATIVE {
+        let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).map(str::to_owned);
+        let authorities = state.remote.accepted_authorities(&state.daemon);
+        let host_ok = host.as_deref().is_some_and(|host| authorities.iter().any(|candidate| candidate == host));
+        if !host_ok {
+            return forbidden_origin();
+        }
+    }
+    next.run(request).await
+}
+
+fn forbidden_origin() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(remote_error("", "unauthorized", "This request did not come from this computer's Bitbots Remote address.")),
+    )
+        .into_response()
+}
+
+/// The abuse limits (FIX35 C1 §4): a per-source token bucket on every
+/// unauthenticated route (`/api/login`, `/api/pair` and the static files).
+async fn abuse_limit(
+    State(state): State<WebState>,
+    connect: Option<Extension<ConnectInfo<SocketAddr>>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    let unauthenticated = path == "/api/login" || path == "/api/pair" || !path.starts_with("/api/");
+    if unauthenticated {
+        let key = source_key(request.headers(), connect.as_ref());
+        if !state.remote.unauth_allow(&key) {
+            return rate_limited(None);
+        }
+    }
+    // Native records where the last device reached it from.
+    if state.remote.active_method(&state.daemon) == super::METHOD_NATIVE {
+        native::note_reached(&state.daemon, &source_ip(connect.as_ref()));
+    }
+    next.run(request).await
+}
+
+/// The peer address, when the listener reported one. The Tailscale listener
+/// serves over loopback and adds no connect info.
+fn peer_addr(connect: Option<&Extension<ConnectInfo<SocketAddr>>>) -> Option<SocketAddr> {
+    connect.map(|Extension(info)| info.0)
+}
+
+/// The source IP of the connection, or `loopback` when none was reported.
+fn source_ip(connect: Option<&Extension<ConnectInfo<SocketAddr>>>) -> String {
+    peer_addr(connect).map(|addr| addr.ip().to_string()).unwrap_or_else(|| "loopback".to_string())
+}
+
+/// The bucket key for a request: the Tailscale login when present, else the
+/// source IP.
+fn source_key(headers: &HeaderMap, connect: Option<&Extension<ConnectInfo<SocketAddr>>>) -> String {
+    if let Some(login) = headers.get("tailscale-user-login").and_then(|value| value.to_str().ok()) {
+        return format!("ts:{login}");
+    }
+    source_ip(connect)
+}
+
+fn rate_limited(until: Option<Instant>) -> Response {
+    let message = if until.is_some() {
+        "Too many sign-in attempts; try again later."
+    } else {
+        "Too many requests; try again in a moment."
+    };
+    json_response(StatusCode::TOO_MANY_REQUESTS, remote_error("", "rate_limited", message))
+}
+
+fn login_invalid() -> Response {
+    json_response(
+        StatusCode::UNAUTHORIZED,
+        remote_error("", "login_invalid", "That username or password is not right."),
+    )
 }
 
 /// Security headers on every response (PROTOCOL §4.4).
@@ -318,13 +395,21 @@ async fn pair_post(State(state): State<WebState>, headers: HeaderMap, body: Byte
             )
         }
     };
-    let (pending, expires_at) = {
-        let pairing = state.remote.pairing.lock().unwrap();
-        let pending = pairing.pending(&pairing_id, Utc::now()).unwrap_or(Value::Null);
-        let expires_at = pending["expiresAt"].as_str().unwrap_or_default().to_string();
-        (pending, expires_at)
-    };
     // The desktop raises the approval dialog from this event.
+    announce_pairing_request(&state, &pairing_id).await;
+    with_cookie(
+        json_response(StatusCode::ACCEPTED, json!({"state": "pending"})),
+        pair_cookie(&pairing_id),
+    )
+}
+
+/// Emits `remote.pairing.requested` for a pending request, from either method.
+async fn announce_pairing_request(state: &WebState, pairing_id: &str) {
+    let pending = {
+        let pairing = state.remote.pairing.lock().unwrap();
+        pairing.pending(pairing_id, Utc::now()).unwrap_or(Value::Null)
+    };
+    let expires_at = pending["expiresAt"].as_str().unwrap_or_default().to_string();
     state
         .daemon
         .emit(
@@ -335,10 +420,88 @@ async fn pair_post(State(state): State<WebState>, headers: HeaderMap, body: Byte
                 "kind": pending["kind"],
                 "platform": pending["platform"],
                 "login": pending["login"],
+                "method": pending["method"],
                 "expiresAt": expires_at,
             }),
         )
         .await;
+}
+
+/// `POST /api/login` (Native only). A correct username and password either
+/// approves a device that already holds a cookie, or starts a pending request
+/// the owner approves on the desktop, exactly as a pairing request.
+async fn login_post(
+    State(state): State<WebState>,
+    connect: Option<Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if state.remote.active_method(&state.daemon) != super::METHOD_NATIVE {
+        return not_found();
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return json_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            remote_error("", "payload_too_large", "That request was too large."),
+        );
+    }
+    let source = source_ip(connect.as_ref());
+    if let Some(until) = state.remote.login_locked_until(&source) {
+        return rate_limited(Some(until));
+    }
+    let Ok(input) = serde_json::from_slice::<Value>(&body) else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            remote_error("", "invalid_argument", "The sign-in request could not be read."),
+        );
+    };
+    let Some(account) = native::account_of(&state.daemon) else {
+        return login_invalid();
+    };
+    let username = input["username"].as_str().unwrap_or("");
+    let password = input["password"].as_str().unwrap_or("");
+    if !native::verify_login(&account, username, password) {
+        let lockout = state.remote.record_login_failure(&source);
+        // Content-free: never the username, never the password.
+        audit(&state.daemon, None, "denied", "A sign-in was refused.").await;
+        if lockout.global_paused {
+            audit(&state.daemon, None, "denied", "Sign-in is paused after repeated failures.").await;
+            state
+                .daemon
+                .emit("remote.changed", json!({"status": state.remote.status_value(&state.daemon)}))
+                .await;
+        }
+        if lockout.locked {
+            return rate_limited(lockout.until);
+        }
+        return login_invalid();
+    }
+    state.remote.clear_login_failures(&source);
+    native::note_reached(&state.daemon, &source);
+    // A device that already holds a valid cookie is approved again.
+    if authenticate(&state, &headers).await.is_ok() {
+        return json_response(StatusCode::OK, json!({"state": "approved"}));
+    }
+    // A pending request this browser already started is reused.
+    if let Some(pairing_id) = cookie_value(&headers, PAIR_COOKIE) {
+        let pending = matches!(
+            state.remote.pairing.lock().unwrap().poll(&pairing_id, Utc::now()),
+            super::pairing::Poll::Pending
+        );
+        if pending {
+            return with_cookie(
+                json_response(StatusCode::ACCEPTED, json!({"state": "pending"})),
+                pair_cookie(&pairing_id),
+            );
+        }
+    }
+    let pairing_id = state.remote.pairing.lock().unwrap().begin_native(
+        input["name"].as_str().unwrap_or(""),
+        input["kind"].as_str().unwrap_or(""),
+        input["platform"].as_str().unwrap_or(""),
+        Utc::now(),
+    );
+    announce_pairing_request(&state, &pairing_id).await;
     with_cookie(
         json_response(StatusCode::ACCEPTED, json!({"state": "pending"})),
         pair_cookie(&pairing_id),
@@ -416,6 +579,7 @@ async fn me_get(State(state): State<WebState>, headers: HeaderMap) -> Response {
             "host": {"name": state.remote.host_name},
             "approvalsFromRemote": security.approvals_from_remote,
             "quietHoursActive": security.quiet_hours_active(chrono::Local::now()),
+            "method": state.remote.active_method(&state.daemon),
         }),
     )
 }

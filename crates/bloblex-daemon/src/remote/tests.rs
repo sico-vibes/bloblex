@@ -1068,8 +1068,363 @@ async fn the_tier_table_matches_the_gateway_every_remote_method_is_never() {
         "remote.status", "remote.enable", "remote.disable", "remote.pair.begin", "remote.pair.cancel",
         "remote.pair.confirm", "remote.devices.list", "remote.devices.update", "remote.devices.revoke",
         "remote.security.get", "remote.security.set", "remote.activity.list",
+        "remote.method.set", "remote.native.account.set", "remote.native.cert.regenerate", "remote.native.port.set",
     ] {
         let rule = policy::rule_for(method).unwrap_or_else(|| panic!("no tier rule for {method}"));
         assert_eq!(rule.class, policy::MethodClass::Never, "{method}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Native Remote (FIX35 C1)
+
+/// A Native host: TLS on an ephemeral loopback port, with an account set.
+struct NativeGateway {
+    st: AppState,
+    port: u16,
+    origin: String,
+    client: reqwest::Client,
+    dir: PathBuf,
+}
+
+impl Drop for NativeGateway {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+async fn native_gateway() -> NativeGateway {
+    let (st, _events) = crate::phase2a_tests::state();
+    let dir = std::env::temp_dir().join(format!("bitbots-native-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    *st.team.data_dir.lock().unwrap() = Some(dir.clone());
+    st.db.set_setting("remote.method", &json!("native")).unwrap();
+    st.remote.set_method_cache("native");
+    // Port 0: an ephemeral port, so parallel tests cannot collide.
+    st.db.set_setting("remote.native.port", &json!(0)).unwrap();
+    super::native::set_account(&st, "owner", "correct horse battery").unwrap();
+    super::enable(&st).await.unwrap();
+    let port = st.remote.native_bound().expect("the native listener is bound").port();
+    NativeGateway {
+        st,
+        port,
+        origin: format!("https://127.0.0.1:{port}"),
+        client: reqwest::Client::builder().danger_accept_invalid_certs(true).no_proxy().build().unwrap(),
+        dir,
+    }
+}
+
+impl NativeGateway {
+    fn url(&self, path: &str) -> String {
+        format!("https://127.0.0.1:{}{path}", self.port)
+    }
+
+    /// A request to a chosen `Host`, so the Host check can be exercised apart
+    /// from the Origin check.
+    async fn post(&self, path: &str, host: &str, origin: &str, cookie: Option<&str>, body: &Value) -> reqwest::Response {
+        let url = format!("https://{host}:{}{path}", self.port);
+        let mut request = self.client.post(url).header("Origin", origin).header("Content-Type", "application/json");
+        if let Some(cookie) = cookie {
+            request = request.header("Cookie", cookie);
+        }
+        request.json(body).send().await.unwrap()
+    }
+
+    async fn login(&self, body: Value) -> reqwest::Response {
+        self.post("/api/login", "127.0.0.1", &self.origin, None, &body).await
+    }
+
+    async fn login_with(&self, cookie: &str, body: Value) -> reqwest::Response {
+        self.post("/api/login", "127.0.0.1", &self.origin, Some(cookie), &body).await
+    }
+
+    async fn get(&self, path: &str, cookie: Option<&str>) -> reqwest::Response {
+        let mut request = self.client.get(self.url(path)).header("Origin", &self.origin);
+        if let Some(cookie) = cookie {
+            request = request.header("Cookie", cookie);
+        }
+        request.send().await.unwrap()
+    }
+}
+
+/// Signs in and has the owner approve the device, returning `(device id, cookie)`.
+async fn approve_native_device(gateway: &NativeGateway) -> (String, String) {
+    let pending = gateway
+        .login(json!({"username": "owner", "password": "correct horse battery", "name": "Pixel 8", "kind": "phone", "platform": "Android 15"}))
+        .await;
+    assert_eq!(pending.status(), StatusCode::ACCEPTED);
+    let pair_cookie = cookie_of(&pending, PAIR_COOKIE).expect("a pair cookie");
+    let requested = super::events_last(&gateway.st, "remote.pairing.requested").await;
+    let pairing_id = requested["payload"]["pairingId"].as_str().unwrap().to_string();
+    super::rpc(&gateway.st, "remote.pair.confirm", &json!({"pairingId": pairing_id, "approve": true, "tier": "chat"}))
+        .await
+        .unwrap();
+    let polled = gateway.get("/api/pair", Some(&pair_cookie)).await;
+    assert_eq!(polled.status(), StatusCode::OK);
+    let device_cookie = cookie_of(&polled, DEVICE_COOKIE).expect("a device cookie");
+    let approved: Value = polled.json().await.unwrap();
+    let device_id = approved["device"]["id"].as_str().unwrap().to_string();
+    (device_id, device_cookie)
+}
+
+#[tokio::test]
+async fn the_native_certificate_is_stable_and_regeneration_changes_it() {
+    let gateway = native_gateway().await;
+    let first = super::native::ensure_cert(&gateway.st, false).unwrap();
+    let again = super::native::ensure_cert(&gateway.st, false).unwrap();
+    assert_eq!(first.fingerprint, again.fingerprint, "the fingerprint is stable across a restart");
+    assert_eq!(first.fingerprint.len(), 95, "32 hex pairs: {}", first.fingerprint);
+    assert!(gateway.dir.join(super::native::CERT_FILE).exists());
+    assert!(gateway.dir.join(super::native::KEY_FILE).exists());
+    let regenerated = super::native::ensure_cert(&gateway.st, true).unwrap();
+    assert_ne!(first.fingerprint, regenerated.fingerprint, "regeneration changes the fingerprint");
+    // The key file's permissions were restricted by a recorded command.
+    let commands = gateway.st.remote.key_commands.lock().unwrap().clone();
+    assert!(!commands.is_empty(), "a permission command was recorded");
+    let expected = if cfg!(windows) { "icacls" } else { "chmod" };
+    assert_eq!(commands[0][0], expected);
+    assert!(commands[0].iter().any(|arg| arg.contains("remote-native-key.pem")), "{:?}", commands[0]);
+}
+
+#[tokio::test]
+async fn the_native_listener_serves_tls_and_refuses_plain_http() {
+    let gateway = native_gateway().await;
+    let response = gateway.get("/", None).await;
+    assert_eq!(response.status(), StatusCode::OK, "a TLS request succeeds with the generated certificate");
+    // A plain-HTTP request fails the handshake and is dropped, never answered.
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", gateway.port)).await.unwrap();
+    let request = format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n", gateway.port);
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut response)).await;
+    let text = String::from_utf8_lossy(&response);
+    assert!(!text.contains("HTTP/"), "plain HTTP was answered: {text}");
+}
+
+#[tokio::test]
+async fn the_native_listener_binds_only_while_native_is_on() {
+    let gateway = native_gateway().await;
+    assert!(gateway.st.remote.native_listening());
+    assert!(gateway.st.remote.native_bound().is_some());
+    super::disable(&gateway.st).await.unwrap();
+    assert!(!gateway.st.remote.native_listening());
+    assert!(gateway.st.remote.native_bound().is_none());
+    // The port is closed: the client sees a transport error, not an HTTP status.
+    let refused = gateway.client.get(gateway.url("/")).header("Origin", &gateway.origin).send().await;
+    assert!(refused.is_err(), "the listener still answered after disable");
+}
+
+#[tokio::test]
+async fn native_checks_origin_and_host_against_the_certificate() {
+    let gateway = native_gateway().await;
+    // The certificate's own origin passes; a wrong password is a 401, not a 403.
+    let accepted = gateway.login(json!({"username": "owner", "password": "not the password"})).await;
+    assert_eq!(accepted.status(), StatusCode::UNAUTHORIZED);
+    // The Tailscale origin is refused under Native.
+    let tailscale = gateway
+        .post("/api/login", "127.0.0.1", "https://work-pc.tail1234.ts.net", None, &json!({}))
+        .await;
+    assert_eq!(tailscale.status(), StatusCode::FORBIDDEN);
+    // An accepted origin with a Host outside the certificate is refused.
+    let host = gateway
+        .post("/api/login", "127.0.0.2", &gateway.origin, None, &json!({}))
+        .await;
+    assert_eq!(host.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_native_origin_is_refused_under_tailscale() {
+    let gateway = gateway().await;
+    let response = gateway
+        .client
+        .post(gateway.url("/api/pair"))
+        .header("Origin", "https://127.0.0.1:48621")
+        .header("Content-Type", "application/json")
+        .json(&json!({"code": "AAAA-AAAA"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn native_login_answers_uniformly_and_approves_through_the_owner() {
+    let gateway = native_gateway().await;
+    let wrong = gateway.login(json!({"username": "owner", "password": "definitely wrong"})).await;
+    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong.json::<Value>().await.unwrap()["error"]["code"], "login_invalid");
+    let wrong_user = gateway.login(json!({"username": "nobody", "password": "correct horse battery"})).await;
+    assert_eq!(wrong_user.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong_user.json::<Value>().await.unwrap()["error"]["code"], "login_invalid");
+
+    let pending = gateway
+        .login(json!({"username": "owner", "password": "correct horse battery", "name": "Pixel 8", "kind": "phone", "platform": "Android 15"}))
+        .await;
+    assert_eq!(pending.status(), StatusCode::ACCEPTED);
+    let pair_cookie = cookie_of(&pending, PAIR_COOKIE).expect("a pair cookie");
+    assert_eq!(pending.json::<Value>().await.unwrap()["state"], "pending");
+    let requested = super::events_last(&gateway.st, "remote.pairing.requested").await;
+    assert_eq!(requested["payload"]["method"], "native");
+    assert!(requested["payload"]["login"].is_null());
+    let pairing_id = requested["payload"]["pairingId"].as_str().unwrap().to_string();
+    let approved = super::rpc(&gateway.st, "remote.pair.confirm", &json!({"pairingId": pairing_id, "approve": true, "tier": "chat"}))
+        .await
+        .unwrap();
+    assert_eq!(approved["approved"], true);
+    let polled = gateway.get("/api/pair", Some(&pair_cookie)).await;
+    assert_eq!(polled.status(), StatusCode::OK);
+    let device_cookie = cookie_of(&polled, DEVICE_COOKIE).expect("a device cookie");
+    let me: Value = gateway.get("/api/me", Some(&device_cookie)).await.json().await.unwrap();
+    assert_eq!(me["method"], "native");
+    // Signing in again with the cookie is approved at once.
+    let again = gateway
+        .login_with(&device_cookie, json!({"username": "owner", "password": "correct horse battery"}))
+        .await;
+    assert_eq!(again.status(), StatusCode::OK);
+    assert_eq!(again.json::<Value>().await.unwrap()["state"], "approved");
+}
+
+#[tokio::test]
+async fn a_revoked_native_device_must_sign_in_again() {
+    let gateway = native_gateway().await;
+    let (device_id, device_cookie) = approve_native_device(&gateway).await;
+    let approved = gateway
+        .login_with(&device_cookie, json!({"username": "owner", "password": "correct horse battery"}))
+        .await;
+    assert_eq!(approved.status(), StatusCode::OK);
+    super::rpc(&gateway.st, "remote.devices.revoke", &json!({"deviceId": device_id})).await.unwrap();
+    let after = gateway
+        .login_with(&device_cookie, json!({"username": "owner", "password": "correct horse battery"}))
+        .await;
+    assert_eq!(after.status(), StatusCode::ACCEPTED);
+    assert_eq!(after.json::<Value>().await.unwrap()["state"], "pending");
+}
+
+#[tokio::test]
+async fn native_account_set_validates_and_argon2_verifies() {
+    let (st, _events) = crate::phase2a_tests::state();
+    for bad in [
+        json!({"username": "", "password": "correct horse battery"}),
+        json!({"username": "a".repeat(65), "password": "correct horse battery"}),
+        json!({"username": "owner", "password": "short"}),
+        json!({"username": "same", "password": "same"}),
+    ] {
+        let error = super::rpc(&st, "remote.native.account.set", &bad).await.unwrap_err();
+        assert_eq!(error.1.code, "invalid_argument", "{bad}");
+    }
+    let saved = super::rpc(&st, "remote.native.account.set", &json!({"username": "owner", "password": "correct horse battery"}))
+        .await
+        .unwrap();
+    assert_eq!(saved, json!({"accountSet": true, "username": "owner"}));
+    let account = super::native::account_of(&st).unwrap();
+    assert_eq!(account.username, "owner");
+    assert!(account.hash.starts_with("$argon2id$"), "{}", account.hash);
+    assert!(!account.hash.contains("correct horse battery"));
+    assert!(super::native::verify_login(&account, "owner", "correct horse battery"));
+    assert!(!super::native::verify_login(&account, "owner", "wrong password!!"));
+    assert!(!super::native::verify_login(&account, "someone else", "correct horse battery"));
+}
+
+#[tokio::test]
+async fn native_login_lockout_locks_the_source_and_writes_a_denied_line() {
+    let gateway = native_gateway().await;
+    for _ in 0..4 {
+        let response = gateway.login(json!({"username": "owner", "password": "wrong password!!"})).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    // The fifth failure locks the source.
+    let fifth = gateway.login(json!({"username": "owner", "password": "wrong password!!"})).await;
+    assert_eq!(fifth.status(), StatusCode::TOO_MANY_REQUESTS);
+    // Even the right password is refused while locked.
+    let right = gateway.login(json!({"username": "owner", "password": "correct horse battery"})).await;
+    assert_eq!(right.status(), StatusCode::TOO_MANY_REQUESTS);
+    let entries = gateway.st.db.remote_activity_list(100).unwrap();
+    assert!(entries.iter().any(|entry| entry["kind"] == "denied"), "a denied activity line");
+    assert!(entries.iter().all(|entry| !entry["summary"].as_str().unwrap_or("").contains("owner")), "no username in a summary");
+}
+
+#[tokio::test]
+async fn native_global_pause_pauses_every_sign_in_and_flags_the_change() {
+    let gateway = native_gateway().await;
+    // Twenty-nine failures from other sources, then one over HTTP reaches the cap.
+    for index in 0..29 {
+        gateway.st.remote.record_login_failure(&format!("10.0.0.{index}"));
+    }
+    let trigger = gateway.login(json!({"username": "owner", "password": "wrong password!!"})).await;
+    assert_eq!(trigger.status(), StatusCode::UNAUTHORIZED);
+    let (paused, until) = gateway.st.remote.login_pause_state();
+    assert!(paused);
+    assert!(until.is_some());
+    let changed = super::events_last(&gateway.st, "remote.changed").await;
+    assert_eq!(changed["payload"]["status"]["native"]["loginPaused"], true);
+    // A later sign-in, even with the right password, is refused.
+    let right = gateway.login(json!({"username": "owner", "password": "correct horse battery"})).await;
+    assert_eq!(right.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn native_refuses_pair_codes_and_method_switches_while_on() {
+    let gateway = native_gateway().await;
+    assert_eq!(super::rpc(&gateway.st, "remote.pair.begin", &json!({})).await.unwrap_err().1.code, "conflict");
+    assert_eq!(super::rpc(&gateway.st, "remote.method.set", &json!({"method": "tailscale"})).await.unwrap_err().1.code, "conflict");
+    // With Remote off, the switch is allowed.
+    super::disable(&gateway.st).await.unwrap();
+    let switched = super::rpc(&gateway.st, "remote.method.set", &json!({"method": "tailscale"})).await.unwrap();
+    assert_eq!(switched["method"], "tailscale");
+}
+
+#[tokio::test]
+async fn native_enable_needs_an_account() {
+    let (st, _events) = crate::phase2a_tests::state();
+    let dir = std::env::temp_dir().join(format!("bitbots-native-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    *st.team.data_dir.lock().unwrap() = Some(dir.clone());
+    st.db.set_setting("remote.method", &json!("native")).unwrap();
+    st.db.set_setting("remote.native.port", &json!(0)).unwrap();
+    let error = super::enable(&st).await.unwrap_err();
+    assert_eq!(error.1.code, "conflict");
+    assert!(error.1.message.contains("username and password"), "{}", error.1.message);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn native_status_reports_the_native_block() {
+    let gateway = native_gateway().await;
+    // A sign-in records where it came from; this proves the peer address is read
+    // from the connection, not defaulted to "loopback".
+    let _ = gateway.login(json!({"username": "owner", "password": "not the password"})).await;
+    let status = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
+    assert_eq!(status["native"]["lastReachedFrom"], "127.0.0.1");
+    assert_eq!(status["method"], "native");
+    let native = &status["native"];
+    assert_eq!(native["port"], gateway.port);
+    assert_eq!(native["accountSet"], true);
+    assert_eq!(native["username"], "owner");
+    assert_eq!(native["listening"], true);
+    assert_eq!(native["loginPaused"], false);
+    assert!(native["fingerprint"].as_str().unwrap().contains(':'));
+    assert!(native["urls"].as_array().unwrap().iter().any(|url| url.as_str().unwrap().ends_with(&format!(":{}", gateway.port))));
+}
+
+#[tokio::test]
+async fn native_port_set_validates_and_requires_remote_off() {
+    let gateway = native_gateway().await;
+    assert_eq!(super::rpc(&gateway.st, "remote.native.port.set", &json!({"port": 5000})).await.unwrap_err().1.code, "conflict");
+    super::disable(&gateway.st).await.unwrap();
+    assert_eq!(super::rpc(&gateway.st, "remote.native.port.set", &json!({"port": 80})).await.unwrap_err().1.code, "invalid_argument");
+    let saved = super::rpc(&gateway.st, "remote.native.port.set", &json!({"port": 49001})).await.unwrap();
+    assert_eq!(saved["port"], 49001);
+}
+
+#[tokio::test]
+async fn native_cert_regenerate_restarts_and_changes_the_fingerprint() {
+    let gateway = native_gateway().await;
+    let before = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap()["native"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let after = super::rpc(&gateway.st, "remote.native.cert.regenerate", &json!({})).await.unwrap();
+    let after_fingerprint = after["fingerprint"].as_str().unwrap().to_string();
+    assert_ne!(before, after_fingerprint);
+    assert!(gateway.st.remote.native_listening(), "the listener restarted");
 }

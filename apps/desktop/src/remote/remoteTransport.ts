@@ -11,7 +11,7 @@
 // host, a browser or a network.
 
 import type { DaemonEvent, JsonRecord } from '../types'
-import type { RemoteTier } from './remoteContract'
+import type { RemoteMethodId, RemoteTier } from './remoteContract'
 
 /** What the events socket is doing right now. */
 export type RemoteConnectionStatus = 'connecting' | 'online' | 'reconnecting' | 'offline' | 'signed_out'
@@ -43,6 +43,8 @@ export interface RemoteMe {
   host: { name: string }
   approvalsFromRemote: boolean
   quietHoursActive: boolean
+  /** The host's active method; `native` means the client shows a sign-in screen. */
+  method: RemoteMethodId
 }
 
 export interface RemotePairInput {

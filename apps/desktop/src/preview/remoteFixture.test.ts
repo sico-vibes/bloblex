@@ -308,6 +308,14 @@ describe('remote preview simulator (host side)', () => {
         params = { pairingId: locked.pairingId, approve: true, tier: 'chat' }
       } else if (method === 'remote.devices.update' || method === 'remote.devices.revoke') {
         params = { deviceId: 'device-1', tier: 'viewer' }
+      } else if (method === 'remote.method.set') {
+        simulator.reset({ enabled: false, devices: 1 })
+        params = { method: 'native' }
+      } else if (method === 'remote.native.account.set') {
+        params = { username: 'owner', password: 'correct horse battery' }
+      } else if (method === 'remote.native.port.set') {
+        simulator.reset({ enabled: false, devices: 1 })
+        params = { port: 49000 }
       }
       await expect(simulator.call(method, params), method).resolves.toBeDefined()
       asked.push(method)

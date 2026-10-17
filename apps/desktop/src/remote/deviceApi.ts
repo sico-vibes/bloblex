@@ -54,7 +54,7 @@ export function createPreviewDeviceApi(options: { hostName?: string; tier?: Remo
     async me() {
       const device = read()
       if (!device) throw refused('unauthorized', 'This device is not paired.')
-      return { protocolVersion: 1, device: { id: 'preview-device', name: device.name, tier }, host: { name: hostName }, approvalsFromRemote: false, quietHoursActive: false }
+      return { protocolVersion: 1, device: { id: 'preview-device', name: device.name, tier }, host: { name: hostName }, approvalsFromRemote: false, quietHoursActive: false, method: 'tailscale' }
     },
     async pair(input) {
       if (input.code.replace('-', '').length !== 8) throw refused('pairing_invalid', 'That code did not work. Check it, or show a new one on the computer.')

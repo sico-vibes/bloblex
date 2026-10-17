@@ -17,8 +17,15 @@ export const REMOTE_TIERS: readonly RemoteTier[] = ['viewer', 'chat', 'operator'
 
 export type DeviceKind = 'phone' | 'tablet' | 'browser' | 'computer'
 
-/** The host's link to its Tailscale serve address. */
+/** The host's link to its serve address. */
 export type RemoteLinkState = 'off' | 'starting' | 'online' | 'error'
+
+/**
+ * The two ways a device reaches a host (`remote.method`): over Tailscale, or
+ * over the host's own network with a built-in TLS certificate and a password
+ * (Native). One is active at a time.
+ */
+export type RemoteMethodId = 'tailscale' | 'native'
 
 /**
  * What Tailscale must report before Remote can serve. Only `ready` starts;
@@ -57,6 +64,34 @@ export interface RemoteStatus {
   /** Remote needs the computer awake; true when "keep awake" is covering that. */
   keepAwake: boolean
   error: string | null
+  /**
+   * The active Remote method (`remote.method`); Tailscale by default. The
+   * daemon always sends it; optional here only so a partial fixture that
+   * predates Native Remote still typechecks.
+   */
+  method?: RemoteMethodId
+  /** Native Remote's own state (`remote.status.native`). The daemon always sends it. */
+  native?: RemoteNativeStatus
+}
+
+/**
+ * The `native` block of `remote.status` (FIX35 C1). C2 adds `upnp`,
+ * `firewall`, `externalIp` and `cgnat`.
+ */
+export interface RemoteNativeStatus {
+  /** The port the Native listener binds (`remote.nativePort`, default 48621). */
+  port: number
+  /** The `https://<authority>` addresses the certificate covers. */
+  urls: string[]
+  /** SHA-256 of the certificate DER, uppercase hex in colon pairs; null before the certificate exists. */
+  fingerprint: string | null
+  accountSet: boolean
+  username: string | null
+  listening: boolean
+  loginPaused: boolean
+  pausedUntil: string | null
+  lastReachedAt: string | null
+  lastReachedFrom: string | null
 }
 
 export interface PairingOffer {
@@ -80,6 +115,8 @@ export interface PairingRequest {
   platform: string
   /** The Tailscale login that made the request; null when no login header was sent. */
   login: string | null
+  /** How the request arrived: a Tailscale pairing code, or a Native password sign-in. */
+  method: RemoteMethodId
   /** ISO time; the request expires with the code. */
   expiresAt: string
 }
@@ -132,6 +169,10 @@ export const REMOTE_METHODS = [
   'remote.status',
   'remote.enable',
   'remote.disable',
+  'remote.method.set',
+  'remote.native.account.set',
+  'remote.native.cert.regenerate',
+  'remote.native.port.set',
   'remote.pair.begin',
   'remote.pair.cancel',
   'remote.pair.confirm',

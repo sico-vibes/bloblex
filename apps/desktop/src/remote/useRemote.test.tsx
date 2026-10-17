@@ -43,7 +43,7 @@ const fire = async (type: string, payload?: unknown) => {
 }
 
 function status(patch: Partial<RemoteStatus> = {}): RemoteStatus {
-  return { enabled: true, link: 'online', url: 'https://work-pc.tail1234.ts.net', port: 48620, servePort: 443, tailscale: 'ready', hostName: 'Work PC', deviceCount: 0, connectedCount: 0, keepAwake: true, error: null, ...patch }
+  return { enabled: true, link: 'online', url: 'https://work-pc.tail1234.ts.net', port: 48620, servePort: 443, tailscale: 'ready', hostName: 'Work PC', deviceCount: 0, connectedCount: 0, keepAwake: true, error: null, method: 'tailscale', native: { port: 48621, urls: [], fingerprint: null, accountSet: false, username: null, listening: false, loginPaused: false, pausedUntil: null, lastReachedAt: null, lastReachedFrom: null }, ...patch }
 }
 
 const device: RemoteDevice = { id: 'device-9', name: 'Pixel 8', kind: 'phone', tier: 'chat', platform: 'Android 15, Chrome', pairedAt: '2026-10-15T09:00:00.000Z', lastSeenAt: null, online: true }
@@ -97,7 +97,7 @@ describe('useRemote', () => {
 
   it('tracks the owner-confirmed request and the outcome after the reload', async () => {
     await mount()
-    const request: PairingRequest = { pairingId: 'pairing-1', name: 'Pixel 8', kind: 'phone', platform: 'Android 15, Chrome', login: 'owner@example.com', expiresAt: new Date(Date.now() + 60_000).toISOString() }
+    const request: PairingRequest = { pairingId: 'pairing-1', name: 'Pixel 8', kind: 'phone', platform: 'Android 15, Chrome', login: 'owner@example.com', method: 'tailscale', expiresAt: new Date(Date.now() + 60_000).toISOString() }
     await fire('remote.pairing.requested', request)
     expect(current().request).toEqual(request)
 

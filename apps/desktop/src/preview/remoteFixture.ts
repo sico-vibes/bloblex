@@ -22,6 +22,8 @@ import type {
   RemoteDevice,
   RemoteEventType,
   RemoteMethod,
+  RemoteMethodId,
+  RemoteNativeStatus,
   RemoteSecurityOptions,
   RemoteStatus,
   RemoteTailscaleState,
@@ -58,6 +60,8 @@ export interface RemoteSeed {
   devices?: number
   /** The Tailscale state the host reports; only `ready` can serve. */
   tailscale?: RemoteTailscaleState
+  /** The active Remote method (`remote.method`); Tailscale by default. */
+  method?: RemoteMethodId
 }
 
 const HOST_NAME = 'Work PC'
@@ -68,6 +72,13 @@ const SERVE_PORT = 443
 const SERVE_START_MS = 700
 const ACTIVITY_LIMIT = 50
 const DEVICE_NAME_MAX = 40
+/** `remote.native.port` default (FIX35 C1). */
+const NATIVE_PORT = 48621
+
+/** A stable-looking certificate fingerprint, so the simulator's changes are visible. */
+function nativeFingerprintFor(serial: number): string {
+  return Array.from({ length: 32 }, (_, index) => ((index * 7 + serial * 13 + 1) % 256).toString(16).padStart(2, '0').toUpperCase()).join(':')
+}
 
 /** The fix the Settings page shows, one line per state (`docs/remote/ARCHITECTURE.md:99-101`). */
 const TAILSCALE_FIX: Record<Exclude<RemoteTailscaleState, 'ready'>, string> = {
@@ -142,6 +153,15 @@ export function createRemoteSimulator(options: {
   let url: string | null = null
   let servePort: number | null = null
   let tailscale: RemoteTailscaleState = 'ready'
+  let method: RemoteMethodId = 'tailscale'
+  let nativePort = NATIVE_PORT
+  let nativeAccount: string | null = null
+  let nativeFingerprint: string | null = null
+  let nativeCertSerial = 0
+  let nativeLoginPaused = false
+  let nativePausedUntil: string | null = null
+  let nativeLastReachedAt: string | null = null
+  let nativeLastReachedFrom: string | null = null
   /** The fixture never reaches a serving failure, so this stays null; a real host sets it when `tailscale serve` dies. */
   let error: string | null = null
   let devices: RemoteDevice[] = []
@@ -166,6 +186,23 @@ export function createRemoteSimulator(options: {
   }
   const cancel = (handle: unknown) => { if (handle !== null) timers.clearTimeout(handle) }
 
+  function nativeStatus(): RemoteNativeStatus {
+    return {
+      port: nativePort,
+      urls: nativeFingerprint === null
+        ? []
+        : [`https://${HOST_NAME.toLowerCase().replace(/[^a-z0-9]+/g, '-')}:${nativePort}`, `https://localhost:${nativePort}`],
+      fingerprint: nativeFingerprint,
+      accountSet: nativeAccount !== null,
+      username: nativeAccount,
+      listening: enabled && method === 'native',
+      loginPaused: nativeLoginPaused,
+      pausedUntil: nativePausedUntil,
+      lastReachedAt: nativeLastReachedAt,
+      lastReachedFrom: nativeLastReachedFrom,
+    }
+  }
+
   function status(): RemoteStatus {
     return {
       enabled,
@@ -179,6 +216,8 @@ export function createRemoteSimulator(options: {
       connectedCount: devices.filter((device) => device.online).length,
       keepAwake: enabled,
       error,
+      method,
+      native: nativeStatus(),
     }
   }
 
@@ -245,8 +284,21 @@ export function createRemoteSimulator(options: {
   }
 
   function enable(): RemoteStatus {
-    if (tailscale !== 'ready') throw remoteError('unsupported', TAILSCALE_FIX[tailscale])
     if (enabled && link === 'online') return status()
+    if (method === 'native') {
+      if (nativeAccount === null) throw remoteError('conflict', 'Set a username and password first.')
+      enabled = true
+      error = null
+      cancel(startTimer)
+      startTimer = null
+      link = 'online'
+      url = null
+      servePort = null
+      if (nativeFingerprint === null) nativeFingerprint = nativeFingerprintFor(nativeCertSerial)
+      emit('remote.changed', { status: status() })
+      return status()
+    }
+    if (tailscale !== 'ready') throw remoteError('unsupported', TAILSCALE_FIX[tailscale])
     enabled = true
     error = null
     cancel(startTimer)
@@ -334,6 +386,7 @@ export function createRemoteSimulator(options: {
       kind: submission.kind ?? PHONE_SUBMISSION.kind,
       platform: submission.platform ?? PHONE_SUBMISSION.platform,
       login: submission.login === undefined ? PHONE_SUBMISSION.login : submission.login,
+      method: 'tailscale',
       expiresAt: live.expiresAt,
     }
     // The first correct code locks the offer to this request; the code is spent.
@@ -453,16 +506,61 @@ export function createRemoteSimulator(options: {
     return cloneSecurity(security)
   }
 
+  function methodSet(params: Record<string, unknown>): RemoteStatus {
+    const next = params.method
+    if (next !== 'tailscale' && next !== 'native') throw remoteError('invalid_argument', 'method must be tailscale or native.')
+    if (enabled && method !== next) throw remoteError('conflict', 'Turn Remote off before switching method.')
+    method = next
+    emit('remote.changed', { status: status() })
+    return status()
+  }
+
+  function accountSet(params: Record<string, unknown>): { accountSet: true; username: string } {
+    const username = typeof params.username === 'string' ? params.username.trim() : ''
+    const password = typeof params.password === 'string' ? params.password : ''
+    if (username.length < 1 || username.length > 64) throw remoteError('invalid_argument', 'The username must be 1 to 64 characters.')
+    if (password.length < 12) throw remoteError('invalid_argument', 'The password must be at least 12 characters.')
+    if (password === username) throw remoteError('invalid_argument', 'The password must not be the username.')
+    nativeAccount = username
+    return { accountSet: true, username }
+  }
+
+  function certRegenerate(): RemoteNativeStatus {
+    nativeCertSerial += 1
+    nativeFingerprint = nativeFingerprintFor(nativeCertSerial)
+    return nativeStatus()
+  }
+
+  function portSet(params: Record<string, unknown>): RemoteNativeStatus {
+    if (enabled) throw remoteError('conflict', 'Turn Remote off before changing the port.')
+    const port = params.port
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1024 || port > 65535) {
+      throw remoteError('invalid_argument', 'port must be a number from 1024 to 65535')
+    }
+    nativePort = port
+    emit('remote.changed', { status: status() })
+    return nativeStatus()
+  }
+
   function reset(seed: RemoteSeed = {}) {
     cancel(startTimer)
     startTimer = null
     cancel(expiryTimer)
     expiryTimer = null
     tailscale = seed.tailscale ?? 'ready'
-    enabled = (seed.enabled ?? false) && tailscale === 'ready'
+    method = seed.method ?? 'tailscale'
+    enabled = (seed.enabled ?? false) && (method === 'native' || tailscale === 'ready')
     link = enabled ? 'online' : 'off'
-    url = enabled ? SERVE_URL : null
-    servePort = enabled ? SERVE_PORT : null
+    url = enabled && method === 'tailscale' ? SERVE_URL : null
+    servePort = enabled && method === 'tailscale' ? SERVE_PORT : null
+    nativePort = NATIVE_PORT
+    nativeAccount = null
+    nativeFingerprint = null
+    nativeCertSerial = 0
+    nativeLoginPaused = false
+    nativePausedUntil = null
+    nativeLastReachedAt = null
+    nativeLastReachedFrom = null
     error = null
     offer = null
     request = null
@@ -480,6 +578,10 @@ export function createRemoteSimulator(options: {
       case 'remote.status': return status()
       case 'remote.enable': return enable()
       case 'remote.disable': return disable()
+      case 'remote.method.set': return methodSet(params)
+      case 'remote.native.account.set': return accountSet(params)
+      case 'remote.native.cert.regenerate': return certRegenerate()
+      case 'remote.native.port.set': return portSet(params)
       case 'remote.pair.begin': return pairBegin()
       case 'remote.pair.cancel': return pairCancel()
       case 'remote.pair.confirm': return pairConfirm(params)

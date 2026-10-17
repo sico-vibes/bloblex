@@ -693,6 +693,34 @@
       "minTier": null,
       "why": "The activity list is the owner's audit view at the computer.",
       "params": null
+    },
+    {
+      "method": "remote.method.set",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the owner at the computer may choose the Remote method.",
+      "params": null
+    },
+    {
+      "method": "remote.native.account.set",
+      "class": "never",
+      "minTier": null,
+      "why": "The Native username and password are set by the owner at the computer.",
+      "params": null
+    },
+    {
+      "method": "remote.native.cert.regenerate",
+      "class": "never",
+      "minTier": null,
+      "why": "A paired device must not replace the host's TLS certificate.",
+      "params": null
+    },
+    {
+      "method": "remote.native.port.set",
+      "class": "never",
+      "minTier": null,
+      "why": "The Native port is a host setting the owner changes at the computer.",
+      "params": null
     }
   ],
   "events": {

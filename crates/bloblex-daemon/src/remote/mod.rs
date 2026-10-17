@@ -15,6 +15,7 @@
 //! * it never runs `tailscale funnel` or `tailscale serve reset`;
 //! * `tailscale status --json` is never logged (it carries the owner's email).
 
+pub mod native;
 pub mod pairing;
 pub mod policy;
 pub mod tailscale;
@@ -28,7 +29,7 @@ use chrono::{DateTime, Local, Timelike, Utc};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{Notify, RwLock};
 
 /// `remote.port` default. The gateway binds this on loopback.
@@ -38,8 +39,24 @@ pub const MAX_REQUEST_BYTES: usize = 256 * 1024;
 /// Per-device token bucket: sustained rate and burst.
 pub const RATE_LIMIT_PER_SECOND: f64 = 20.0;
 pub const RATE_LIMIT_BURST: f64 = 40.0;
+/// Per-source bucket for the unauthenticated routes: 30 requests in 10 s, burst
+/// 60 (FIX35 C1 §4). Applied to `/api/login`, `/api/pair` and the static files.
+pub const UNAUTH_RATE_PER_SECOND: f64 = 3.0;
+pub const UNAUTH_RATE_BURST: f64 = 60.0;
+/// Login lockout: five failed sign-ins per source in fifteen minutes locks that
+/// source out for fifteen minutes.
+pub const LOGIN_FAILURES_PER_SOURCE: usize = 5;
+pub const LOGIN_FAILURE_WINDOW_SECS: u64 = 15 * 60;
+pub const LOGIN_LOCKOUT_SECS: u64 = 15 * 60;
+/// A burst across every source pauses all sign-ins for half an hour.
+pub const LOGIN_GLOBAL_FAILURES: usize = 30;
+pub const LOGIN_GLOBAL_WINDOW_SECS: u64 = 60 * 60;
+pub const LOGIN_GLOBAL_PAUSE_SECS: u64 = 30 * 60;
 /// `remote.activity.list` default page size.
 pub const ACTIVITY_DEFAULT_LIMIT: usize = 100;
+/// The two Remote methods. `remote.method` holds one of these.
+pub const METHOD_TAILSCALE: &str = "tailscale";
+pub const METHOD_NATIVE: &str = "native";
 
 /// The default `remote.security` value, matching `REMOTE_TIERS` defaults.
 pub fn default_security() -> Security {
@@ -162,6 +179,14 @@ pub fn now_rfc3339() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+/// Turns a future `Instant` (a lockout or pause) into a wall-clock timestamp.
+/// `Instant` has no date, so the delta from now is added to `Utc::now()`.
+fn instant_to_rfc3339(instant: Instant) -> String {
+    let delta = instant.saturating_duration_since(Instant::now());
+    (Utc::now() + chrono::Duration::from_std(delta).unwrap_or_default())
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 // ---------------------------------------------------------------------------
 // The gateway state
 
@@ -183,6 +208,30 @@ struct Bucket {
     at: Instant,
 }
 
+/// The unauthenticated-route limiter and the sign-in lockout (FIX35 C1 §4).
+#[derive(Default)]
+struct AbuseState {
+    /// Per-source token bucket for `/api/login`, `/api/pair` and static files.
+    buckets: HashMap<String, Bucket>,
+    /// Failed sign-ins per source within the window.
+    per_source: HashMap<String, Vec<Instant>>,
+    /// Failed sign-ins across every source within the window.
+    global: Vec<Instant>,
+    /// Sources locked out until this instant.
+    locked: HashMap<String, Instant>,
+    /// When set, every sign-in is refused until this instant.
+    paused_until: Option<Instant>,
+}
+
+/// What one failed sign-in did to the limits.
+pub struct LoginLockout {
+    /// The source is now locked out (or was already).
+    pub locked: bool,
+    /// The global pause started with this failure.
+    pub global_paused: bool,
+    pub until: Option<Instant>,
+}
+
 struct Inner {
     enabled: bool,
     /// `off`, `starting`, `online` or `error`.
@@ -194,6 +243,8 @@ struct Inner {
     running: Option<RunningServer>,
     sockets: HashMap<String, SocketEntry>,
     next_socket_id: u64,
+    /// Native Remote's listener, certificate and reach info (FIX35 C1).
+    native: native::NativeState,
 }
 
 /// Everything the gateway owns, held in `AppState`.
@@ -207,7 +258,13 @@ pub struct RemoteState {
     pub host_name: String,
     inner: StdMutex<Inner>,
     rate: StdMutex<HashMap<String, Bucket>>,
+    abuse: StdMutex<AbuseState>,
     security_cache: StdMutex<Option<Security>>,
+    /// The active method, read from `remote.method` once and refreshed on a write.
+    method_cache: StdMutex<Option<String>>,
+    /// Test seam: the permission commands run for the native key file.
+    #[cfg(test)]
+    pub key_commands: StdMutex<Vec<Vec<String>>>,
 }
 
 impl RemoteState {
@@ -235,9 +292,14 @@ impl RemoteState {
                 running: None,
                 sockets: HashMap::new(),
                 next_socket_id: 1,
+                native: native::NativeState::default(),
             }),
             rate: StdMutex::new(HashMap::new()),
+            abuse: StdMutex::new(AbuseState::default()),
             security_cache: StdMutex::new(None),
+            method_cache: StdMutex::new(None),
+            #[cfg(test)]
+            key_commands: StdMutex::new(Vec::new()),
         }
     }
 
@@ -297,6 +359,129 @@ impl RemoteState {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // The active method (FIX35 C1)
+
+    /// The active Remote method, `tailscale` (default) or `native`.
+    pub fn active_method(&self, st: &AppState) -> String {
+        if let Some(cached) = self.method_cache.lock().unwrap().clone() {
+            return cached;
+        }
+        let settings = st.db.settings().unwrap_or(Value::Null);
+        let method = settings
+            .get("remote.method")
+            .and_then(Value::as_str)
+            .filter(|name| matches!(*name, METHOD_TAILSCALE | METHOD_NATIVE))
+            .unwrap_or(METHOD_TAILSCALE)
+            .to_string();
+        *self.method_cache.lock().unwrap() = Some(method.clone());
+        method
+    }
+
+    /// Records the chosen method so the next read does not touch the database.
+    pub fn set_method_cache(&self, method: &str) {
+        *self.method_cache.lock().unwrap() = Some(method.to_string());
+    }
+
+    /// The accepted origins for the active method. Tailscale is the one serve
+    /// origin; Native is `https://<authority>` for every certificate SAN.
+    pub fn accepted_origins(&self, st: &AppState) -> Vec<String> {
+        if self.active_method(st) == METHOD_NATIVE {
+            native::origins(st)
+        } else {
+            self.serve_origin().into_iter().collect()
+        }
+    }
+
+    /// The accepted `Host` authorities for the active method (Native only).
+    pub fn accepted_authorities(&self, st: &AppState) -> Vec<String> {
+        if self.active_method(st) == METHOD_NATIVE {
+            native::authorities(st)
+        } else {
+            Vec::new()
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Abuse limits (FIX35 C1 §4)
+
+    /// A token bucket for the unauthenticated routes: 3/s with a burst of 60.
+    pub fn unauth_allow(&self, source: &str) -> bool {
+        let now = Instant::now();
+        let mut abuse = self.abuse.lock().unwrap();
+        let bucket = abuse.buckets.entry(source.to_string()).or_insert(Bucket {
+            tokens: UNAUTH_RATE_BURST,
+            at: now,
+        });
+        let elapsed = now.saturating_duration_since(bucket.at).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * UNAUTH_RATE_PER_SECOND).min(UNAUTH_RATE_BURST);
+        bucket.at = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// When a source is locked out, or every sign-in is paused, this is the
+    /// instant it lifts. `None` when sign-in is allowed.
+    pub fn login_locked_until(&self, source: &str) -> Option<Instant> {
+        let now = Instant::now();
+        let abuse = self.abuse.lock().unwrap();
+        let paused = abuse.paused_until.filter(|until| *until > now);
+        let locked = abuse.locked.get(source).copied().filter(|until| *until > now);
+        paused.max(locked)
+    }
+
+    /// The status-facing view of the pause: `(paused, until_rfc3339)`.
+    pub fn login_pause_state(&self) -> (bool, Option<String>) {
+        let now = Instant::now();
+        let until = self.abuse.lock().unwrap().paused_until.filter(|until| *until > now);
+        match until {
+            Some(until) => (true, Some(instant_to_rfc3339(until))),
+            None => (false, None),
+        }
+    }
+
+    /// Records one failed sign-in and returns what it triggered.
+    pub fn record_login_failure(&self, source: &str) -> LoginLockout {
+        let now = Instant::now();
+        let mut abuse = self.abuse.lock().unwrap();
+        let window = Duration::from_secs(LOGIN_FAILURE_WINDOW_SECS);
+        let per_source = {
+            let entry = abuse.per_source.entry(source.to_string()).or_default();
+            entry.retain(|at| now.saturating_duration_since(*at) < window);
+            entry.push(now);
+            entry.len()
+        };
+        let global_window = Duration::from_secs(LOGIN_GLOBAL_WINDOW_SECS);
+        abuse.global.retain(|at| now.saturating_duration_since(*at) < global_window);
+        abuse.global.push(now);
+        let global_count = abuse.global.len();
+        let mut locked = false;
+        if per_source >= LOGIN_FAILURES_PER_SOURCE {
+            let until = now + Duration::from_secs(LOGIN_LOCKOUT_SECS);
+            abuse.locked.insert(source.to_string(), until);
+            locked = true;
+        }
+        let mut global_paused = false;
+        if global_count >= LOGIN_GLOBAL_FAILURES {
+            let until = now + Duration::from_secs(LOGIN_GLOBAL_PAUSE_SECS);
+            if abuse.paused_until.map(|current| current <= now).unwrap_or(true) {
+                global_paused = true;
+            }
+            abuse.paused_until = Some(until);
+        }
+        let until = abuse.paused_until.max(abuse.locked.get(source).copied());
+        LoginLockout { locked, global_paused, until }
+    }
+
+    /// Clears a source's failure count after a correct sign-in.
+    pub fn clear_login_failures(&self, source: &str) {
+        self.abuse.lock().unwrap().per_source.remove(source);
+    }
+
     /// Registers the device's live socket, replacing any older one. Returns the
     /// new socket's id and whether an older socket was closed.
     pub fn register_socket(&self, device_id: &str, kick: tokio::sync::mpsc::Sender<()>) -> (bool, u64) {
@@ -339,6 +524,17 @@ impl RemoteState {
         self.inner.lock().unwrap().running.as_ref().map(|running| running.addr)
     }
 
+    /// The Native listener's IPv4 address, while Native is on.
+    #[cfg(test)]
+    pub fn native_bound(&self) -> Option<std::net::SocketAddr> {
+        self.inner.lock().unwrap().native.bound.first().copied()
+    }
+
+    /// Whether any Native listener socket is live.
+    pub fn native_listening(&self) -> bool {
+        !self.inner.lock().unwrap().native.servers.is_empty()
+    }
+
     #[cfg(test)]
     pub fn link(&self) -> &'static str {
         self.inner.lock().unwrap().link
@@ -357,21 +553,36 @@ impl RemoteState {
     /// The status object of `remote.status`, and of the `remote.changed` event.
     /// Never includes the tailnet login or raw status JSON.
     pub fn status_value(&self, st: &AppState) -> Value {
-        let inner = self.inner.lock().unwrap();
+        let (enabled, link, url, port, serve_port, tailscale, connected, error) = {
+            let inner = self.inner.lock().unwrap();
+            (
+                inner.enabled,
+                inner.link,
+                inner.serve_origin.clone(),
+                inner.running.as_ref().map(|running| running.addr.port()).unwrap_or_else(|| remote_port(st)),
+                inner.serve_port,
+                inner.tailscale.as_str(),
+                inner.sockets.len(),
+                inner.error.clone(),
+            )
+        };
         let devices = st.db.remote_devices().unwrap_or_default();
         let live = devices.iter().filter(|device| device["revokedAt"].is_null() && device["signedOutAt"].is_null()).count();
+        let method = self.active_method(st);
         json!({
-            "enabled": inner.enabled,
-            "link": inner.link,
-            "url": inner.serve_origin,
-            "port": inner.running.as_ref().map(|running| running.addr.port()).unwrap_or_else(|| remote_port(st)),
-            "servePort": inner.serve_port,
-            "tailscale": inner.tailscale.as_str(),
+            "enabled": enabled,
+            "link": link,
+            "url": url,
+            "port": port,
+            "servePort": serve_port,
+            "tailscale": tailscale,
             "hostName": self.host_name,
             "deviceCount": live,
-            "connectedCount": inner.sockets.len(),
+            "connectedCount": connected,
             "keepAwake": false,
-            "error": inner.error,
+            "error": error,
+            "method": method,
+            "native": native::status_block(st),
         })
     }}
 
@@ -444,8 +655,10 @@ pub async fn start_at_boot(st: &AppState) {
     let settings = st.db.settings().unwrap_or(Value::Null);
     if settings.get("remote.enabled") != Some(&Value::Bool(true)) {
         // Still record what Tailscale looks like, so the page can explain the
-        // fix before the owner presses the switch.
-        refresh_tailscale(st).await;
+        // fix before the owner presses the switch. Native never touches it.
+        if st.remote.active_method(st) == METHOD_TAILSCALE {
+            refresh_tailscale(st).await;
+        }
         emit_status(st).await;
         return;
     }
@@ -495,6 +708,15 @@ pub async fn enable(st: &AppState) -> Result<Value, DispatchError> {
     }
     st.remote.set_link("starting", None);
     emit_status(st).await;
+
+    if st.remote.active_method(st) == METHOD_NATIVE {
+        let result = native::enable(st).await;
+        if let Err(error) = &result {
+            st.remote.set_link("error", Some(error.1.message.clone()));
+            emit_status(st).await;
+        }
+        return result;
+    }
 
     let remote = st.remote.clone();
     let cli = remote.cli().await;
@@ -567,6 +789,9 @@ pub async fn enable(st: &AppState) -> Result<Value, DispatchError> {
 /// Turns Remote off: close every device socket, stop the listener and remove
 /// only the handler Bitbots added. Paired devices are kept.
 pub async fn disable(st: &AppState) -> Result<Value, DispatchError> {
+    if st.remote.active_method(st) == METHOD_NATIVE {
+        return native::disable(st).await;
+    }
     let remote = st.remote.clone();
     let was_enabled = {
         let inner = remote.inner.lock().unwrap();
@@ -627,12 +852,19 @@ async fn stop_server(running: RunningServer) {
     let _ = running.handle.await;
 }
 
-/// Stops the listener and closes every device socket.
+/// Stops every listener (Tailscale and Native) and closes every device socket.
 async fn stop_serving(remote: &Arc<RemoteState>) {
-    let running = remote.inner.lock().unwrap().running.take();
+    let (running, native_servers) = {
+        let mut inner = remote.inner.lock().unwrap();
+        (inner.running.take(), std::mem::take(&mut inner.native.servers))
+    };
     if let Some(running) = running {
         stop_server(running).await;
     }
+    for server in native_servers {
+        stop_server(server).await;
+    }
+    remote.inner.lock().unwrap().native.bound.clear();
     remote.close_all_sockets();
 }
 
@@ -644,11 +876,17 @@ async fn stop_serving(remote: &Arc<RemoteState>) {
 pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, DispatchError> {
     match method {
         "remote.status" => {
-            refresh_tailscale(st).await;
+            if st.remote.active_method(st) == METHOD_TAILSCALE {
+                refresh_tailscale(st).await;
+            }
             Ok(st.remote.status_value(st))
         }
         "remote.enable" => enable(st).await,
         "remote.disable" => disable(st).await,
+        "remote.method.set" => method_set(st, p).await,
+        "remote.native.account.set" => native::account_set_rpc(st, p),
+        "remote.native.cert.regenerate" => native::cert_regenerate(st).await,
+        "remote.native.port.set" => native::port_set(st, p).await,
         "remote.pair.begin" => pair_begin(st).await,
         "remote.pair.cancel" => pair_cancel(st).await,
         "remote.pair.confirm" => pair_confirm(st, p).await,
@@ -662,9 +900,31 @@ pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, Dispat
     }
 }
 
+/// `remote.method.set`: choose Tailscale or Native. Refused while the other
+/// method is on, so the owner turns Remote off first.
+async fn method_set(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
+    let method = p["method"].as_str().filter(|name| matches!(*name, METHOD_TAILSCALE | METHOD_NATIVE));
+    let Some(method) = method else {
+        return Err(derr("invalid_argument", "method must be tailscale or native", StatusCode::BAD_REQUEST));
+    };
+    let current = st.remote.active_method(st);
+    if st.remote.is_enabled() && current != method {
+        return Err(derr("conflict", "Turn Remote off before switching method.", StatusCode::CONFLICT));
+    }
+    st.db
+        .set_setting("remote.method", &json!(method))
+        .map_err(|error| derr("internal", &error.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+    st.remote.set_method_cache(method);
+    emit_status(st).await;
+    Ok(st.remote.status_value(st))
+}
+
 async fn pair_begin(st: &AppState) -> Result<Value, DispatchError> {
     if !st.remote.is_enabled() {
         return Err(derr("conflict", "Turn Remote on before pairing a device.", StatusCode::CONFLICT));
+    }
+    if st.remote.active_method(st) == METHOD_NATIVE {
+        return Err(derr("conflict", "Native Remote signs in with a password.", StatusCode::CONFLICT));
     }
     let offer = st.remote.pairing.lock().unwrap().begin(Utc::now());
     let origin = st.remote.serve_origin().unwrap_or_default();

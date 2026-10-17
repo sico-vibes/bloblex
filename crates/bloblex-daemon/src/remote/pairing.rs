@@ -129,6 +129,9 @@ pub struct Pending {
     /// The device record minted at approval, waiting to be stored when the
     /// phone collects its cookie.
     pub device: Option<Value>,
+    /// How the request arrived: `tailscale` (a pairing code) or `native` (a
+    /// password sign-in). The desktop approval dialog and the event carry it.
+    pub method: String,
 }
 
 /// The one live offer.
@@ -237,8 +240,42 @@ impl PairingState {
             tier: None,
             token: None,
             device: None,
+            method: "tailscale".to_string(),
         });
         Ok(offer.pairing_id.clone())
+    }
+
+    /// A Native sign-in creates a pending request directly: there is no code,
+    /// because the device proved itself with the account password. Everything
+    /// after this is the pairing path unchanged (owner approval, poll, cookie).
+    pub fn begin_native(&mut self, name: &str, kind: &str, platform: &str, now: DateTime<Utc>) -> String {
+        if let Some(previous) = self.offer.as_mut() {
+            if previous.pending.as_ref().map(|pending| pending.outcome) == Some(Outcome::Pending) {
+                previous.pending.as_mut().unwrap().outcome = Outcome::Cancelled;
+            }
+        }
+        let pairing_id = uuid::Uuid::new_v4().to_string();
+        let name = truncate(name, 80);
+        self.offer = Some(Offer {
+            pairing_id: pairing_id.clone(),
+            code: String::new(),
+            expires_at: now + Duration::minutes(OFFER_TTL_MINUTES),
+            attempts_left: 0,
+            burned: false,
+            cancelled: false,
+            pending: Some(Pending {
+                name: if name.is_empty() { "A device".to_string() } else { name },
+                kind: kind_of(kind),
+                platform: truncate(platform, 80),
+                login: None,
+                outcome: Outcome::Pending,
+                tier: None,
+                token: None,
+                device: None,
+                method: "native".to_string(),
+            }),
+        });
+        pairing_id
     }
 
     /// The pending request for the desktop's approval dialog.
@@ -254,6 +291,7 @@ impl PairingState {
             "kind": pending.kind,
             "platform": pending.platform,
             "login": pending.login,
+            "method": pending.method,
             "expiresAt": offer.expires_at.to_rfc3339(),
         }))
     }

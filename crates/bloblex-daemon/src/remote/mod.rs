@@ -15,6 +15,7 @@
 //! * it never runs `tailscale funnel` or `tailscale serve reset`;
 //! * `tailscale status --json` is never logged (it carries the owner's email).
 
+pub mod connectivity;
 pub mod native;
 pub mod pairing;
 pub mod policy;
@@ -227,6 +228,9 @@ struct AbuseState {
 pub struct LoginLockout {
     /// The source is now locked out (or was already).
     pub locked: bool,
+    /// This failure started the source's lockout, not an earlier one. Only a
+    /// start writes an activity line, so a flood cannot bury the log.
+    pub started: bool,
     /// The global pause started with this failure.
     pub global_paused: bool,
     pub until: Option<Instant>,
@@ -265,6 +269,10 @@ pub struct RemoteState {
     /// Test seam: the permission commands run for the native key file.
     #[cfg(test)]
     pub key_commands: StdMutex<Vec<Vec<String>>>,
+    /// Test seam: a fake UPnP gateway and a fixed firewall reading, so no test
+    /// touches a router, the network or `netsh`.
+    #[cfg(test)]
+    pub seams: StdMutex<connectivity::TestSeams>,
 }
 
 impl RemoteState {
@@ -300,7 +308,22 @@ impl RemoteState {
             method_cache: StdMutex::new(None),
             #[cfg(test)]
             key_commands: StdMutex::new(Vec::new()),
+            #[cfg(test)]
+            seams: StdMutex::new(connectivity::TestSeams::default()),
         }
+    }
+
+    /// Discovers the UPnP gateway. Tests seed a fake `seams` entry; production
+    /// searches the local network, bounded by `connectivity::SEARCH_TIMEOUT`.
+    pub async fn discover_gateway(&self) -> Option<Arc<dyn connectivity::UpnpGateway>> {
+        #[cfg(test)]
+        {
+            let seams = self.seams.lock().unwrap();
+            if seams.upnp_active {
+                return seams.gateway.clone();
+            }
+        }
+        connectivity::real_discover().await
     }
 
     /// Tests swap in a fake so no real `tailscale` process is ever started.
@@ -460,10 +483,13 @@ impl RemoteState {
         abuse.global.push(now);
         let global_count = abuse.global.len();
         let mut locked = false;
+        let mut started = false;
         if per_source >= LOGIN_FAILURES_PER_SOURCE {
             let until = now + Duration::from_secs(LOGIN_LOCKOUT_SECS);
+            let already = abuse.locked.get(source).is_some_and(|current| *current > now);
             abuse.locked.insert(source.to_string(), until);
             locked = true;
+            started = !already;
         }
         let mut global_paused = false;
         if global_count >= LOGIN_GLOBAL_FAILURES {
@@ -474,7 +500,7 @@ impl RemoteState {
             abuse.paused_until = Some(until);
         }
         let until = abuse.paused_until.max(abuse.locked.get(source).copied());
-        LoginLockout { locked, global_paused, until }
+        LoginLockout { locked, started, global_paused, until }
     }
 
     /// Clears a source's failure count after a correct sign-in.
@@ -625,6 +651,12 @@ pub async fn audit(st: &AppState, device_id: Option<&str>, kind: &str, summary: 
         st.emit("remote.activity", json!({ "entry": entry })).await;
     }
     entry
+}
+
+/// Daemon shutdown: remove the port mapping Bitbots added, if any. Nothing else
+/// is touched; the certificate, the account and the paired devices stay.
+pub async fn shutdown(st: &AppState) {
+    connectivity::disable(st).await;
 }
 
 /// Emits `remote.changed` with the fresh status.
@@ -887,6 +919,16 @@ pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, Dispat
         "remote.native.account.set" => native::account_set_rpc(st, p),
         "remote.native.cert.regenerate" => native::cert_regenerate(st).await,
         "remote.native.port.set" => native::port_set(st, p).await,
+        "remote.native.upnp.set" => {
+            let enabled = p["enabled"].as_bool().ok_or_else(|| {
+                derr("invalid_argument", "enabled must be true or false", StatusCode::BAD_REQUEST)
+            })?;
+            connectivity::set_consent(st, enabled).await?;
+            Ok(native::status_block(st))
+        }
+        "remote.native.externalIp.set" => connectivity::set_external_ip(st, p).await,
+        "remote.native.firewall.add" => Ok(json!({"result": connectivity::add_rule(st).await})),
+        "remote.native.firewall.remove" => Ok(json!({"result": connectivity::remove_rule(st).await})),
         "remote.pair.begin" => pair_begin(st).await,
         "remote.pair.cancel" => pair_cancel(st).await,
         "remote.pair.confirm" => pair_confirm(st, p).await,

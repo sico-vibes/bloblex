@@ -122,7 +122,7 @@ describe('remoteTransport rpc', () => {
   })
 
   it('keeps every gateway error code distinct', async () => {
-    const codes = ['unauthorized', 'device_revoked', 'forbidden_remote', 'tier_required', 'approvals_disabled', 'quiet_hours', 'invalid_params', 'payload_too_large', 'rate_limited']
+    const codes = ['unauthorized', 'device_revoked', 'login_invalid', 'forbidden_remote', 'tier_required', 'approvals_disabled', 'quiet_hours', 'invalid_params', 'payload_too_large', 'rate_limited']
     for (const code of codes) {
       const { transport } = harness(() => errResult(code, code === 'unauthorized' ? 401 : 400))
       await expect(transport.rpc('session.list')).rejects.toMatchObject({ code, message: `denied: ${code}` })
@@ -183,6 +183,24 @@ describe('remoteTransport pairing and session', () => {
     expect(calls[0].init.method).toBe('GET')
   })
 
+  it('learns the active method from a refused /api/me', async () => {
+    const refusedMe = jsonResponse(
+      { v: 1, id: '', ok: false, method: 'native', error: { code: 'unauthorized', message: 'Pair this device with the computer first.' } },
+      401,
+    )
+    const { transport } = harness(() => refusedMe)
+    const failure = await transport.me().catch((reason: unknown) => reason)
+    expect(failure).toBeInstanceOf(RemoteCallError)
+    expect(failure).toMatchObject({ code: 'unauthorized', status: 401, method: 'native' })
+  })
+
+  it('leaves method unset when a refusal does not carry one', async () => {
+    const { transport } = harness(() => errResult('unauthorized', 401))
+    const failure = await transport.rpc('session.list').catch((reason: unknown) => reason)
+    expect(failure).toBeInstanceOf(RemoteCallError)
+    expect((failure as RemoteCallError).method).toBeUndefined()
+  })
+
   it('signs out, clears the cursor and refuses later calls', async () => {
     const storage = new FakeStorage()
     storage.setItem(CURSOR_STORAGE_KEY, '900')
@@ -200,6 +218,35 @@ describe('remoteTransport pairing and session', () => {
     const { transport } = harness(() => errResult('pairing_invalid', 401))
     await expect(transport.pair({ code: 'WRNG-0000', name: 'Pixel', kind: 'phone', platform: 'Android' })).rejects.toMatchObject({ code: 'pairing_invalid' })
     expect(transport.signedOut()).toBe(false)
+  })
+})
+
+describe('remoteTransport Native sign-in', () => {
+  const input = { username: 'owner', password: 'correct horse', name: 'Pixel 8', kind: 'phone' as const, platform: 'Android, Chrome' }
+
+  it('posts the sign-in request and reports an approved device', async () => {
+    const { transport, calls } = harness(() => jsonResponse({ state: 'approved' }))
+    expect(await transport.login(input)).toEqual({ state: 'approved' })
+    expect(calls[0].url).toBe('/api/login')
+    expect(calls[0].init.method).toBe('POST')
+    expect(calls[0].init.credentials).toBe('same-origin')
+    expect(JSON.parse(calls[0].init.body ?? '{}')).toEqual(input)
+  })
+
+  it('normalizes a pending answer', async () => {
+    const { transport } = harness(() => jsonResponse({ state: 'pending' }, 202))
+    expect(await transport.login(input)).toEqual({ state: 'pending' })
+  })
+
+  it('keeps a refused sign-in as login_invalid and does not sign the device out', async () => {
+    const { transport } = harness(() => errResult('login_invalid', 401))
+    await expect(transport.login(input)).rejects.toMatchObject({ code: 'login_invalid', status: 401 })
+    expect(transport.signedOut()).toBe(false)
+  })
+
+  it('maps a rate-limited sign-in to rate_limited', async () => {
+    const { transport } = harness(() => jsonResponse(null, 429))
+    await expect(transport.login(input)).rejects.toMatchObject({ code: 'rate_limited', status: 429 })
   })
 })
 

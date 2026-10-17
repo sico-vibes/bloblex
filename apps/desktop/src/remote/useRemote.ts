@@ -171,6 +171,13 @@ export function useRemote(enabled = true) {
     setNativeAccount: (username: string, password: string) => run(async () => { await rpc('remote.native.account.set', { username, password }) }),
     setNativePort: (port: number) => run(async () => { await rpc('remote.native.port.set', { port }) }),
     regenerateNativeCert: () => run(async () => { await rpc('remote.native.cert.regenerate') }),
+    /** Native Remote: let Bitbots ask the router (UPnP) to forward the port. */
+    setNativeUpnp: (enabled: boolean) => run(async () => { await rpc('remote.native.upnp.set', { enabled }) }),
+    /** Native Remote: the public address typed by the owner, or null to clear it. */
+    setNativeExternalIp: (ip: string | null) => run(async () => { await rpc('remote.native.externalIp.set', { ip }) }),
+    /** Native Remote: the elevated firewall prompt; resolves to `added | declined | failed | unsupported`. */
+    addFirewallRule: async () => { let result = 'failed'; await run(async () => { result = (await rpc<{ result: string }>('remote.native.firewall.add')).result }); return result },
+    removeFirewallRule: async () => { let result = 'failed'; await run(async () => { result = (await rpc<{ result: string }>('remote.native.firewall.remove')).result }); return result },
     /** Preview only: act as the phone submitting the code. */
     simulatePairing: () => run(async () => { await rpc('remote.preview.pair') }),
     dismissPaired: () => setState((current) => ({ ...current, lastOutcome: null })),

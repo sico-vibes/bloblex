@@ -1251,6 +1251,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         | "remote.native.account.set"
         | "remote.native.cert.regenerate"
         | "remote.native.port.set"
+        | "remote.native.upnp.set"
+        | "remote.native.externalIp.set"
+        | "remote.native.firewall.add"
+        | "remote.native.firewall.remove"
         | "remote.pair.begin"
         | "remote.pair.cancel"
         | "remote.pair.confirm"
@@ -3982,6 +3986,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     std::io::stdout().flush()?;
     let shutdown = st.stopping.clone();
     tokio::select! {r=axum::serve(listener,app.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(async move{shutdown.notified().await}).into_future()=>r?,_=tokio::signal::ctrl_c()=>{}}
+    // Remove Bitbots' own UPnP mapping before the process exits, so no router
+    // is left forwarding the port after Remote has stopped.
+    remote::shutdown(&st).await;
     let sessions = std::mem::take(&mut *st.sessions.lock().await);
     for (_, s) in sessions {
         let _ = s.adapter.close_session(&s.handle).await;

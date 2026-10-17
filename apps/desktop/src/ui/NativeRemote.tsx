@@ -2,7 +2,7 @@
 // addresses and certificate fingerprint a device will use. The daemon owns the
 // listener, the certificate and the password hash; this page only asks.
 import { useState } from 'react'
-import { Check, Copy, Globe, KeyRound, RefreshCw, ShieldCheck, Smartphone } from 'lucide-react'
+import { AlertTriangle, Check, CircleDashed, Copy, Globe, KeyRound, RefreshCw, ShieldCheck, Smartphone } from 'lucide-react'
 import type { RemoteMethodId, RemoteNativeStatus } from '../remote/remoteContract'
 import { HelpTip, SettingsGroup, SettingsRow } from './SettingsParts'
 import { QrGlyph } from './QrGlyph'
@@ -87,7 +87,6 @@ export function NativeAddresses({ native, busy, onRegenerate }: { native: Remote
         <code>{native.fingerprint}</code>
         <button type="button" className="ghost-button small" disabled={busy} onClick={onRegenerate}><RefreshCw size={12} aria-hidden="true" />New certificate</button>
       </div>}
-      {native.lastReachedAt && <small className="remote-native-reached">Reached{native.lastReachedFrom ? ` from ${native.lastReachedFrom}` : ''} at {new Date(native.lastReachedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>}
     </div>
   </div>
 }
@@ -99,4 +98,117 @@ export function NativePortRow({ port, busy, onSave }: { port: number; busy: bool
   return <SettingsRow label="Port" hint="The port devices connect to on this computer. Your router has to forward it here when you are away from home.">
     <input className="text-input remote-port-input" inputMode="numeric" aria-label="Port" value={value} onChange={(event) => setValue(event.target.value.replace(/\D/g, '').slice(0, 5))} onBlur={() => { if (valid && parsed !== port) onSave(parsed) }} disabled={busy} />
   </SettingsRow>
+}
+
+export type StepTone = 'ok' | 'warn' | 'todo'
+export interface ConnectStep { id: 'router' | 'firewall' | 'address' | 'test'; tone: StepTone; title: string; detail: string }
+
+const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+/** The address a device away from home would use: the one naming the public IP, else the first. */
+export function outsideUrl(native: RemoteNativeStatus): string | null {
+  const ip = native.externalIp ?? null
+  return (ip ? native.urls.find((url) => url.includes(ip)) : undefined) ?? native.urls[0] ?? null
+}
+
+/**
+ * The checklist for reaching this computer from outside its network, in the
+ * order someone fixes it: the router, the firewall, the public address, then a
+ * test from a phone on mobile data. Pure, so each wording is tested.
+ */
+export function connectSteps(native: RemoteNativeStatus, on: boolean): ConnectStep[] {
+  const port = native.port
+  const forward = `Forward TCP port ${port} to this computer in your router’s settings.`
+  const upnp = native.upnp ?? { consent: false, state: 'off' as const }
+  const router: ConnectStep = !upnp.consent
+    ? { id: 'router', tone: 'todo', title: 'Router forwarding', detail: `${forward} Or let Bitbots ask the router for you.` }
+    : upnp.state === 'mapped'
+      ? { id: 'router', tone: 'ok', title: `Your router forwards port ${port}`, detail: 'Bitbots asked the router, and removes the forward when Remote turns off.' }
+      : upnp.state === 'no_gateway'
+        ? { id: 'router', tone: 'warn', title: 'No router answered', detail: `Automatic forwarding (UPnP) may be off on your router. ${forward}` }
+        : upnp.state === 'failed'
+          ? { id: 'router', tone: 'warn', title: 'The router said no', detail: `${upnp.error ? `It answered “${upnp.error}”. ` : ''}${forward}` }
+          : { id: 'router', tone: 'todo', title: 'Router forwarding', detail: on ? 'Asking the router…' : `Bitbots asks your router to forward port ${port} when Remote turns on.` }
+  const steps: ConnectStep[] = [router]
+  const firewall = native.firewall ?? 'unknown'
+  if (firewall === 'allowed') steps.push({ id: 'firewall', tone: 'ok', title: 'Windows Firewall lets it in', detail: `An inbound rule allows TCP port ${port}.` })
+  else if (firewall === 'missing') steps.push({ id: 'firewall', tone: 'warn', title: 'Windows Firewall blocks it', detail: `Other devices can’t get in until Windows allows port ${port}. Windows asks you to confirm.` })
+  else if (firewall === 'unknown') steps.push({ id: 'firewall', tone: 'todo', title: 'Windows Firewall not checked', detail: `Bitbots couldn’t read the firewall. Allow port ${port} if devices can’t connect.` })
+  const ip = native.externalIp ?? null
+  if (ip && native.cgnat && native.cgnatReason === 'carrier_nat') steps.push({ id: 'address', tone: 'warn', title: 'Your provider shares your address', detail: `${ip} is shared by your internet provider (carrier-grade NAT), so devices away from this network can’t reach this computer. Use Tailscale instead, or ask your provider for a public IP address.` })
+  else if (ip && native.cgnat) steps.push({ id: 'address', tone: 'warn', title: 'That address is private', detail: `${ip} only works on this network. Enter the public address shown on your router’s status page.` })
+  else if (ip) steps.push({ id: 'address', tone: 'ok', title: `Public address ${ip}`, detail: native.externalIpSource === 'manual' ? 'Entered by you. If your provider changes it, update it here.' : 'From your router. Bitbots checks it every 10 minutes.' })
+  else steps.push({ id: 'address', tone: 'todo', title: 'Public address unknown', detail: 'Let Bitbots ask your router, or enter the public address shown on your router’s status page.' })
+  if (on) {
+    const url = outsideUrl(native)
+    const howTo = url ? `On your phone, turn off Wi-Fi and open ${url}/api/ping.` : 'Once there is an address, open it on your phone with Wi-Fi off.'
+    const from = native.lastReachedFrom
+    if (native.lastReachedAt && from && from !== 'this network') steps.push({ id: 'test', tone: 'ok', title: `Reached from ${from}`, detail: `A device outside this network got through at ${clock(native.lastReachedAt)}.` })
+    else if (native.lastReachedAt) steps.push({ id: 'test', tone: 'todo', title: 'Reached from this network only', detail: `At ${clock(native.lastReachedAt)}. That proves Bitbots answers, not that the internet can reach it. ${howTo}` })
+    else steps.push({ id: 'test', tone: 'todo', title: 'Test from outside', detail: `${howTo} When it gets through, it shows here.` })
+  }
+  return steps
+}
+
+const TONE_ICON = { ok: Check, warn: AlertTriangle, todo: CircleDashed } as const
+
+/** Is a typed public address plausible enough to send? The daemon has the final say. */
+export function looksLikeAddress(text: string): boolean {
+  const value = text.trim()
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) return value.split('.').every((part) => Number(part) <= 255)
+  return /^[0-9a-f:]+$/i.test(value) && value.includes(':')
+}
+
+export function NativeConnectivityGroup({ native, on, busy, onConsent, onAddFirewall, onRemoveFirewall, onExternalIp }: {
+  native: RemoteNativeStatus
+  on: boolean
+  busy: boolean
+  onConsent: (enabled: boolean) => void
+  onAddFirewall: () => Promise<string>
+  onRemoveFirewall: () => Promise<string>
+  onExternalIp: (ip: string | null) => void
+}) {
+  const [firewallNote, setFirewallNote] = useState<string | null>(null)
+  const [address, setAddress] = useState('')
+  const [editing, setEditing] = useState(false)
+  const steps = connectSteps(native, on)
+  const consent = native.upnp?.consent ?? false
+  const firewall = native.firewall ?? 'unknown'
+  const firewallAction = async (add: boolean) => {
+    setFirewallNote(null)
+    const result = await (add ? onAddFirewall() : onRemoveFirewall())
+    if (result === 'declined') setFirewallNote('Windows asked for permission and it wasn’t given. Nothing changed.')
+    else if (result === 'failed') setFirewallNote(add ? 'Windows didn’t add the rule. Try again, or allow the port in Windows Security.' : 'Windows didn’t remove the rule.')
+  }
+  const saveAddress = () => { if (!looksLikeAddress(address)) return; onExternalIp(address.trim()); setEditing(false); setAddress('') }
+  const extra = (step: ConnectStep) => {
+    if (step.id === 'router') return <button type="button" role="switch" aria-checked={consent} aria-label="Ask my router to forward the port" className={`toggle ${consent ? 'on' : ''}`} disabled={busy} onClick={() => onConsent(!consent)}><i /></button>
+    if (step.id === 'firewall' && firewall !== 'allowed') return <button type="button" className="secondary-button small" disabled={busy} onClick={() => void firewallAction(true)}>Allow in firewall</button>
+    if (step.id === 'firewall') return <button type="button" className="ghost-button small" disabled={busy} onClick={() => void firewallAction(false)}>Remove rule</button>
+    if (step.id === 'address' && !editing) return <button type="button" className="ghost-button small" disabled={busy} onClick={() => { setAddress(native.externalIpSource === 'manual' ? native.externalIp ?? '' : ''); setEditing(true) }}>{native.externalIp ? 'Change' : 'Enter it'}</button>
+    return null
+  }
+  return <SettingsGroup title="Reaching this computer from away">
+    <ol className="remote-steps">
+      {steps.map((step) => {
+        const Icon = TONE_ICON[step.tone]
+        return <li key={step.id} className={`remote-step ${step.tone}`}>
+          <span className="remote-step-icon" aria-hidden="true"><Icon size={13} /></span>
+          <span className="remote-step-copy">
+            <strong>{step.title}</strong>
+            <small>{step.detail}</small>
+            {step.id === 'router' && consent && <small className="remote-step-aside">Uses UPnP, on this network only.</small>}
+            {step.id === 'firewall' && firewallNote && <small className="remote-step-problem" role="alert">{firewallNote}</small>}
+            {step.id === 'address' && editing && <form className="remote-step-form" onSubmit={(event) => { event.preventDefault(); saveAddress() }}>
+              <input className="text-input" aria-label="Public address" placeholder="203.0.113.7" inputMode="decimal" autoFocus onFocus={(event) => event.target.select()} value={address} onChange={(event) => setAddress(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setEditing(false) }} />
+              <button className="primary-button small" disabled={busy || !looksLikeAddress(address)}>Save</button>
+              {native.externalIpSource === 'manual' && <button type="button" className="ghost-button small" disabled={busy} onClick={() => { onExternalIp(null); setEditing(false) }}>Clear</button>}
+              <button type="button" className="ghost-button small" onClick={() => setEditing(false)}>Cancel</button>
+            </form>}
+          </span>
+          <span className="remote-step-action">{extra(step)}</span>
+        </li>
+      })}
+    </ol>
+  </SettingsGroup>
 }

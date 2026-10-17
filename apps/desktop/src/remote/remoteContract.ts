@@ -74,9 +74,27 @@ export interface RemoteStatus {
   native?: RemoteNativeStatus
 }
 
+/** UPnP port-mapping state (`remote.status.native.upnp.state`, FIX35 C2). */
+export type RemoteNativeUpnpState = 'off' | 'mapped' | 'no_gateway' | 'failed'
+
+export interface RemoteNativeUpnp {
+  /** The owner consented to mapping the port on the router (`remote.native.upnp`). */
+  consent: boolean
+  state: RemoteNativeUpnpState
+  /** Why the mapping failed, when it did; absent otherwise. */
+  error?: string
+}
+
+/** The Windows firewall's view of Bitbots' inbound rule (FIX35 C2). */
+export type RemoteNativeFirewallState = 'allowed' | 'missing' | 'unsupported' | 'unknown'
+
+/** Where the external address came from (FIX35 C2). */
+export type RemoteNativeExternalSource = 'upnp' | 'manual'
+
 /**
- * The `native` block of `remote.status` (FIX35 C1). C2 adds `upnp`,
- * `firewall`, `externalIp` and `cgnat`.
+ * The `native` block of `remote.status` (FIX35 C1; C2 adds `upnp`, `firewall`,
+ * `externalIp` and `cgnat`). The daemon always sends the C2 fields; they are
+ * optional here only so a fixture that predates them still typechecks.
  */
 export interface RemoteNativeStatus {
   /** The port the Native listener binds (`remote.nativePort`, default 48621). */
@@ -91,7 +109,20 @@ export interface RemoteNativeStatus {
   loginPaused: boolean
   pausedUntil: string | null
   lastReachedAt: string | null
+  /** The last device that reached the host: a public address, or "this network". */
   lastReachedFrom: string | null
+  /** UPnP port mapping (FIX35 C2). */
+  upnp?: RemoteNativeUpnp
+  /** The inbound Windows firewall rule for the port. */
+  firewall?: RemoteNativeFirewallState
+  /** The address the owner would share; null until UPnP or the owner supplies one. */
+  externalIp?: string | null
+  /** Where `externalIp` came from; null when there is none. */
+  externalIpSource?: RemoteNativeExternalSource | null
+  /** True when the address is carrier NAT, RFC 1918, link-local or IPv6 ULA. */
+  cgnat?: boolean
+  /** "carrier_nat" or "private"; absent when `cgnat` is false. */
+  cgnatReason?: string
 }
 
 export interface PairingOffer {
@@ -173,6 +204,10 @@ export const REMOTE_METHODS = [
   'remote.native.account.set',
   'remote.native.cert.regenerate',
   'remote.native.port.set',
+  'remote.native.upnp.set',
+  'remote.native.externalIp.set',
+  'remote.native.firewall.add',
+  'remote.native.firewall.remove',
   'remote.pair.begin',
   'remote.pair.cancel',
   'remote.pair.confirm',

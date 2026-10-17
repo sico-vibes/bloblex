@@ -1,7 +1,7 @@
 // The remote client's one way of talking to a host: the gateway's HTTP routes
-// (`/api/rpc`, `/api/me`, `/api/pair`, `/api/logout`) and the events socket
-// (`/api/events`). Same-origin only: the device cookie is `HttpOnly`, so this
-// module never sees it and always asks the browser to attach it
+// (`/api/rpc`, `/api/me`, `/api/pair`, `/api/login`, `/api/logout`) and the events
+// socket (`/api/events`). Same-origin only: the device cookie is `HttpOnly`, so
+// this module never sees it and always asks the browser to attach it
 // (`credentials: 'same-origin'`).
 //
 // Spec: docs/remote/PROTOCOL.md §3, §4.3-4.4, §6 and §11; FIX29 WP6c.
@@ -24,6 +24,7 @@ export type RemoteConnectionStatus = 'connecting' | 'online' | 'reconnecting' | 
 export type RemoteErrorCode =
   | 'unauthorized'
   | 'device_revoked'
+  | 'login_invalid'
   | 'forbidden_remote'
   | 'tier_required'
   | 'approvals_disabled'
@@ -54,15 +55,30 @@ export interface RemotePairInput {
   platform: string
 }
 
+/** The Native sign-in (`POST /api/login`): a username and password, plus who the device is. */
+export interface RemoteLoginInput {
+  username: string
+  password: string
+  name: string
+  kind: RemoteDeviceKind
+  platform: string
+}
+
 /** A refused call: `ok:false` in the envelope, or an HTTP/transport failure. */
 export class RemoteCallError extends Error {
   readonly code: RemoteErrorCode | string
   readonly status: number
-  constructor(code: string, message: string, status = 0) {
+  /**
+   * The host's active method, when a refusal carried it (`GET /api/me`). A
+   * signed-out device uses it to choose the sign-in screen.
+   */
+  readonly method?: RemoteMethodId
+  constructor(code: string, message: string, status = 0, method?: RemoteMethodId) {
     super(message)
     this.name = 'RemoteCallError'
     this.code = code
     this.status = status
+    this.method = method
   }
 }
 
@@ -131,6 +147,8 @@ export interface RemoteTransport {
   me(): Promise<RemoteMe>
   pair(input: RemotePairInput): Promise<{ state: RemotePairState }>
   pairStatus(): Promise<RemotePairState>
+  /** Native sign-in (`POST /api/login`); the answer is a pairing state like `pair`. */
+  login(input: RemoteLoginInput): Promise<{ state: RemotePairState }>
   logout(): Promise<void>
   /** Opens (or reuses) the events socket. Returns an unsubscribe function. */
   events(handler: (event: DaemonEvent) => void, status: (status: RemoteConnectionStatus) => void): () => void
@@ -173,6 +191,7 @@ export function codeForStatus(status: number): RemoteErrorCode {
 const DEFAULT_MESSAGES: Partial<Record<RemoteErrorCode, string>> = {
   unauthorized: 'This device is not signed in to the host.',
   device_revoked: 'This device was removed. Pair it again to continue.',
+  login_invalid: 'That username or password is not right.',
   forbidden_remote: 'That is not available to a remote device.',
   tier_required: 'This device needs a higher permission level for that.',
   approvals_disabled: 'Approvals from remote devices are switched off on the host.',
@@ -197,6 +216,19 @@ function messageOf(reason: unknown): string {
 
 function isAuthCode(code: string): boolean {
   return code === 'unauthorized' || code === 'device_revoked'
+}
+
+/** The active method a refusal may carry (`GET /api/me`), when it is one we know. */
+function methodOf(value: unknown): RemoteMethodId | undefined {
+  return value === 'tailscale' || value === 'native' ? value : undefined
+}
+
+/**
+ * Routes that run without the device cookie (`/api/pair` and the Native
+ * `/api/login`), so a failure there is never a sign-out.
+ */
+function isCookieFreeRoute(path: string): boolean {
+  return path === '/api/pair' || path === '/api/login'
 }
 
 function defaultFetch(input: string, init: RemoteFetchInit): Promise<RemoteResponse> {
@@ -290,11 +322,11 @@ export function createRemoteTransport(options: RemoteTransportOptions = {}): Rem
       data = null
     }
     if (data && typeof data === 'object' && 'ok' in data) {
-      const envelope = data as { ok: unknown; result?: unknown; error?: { code?: unknown; message?: unknown } }
+      const envelope = data as { ok: unknown; result?: unknown; method?: unknown; error?: { code?: unknown; message?: unknown } }
       if (envelope.ok === true) return envelope.result
       const code = typeof envelope.error?.code === 'string' ? envelope.error.code : codeForStatus(response.status)
       const message = typeof envelope.error?.message === 'string' && envelope.error.message ? envelope.error.message : defaultMessage(code)
-      throw new RemoteCallError(code, message, response.status)
+      throw new RemoteCallError(code, message, response.status, methodOf(envelope.method))
     }
     if (!response.ok) {
       const code = codeForStatus(response.status)
@@ -304,7 +336,7 @@ export function createRemoteTransport(options: RemoteTransportOptions = {}): Rem
   }
 
   async function send(path: string, method: string, body?: JsonRecord): Promise<unknown> {
-    if (isSignedOut && path !== '/api/pair' && path !== '/api/logout') {
+    if (isSignedOut && !isCookieFreeRoute(path) && path !== '/api/logout') {
       throw new RemoteCallError('device_revoked', defaultMessage('device_revoked'), 401)
     }
     let response: RemoteResponse
@@ -320,9 +352,10 @@ export function createRemoteTransport(options: RemoteTransportOptions = {}): Rem
     try {
       return await readEnvelope(response)
     } catch (reason) {
-      // `/api/pair` runs without the device cookie, so a failure there is never
-      // a sign-out; every other 401 means the device's cookie is no longer good.
-      if (reason instanceof RemoteCallError && isAuthCode(reason.code) && path !== '/api/pair') enterSignedOut()
+      // `/api/pair` and `/api/login` run without the device cookie, so a failure
+      // there is never a sign-out; every other 401 means the device's cookie is
+      // no longer good.
+      if (reason instanceof RemoteCallError && isAuthCode(reason.code) && !isCookieFreeRoute(path)) enterSignedOut()
       throw reason
     }
   }
@@ -503,6 +536,17 @@ export function createRemoteTransport(options: RemoteTransportOptions = {}): Rem
 
     async pairStatus(): Promise<RemotePairState> {
       return normalizePairState(await send('/api/pair', 'GET'))
+    },
+
+    async login(input: RemoteLoginInput): Promise<{ state: RemotePairState }> {
+      const result = await send('/api/login', 'POST', {
+        username: input.username,
+        password: input.password,
+        name: input.name,
+        kind: input.kind,
+        platform: input.platform,
+      })
+      return { state: normalizePairState(result) }
     },
 
     async logout(): Promise<void> {

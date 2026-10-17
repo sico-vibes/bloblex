@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Check, Download, List, LogOut, Monitor, RefreshCw, Send, ShieldAlert, Smartphone, WifiOff } from 'lucide-react'
+import { ArrowLeft, Check, Download, Eye, EyeOff, List, LogOut, Monitor, RefreshCw, Send, ShieldAlert, Smartphone, WifiOff } from 'lucide-react'
 import { fetchSnapshot, listenForDaemonEvents, previewMode, rpc } from '../tauri'
 import type { Agent, PermissionRequest, Session, Snapshot } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
@@ -11,7 +11,7 @@ import { StatusDot } from '../ui/StatusDot'
 import { isAutomationSession, isSideSession, mainSessionFor } from '../ui/teamSelectors'
 import { useEntityNoun } from '../ui/vocabulary'
 import logo from '../assets/bloblex-128.png'
-import type { RemoteTier } from './remoteContract'
+import type { RemoteMethodId, RemoteTier } from './remoteContract'
 import type { RemoteConnectionStatus, RemoteMe } from './remoteTransport'
 import { codeFromHash, createPreviewDeviceApi, describeThisDevice, errorCode, type RemoteDeviceApi } from './deviceApi'
 import { applyUpdate, onUpdateReady } from './serviceWorker'
@@ -54,6 +54,31 @@ export function formatCode(value: string): string {
   return clean.length > 4 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean
 }
 
+/**
+ * Which way in a signed-out device is offered. The gateway names its method in
+ * the refusal; without that, a `*.ts.net` address is Tailscale, a local preview
+ * is Tailscale, and anything else (an IP or the owner's own name) is Direct.
+ */
+export function signedOutMethod(reason: unknown, hostname: string): RemoteMethodId {
+  const named = (reason as { method?: unknown } | null)?.method
+  if (named === 'native' || named === 'tailscale') return named
+  const host = hostname.toLowerCase()
+  if (host === '' || host.endsWith('.ts.net') || host === 'localhost' || host === '127.0.0.1' || host === '[::1]') return 'tailscale'
+  return 'native'
+}
+
+/** Words for a refused sign-in, by the gateway's code. */
+export function loginProblem(reason: unknown): string {
+  switch (errorCode(reason)) {
+    case 'login_invalid': return 'That username or password is not right.'
+    case 'rate_limited': return 'Sign-in is paused after too many tries. Wait a few minutes, then try again.'
+    case 'network': return 'Could not reach the computer. Check that it is awake and that Remote is on.'
+    default: return messageOf(reason, 'Could not sign in. Try again.')
+  }
+}
+
+const deviceNameFor = (name: string, kind: string) => name.trim() || (kind === 'phone' ? 'My phone' : kind === 'tablet' ? 'My tablet' : 'My browser')
+
 const messageOf = (reason: unknown, fallback: string) => reason instanceof Error && reason.message ? reason.message : fallback
 
 /** Words for a refused send, by the gateway's code. */
@@ -88,6 +113,9 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
   const [loaded, setLoaded] = useState<Record<string, Session>>({})
   const [listOpen, setListOpen] = useState(false)
   const [updateReady, setUpdateReady] = useState(false)
+  const [method, setMethod] = useState<RemoteMethodId>('tailscale')
+  const native = method === 'native'
+  const againWords = native ? 'Sign in again to come back.' : 'Pair it again to come back.'
 
   const signedIn = me !== null
   const hostName = me?.host.name ?? 'your computer'
@@ -108,11 +136,15 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
     try {
       const next = await device.me()
       setMe(next)
+      setMethod(next.method === 'native' ? 'native' : 'tailscale')
       setScreen((current) => current === 'checking' || current === 'connect' || current === 'waiting' ? 'bots' : current)
     } catch (reason) {
       const code = errorCode(reason)
-      if (code === 'device_revoked') { signOut('This device was removed on the computer. Pair it again to come back.'); return }
-      if (code === 'network') { setNotice('Could not reach the computer. Check that it is awake and on Tailscale.'); setScreen('connect'); return }
+      const way = signedOutMethod(reason, typeof location === 'undefined' ? '' : location.hostname)
+      setMethod(way)
+      const again = way === 'native' ? 'Sign in again to come back.' : 'Pair it again to come back.'
+      if (code === 'device_revoked') { signOut(`This device was removed on the computer. ${again}`); return }
+      if (code === 'network') { setNotice(way === 'native' ? 'Could not reach the computer. Check that it is awake and that Remote is on.' : 'Could not reach the computer. Check that it is awake and on Tailscale.'); setScreen('connect'); return }
       // Not paired: a pairing may still be waiting for the owner.
       const state = await device.pairStatus().catch(() => 'expired' as const)
       setScreen(state === 'pending' ? 'waiting' : 'connect')
@@ -122,16 +154,16 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
   useEffect(() => { void check() }, [check])
   useEffect(() => device.onConnection((status) => {
     setConnection(status)
-    if (status === 'signed_out') signOut('This device was signed out. Pair it again to come back.')
-  }), [device, signOut])
+    if (status === 'signed_out') signOut(`This device was signed out. ${againWords}`)
+  }), [device, signOut, againWords])
   useEffect(() => onUpdateReady(() => setUpdateReady(true)), [])
 
   const refresh = useCallback(async () => {
     try { setSnapshot(await fetchSnapshot()) } catch (reason) {
       const code = errorCode(reason)
-      if (code === 'unauthorized' || code === 'device_revoked') signOut('This device was signed out. Pair it again to come back.')
+      if (code === 'unauthorized' || code === 'device_revoked') signOut(`This device was signed out. ${againWords}`)
     }
-  }, [signOut])
+  }, [signOut, againWords])
 
   useEffect(() => {
     if (!signedIn) return
@@ -154,16 +186,16 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
       void device.pairStatus().then((state) => {
         if (state === 'approved') void check()
         else if (state === 'rejected') { setNotice('The computer declined this device.'); setScreen('connect') }
-        else if (state === 'expired') { setNotice('The code expired before it was approved. Show a new one on the computer.'); setScreen('connect') }
+        else if (state === 'expired') { setNotice(native ? 'The request expired before it was approved. Sign in again.' : 'The code expired before it was approved. Show a new one on the computer.'); setScreen('connect') }
       }).catch(() => undefined)
     }, pollMs)
     return () => window.clearInterval(timer)
-  }, [screen, device, check, pollMs])
+  }, [screen, device, check, pollMs, native])
 
   const connect = async (code: string, name: string) => {
     setNotice(null)
     const about = describeThisDevice(typeof navigator === 'undefined' ? '' : navigator.userAgent)
-    const deviceName = name.trim() || (about.kind === 'phone' ? 'My phone' : about.kind === 'tablet' ? 'My tablet' : 'My browser')
+    const deviceName = deviceNameFor(name, about.kind)
     try {
       await device.pair({ code: code.replace('-', ''), name: deviceName, ...about })
       setPendingName(deviceName)
@@ -171,6 +203,21 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
       try { history.replaceState(null, '', location.pathname) } catch { /* not in a browser */ }
     } catch (reason) {
       setNotice(errorCode(reason) === 'network' ? 'Could not reach the computer. Check that it is awake and on Tailscale.' : 'That code did not work. Check it, or show a new one on the computer.')
+    }
+  }
+
+  const signIn = async (username: string, password: string, name: string) => {
+    setNotice(null)
+    const about = describeThisDevice(typeof navigator === 'undefined' ? '' : navigator.userAgent)
+    const deviceName = deviceNameFor(name, about.kind)
+    try {
+      const { state } = await device.login({ username: username.trim(), password, name: deviceName, ...about })
+      if (state === 'approved') { await check(); return }
+      setPendingName(deviceName)
+      setScreen(state === 'pending' ? 'waiting' : 'connect')
+      if (state === 'rejected') setNotice('The computer declined this device.')
+    } catch (reason) {
+      setNotice(loginProblem(reason))
     }
   }
 
@@ -199,8 +246,10 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
       {previewMode && <p className="rm-ribbon" role="note">Preview · simulated, not connected to a computer</p>}
       {updateReady && <p className="rm-update" role="status">A new version is ready.<button type="button" onClick={applyUpdate}>Reload</button></p>}
       {screen === 'checking' && <main className="rm-connect rm-checking" aria-busy="true"><img src={logo} alt="" width="56" height="56" /><p>Connecting…</p></main>}
-      {screen === 'connect' && <ConnectScreen notice={notice} onConnect={connect} nouns={nouns} />}
-      {screen === 'waiting' && <WaitingScreen name={pendingName} onCancel={() => setScreen('connect')} />}
+      {screen === 'connect' && (native
+        ? <SignInScreen notice={notice} onSignIn={signIn} nouns={nouns} />
+        : <ConnectScreen notice={notice} onConnect={connect} nouns={nouns} />)}
+      {screen === 'waiting' && <WaitingScreen name={pendingName} back={native ? 'Back to sign in' : 'Use a different code'} onCancel={() => setScreen('connect')} />}
       {!preApproval && <>
         <header className="rm-top">
           {screen === 'chat'
@@ -285,13 +334,51 @@ function ConnectScreen({ notice, onConnect, nouns }: { notice: string | null; on
   </main>
 }
 
-function WaitingScreen({ name, onCancel }: { name: string; onCancel: () => void }) {
+function SignInScreen({ notice, onSignIn, nouns }: { notice: string | null; onSignIn: (username: string, password: string, name: string) => Promise<void>; nouns: string }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [name, setName] = useState('')
+  const [shown, setShown] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const complete = username.trim().length > 0 && password.length > 0
+  const submit = async () => {
+    if (!complete || busy) return
+    setBusy(true)
+    try { await onSignIn(username, password, name) } finally { setBusy(false); setPassword('') }
+  }
+  const enter = (event: { key: string }) => { if (event.key === 'Enter') void submit() }
+  return <main className="rm-connect">
+    <img src={logo} alt="" width="56" height="56" />
+    <h1>Sign in to your computer</h1>
+    <p>Use the username and password set in Bitbots on the computer, under Settings › Remote.</p>
+    {notice && <p className="rm-notice" role="alert">{notice}</p>}
+    <form className="rm-form" onSubmit={(event) => { event.preventDefault(); void submit() }}>
+      <label className="rm-field">Username
+        <input name="username" autoComplete="username" autoCapitalize="none" spellCheck={false} value={username} maxLength={64} onChange={(event) => setUsername(event.target.value)} onKeyDown={enter} />
+      </label>
+      <label className="rm-field">Password
+        <span className="rm-password">
+          <input name="password" type={shown ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={enter} />
+          <button type="button" className="rm-icon" aria-label={shown ? 'Hide password' : 'Show password'} aria-pressed={shown} onClick={() => setShown((value) => !value)}>{shown ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+        </span>
+      </label>
+      <label className="rm-field">Name this device
+        <input autoComplete="off" placeholder="My phone" value={name} maxLength={40} onChange={(event) => setName(event.target.value)} onKeyDown={enter} />
+      </label>
+      <button type="submit" className="rm-primary" disabled={!complete || busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+    </form>
+    <p className="rm-hint">A new device also needs your approval on the computer before it can see anything. Your {nouns} stay on your computer.</p>
+    <p className="rm-hint rm-cert-hint"><ShieldAlert size={14} aria-hidden="true" />Your browser warned about this address because the computer uses its own certificate. Check that the fingerprint matches the one in Settings › Remote. Adding this page to your home screen may not work with that certificate; use it in the browser.</p>
+  </main>
+}
+
+function WaitingScreen({ name, back, onCancel }: { name: string; back: string; onCancel: () => void }) {
   return <main className="rm-connect rm-waiting" aria-live="polite">
     <span className="rm-waiting-icon" aria-hidden="true"><Monitor size={26} /></span>
     <h1>Approve on your computer</h1>
     <p>Bitbots on your computer is asking whether to let <b>{name || 'this device'}</b> in. Choose what it may do and approve it there.</p>
     <span className="rm-waiting-dots" aria-hidden="true"><i /><i /><i /></span>
-    <button type="button" className="rm-secondary" onClick={onCancel}>Use a different code</button>
+    <button type="button" className="rm-secondary" onClick={onCancel}>{back}</button>
   </main>
 }
 

@@ -115,6 +115,7 @@ export const remoteDevice: RemoteDeviceApi = {
   me: () => transport().me(),
   pair: (input) => transport().pair(input),
   pairStatus: () => transport().pairStatus(),
+  login: (input) => transport().login(input),
   logout: () => transport().logout(),
   onConnection(handler) {
     statusHandlers.add(handler)

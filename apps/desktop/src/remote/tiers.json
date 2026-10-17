@@ -742,6 +742,34 @@
       "minTier": null,
       "why": "The Native port is a host setting the owner changes at the computer.",
       "params": null
+    },
+    {
+      "method": "remote.native.upnp.set",
+      "class": "never",
+      "minTier": null,
+      "why": "Consent to map the port on the router is the owner's decision at the computer.",
+      "params": null
+    },
+    {
+      "method": "remote.native.externalIp.set",
+      "class": "never",
+      "minTier": null,
+      "why": "The external address the host advertises is set by the owner at the computer.",
+      "params": null
+    },
+    {
+      "method": "remote.native.firewall.add",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the owner at the computer may raise the firewall prompt; a device must never add a rule.",
+      "params": null
+    },
+    {
+      "method": "remote.native.firewall.remove",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the owner at the computer may raise the firewall prompt; a device must never remove a rule.",
+      "params": null
     }
   ],
   "events": {

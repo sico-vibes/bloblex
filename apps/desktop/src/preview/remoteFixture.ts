@@ -23,7 +23,10 @@ import type {
   RemoteEventType,
   RemoteMethod,
   RemoteMethodId,
+  RemoteNativeExternalSource,
+  RemoteNativeFirewallState,
   RemoteNativeStatus,
+  RemoteNativeUpnpState,
   RemoteSecurityOptions,
   RemoteStatus,
   RemoteTailscaleState,
@@ -162,6 +165,14 @@ export function createRemoteSimulator(options: {
   let nativePausedUntil: string | null = null
   let nativeLastReachedAt: string | null = null
   let nativeLastReachedFrom: string | null = null
+  let nativeUpnpConsent = false
+  let nativeUpnpState: RemoteNativeUpnpState = 'off'
+  let nativeUpnpError: string | undefined
+  let nativeFirewall: RemoteNativeFirewallState = 'unknown'
+  let nativeExternalIp: string | null = null
+  let nativeExternalIpSource: RemoteNativeExternalSource | null = null
+  let nativeCgnat = false
+  let nativeCgnatReason: string | undefined
   /** The fixture never reaches a serving failure, so this stays null; a real host sets it when `tailscale serve` dies. */
   let error: string | null = null
   let devices: RemoteDevice[] = []
@@ -200,6 +211,16 @@ export function createRemoteSimulator(options: {
       pausedUntil: nativePausedUntil,
       lastReachedAt: nativeLastReachedAt,
       lastReachedFrom: nativeLastReachedFrom,
+      upnp: {
+        consent: nativeUpnpConsent,
+        state: nativeUpnpState,
+        ...(nativeUpnpError === undefined ? {} : { error: nativeUpnpError }),
+      },
+      firewall: nativeFirewall,
+      externalIp: nativeExternalIp,
+      externalIpSource: nativeExternalIpSource,
+      cgnat: nativeCgnat,
+      ...(nativeCgnatReason === undefined ? {} : { cgnatReason: nativeCgnatReason }),
     }
   }
 
@@ -542,6 +563,71 @@ export function createRemoteSimulator(options: {
     return nativeStatus()
   }
 
+  /** IPv4 dotted quad or anything with a colon (IPv6), enough for the preview. */
+  function looksLikeIp(value: string): boolean {
+    const text = value.trim()
+    if (text.includes(':')) return /^[0-9a-fA-F:]+$/.test(text)
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(text)
+  }
+
+  /** The words the daemon's status uses, enough for the preview to be truthful. */
+  function cgnatReasonFor(ip: string): string | undefined {
+    const parts = ip.split('.').map((part) => Number(part))
+    if (parts.length === 4 && parts.every((part) => Number.isInteger(part))) {
+      const [a, b] = parts
+      if (a === 100 && b >= 64 && b <= 127) return 'carrier_nat'
+      if (a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254)) return 'private'
+      return undefined
+    }
+    const first = ip.slice(0, 2).toLowerCase()
+    return first === 'fc' || first === 'fd' || first === 'fe' ? 'private' : undefined
+  }
+
+  function upnpSet(params: Record<string, unknown>): RemoteNativeStatus {
+    const enabled = params.enabled === true
+    nativeUpnpConsent = enabled
+    nativeUpnpState = enabled ? 'mapped' : 'off'
+    nativeUpnpError = undefined
+    if (enabled) {
+      // The simulator always finds a gateway that hands out one public address.
+      nativeExternalIp = '203.0.113.7'
+      nativeExternalIpSource = 'upnp'
+      nativeCgnat = false
+      nativeCgnatReason = undefined
+    }
+    emit('remote.changed', { status: status() })
+    return nativeStatus()
+  }
+
+  function externalIpSet(params: Record<string, unknown>): RemoteNativeStatus {
+    const raw = params.ip
+    if (raw !== null && raw !== undefined && typeof raw !== 'string') {
+      throw remoteError('invalid_argument', 'ip must be an address, or null to clear it')
+    }
+    const ip = typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null
+    if (ip !== null && !looksLikeIp(ip)) {
+      throw remoteError('invalid_argument', 'ip must be an address, or null to clear it')
+    }
+    nativeExternalIp = ip
+    nativeExternalIpSource = ip === null ? null : 'manual'
+    nativeCgnatReason = ip === null ? undefined : cgnatReasonFor(ip)
+    nativeCgnat = nativeCgnatReason !== undefined
+    emit('remote.changed', { status: status() })
+    return nativeStatus()
+  }
+
+  function firewallAdd(): { result: string } {
+    nativeFirewall = 'allowed'
+    emit('remote.changed', { status: status() })
+    return { result: 'added' }
+  }
+
+  function firewallRemove(): { result: string } {
+    nativeFirewall = 'missing'
+    emit('remote.changed', { status: status() })
+    return { result: 'removed' }
+  }
+
   function reset(seed: RemoteSeed = {}) {
     cancel(startTimer)
     startTimer = null
@@ -561,6 +647,14 @@ export function createRemoteSimulator(options: {
     nativePausedUntil = null
     nativeLastReachedAt = null
     nativeLastReachedFrom = null
+    nativeUpnpConsent = false
+    nativeUpnpState = 'off'
+    nativeUpnpError = undefined
+    nativeFirewall = 'unknown'
+    nativeExternalIp = null
+    nativeExternalIpSource = null
+    nativeCgnat = false
+    nativeCgnatReason = undefined
     error = null
     offer = null
     request = null
@@ -582,6 +676,10 @@ export function createRemoteSimulator(options: {
       case 'remote.native.account.set': return accountSet(params)
       case 'remote.native.cert.regenerate': return certRegenerate()
       case 'remote.native.port.set': return portSet(params)
+      case 'remote.native.upnp.set': return upnpSet(params)
+      case 'remote.native.externalIp.set': return externalIpSet(params)
+      case 'remote.native.firewall.add': return firewallAdd()
+      case 'remote.native.firewall.remove': return firewallRemove()
       case 'remote.pair.begin': return pairBegin()
       case 'remote.pair.cancel': return pairCancel()
       case 'remote.pair.confirm': return pairConfirm(params)

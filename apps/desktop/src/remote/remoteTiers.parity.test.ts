@@ -79,16 +79,18 @@ function parseDispatch(source: string): ParsedDispatch {
     }
     joined.push(arm)
   }
+  // Method names may carry a camelCase segment (`remote.native.externalIp.set`),
+  // so the letters are `[a-zA-Z]`, not just `[a-z]`.
   for (const line of joined) {
-    const arm = /^ {8}("(?:[a-z0-9_.]+)"(?:\s*\|\s*"[a-z0-9_.]+")*)\s*=>/.exec(line)
+    const arm = /^ {8}("([a-zA-Z0-9_.]+)"(?:\s*\|\s*"[a-zA-Z0-9_.]+")*)\s*=>/.exec(line)
     if (!arm) continue
     arms++
-    for (const quoted of arm[1].matchAll(/"([a-z0-9_.]+)"/g)) methods.add(quoted[1])
+    for (const quoted of arm[1].matchAll(/"([a-zA-Z0-9_.]+)"/g)) methods.add(quoted[1])
   }
   // Method prefix guards: only the RPC method receivers (`m`, `method`,
   // `req.method`) count; `k.starts_with("exec_gate.")` is a setting key.
   const guards = new Set<string>()
-  const guard = /(?:\breq\.method|\bmethod|\breq_method|\bm)\s*\.starts_with\(\s*"([a-z0-9_.]+)"\s*\)/g
+  const guard = /(?:\breq\.method|\bmethod|\breq_method|\bm)\s*\.starts_with\(\s*"([a-zA-Z0-9_.]+)"\s*\)/g
   for (const match of source.matchAll(guard)) guards.add(match[1])
   if (arms < 10 || methods.size < 10) {
     throw new Error(`parity: parsed only ${arms} arms and ${methods.size} methods from the dispatch; the extraction is stale, not the table`)

@@ -25,23 +25,30 @@ vi.mock('../tauri', () => ({
   inDesktop: false,
 }))
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => <span /> }))
-import { RemoteApp } from './RemoteApp'
+import { loginProblem, RemoteApp, signedOutMethod } from './RemoteApp'
 
-const refused = (code: string) => Object.assign(new Error(code), { code })
+const refused = (code: string, method?: string) => Object.assign(new Error(code), { code }, method ? { method } : {})
 const meFor = (tier: RemoteMe['device']['tier'], extra: Partial<RemoteMe> = {}): RemoteMe => ({ protocolVersion: 1, device: { id: 'd1', name: 'Pixel 8', tier }, host: { name: 'Work PC' }, approvalsFromRemote: false, quietHoursActive: false, method: 'tailscale', ...extra })
 
-function fakeDevice(start: RemoteMe | 'unpaired' | 'revoked', pairStates: RemotePairState[] = ['pending', 'approved']) {
+function fakeDevice(start: RemoteMe | 'unpaired' | 'revoked', pairStates: RemotePairState[] = ['pending', 'approved'], method?: 'native') {
   let current = start
   const states = [...pairStates]
   const pairCalls: unknown[] = []
+  const loginCalls: { password: string }[] = []
   const api = {
     pairCalls,
+    loginCalls,
     me: vi.fn(async () => {
-      if (current === 'unpaired') throw refused('unauthorized')
-      if (current === 'revoked') throw refused('device_revoked')
+      if (current === 'unpaired') throw refused('unauthorized', method)
+      if (current === 'revoked') throw refused('device_revoked', method)
       return current
     }),
     pair: vi.fn(async (input: unknown) => { pairCalls.push(input); return { state: 'pending' as const } }),
+    login: vi.fn(async (input: { password: string }) => {
+      if (input.password !== 'right-password') throw refused('login_invalid')
+      loginCalls.push(input); pairCalls.push(input)
+      return { state: 'pending' as const }
+    }),
     pairStatus: vi.fn(async () => {
       // Nothing is waiting for the owner until this device submits a code.
       if (pairCalls.length === 0) return 'expired' as const
@@ -110,6 +117,49 @@ describe('RemoteApp', () => {
   it('a removed device lands on the code screen with an explanation', async () => {
     const view = await mount(fakeDevice('revoked'))
     expect(view.querySelector('.rm-notice')?.textContent).toContain('removed on the computer')
+  })
+
+  it('Direct: signs in with a username and password, waits for approval, then lists the bots', async () => {
+    const device = fakeDevice('unpaired', ['pending', 'pending', 'pending', 'pending', 'approved'], 'native')
+    const view = await mount(device)
+    expect(view.textContent).toContain('Sign in to your computer')
+    expect(view.querySelector('.rm-code')).toBeNull()
+    const submit = view.querySelector<HTMLButtonElement>('.rm-primary')!
+    expect(submit.disabled).toBe(true)
+    type(view, 'input[name="username"]', 'owner')
+    type(view, 'input[name="password"]', 'wrong')
+    await act(async () => { submit.click() })
+    await flush()
+    expect(view.querySelector('.rm-notice')?.textContent).toBe('That username or password is not right.')
+    expect((view.querySelector('input[name="password"]') as HTMLInputElement).value).toBe('')
+    type(view, 'input[name="password"]', 'right-password')
+    type(view, '.rm-form input', 'Pixel 8', 2)
+    await act(async () => { view.querySelector<HTMLButtonElement>('.rm-primary')!.click() })
+    await flush()
+    expect(device.loginCalls[0]).toMatchObject({ username: 'owner', name: 'Pixel 8' })
+    expect(view.querySelector('.rm-waiting')?.textContent).toContain('Back to sign in')
+    await flush(200)
+    expect(view.querySelector('.rm-host')?.textContent).toContain('Work PC')
+  })
+
+  it('Direct: the password can be shown, and a removed device is asked to sign in again', async () => {
+    const view = await mount(fakeDevice('revoked', ['expired'], 'native'))
+    expect(view.querySelector('.rm-notice')?.textContent).toContain('Sign in again')
+    const toggle = view.querySelector<HTMLButtonElement>('.rm-password button')!
+    expect((view.querySelector('input[name="password"]') as HTMLInputElement).type).toBe('password')
+    act(() => toggle.click())
+    expect((view.querySelector('input[name="password"]') as HTMLInputElement).type).toBe('text')
+    expect(toggle.getAttribute('aria-label')).toBe('Hide password')
+  })
+
+  it('chooses sign-in or pairing from the refusal, or else from the address', () => {
+    expect(signedOutMethod(refused('unauthorized', 'native'), 'host.example.ts.net')).toBe('native')
+    expect(signedOutMethod(refused('unauthorized', 'tailscale'), '203.0.113.7')).toBe('tailscale')
+    expect(signedOutMethod(refused('unauthorized'), 'work-pc.tail1234.ts.net')).toBe('tailscale')
+    expect(signedOutMethod(refused('unauthorized'), 'localhost')).toBe('tailscale')
+    expect(signedOutMethod(refused('unauthorized'), '203.0.113.7')).toBe('native')
+    expect(signedOutMethod(refused('unauthorized'), 'home.example.org')).toBe('native')
+    expect(loginProblem(refused('rate_limited'))).toContain('paused')
   })
 
   it('view only: strips Markdown, disables sending and cannot approve', async () => {

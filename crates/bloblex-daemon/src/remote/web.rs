@@ -79,7 +79,11 @@ pub struct DeviceAuth {
 // The router
 
 pub fn router(state: WebState) -> Router {
-    let api = Router::new()
+    // The self-test (`GET /api/ping`) is merged *after* the origin layer, so it
+    // is deliberately open: the owner opens it from a phone's address bar, which
+    // carries no `Origin`. It answers `{"ok":true}` and nothing else.
+    let open = Router::new().route("/ping", get(ping_get));
+    let guarded = Router::new()
         .route("/pair", post(pair_post).get(pair_get))
         .route("/login", post(login_post))
         .route("/me", get(me_get))
@@ -87,6 +91,7 @@ pub fn router(state: WebState) -> Router {
         .route("/events", get(events_get))
         .route("/logout", post(logout_post))
         .layer(middleware::from_fn_with_state(state.clone(), require_origin));
+    let api = guarded.merge(open);
     Router::new()
         .nest("/api", api)
         .fallback(static_file)
@@ -134,16 +139,20 @@ async fn abuse_limit(
     next: Next,
 ) -> Response {
     let path = request.uri().path();
-    let unauthenticated = path == "/api/login" || path == "/api/pair" || !path.starts_with("/api/");
+    let unauthenticated = path == "/api/login"
+        || path == "/api/pair"
+        || path == "/api/ping"
+        || !path.starts_with("/api/");
     if unauthenticated {
         let key = source_key(request.headers(), connect.as_ref());
         if !state.remote.unauth_allow(&key) {
             return rate_limited(None);
         }
     }
-    // Native records where the last device reached it from.
+    // Native records where the last device reached it from. A private or
+    // loopback peer is only ever reported as "this network".
     if state.remote.active_method(&state.daemon) == super::METHOD_NATIVE {
-        native::note_reached(&state.daemon, &source_ip(connect.as_ref()));
+        native::note_reached(&state.daemon, &reached_from(peer_addr(connect.as_ref())));
     }
     next.run(request).await
 }
@@ -157,6 +166,16 @@ fn peer_addr(connect: Option<&Extension<ConnectInfo<SocketAddr>>>) -> Option<Soc
 /// The source IP of the connection, or `loopback` when none was reported.
 fn source_ip(connect: Option<&Extension<ConnectInfo<SocketAddr>>>) -> String {
     peer_addr(connect).map(|addr| addr.ip().to_string()).unwrap_or_else(|| "loopback".to_string())
+}
+
+/// What `native.lastReachedFrom` records: the peer's address only when it is a
+/// public address, else the phrase the owner reads ("this network"). The raw
+/// address never appears anywhere else.
+pub(crate) fn reached_from(peer: Option<SocketAddr>) -> String {
+    match peer {
+        Some(addr) if super::connectivity::is_public(addr.ip()) => addr.ip().to_string(),
+        _ => "this network".to_string(),
+    }
 }
 
 /// The bucket key for a request: the Tailscale login when present, else the
@@ -273,13 +292,23 @@ fn deny(status: StatusCode, body: Value) -> Box<Response> {
     Box::new(json_response(status, body))
 }
 
-/// The authenticated device, or the reply to send instead.
-async fn authenticate(state: &WebState, headers: &HeaderMap) -> Result<DeviceAuth, Box<Response>> {
+/// A refusal from `authenticate`. On `/api/me` (`include_method`) the body also
+/// names the active method, so a signed-out device can show the sign-in screen
+/// that matches the host (`native` or `tailscale`) without any other host or
+/// device data (FIX35 C6).
+fn refuse(state: &WebState, include_method: bool, code: &'static str, message: &str) -> Box<Response> {
+    let mut body = remote_error("", code, message);
+    if include_method {
+        body["method"] = json!(state.remote.active_method(&state.daemon));
+    }
+    deny(StatusCode::UNAUTHORIZED, body)
+}
+
+/// The authenticated device, or the reply to send instead. `include_method` adds
+/// the active method to a refusal, which only `/api/me` does.
+async fn authenticate(state: &WebState, headers: &HeaderMap, include_method: bool) -> Result<DeviceAuth, Box<Response>> {
     let Some(token) = cookie_value(headers, DEVICE_COOKIE) else {
-        return Err(deny(
-            StatusCode::UNAUTHORIZED,
-            remote_error("", "unauthorized", "Pair this device with the computer first."),
-        ));
+        return Err(refuse(state, include_method, "unauthorized", "Pair this device with the computer first."));
     };
     let hash = super::pairing::hash_token(&token);
     let device = state
@@ -291,25 +320,16 @@ async fn authenticate(state: &WebState, headers: &HeaderMap) -> Result<DeviceAut
     // The lookup finds the row by digest; the digest itself is then confirmed
     // in constant time, so a timing difference cannot narrow a guess.
     let Some((device, stored)) = device else {
-        return Err(deny(
-            StatusCode::UNAUTHORIZED,
-            remote_error("", "unauthorized", "Pair this device with the computer first."),
-        ));
+        return Err(refuse(state, include_method, "unauthorized", "Pair this device with the computer first."));
     };
     if !super::pairing::token_matches(&stored, &token) {
-        return Err(deny(
-            StatusCode::UNAUTHORIZED,
-            remote_error("", "unauthorized", "Pair this device with the computer first."),
-        ));
+        return Err(refuse(state, include_method, "unauthorized", "Pair this device with the computer first."));
     }
     let revoked = device["revokedAt"].is_string() || device["signedOutAt"].is_string();
     let security = state.remote.security(&state.daemon);
     let expired = security.idle_expired(device["lastSeenAt"].as_str(), Utc::now());
     if revoked || expired {
-        return Err(deny(
-            StatusCode::UNAUTHORIZED,
-            remote_error("", "device_revoked", "This device's pairing was removed or expired. Pair again to continue."),
-        ));
+        return Err(refuse(state, include_method, "device_revoked", "This device's pairing was removed or expired. Pair again to continue."));
     }
     let id = device["id"].as_str().unwrap_or_default().to_string();
     let name = device["name"].as_str().unwrap_or("A device").to_string();
@@ -318,17 +338,11 @@ async fn authenticate(state: &WebState, headers: &HeaderMap) -> Result<DeviceAut
         let recorded = device["login"].as_str();
         if recorded != Some(login) {
             audit(&state.daemon, Some(&id), "denied", &format!("{name}'s Tailscale account no longer matches its pairing.")).await;
-            return Err(deny(
-                StatusCode::UNAUTHORIZED,
-                remote_error("", "device_revoked", "This device's pairing was removed or expired. Pair again to continue."),
-            ));
+            return Err(refuse(state, include_method, "device_revoked", "This device's pairing was removed or expired. Pair again to continue."));
         }
     }
     let Some(tier) = device["tier"].as_str().and_then(tier_of) else {
-        return Err(deny(
-            StatusCode::UNAUTHORIZED,
-            remote_error("", "device_revoked", "This device's pairing was removed or expired. Pair again to continue."),
-        ));
+        return Err(refuse(state, include_method, "device_revoked", "This device's pairing was removed or expired. Pair again to continue."));
     };
     let _ = state.daemon.db.remote_device_touch(&id, &now_rfc3339());
     Ok(DeviceAuth { id, name, tier })
@@ -462,8 +476,12 @@ async fn login_post(
     let password = input["password"].as_str().unwrap_or("");
     if !native::verify_login(&account, username, password) {
         let lockout = state.remote.record_login_failure(&source);
-        // Content-free: never the username, never the password.
-        audit(&state.daemon, None, "denied", "A sign-in was refused.").await;
+        // Content-free, and only when a limit starts: on a public port an
+        // attacker must not be able to flood the 500-row activity log with a
+        // line per guessed password.
+        if lockout.started {
+            audit(&state.daemon, None, "denied", "Sign-in from this address is paused after repeated failures.").await;
+        }
         if lockout.global_paused {
             audit(&state.daemon, None, "denied", "Sign-in is paused after repeated failures.").await;
             state
@@ -477,9 +495,9 @@ async fn login_post(
         return login_invalid();
     }
     state.remote.clear_login_failures(&source);
-    native::note_reached(&state.daemon, &source);
+    native::note_reached(&state.daemon, &reached_from(peer_addr(connect.as_ref())));
     // A device that already holds a valid cookie is approved again.
-    if authenticate(&state, &headers).await.is_ok() {
+    if authenticate(&state, &headers, false).await.is_ok() {
         return json_response(StatusCode::OK, json!({"state": "approved"}));
     }
     // A pending request this browser already started is reused.
@@ -506,6 +524,26 @@ async fn login_post(
         json_response(StatusCode::ACCEPTED, json!({"state": "pending"})),
         pair_cookie(&pairing_id),
     )
+}
+
+/// `GET /api/ping` (FIX35 C2 §4): the self-test. It is unauthenticated and
+/// answers nothing but `{"ok":true}`, so the owner can open it from a phone to
+/// confirm the address is reachable. It records where the reach came from (a
+/// public address, or "this network") and emits `remote.changed`, which is what
+/// the desktop shows as "Reached from …".
+async fn ping_get(
+    State(state): State<WebState>,
+    connect: Option<Extension<ConnectInfo<SocketAddr>>>,
+) -> Response {
+    if state.remote.active_method(&state.daemon) == super::METHOD_NATIVE {
+        let from = reached_from(peer_addr(connect.as_ref()));
+        native::note_reached(&state.daemon, &from);
+        state
+            .daemon
+            .emit("remote.changed", json!({"status": state.remote.status_value(&state.daemon)}))
+            .await;
+    }
+    json_response(StatusCode::OK, json!({"ok": true}))
 }
 
 async fn pair_get(State(state): State<WebState>, headers: HeaderMap) -> Response {
@@ -566,7 +604,7 @@ async fn pair_get(State(state): State<WebState>, headers: HeaderMap) -> Response
 // /api/me, /api/logout
 
 async fn me_get(State(state): State<WebState>, headers: HeaderMap) -> Response {
-    let device = match authenticate(&state, &headers).await {
+    let device = match authenticate(&state, &headers, true).await {
         Ok(device) => device,
         Err(response) => return *response,
     };
@@ -585,7 +623,7 @@ async fn me_get(State(state): State<WebState>, headers: HeaderMap) -> Response {
 }
 
 async fn logout_post(State(state): State<WebState>, headers: HeaderMap) -> Response {
-    let device = match authenticate(&state, &headers).await {
+    let device = match authenticate(&state, &headers, false).await {
         Ok(device) => device,
         Err(response) => return *response,
     };
@@ -618,7 +656,7 @@ async fn rpc_post(State(state): State<WebState>, headers: HeaderMap, body: Bytes
             remote_error("", "payload_too_large", "That request was too large."),
         );
     }
-    let device = match authenticate(&state, &headers).await {
+    let device = match authenticate(&state, &headers, false).await {
         Ok(device) => device,
         Err(response) => return *response,
     };
@@ -704,7 +742,7 @@ fn audit_kind(method: &str) -> Option<&'static str> {
 // /api/events
 
 async fn events_get(State(state): State<WebState>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
-    let device = match authenticate(&state, &headers).await {
+    let device = match authenticate(&state, &headers, false).await {
         Ok(device) => device,
         Err(response) => return *response,
     };

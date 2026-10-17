@@ -2,13 +2,15 @@
 // is (`/api/me`), pairing, sign-out and the live connection state. The real
 // build backs it with the gateway transport (`remoteDevice` in remoteTauri.ts);
 // the browser preview and tests use `createPreviewDeviceApi`.
-import type { RemoteConnectionStatus, RemoteMe, RemotePairInput, RemotePairState } from './remoteTransport'
-import type { DeviceKind, RemoteTier } from './remoteContract'
+import type { RemoteConnectionStatus, RemoteLoginInput, RemoteMe, RemotePairInput, RemotePairState } from './remoteTransport'
+import type { DeviceKind, RemoteMethodId, RemoteTier } from './remoteContract'
 
 export interface RemoteDeviceApi {
   me(): Promise<RemoteMe>
   pair(input: RemotePairInput): Promise<{ state: RemotePairState }>
   pairStatus(): Promise<RemotePairState>
+  /** Native sign-in: a username and password that either approves a held cookie or starts a pending request. */
+  login(input: RemoteLoginInput): Promise<{ state: RemotePairState }>
   logout(): Promise<void>
   /** Live connection state; returns an unsubscribe function. */
   onConnection(handler: (status: RemoteConnectionStatus) => void): () => void
@@ -37,27 +39,42 @@ export function codeFromHash(hash: string): string {
 
 const PREVIEW_KEY = 'bitbots.remote.preview.device'
 
+/** The preview's password: any username works, this is the password that does not. */
+export const PREVIEW_PASSPHRASE = 'preview-passphrase'
+
 /**
  * The preview's stand-in host: any 8 characters pair, the computer "approves"
- * after a short wait, and the device is remembered in localStorage.
+ * after a short wait, and the device is remembered in localStorage. Native
+ * sign-in accepts any username with the preview passphrase, then behaves like a
+ * pairing request.
  */
-export function createPreviewDeviceApi(options: { hostName?: string; tier?: RemoteTier; approveAfterMs?: number } = {}): RemoteDeviceApi {
+export function createPreviewDeviceApi(
+  options: { hostName?: string; tier?: RemoteTier; approveAfterMs?: number; method?: RemoteMethodId } = {},
+): RemoteDeviceApi {
   const hostName = options.hostName ?? 'Work PC'
   const tier = options.tier ?? 'chat'
   const approveAfter = options.approveAfterMs ?? 2500
+  const method: RemoteMethodId = options.method ?? 'tailscale'
   let pendingSince: number | null = null
   let pendingName = 'This phone'
   const read = (): { name: string } | null => { try { return JSON.parse(localStorage.getItem(PREVIEW_KEY) ?? 'null') as { name: string } | null } catch { return null } }
   const write = (value: { name: string } | null) => { try { if (value) localStorage.setItem(PREVIEW_KEY, JSON.stringify(value)); else localStorage.removeItem(PREVIEW_KEY) } catch { /* private mode */ } }
-  const refused = (code: string, message: string) => Object.assign(new Error(message), { code })
+  const refused = (code: string, message: string, method?: RemoteMethodId) =>
+    Object.assign(new Error(message), method === undefined ? { code } : { code, method })
   return {
     async me() {
       const device = read()
-      if (!device) throw refused('unauthorized', 'This device is not paired.')
-      return { protocolVersion: 1, device: { id: 'preview-device', name: device.name, tier }, host: { name: hostName }, approvalsFromRemote: false, quietHoursActive: false, method: 'tailscale' }
+      if (!device) throw refused('unauthorized', 'This device is not paired.', method)
+      return { protocolVersion: 1, device: { id: 'preview-device', name: device.name, tier }, host: { name: hostName }, approvalsFromRemote: false, quietHoursActive: false, method }
     },
     async pair(input) {
       if (input.code.replace('-', '').length !== 8) throw refused('pairing_invalid', 'That code did not work. Check it, or show a new one on the computer.')
+      pendingSince = Date.now()
+      pendingName = input.name
+      return { state: 'pending' }
+    },
+    async login(input) {
+      if (input.password !== PREVIEW_PASSPHRASE) throw refused('login_invalid', 'That username or password is not right.')
       pendingSince = Date.now()
       pendingName = input.name
       return { state: 'pending' }

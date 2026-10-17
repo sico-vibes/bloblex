@@ -9,7 +9,7 @@ import { SettingsGroup, SettingsRow } from './SettingsParts'
 import { StatusDot } from './StatusDot'
 import { QrGlyph } from './QrGlyph'
 import { useEntityNoun } from './vocabulary'
-import { NativeAccountGroup, NativeAddresses, NativePortRow, RemoteMethodSwitch } from './NativeRemote'
+import { NativeAccountGroup, NativeAddresses, NativeConnectivityGroup, NativePortRow, RemoteMethodSwitch } from './NativeRemote'
 import './remoteSettings.css'
 
 const TIER_LABEL: Record<RemoteTier, string> = { viewer: 'View only', chat: 'Chat', operator: 'Chat and approve' }
@@ -176,6 +176,10 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
         <button type="button" className="secondary-button small" onClick={onOpenPower}>Power settings</button>
       </SettingsRow>}
     </SettingsGroup>
+
+    {native && nativeStatus && nativeStatus.accountSet && <NativeConnectivityGroup native={nativeStatus} on={on} busy={state.busy}
+      onConsent={(enabled) => void remote.setNativeUpnp(enabled)} onAddFirewall={remote.addFirewallRule} onRemoveFirewall={remote.removeFirewallRule}
+      onExternalIp={(ip) => void remote.setNativeExternalIp(ip)} />}
 
     {on && <SettingsGroup title="Add a device">
       {state.justPaired && <div className="remote-paired" role="status">

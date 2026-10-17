@@ -24,6 +24,7 @@ bloblex-adapter-claude = { path = "../bloblex-adapter-claude" }
 chrono.workspace = true
 futures-util.workspace = true
 if-addrs.workspace = true
+igd-next.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true

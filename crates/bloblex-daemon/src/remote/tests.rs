@@ -8,6 +8,7 @@
 //! loopback port, so the router, the middleware and the checks are exercised as
 //! a device would exercise them.
 
+use super::connectivity;
 use super::pairing::{self, DEVICE_COOKIE, PAIR_COOKIE};
 use super::tailscale::tests::{FakeCli, EMPTY_SERVE, RUNNING_STATUS};
 use super::{RemoteState, DEFAULT_REMOTE_PORT};
@@ -524,6 +525,35 @@ async fn without_a_cookie_the_answer_is_unauthorized() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(response.json::<Value>().await.unwrap()["error"]["code"], "unauthorized");
+}
+
+/// FIX35 C6: a signed-out phone must learn which sign-in screen to show.
+#[tokio::test]
+async fn a_refused_me_names_the_active_method_and_nothing_else() {
+    // Tailscale (the default): the phone shows the pairing-code screen.
+    let gateway = gateway().await;
+    let response = gateway
+        .client
+        .get(gateway.url("/api/me"))
+        .header("Origin", &gateway.origin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["method"], "tailscale");
+    // Nothing else rides along: no host name, no device data.
+    assert!(body.get("host").is_none(), "{body}");
+    assert!(body.get("device").is_none(), "{body}");
+
+    // Native: the phone shows the username-and-password screen.
+    let native = native_gateway().await;
+    let response = native.get("/api/me", None).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["method"], "native");
+    assert!(body.get("host").is_none(), "{body}");
+    assert!(body.get("device").is_none(), "{body}");
 }
 
 #[tokio::test]
@@ -1069,6 +1099,7 @@ async fn the_tier_table_matches_the_gateway_every_remote_method_is_never() {
         "remote.pair.confirm", "remote.devices.list", "remote.devices.update", "remote.devices.revoke",
         "remote.security.get", "remote.security.set", "remote.activity.list",
         "remote.method.set", "remote.native.account.set", "remote.native.cert.regenerate", "remote.native.port.set",
+        "remote.native.upnp.set", "remote.native.externalIp.set", "remote.native.firewall.add", "remote.native.firewall.remove",
     ] {
         let rule = policy::rule_for(method).unwrap_or_else(|| panic!("no tier rule for {method}"));
         assert_eq!(rule.class, policy::MethodClass::Never, "{method}");
@@ -1120,10 +1151,18 @@ impl NativeGateway {
     }
 
     /// A request to a chosen `Host`, so the Host check can be exercised apart
-    /// from the Origin check.
+    /// from the Origin check. The socket always dials loopback (the test
+    /// listener binds loopback only); `host` becomes the `Host` header, which is
+    /// what the certificate's authority check reads.
     async fn post(&self, path: &str, host: &str, origin: &str, cookie: Option<&str>, body: &Value) -> reqwest::Response {
-        let url = format!("https://{host}:{}{path}", self.port);
-        let mut request = self.client.post(url).header("Origin", origin).header("Content-Type", "application/json");
+        let url = format!("https://127.0.0.1:{}{path}", self.port);
+        let authority = format!("{host}:{}", self.port);
+        let mut request = self
+            .client
+            .post(url)
+            .header("Host", authority)
+            .header("Origin", origin)
+            .header("Content-Type", "application/json");
         if let Some(cookie) = cookie {
             request = request.header("Cookie", cookie);
         }
@@ -1212,6 +1251,22 @@ async fn the_native_listener_binds_only_while_native_is_on() {
     // The port is closed: the client sees a transport error, not an HTTP status.
     let refused = gateway.client.get(gateway.url("/")).header("Origin", &gateway.origin).send().await;
     assert!(refused.is_err(), "the listener still answered after disable");
+}
+
+#[test]
+fn the_native_bind_host_is_every_interface_in_production_and_loopback_under_test() {
+    // Production keeps the wildcard; only the test default narrows the bind.
+    assert_eq!(super::native::PRODUCTION_BIND_V4, "0.0.0.0");
+    assert_eq!(super::native::PRODUCTION_BIND_V6, "::");
+    let production = super::native::BindHosts::production();
+    assert_eq!(production.v4, "0.0.0.0", "production binds every interface");
+    assert_eq!(production.v6.as_deref(), Some("::"), "production tries the IPv6 wildcard");
+    // The default used while testing binds loopback and never the wildcard, so
+    // no test binary opens a socket the Windows Firewall would ask about. This
+    // reads the default; it binds nothing.
+    let test_bind = super::native::BindHosts::default();
+    assert_eq!(test_bind.v4, "127.0.0.1", "tests must bind loopback only");
+    assert_eq!(test_bind.v6, None, "tests must skip the IPv6 wildcard");
 }
 
 #[tokio::test]
@@ -1394,7 +1449,9 @@ async fn native_status_reports_the_native_block() {
     // from the connection, not defaulted to "loopback".
     let _ = gateway.login(json!({"username": "owner", "password": "not the password"})).await;
     let status = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
-    assert_eq!(status["native"]["lastReachedFrom"], "127.0.0.1");
+    // The connection's address is read, but a loopback/private peer is only
+    // ever reported as "this network" (FIX35 C2 §4).
+    assert_eq!(status["native"]["lastReachedFrom"], "this network");
     assert_eq!(status["method"], "native");
     let native = &status["native"];
     assert_eq!(native["port"], gateway.port);
@@ -1427,4 +1484,340 @@ async fn native_cert_regenerate_restarts_and_changes_the_fingerprint() {
     let after_fingerprint = after["fingerprint"].as_str().unwrap().to_string();
     assert_ne!(before, after_fingerprint);
     assert!(gateway.st.remote.native_listening(), "the listener restarted");
+}
+
+// ---------------------------------------------------------------------------
+// Native Remote connectivity (FIX35 C2)
+
+/// A fake router: no socket is ever opened. The test decides what it answers.
+struct FakeUpnp {
+    external: std::sync::Mutex<std::net::IpAddr>,
+    added: std::sync::Mutex<Vec<(u16, std::net::SocketAddr, u32, String)>>,
+    removed: std::sync::Mutex<Vec<u16>>,
+    fail_add: bool,
+}
+
+impl FakeUpnp {
+    fn new(external: &str) -> Self {
+        Self {
+            external: std::sync::Mutex::new(external.parse().unwrap()),
+            added: std::sync::Mutex::new(Vec::new()),
+            removed: std::sync::Mutex::new(Vec::new()),
+            fail_add: false,
+        }
+    }
+
+    fn failing(external: &str) -> Self {
+        Self { fail_add: true, ..Self::new(external) }
+    }
+
+    fn set_external(&self, external: &str) {
+        *self.external.lock().unwrap() = external.parse().unwrap();
+    }
+
+    fn added(&self) -> Vec<(u16, std::net::SocketAddr, u32, String)> {
+        self.added.lock().unwrap().clone()
+    }
+
+    fn removed(&self) -> Vec<u16> {
+        self.removed.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl connectivity::UpnpGateway for FakeUpnp {
+    async fn external_ip(&self) -> Result<std::net::IpAddr, String> {
+        Ok(*self.external.lock().unwrap())
+    }
+
+    async fn add_mapping(
+        &self,
+        external_port: u16,
+        local_addr: std::net::SocketAddr,
+        lease: u32,
+        description: &str,
+    ) -> Result<(), String> {
+        if self.fail_add {
+            return Err("the gateway refused the mapping".to_string());
+        }
+        self.added.lock().unwrap().push((external_port, local_addr, lease, description.to_string()));
+        Ok(())
+    }
+
+    async fn remove_mapping(&self, external_port: u16) -> Result<(), String> {
+        self.removed.lock().unwrap().push(external_port);
+        Ok(())
+    }
+}
+
+/// Seeds the fake gateway and a fixed firewall reading, so no test runs `netsh`
+/// or searches the network.
+fn seed_connectivity(gateway: &NativeGateway, fake: Option<Arc<FakeUpnp>>) {
+    *gateway.st.remote.seams.lock().unwrap() = connectivity::TestSeams {
+        upnp_active: true,
+        gateway: fake.map(|fake| fake as Arc<dyn connectivity::UpnpGateway>),
+        firewall: Some(connectivity::FirewallState::Allowed),
+    };
+}
+
+#[test]
+fn native_cgnat_classification_matches_the_spec() {
+    use std::net::IpAddr;
+    let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+    assert_eq!(connectivity::classify(Some(ip("100.64.0.1"))), (true, Some("carrier_nat")));
+    assert_eq!(connectivity::classify(Some(ip("100.127.255.255"))), (true, Some("carrier_nat")));
+    for private in ["10.1.2.3", "192.168.0.5", "172.16.4.4", "172.31.0.1", "169.254.10.1", "fd00::1", "fc00::1", "fe80::1"] {
+        assert_eq!(connectivity::classify(Some(ip(private))), (true, Some("private")), "{private}");
+    }
+    for public in ["1.1.1.1", "8.8.4.4", "100.63.0.1", "100.128.0.1", "2606:4700:4700::1111"] {
+        assert_eq!(connectivity::classify(Some(ip(public))), (false, None), "{public}");
+    }
+    assert_eq!(connectivity::classify(None), (false, None));
+}
+
+#[test]
+fn native_firewall_parses_recorded_output_and_builds_the_exact_argv() {
+    use connectivity::FirewallState;
+    let missing = "No rules match the specified criteria.\r\n";
+    assert_eq!(connectivity::parse_firewall(missing, 48621), FirewallState::Missing);
+    let allowed = "\r\nRule Name:                            Bitbots-Remote\r\n----------------------------------------------------------------------\r\nEnabled:                              Yes\r\nDirection:                            In\r\nProfiles:                             Domain,Private,Public\r\nLocalPort:                            48621\r\n";
+    assert_eq!(connectivity::parse_firewall(allowed, 48621), FirewallState::Allowed);
+    assert_eq!(connectivity::parse_firewall(allowed, 48620), FirewallState::Missing, "a rule for another port is not this port");
+    // The old name (with a space) is still read as a rule for this port.
+    let legacy = allowed.replace("Bitbots-Remote", "Bitbots Remote");
+    assert_eq!(connectivity::parse_firewall(&legacy, 48621), FirewallState::Allowed);
+    assert_eq!(connectivity::firewall_state_from(false, Some(allowed), 48621), FirewallState::Unsupported);
+    assert_eq!(connectivity::firewall_state_from(true, None, 48621), FirewallState::Unknown);
+
+    assert_eq!(connectivity::show_rule_args(connectivity::FIREWALL_RULE_NAME).last().unwrap(), "name=Bitbots-Remote");
+    let add = connectivity::elevated_command(&connectivity::add_rule_args(48621));
+    assert_eq!(add[0], "powershell");
+    assert_eq!(add[1], "-NoProfile");
+    assert_eq!(add[2], "-NonInteractive");
+    assert_eq!(add[3], "-Command");
+    assert_eq!(
+        add[4],
+        "Start-Process -FilePath netsh -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList @('advfirewall','firewall','add','rule','name=Bitbots-Remote','dir=in','action=allow','protocol=TCP','localport=48621')"
+    );
+    // Remove deletes one rule: the current name.
+    let remove = connectivity::elevated_command(&connectivity::remove_rule_args());
+    assert_eq!(
+        remove[4],
+        "Start-Process -FilePath netsh -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList @('advfirewall','firewall','delete','rule','name=Bitbots-Remote')"
+    );
+}
+
+#[test]
+fn native_ping_reports_a_public_peer_but_not_a_private_one() {
+    let public: std::net::SocketAddr = "8.8.8.8:51234".parse().unwrap();
+    assert_eq!(super::web::reached_from(Some(public)), "8.8.8.8");
+    for private in ["127.0.0.1:4000", "192.168.1.20:4000", "10.0.0.9:4000", "[fe80::1]:4000"] {
+        let addr: std::net::SocketAddr = private.parse().unwrap();
+        assert_eq!(super::web::reached_from(Some(addr)), "this network", "{private}");
+    }
+    assert_eq!(super::web::reached_from(None), "this network");
+}
+
+#[tokio::test]
+async fn native_upnp_maps_only_with_consent_and_removes_its_own_mapping() {
+    let gateway = native_gateway().await;
+    let fake = Arc::new(FakeUpnp::new("203.0.113.7"));
+    seed_connectivity(&gateway, Some(fake.clone()));
+    let port = gateway.st.remote.native_bound().unwrap().port();
+
+    // Without consent nothing is mapped.
+    connectivity::enable(&gateway.st).await;
+    assert!(fake.added().is_empty(), "no mapping without consent");
+    let status = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
+    assert_eq!(status["native"]["upnp"]["state"], "off");
+    assert_eq!(status["native"]["upnp"]["consent"], false);
+    assert_eq!(status["native"]["firewall"], "allowed");
+
+    // Consent is stored and acted on at once.
+    let saved = super::rpc(&gateway.st, "remote.native.upnp.set", &json!({"enabled": true})).await.unwrap();
+    assert_eq!(saved["upnp"]["state"], "mapped");
+    let added = fake.added();
+    assert_eq!(added.len(), 1, "one mapping");
+    assert_eq!(added[0].0, port);
+    assert_eq!(added[0].1.port(), port);
+    assert_eq!(added[0].2, connectivity::MAPPING_LEASE_SECS);
+    assert_eq!(added[0].3, connectivity::MAPPING_DESCRIPTION);
+    let status = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
+    assert_eq!(status["native"]["upnp"]["state"], "mapped");
+    assert_eq!(status["native"]["upnp"]["consent"], true);
+    assert_eq!(status["native"]["externalIp"], "203.0.113.7");
+    assert_eq!(status["native"]["externalIpSource"], "upnp");
+    assert_eq!(status["native"]["cgnat"], false);
+
+    // A renewal re-adds the same mapping with the same lease.
+    connectivity::renew_mapping(&gateway.st).await;
+    assert_eq!(fake.added().len(), 2, "the lease was renewed");
+    assert_eq!(fake.added()[0], fake.added()[1]);
+
+    // Withdrawing consent removes only Bitbots' mapping.
+    super::rpc(&gateway.st, "remote.native.upnp.set", &json!({"enabled": false})).await.unwrap();
+    assert_eq!(fake.removed(), vec![port]);
+    assert_eq!(fake.added().len(), 2, "nothing else was added");
+    let status = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
+    assert_eq!(status["native"]["upnp"]["state"], "off");
+}
+
+#[tokio::test]
+async fn native_upnp_reports_no_gateway_and_a_failed_mapping() {
+    let gateway = native_gateway().await;
+    seed_connectivity(&gateway, None);
+    super::rpc(&gateway.st, "remote.native.upnp.set", &json!({"enabled": true})).await.unwrap();
+    let status = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
+    assert_eq!(status["native"]["upnp"]["state"], "no_gateway");
+    assert_eq!(status["native"]["upnp"]["consent"], true);
+    assert_eq!(status["native"]["externalIp"], Value::Null);
+
+    let failable = Arc::new(FakeUpnp::failing("203.0.113.7"));
+    seed_connectivity(&gateway, Some(failable));
+    connectivity::enable(&gateway.st).await;
+    let status = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
+    assert_eq!(status["native"]["upnp"]["state"], "failed");
+    assert!(status["native"]["upnp"]["error"].is_string(), "{status}");
+}
+
+#[tokio::test]
+async fn native_external_ip_change_updates_the_urls_and_the_certificate() {
+    let gateway = native_gateway().await;
+    let fake = Arc::new(FakeUpnp::new("198.51.100.9"));
+    seed_connectivity(&gateway, Some(fake.clone()));
+    super::rpc(&gateway.st, "remote.native.upnp.set", &json!({"enabled": true})).await.unwrap();
+
+    let first = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
+    assert_eq!(first["native"]["externalIp"], "198.51.100.9");
+    let before_fingerprint = first["native"]["fingerprint"].clone();
+
+    // The router hands out a new address.
+    fake.set_external("198.51.100.20");
+    connectivity::recheck_external_ip(&gateway.st).await;
+
+    let after = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
+    assert_eq!(after["native"]["externalIp"], "198.51.100.20");
+    assert_ne!(after["native"]["fingerprint"], before_fingerprint, "the certificate was regenerated for the new name");
+    let urls: Vec<String> = after["native"]["urls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|url| url.as_str().unwrap().to_string())
+        .collect();
+    assert!(urls.iter().any(|url| url.contains("198.51.100.20")), "{urls:?}");
+    assert!(!urls.iter().any(|url| url.contains("198.51.100.9")), "{urls:?}");
+    let changed = super::events_last(&gateway.st, "remote.changed").await;
+    assert_eq!(changed["payload"]["status"]["native"]["externalIp"], "198.51.100.20");
+}
+
+#[tokio::test]
+async fn native_manual_external_ip_uses_the_key_the_certificate_reads() {
+    let gateway = native_gateway().await;
+    let before = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap()["native"]["fingerprint"].clone();
+
+    let saved = super::rpc(&gateway.st, "remote.native.externalIp.set", &json!({"ip": "203.0.113.55"})).await.unwrap();
+    assert_eq!(saved["externalIp"], "203.0.113.55");
+    assert_eq!(saved["externalIpSource"], "manual");
+    assert_eq!(saved["cgnat"], false);
+    // C1's certificate reads exactly this key.
+    let settings = gateway.st.db.settings().unwrap();
+    assert_eq!(settings.get(super::native::EXTERNAL_IP_SETTING).and_then(Value::as_str), Some("203.0.113.55"));
+
+    let after = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
+    assert_ne!(after["native"]["fingerprint"], before, "the certificate SANs were regenerated");
+    assert!(after["native"]["urls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|url| url.as_str().unwrap().contains("203.0.113.55")));
+
+    // A private value is flagged, not rejected.
+    let private = super::rpc(&gateway.st, "remote.native.externalIp.set", &json!({"ip": "192.168.1.4"})).await.unwrap();
+    assert_eq!(private["cgnat"], true);
+    assert_eq!(private["cgnatReason"], "private");
+
+    // Clearing it removes the name again.
+    let cleared = super::rpc(&gateway.st, "remote.native.externalIp.set", &json!({"ip": null})).await.unwrap();
+    assert_eq!(cleared["externalIp"], Value::Null);
+    assert_eq!(cleared["externalIpSource"], Value::Null);
+    assert_eq!(cleared["cgnat"], false);
+
+    // Bad input is refused, and nothing is written.
+    assert_eq!(
+        super::rpc(&gateway.st, "remote.native.externalIp.set", &json!({"ip": "not an ip"})).await.unwrap_err().1.code,
+        "invalid_argument"
+    );
+}
+
+#[tokio::test]
+async fn native_ping_is_open_and_records_where_it_came_from() {
+    let gateway = native_gateway().await;
+    // No Origin header: a phone opening the address in its browser proves the
+    // route is unauthenticated and exempt from the origin check.
+    let response = gateway.client.get(gateway.url("/api/ping")).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.json::<Value>().await.unwrap(), json!({"ok": true}));
+
+    let status = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
+    assert_eq!(status["native"]["lastReachedFrom"], "this network");
+    assert!(status["native"]["lastReachedAt"].is_string(), "{status}");
+    let changed = super::events_last(&gateway.st, "remote.changed").await;
+    assert_eq!(changed["payload"]["status"]["native"]["lastReachedFrom"], "this network");
+}
+
+#[tokio::test]
+async fn native_ping_shares_the_unauthenticated_rate_limit() {
+    let gateway = native_gateway().await;
+    let mut limited = false;
+    for _ in 0..70 {
+        let response = gateway.client.get(gateway.url("/api/ping")).send().await.unwrap();
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+    }
+    assert!(limited, "the ping route is limited by C1's unauthenticated bucket");
+}
+
+#[tokio::test]
+async fn native_failed_sign_ins_write_a_denied_line_only_when_a_limit_starts() {
+    let gateway = native_gateway().await;
+    for _ in 0..4 {
+        let response = gateway.login(json!({"username": "owner", "password": "wrong password!!"})).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    let before = gateway.st.db.remote_activity_list(100).unwrap();
+    assert!(before.iter().all(|entry| entry["kind"] != "denied"), "four failures write nothing: {before:?}");
+
+    // The fifth failure starts the source's lockout: exactly one line.
+    let fifth = gateway.login(json!({"username": "owner", "password": "wrong password!!"})).await;
+    assert_eq!(fifth.status(), StatusCode::TOO_MANY_REQUESTS);
+    let after = gateway.st.db.remote_activity_list(100).unwrap();
+    let denied: Vec<&Value> = after.iter().filter(|entry| entry["kind"] == "denied").collect();
+    assert_eq!(denied.len(), 1, "{after:?}");
+
+    // A request refused because the lockout is already running writes nothing.
+    let again = gateway.login(json!({"username": "owner", "password": "wrong password!!"})).await;
+    assert_eq!(again.status(), StatusCode::TOO_MANY_REQUESTS);
+    let more = gateway.st.db.remote_activity_list(100).unwrap();
+    assert_eq!(more.iter().filter(|entry| entry["kind"] == "denied").count(), 1, "the lockout did not flood the log");
+}
+
+#[tokio::test]
+async fn native_global_pause_writes_one_denied_line() {
+    let gateway = native_gateway().await;
+    for index in 0..29 {
+        gateway.st.remote.record_login_failure(&format!("10.0.0.{index}"));
+    }
+    let before = gateway.st.db.remote_activity_list(100).unwrap();
+    assert!(before.iter().all(|entry| entry["kind"] != "denied"), "seeded failures write nothing");
+
+    // The thirtieth failure across all sources pauses every sign-in.
+    let trigger = gateway.login(json!({"username": "owner", "password": "wrong password!!"})).await;
+    assert_eq!(trigger.status(), StatusCode::UNAUTHORIZED);
+    let (paused, _) = gateway.st.remote.login_pause_state();
+    assert!(paused);
+    let entries = gateway.st.db.remote_activity_list(100).unwrap();
+    let denied: Vec<&Value> = entries.iter().filter(|entry| entry["kind"] == "denied").collect();
+    assert_eq!(denied.len(), 1, "one line for the pause: {entries:?}");
 }

@@ -12,14 +12,14 @@
 //!
 //! Rules that shape every line (see `AGENTS.md`, the Native Remote amendment):
 //!
-//! * the listener binds `0.0.0.0` and `[::]` **only while Native is on**; it is
-//!   closed the moment Native is turned off;
+//! * the listener binds `0.0.0.0` and `[::]` (production; tests bind loopback
+//!   only) **only while Native is on**; it is closed the moment Native is off;
 //! * TLS only: a plain-HTTP connection is dropped, never answered;
 //! * the certificate key is never logged, and on Windows it is restricted to
 //!   the current user with `icacls`;
 //! * no third-party service is contacted.
 
-use super::web;
+use super::{connectivity, web};
 use crate::{derr, AppState, DispatchError};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
@@ -69,6 +69,44 @@ pub struct CertInfo {
     pub sans: Vec<String>,
 }
 
+/// The production address the Native listener binds: every interface.
+pub const PRODUCTION_BIND_V4: &str = "0.0.0.0";
+/// The production IPv6 wildcard, bound best effort next to the IPv4 one.
+pub const PRODUCTION_BIND_V6: &str = "::";
+
+/// The addresses the Native listener binds. Production binds every interface
+/// (`0.0.0.0`, and `[::]` when the OS allows). Under `#[cfg(test)]` it binds
+/// loopback only and skips the IPv6 wildcard, so building and running a test
+/// binary never opens a listening socket on the host's interfaces — the Windows
+/// Firewall would otherwise ask once per newly built test executable.
+#[derive(Clone, Debug)]
+pub struct BindHosts {
+    /// The IPv4 address to bind.
+    pub v4: String,
+    /// `Some` to also try the IPv6 wildcard; `None` to skip it.
+    pub v6: Option<String>,
+}
+
+impl BindHosts {
+    /// The production binding: every interface.
+    pub fn production() -> Self {
+        Self { v4: PRODUCTION_BIND_V4.to_string(), v6: Some(PRODUCTION_BIND_V6.to_string()) }
+    }
+}
+
+impl Default for BindHosts {
+    fn default() -> Self {
+        #[cfg(not(test))]
+        {
+            Self::production()
+        }
+        #[cfg(test)]
+        {
+            Self { v4: "127.0.0.1".to_string(), v6: None }
+        }
+    }
+}
+
 /// Native-specific state, held inside `super::Inner`.
 #[derive(Default)]
 pub struct NativeState {
@@ -78,6 +116,11 @@ pub struct NativeState {
     pub servers: Vec<super::RunningServer>,
     pub last_reached_at: Option<String>,
     pub last_reached_from: Option<String>,
+    /// The addresses the listener binds (production: every interface; tests:
+    /// loopback). Kept in state so no test binary opens a firewall prompt.
+    pub bind: BindHosts,
+    /// UPnP, the firewall rule, the external IP and the CGNAT reading (FIX35 C2).
+    pub connectivity: connectivity::ConnectivityState,
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +217,7 @@ pub fn configured_port(st: &AppState) -> u16 {
 
 /// The port a browser would reach right now: the bound port while listening,
 /// else the configured one.
-fn current_port(st: &AppState) -> u16 {
+pub fn current_port(st: &AppState) -> u16 {
     let bound = st.remote.inner.lock().unwrap().native.bound.first().copied();
     bound.map(|addr| addr.port()).unwrap_or_else(|| configured_port(st))
 }
@@ -434,19 +477,16 @@ fn spawn_tls(listener: TcpListener, config: Arc<rustls::ServerConfig>, state: we
 // ---------------------------------------------------------------------------
 // Lifecycle
 
-/// Turns Native on: ensure the certificate, bind `0.0.0.0` (and `[::]` when the
-/// OS allows) and serve the gateway over TLS. The caller has already set the
-/// link to `starting`.
-pub async fn enable(st: &AppState) -> Result<Value, DispatchError> {
+/// Binds the Native listeners on the state's bind hosts (production: `0.0.0.0`
+/// and `[::]` when the OS allows; tests: `127.0.0.1` only) and returns the
+/// running servers and the bound addresses. Shared by `enable` and a certificate
+/// refresh, so a restart rebinds exactly as the first start did.
+async fn bind_listeners(st: &AppState) -> Result<(Vec<super::RunningServer>, Vec<SocketAddr>), DispatchError> {
     let remote = st.remote.clone();
-    if !account_set(st) {
-        return Err(derr("conflict", "Set a username and password first.", StatusCode::CONFLICT));
-    }
     let port = configured_port(st);
-    let cert = ensure_cert(st, false).map_err(|message| derr("internal", &message, StatusCode::INTERNAL_SERVER_ERROR))?;
+    let hosts = st.remote.inner.lock().unwrap().native.bind.clone();
     let config = tls_config(st).map_err(|message| derr("internal", &message, StatusCode::INTERNAL_SERVER_ERROR))?;
-
-    let v4 = TcpListener::bind(("0.0.0.0", port)).await.map_err(|_| {
+    let v4 = TcpListener::bind((hosts.v4.as_str(), port)).await.map_err(|_| {
         derr("conflict", &format!("Port {port} is already in use on this computer."), StatusCode::CONFLICT)
     })?;
     let addr = v4
@@ -456,16 +496,30 @@ pub async fn enable(st: &AppState) -> Result<Value, DispatchError> {
     let mut servers = vec![spawn_tls(v4, config.clone(), state.clone())];
     let mut bound = vec![addr];
     // IPv6 is best effort: a dual-stack `[::]` may already be taken by the IPv4
-    // bind on some systems, in which case only the IPv4 listener runs.
-    if let Ok(v6) = TcpListener::bind(("::", port)).await {
-        if let Ok(v6_addr) = v6.local_addr() {
-            bound.push(v6_addr);
-            servers.push(spawn_tls(v6, config.clone(), state));
+    // bind on some systems, in which case only the IPv4 listener runs. Tests set
+    // no IPv6 host, so they never bind the wildcard.
+    if let Some(host6) = hosts.v6.as_deref() {
+        if let Ok(v6) = TcpListener::bind((host6, port)).await {
+            if let Ok(v6_addr) = v6.local_addr() {
+                bound.push(v6_addr);
+                servers.push(spawn_tls(v6, config, state));
+            }
         }
     }
+    Ok((servers, bound))
+}
 
+/// Turns Native on: ensure the certificate, bind the state's bind hosts
+/// (production: `0.0.0.0` and `[::]` when the OS allows) and serve the gateway
+/// over TLS. The caller has already set the link to `starting`.
+pub async fn enable(st: &AppState) -> Result<Value, DispatchError> {
+    if !account_set(st) {
+        return Err(derr("conflict", "Set a username and password first.", StatusCode::CONFLICT));
+    }
+    let cert = ensure_cert(st, false).map_err(|message| derr("internal", &message, StatusCode::INTERNAL_SERVER_ERROR))?;
+    let (servers, bound) = bind_listeners(st).await?;
     {
-        let mut inner = remote.inner.lock().unwrap();
+        let mut inner = st.remote.inner.lock().unwrap();
         inner.enabled = true;
         inner.link = "online";
         inner.error = None;
@@ -475,12 +529,16 @@ pub async fn enable(st: &AppState) -> Result<Value, DispatchError> {
     }
     let _ = st.db.set_setting("remote.enabled", &json!(true));
     super::emit_status(st).await;
+    // UPnP and the firewall come after the listener is up. A failure is
+    // reported in the status, never fatal.
+    connectivity::enable(st).await;
     Ok(st.remote.status_value(st))
 }
 
-/// Turns Native off: close every listener and every device socket. The
-/// certificate and the account stay.
+/// Turns Native off: remove Bitbots' own port mapping, close every listener and
+/// every device socket. The certificate, the account and the external IP stay.
 pub async fn disable(st: &AppState) -> Result<Value, DispatchError> {
+    connectivity::disable(st).await;
     let remote = st.remote.clone();
     let servers = std::mem::take(&mut remote.inner.lock().unwrap().native.servers);
     for server in servers {
@@ -503,18 +561,50 @@ pub async fn disable(st: &AppState) -> Result<Value, DispatchError> {
 // RPCs
 
 /// `remote.native.cert.regenerate`. If Native is serving, it restarts so the
-/// new certificate takes effect at once.
+/// new certificate takes effect at once. The UPnP mapping and the firewall rule
+/// are untouched: only the certificate and the listener change.
 pub async fn cert_regenerate(st: &AppState) -> Result<Value, DispatchError> {
-    let was_listening = st.remote.native_listening();
-    if was_listening {
-        disable(st).await?;
-    }
-    ensure_cert(st, true).map_err(|message| derr("internal", &message, StatusCode::INTERNAL_SERVER_ERROR))?;
-    if was_listening {
-        enable(st).await?;
+    let cert = ensure_cert(st, true).map_err(|message| derr("internal", &message, StatusCode::INTERNAL_SERVER_ERROR))?;
+    st.remote.inner.lock().unwrap().native.cert = Some(cert);
+    if st.remote.native_listening() {
+        restart_listeners(st)
+            .await
+            .map_err(|message| derr("internal", &message, StatusCode::INTERNAL_SERVER_ERROR))?;
     }
     super::emit_status(st).await;
     Ok(status_block(st))
+}
+
+/// Regenerates the certificate when its SANs no longer cover the current
+/// candidates (a new interface address, or a new external IP from C2) and
+/// restarts the listener so the new certificate takes effect. Returns whether
+/// the certificate changed. The UPnP mapping is not touched.
+pub async fn refresh_cert(st: &AppState) -> Result<bool, String> {
+    let before = st.remote.inner.lock().unwrap().native.cert.as_ref().map(|cert| cert.fingerprint.clone());
+    let cert = ensure_cert(st, false)?;
+    let changed = before.as_deref() != Some(cert.fingerprint.as_str());
+    st.remote.inner.lock().unwrap().native.cert = Some(cert);
+    if changed && st.remote.native_listening() {
+        restart_listeners(st).await?;
+    }
+    Ok(changed)
+}
+
+/// Rebuilds the TLS listeners from the certificate on disk, without touching
+/// the account, the settings or the port mapping.
+async fn restart_listeners(st: &AppState) -> Result<(), String> {
+    let remote = st.remote.clone();
+    let servers = std::mem::take(&mut remote.inner.lock().unwrap().native.servers);
+    for server in servers {
+        super::stop_server(server).await;
+    }
+    remote.close_all_sockets();
+    remote.inner.lock().unwrap().native.bound.clear();
+    let (servers, bound) = bind_listeners(st).await.map_err(|error| error.1.message.clone())?;
+    let mut inner = remote.inner.lock().unwrap();
+    inner.native.servers = servers;
+    inner.native.bound = bound;
+    Ok(())
 }
 
 /// `remote.native.port.set`, 1024-65535 and only while Remote is off.
@@ -543,23 +633,41 @@ pub fn note_reached(st: &AppState, from: &str) {
     inner.native.last_reached_from = Some(from.to_string());
 }
 
-/// The `native` block of `remote.status`. C2 adds `upnp`, `firewall`,
-/// `externalIp` and `cgnat`; C1 reports only what it owns.
+/// The `native` block of `remote.status`: C1's certificate and sign-in state
+/// plus C2's `upnp`, `firewall`, `externalIp` and `cgnat` readings.
 pub fn status_block(st: &AppState) -> Value {
-    let (fingerprint, sans, listening, last_reached_at, last_reached_from) = {
+    let (fingerprint, sans, listening, last_reached_at, last_reached_from, connectivity) = {
         let inner = st.remote.inner.lock().unwrap();
+        let connectivity = &inner.native.connectivity;
         (
             inner.native.cert.as_ref().map(|cert| cert.fingerprint.clone()),
             inner.native.cert.as_ref().map(|cert| cert.sans.clone()).unwrap_or_default(),
             !inner.native.servers.is_empty(),
             inner.native.last_reached_at.clone(),
             inner.native.last_reached_from.clone(),
+            (
+                connectivity.consent,
+                connectivity.upnp,
+                connectivity.upnp_error.clone(),
+                connectivity.external_ip.map(|ip| ip.to_string()),
+                connectivity.external_source,
+                connectivity.cgnat,
+                connectivity.cgnat_reason,
+                connectivity.firewall,
+            ),
         )
     };
+    let (consent, upnp, upnp_error, external_ip, external_source, cgnat, cgnat_reason, firewall) = connectivity;
     let port = current_port(st);
     let urls: Vec<String> = sans.iter().map(|host| format!("https://{}", authority(host, port))).collect();
     let account = account_of(st);
     let (login_paused, paused_until) = st.remote.login_pause_state();
+    let mut upnp_block = serde_json::Map::new();
+    upnp_block.insert("consent".to_string(), json!(consent));
+    upnp_block.insert("state".to_string(), json!(upnp.as_str()));
+    if let Some(error) = upnp_error {
+        upnp_block.insert("error".to_string(), json!(error));
+    }
     json!({
         "port": port,
         "urls": urls,
@@ -571,5 +679,11 @@ pub fn status_block(st: &AppState) -> Value {
         "pausedUntil": paused_until,
         "lastReachedAt": last_reached_at,
         "lastReachedFrom": last_reached_from,
+        "upnp": Value::Object(upnp_block),
+        "firewall": firewall.as_str(),
+        "externalIp": external_ip,
+        "externalIpSource": external_source.map(|source| source.as_str()),
+        "cgnat": cgnat,
+        "cgnatReason": cgnat_reason,
     })
 }

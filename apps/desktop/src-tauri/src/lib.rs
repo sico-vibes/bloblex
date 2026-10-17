@@ -263,6 +263,16 @@ fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // When the packaged remote web app is installed beside the shell, hand its
+    // folder to the daemon so the remote gateway can serve it (WP6c builds it).
+    if let Ok(remote_web) = app
+        .path()
+        .resolve("remote-web", tauri::path::BaseDirectory::Resource)
+    {
+        if remote_web.is_dir() {
+            command.env("BITBOTS_REMOTE_WEB_DIR", &remote_web);
+        }
+    }
     #[cfg(windows)]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     let mut child = command.spawn().map_err(|error| {

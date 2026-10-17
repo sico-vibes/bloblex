@@ -602,6 +602,71 @@ fn ensure_skills_schema(c: &Connection) -> Result<(), StorageError> {
 
 const SKILL_COLUMNS: &str = "name,description,source,source_path,content_sha256,enabled,file_count,total_bytes,imported_at,updated_at";
 
+/// Remote mode (FIX29 WP6b) schema: paired devices and the host-side activity
+/// log. Additive and idempotent like the other `ensure_*` functions, so it runs
+/// on every open without a `user_version` bump. Only `sha256(token)` is ever
+/// stored: the token itself lives in the device's cookie.
+fn ensure_remote_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS remote_devices(
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            tier TEXT NOT NULL CHECK(tier IN ('viewer','chat','operator')),
+            login TEXT,
+            token_sha256 TEXT UNIQUE,
+            paired_at TEXT NOT NULL,
+            last_seen_at TEXT,
+            revoked_at TEXT,
+            signed_out_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS remote_activity(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at TEXT NOT NULL,
+            device_id TEXT,
+            kind TEXT NOT NULL,
+            summary TEXT NOT NULL
+        );",
+    )?;
+    Ok(())
+}
+
+/// The newest `REMOTE_ACTIVITY_LIMIT` activity rows are kept; older rows are
+/// dropped on every insert so the table cannot grow without bound.
+pub const REMOTE_ACTIVITY_LIMIT: usize = 500;
+
+const REMOTE_DEVICE_COLUMNS: &str =
+    "id,name,kind,platform,tier,login,paired_at,last_seen_at,revoked_at,signed_out_at";
+
+fn remote_device_dto_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    Ok(json!({
+        "id": row.get::<_, String>(0)?,
+        "name": row.get::<_, String>(1)?,
+        "kind": row.get::<_, String>(2)?,
+        "platform": row.get::<_, String>(3)?,
+        "tier": row.get::<_, String>(4)?,
+        "login": row.get::<_, Option<String>>(5)?,
+        "pairedAt": row.get::<_, String>(6)?,
+        "lastSeenAt": row.get::<_, Option<String>>(7)?,
+        "revokedAt": row.get::<_, Option<String>>(8)?,
+        "signedOutAt": row.get::<_, Option<String>>(9)?,
+        // Derived by the gateway from its live event sockets; never stored.
+        "online": false,
+    }))
+}
+
+fn remote_activity_dto_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    Ok(json!({
+        "id": row.get::<_, i64>(0)?.to_string(),
+        "at": row.get::<_, String>(1)?,
+        "deviceId": row.get::<_, Option<String>>(2)?,
+        "deviceName": row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        "kind": row.get::<_, String>(4)?,
+        "summary": row.get::<_, String>(5)?,
+    }))
+}
+
 fn valid_skill_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
@@ -1194,6 +1259,7 @@ impl Storage {
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
+                ensure_remote_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==11 {
@@ -1207,6 +1273,7 @@ impl Storage {
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
+                ensure_remote_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==10 {
@@ -1221,6 +1288,7 @@ impl Storage {
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
+                ensure_remote_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1238,6 +1306,7 @@ impl Storage {
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
+                ensure_remote_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1350,6 +1419,7 @@ impl Storage {
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
+                ensure_remote_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -3451,6 +3521,143 @@ impl Storage {
         let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let events = write_setting(&tx, k, v)?;
         tx.commit()?;Ok(events)
+    }
+    // ── Remote mode (FIX29 WP6b): paired devices and the activity log ──────
+    /// Insert one paired device. `device` carries the DTO fields; the token
+    /// itself is never passed here, only its SHA-256 hex digest.
+    pub fn remote_device_create(&self, device: &Value, token_sha256: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute(
+            "INSERT INTO remote_devices(id,name,kind,platform,tier,login,token_sha256,paired_at,last_seen_at,revoked_at,signed_out_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,NULL,NULL,NULL)",
+            params![
+                device["id"].as_str().unwrap_or(""),
+                device["name"].as_str().unwrap_or(""),
+                device["kind"].as_str().unwrap_or("browser"),
+                device["platform"].as_str().unwrap_or(""),
+                device["tier"].as_str().unwrap_or("viewer"),
+                device["login"].as_str(),
+                token_sha256,
+                device["pairedAt"].as_str().unwrap_or(""),
+            ],
+        )?;
+        Ok(())
+    }
+    /// The device whose cookie hashes to `token_sha256`, revoked or not, with
+    /// the stored digest so the caller can confirm it in constant time.
+    pub fn remote_device_by_token_hash(&self, token_sha256: &str) -> Result<Option<(Value, String)>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.query_row(
+            &format!("SELECT {REMOTE_DEVICE_COLUMNS},token_sha256 FROM remote_devices WHERE token_sha256=?1"),
+            [token_sha256],
+            |row| Ok((remote_device_dto_from_row(row)?, row.get::<_, String>(10)?)),
+        )
+        .optional()
+        .map_err(StorageError::from)
+    }
+    /// Every device row, newest pairing first. Includes revoked rows: the
+    /// caller decides whether to hide them; the token hash is never returned.
+    pub fn remote_devices(&self) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare(&format!("SELECT {REMOTE_DEVICE_COLUMNS} FROM remote_devices ORDER BY paired_at DESC,id"))?;
+        let rows = q.query_map([], remote_device_dto_from_row)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+    pub fn remote_device_get(&self, id: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.query_row(
+            &format!("SELECT {REMOTE_DEVICE_COLUMNS} FROM remote_devices WHERE id=?1"),
+            [id],
+            remote_device_dto_from_row,
+        )
+        .optional()
+        .map_err(StorageError::from)
+    }
+    /// Renames a device or changes its tier; omitted fields are left alone.
+    /// Returns `None` when no such device exists.
+    pub fn remote_device_update(&self, id: &str, name: Option<&str>, tier: Option<&str>) -> Result<Option<Value>, StorageError> {
+        if let Some(tier) = tier {
+            if !matches!(tier, "viewer" | "chat" | "operator") { return Err(StorageError::InvalidAgent); }
+        }
+        let name = match name {
+            Some(name) => {
+                let trimmed = name.trim();
+                if trimmed.is_empty() || trimmed.chars().count() > 80 { return Err(StorageError::InvalidAgent); }
+                Some(trimmed.to_owned())
+            }
+            None => None,
+        };
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM remote_devices WHERE id=?1)", [id], |r| r.get(0))?;
+        if !exists { return Ok(None); }
+        if let Some(name) = name { c.execute("UPDATE remote_devices SET name=?2 WHERE id=?1", params![id, name])?; }
+        if let Some(tier) = tier { c.execute("UPDATE remote_devices SET tier=?2 WHERE id=?1", params![id, tier])?; }
+        c.query_row(
+            &format!("SELECT {REMOTE_DEVICE_COLUMNS} FROM remote_devices WHERE id=?1"),
+            [id],
+            remote_device_dto_from_row,
+        )
+        .optional()
+        .map_err(StorageError::from)
+    }
+    /// Marks a device revoked. Its token hash is kept only so later requests
+    /// are answered `device_revoked`; it can never authorise again.
+    pub fn remote_device_revoke(&self, id: &str, at: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute("UPDATE remote_devices SET revoked_at=?2 WHERE id=?1 AND revoked_at IS NULL", params![id, at])?;
+        Ok(changed > 0)
+    }
+    /// Marks a device signed out. The token hash is kept only so the stale
+    /// cookie is answered `device_revoked` (PROTOCOL §11); it can never
+    /// authorise again because the gateway refuses any signed-out row.
+    pub fn remote_device_sign_out(&self, id: &str, at: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE remote_devices SET signed_out_at=?2 WHERE id=?1", params![id, at])?;
+        Ok(())
+    }
+    pub fn remote_device_touch(&self, id: &str, at: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE remote_devices SET last_seen_at=?2 WHERE id=?1", params![id, at])?;
+        Ok(())
+    }
+    /// Append one content-free activity row and trim the table to its cap.
+    pub fn remote_activity_push(&self, at: &str, device_id: Option<&str>, kind: &str, summary: &str) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO remote_activity(at,device_id,kind,summary) VALUES(?1,?2,?3,?4)",
+            params![at, device_id, kind, summary],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            &format!("DELETE FROM remote_activity WHERE id NOT IN (SELECT id FROM remote_activity ORDER BY id DESC LIMIT {REMOTE_ACTIVITY_LIMIT})"),
+            [],
+        )?;
+        let device_name: Option<String> = match device_id {
+            Some(device_id) => tx.query_row("SELECT name FROM remote_devices WHERE id=?1", [device_id], |r| r.get::<_, String>(0)).optional()?,
+            None => None,
+        };
+        tx.commit()?;
+        Ok(json!({
+            "id": id.to_string(),
+            "at": at,
+            "deviceId": device_id,
+            "deviceName": device_name.unwrap_or_default(),
+            "kind": kind,
+            "summary": summary,
+        }))
+    }
+    pub fn remote_activity_list(&self, limit: usize) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let limit = limit.clamp(1, REMOTE_ACTIVITY_LIMIT) as i64;
+        let mut q = c.prepare(
+            "SELECT a.id,a.at,a.device_id,d.name,a.kind,a.summary FROM remote_activity a LEFT JOIN remote_devices d ON d.id=a.device_id ORDER BY a.id DESC LIMIT ?1",
+        )?;
+        let rows = q.query_map([limit], remote_activity_dto_from_row)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+    pub fn remote_activity_count(&self) -> Result<i64, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT COUNT(*) FROM remote_activity", [], |r| r.get(0))?)
     }
     pub fn profiles(&self) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;

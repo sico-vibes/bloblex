@@ -1,0 +1,789 @@
+//! The gateway's HTTP surface (FIX29 WP6b).
+//!
+//! `docs/remote/PROTOCOL.md` §4.4 defines the routes; §4.1 defines the order of
+//! the checks on every `/api/*` request; §4.5 defines the `POST /api/rpc`
+//! pipeline; §6 defines the event socket. The gateway binds `127.0.0.1` only,
+//! calls `dispatch()` in process, and never sees the daemon capability.
+
+use super::pairing::{DEVICE_COOKIE, PAIR_COOKIE};
+use super::policy::{self, RedactOptions, RemoteCall, Tier};
+use super::{audit, now_rfc3339, RemoteState, MAX_REQUEST_BYTES};
+use crate::{dispatch, AppState};
+use axum::{
+    body::Bytes,
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Request, State,
+    },
+    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use chrono::Utc;
+use futures_util::StreamExt;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc;
+
+/// The request body cap. Rejected bodies get `payload_too_large`.
+pub const MAX_BODY_BYTES: usize = MAX_REQUEST_BYTES;
+/// A backstop so a body cannot be streamed into memory without bound.
+const HARD_BODY_LIMIT: usize = 1024 * 1024;
+/// How long a socket may wait for its first cursor message.
+const FIRST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Replay batch size, matching `events.replay` and the daemon's own socket.
+const REPLAY_BATCH: usize = 1000;
+/// At most this many files are listed from the PWA folder.
+const MAX_MANIFEST_ENTRIES: usize = 4096;
+
+/// The router state: the daemon's state plus the gateway's.
+#[derive(Clone)]
+pub struct WebState {
+    pub daemon: AppState,
+    pub remote: Arc<RemoteState>,
+}
+
+/// A gateway error on the remote path: the envelope plus the HTTP status.
+struct RemoteFailure {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+}
+
+impl RemoteFailure {
+    fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+/// The device behind an authenticated request.
+#[derive(Clone, Debug)]
+pub struct DeviceAuth {
+    pub id: String,
+    pub name: String,
+    pub tier: Tier,
+}
+
+// ---------------------------------------------------------------------------
+// The router
+
+pub fn router(state: WebState) -> Router {
+    let api = Router::new()
+        .route("/pair", post(pair_post).get(pair_get))
+        .route("/me", get(me_get))
+        .route("/rpc", post(rpc_post))
+        .route("/events", get(events_get))
+        .route("/logout", post(logout_post))
+        .layer(middleware::from_fn_with_state(state.clone(), require_origin));
+    Router::new()
+        .nest("/api", api)
+        .fallback(static_file)
+        .layer(axum::extract::DefaultBodyLimit::max(HARD_BODY_LIMIT))
+        .layer(middleware::from_fn(security_headers))
+        .with_state(state)
+}
+
+/// Every `/api/*` request must carry the serve origin. The WebSocket upgrade is
+/// an `/api/*` request, so it is checked here too (PROTOCOL §4.1 step 1).
+async fn require_origin(State(state): State<WebState>, request: Request, next: Next) -> Response {
+    let origin = request.headers().get(header::ORIGIN).and_then(|value| value.to_str().ok()).map(str::to_owned);
+    let expected = state.remote.serve_origin();
+    match (origin, expected) {
+        (Some(origin), Some(expected)) if origin == expected => next.run(request).await,
+        _ => (
+            StatusCode::FORBIDDEN,
+            Json(remote_error("", "unauthorized", "This request did not come from this computer's Bitbots Remote address.")),
+        )
+            .into_response(),
+    }
+}
+
+/// Security headers on every response (PROTOCOL §4.4).
+async fn security_headers(request: Request, next: Next) -> Response {
+    let is_api = request.uri().path().starts_with("/api/");
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"),
+    );
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    if is_api {
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    response
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+
+fn remote_error(id: &str, code: &str, message: &str) -> Value {
+    json!({"v": 1, "id": id, "ok": false, "error": {"code": code, "message": message}})
+}
+
+fn remote_ok(id: &str, result: Value) -> Value {
+    json!({"v": 1, "id": id, "ok": true, "result": result})
+}
+
+fn json_response(status: StatusCode, value: Value) -> Response {
+    (status, Json(value)).into_response()
+}
+
+fn with_cookie(mut response: Response, cookie: String) -> Response {
+    if let Ok(value) = HeaderValue::from_str(&cookie) {
+        response.headers_mut().append(header::SET_COOKIE, value);
+    }
+    response
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    for part in raw.split(';') {
+        let part = part.trim();
+        if let Some((key, value)) = part.split_once('=') {
+            if key.trim() == name {
+                return Some(value.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// `HttpOnly; Secure; SameSite=Strict; Path=/`; `Max-Age` only when the device
+/// expires (`0` days means never).
+fn device_cookie(token: &str, idle_expiry_days: u32) -> String {
+    let mut cookie = format!("{DEVICE_COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/");
+    if idle_expiry_days > 0 {
+        cookie.push_str(&format!("; Max-Age={}", u64::from(idle_expiry_days) * 86_400));
+    }
+    cookie
+}
+
+fn cleared_device_cookie() -> String {
+    format!("{DEVICE_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0")
+}
+
+fn cleared_pair_cookie() -> String {
+    format!("{PAIR_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0")
+}
+
+fn pair_cookie(pairing_id: &str) -> String {
+    format!("{PAIR_COOKIE}={pairing_id}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=300")
+}
+
+fn tier_of(name: &str) -> Option<Tier> {
+    match name {
+        "viewer" => Some(Tier::Viewer),
+        "chat" => Some(Tier::Chat),
+        "operator" => Some(Tier::Operator),
+        _ => None,
+    }
+}
+
+/// Box the refusal so `authenticate`'s `Err` variant stays small (clippy
+/// `result_large_err`); a `Response` is well over 100 bytes.
+fn deny(status: StatusCode, body: Value) -> Box<Response> {
+    Box::new(json_response(status, body))
+}
+
+/// The authenticated device, or the reply to send instead.
+async fn authenticate(state: &WebState, headers: &HeaderMap) -> Result<DeviceAuth, Box<Response>> {
+    let Some(token) = cookie_value(headers, DEVICE_COOKIE) else {
+        return Err(deny(
+            StatusCode::UNAUTHORIZED,
+            remote_error("", "unauthorized", "Pair this device with the computer first."),
+        ));
+    };
+    let hash = super::pairing::hash_token(&token);
+    let device = state
+        .daemon
+        .db
+        .remote_device_by_token_hash(&hash)
+        .ok()
+        .flatten();
+    // The lookup finds the row by digest; the digest itself is then confirmed
+    // in constant time, so a timing difference cannot narrow a guess.
+    let Some((device, stored)) = device else {
+        return Err(deny(
+            StatusCode::UNAUTHORIZED,
+            remote_error("", "unauthorized", "Pair this device with the computer first."),
+        ));
+    };
+    if !super::pairing::token_matches(&stored, &token) {
+        return Err(deny(
+            StatusCode::UNAUTHORIZED,
+            remote_error("", "unauthorized", "Pair this device with the computer first."),
+        ));
+    }
+    let revoked = device["revokedAt"].is_string() || device["signedOutAt"].is_string();
+    let security = state.remote.security(&state.daemon);
+    let expired = security.idle_expired(device["lastSeenAt"].as_str(), Utc::now());
+    if revoked || expired {
+        return Err(deny(
+            StatusCode::UNAUTHORIZED,
+            remote_error("", "device_revoked", "This device's pairing was removed or expired. Pair again to continue."),
+        ));
+    }
+    let id = device["id"].as_str().unwrap_or_default().to_string();
+    let name = device["name"].as_str().unwrap_or("A device").to_string();
+    // The Tailscale login header is a second check, never a way in on its own.
+    if let Some(login) = headers.get("tailscale-user-login").and_then(|value| value.to_str().ok()) {
+        let recorded = device["login"].as_str();
+        if recorded != Some(login) {
+            audit(&state.daemon, Some(&id), "denied", &format!("{name}'s Tailscale account no longer matches its pairing.")).await;
+            return Err(deny(
+                StatusCode::UNAUTHORIZED,
+                remote_error("", "device_revoked", "This device's pairing was removed or expired. Pair again to continue."),
+            ));
+        }
+    }
+    let Some(tier) = device["tier"].as_str().and_then(tier_of) else {
+        return Err(deny(
+            StatusCode::UNAUTHORIZED,
+            remote_error("", "device_revoked", "This device's pairing was removed or expired. Pair again to continue."),
+        ));
+    };
+    let _ = state.daemon.db.remote_device_touch(&id, &now_rfc3339());
+    Ok(DeviceAuth { id, name, tier })
+}
+
+/// A gateway denial carried as a daemon envelope.
+fn denial(id: &str, failure: RemoteFailure) -> Response {
+    json_response(failure.status, remote_error(id, failure.code, &failure.message))
+}
+
+/// §9: attachments are refused in v1, whatever shape they arrive in.
+pub(super) fn attachment_rule(method: &str, params: &Value) -> Option<String> {
+    if !matches!(method, "session.prompt" | "session.queue.add") {
+        return None;
+    }
+    let attachments = params.get("attachments").and_then(Value::as_array)?;
+    if attachments.is_empty() {
+        None
+    } else {
+        Some("attachments are not supported from remote devices yet".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pairing
+
+async fn pair_post(State(state): State<WebState>, headers: HeaderMap, body: Bytes) -> Response {
+    if body.len() > MAX_BODY_BYTES {
+        return json_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            remote_error("", "payload_too_large", "That request was too large."),
+        );
+    }
+    let Ok(input) = serde_json::from_slice::<Value>(&body) else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            remote_error("", "invalid_argument", "The pairing request could not be read."),
+        );
+    };
+    let Some(code) = input["code"].as_str() else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            remote_error("", "pairing_invalid", super::pairing::PAIRING_INVALID_MESSAGE),
+        );
+    };
+    let login = headers.get("tailscale-user-login").and_then(|value| value.to_str().ok()).map(str::to_owned);
+    let result = {
+        let mut pairing = state.remote.pairing.lock().unwrap();
+        pairing.submit(
+            code,
+            input["name"].as_str().unwrap_or(""),
+            input["kind"].as_str().unwrap_or(""),
+            input["platform"].as_str().unwrap_or(""),
+            login,
+            Utc::now(),
+        )
+    };
+    let pairing_id = match result {
+        Ok(pairing_id) => pairing_id,
+        Err(code) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                remote_error("", &code, super::pairing::PAIRING_INVALID_MESSAGE),
+            )
+        }
+    };
+    let (pending, expires_at) = {
+        let pairing = state.remote.pairing.lock().unwrap();
+        let pending = pairing.pending(&pairing_id, Utc::now()).unwrap_or(Value::Null);
+        let expires_at = pending["expiresAt"].as_str().unwrap_or_default().to_string();
+        (pending, expires_at)
+    };
+    // The desktop raises the approval dialog from this event.
+    state
+        .daemon
+        .emit(
+            "remote.pairing.requested",
+            json!({
+                "pairingId": pairing_id,
+                "name": pending["name"],
+                "kind": pending["kind"],
+                "platform": pending["platform"],
+                "login": pending["login"],
+                "expiresAt": expires_at,
+            }),
+        )
+        .await;
+    with_cookie(
+        json_response(StatusCode::ACCEPTED, json!({"state": "pending"})),
+        pair_cookie(&pairing_id),
+    )
+}
+
+async fn pair_get(State(state): State<WebState>, headers: HeaderMap) -> Response {
+    let Some(pairing_id) = cookie_value(&headers, PAIR_COOKIE) else {
+        return json_response(StatusCode::OK, json!({"state": "expired"}));
+    };
+    let poll = {
+        let mut pairing = state.remote.pairing.lock().unwrap();
+        pairing.poll(&pairing_id, Utc::now())
+    };
+    match poll {
+        super::pairing::Poll::Pending => json_response(StatusCode::OK, json!({"state": "pending"})),
+        super::pairing::Poll::Rejected => with_cookie(
+            json_response(StatusCode::OK, json!({"state": "rejected"})),
+            cleared_pair_cookie(),
+        ),
+        super::pairing::Poll::Expired => {
+            let outcome = state.remote.pairing.lock().unwrap().take_outcome(&pairing_id);
+            if let Some(outcome) = outcome {
+                if matches!(outcome, super::pairing::Outcome::Expired | super::pairing::Outcome::Burned) {
+                    state
+                        .daemon
+                        .emit("remote.pairing.completed", json!({"pairingId": pairing_id, "outcome": outcome.as_str()}))
+                        .await;
+                }
+            }
+            with_cookie(
+                json_response(StatusCode::OK, json!({"state": "expired"})),
+                cleared_pair_cookie(),
+            )
+        }
+        super::pairing::Poll::Approved { device, token } => {
+            let hash = super::pairing::hash_token(&token);
+            if state.daemon.db.remote_device_by_token_hash(&hash).ok().flatten().is_none() {                let device_id = device["id"].as_str().unwrap_or_default().to_string();
+                if state.daemon.db.remote_device_create(&device, &hash).is_ok() {
+                    audit(&state.daemon, Some(&device_id), "paired", &format!("{} was paired.", device["name"].as_str().unwrap_or("A device"))).await;
+                    state
+                        .daemon
+                        .emit(
+                            "remote.pairing.completed",
+                            json!({"pairingId": pairing_id, "outcome": "approved", "deviceId": device_id}),
+                        )
+                        .await;
+                }
+            }
+            let security = state.remote.security(&state.daemon);
+            let response = json_response(
+                StatusCode::OK,
+                json!({"state": "approved", "device": {"id": device["id"], "name": device["name"], "tier": device["tier"]}}),
+            );
+            let response = with_cookie(response, device_cookie(&token, security.idle_expiry_days));
+            with_cookie(response, cleared_pair_cookie())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// /api/me, /api/logout
+
+async fn me_get(State(state): State<WebState>, headers: HeaderMap) -> Response {
+    let device = match authenticate(&state, &headers).await {
+        Ok(device) => device,
+        Err(response) => return *response,
+    };
+    let security = state.remote.security(&state.daemon);
+    json_response(
+        StatusCode::OK,
+        json!({
+            "protocolVersion": 1,
+            "device": {"id": device.id, "name": device.name, "tier": device.tier.as_str()},
+            "host": {"name": state.remote.host_name},
+            "approvalsFromRemote": security.approvals_from_remote,
+            "quietHoursActive": security.quiet_hours_active(chrono::Local::now()),
+        }),
+    )
+}
+
+async fn logout_post(State(state): State<WebState>, headers: HeaderMap) -> Response {
+    let device = match authenticate(&state, &headers).await {
+        Ok(device) => device,
+        Err(response) => return *response,
+    };
+    let _ = state.daemon.db.remote_device_sign_out(&device.id, &now_rfc3339());
+    state.remote.close_socket(&device.id);
+    audit(
+        &state.daemon,
+        Some(&device.id),
+        "disconnected",
+        &format!("{} signed out.", device.name),
+    )
+    .await;
+    state
+        .daemon
+        .emit("remote.device.changed", json!({"action": "signed_out", "device": {"id": device.id}}))
+        .await;
+    with_cookie(
+        json_response(StatusCode::OK, json!({"signedOut": true})),
+        cleared_device_cookie(),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// /api/rpc
+
+async fn rpc_post(State(state): State<WebState>, headers: HeaderMap, body: Bytes) -> Response {
+    if body.len() > MAX_BODY_BYTES {
+        return json_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            remote_error("", "payload_too_large", "That request was too large."),
+        );
+    }
+    let device = match authenticate(&state, &headers).await {
+        Ok(device) => device,
+        Err(response) => return *response,
+    };
+    if !state.remote.rate_allow(&device.id) {
+        return denial(
+            "",
+            RemoteFailure::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Too many requests from this device; try again in a moment."),
+        );
+    }
+    let Ok(request) = serde_json::from_slice::<bloblex_protocol::RpcRequest>(&body) else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            remote_error("", "invalid_argument", "The request could not be read."),
+        );
+    };
+    let id = request.id.clone();
+    let method = request.method.clone();
+    let params = request.params.clone();
+    let security = state.remote.security(&state.daemon);
+    let quiet_hours = security.quiet_hours_active(chrono::Local::now());
+    let decision = policy::authorize(&RemoteCall {
+        tier: device.tier,
+        approvals_from_remote: security.approvals_from_remote,
+        method: method.clone(),
+        params: params.clone(),
+        quiet_hours,
+    });
+    if let policy::Decision::Denied { code, reason } = decision {
+        audit(
+            &state.daemon,
+            Some(&device.id),
+            "denied",
+            &format!("{} was refused {method}.", device.name),
+        )
+        .await;
+        let status = match code {
+            policy::DenialCode::InvalidParams => StatusCode::BAD_REQUEST,
+            _ => StatusCode::FORBIDDEN,
+        };
+        return denial(&id, RemoteFailure::new(status, code.as_str(), reason));
+    }
+    if let Some(reason) = attachment_rule(&method, &params) {
+        audit(
+            &state.daemon,
+            Some(&device.id),
+            "denied",
+            &format!("{} was refused {method}.", device.name),
+        )
+        .await;
+        return denial(
+            &id,
+            RemoteFailure::new(StatusCode::BAD_REQUEST, "invalid_params", reason),
+        );
+    }
+    match dispatch(&state.daemon, &method, params).await {
+        Ok(result) => {
+            if let Some(kind) = audit_kind(&method) {
+                audit(
+                    &state.daemon,
+                    Some(&device.id),
+                    kind,
+                    &format!("{} sent {method} from the remote app.", device.name),
+                )
+                .await;
+            }
+            let redacted = policy::redact_result(&method, &result, &RedactOptions::default());
+            json_response(StatusCode::OK, remote_ok(&id, redacted))
+        }
+        Err((status, error)) => json_response(status, remote_error(&id, &error.code, &error.message)),
+    }
+}
+
+/// The audit kind for a method that changes something, if any.
+fn audit_kind(method: &str) -> Option<&'static str> {
+    match policy::rule_for(method).map(|rule| rule.class) {
+        Some(policy::MethodClass::Chat) => Some("prompt"),
+        Some(policy::MethodClass::Approve) => Some("approval"),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// /api/events
+
+async fn events_get(State(state): State<WebState>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    let device = match authenticate(&state, &headers).await {
+        Ok(device) => device,
+        Err(response) => return *response,
+    };
+    // One live socket per device: registering replaces (and drops) the old
+    // sender, which is how the previous socket is closed.
+    let (kick, kick_rx) = mpsc::channel::<()>(1);
+    let (replaced, socket_id) = state.remote.register_socket(&device.id, kick);
+    let state_for_socket = state.clone();
+    if replaced {
+        audit(
+            &state.daemon,
+            Some(&device.id),
+            "connected",
+            &format!("{} opened a new connection; the older one was closed.", device.name),
+        )
+        .await;
+    } else {
+        audit(
+            &state.daemon,
+            Some(&device.id),
+            "connected",
+            &format!("{} connected.", device.name),
+        )
+        .await;
+    }
+    upgrade.on_upgrade(move |socket| events_loop(socket, state_for_socket, device, kick_rx, socket_id))
+}
+
+async fn events_loop(mut socket: WebSocket, state: WebState, device: DeviceAuth, mut kick: mpsc::Receiver<()>, socket_id: u64) {
+    // The live subscription is registered before replay, so a client may see a
+    // duplicate sequence and must discard it (PROTOCOL §6).
+    let mut live = state.daemon.events.subscribe();
+    let Ok(Some(Ok(Message::Text(first)))) = tokio::time::timeout(FIRST_MESSAGE_TIMEOUT, socket.next()).await else {
+        return;
+    };
+    let Ok(cursor) = serde_json::from_str::<Value>(&first) else {
+        return;
+    };
+    let mut after = cursor["afterSequence"].as_u64().unwrap_or(0);
+
+    loop {
+        let batch = state.daemon.db.replay_events(after, REPLAY_BATCH).unwrap_or_default();
+        let count = batch.len();
+        for event in batch {
+            if event["replayAvailable"] == false {
+                let _ = send_json(&mut socket, replay_gap(&event)).await;
+                return;
+            }
+            let sequence = event["sequence"].as_u64().unwrap_or(0);
+            if sequence <= after {
+                continue;
+            }
+            if let Some(redacted) = policy::redact_event(&event) {
+                if !send_json(&mut socket, redacted).await {
+                    return;
+                }
+            }
+            after = sequence;
+        }
+        if count < REPLAY_BATCH {
+            break;
+        }
+    }
+    let complete = json!({
+        "v": 1,
+        "eventId": format!("replay-complete-{after}"),
+        "sequence": after,
+        "timestamp": now_rfc3339(),
+        "type": "events.replay.complete",
+        "payload": {"throughSequence": after},
+    });
+    if !send_json(&mut socket, complete).await {
+        return;
+    }
+    loop {
+        tokio::select! {
+            item = live.recv() => match item {
+                Ok(event) if event.sequence > after => {
+                    let value = serde_json::to_value(&event).unwrap_or(Value::Null);
+                    if let Some(redacted) = policy::redact_event(&value) {
+                        if !send_json(&mut socket, redacted).await {
+                            break;
+                        }
+                    }
+                    after = event.sequence;
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    let _ = send_json(&mut socket, replay_gap(&json!({"replayAvailable": false}))).await;
+                    break;
+                }
+                Err(_) => break,
+            },
+            // A second socket for the same device, or a revoke, closes this one.
+            _ = kick.recv() => break,
+            message = socket.next() => match message {
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Err(_)) => break,
+                // Anything else from the device is ignored (§6).
+                _ => {}
+            },
+        }
+    }
+    state.remote.forget_socket(&device.id, socket_id);
+}
+
+fn replay_gap(payload: &Value) -> Value {
+    json!({
+        "v": 1,
+        "eventId": "gap",
+        "sequence": 0,
+        "timestamp": now_rfc3339(),
+        "type": "replay.gap",
+        "payload": payload,
+    })
+}
+
+async fn send_json(socket: &mut WebSocket, value: Value) -> bool {
+    socket.send(Message::Text(value.to_string().into())).await.is_ok()
+}
+
+// ---------------------------------------------------------------------------
+// Static files
+
+/// The PWA files, listed once at startup. Anything not in the manifest is 404,
+/// which is also what rules out path traversal: a decoded `..` is simply not a
+/// key.
+pub struct StaticFiles {
+    manifest: HashMap<String, PathBuf>,
+}
+
+impl Default for StaticFiles {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl StaticFiles {
+    pub fn empty() -> Self {
+        Self {
+            manifest: HashMap::new(),
+        }
+    }
+
+    /// Build the manifest from `BITBOTS_REMOTE_WEB_DIR`. An absent or empty
+    /// value leaves the gateway with the built-in "not installed" page.
+    pub fn from_env() -> Self {
+        match std::env::var_os("BITBOTS_REMOTE_WEB_DIR") {
+            Some(dir) if !dir.is_empty() => Self::load(PathBuf::from(dir)),
+            _ => Self::empty(),
+        }
+    }
+
+    pub fn load(root: PathBuf) -> Self {
+        let mut manifest = HashMap::new();
+        collect_files(&root, &root, &mut manifest, 0);
+        if manifest.contains_key("/index.html") {
+            let index = root.join("index.html");
+            manifest.insert("/".to_string(), index);
+        }
+        Self { manifest }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.manifest.is_empty() || !self.manifest.contains_key("/")
+    }
+
+    pub fn get(&self, path: &str) -> Option<&PathBuf> {
+        // A decoded traversal is never a key, but refuse the obvious shapes
+        // before the lookup so the intent is explicit.
+        if path.contains("..") || path.contains('\\') || path.contains('%') {
+            return None;
+        }
+        self.manifest.get(path)
+    }
+}
+
+fn collect_files(root: &Path, dir: &Path, manifest: &mut HashMap<String, PathBuf>, depth: usize) {
+    if depth > 8 || manifest.len() >= MAX_MANIFEST_ENTRIES {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(root, &path, manifest, depth + 1);
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(root) else { continue };
+        let key = format!("/{}", relative.to_string_lossy().replace('\\', "/"));
+        manifest.insert(key, path);
+        if manifest.len() >= MAX_MANIFEST_ENTRIES {
+            return;
+        }
+    }
+}
+
+/// The page served when no PWA is installed beside the daemon.
+const NOT_INSTALLED_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Bitbots Remote</title></head><body style=\"font-family:system-ui,sans-serif;margin:2rem;line-height:1.5\"><h1>Bitbots Remote is not installed</h1><p>This computer is serving Remote, but its web app files are not on disk yet. Install the packaged build, then reload this page.</p></body></html>";
+
+async fn static_file(State(state): State<WebState>, uri: Uri) -> Response {
+    let path = uri.path();
+    if state.remote.web.is_empty() {
+        if path == "/" || path == "/index.html" {
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                NOT_INSTALLED_PAGE,
+            )
+                .into_response();
+        }
+        return not_found();
+    }
+    let Some(file) = state.remote.web.get(path) else {
+        return not_found();
+    };
+    match std::fs::read(file) {
+        Ok(bytes) => {
+            let content_type = content_type_of(path);
+            (StatusCode::OK, [(header::CONTENT_TYPE, content_type)], bytes).into_response()
+        }
+        Err(_) => not_found(),
+    }
+}
+
+fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, "Not found").into_response()
+}
+
+fn content_type_of(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("") {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" | "map" => "application/json",
+        "webmanifest" => "application/manifest+json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "ico" => "image/x-icon",
+        "webp" => "image/webp",
+        "woff2" => "font/woff2",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}

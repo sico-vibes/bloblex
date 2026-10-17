@@ -49,9 +49,7 @@ mod backup;
 mod memory;
 mod questions;
 mod skills;
-// Remote mode (P1). WP6a adds the shared policy port; WP6b is the first
-// production caller, so the module is unused until then.
-#[allow(dead_code)]
+// Remote mode (P1): the gateway, its policy and its `remote.*` API.
 mod remote;
 
 use quota::{normalize_codex_quota, PollFailure, PollOutcome, QuotaPollGate, QUOTA_POLL_INTERVAL, QUOTA_REQUEST_TIMEOUT};
@@ -82,6 +80,9 @@ struct AppState {
     memory: Arc<memory::Memory>,
     skills: Arc<skills::Skills>,
     backup_previews: Arc<backup::BackupPreviews>,
+    /// Remote mode (FIX29 WP6b): the listener, the live offer, the device
+    /// sockets and the security options.
+    remote: Arc<remote::RemoteState>,
     /// Serialises provider activation per session so a warm-up and a first send
     /// cannot resume the same conversation twice.
     activation_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
@@ -1076,6 +1077,11 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         }),
         "settings.set" => {
             let k = p["key"].as_str().unwrap_or("");
+            // Remote preferences move only through the `remote.*` family, so a
+            // stale client cannot write them behind the policy.
+            if k.starts_with("remote.") {
+                return Err(derr("invalid_argument", "Remote settings change only through Settings › Remote.", StatusCode::BAD_REQUEST));
+            }
             let value = validate_setting(k, &p["value"])?;
             let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions";
             let events=st.db.set_setting(k, &value).map_err(|e| {
@@ -1089,6 +1095,18 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             Ok(json!({"saved":true}))
         }
         "pricing.list" | "pricing.override" | "subscription.list" | "subscription.save" => Err(derr("unsupported", "monetary valuation and subscription controls have been retired; historical records are preserved", StatusCode::NOT_FOUND)),
+        "remote.status"
+        | "remote.enable"
+        | "remote.disable"
+        | "remote.pair.begin"
+        | "remote.pair.cancel"
+        | "remote.pair.confirm"
+        | "remote.devices.list"
+        | "remote.devices.update"
+        | "remote.devices.revoke"
+        | "remote.security.get"
+        | "remote.security.set"
+        | "remote.activity.list" => remote::rpc(st, method, &p).await,
         _ => Err(derr(
             "unsupported",
             "method is not supported",
@@ -3699,6 +3717,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         memory: Arc::new(memory::Memory::default()),
         skills: Arc::new(skills::Skills::default()),
         backup_previews: Arc::new(backup::BackupPreviews::default()),
+        remote: Arc::new(remote::RemoteState::new()),
         activation_locks: Arc::new(Mutex::new(HashMap::new())),
         starting_cancels: Arc::new(Mutex::new(HashSet::new())),
         warm_lru: Arc::new(Mutex::new(Vec::new())),
@@ -3746,6 +3765,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             catalog::prewarm_all(&discovery_state).await;
         }
     });
+    // Remote mode: start the gateway if it was on, and record the Tailscale
+    // state either way. A problem becomes a status the page explains.
+    let remote_state = st.clone();
+    tokio::spawn(async move { remote::start_at_boot(&remote_state).await; });
     println!(
         "{}",
         serde_json::to_string(&DaemonReady {
@@ -4634,9 +4657,9 @@ mod phase2a_tests {
         std::fs::remove_dir_all(path).unwrap();
     }
 
-    fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
+    pub(crate) fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {

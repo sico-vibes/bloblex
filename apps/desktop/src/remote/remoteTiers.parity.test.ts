@@ -63,8 +63,23 @@ function parseDispatch(source: string): ParsedDispatch {
   const body = dispatchBody(source)
   const methods = new Set<string>()
   let arms = 0
-  for (const line of body.split(/\r?\n/)) {
-    // Dispatch arms sit at eight spaces of indentation; nested matches go deeper.
+  // Dispatch arms sit at eight spaces of indentation; nested matches go deeper.
+  // An arm may be split across lines (`"a"\n | "b" => ...`), so the first
+  // eight-space line without an `=>` is joined with the lines that follow until
+  // the arm arrow appears. That keeps rustfmt's multi-line alternation arms
+  // parseable instead of silently dropping them.
+  const lines = body.split(/\r?\n/)
+  const joined: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^ {8}"/.test(lines[i])) continue
+    let arm = lines[i]
+    while (!arm.includes('=>') && i + 1 < lines.length) {
+      i++
+      arm += ` ${lines[i].trim()}`
+    }
+    joined.push(arm)
+  }
+  for (const line of joined) {
     const arm = /^ {8}("(?:[a-z0-9_.]+)"(?:\s*\|\s*"[a-z0-9_.]+")*)\s*=>/.exec(line)
     if (!arm) continue
     arms++

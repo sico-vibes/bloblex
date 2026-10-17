@@ -772,6 +772,11 @@ async fn quota_poll_loop(st: AppState, mut events: broadcast::Receiver<EventEnve
     }
 }
 
+/// FIX36 D1: the default description of the built-in Manager.
+const MANAGER_DESCRIPTION: &str = "Runs your team: knows every project and bot, plans the work and asks before it acts.";
+/// FIX36 D1: the Manager's default persona (well under the 1200-character limit).
+const MANAGER_INSTRUCTIONS: &str = "You are the Manager. You work across all of the user's projects and know every bot on the team. When the user describes a goal, break it into steps, decide which project and which bots it touches, and propose the work. Ask the user before consequential actions: creating a project, creating a bot, assigning a task, or changing your own playbook. Keep answers short and concrete: what you know, what you plan, what you need. Delegate with message_blob by writing a self-contained brief. Never guess about the user's projects: call list_projects and list_blobs first, then act. If a request is vague, ask one clarifying question instead of inventing scope.";
+
 async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, DispatchError> {
     match method {
         "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
@@ -807,6 +812,20 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         }
         "agent.get" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?; st.db.agent_get(id).map(|agent|json!({"agent":agent})).map_err(agent_error) }
         "permissions.policy.get" => { let default=st.db.default_approval_mode().map_err(agent_error)?;let agents=st.db.agent_list(false,None).map_err(agent_error)?;let per_agent=agents.iter().map(|a|json!({"agentId":a["id"],"mode":a["approvalMode"],"effectiveMode":a["effectiveApprovalMode"]})).collect::<Vec<_>>();Ok(json!({"defaultMode":default,"perAgent":per_agent})) }
+        "manager.get" => st.db.manager_agent().map(|manager| json!({"manager": manager})).map_err(agent_error),
+        "manager.ensure" => {
+            if let Some(manager) = st.db.manager_agent().map_err(agent_error)? { return Ok(json!({"manager": manager, "created": false})); }
+            let mut fields = if p.is_object() { p.clone() } else { json!({}) };
+            if let Some(object) = fields.as_object_mut() { object.remove("agentId"); object.remove("systemRole"); object.remove("role"); }
+            if !fields["name"].is_string() { fields["name"] = json!("Manager"); }
+            if !fields["description"].is_string() { fields["description"] = json!(MANAGER_DESCRIPTION); }
+            if !fields["instructions"].is_string() { fields["instructions"] = json!(MANAGER_INSTRUCTIONS); }
+            fields["role"] = json!("Manager");
+            fields["approvalMode"] = json!("ask");
+            fields["systemRole"] = json!("manager");
+            let agent = agent_create_from_rpc(st, fields).await?;
+            Ok(json!({"manager": agent, "created": true}))
+        }
         "agent.create" => Ok(json!({"agent": agent_create_from_rpc(st, p.clone()).await?})),
         "agent.update" => {
             let id = p["agentId"].as_str().ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
@@ -831,7 +850,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.broadcast_persisted(events);
             Ok(json!({"agent":agent}))
         }
-        "agent.delete" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;st.broadcast_persisted(events);automations::pause_for_agent(st, id).await;Ok(json!({"agent":agent})) }
+        "agent.delete" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;if st.db.agent_get(id).map_err(agent_error)?["systemRole"].as_str()==Some("manager"){return Err(derr("conflict","The Manager can't be removed; you can rename it or change its model",StatusCode::CONFLICT));}let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;st.broadcast_persisted(events);automations::pause_for_agent(st, id).await;Ok(json!({"agent":agent})) }
         "agent.reorder" => { let rt=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;let ids=p["agentIds"].as_array().filter(|a|a.iter().all(Value::is_string)).ok_or_else(||derr("invalid_argument","agentIds must be an array of strings",StatusCode::BAD_REQUEST))?.iter().map(|v|v.as_str().unwrap().to_owned()).collect::<Vec<_>>();let (agents,events)=st.db.agent_reorder(rt,&ids).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agents":agents})) }
         "app.snapshot" => st.db.snapshot().map_err(|e| {
             derr(
@@ -1418,7 +1437,7 @@ async fn resolve_session_model_lock(
 /// Bitbots' own MCP tools (list_blobs, list_conversations, message_blob) are app-owned and safe.
 fn is_team_tool_permission(raw: &Value) -> bool {
     let text = raw.to_string();
-    ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob", "bloblex_list_conversations", "bloblex__list_conversations", "bloblex_memory_", "bloblex__memory_", "bloblex_list_skills", "bloblex__list_skills", "bloblex_load_skill", "bloblex__load_skill", "bloblex_read_skill_file", "bloblex__read_skill_file", "bloblex_list_projects", "bloblex__list_projects", "bloblex_create_blob", "bloblex__create_blob", "bloblex_update_blob", "bloblex__update_blob"].iter().any(|needle| text.contains(needle))
+    ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob", "bloblex_list_conversations", "bloblex__list_conversations", "bloblex_memory_", "bloblex__memory_", "bloblex_list_skills", "bloblex__list_skills", "bloblex_load_skill", "bloblex__load_skill", "bloblex_read_skill_file", "bloblex__read_skill_file", "bloblex_list_projects", "bloblex__list_projects", "bloblex_update_blob", "bloblex__update_blob"].iter().any(|needle| text.contains(needle))
 }
 fn parse_mode(s:&str)->ApprovalMode{match s{"auto"=>ApprovalMode::Auto,"bypass"=>ApprovalMode::Bypass,_=>ApprovalMode::Ask}}
 fn provider_mode(provider:&str)->&'static str{match provider{"claude"=>"bypassPermissions","codex"=>"never",_=>"daemon_allow_all"}}
@@ -1577,8 +1596,9 @@ async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) 
 }
 /// The shared body of `agent.create`: normalize the requested model/effort
 /// against the runtime catalog, validate it, persist the blob and broadcast the
-/// normal creation events. The team leader's `create_blob` tool reuses this so a
-/// blob it creates goes through exactly the same path as the RPC.
+/// normal creation events. `manager.ensure` (and the FIX36 D2 `propose_bot`
+/// approval) reuse this so a bot created outside `agent.create` goes through
+/// exactly the same path as the RPC.
 async fn agent_create_from_rpc(st: &AppState, mut fields: Value) -> Result<Value, DispatchError> {
     let runtime_id = fields["runtimeId"].as_str().ok_or_else(|| derr("invalid_argument", "runtimeId is required", StatusCode::BAD_REQUEST))?.to_owned();
     if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id.as_str()).cloned() {
@@ -4353,7 +4373,7 @@ mod phase2a_tests {
         team::mcp_rpc(st, session, "mcp.tools.call", &json!({"name":name,"arguments":args})).await.unwrap()
     }
     #[tokio::test]
-    async fn leader_delegates_to_a_teammate_and_is_woken_by_the_relayed_reply() {
+    async fn manager_delegates_to_a_teammate_and_is_woken_by_the_relayed_reply() {
         let (mut st, _) = state();
         let runtime_id = "rt-team";
         st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
@@ -4363,23 +4383,24 @@ mod phase2a_tests {
         st.db.set_setting("exec_gate.codex.instructions", &json!(true)).unwrap();
         let data_dir = std::env::temp_dir().join(format!("bloblex-team-{}", Uuid::new_v4()));
         *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
-        let lead = st.db.agent_create(&json!({"name":"Lead","runtimeId":runtime_id,"description":"Plans the work."})).unwrap().0;
+        let lead = dispatch(&st, "manager.ensure", json!({"name":"Lead","runtimeId":runtime_id,"description":"Plans the work."})).await.unwrap()["manager"].clone();
         let mate = st.db.agent_create(&json!({"name":"Mate","runtimeId":runtime_id})).unwrap().0;
         let (lead_id, mate_id) = (lead["id"].as_str().unwrap().to_owned(), mate["id"].as_str().unwrap().to_owned());
-        dispatch(&st, "agent.team.update", json!({"agentId":lead_id,"leader":true,"role":"CTO"})).await.unwrap();
+        assert_eq!(lead["systemRole"], "manager");
+        dispatch(&st, "agent.team.update", json!({"agentId":lead_id,"role":"CTO"})).await.unwrap();
 
         let opened = dispatch(&st, "agent.conversation", json!({"agentId":lead_id})).await.unwrap();
         assert_eq!(opened["created"], true);
         let main = opened["session"]["id"].as_str().unwrap().to_owned();
         assert_eq!(dispatch(&st, "agent.conversation", json!({"agentId":lead_id})).await.unwrap()["session"]["id"], main.as_str(), "one main conversation per blob");
         let lead_instructions = adapter.instructions.lock().unwrap()[&main].clone();
-        for expected in ["You are Lead", "Your role: CTO.", "What you are for: Plans the work.", "address them as the admin", "You are a casual bot", "You are the team leader", "message_blob"] {
+        for expected in ["You are Lead, the user's Manager", "Your role: CTO.", "What you are for: Plans the work.", "address them as the admin", "You are a casual bot", "you ask the user before creating projects", "message_blob"] {
             assert!(lead_instructions.contains(expected), "missing {expected:?} in {lead_instructions}");
         }
 
         let listed = call_tool(&st, &main, "list_blobs", json!({})).await;
         let roster = listed["content"][0]["text"].as_str().unwrap();
-        assert!(roster.contains("- Lead (you) [leader] — CTO") && roster.contains("- Mate"), "{roster}");
+        assert!(roster.contains("- Lead (you) [manager] — CTO") && roster.contains("- Mate"), "{roster}");
         for (args, error) in [(json!({"blob":"Lead","message":"hi"}), "cannot message yourself"), (json!({"blob":"Nobody","message":"hi"}), "No teammate is called that"), (json!({"blob":"Mate","message":"  "}), "message is required")] {
             let result = call_tool(&st, &main, "message_blob", args).await;
             assert_eq!(result["isError"], true);
@@ -4396,7 +4417,7 @@ mod phase2a_tests {
         assert!(lead_instructions.contains("list_conversations"));
         assert!(adapter.instructions.lock().unwrap()[&side].contains("This is a side conversation. Messages here come from Lead"));
 
-        // The teammate answers; its reply is relayed into the leader's conversation, which wakes the leader.
+        // The teammate answers; its reply is relayed into the Manager's conversation, which wakes the Manager.
         let side_messages = wait_for_messages(&st, &side, |m| m.iter().any(|m| m["role"] == "assistant")).await;
         assert_eq!(side_messages[0]["meta"]["kind"], "blob_message");
         let main_messages = wait_for_messages(&st, &main, |m| m.iter().any(|m| m["role"] == "assistant" && m["content"] == "handled: [Reply from Mate]")).await;
@@ -4429,7 +4450,7 @@ mod phase2a_tests {
         assert!(listed.contains(&format!("- {side} · \"Check the build\" with Mate · you started it")) && listed.contains("\"Release notes\"") && listed.contains("Latest reply: handled:"), "{listed}");
         let unknown = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"hi","conversation":"missing"})).await;
         assert!(unknown["content"][0]["text"].as_str().unwrap().contains("No conversation has the id missing"));
-        // The teammate cannot continue a conversation the leader started; it answers there automatically.
+        // The teammate cannot continue a conversation the Manager started; it answers there automatically.
         let mate_main = dispatch(&st, "agent.conversation", json!({"agentId":mate_id})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
         let reversed = call_tool(&st, &mate_main, "message_blob", json!({"blob":"Lead","message":"hi","conversation":side})).await;
         assert!(reversed["content"][0]["text"].as_str().unwrap().contains("Lead started \"Check the build\" with you"), "{reversed}");
@@ -4499,108 +4520,99 @@ mod phase2a_tests {
         assert!(event.payload["beforeMessageId"].is_string());
     }
     #[tokio::test]
-    async fn team_leader_tools_create_and_update_but_are_hidden_from_non_leaders() {
+    async fn manager_lists_projects_and_updates_blobs_while_ordinary_bots_are_refused() {
         let (mut st, _) = state();
         let runtime_id = "rt-create";
         st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
         *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
         st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:Arc::new(TeamAdapter::default()), claude:Arc::new(ClaudeAdapter::default()) });
-        let lead = st.db.agent_create(&json!({"name":"Boss","runtimeId":runtime_id})).unwrap().0;
+        let boss = dispatch(&st, "manager.ensure", json!({"name":"Boss","runtimeId":runtime_id})).await.unwrap()["manager"].clone();
         let mate = st.db.agent_create(&json!({"name":"Worker","runtimeId":runtime_id})).unwrap().0;
-        let lead_id = lead["id"].as_str().unwrap().to_owned();
+        let boss_id = boss["id"].as_str().unwrap().to_owned();
         let mate_id = mate["id"].as_str().unwrap().to_owned();
-        st.db.agent_set_team(&lead_id, &json!({"leader":true})).unwrap();
-        st.db.create_session_for_agent("boss-create", runtime_id, "codex", ".", "Boss", Some(&lead_id)).unwrap();
+        st.db.create_session_for_agent("boss-create", runtime_id, "codex", ".", "Boss", Some(&boss_id)).unwrap();
         st.db.update_session_state("boss-create", "idle").unwrap();
         st.db.create_session_for_agent("worker-create", runtime_id, "codex", ".", "Worker", Some(&mate_id)).unwrap();
         st.db.update_session_state("worker-create", "idle").unwrap();
 
-        // A non-leader is not offered the creation tools and is refused with the leader tag.
+        // An ordinary bot is offered neither manager tool and is refused with the Manager's name.
         let worker_tools = tool_names(&team::mcp_rpc(&st, "worker-create", "mcp.tools.list", &json!({})).await.unwrap());
-        for tool in ["list_projects", "create_blob", "update_blob"] { assert!(!worker_tools.contains(&tool.to_owned()), "{tool} must be hidden from non-leaders"); }
-        for tool in ["list_projects", "create_blob", "update_blob"] {
+        for tool in ["list_projects", "update_blob", "create_blob"] { assert!(!worker_tools.contains(&tool.to_owned()), "{tool} must be hidden from an ordinary bot"); }
+        for tool in ["list_projects", "update_blob", "create_blob"] {
             let refused = call_tool(&st, "worker-create", tool, json!({"blob":"Boss","name":"Nope"})).await;
-            assert_eq!(refused["isError"], true, "{tool} must be refused for a non-leader");
-            assert_eq!(refused["content"][0]["text"], "Only the team leader (Boss) can create bots. Ask the user to tag @Boss.");
+            assert_eq!(refused["isError"], true, "{tool} must be refused for an ordinary bot");
+            if tool == "create_blob" { assert_eq!(refused["content"][0]["text"], "Unknown tool create_blob."); }
+            else { assert_eq!(refused["content"][0]["text"], "Only the Manager can list projects or change bots. Ask the Manager (@Boss)."); }
         }
-        // The leader sees all three.
+        // The Manager sees the two manager tools; create_blob is gone from the bridge.
         let boss_tools = tool_names(&team::mcp_rpc(&st, "boss-create", "mcp.tools.list", &json!({})).await.unwrap());
-        for tool in ["list_projects", "create_blob", "update_blob"] { assert!(boss_tools.contains(&tool.to_owned()), "{tool} must be listed for the leader"); }
+        for tool in ["list_projects", "update_blob"] { assert!(boss_tools.contains(&tool.to_owned()), "{tool} must be listed for the Manager"); }
+        assert!(!boss_tools.contains(&"create_blob".to_owned()), "create_blob is removed from the bridge (D2 replaces it with propose_bot)");
 
-        // An unknown project lists the available ones; list_projects shows them.
-        let project = st.db.project_create("Rocket", Some(".")).unwrap().0;
-        let project_id = project["id"].as_str().unwrap().to_owned();
-        let unknown = call_tool(&st, "boss-create", "create_blob", json!({"name":"Pilot","project":"Nowhere"})).await;
-        assert_eq!(unknown["isError"], true);
-        assert!(unknown["content"][0]["text"].as_str().unwrap().contains("Available projects: Rocket"), "{unknown}");
+        // list_projects shows the projects; update_blob edits a colleague.
+        st.db.project_create("Rocket", Some(".")).unwrap();
         let projects = call_tool(&st, "boss-create", "list_projects", json!({})).await;
         assert!(projects["content"][0]["text"].as_str().unwrap().contains("Rocket"), "{projects}");
-
-        // The leader creates a blob attached to the project.
-        let created = call_tool(&st, "boss-create", "create_blob", json!({"name":"CTO Bot","role":"CTO","description":"Owns the plan.","instructions":"Be concise.","project":"Rocket"})).await;
-        assert!(created.get("isError").is_none(), "{created}");
-        let text = created["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Created bot CTO Bot (CTO) in Rocket on codex"), "{text}");
-        let cto_id = st.db.agent_list(false, None).unwrap().iter().find(|a| a["name"] == "CTO Bot").unwrap()["id"].as_str().unwrap().to_owned();
-        let cto = st.db.agent_get(&cto_id).unwrap();
-        assert_eq!(cto["role"], "CTO");
-        assert_eq!(cto["projectId"], project_id.as_str());
-        assert_eq!(cto["leader"], false);
-        assert_eq!(cto["effectiveApprovalMode"], "ask");
-        // The creation is recorded as a team note in the leader's conversation.
-        let notes = st.db.session_detail("boss-create").unwrap()["messages"].as_array().cloned().unwrap_or_default();
-        assert!(notes.iter().any(|m| m["role"] == "notice" && m["content"].as_str().unwrap_or("").contains("Created bot CTO Bot (CTO) in Rocket.")), "{notes:?}");
-
-        // Duplicate names, unknown providers and oversized fields are refused.
-        assert_eq!(call_tool(&st, "boss-create", "create_blob", json!({"name":"cto bot"})).await["isError"], true);
-        assert_eq!(call_tool(&st, "boss-create", "create_blob", json!({"name":"X","provider":"gemini"})).await["isError"], true);
-        assert_eq!(call_tool(&st, "boss-create", "create_blob", json!({"name":"Y","role":"z".repeat(41)})).await["isError"], true);
-
-        // update_blob edits role, description and instructions but never the leader flag.
-        let updated = call_tool(&st, "boss-create", "update_blob", json!({"blob":"CTO Bot","role":"VP","description":"Sets direction.","instructions":"New style."})).await;
+        let updated = call_tool(&st, "boss-create", "update_blob", json!({"blob":"Worker","role":"VP","description":"Sets direction.","instructions":"New style."})).await;
         assert!(updated.get("isError").is_none(), "{updated}");
-        let cto = st.db.agent_get(&cto_id).unwrap();
-        assert_eq!(cto["role"], "VP");
-        assert_eq!(cto["description"], "Sets direction.");
-        assert_eq!(cto["instructions"], "New style.");
-        assert_eq!(cto["leader"], false);
+        let worker = st.db.agent_get(&mate_id).unwrap();
+        assert_eq!((worker["role"].as_str(), worker["description"].as_str(), worker["instructions"].as_str()), (Some("VP"), Some("Sets direction."), Some("New style.")));
+        assert_eq!(worker["leader"], false);
 
-        // At most five bots per turn.
-        for index in 0..4 { let r = call_tool(&st, "boss-create", "create_blob", json!({"name":format!("Bot {index}")})).await; assert!(r.get("isError").is_none(), "{r}"); }
-        let sixth = call_tool(&st, "boss-create", "create_blob", json!({"name":"Bot six"})).await;
-        assert_eq!(sixth["isError"], true);
-        assert!(sixth["content"][0]["text"].as_str().unwrap().contains("already created 5 bots"), "{sixth}");
-
-        // At most twelve non-archived bots in total.
-        for index in 0..5 { st.db.agent_create(&json!({"name":format!("Filler {index}"),"runtimeId":runtime_id})).unwrap(); }
-        st.db.create_session_for_agent("boss-create-2", runtime_id, "codex", ".", "Boss 2", Some(&lead_id)).unwrap();
-        st.db.update_session_state("boss-create-2", "idle").unwrap();
-        let full = call_tool(&st, "boss-create-2", "create_blob", json!({"name":"Too many"})).await;
-        assert_eq!(full["isError"], true);
-        assert!(full["content"][0]["text"].as_str().unwrap().contains("at most 12"), "{full}");
+        // The Manager is permanent: it cannot be archived, given a project or demoted.
+        assert_eq!(dispatch(&st, "agent.delete", json!({"agentId":boss_id})).await.unwrap_err().1.message, "The Manager can't be removed; you can rename it or change its model");
+        let project_id = st.db.project_list().unwrap()[0]["id"].as_str().unwrap().to_owned();
+        assert_eq!(dispatch(&st, "agent.team.update", json!({"agentId":boss_id,"projectId":project_id})).await.unwrap_err().1.message, "The Manager works across every project");
+        assert_eq!(dispatch(&st, "agent.team.update", json!({"agentId":boss_id,"leader":false})).await.unwrap_err().1.message, "The Manager can't be removed; you can rename it or change its model");
+        // ... but its name can change, and it stays the Manager.
+        let renamed = dispatch(&st, "agent.update", json!({"agentId":boss_id,"name":"Chief"})).await.unwrap()["agent"].clone();
+        assert_eq!(renamed["name"], "Chief");
+        assert_eq!(st.db.agent_get(&boss_id).unwrap()["systemRole"], "manager");
     }
 
     #[tokio::test]
-    async fn runtime_instructions_tag_the_leader_and_reserve_creation_for_them() {
-        let (st, _) = state();
+    async fn manager_ensure_is_idempotent_and_manager_get_reports_it() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-manager-get";
+        st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
+        *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
+        assert!(dispatch(&st, "manager.get", json!({})).await.unwrap()["manager"].is_null());
+        let first = dispatch(&st, "manager.ensure", json!({"runtimeId":runtime_id})).await.unwrap();
+        assert_eq!(first["created"], true);
+        let manager = first["manager"].clone();
+        assert_eq!((manager["name"].as_str(), manager["role"].as_str(), manager["systemRole"].as_str()), (Some("Manager"), Some("Manager"), Some("manager")));
+        assert_eq!(manager["description"], "Runs your team: knows every project and bot, plans the work and asks before it acts.");
+        assert_eq!(manager["effectiveApprovalMode"], "ask");
+        assert!(manager["projectId"].is_null());
+        assert!(manager["instructions"].as_str().unwrap().chars().count() < 1200, "the manager persona stays short");
+        // A second call returns the same bot and creates nothing, whatever it is asked for.
+        let second = dispatch(&st, "manager.ensure", json!({"runtimeId":runtime_id,"name":"Other"})).await.unwrap();
+        assert_eq!(second["created"], false);
+        assert_eq!(second["manager"]["id"], manager["id"]);
+        assert_eq!(st.db.agent_list(false, None).unwrap().len(), 1, "only the Manager exists");
+        assert_eq!(dispatch(&st, "manager.get", json!({})).await.unwrap()["manager"]["id"], manager["id"]);
+    }
+    #[tokio::test]
+    async fn runtime_instructions_name_the_manager_and_reserve_projects_for_it() {
+        let (mut st, _) = state();
         let runtime_id = "rt-instructions";
         st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
-        let lead = st.db.agent_create(&json!({"name":"Boss","runtimeId":runtime_id})).unwrap().0;
+        *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
         let mate = st.db.agent_create(&json!({"name":"Worker","runtimeId":runtime_id})).unwrap().0;
         let main = json!({"kind":"main"});
-        // With no leader yet, a non-leader is told to ask the user to set one.
-        let no_leader = team::runtime_instructions(&st, &mate, &main, std::path::Path::new("."));
-        assert!(no_leader.contains("need to set a team leader"), "{no_leader}");
-        assert!(!no_leader.contains("tag the leader as @"), "{no_leader}");
-        // The leader (the viewer) gets the creation paragraph, not the refusal.
-        st.db.agent_set_team(lead["id"].as_str().unwrap(), &json!({"leader":true})).unwrap();
-        let lead = st.db.agent_get(lead["id"].as_str().unwrap()).unwrap();
-        let as_leader = team::runtime_instructions(&st, &lead, &main, std::path::Path::new("."));
-        assert!(as_leader.contains("You are the only bot who can create teammates"), "{as_leader}");
-        assert!(!as_leader.contains("You cannot create or change bots"), "{as_leader}");
-        // Another blob is told to tag the leader by its real name.
+        // With no Manager yet, an ordinary bot is told to ask the user to set one up.
+        let no_manager = team::runtime_instructions(&st, &mate, &main, std::path::Path::new("."));
+        assert!(no_manager.contains("tell the user they need to set up a Manager"), "{no_manager}");
+        assert!(!no_manager.contains("tag the Manager as @"), "{no_manager}");
+        // The Manager gets the manager paragraph, not the refusal.
+        let boss = dispatch(&st, "manager.ensure", json!({"name":"Boss","runtimeId":runtime_id})).await.unwrap()["manager"].clone();
+        let as_manager = team::runtime_instructions(&st, &boss, &main, std::path::Path::new("."));
+        assert!(as_manager.contains("You are Boss, the user's Manager"), "{as_manager}");
+        assert!(as_manager.contains("you ask the user before creating projects, bots or assigning tasks."), "{as_manager}");
+        assert!(!as_manager.contains("You cannot create projects or bots"), "{as_manager}");
+        // Another bot is told to tag the Manager by its real name.
         let named = team::runtime_instructions(&st, &mate, &main, std::path::Path::new("."));
-        assert!(named.contains("tag the leader as @Boss so the user can ask them"), "{named}");
+        assert!(named.contains("tag the Manager as @Boss so the user can ask them"), "{named}");
     }
     #[tokio::test]
     async fn team_prose_always_says_bot() {
@@ -4612,7 +4624,7 @@ mod phase2a_tests {
         let as_bitbots = team::runtime_instructions(&st, &agent, &link, std::path::Path::new("."));
         assert!(as_bitbots.contains("a bot: one of the user's AI teammates"), "{as_bitbots}");
         let tools = team::mcp_tools_for_test();
-        assert!(tools.iter().any(|tool| tool["description"].as_str().is_some_and(|text| text.contains("Create a new bot"))), "tool descriptions follow the word too");
+        assert!(tools.iter().any(|tool| tool["description"].as_str().is_some_and(|text| text.contains("Update an existing bot"))), "tool descriptions follow the word too");
 
         // The Blobots look keeps its art but the prose is still "bot".
         dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"blobots"})).await.unwrap();

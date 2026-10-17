@@ -241,10 +241,24 @@ fn migrate_agent_outfit_ids(c: &mut Connection, path: Option<&Path>, backup_done
     c.pragma_update(None, "foreign_keys", "OFF")?;
     let result = (|| -> Result<(), StorageError> {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let indexes: Vec<String> = {
-            let mut q = tx.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='agents' AND sql IS NOT NULL ORDER BY name")?;
-            let rows = q.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
-            rows
+        // Capture the indexes and the columns each one sits on *before* the old
+        // table is dropped. The rebuild below recreates only the v9 shape, so an
+        // index whose columns a later additive pass adds (FIX36's
+        // `idx_agents_manager` on `system_role`, added by `ensure_team_schema`,
+        // which recreates the index once the column exists) must not be replayed
+        // here: it would fail with "no such column: system_role" on a database
+        // that already carried it, for example a newer database whose version
+        // marker was reset, as the old-version migration tests do.
+        let indexes: Vec<(String, Vec<String>)> = {
+            let mut q = tx.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='agents' AND sql IS NOT NULL ORDER BY name")?;
+            let named = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            let mut with_columns = Vec::with_capacity(named.len());
+            for (name, sql) in named {
+                let mut columns = tx.prepare("SELECT name FROM pragma_index_info(?1) WHERE name IS NOT NULL")?;
+                let columns = columns.query_map([&name], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+                with_columns.push((sql, columns));
+            }
+            with_columns
         };
         tx.execute_batch("CREATE TABLE agents_v9 (
             id TEXT PRIMARY KEY NOT NULL,
@@ -271,7 +285,15 @@ fn migrate_agent_outfit_ids(c: &mut Connection, path: Option<&Path>, backup_done
         INSERT INTO agents_v9 SELECT id,name,name_key,description,instructions,color,runtime_id,model,thinking,service_tier,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at,approval_mode,outfit FROM agents;
         DROP TABLE agents;
         ALTER TABLE agents_v9 RENAME TO agents;")?;
-        for index_sql in indexes { tx.execute_batch(&index_sql)?; }
+        for (index_sql, columns) in indexes {
+            // Replay only an index whose every column survived into the rebuilt
+            // table; anything else is left to the additive pass that owns it.
+            let mut present = true;
+            for column in &columns {
+                if !tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name=?1)", [column], |r| r.get::<_, bool>(0))? { present = false; break; }
+            }
+            if present { tx.execute_batch(&index_sql)?; }
+        }
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         tx.execute("INSERT INTO schema_migrations(version,applied_at) VALUES(9,?1)", [now])?;
         tx.pragma_update(None, "user_version", 9)?;
@@ -394,8 +416,9 @@ fn migrate_message_reactions(c: &mut Connection, path: Option<&Path>, backup_don
 }
 
 /// Team schema: projects own blobs; blobs gain a project, a role label, a
-/// leader flag and a sidebar visibility flag. Additive and idempotent, so it
-/// runs on every open after the versioned migrations.
+/// leader flag, a sidebar visibility flag and (FIX36) a system role that marks
+/// the one built-in Manager. Additive and idempotent, so it runs on every open
+/// after the versioned migrations.
 fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
     c.execute_batch("CREATE TABLE IF NOT EXISTS projects(
         id TEXT PRIMARY KEY NOT NULL,
@@ -413,10 +436,29 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
         ("hidden", "ALTER TABLE agents ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"),
         ("look", "ALTER TABLE agents ADD COLUMN look TEXT"),
         ("notification_level", "ALTER TABLE agents ADD COLUMN notification_level TEXT"),
+        ("system_role", "ALTER TABLE agents ADD COLUMN system_role TEXT"),
     ] {
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name=?1)", [column], |r| r.get(0))?;
         if !exists { c.execute(ddl, [])?; }
     }
+    // At most one built-in Manager, enforced by a partial unique index rather
+    // than by convention: a second `system_role='manager'` row cannot exist.
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_manager ON agents(system_role) WHERE system_role='manager'", [])?;
+    ensure_manager_introduced(c)?;
+    Ok(())
+}
+
+/// FIX36: the built-in Manager replaces the team leader. Every existing
+/// `leader` flag is cleared exactly once; the column itself stays for
+/// compatibility (`agent_set_team` still keeps one leader at a time) but nothing
+/// reads it for permissions any more. The settings marker keeps a later
+/// operator choice from being overwritten on the next open.
+fn ensure_manager_introduced(c: &Connection) -> Result<(), StorageError> {
+    const MARKER: &str = "migration.managerIntroduced";
+    let done: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1)", [MARKER], |r| r.get(0))?;
+    if done { return Ok(()); }
+    c.execute("UPDATE agents SET leader=0 WHERE leader<>0", [])?;
+    c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,'true')", [MARKER])?;
     Ok(())
 }
 
@@ -1479,7 +1521,7 @@ impl Storage {
     pub fn agent_list(&self, include_archived: bool, runtime_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         {
-            let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
+            let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
             let vals=q.query_map(params![include_archived,runtime_id],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
             vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
         }
@@ -1550,6 +1592,12 @@ impl Storage {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let old = agent_read(&tx, id)?;
         if old["archived"] == true { return Err(StorageError::AgentConflict); }
+        // FIX36: the Manager works across every project; it can never be given
+        // one, and its leadership is permanent (it can't be demoted).
+        if old["systemRole"].as_str() == Some("manager") {
+            if input.get("projectId").is_some_and(|project| !project.is_null()) { return Err(StorageError::AgentConflict); }
+            if input.get("leader").is_some() { return Err(StorageError::AgentConflict); }
+        }
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         if let Some(project) = input.get("projectId") {
             let project = match project { Value::Null => None, Value::String(p) => Some(p.clone()), _ => return Err(StorageError::InvalidAgent) };
@@ -1582,6 +1630,12 @@ impl Storage {
     pub fn leader_agent(&self) -> Result<Option<Value>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let id: Option<String> = c.query_row("SELECT id FROM agents WHERE leader=1 AND archived=0 LIMIT 1", [], |r| r.get(0)).optional()?;
+        id.map(|id| agent_read(&c, &id)).transpose()
+    }
+    /// The one built-in Manager, archived or not, or `None` before it exists.
+    pub fn manager_agent(&self) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let id: Option<String> = c.query_row("SELECT id FROM agents WHERE system_role='manager' LIMIT 1", [], |r| r.get(0)).optional()?;
         id.map(|id| agent_read(&c, &id)).transpose()
     }
     /// Marks a session as a side conversation between two blobs.
@@ -1723,6 +1777,7 @@ impl Storage {
     pub fn agent_create(&self, input:&Value)->Result<(Value,Vec<Value>),StorageError>{
         validate_agent_fields(input,true)?;
         let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?; let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if input["systemRole"].as_str()==Some("manager"){let taken:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE system_role='manager')",[],|r|r.get(0))?;if taken{return Err(StorageError::AgentConflict)}}
         let runtime=input["runtimeId"].as_str().unwrap(); if !runtime_exists(&tx,runtime)?{return Err(StorageError::AgentNotFound)}
         let id=Uuid::new_v4().to_string(); let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
         let name=trimmed(input,"name"); let key=name.to_lowercase(); ensure_name_free(&tx,&key,None)?;
@@ -1758,6 +1813,7 @@ impl Storage {
     }
     pub fn agent_archive(&self,id:&str)->Result<(Value,Vec<Value>),StorageError>{
         validate_agent_id(id)?;let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;let old=agent_read(&tx,id)?;
+        if old["systemRole"].as_str()==Some("manager"){return Err(StorageError::AgentConflict)}
         if old["archived"]==true{tx.commit()?;return Ok((old,vec![]));} let rt=old["runtimeId"].as_str().unwrap_or("").to_owned(); let now=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);
         let before=active_order(&tx,&rt)?;shift_active_except(&tx,&rt,id)?; tx.execute("UPDATE agents SET archived=1,updated_at=?2 WHERE id=?1",params![id,now])?;
         let remaining=active_ids(&tx,&rt)?;assign_active_order(&tx,&remaining,&before,&now)?;
@@ -3875,7 +3931,7 @@ impl Storage {
         Ok(result)
     }
     fn agent_rows_locked(&self,c:&Connection,include_archived:bool)->Result<Vec<Value>,StorageError>{
-        let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
+        let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
         let mut q=c.prepare(sql)?;let vals=q.query_map([include_archived],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
     }
     fn session_detail_locked(&self, c: &Connection, id: &str) -> Result<Value, StorageError> {
@@ -4263,6 +4319,9 @@ impl Storage {
                 if name != base { renamed.push(json!({"from": base, "to": name})); }
                 let mut value = fields.clone();
                 value["name"] = json!(name);
+                // FIX36: an imported Manager row becomes an ordinary bot; the
+                // local Manager is the only one and backup import keeps it.
+                if let Some(object) = value.as_object_mut() { let _ = object.remove("systemRole"); }
                 let runtime = value["runtimeId"].as_str().unwrap_or("").to_owned();
                 if !runtime_exists(&tx, &runtime)? || validate_agent_fields(&value, true).is_err() { bots_skipped += 1; continue; }
                 let id = Uuid::new_v4().to_string();
@@ -4733,6 +4792,8 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
     if v.get("approvalMode").and_then(Value::as_str).is_some_and(|s| !["ask","auto","bypass"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if v.get("notificationLevel").is_some_and(|x| !x.is_null() && !x.as_str().is_some_and(|s| ["all","input","muted"].contains(&s))){return Err(StorageError::InvalidAgent)}
     if v.get("outfit").is_some_and(|value| !value.as_str().is_some_and(|s| ["auto","none","party-hat","beanie","crown","sunglasses","round-glasses","bow","scarf","witch-hat","santa-hat","pumpkin","bunny-ears"].contains(&s))) { return Err(StorageError::InvalidAgent); }
+    if v.get("role").is_some_and(|x| !x.is_null() && !x.as_str().is_some_and(|r| r.trim().chars().count() <= 40)) { return Err(StorageError::InvalidAgent); }
+    if v.get("systemRole").is_some_and(|x| !x.is_null() && x.as_str() != Some("manager")) { return Err(StorageError::InvalidAgent); }
     if v.get("look").is_some_and(|look| !look.is_null() && !valid_look(look)) { return Err(StorageError::InvalidAgent); }
     if create && (!v["name"].is_string()||!v["runtimeId"].is_string()){return Err(StorageError::InvalidAgent)}
     if let Some(name)=v["name"].as_str(){let n=name.trim();if n.chars().count()==0||n.chars().count()>60{return Err(StorageError::InvalidAgent)}}
@@ -4849,8 +4910,8 @@ fn push_team_event(tx: &Transaction<'_>, event_type: &str, payload: &Value) -> R
     tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,?3,?4)", params![id, ts, event_type, payload.to_string()])?;
     Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":event_type,"payload":payload}))
 }
-fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
-fn insert_agent(tx:&Transaction<'_>,id:&str,v:&Value,name:&str,key:&str,pos:i64,now:&str)->Result<(),StorageError>{let color=v["color"].as_str().unwrap_or("mint");let color=if color.starts_with('#'){color.to_ascii_uppercase()}else{color.into()};tx.execute("INSERT INTO agents(id,name,name_key,description,instructions,color,outfit,runtime_id,model,thinking,service_tier,approval_mode,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at,notification_level) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?18,?19)",params![id,name,key,v["description"].as_str().unwrap_or(""),v["instructions"].as_str().unwrap_or(""),color,v["outfit"].as_str().unwrap_or("auto"),v["runtimeId"].as_str().unwrap_or(""),nullable(&v["model"]),nullable(&v["thinking"]),nullable(&v["serviceTier"]),nullable(&v["approvalMode"]),v.get("customArgs").cloned().unwrap_or(json!([])).to_string(),v.get("customEnv").cloned().unwrap_or(json!({})).to_string(),v["maxConcurrency"].as_i64().unwrap_or(1),nullable(&v["defaultProject"]),pos,now,nullable(&v["notificationLevel"])])?;tx.execute("UPDATE agents SET look=?2 WHERE id=?1",params![id,look_column(&v["look"])])?;Ok(())}
+fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
+fn insert_agent(tx:&Transaction<'_>,id:&str,v:&Value,name:&str,key:&str,pos:i64,now:&str)->Result<(),StorageError>{let color=v["color"].as_str().unwrap_or("mint");let color=if color.starts_with('#'){color.to_ascii_uppercase()}else{color.into()};tx.execute("INSERT INTO agents(id,name,name_key,description,instructions,color,outfit,runtime_id,model,thinking,service_tier,approval_mode,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at,notification_level,role,system_role) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?18,?19,?20,?21)",params![id,name,key,v["description"].as_str().unwrap_or(""),v["instructions"].as_str().unwrap_or(""),color,v["outfit"].as_str().unwrap_or("auto"),v["runtimeId"].as_str().unwrap_or(""),nullable(&v["model"]),nullable(&v["thinking"]),nullable(&v["serviceTier"]),nullable(&v["approvalMode"]),v.get("customArgs").cloned().unwrap_or(json!([])).to_string(),v.get("customEnv").cloned().unwrap_or(json!({})).to_string(),v["maxConcurrency"].as_i64().unwrap_or(1),nullable(&v["defaultProject"]),pos,now,nullable(&v["notificationLevel"]),v["role"].as_str().unwrap_or(""),if v["systemRole"].as_str()==Some("manager"){Some("manager")}else{None}])?;tx.execute("UPDATE agents SET look=?2 WHERE id=?1",params![id,look_column(&v["look"])])?;Ok(())}
 fn push_agent_event(tx:&Transaction<'_>,action:&str,a:&Value)->Result<Value,StorageError>{let payload=json!({"action":action,"agentId":a["id"],"runtimeId":a["runtimeId"],"updatedAt":a["updatedAt"],"archived":a["archived"],"sortOrder":a["sortOrder"],"notificationLevel":a["notificationLevel"]});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'agent.changed',?3)",params![id,ts,payload.to_string()])?;Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"agent.changed","payload":payload}))}
 fn snapshot_requested(v:&Value)->Value{
     let mut result=json!({"model":v["model"],"thinking":v["thinking"],"serviceTier":v["serviceTier"],"approvalMode":v["approvalMode"],"instructionsPresent":v["instructionsPresent"].as_bool().unwrap_or(false),"extraArgs":[],"maxConcurrency":v["maxConcurrency"].as_u64().unwrap_or(1)});
@@ -6866,5 +6927,84 @@ mod memory_tests {
             let stamp: Option<String> = c.query_row("SELECT json_extract(data,'$.projectId') FROM sessions WHERE id='elsewhere'", [], |r| r.get(0)).unwrap();
             assert_eq!(stamp, None);
         }
+    }
+    #[test]
+    fn manager_migration_demotes_every_leader_once_and_is_marked() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-manager","provider":"codex"})).unwrap();
+        let (leader, _) = db.agent_create(&json!({"name":"Old Lead","runtimeId":"rt-manager"})).unwrap();
+        let id = leader["id"].as_str().unwrap().to_owned();
+        assert!(leader["systemRole"].is_null(), "an ordinary bot carries no system role");
+        // The open that built this database already stamped the marker.
+        assert_eq!(db.settings().unwrap()["migration.managerIntroduced"], true);
+        // Simulate a database from before the migration: no marker, one leader.
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute("DELETE FROM settings WHERE key='migration.managerIntroduced'", []).unwrap();
+            c.execute("UPDATE agents SET leader=1 WHERE id=?1", [id.as_str()]).unwrap();
+            ensure_team_schema(&c).unwrap();
+        }
+        assert_eq!(db.agent_get(&id).unwrap()["leader"], false, "the one-time migration clears every leader flag");
+        assert_eq!(db.settings().unwrap()["migration.managerIntroduced"], true);
+        // With the marker back, a later leader choice survives a re-run.
+        db.agent_set_team(&id, &json!({"leader":true})).unwrap();
+        ensure_team_schema(&db.conn.lock().unwrap()).unwrap();
+        assert_eq!(db.agent_get(&id).unwrap()["leader"], true, "the marker keeps the migration to a single run");
+    }
+    #[test]
+    fn manager_ensure_is_singular_and_the_unique_index_holds() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-manager","provider":"codex"})).unwrap();
+        assert!(db.manager_agent().unwrap().is_none());
+        let (manager, events) = db.agent_create(&json!({"name":"Manager","runtimeId":"rt-manager","role":"Manager","description":"Runs your team.","systemRole":"manager"})).unwrap();
+        assert_eq!(events[0]["type"], "agent.changed");
+        assert_eq!((manager["systemRole"].as_str(), manager["role"].as_str(), manager["projectId"].is_null()), (Some("manager"), Some("Manager"), true));
+        assert_eq!(db.manager_agent().unwrap().unwrap()["id"], manager["id"]);
+        // Ordinary bots and the snapshot both carry the field; only one is a manager.
+        db.agent_create(&json!({"name":"Worker","runtimeId":"rt-manager"})).unwrap();
+        assert_eq!(db.agent_list(false, None).unwrap().iter().filter(|agent| agent["systemRole"].as_str() == Some("manager")).count(), 1);
+        assert_eq!(db.snapshot().unwrap()["agents"].as_array().unwrap().iter().filter(|agent| agent["systemRole"].as_str() == Some("manager")).count(), 1);
+        // A second manager row is refused both by the storage guard ...
+        assert!(matches!(db.agent_create(&json!({"name":"Second","runtimeId":"rt-manager","systemRole":"manager"})), Err(StorageError::AgentConflict)));
+        // ... and by the partial unique index itself.
+        assert!(db.conn.lock().unwrap().execute("INSERT INTO agents(id,name,name_key,runtime_id,sort_order,created_at,updated_at,system_role) VALUES('row-2','Row 2','row 2','rt-manager',0,'now','now','manager')", []).is_err());
+    }
+    #[test]
+    fn the_manager_cannot_be_removed_given_a_project_or_demoted() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-manager","provider":"codex"})).unwrap();
+        let (manager, _) = db.agent_create(&json!({"name":"Manager","runtimeId":"rt-manager","role":"Manager","systemRole":"manager"})).unwrap();
+        let id = manager["id"].as_str().unwrap().to_owned();
+        let (mate, _) = db.agent_create(&json!({"name":"Mate","runtimeId":"rt-manager"})).unwrap();
+        let project_id = db.project_create("Board", None).unwrap().0["id"].as_str().unwrap().to_owned();
+        assert!(matches!(db.agent_set_team(&id, &json!({"projectId":project_id})), Err(StorageError::AgentConflict)));
+        assert!(matches!(db.agent_set_team(&id, &json!({"leader":false})), Err(StorageError::AgentConflict)));
+        assert!(matches!(db.agent_archive(&id), Err(StorageError::AgentConflict)));
+        // A null project, a role and a hidden flag are still fine.
+        db.agent_set_team(&id, &json!({"projectId":null,"role":"Chief","hidden":true})).unwrap();
+        assert_eq!(db.agent_get(&id).unwrap()["role"], "Chief");
+        // Its name, instructions and model change through the normal update path;
+        // the system role is not updatable, so it cannot be demoted.
+        let (updated, _) = db.agent_update(&id, &json!({"name":"Chief","model":"gpt-6.1-sol","thinking":"high","instructions":"New style."})).unwrap();
+        assert_eq!((updated["name"].as_str(), updated["model"].as_str(), updated["systemRole"].as_str()), (Some("Chief"), Some("gpt-6.1-sol"), Some("manager")));
+        assert_eq!(db.manager_agent().unwrap().unwrap()["id"], manager["id"]);
+        // The guard only protects the Manager: an ordinary bot still archives.
+        db.agent_archive(mate["id"].as_str().unwrap()).unwrap();
+    }
+    #[test]
+    fn backup_import_never_creates_a_second_manager() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-manager","provider":"codex"})).unwrap();
+        let (manager, _) = db.agent_create(&json!({"name":"Manager","runtimeId":"rt-manager","role":"Manager","systemRole":"manager"})).unwrap();
+        let manager_id = manager["id"].as_str().unwrap().to_owned();
+        let plan = json!({"bots":[{"exportId":"export-1","resolution":"rename","leader":false,"fields":{"name":"Imported Chief","runtimeId":"rt-manager","role":"","description":"","instructions":"","color":"mint","systemRole":"manager"}}],"memory":[],"automations":[],"settings":[]});
+        assert_eq!(db.backup_import(&plan).unwrap()["bots"], 1);
+        let imported = db.agent_list(false, None).unwrap().into_iter().find(|agent| agent["name"] == "Imported Chief").expect("imported bot");
+        assert!(imported["systemRole"].is_null(), "an imported manager row becomes an ordinary bot");
+        assert_eq!(db.manager_agent().unwrap().unwrap()["id"], manager_id.as_str(), "backup import keeps the local Manager");
+        // Replacing the local Manager with an incoming row leaves its role alone.
+        let replaced = json!({"bots":[{"exportId":"export-2","resolution":"replace","replaceAgentId":manager_id,"leader":false,"fields":{"name":"Manager","runtimeId":"rt-manager","description":"Still runs the team."}}],"memory":[],"automations":[],"settings":[]});
+        assert_eq!(db.backup_import(&replaced).unwrap()["bots"], 1);
+        assert_eq!(db.agent_get(&manager_id).unwrap()["systemRole"], "manager");
     }
 }

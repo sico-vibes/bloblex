@@ -177,6 +177,8 @@ export interface Agent extends JsonRecord {
   projectId?: string | null
   role?: string
   leader?: boolean
+  /** FIX36: only the one built-in Manager carries "manager". */
+  systemRole?: 'manager' | null
   hidden?: boolean
 }
 

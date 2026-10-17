@@ -153,6 +153,11 @@ const teamFields: Record<string, Partial<Agent>> = {
 }
 agents = agents.map((agent) => ({ projectId: null, role: '', leader: false, hidden: false, ...agent, ...teamFields[agent.id] }))
 agents.push({ id: 'agent-pololo', name: 'Pololo', look: { shape: 'sun', seed: 'pololo' }, description: 'UI/UX designer: finds and adapts component references.', instructions: '', color: '#2fbf9b', runtimeId: 'runtime-opencode', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 2, archived: false, createdAt: minutesAgo(900), updatedAt: minutesAgo(900), projectId: 'project-board', role: 'UI/UX Designer', leader: false, hidden: false })
+// FIX36: the one built-in Manager previews as an ordinary bot that carries
+// systemRole "manager" and works across every project (projectId null).
+const managerDescription = 'Runs your team: knows every project and bot, plans the work and asks before it acts.'
+const managerInstructions = "You are the Manager. You work across all of the user's projects and know every bot on the team. Ask the user before consequential actions: creating a project, creating a bot, assigning a task, or changing your own playbook."
+agents.push({ id: 'agent-manager', name: 'Manager', look: { shape: 'hexagon', seed: 'manager' }, description: managerDescription, instructions: managerInstructions, color: 'mint', runtimeId: 'runtime-opencode', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: minutesAgo(5000), updatedAt: minutesAgo(2), projectId: null, role: 'Manager', leader: false, hidden: false, approvalMode: 'ask', effectiveApprovalMode: 'ask', systemRole: 'manager' })
 const teamMainId = 'session-team-leader'
 const teamSideId = 'session-team-side'
 sessions.push({
@@ -745,6 +750,46 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (!agent) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
     return { agent: { ...agent } } as T
   }
+  if (method === 'manager.get') {
+    return { manager: agents.find((agent) => agent.systemRole === 'manager') ?? null } as T
+  }
+  if (method === 'manager.ensure') {
+    const existing = agents.find((agent) => agent.systemRole === 'manager')
+    if (existing) return { manager: { ...existing }, created: false } as T
+    const runtimeId = typeof params.runtimeId === 'string' ? params.runtimeId : ''
+    if (!baseRuntimes.some((runtime) => runtime.id === runtimeId)) throw rpcError('not_found', 'That runtime is no longer available.')
+    const now = new Date().toISOString()
+    const name = typeof params.name === 'string' && params.name.trim() ? params.name.trim() : 'Manager'
+    const manager: Agent = {
+      id: `agent-manager-${agentSerial++}`,
+      name,
+      description: managerDescription,
+      instructions: managerInstructions,
+      color: 'mint',
+      runtimeId,
+      model: typeof params.model === 'string' ? params.model : null,
+      thinking: typeof params.thinking === 'string' ? params.thinking : null,
+      serviceTier: null,
+      customArgs: [],
+      customEnv: {},
+      maxConcurrency: 1,
+      defaultProject: null,
+      sortOrder: agents.filter((agent) => agent.runtimeId === runtimeId && !agent.archived).reduce((max, agent) => Math.max(max, agent.sortOrder), -1) + 1,
+      archived: false,
+      createdAt: now,
+      updatedAt: now,
+      approvalMode: 'ask',
+      effectiveApprovalMode: 'ask',
+      projectId: null,
+      role: 'Manager',
+      leader: false,
+      hidden: false,
+      systemRole: 'manager',
+    }
+    agents = sortAgents([...agents, manager])
+    sequence += 1
+    return { manager, created: true } as T
+  }
   if (method === 'agent.create') {
     const name = typeof params.name === 'string' ? params.name.trim() : ''
     const runtimeId = typeof params.runtimeId === 'string' ? params.runtimeId : ''
@@ -802,6 +847,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const agentId = typeof params.agentId === 'string' ? params.agentId : ''
     const existing = agents.find((agent) => agent.id === agentId)
     if (!existing) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
+    if (existing.systemRole === 'manager') throw rpcError('conflict', "The Manager can't be removed; you can rename it or change its model")
     const archived = { ...existing, archived: true, updatedAt: new Date().toISOString() }
     agents = sortAgents(agents.map((agent) => agent.id === archived.id ? archived : agent))
     sequence += 1
@@ -846,6 +892,8 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   if (method === 'agent.team.update') {
     const agent = agents.find((item) => item.id === params.agentId)
     if (!agent) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
+    if (agent.systemRole === 'manager' && typeof params.projectId === 'string') throw rpcError('conflict', 'The Manager works across every project')
+    if (agent.systemRole === 'manager' && 'leader' in params) throw rpcError('conflict', "The Manager can't be removed; you can rename it or change its model")
     if (params.leader === true) agents = agents.map((item) => item.id === agent.id ? item : { ...item, leader: false })
     const patch: Partial<Agent> = {}
     if ('projectId' in params) patch.projectId = typeof params.projectId === 'string' ? params.projectId : null

@@ -163,6 +163,13 @@
       "params": null
     },
     {
+      "method": "manager.get",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads the one built-in Manager (or null); it is the same agent shape every remote view already shows.",
+      "params": null
+    },
+    {
       "method": "project.list",
       "class": "read",
       "minTier": "viewer",
@@ -307,6 +314,13 @@
       "class": "never",
       "minTier": null,
       "why": "A remote device must not create bots.",
+      "params": null
+    },
+    {
+      "method": "manager.ensure",
+      "class": "never",
+      "minTier": null,
+      "why": "Creating or adopting the built-in Manager is a host-only decision; a device may read it with manager.get.",
       "params": null
     },
     {

@@ -6,7 +6,7 @@
 //! teammate's turn ends, its reply is relayed back into the sender's
 //! conversation, which wakes the sender to report to the user.
 
-use crate::{agent_create_from_rpc, agent_error, derr, new_session, AppState, DispatchError};
+use crate::{agent_error, derr, new_session, AppState, DispatchError};
 use axum::http::StatusCode;
 use bloblex_agent_core::{ExecOptions, McpServerSpec};
 use serde_json::{json, Value};
@@ -30,8 +30,6 @@ pub struct Team {
     pub data_dir: StdMutex<Option<PathBuf>>,
     /// Hop depth of the turn currently running in a session.
     depth: StdMutex<HashMap<String, u32>>,
-    /// Blobs the leader created in the current turn, per session (rate limit).
-    created: StdMutex<HashMap<String, u32>>,
     /// Prompts waiting for a busy session to finish its turn.
     queued: Mutex<HashMap<String, VecDeque<Queued>>>,
 }
@@ -68,9 +66,6 @@ impl Team {
     pub(crate) async fn queued_len(&self, session_id: &str) -> usize {
         self.queued.lock().await.get(session_id).map_or(0, VecDeque::len)
     }
-    fn creations(&self, session_id: &str) -> u32 { self.created.lock().unwrap().get(session_id).copied().unwrap_or(0) }
-    fn record_creation(&self, session_id: &str) { *self.created.lock().unwrap().entry(session_id.to_owned()).or_insert(0) += 1; }
-    fn clear_creations(&self, session_id: &str) { self.created.lock().unwrap().remove(session_id); }
 }
 
 fn agent_name(agent: &Value) -> String { agent["name"].as_str().unwrap_or("A teammate").to_owned() }
@@ -149,13 +144,12 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
         Some(project) => format!("You work in the project \"{}\" at {}. Treat that folder as your workspace.", project["name"].as_str().unwrap_or("project"), workspace.display()),
         None => format!("You are a casual {noun}, not tied to a project. Your scratch workspace is {}; take general requests and work wherever the user points you.", workspace.display()),
     });
-    if agent["leader"] == true {
-        lines.push(format!("You are the team leader. The user usually talks to you first; you coordinate the other {nouns} and report back."));
-        lines.push(format!("You are the only {noun} who can create teammates. When the user asks for a new {noun} or a team, use `create_blob`: call `list_blobs` and `list_projects` first to avoid duplicates and to pick the right project, read the project folder or its description yourself to decide which roles fit, then create at most a handful. Give each a distinct short name, a role such as CTO, one sentence of purpose, and instructions describing its working style. Afterwards, tell the user who was created and where."));
+    if agent["systemRole"].as_str() == Some("manager") {
+        lines.push(format!("You are {name}, the user's Manager. You work across all projects (list them with `list_projects`), know every {noun} (`list_blobs`), plan work, delegate with `message_blob`, and you ask the user before creating projects, {nouns} or assigning tasks."));
     } else {
-        match st.db.leader_agent().ok().flatten() {
-            Some(leader) => lines.push(format!("You cannot create or change {nouns}; only the team leader can. If the user asks you to, say so briefly and tag the leader as @{} so the user can ask them.", agent_name(&leader))),
-            None => lines.push(format!("You cannot create or change {nouns}; only the team leader can. If the user asks you to, say so briefly and tell the user they need to set a team leader.")),
+        match st.db.manager_agent().ok().flatten() {
+            Some(manager) => lines.push(format!("You cannot create projects or {nouns}; the Manager does that. If the user asks you to, say so briefly and tag the Manager as @{} so the user can ask them.", agent_name(&manager))),
+            None => lines.push(format!("You cannot create projects or {nouns}; the Manager does that. If the user asks you to, say so briefly and tell the user they need to set up a Manager.")),
         }
     }
     lines.push(String::new());
@@ -197,7 +191,7 @@ pub fn attach(st: &AppState, session_id: &str, agent_id: Option<&str>, link: &Va
 /// conversations or schedule anything. Memory tools are only listed while
 /// `experimental.memory` is on; automation runs may keep memory tools but the
 /// write rails restrict them to blob scope.
-fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_leader: bool, noun: &str, nouns: &str) -> Value {
+fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: bool, noun: &str, nouns: &str) -> Value {
     let memory = if memory_enabled { crate::memory::tool_schemas() } else { Vec::new() };
     // The shared skills pool is read-only, so every bot gets it, including
     // automation runs (the index is what tells a bot the pool exists).
@@ -208,17 +202,18 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_leader: b
         return json!(list);
     }
     let mut list: Vec<Value> = vec![
-        json!({"name":"list_blobs","description":"List your teammates in Bitbots: name, role, what each is for, project, whether they are busy, and which one is the leader.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
+        json!({"name":"list_blobs","description":"List your teammates in Bitbots: name, role, what each is for, project, whether they are busy, and which one is the Manager.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
         json!({"name":"list_conversations","description":"List your side conversations with teammates, newest first: id, topic, teammate, who started it, size and the latest reply. Use it to find a conversation to continue.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"Only conversations with this teammate (optional)."}},"additionalProperties":false}}),
         json!({"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}}),
         json!({"name":"schedule_task","description":format!("Propose a scheduled task for your {noun}. It is created disabled and will never run until the user approves it in Bitbots. Use this only when the user asks for something recurring or at a set time."),"inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}}),
         json!({"name":"list_my_schedules","description":format!("List this {noun}'s scheduled tasks, whether each is enabled, and when it next runs."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
     ];
-    // Only the team leader may create or change blobs.
-    if is_leader {
-        list.push(json!({"name":"list_projects","description":format!("List the projects a {noun} can belong to: id, name, folder and description. Call it before create_blob to attach a new {noun} to the right project."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
-        list.push(json!({"name":"create_blob","description":format!("Create a new {noun} (an AI teammate) on the team. Only the team leader may create {nouns}. Give a short unique name, an optional role, a one-sentence purpose and instructions describing how it should work. The new {noun} inherits a safe permission mode; it is never the leader."),"inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short unique name, 1 to 40 characters."},"role":{"type":"string","description":"A role label such as CTO (optional, up to 40 characters)."},"description":{"type":"string","description":format!("What this {noun} is for, up to 255 characters (optional).")},"instructions":{"type":"string","description":"Persona and working style, up to 4000 characters (optional)."},"project":{"type":"string","description":format!("A project id or exact project name to attach the {noun} to (optional; absent makes a casual {noun}).")},"provider":{"type":"string","description":"claude, codex or opencode (optional; defaults to the leader's own runtime)."},"model":{"type":"string","description":"A model id from that runtime's catalog (optional)."},"thinking":{"type":"string","description":"An effort level supported by the chosen model (optional)."}},"required":["name"],"additionalProperties":false}}));
-        list.push(json!({"name":"update_blob","description":format!("Update an existing {noun}'s role, description or instructions. Only the team leader may change {nouns}; it cannot change a {noun}'s runtime, permission mode, project or leader flag, and cannot archive or delete one."),"inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":format!("The {noun}'s name or id.")},"role":{"type":"string","description":"A new role label (optional, up to 40 characters)."},"description":{"type":"string","description":"A new purpose (optional, up to 255 characters)."},"instructions":{"type":"string","description":"New instructions (optional, up to 4000 characters)."}},"required":["blob"],"additionalProperties":false}}));
+    // Only the Manager may list projects or change blobs. Creating a bot is no
+    // longer a direct bridge call: the Manager proposes it and the owner
+    // approves (FIX36 D2), so `create_blob` is gone.
+    if is_manager {
+        list.push(json!({"name":"list_projects","description":format!("List the projects a {noun} can belong to: id, name, folder and description. Only the Manager may call it; a bot cannot join or create a project itself."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
+        list.push(json!({"name":"update_blob","description":format!("Update an existing {noun}'s role, description or instructions. Only the Manager may change {nouns}; it cannot change a {noun}'s runtime, permission mode or project, and cannot archive or delete one."),"inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":format!("The {noun}'s name or id.")},"role":{"type":"string","description":"A new role label (optional, up to 40 characters)."},"description":{"type":"string","description":"A new purpose (optional, up to 255 characters)."},"instructions":{"type":"string","description":"New instructions (optional, up to 4000 characters)."}},"required":["blob"],"additionalProperties":false}}));
     }
     // OpenCode has no native question tool over ACP, so the bridge offers one.
     if ask_user { list.push(crate::questions::tool_schema()); }
@@ -250,14 +245,14 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
     if is_automation && method.starts_with("automation.") {
         return Err(derr("forbidden", "Automation runs cannot change automations.", StatusCode::FORBIDDEN));
     }
-    // Blob creation is reserved for the leader's own blob. Side conversations
-    // of the leader are allowed (the session's agent is the leader); automation
-    // sessions never reach here.
-    let is_leader = session.as_ref().is_some_and(|row| {
-        row["agentId"].as_str().is_some_and(|id| st.db.agent_get(id).is_ok_and(|agent| agent["leader"] == true && agent["archived"] != true))
+    // Changing blobs is reserved for the Manager's own blob. Side conversations
+    // of the Manager are allowed (the session's agent is the Manager);
+    // automation sessions never reach here.
+    let is_manager = session.as_ref().is_some_and(|row| {
+        row["agentId"].as_str().is_some_and(|id| st.db.agent_get(id).is_ok_and(|agent| agent["systemRole"].as_str() == Some("manager") && agent["archived"] != true))
     });
     match method {
-        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation, memory_enabled, ask_user, is_leader, &entity_noun(false), &entity_noun(true))})),
+        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation, memory_enabled, ask_user, is_manager, &entity_noun(false), &entity_noun(true))})),
         "mcp.tools.call" => {
             let name = params["name"].as_str().unwrap_or("");
             if is_automation && !name.starts_with("memory_") && !matches!(name, "list_skills" | "load_skill" | "read_skill_file") {
@@ -268,10 +263,9 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "list_blobs" => list_blobs(st, session_id).await,
                 "list_conversations" => list_conversations(st, session_id, args).await,
                 "message_blob" => message_blob(st, session_id, args).await,
-                "list_projects" if is_leader => list_projects(st).await,
-                "create_blob" if is_leader => create_blob(st, session_id, args).await,
-                "update_blob" if is_leader => update_blob(st, args).await,
-                "list_projects" | "create_blob" | "update_blob" => Err(non_leader_create_error(st)),
+                "list_projects" if is_manager => list_projects(st).await,
+                "update_blob" if is_manager => update_blob(st, args).await,
+                "list_projects" | "update_blob" => Err(non_manager_error(st)),
                 "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
                 "ask_user" if ask_user => crate::questions::ask_user_tool(st, session_id, args).await,
@@ -314,7 +308,7 @@ async fn list_blobs(st: &AppState, session_id: &str) -> Result<String, String> {
         let provider = runtimes.iter().find(|r| r["id"] == agent["runtimeId"]).and_then(|r| r["provider"].as_str()).unwrap_or("unknown");
         let mut line = format!("- {}", agent_name(agent));
         if me.as_deref() == Some(id) { line.push_str(" (you)"); }
-        if agent["leader"] == true { line.push_str(" [leader]"); }
+        if agent["systemRole"].as_str() == Some("manager") { line.push_str(" [manager]"); }
         if let Some(role) = agent["role"].as_str().filter(|r| !r.trim().is_empty()) { line.push_str(&format!(" — {role}")); }
         line.push_str(&format!(" · {provider} · project: {project} · {}", if busy { "busy" } else { "available" }));
         if let Some(description) = agent["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) { line.push_str(&format!("\n  {description}")); }
@@ -338,15 +332,15 @@ fn bounded_text(args: &Value, key: &str, limit: usize) -> Result<Option<String>,
     Ok(Some(text.to_owned()))
 }
 
-/// The error a non-leader gets when it tries to create or change blobs.
-fn non_leader_create_error(st: &AppState) -> String {
-    match st.db.leader_agent().ok().flatten() {
-        Some(leader) => { let name = agent_name(&leader); format!("Only the team leader ({name}) can create {}. Ask the user to tag @{name}.", entity_noun(true)) }
-        None => format!("Only the team leader can create {}, and this team has no leader yet. Ask the user to set one.", entity_noun(true)),
+/// The error a non-manager gets when it tries to list projects or change blobs.
+fn non_manager_error(st: &AppState) -> String {
+    match st.db.manager_agent().ok().flatten() {
+        Some(manager) => { let name = agent_name(&manager); format!("Only the Manager can list projects or change {}. Ask the Manager (@{name}).", entity_noun(true)) }
+        None => format!("Only the Manager can list projects or change {}, and this team has no Manager yet. Ask the user to set one up.", entity_noun(true)),
     }
 }
 
-/// Leader-only: projects a blob can be attached to.
+/// Manager-only: projects a blob can be attached to.
 async fn list_projects(st: &AppState) -> Result<String, String> {
     let projects = st.db.project_list().map_err(|error| error.to_string())?;
     if projects.is_empty() { return Ok(format!("No projects exist yet. Create one in Bitbots, or create a casual {} with no project.", entity_noun(false))); }
@@ -361,76 +355,8 @@ async fn list_projects(st: &AppState) -> Result<String, String> {
     Ok(format!("Projects you can attach a {} to:\n{}", entity_noun(false), rows.join("\n")))
 }
 
-/// Leader-only: create a blob through the same path as the `agent.create` RPC.
-async fn create_blob(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
-    let leader_id = st.db.session_detail(session_id).ok().and_then(|row| row["agentId"].as_str().map(str::to_owned)).ok_or_else(|| format!("Only a {} conversation can create {}.", entity_noun(false), entity_noun(true)))?;
-    let leader = st.db.agent_get(&leader_id).map_err(|_| format!("Your {} is no longer available.", entity_noun(false)))?;
-    if leader["leader"] != true || leader["archived"] == true { return Err(non_leader_create_error(st)); }
-    let name = bounded_text(args, "name", 40)?.ok_or("name is required.")?;
-    if name.chars().count() < 1 { return Err("name is required.".into()); }
-    let role = bounded_text(args, "role", 40)?;
-    let description = bounded_text(args, "description", 255)?;
-    let instructions = bounded_text(args, "instructions", 4000)?;
-    let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
-    if agents.len() >= 12 { return Err(format!("The team already has {} {}; Bitbots allows at most 12. Archive one before creating another.", agents.len(), entity_noun(true))); }
-    if st.team.creations(session_id) >= 5 { return Err(format!("You have already created 5 {} this turn. Ask the user before creating more.", entity_noun(true))); }
-    if agents.iter().any(|agent| agent["name"].as_str().map(str::trim).map(str::to_lowercase).is_some_and(|existing| existing == name.to_lowercase())) {
-        return Err(format!("A {} named {name} already exists. Choose a different name.", entity_noun(false)));
-    }
-    let project_id = match args["project"].as_str().map(str::trim).filter(|project| !project.is_empty()) {
-        None => None,
-        Some(wanted) => {
-            let projects = st.db.project_list().map_err(|error| error.to_string())?;
-            match projects.iter().find(|project| project["id"].as_str() == Some(wanted) || project["name"].as_str().is_some_and(|project_name| project_name.trim() == wanted)) {
-                Some(project) => project["id"].as_str().map(str::to_owned),
-                None => {
-                    let names = projects.iter().filter_map(|project| project["name"].as_str()).collect::<Vec<_>>().join(", ");
-                    return Err(format!("No project matches \"{wanted}\". Available projects: {}.", if names.is_empty() { "none" } else { &names }));
-                }
-            }
-        }
-    };
-    let runtimes = st.runtimes.read().await.clone();
-    let runtime = match args["provider"].as_str().map(str::trim).filter(|provider| !provider.is_empty()) {
-        Some(provider) => {
-            if !["claude", "codex", "opencode"].contains(&provider) { return Err(format!("provider must be claude, codex or opencode; got \"{provider}\".")); }
-            runtimes.iter().find(|runtime| runtime["provider"] == provider).cloned().ok_or_else(|| format!("No {provider} runtime is installed."))?
-        }
-        None => {
-            let runtime_id = leader["runtimeId"].as_str().ok_or_else(|| format!("Your {} has no runtime.", entity_noun(false)))?;
-            runtimes.iter().find(|runtime| runtime["id"] == runtime_id).cloned().ok_or("Your runtime is not available.")?
-        }
-    };
-    let provider = runtime["provider"].as_str().unwrap_or("unknown").to_owned();
-    // Created blobs inherit a safe mode: never bypass, and auto only when the
-    // leader's own effective mode is auto.
-    let approval = if leader["effectiveApprovalMode"].as_str() == Some("auto") { "auto" } else { "ask" };
-    let mut fields = json!({"name":name,"runtimeId":runtime["id"],"approvalMode":approval});
-    if let Some(description) = &description { fields["description"] = json!(description); }
-    if let Some(instructions) = &instructions { fields["instructions"] = json!(instructions); }
-    if let Some(model) = args["model"].as_str().map(str::trim).filter(|model| !model.is_empty()) { fields["model"] = json!(model); }
-    if let Some(thinking) = args["thinking"].as_str().map(str::trim).filter(|thinking| !thinking.is_empty()) { fields["thinking"] = json!(thinking); }
-    let agent = agent_create_from_rpc(st, fields).await.map_err(|error| error.1.message)?;
-    let agent_id = agent["id"].as_str().unwrap_or("").to_owned();
-    if role.is_some() || project_id.is_some() {
-        let mut team_fields = json!({});
-        if let Some(role) = &role { team_fields["role"] = json!(role); }
-        if let Some(project_id) = &project_id { team_fields["projectId"] = json!(project_id); }
-        let (_agent, events) = st.db.agent_set_team(&agent_id, &team_fields).map_err(|error| error.to_string())?;
-        st.broadcast_persisted(events);
-    }
-    st.team.record_creation(session_id);
-    let role_label = role.as_deref().unwrap_or("no role");
-    let project_label = project_id.as_deref().and_then(|id| st.db.project_get(id).ok()).and_then(|project| project["name"].as_str().map(str::to_owned)).unwrap_or_else(|| "no project".into());
-    let noun = entity_noun(false);
-    note(st, session_id, &format!("Created {noun} {name} ({role_label}) in {project_label}."), json!({"kind":"blob_created","agentId":agent_id,"name":name})).await;
-    let role_part = role.as_deref().map(|role| format!(" ({role})")).unwrap_or_default();
-    let project_part = if project_label == "no project" { format!(" as a casual {noun}") } else { format!(" in {project_label}") };
-    Ok(format!("Created {noun} {name}{role_part}{project_part} on {provider}. Tell the user who was created and where."))
-}
-
-/// Leader-only: update a blob's role, purpose or instructions (never its
-/// runtime, mode, project, leader flag, archive or deletion).
+/// Manager-only: update a blob's role, purpose or instructions (never its
+/// runtime, mode, project, archive or deletion).
 async fn update_blob(st: &AppState, args: &Value) -> Result<String, String> {
     let wanted = args["blob"].as_str().map(str::trim).filter(|blob| !blob.is_empty()).ok_or("blob is required.")?;
     let role = bounded_text(args, "role", 40)?;
@@ -643,7 +569,6 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
     let outcome = outcome.to_owned();
     tokio::spawn(async move {
         let depth = st.team.depth.lock().unwrap().remove(&session_id).unwrap_or(0);
-        st.team.clear_creations(&session_id);
         if let Ok(row) = st.db.session_detail(&session_id) {
             let link = row["link"].clone();
             if link["kind"] == "side" {
@@ -749,6 +674,14 @@ pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, D
         }
         "agent.team.update" => {
             let id = p["agentId"].as_str().unwrap_or("");
+            // FIX36: the Manager works across every project and its leadership
+            // is permanent, so neither a project nor a leader change applies.
+            if let Ok(agent) = st.db.agent_get(id) {
+                if agent["systemRole"].as_str() == Some("manager") {
+                    if p.get("projectId").is_some_and(|project| !project.is_null()) { return Err(derr("conflict", "The Manager works across every project", StatusCode::CONFLICT)); }
+                    if p.get("leader").is_some() { return Err(derr("conflict", "The Manager can't be removed; you can rename it or change its model", StatusCode::CONFLICT)); }
+                }
+            }
             let (agent, events) = st.db.agent_set_team(id, p).map_err(agent_error)?;
             st.broadcast_persisted(events);
             // A bot that changes project keeps its conversations; the panel

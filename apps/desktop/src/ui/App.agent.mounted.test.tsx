@@ -786,6 +786,20 @@ describe('blob roster and editor', () => {
     expect([...view.host.querySelectorAll('.team-group[aria-label="Unassigned"] .team-row strong')].map((node) => node.textContent)).toEqual(['Codex', 'Invoice helper', 'OpenCode'])
   })
 
+  it('starts a new project in the Manager conversation with a starter message to edit', async () => {
+    const manager = { ...opencode, id: 'agent-manager', name: 'Max', role: 'Manager', systemRole: 'manager' as const, projectId: null }
+    configure(snapshot({ projects: [board], agents: [claude, codex, manager], sessions: [...sessions, session({ id: 'session-manager', runtimeId: opencode.runtimeId, agentId: 'agent-manager', title: 'Planning' })] }))
+    const view = startApp()
+    await view.settle()
+    await click(view.host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"][aria-label$=" actions"][title^="Import"]')!)
+    expect(menuItem(view.host, 'Import project folder…')).toBeTruthy()
+    await click(menuItem(view.host, 'New project with Max'))
+    await view.settle()
+    const composer = view.host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Max"]')!
+    expect(composer.value).toContain('I want to start a new project.')
+    expect(h.rpc.mock.calls.some(([method]) => method === 'project.create')).toBe(false)
+  })
+
   it('pins and unpins a blob from its context menu', async () => {
     const view = startApp()
     await view.settle()
@@ -1070,6 +1084,18 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.team-row[aria-current="true"]')?.getAttribute('data-agent-id')).toBe('agent-claude')
     expect(view.host.querySelector('.question-card')).toBeNull()
     expect(view.host.querySelector('.team-row[data-agent-id="agent-codex"] .bot-row-preview')?.textContent).toBe('Waiting for you')
+  })
+
+  it('pulls focus to a new approval once, then lets the user look at another bot while it waits', async () => {
+    const waiting = session({ id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Codex', state: 'waiting_permission', updatedAt: '2026-10-01T00:00:00.000Z' })
+    const approval = { id: 'perm-a', sessionId: 'session-codex', runtimeId: 'runtime-codex', status: 'pending', kind: 'command', title: 'Run npm test', choices: ['allow', 'deny'] }
+    configure(snapshot({ sessions: [waiting, ...sessions.filter((item) => item.id !== 'session-codex')], permissions: [approval] }))
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelector('.team-row[aria-current="true"]')?.getAttribute('data-agent-id')).toBe('agent-codex')
+    await click(view.host.querySelector('.team-row[data-agent-id="agent-claude"]'))
+    await view.settle()
+    expect(view.host.querySelector('.team-row[aria-current="true"]')?.getAttribute('data-agent-id')).toBe('agent-claude')
   })
 
   it('approves a proposed plan by leaving plan mode and asking the blob to build', async () => {

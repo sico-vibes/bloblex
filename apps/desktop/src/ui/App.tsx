@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import {
-  Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, CornerDownRight, FileDown, FileText, FolderOpen, FolderPlus, Hash, Import,
+  Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, CornerDownRight, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Sparkles,
   Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus,
   RefreshCw, RotateCw, Search, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X,
 } from 'lucide-react'
@@ -862,14 +862,18 @@ export function App() {
     void setCompanionVisibility(true).catch((reason) => setError(messageOf(reason))).finally(() => setPendingCompanionStartup(false))
   }, [companion, launchVisible, onboardingVisible, onboardingCompleteThisRun, pendingCompanionStartup, snapshot?.agents])
 
+  // A new approval pulls focus to its conversation once. After that the user may
+  // look at other bots while it waits; the sidebar and tray still flag it.
+  const focusedPermission = useRef<string | null>(null)
   useEffect(() => {
     if (!activePermission?.sessionId) return
+    if (focusedPermission.current === activePermission.id) return
     const target = sessions.find((item) => item.id === activePermission.sessionId)
     if (!target) return
-    if (target.agentId) {
-      const owner = (snapshot?.agents ?? []).find((agent) => agent.id === target.agentId && !agent.archived)
-      if (owner && owner.id !== selectedAgentId) setSelectedAgentId(owner.id)
-    }
+    const owner = target.agentId ? (snapshot?.agents ?? []).find((agent) => agent.id === target.agentId && !agent.archived) : undefined
+    // Focus has arrived once the approval's conversation is the one on screen.
+    if (target.id === selectedSessionId && target.id === activeSessionId && (!owner || owner.id === selectedAgentId)) { focusedPermission.current = activePermission.id; return }
+    if (owner && owner.id !== selectedAgentId) setSelectedAgentId(owner.id)
     if (target.runtimeId !== selectedRuntimeId) setSelectedRuntimeId(target.runtimeId)
     if (target.id !== selectedSessionId) setSelectedSessionId(target.id)
     if (target.id !== activeSessionId) {
@@ -2060,6 +2064,26 @@ export function App() {
     if (project) setRosterAnnouncement(`Created project ${project.name}.`)
     return project
   }
+  /** Opens the Manager's conversation with a starter message to edit and send; false without a Manager. */
+  const planWithManager = (text: string) => {
+    const manager = managerOf(agents)
+    if (!manager) return false
+    selectAgent(manager)
+    setComposer(text)
+    window.setTimeout(() => composerRef.current?.focus(), 0)
+    return true
+  }
+  const startProjectWithManager = () => {
+    setCreateMenuOpen(false)
+    if (!planWithManager('I want to start a new project. Ask me about it, then propose the project and a team.')) void createProject()
+  }
+  const importProjectWithManager = async () => {
+    setCreateMenuOpen(false)
+    if (!managerOf(agents)) { void createProject(); return }
+    const path = await openProjectFolder()
+    if (!path) return
+    planWithManager(`I want to bring in the existing project at ${path}. Look through it, ask me what you need, then propose the project and a team.`)
+  }
   const selectSession = (session: Session) => {
     const target = sessionSelectionTarget(agents, activeSelectedAgent, session)
     if (!target) return
@@ -2252,7 +2276,13 @@ export function App() {
             <button data-testid="create-blob" className="icon-button" title={`Create ${noun}`} aria-label={`Create ${noun}`} disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={() => openCreate()}><Plus size={17} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setCreateMenuOpen(false); restoreCreateFocus() } }}>
               <button type="button" className="icon-button small" title={`Import a ${noun} setup`} aria-label={`${Noun} actions`} aria-haspopup="menu" aria-expanded={createMenuOpen} disabled={connection !== 'connected' || busy} onClick={() => setCreateMenuOpen((open) => !open)}><ChevronDown size={14} /></button>
-              {createMenuOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" onClick={() => { setCreateMenuOpen(false); void createProject() }}><FolderPlus size={15} />New project…</button><button className="menu-item" role="menuitem" onClick={() => void importBlob()}><Import size={15} />Import {noun}…</button></div>}
+              {createMenuOpen && <div className="menu-surface more-menu" role="menu">
+                {managerOf(agents)
+                  ? <><button className="menu-item" role="menuitem" onClick={startProjectWithManager}><Sparkles size={15} />New project with {managerOf(agents)?.name ?? 'the Manager'}</button>
+                    <button className="menu-item" role="menuitem" onClick={() => void importProjectWithManager()}><FolderInput size={15} />Import project folder…</button></>
+                  : <button className="menu-item" role="menuitem" onClick={() => { setCreateMenuOpen(false); void createProject() }}><FolderPlus size={15} />New project…</button>}
+                <button className="menu-item" role="menuitem" onClick={() => void importBlob()}><Import size={15} />Import {noun}…</button>
+              </div>}
             </div>
           </div>
         </div>

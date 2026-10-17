@@ -59,14 +59,20 @@ async fn gateway() -> Gateway {
     }
 }
 
-/// The built-in "not installed" page is what an empty manifest serves.
+/// The real packaged remote layout (FIX34): the entry page is `remote.html`.
 async fn gateway_with_static_files() -> Gateway {
     let root = std::env::temp_dir();
     let name = format!("bitbots-remote-web-{}", uuid::Uuid::new_v4());
     let dir = root.join(&name);
     std::fs::create_dir_all(dir.join("assets")).unwrap();
-    std::fs::write(dir.join("index.html"), "<!doctype html><title>Bitbots Remote</title>").unwrap();
-    std::fs::write(dir.join("assets/app.js"), "console.log('remote')").unwrap();
+    std::fs::write(
+        dir.join("remote.html"),
+        "<!doctype html><title>Bitbots Remote</title><p id=\"entry\">remote entry</p>",
+    )
+    .unwrap();
+    std::fs::write(dir.join("remote.webmanifest"), "{\"name\":\"Bitbots Remote\"}").unwrap();
+    std::fs::write(dir.join("remote-sw.js"), "self.addEventListener('install',()=>{})").unwrap();
+    std::fs::write(dir.join("assets/app-AbC123.js"), "console.log('remote')").unwrap();
     // A real file one directory up, so a traversal attempt has something to
     // leak if the manifest were not the only gate.
     let outside = root.join(format!("{name}-outside.txt"));
@@ -783,10 +789,18 @@ async fn an_empty_attachment_list_is_the_only_size_that_passes() {
 #[tokio::test]
 async fn static_files_come_from_the_manifest_and_nothing_else() {
     let gateway = gateway_with_static_files().await;
-    let index = raw_get(gateway.port, "/").await;
-    assert!(index.contains("200 OK"), "{index}");
-    assert!(index.contains("Bitbots Remote"), "{index}");
-    let asset = raw_get(gateway.port, "/assets/app.js").await;
+    // The entry page is `remote.html`; both `/` and `/remote.html` serve it.
+    for path in ["/", "/remote.html"] {
+        let entry = raw_get(gateway.port, path).await;
+        assert!(entry.contains("200 OK"), "{path}: {entry}");
+        assert!(entry.contains("remote entry"), "{path}: {entry}");
+    }
+    // Every listed file stays servable at its own path.
+    for path in ["/remote.webmanifest", "/remote-sw.js"] {
+        let file = raw_get(gateway.port, path).await;
+        assert!(file.contains("200 OK"), "{path}: {file}");
+    }
+    let asset = raw_get(gateway.port, "/assets/app-AbC123.js").await;
     assert!(asset.contains("200 OK"), "{asset}");
     assert!(asset.contains("console.log('remote')"), "{asset}");
     let missing = raw_get(gateway.port, "/nope.js").await;
@@ -831,6 +845,32 @@ async fn an_absent_web_folder_serves_the_built_in_page() {
     assert!(response.contains("200 OK"), "{response}");
     assert!(response.contains("not installed"), "{response}");
     assert!(raw_get(gateway.port, "/anything.js").await.contains("404"));
+}
+
+#[tokio::test]
+async fn a_folder_with_files_but_no_entry_page_serves_the_built_in_page() {
+    let root = std::env::temp_dir();
+    let name = format!("bitbots-remote-web-noentry-{}", uuid::Uuid::new_v4());
+    let dir = root.join(&name);
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("assets/app-AbC123.js"), "console.log('remote')").unwrap();
+
+    let (mut st, _events) = crate::phase2a_tests::state();
+    let fake = Arc::new(FakeCli::new(RUNNING_STATUS, EMPTY_SERVE));
+    let mut remote = RemoteState::with_cli(fake.clone());
+    remote.web = super::web::StaticFiles::load(dir.clone());
+    st.remote = Arc::new(remote);
+    st.db.set_setting("remote.port", &json!(0)).unwrap();
+    super::enable(&st).await.unwrap();
+    let port = st.remote.bound_address().expect("the listener is bound").port();
+
+    // Files exist, so the folder is not empty, but there is no entry page:
+    // `/` falls back to the built-in page rather than 404.
+    let response = raw_get(port, "/").await;
+    assert!(response.contains("200 OK"), "{response}");
+    assert!(response.contains("not installed"), "{response}");
+
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]

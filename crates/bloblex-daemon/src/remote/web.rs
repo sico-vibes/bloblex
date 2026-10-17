@@ -697,15 +697,41 @@ impl StaticFiles {
     pub fn load(root: PathBuf) -> Self {
         let mut manifest = HashMap::new();
         collect_files(&root, &root, &mut manifest, 0);
-        if manifest.contains_key("/index.html") {
-            let index = root.join("index.html");
-            manifest.insert("/".to_string(), index);
+        if manifest.is_empty() {
+            // An absent or empty folder. The router serves the built-in page.
+            return Self { manifest };
+        }
+        // The packaged remote build's entry page is `remote.html`; `index.html`
+        // keeps an older layout working. Either way `/` maps to the entry file
+        // while every listed file stays servable at its own path.
+        let entry = if manifest.contains_key("/remote.html") {
+            Some("/remote.html")
+        } else if manifest.contains_key("/index.html") {
+            Some("/index.html")
+        } else {
+            None
+        };
+        match entry {
+            Some(key) => {
+                let path = manifest[key].clone();
+                manifest.insert("/".to_string(), path);
+            }
+            None => {
+                // Files but no entry page: a broken install. Warn once at load
+                // (the folder path only) and fall back to the built-in page.
+                tracing::warn!(
+                    "remote web folder has no remote.html or index.html; serving the built-in page: {}",
+                    root.display()
+                );
+            }
         }
         Self { manifest }
     }
 
+    /// True only when no file was found beside the daemon. A folder that has
+    /// files but no entry page is not empty; the router handles it at `/`.
     pub fn is_empty(&self) -> bool {
-        self.manifest.is_empty() || !self.manifest.contains_key("/")
+        self.manifest.is_empty()
     }
 
     pub fn get(&self, path: &str) -> Option<&PathBuf> {
@@ -741,20 +767,29 @@ fn collect_files(root: &Path, dir: &Path, manifest: &mut HashMap<String, PathBuf
 /// The page served when no PWA is installed beside the daemon.
 const NOT_INSTALLED_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Bitbots Remote</title></head><body style=\"font-family:system-ui,sans-serif;margin:2rem;line-height:1.5\"><h1>Bitbots Remote is not installed</h1><p>This computer is serving Remote, but its web app files are not on disk yet. Install the packaged build, then reload this page.</p></body></html>";
 
+fn not_installed_response() -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        NOT_INSTALLED_PAGE,
+    )
+        .into_response()
+}
+
 async fn static_file(State(state): State<WebState>, uri: Uri) -> Response {
     let path = uri.path();
     if state.remote.web.is_empty() {
         if path == "/" || path == "/index.html" {
-            return (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-                NOT_INSTALLED_PAGE,
-            )
-                .into_response();
+            return not_installed_response();
         }
         return not_found();
     }
     let Some(file) = state.remote.web.get(path) else {
+        // A folder with files but no entry page has no `/` key; the built-in
+        // page stands in at `/`, anything else is a genuine 404.
+        if path == "/" {
+            return not_installed_response();
+        }
         return not_found();
     };
     match std::fs::read(file) {

@@ -10,7 +10,7 @@ import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
 import { RuntimeProblemMarker, runtimeProblem } from './RuntimeProblemMarker'
 import { shortTime } from './rosterSelectors'
-import { conversationPreview, groupAgentsByProject, mainSessionFor, sessionIsBusy } from './teamSelectors'
+import { conversationPreview, groupAgentsByProject, isManager, mainSessionFor, managerOf, sessionIsBusy } from './teamSelectors'
 import { useEntityNoun } from './vocabulary'
 
 export type MenuItem = { label: string; icon?: ReactNode; onSelect?: () => void; disabled?: boolean; danger?: boolean; checked?: boolean; submenu?: MenuItem[] } | 'separator'
@@ -88,7 +88,6 @@ export type TeamSidebarActions = {
   onReorder: (agent: Agent, direction: -1 | 1) => void
   /** Pointer drop: place the blob before or after another blob (same or another project). */
   onPlace: (agent: Agent, target: Agent, edge: 'before' | 'after') => void
-  onToggleLeader: (agent: Agent) => void
   onSetHidden: (agent: Agent, hidden: boolean) => void
   onToggleUnread: (agent: Agent, session: Session | null, unread: boolean) => void
   onCopyConversationId: (agent: Agent, session: Session | null) => void
@@ -132,6 +131,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   const [runtimeTooltipAgentId, setRuntimeTooltipAgentId] = useState<string | null>(null)
   const menuTrigger = useRef<HTMLElement | null>(null)
   const groups = useMemo(() => groupAgentsByProject(agents, projects, query, showHidden), [agents, projects, query, showHidden])
+  const manager = managerOf(agents)
   const pinned = pinnedIds.map((id) => agents.find((agent) => agent.id === id && !agent.archived && (showHidden || !agent.hidden))).filter((agent): agent is Agent => !!agent)
   const hiddenCount = agents.filter((agent) => !agent.archived && agent.hidden).length
   const rowOrder = [...pinned, ...groups.flatMap((group) => group.project?.collapsed ? [] : group.agents.filter((agent) => !pinnedIds.includes(agent.id)))]
@@ -142,6 +142,14 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     const session = mainSessionFor(sessions, agent.id)
     const unread = !!session && unreadSessionIds.has(session.id)
     const isPinned = pinnedIds.includes(agent.id)
+    // The Manager stays pinned at the top, works across every project and can't be removed.
+    if (isManager(agent)) return [
+      { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? <MailOpen size={15} /> : <Mail size={15} />, disabled: !session, onSelect: () => actions.onToggleUnread(agent, session, !unread) },
+      'separator',
+      { label: 'Rename Manager', icon: <Pencil size={15} />, onSelect: () => actions.onRename(agent) },
+      { label: 'Edit Manager', icon: <Settings2 size={15} />, onSelect: () => actions.onEdit(agent) },
+      { label: 'Copy conversation ID', icon: <Copy size={15} />, disabled: !session, onSelect: () => actions.onCopyConversationId(agent, session) },
+    ]
     return [
       { label: isPinned ? 'Unpin' : 'Pin', icon: isPinned ? <PinOff size={15} /> : <Pin size={15} />, onSelect: () => actions.onTogglePin(agent.id) },
       { label: 'Move to', icon: <FolderInput size={15} />, submenu: [
@@ -153,7 +161,6 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? <MailOpen size={15} /> : <Mail size={15} />, disabled: !session, onSelect: () => actions.onToggleUnread(agent, session, !unread) },
       'separator',
       { label: `Rename ${noun}`, icon: <Pencil size={15} />, onSelect: () => actions.onRename(agent) },
-      { label: agent.leader ? 'Remove as leader' : 'Make team leader', icon: <Star size={15} />, onSelect: () => actions.onToggleLeader(agent) },
       { label: `Edit ${noun}`, icon: <Settings2 size={15} />, onSelect: () => actions.onEdit(agent) },
       { label: 'Duplicate', icon: <Duplicate size={15} />, onSelect: () => actions.onDuplicate(agent) },
       { label: `Export ${noun}…`, icon: <Download size={15} />, onSelect: () => actions.onExportBlob(agent) },
@@ -214,7 +221,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     const preview = !connected ? 'Offline' : (status.mood === 'offline' || status.mood === 'error') ? status.label : waiting ? 'Waiting for you' : working ? status.label : conversationPreview(session) ?? (agent.description?.trim() || 'Say hi to get started')
     const runtimeIssue = runtimeProblem(runtime)
     return <button key={agent.id} type="button" role="treeitem" data-agent-id={agent.id} aria-current={selected ? 'true' : undefined} aria-selected={selected} aria-describedby={runtimeIssue ? `runtime-problem-${runtime!.id}-${agent.id}` : undefined}
-      aria-label={`${agent.name}${agent.role ? `, ${agent.role}` : ''}${agent.leader ? ', team leader' : ''}${approval ? ', needs approval' : unread ? ', unread' : ''}`}
+      aria-label={`${agent.name}${agent.role ? `, ${agent.role}` : ''}${isManager(agent) ? ', Manager' : ''}${approval ? ', needs approval' : unread ? ', unread' : ''}`}
       tabIndex={selected || (!selectedAgentId && rowOrder[0]?.id === agent.id) ? 0 : -1}
       className={`bot-row team-row ${selected ? 'selected' : ''} ${agent.hidden ? 'hidden-blob' : ''} ${dragId === agent.id ? 'dragging' : ''} ${dropHint?.kind === 'row' && dropHint.agentId === agent.id ? `drop-${dropHint.edge}` : ''}`}
       onMouseEnter={() => { if (runtimeIssue) setRuntimeTooltipAgentId(agent.id) }}
@@ -274,7 +281,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       }}>
       <span className="team-row-avatar">
         <BlobCanvas color={agentColorHex(agent.color)} size={50} mood={status.mood} look={agentLook(agent)} label={agent.name} track={selected} />
-        {agent.leader && <span className="leader-badge" title="Team leader" aria-hidden="true"><Star size={8} strokeWidth={0} fill="currentColor" /></span>}
+        {isManager(agent) && <span className="leader-badge" title="Manager" aria-hidden="true"><Star size={8} strokeWidth={0} fill="currentColor" /></span>}
       </span>
       <span className="bot-row-copy">
         <span className="bot-row-line">
@@ -293,6 +300,9 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       <input value={query} placeholder="Search" aria-label={`Search ${nouns}`} onChange={(event) => onQueryChange(event.target.value)} />
     </label>
     <nav className="sidebar-scroll" aria-label={Nouns} data-tour="roster"><div role="tree" aria-label={`${Nouns} by project`}>
+      {manager && !query && <section className="team-group manager-group" aria-label="Manager">
+        <div className="team-group-rows">{renderRow(manager)}</div>
+      </section>}
       {pinned.length > 0 && <section className="team-group" aria-label="Pinned">
         <div className="team-group-head static"><Pin size={13} aria-hidden="true" /><span>Pinned</span></div>
         <div className="team-group-rows">{pinned.map(renderRow)}</div>

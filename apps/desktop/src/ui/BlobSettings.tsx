@@ -46,7 +46,7 @@ const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; name: string; sente
   { value: 'bypass', name: 'Bypass', sentence: 'nothing asks; use only on a computer and project you trust', Icon: ShieldAlert },
 ]
 
-export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, savedRuntimeId, sessionId, autoApprovals, sections, sessions, memoryEnabled, onOpenMemory, onOpenSkills, onDraftChange, onArchive, onExecutionGate }: {
+export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, savedRuntimeId, sessionId, autoApprovals, sections, sessions, memoryEnabled, manager = false, onOpenMemory, onOpenSkills, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
   runtimes: Runtime[]
   projects?: Project[]
@@ -67,13 +67,14 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
   /** Opens Settings › Memory. Rendered only when given. */
   onOpenMemory?: () => void
   onOpenSkills?: () => void
+  /** Editing the built-in Manager: no project, can't be archived. */
+  manager?: boolean
   onDraftChange: (draft: AgentDraft) => void
   onArchive?: () => void
   onExecutionGate?: (gate: ExecutionSendGate) => void
 }) {
   const descriptionCount = scalarLength(draft.description)
   const noun = useEntityNoun()
-  const nouns = useEntityNoun({ plural: true })
   const Noun = useEntityNoun({ capital: true })
   const runtime = runtimes.find((item) => item.id === draft.runtimeId) ?? null
   const provider = runtime?.provider ?? ''
@@ -259,14 +260,13 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
         <RowCopy label="Role" hint="A short label shown next to the name, like CTO or Researcher." />
         <span className="settings-row-control"><input className="text-input role-input" aria-label="Role" maxLength={40} placeholder="No role" value={draft.role} onChange={(event) => onDraftChange({ ...draft, role: event.target.value })} /></span>
       </div>
-      <div className="settings-row">
+      {manager ? <div className="settings-row">
+        <RowCopy label="Projects" hint={`The Manager works across every project and knows every ${noun}. It can't be moved into one.`} />
+        <span className="settings-row-control"><span className="settings-value">All projects</span></span>
+      </div> : <div className="settings-row">
         <RowCopy label="Team project" hint={`Which project this ${noun} belongs to on the team.`} />
         <span className="settings-row-control"><Select ariaLabel="Team project" variant="muted" value={draft.projectId ?? ''} onChange={(value) => onDraftChange({ ...draft, projectId: value || null })} options={[{ value: '', label: 'No team project (casual)' }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} /></span>
-      </div>
-      <div className="settings-row">
-        <RowCopy label="Team leader" hint={`The leader coordinates the other ${nouns}, reports back, and is the only ${noun} that can create new ones when you ask it to. Only one ${noun} leads.`} />
-        <span className="settings-row-control"><button type="button" role="switch" aria-checked={draft.leader} aria-label="Team leader" className={`toggle ${draft.leader ? 'on' : ''}`} onClick={() => onDraftChange({ ...draft, leader: !draft.leader })}><i /></button></span>
-      </div>
+      </div>}
     </EditGroup>}
 
     {show('model') && <EditGroup id="model" title="Model" label="Execution" action={<span className="catalog-refresh-action">{catalog?.fetchedAt && <small>Updated {formatCatalogTime(catalog.fetchedAt)}</small>}<button type="button" className="ghost-button small" onClick={() => void refreshCatalog()} disabled={!draft.runtimeId || loading}><RefreshCw size={13} className={loading ? 'spinning' : ''} />Refresh models</button></span>}>

@@ -25,7 +25,7 @@ function actions(overrides: Partial<TeamSidebarActions> = {}): TeamSidebarAction
   return {
     onSelect: vi.fn(), onCreate: vi.fn(), onCreateProject: vi.fn(), onEdit: vi.fn(), onArchive: vi.fn(),
     onDuplicate: vi.fn(), onExportBlob: vi.fn(), onRename: vi.fn(), onTogglePin: vi.fn(), onMove: vi.fn(),
-    onReorder: vi.fn(), onPlace: vi.fn(), onToggleLeader: vi.fn(), onSetHidden: vi.fn(), onToggleUnread: vi.fn(),
+    onReorder: vi.fn(), onPlace: vi.fn(), onSetHidden: vi.fn(), onToggleUnread: vi.fn(),
     onCopyConversationId: vi.fn(), onDeleteConversation: vi.fn(), onRenameProject: vi.fn(), onChangeProjectFolder: vi.fn(),
     onDeleteProject: vi.fn(), onToggleProjectCollapsed: vi.fn(), onOpenRuntimeSettings: vi.fn(),
     ...overrides,

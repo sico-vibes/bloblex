@@ -188,3 +188,7 @@
 .plan-card-tick { width: 16px; height: 16px; margin-top: 2px; flex: 0 0 auto; display: grid; place-items: center; color: var(--user-accent-ink, var(--text-inverse)); border: 1px solid var(--line-strong); border-radius: 50%; }
 .plan-card-steps li.done .plan-card-tick { border-color: transparent; background: var(--user-accent, var(--text-2)); }
 @media (prefers-reduced-motion: reduce) { .plan-card-meter > b { transition: none; } }
+
+/* The Manager: pinned above every project, set apart by a hairline. */
+.manager-group { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+:root[data-bitbots="on"] .manager-group { border-bottom: 2px dotted var(--bb-line); }

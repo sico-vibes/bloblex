@@ -2275,7 +2275,6 @@ export function App() {
           onMove: (agent, projectId) => { if (experiments.undo) void moveBlob(agent, projectId, agent.projectId ?? null); else void moveAgent(agent, projectId) },
           onReorder: (agent, direction) => reorderAgent(agent, direction),
           onPlace: (agent, target, edge) => void placeAgent(agent, target, edge),
-          onToggleLeader: (agent) => void teamUpdate(agent, { leader: !agent.leader }),
           onSetHidden: (agent, hidden) => void teamUpdate(agent, { hidden }),
           onToggleUnread: (_agent, session, unread) => { if (session) setSeenSessions((current) => markSeen(current, session.id, unread ? new Date(0).toISOString() : new Date().toISOString())) },
           onCopyConversationId: (_agent, session) => { if (session) void navigator.clipboard.writeText(session.id).catch(() => undefined) },
@@ -3468,7 +3467,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
               <span className="card-bot"><span className="focus-glow" aria-hidden="true" />{focusBlob(58)}</span>
               <button className="icon-btn jump" aria-label="Open in Bitbots" title="Open in Bitbots" onClick={onOpenMain}><ArrowUpRight size={9} /></button>
               <div className="card-stack">
-                <div className="who"><span className="name">{name}</span><RuntimeProblemMarker runtime={runtime} onOpenSettings={onOpenSettings} />{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}{agent?.leader && <span className="companion-leader" title="Team leader" aria-label="Team leader">★</span>}{botProjectName(agent, projects) && <span className="companion-project" title="Project">{botProjectName(agent, projects)}</span>}<span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
+                <div className="who"><span className="name">{name}</span><RuntimeProblemMarker runtime={runtime} onOpenSettings={onOpenSettings} />{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}{agent?.systemRole === 'manager' && <span className="companion-leader" title="Manager" aria-label="Manager">★</span>}{botProjectName(agent, projects) && <span className="companion-project" title="Project">{botProjectName(agent, projects)}</span>}<span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
                 <FocusTicker steps={focusSteps} current={statusLine} shimmering={shimmering} />
                 {focusTeam ? <button type="button" className="glance team-glance" onClick={() => onOpenSession?.(focusTeam.sessionId)} title="Open the side conversation in Bitbots">{focusTeam.peer && <BlobCanvas decorative color={agentColorHex(focusTeam.peer.color)} size={14} mini look={agentLook(focusTeam.peer)} label={focusTeam.peer.name} />}<span>{focusTeam.text}</span></button>
                   : <div className="glance" title={`Reported tokens across all ${nouns}. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}><span>All {nouns}: Tokens <b>{tokenGlance}</b></span></div>}

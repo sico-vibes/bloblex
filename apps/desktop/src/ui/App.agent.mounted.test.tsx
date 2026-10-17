@@ -768,16 +768,21 @@ describe('blob roster and editor', () => {
     })
   }
 
-  it('groups blobs under projects, keeps casual blobs in Unassigned and marks the leader', async () => {
-    configure(snapshot({ projects: [board], agents: [{ ...claude, projectId: board.id, role: 'CTO', leader: true }, codex, invoice, opencode, retired] }))
+  it('groups bots under projects, keeps casual ones in Unassigned and pins the Manager above them', async () => {
+    const manager = { ...opencode, id: 'agent-manager', name: 'Manager', role: 'Manager', systemRole: 'manager' as const, projectId: null }
+    configure(snapshot({ projects: [board], agents: [{ ...claude, projectId: board.id, role: 'CTO', leader: true }, codex, invoice, opencode, manager, retired] }))
     const view = startApp()
     await view.settle()
     const groups = [...view.host.querySelectorAll('.team-group')].map((group) => group.getAttribute('aria-label'))
-    expect(groups).toEqual(['Board', 'Unassigned'])
-    const leader = view.host.querySelector('.team-row[data-agent-id="agent-claude"]')!
-    expect(leader.getAttribute('aria-label')).toBe('Claude, CTO, team leader')
-    expect(leader.querySelector('.leader-badge')).not.toBeNull()
-    expect(leader.querySelector('.role-chip')?.textContent).toBe('CTO')
+    expect(groups).toEqual(['Manager', 'Board', 'Unassigned'])
+    // An old team leader is an ordinary bot now.
+    const formerLeader = view.host.querySelector('.team-row[data-agent-id="agent-claude"]')!
+    expect(formerLeader.getAttribute('aria-label')).toBe('Claude, CTO')
+    expect(formerLeader.querySelector('.leader-badge')).toBeNull()
+    expect(formerLeader.querySelector('.role-chip')?.textContent).toBe('CTO')
+    const managerRow = view.host.querySelector('.manager-group .team-row[data-agent-id="agent-manager"]')!
+    expect(managerRow.getAttribute('aria-label')).toBe('Manager, Manager, Manager')
+    expect(managerRow.querySelector('.leader-badge')).not.toBeNull()
     expect([...view.host.querySelectorAll('.team-group[aria-label="Unassigned"] .team-row strong')].map((node) => node.textContent)).toEqual(['Codex', 'Invoice helper', 'OpenCode'])
   })
 

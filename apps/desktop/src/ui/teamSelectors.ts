@@ -77,9 +77,19 @@ export function conversationPlaceName(session: Session | null | undefined, agent
 export type ProjectGroup = { project: Project | null; agents: Agent[] }
 
 /** Projects in their saved order, then casual blobs; hidden blobs only when asked for. */
+/** The built-in Manager: the one bot that works across every project. */
+export function isManager(agent: Pick<Agent, 'systemRole'> | null | undefined): boolean {
+  return agent?.systemRole === 'manager'
+}
+
+export function managerOf(agents: readonly Agent[]): Agent | null {
+  return agents.find((agent) => isManager(agent) && !agent.archived) ?? null
+}
+
 export function groupAgentsByProject(agents: readonly Agent[], projects: readonly Project[], query = '', showHidden = false): ProjectGroup[] {
   const needle = query.trim().toLowerCase()
-  const visible = agents.filter((agent) => !agent.archived && (showHidden || agent.hidden !== true)
+  // The Manager is pinned above every project, never inside one.
+  const visible = agents.filter((agent) => !agent.archived && !isManager(agent) && (showHidden || agent.hidden !== true)
     && (!needle || [agent.name, agent.role, agent.description].some((value) => typeof value === 'string' && value.toLowerCase().includes(needle))))
   const known = new Set(projects.map((project) => project.id))
   const groups: ProjectGroup[] = [...projects]

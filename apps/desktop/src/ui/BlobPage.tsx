@@ -125,7 +125,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
   const discardBody = mode === 'edit' && discard === 'revert' && changes.length
     ? 'These changes will be lost: ' + summarizeChanges(changes, 8) + '.'
     : discard === 'leave' && changes.length ? 'Unsaved changes: ' + summarizeChanges(changes, 8) + '.' : undefined
-  const renderSettings = (only?: BotSection[]) => <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} savedRuntimeId={agent?.runtimeId ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate}  sections={only} sessions={sessions} onOpenMemory={onOpenMemory} onOpenSkills={onOpenSkills} />
+  const renderSettings = (only?: BotSection[]) => <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} savedRuntimeId={agent?.runtimeId ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate}  sections={only} sessions={sessions} manager={agent?.systemRole === 'manager'} onOpenMemory={onOpenMemory} onOpenSkills={onOpenSkills} />
   // A draft that already has a name (an import, a duplicate, a starter) is a review job, not a blank page.
   const [advanced, setAdvanced] = useState(() => mode === 'create' && draft.name.trim().length > 0)
   const wizardActive = mode === 'create' && !advanced

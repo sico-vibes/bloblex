@@ -1,5 +1,18 @@
 # Bitbots collaboration instructions
 
+# Amendment (17 October 2026): Remote mode over Tailscale
+
+Owner directive, accepted as drafted in [docs/remote/AGENTS_AMENDMENT_DRAFT.md](docs/remote/AGENTS_AMENDMENT_DRAFT.md) (16 October wording). Remote mode lets paired devices on the owner's tailnet reach a host's bots through a gateway inside the daemon. This amends the loopback and capability rules in `docs/ipc-contract.md` for this one path only.
+
+- **The daemon API is unchanged.** Its HTTP and WebSocket listeners stay on `127.0.0.1`, protected by the capability, and the Tauri shell path is unchanged.
+- **The gateway is the only remote entry.** It is off by default and compiled into the daemon: a second listener on `127.0.0.1:<remote.port>` (default 48620) and nothing else. It never reads, accepts or exposes the capability; it calls `dispatch()` in-process.
+- **Tailscale is the only way in.** The gateway is published with `tailscale serve --bg --https=443` (or 8443). Never `tailscale funnel`, never `tailscale serve reset`, never a non-loopback bind. Turning Remote off removes only Bitbots' own serve handler. No Bitbots relay and no LAN listener.
+- **Authorisation is per device.** Pairing needs a one-time code (5 minutes, 5 attempts) and the owner's approval on the desktop, where the owner picks the tier (`viewer`, `chat` or `operator`; Chat is preselected). The device gets a 256-bit token in an `HttpOnly; Secure; SameSite=Strict` cookie; only its SHA-256 is stored. Every request checks the cookie, revocation and `Origin`, and the Tailscale login when that header is present; a device without the header may still pair, with the cookie as its only proof. Approvals from remote are off by default.
+- **One policy, two languages.** The tier table, event policy and settings allowlist live in `apps/desktop/src/remote/tiers.json`, read by the Rust gateway and the TypeScript client, and a parity test fails the build when a daemon method or event has no row.
+- **Never remote:** `settings.set`, every `remote.*` method, agent create/update/delete, runtime profile changes, runtime refresh, file revert, automation writes, memory writes, daemon shutdown, attachments (in v1) and every native Tauri command.
+- **Content stays private.** No message text appears in logs, push payloads or the activity list. Tailscale status JSON is never logged. No provider credentials, tokens or environment values leave the host; results and events are redacted and allowlisted before they leave.
+- **Release gate, waived once by the owner.** The draft's gate (the checklists in `docs/remote/THREAT_MODEL.md` sections 8 and 11 and an independent review of the cookie, Origin and Tailscale handling) was **not** completed before `v0.1.0-beta.30`; the owner chose on 17 October 2026 to ship Remote in that beta anyway. Remote is unverified against a live tailnet and a real phone at that release. The checklist and review remain owed before a non-beta release.
+
 # Amendment (16 October 2026): two lanes only
 
 Owner directive; this amends the 12 October lanes below where they differ.

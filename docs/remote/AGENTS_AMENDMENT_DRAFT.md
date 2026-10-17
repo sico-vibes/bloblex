@@ -1,6 +1,9 @@
 # Draft amendment for AGENTS.md: Remote mode (for owner approval)
 
-**Not in force.** `AGENTS.md` has not been edited. This is proposed wording for the owner to
+**In force from 17 October 2026.** The owner accepted the proposed text below as written, with the
+defaults in "Decisions" (approvals from remote off, Chat preselected, Tailscale only, pairing
+without a login header allowed), and waived the release gate once for `v0.1.0-beta.30`; see the
+17 October amendment at the top of `AGENTS.md`. Originally proposed wording for the owner to
 accept, change or reject. Written 15 October 2026; rewritten 16 October 2026 for the owner's
 choice of Tailscale. The earlier wording (relay, Noise sessions, device keys, direct LAN
 listener) is superseded and is not proposed any more.

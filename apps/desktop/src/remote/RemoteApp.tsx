@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Download, LogOut, Monitor, RefreshCw, Send, ShieldAlert, Smartphone, WifiOff } from 'lucide-react'
+import { ArrowLeft, Check, Download, List, LogOut, Monitor, RefreshCw, Send, ShieldAlert, Smartphone, WifiOff } from 'lucide-react'
 import { fetchSnapshot, listenForDaemonEvents, previewMode, rpc } from '../tauri'
 import type { Agent, PermissionRequest, Session, Snapshot } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
@@ -8,7 +8,7 @@ import { agentColorHex } from '../ui/agentColor'
 import { ApprovalCard } from '../ui/ApprovalCard'
 import { blobState, peerLine } from '../ui/CompanionTeam'
 import { StatusDot } from '../ui/StatusDot'
-import { mainSessionFor } from '../ui/teamSelectors'
+import { isAutomationSession, isSideSession, mainSessionFor } from '../ui/teamSelectors'
 import { useEntityNoun } from '../ui/vocabulary'
 import logo from '../assets/bloblex-128.png'
 import type { RemoteTier } from './remoteContract'
@@ -25,6 +25,23 @@ export const PAIR_POLL_MS = 2000
 function subtitle(agent: Agent, sessions: Session[], state: ReturnType<typeof blobState>): string {
   const line = peerLine(agent, sessions, state)
   return line.trim() === (agent.role ?? '').trim() ? 'Ready' : line
+}
+
+/** A bot's own conversations on the phone: not archived, not bot-to-bot, not scheduled; newest first. */
+export function phoneConversations(sessions: readonly Session[], agentId: string): Session[] {
+  return sessions
+    .filter((session) => session.agentId === agentId && !session.archived && !isSideSession(session) && !isAutomationSession(session))
+    .sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))
+}
+
+function shortWhen(iso: string | undefined): string {
+  const time = Date.parse(iso ?? '')
+  if (!Number.isFinite(time)) return ''
+  const minutes = Math.max(0, Math.round((Date.now() - time) / 60_000))
+  if (minutes < 1) return 'now'
+  if (minutes < 60) return `${minutes} min`
+  if (minutes < 1440) return `${Math.round(minutes / 60)} h`
+  return `${Math.round(minutes / 1440)} d`
 }
 
 /** The phone shows plain text; Markdown emphasis markers would just be noise. */
@@ -67,6 +84,9 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
   const [connection, setConnection] = useState<RemoteConnectionStatus>('connecting')
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [agentId, setAgentId] = useState<string | null>(null)
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState<Record<string, Session>>({})
+  const [listOpen, setListOpen] = useState(false)
   const [updateReady, setUpdateReady] = useState(false)
 
   const signedIn = me !== null
@@ -161,6 +181,17 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
 
   const waiting = agents.filter((agent) => blobState(agent, sessions, runtimes, online) === 'waiting')
   const activeAgent = agents.find((agent) => agent.id === agentId) ?? null
+  const conversations = activeAgent ? phoneConversations(sessions, activeAgent.id) : []
+  const listed = conversations.find((session) => session.id === conversationId) ?? (activeAgent ? mainSessionFor(sessions, activeAgent.id) : null)
+  // A conversation other than the newest may arrive without its messages; load it once.
+  const activeSession = listed ? (Array.isArray(listed.messages) ? listed : loaded[listed.id] ? { ...loaded[listed.id], ...listed, messages: loaded[listed.id].messages } : listed) : null
+  useEffect(() => {
+    if (!listed || Array.isArray(listed.messages) || loaded[listed.id]) return
+    let cancelled = false
+    void rpc<Session>('session.get', { sessionId: listed.id }).then((full) => { if (!cancelled && full?.id) setLoaded((current) => ({ ...current, [full.id]: full })) }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [listed, loaded])
+  const openAgent = (id: string) => { setAgentId(id); setConversationId(null); setListOpen(false); setScreen('chat') }
   const preApproval = screen === 'checking' || screen === 'connect' || screen === 'waiting'
 
   return <div className="rm-stage">
@@ -176,7 +207,10 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
             ? <button type="button" className="rm-icon" aria-label={`Back to ${nouns}`} onClick={() => setScreen('bots')}><ArrowLeft size={19} /></button>
             : <img className="rm-logo" src={logo} alt="" width="26" height="26" />}
           {screen === 'chat' && activeAgent
-            ? <div className="rm-title"><strong>{activeAgent.name}</strong><small>{peerLine(activeAgent, sessions, blobState(activeAgent, sessions, runtimes, online))}</small></div>
+            ? <>
+              <div className="rm-title"><strong>{activeAgent.name}</strong><small>{activeSession?.title?.trim() || peerLine(activeAgent, sessions, blobState(activeAgent, sessions, runtimes, online))}</small></div>
+              {conversations.length > 1 && <button type="button" className="rm-icon rm-list-button" aria-label={`${activeAgent.name}'s conversations`} aria-haspopup="dialog" onClick={() => setListOpen(true)}><List size={19} /></button>}
+            </>
             : <div className="rm-host" aria-label={`Computer: ${hostName}, ${online ? 'online' : 'not connected'}`}>
               <StatusDot status={online ? 'working' : connection === 'reconnecting' || connection === 'connecting' ? 'waiting' : 'offline'} />
               <span><strong>{hostName}</strong><small>{online ? TIER_WORD[tier] : connection === 'offline' ? 'Offline' : 'Connecting…'}</small></span>
@@ -185,8 +219,8 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
         {!online && <p className="rm-connection" role="status">{connection === 'offline' ? `Offline. Bitbots will reconnect to ${hostName} when the network is back.` : `Reconnecting to ${hostName}…`}</p>}
         {me?.quietHoursActive && <p className="rm-connection quiet" role="status">Quiet hours: this device can read but not send.</p>}
         <main className="rm-main">
-          {screen === 'bots' && <BotsScreen hostName={hostName} agents={agents} sessions={sessions} runtimes={runtimes} online={online} loaded={snapshot !== null} waiting={waiting} nouns={nouns} onOpen={(id) => { setAgentId(id); setScreen('chat') }} onRetry={() => void refresh()} />}
-          {screen === 'chat' && activeAgent && <ChatScreen agent={activeAgent} session={mainSessionFor(sessions, activeAgent.id)} permissions={snapshot?.permissions ?? []} hostName={hostName} online={online} tier={tier}
+          {screen === 'bots' && <BotsScreen hostName={hostName} agents={agents} sessions={sessions} runtimes={runtimes} online={online} loaded={snapshot !== null} waiting={waiting} nouns={nouns} onOpen={openAgent} onRetry={() => void refresh()} />}
+          {screen === 'chat' && activeAgent && <ChatScreen key={activeSession?.id ?? 'none'} agent={activeAgent} session={activeSession} permissions={snapshot?.permissions ?? []} hostName={hostName} online={online} tier={tier}
             canApprove={tier === 'operator' && me?.approvalsFromRemote === true} quiet={me?.quietHoursActive === true} nouns={nouns} />}
           {screen === 'device' && me && <DeviceScreen me={me} noun={noun} onLogout={() => void logout()} />}
         </main>
@@ -195,7 +229,32 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
           <button type="button" className={screen === 'device' ? 'on' : ''} onClick={() => setScreen('device')}><Smartphone size={19} aria-hidden="true" /><span>This device</span></button>
         </nav>
       </>}
+      {listOpen && activeAgent && <ConversationSheet agentName={activeAgent.name} conversations={conversations} current={activeSession?.id ?? null}
+        onClose={() => setListOpen(false)} onChoose={(id) => { setConversationId(id); setListOpen(false) }} />}
     </div>
+  </div>
+}
+
+function ConversationSheet({ agentName, conversations, current, onClose, onChoose }: { agentName: string; conversations: Session[]; current: string | null; onClose: () => void; onChoose: (id: string) => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return <div className="rm-sheet-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="rm-sheet" role="dialog" aria-modal="true" aria-label={`${agentName}'s conversations`}>
+      <span className="rm-grab" aria-hidden="true" />
+      <h2>Conversations with {agentName}</h2>
+      <ul className="rm-convos">
+        {conversations.map((session) => <li key={session.id}>
+          <button type="button" className={session.id === current ? 'on' : ''} aria-current={session.id === current ? 'true' : undefined} onClick={() => onChoose(session.id)}>
+            <span><strong>{session.title?.trim() || 'New conversation'}</strong><small>{shortWhen(session.updatedAt ?? session.createdAt)}</small></span>
+            {session.id === current && <Check size={16} aria-hidden="true" />}
+          </button>
+        </li>)}
+      </ul>
+      <p className="rm-hint rm-sheet-hint">Start new conversations on the computer.</p>
+    </section>
   </div>
 }
 

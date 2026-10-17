@@ -260,3 +260,18 @@ export function ancestorIds(tree: readonly ConversationNode[], sessionId: string
   }
   return walk(tree, []) ?? []
 }
+
+/** How many conversations load in the background at the same time. */
+export const HYDRATE_AT_ONCE = 4
+
+/**
+ * Conversations still to load in full, in the order they should load: the
+ * selected bot's first, newest first within each group. Archived ones and
+ * ones already loaded are left out.
+ */
+export function hydrationOrder(sessions: readonly Session[], selectedAgentId: string | null): Session[] {
+  const time = (session: Session) => Date.parse(session.updatedAt ?? session.createdAt ?? '') || 0
+  return sessions
+    .filter((session) => !session.archived && !Array.isArray(session.messages) && !Array.isArray(session.turns))
+    .sort((a, b) => Number(b.agentId === selectedAgentId && !!selectedAgentId) - Number(a.agentId === selectedAgentId && !!selectedAgentId) || time(b) - time(a))
+}

@@ -43,7 +43,7 @@ import { fetchCached, invalidateCatalog } from './catalogCache'
 import { ConversationsPanel } from './ConversationsPanel'
 import { SessionRail } from './SessionRail'
 import { ChangeBanner } from './ChangeBanner'
-import { conversationPlaceName, hashQuery, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
+import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isSideSession, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
@@ -378,6 +378,8 @@ export function App() {
   const refreshAgain = useRef(false)
   const snapshotRef = useRef<Snapshot | null>(null)
   const pendingSessionHydrations = useRef(new Set<string>())
+  /** Background loads that failed; the conversation loads again when it is opened. */
+  const failedSessionHydrations = useRef(new Set<string>())
   const selectedAgentIdRef = useRef<string | null>(null)
   const detailsSessionIdRef = useRef<string | null>(null)
   const selectedRuntimeIdRef = useRef<string | null>(null)
@@ -496,16 +498,23 @@ export function App() {
   const sessions = snapshot?.sessions ?? []
   const agents = snapshot?.agents ?? []
   const projects = snapshot?.projects ?? []
+  // Conversations load in the background: the selected bot's newest first, a
+  // few at a time, so its list opens ready while the rest follow. Each finished
+  // load changes the snapshot, which runs this again for the next ones.
   useEffect(() => {
     if (!snapshot || companion || !inDesktop) return
-    for (const session of sessions) {
-      if (session.archived || Array.isArray(session.messages) || Array.isArray(session.turns) || pendingSessionHydrations.current.has(session.id)) continue
+    const queue = hydrationOrder(sessions, selectedAgentId).filter((session) => !pendingSessionHydrations.current.has(session.id) && !failedSessionHydrations.current.has(session.id))
+    for (const session of queue.slice(0, Math.max(0, HYDRATE_AT_ONCE - pendingSessionHydrations.current.size))) {
       pendingSessionHydrations.current.add(session.id)
       void rpc<Session>('session.get', { sessionId: session.id }).then((fullSession) => {
         setSnapshot((current) => current ? mergeHydratedSession(current, session.id, fullSession) : current)
-      }).catch(() => undefined).finally(() => pendingSessionHydrations.current.delete(session.id))
+      }).catch(() => {
+        failedSessionHydrations.current.add(session.id)
+        // Nothing changed in the snapshot, so nudge it to start the next load.
+        setSnapshot((current) => current ? { ...current } : current)
+      }).finally(() => pendingSessionHydrations.current.delete(session.id))
     }
-  }, [snapshot, sessions, companion])
+  }, [snapshot, sessions, companion, selectedAgentId])
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? null
   const activeSelectedAgent = selectedAgent && !selectedAgent.archived ? selectedAgent : null
   const selectedRuntime = activeSelectedAgent
@@ -1472,12 +1481,28 @@ export function App() {
     void setActiveSession(session.id)
   }
 
+  const archiveConversation = async (session: Session) => {
+    try {
+      const result = await rpc<{ session?: Session }>('session.archive', { sessionId: session.id, archived: true })
+      const saved = result.session
+      setSnapshot((current) => current ? { ...current, sessions: (current.sessions ?? []).map((item) => item.id === session.id ? { ...item, ...(saved ?? {}), archived: true } : item) } : current)
+      if (selectedSessionId === session.id) setSelectedSessionId(null)
+    } catch (reason) { setError(messageOf(reason)) }
+  }
+
+  // The pill flips at once; the daemon's answer replaces it, and a failure puts it back.
   const setPlanMode = async (enabled: boolean) => {
     if (!selectedSession) return
+    const before = selectedSession
+    const optimistic: Session = { ...before, modelLock: { ...(before.modelLock ?? {}), planMode: enabled } }
+    setSnapshot((current) => current ? mergeHydratedSession(current, before.id, optimistic) : current)
     try {
-      const result = await doRpc<{ session?: Session }>('session.model.update', { sessionId: selectedSession.id, planMode: enabled })
+      const result = await rpc<{ session?: Session }>('session.model.update', { sessionId: before.id, planMode: enabled })
       if (result.session?.id) setSnapshot((current) => current ? mergeHydratedSession(current, result.session!.id, result.session!) : current)
-    } catch { /* inline */ }
+    } catch (reason) {
+      setSnapshot((current) => current ? mergeHydratedSession(current, before.id, before) : current)
+      setError(messageOf(reason))
+    }
   }
   const approvePlan = async () => {
     if (!selectedSession) return
@@ -2235,7 +2260,7 @@ export function App() {
       </aside>
 
       {activeSelectedAgent
-        ? <ConversationsPanel agent={activeSelectedAgent} agents={agents} sessions={sessions} selectedSessionId={selectedSession?.id ?? null} sideSessionId={sideSessionId} canCreate={connection === 'connected' && runtimeReady} onSelect={selectConversation} onOpenSide={openSideConversation} onNew={() => newSession()} onRename={renameConversation} onDelete={(session) => setSessionDeleteTarget(session)} onClose={() => setConvosVisible(false)} />
+        ? <ConversationsPanel agent={activeSelectedAgent} agents={agents} sessions={sessions} selectedSessionId={selectedSession?.id ?? null} sideSessionId={sideSessionId} canCreate={connection === 'connected' && runtimeReady} onSelect={selectConversation} onOpenSide={openSideConversation} onNew={() => newSession()} onRename={renameConversation} onArchive={(session) => void archiveConversation(session)} onDelete={(session) => setSessionDeleteTarget(session)} onClose={() => setConvosVisible(false)} />
         : <aside className="conversations-panel" aria-hidden="true" />}
 
       <section className="conversation-pane">
@@ -2365,7 +2390,7 @@ export function App() {
           <h2>{agentName}</h2>
           <p>{selectedSession?.title?.trim() || (selectedRuntime ? [labelize(selectedRuntime.provider), selectedRuntime.version].filter(Boolean).join(' · ') : 'No coding agent selected')}</p>
         </section>
-        <SessionRail session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
+        <SessionRail session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} onOpenRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
       </aside>
 
       {!companion && <ContextualHints enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet} />}

@@ -12,6 +12,8 @@ const agents = [
 const sessions = [
   { id: 's1', agentId: 'a1', runtimeId: 'rt', state: 'waiting_permission', updatedAt: '2026-10-15T10:00:00Z', messages: [{ id: 'm1', role: 'user', content: 'Fix the parser' }, { id: 'm2', role: 'assistant', content: 'On it. **Found** the bug.' }] },
   { id: 's2', agentId: 'a2', runtimeId: 'rt', state: 'idle', updatedAt: '2026-10-15T09:00:00Z', messages: [] },
+  // An older conversation with Pixel that arrives without its messages.
+  { id: 's3', agentId: 'a2', runtimeId: 'rt', state: 'idle', title: 'Logo ideas', updatedAt: '2026-10-14T09:00:00Z' },
 ]
 const permissions = [{ id: 'p1', sessionId: 's1', runtimeId: 'rt', status: 'pending', kind: 'command', title: 'Run npm test', choices: ['allow', 'deny'] }]
 const h = vi.hoisted(() => ({ rpc: vi.fn() }))
@@ -129,6 +131,22 @@ describe('RemoteApp', () => {
     expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId: 's2', text: 'Ship it' })
     expect(view.querySelector('.rm-send-problem')?.textContent).toContain('Quiet hours')
     expect(view.querySelector<HTMLTextAreaElement>('.rm-composer textarea')?.value).toBe('Ship it')
+  })
+
+  it('lists a bot\'s conversations and loads an older one when chosen', async () => {
+    h.rpc.mockImplementation(async (method: string, params: { sessionId?: string }) => method === 'session.get' && params.sessionId === 's3'
+      ? { id: 's3', agentId: 'a2', runtimeId: 'rt', title: 'Logo ideas', messages: [{ id: 'm9', role: 'assistant', content: 'Three logo sketches.' }] }
+      : {})
+    const view = await mount(fakeDevice(meFor('chat')))
+    await act(async () => { view.querySelectorAll<HTMLButtonElement>('.rm-bot')[1]!.click() })
+    await act(async () => { view.querySelector<HTMLButtonElement>('.rm-list-button')!.click() })
+    const rows = [...document.querySelectorAll<HTMLButtonElement>('.rm-convos button')]
+    expect(rows.map((row) => row.querySelector('strong')?.textContent)).toEqual(['New conversation', 'Logo ideas'])
+    await act(async () => { rows[1]!.click() })
+    await flush()
+    expect(h.rpc).toHaveBeenCalledWith('session.get', { sessionId: 's3' })
+    expect(view.querySelector('.rm-title small')?.textContent).toBe('Logo ideas')
+    expect(view.querySelector('.rm-log')?.textContent).toContain('Three logo sketches.')
   })
 
   it('signs out from the device screen', async () => {

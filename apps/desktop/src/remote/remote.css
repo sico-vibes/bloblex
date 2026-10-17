@@ -134,6 +134,14 @@ button, input, textarea { font: inherit; }
 .rm-send-problem { margin: 0 12px 8px; padding: 8px 12px; color: var(--danger-ink); font-size: 13px; line-height: 1.45; border-radius: 12px; background: color-mix(in srgb, var(--status-danger) 10%, transparent); }
 .rm-device-hint { margin: 4px 2px 0; line-height: 1.5; }
 
+/* Conversation list sheet */
+.rm-list-button { margin: 0 -8px 0 auto; }
+.rm-convos { max-height: 55dvh; overflow-y: auto; }
+.rm-convos button { justify-content: space-between; }
+.rm-convos button strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rm-convos button > span { min-width: 0; }
+.rm-sheet-hint { margin: 0; text-align: center; }
+
 /* Host sheet */
 .rm-sheet-backdrop { position: absolute; inset: 0; z-index: 20; display: flex; align-items: flex-end; background: rgba(0, 0, 0, .5); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); animation: rm-fade 180ms ease-out both; }
 .rm-sheet { width: 100%; padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); display: grid; gap: 10px; border-radius: 24px 24px 0 0; background: var(--surface-overlay); animation: rm-rise 240ms cubic-bezier(.2, .8, .2, 1) both; }

@@ -2,7 +2,7 @@
 // selected bot in its project, newest first, with bot-to-bot conversations
 // branching under the conversation that started them.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { ArrowLeftRight, ChevronRight, PanelLeftClose, Pencil, SquarePen, Trash2 } from 'lucide-react'
+import { Archive, ArrowLeftRight, ChevronRight, PanelLeftClose, Pencil, SquarePen, Trash2 } from 'lucide-react'
 import type { Agent, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -35,7 +35,7 @@ function isToday(value: unknown, now: number) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
-export function ConversationsPanel({ agent, agents, sessions, selectedSessionId, sideSessionId, canCreate, onSelect, onOpenSide, onNew, onRename, onDelete, onClose }: {
+export function ConversationsPanel({ agent, agents, sessions, selectedSessionId, sideSessionId, canCreate, onSelect, onOpenSide, onNew, onRename, onArchive, onDelete, onClose }: {
   agent: Agent
   agents: readonly Agent[]
   sessions: readonly Session[]
@@ -46,6 +46,8 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
   onOpenSide: (sessionId: string) => void
   onNew: () => void
   onRename: (session: Session, title: string) => Promise<unknown> | void
+  /** Hides the conversation from this list; it can be restored on the bot's page. */
+  onArchive?: (session: Session) => void
   onDelete: (session: Session) => void
   onClose: () => void
 }) {
@@ -90,6 +92,7 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
           </button>}
         {node.kind === 'main' && renaming !== session.id && <span className="convo-actions">
           <button type="button" className="convo-action" aria-label={`Rename ${title}`} title="Rename" onClick={() => setRenaming(session.id)}><Pencil size={12} aria-hidden="true" /></button>
+          {onArchive && <button type="button" className="convo-action" aria-label={`Archive ${title}`} title="Archive (restore it from the bot's page)" disabled={busy} onClick={() => onArchive(session)}><Archive size={12} aria-hidden="true" /></button>}
           <button type="button" className="convo-action danger" aria-label={`Delete ${title}`} title="Delete" disabled={busy} onClick={() => onDelete(session)}><Trash2 size={12} aria-hidden="true" /></button>
         </span>}
       </div>

@@ -75,12 +75,15 @@ export function PermissionModeControl({ session, agent, disabled, onSessionUpdat
   useEffect(() => { if (open) requestAnimationFrame(() => menuRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus()) }, [open])
   useEffect(() => { setOpen(false); setConfirmBypass(false) }, [session.id])
 
+  // The choice shows at once; the daemon's answer replaces it, and a failure puts the old mode back.
   const apply = async (next: ApprovalMode | null) => {
+    const before = session
     setSaving(true)
+    onSessionUpdated({ ...before, modelLock: { ...(before.modelLock ?? {}), approvalMode: next ?? undefined } })
     try {
-      const result = await rpc<{ session?: Session }>('session.model.update', { sessionId: session.id, approvalMode: next })
-      if (result.session?.id === session.id) onSessionUpdated(result.session)
-    } catch (reason) { onError(reason) } finally { setSaving(false) }
+      const result = await rpc<{ session?: Session }>('session.model.update', { sessionId: before.id, approvalMode: next })
+      if (result.session?.id === before.id) onSessionUpdated(result.session)
+    } catch (reason) { onSessionUpdated(before); onError(reason) } finally { setSaving(false) }
   }
   const choose = (next: ApprovalMode) => {
     close(true)

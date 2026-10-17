@@ -2,12 +2,13 @@
 // context is, what it produced and what it changed. Each card collapses and
 // remembers that. Values are only what the daemon reported; nothing is guessed.
 import { useEffect, useState, type ReactNode } from 'react'
-import { Bot, ChevronDown, ChevronRight, Code2, Copy, FileText, FolderOpen, GitBranch, Monitor } from 'lucide-react'
+import { Bot, ChevronDown, ChevronRight, Code2, Copy, FileText, FolderOpen, GitBranch, Monitor, Smartphone } from 'lucide-react'
 import type { JsonRecord, Session } from '../types'
 import { rpc } from '../tauri'
 import { parseUnifiedDiff } from './diffParser'
 import { HelpTip } from './SettingsParts'
 import { usePlatform } from '../transport/platform'
+import { useRemoteStatus } from '../remote/useRemote'
 import './sessionRail.css'
 
 type Environment = { projectPath: string | null; gitRepo: boolean; branch: string | null; detached: boolean; host: string }
@@ -87,7 +88,7 @@ export function fileChanges(session: Session | null): FileChange[] {
   return [...latest.values()].reverse()
 }
 
-export function SessionRail({ session, usage, appliedModel, onOpenFile, onRevealFile, onCopyPath, onDiff, onOpenFolder, runtimeFacts }: {
+export function SessionRail({ session, usage, appliedModel, onOpenFile, onRevealFile, onCopyPath, onDiff, onOpenFolder, runtimeFacts, onOpenRemote }: {
   session: Session | null
   usage: readonly JsonRecord[]
   /** The model the coding agent last reported actually using, when known. */
@@ -99,8 +100,12 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
   onOpenFolder: (path: string) => void
   /** Coding agent facts (version, sign-in, executable) for the Environment card's "?" tip. */
   runtimeFacts?: string
+  /** Opens Settings > Remote, where Remote is turned on (Tailscale check and consent live there). */
+  onOpenRemote?: () => void
 }) {
   const platform = usePlatform()
+  const remote = useRemoteStatus(true)
+  const [remoteBusy, setRemoteBusy] = useState(false)
   const environment = useEnvironment(session?.id ?? null)
   const [showAllOutputs, setShowAllOutputs] = useState(false)
   if (!session) return <div className="rail-empty">Open a conversation to see where it works and what it changed.</div>
@@ -127,6 +132,16 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
       {folderName && <div className="rail-row"><FolderOpen size={13} aria-hidden="true" /><span className="rail-row-main" title={projectPath ?? undefined}>{folderName}</span>{projectPath && platform.editor && <button type="button" className="rail-link" onClick={() => onOpenFolder(projectPath)}>Open</button>}</div>}
       {appliedModel && <div className="rail-row"><Bot size={13} aria-hidden="true" /><span className="rail-row-main" title="The model the coding agent reported using">{appliedModel}</span></div>}
       {environment?.gitRepo && environment.branch && <div className="rail-row"><GitBranch size={13} aria-hidden="true" /><span className="rail-row-main">{environment.branch}</span>{environment.detached && <span className="rail-tag">detached</span>}</div>}
+      {remote.available === true && remote.status && <div className="rail-row rail-remote">
+        <Smartphone size={13} aria-hidden="true" />
+        <span className="rail-row-main" title={remote.status.enabled && remote.status.url ? remote.status.url : undefined}>Remote{remote.status.enabled ? ` · ${remote.status.connectedCount} of ${remote.status.deviceCount} connected` : ' · off'}</span>
+        <button type="button" role="switch" aria-checked={remote.status.enabled} aria-label="Remote" title={remote.status.enabled ? 'Turn Remote off' : 'Turn Remote on in Settings › Remote'} className={`toggle small ${remote.status.enabled ? 'on' : ''}`} disabled={remoteBusy || remote.status.link === 'starting'}
+          onClick={() => {
+            if (!remote.status?.enabled) { onOpenRemote?.(); return }
+            setRemoteBusy(true)
+            void rpc('remote.disable').catch(() => undefined).finally(() => setRemoteBusy(false))
+          }}><i /></button>
+      </div>}
     </Card>
 
     <Card id="context" title="Context">

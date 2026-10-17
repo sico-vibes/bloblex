@@ -1,5 +1,17 @@
 # Bitbots collaboration instructions
 
+# Amendment (17 October 2026, later): Native Remote, without Tailscale
+
+Owner directive (request of 17 October 2026, decisions made in planning). It amends the Remote amendment below where they differ; everything not changed here stands.
+
+- **Two methods, one at a time.** Remote has a Tailscale method (unchanged) and a **Native** method. Only one is active (`remote.method`); switching needs Remote off.
+- **Native may bind beyond loopback, only for the gateway.** While Native is on, the gateway's own listener binds the host's interfaces on `remote.nativePort` (default 48621). It is never on when Native is off. The daemon API listener stays on `127.0.0.1` with the capability, and the Tailscale listener stays loopback-only.
+- **TLS is mandatory.** Native serves HTTPS only, with a certificate Bitbots generates and stores with user-only access (owner decision: built-in certificate; each device sees a one-time warning; the app shows the fingerprint to check). Plain HTTP is refused.
+- **Sign-in is a password plus the owner's approval.** A username and password (Argon2id hash only, never logged or returned) and, for every new device, approval on the desktop with the tier, as for Tailscale pairing. Approvals from remote stay off by default.
+- **Abuse limits are required.** Per-IP rate limits on every unauthenticated route, lockout after repeated failed sign-ins, a global pause on a burst, and a content-free activity line for each.
+- **No third-party service.** Native contacts no IP-echo, relay or DNS service. UPnP port mapping happens only with the owner's consent and removes only its own mapping. A firewall rule is added only through an elevated prompt the owner accepts.
+- **Release gate.** The threat-model review owed for Remote now covers Native too (`docs/remote/THREAT_MODEL.md`, public-internet section) before a non-beta release.
+
 # Amendment (17 October 2026): Remote mode over Tailscale
 
 Owner directive, accepted as drafted in [docs/remote/AGENTS_AMENDMENT_DRAFT.md](docs/remote/AGENTS_AMENDMENT_DRAFT.md) (16 October wording). Remote mode lets paired devices on the owner's tailnet reach a host's bots through a gateway inside the daemon. This amends the loopback and capability rules in `docs/ipc-contract.md` for this one path only.

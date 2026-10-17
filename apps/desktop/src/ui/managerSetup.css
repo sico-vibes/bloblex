@@ -1,0 +1,10 @@
+/* One-time "Meet your Manager" card at the top of the sidebar. */
+.manager-setup { margin: 0 8px 8px; padding: 10px 12px; display: grid; gap: 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-raised); }
+.manager-setup header { display: flex; align-items: center; gap: 8px; }
+.manager-setup header strong { flex: 1; font-size: var(--fs-sm); font-weight: 600; }
+.manager-setup-icon { width: 24px; height: 24px; display: grid; place-items: center; color: var(--user-accent, var(--text-1)); border-radius: 7px; background: var(--surface-selected); }
+.manager-setup p { margin: 0; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; }
+.manager-setup > button { justify-self: start; }
+.manager-setup-form { display: grid; gap: 8px; }
+.manager-setup-actions { display: flex; justify-content: flex-end; gap: 6px; }
+:root[data-bitbots="on"] .manager-setup { border: 2px solid var(--bb-line-strong); border-radius: 0; }

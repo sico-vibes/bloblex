@@ -298,7 +298,7 @@ function emit(event: DaemonEvent) {
 }
 
 describe('blob roster and editor', () => {
-  it('creates a first blob from onboarding with the detected runtime id and Ask approval', async () => {
+  it('sets up the Manager from onboarding with the detected runtime id and Ask approval', async () => {
     configure(snapshot({ runtimes: [codexRuntime], agents: [], sessions: [] }))
     const view = startApp()
     await view.settle()
@@ -310,9 +310,9 @@ describe('blob roster and editor', () => {
     await view.settle()
     const nameField = view.host.querySelector<HTMLInputElement>('.onboarding-field input')
     await typeInto(nameField, 'Codex')
-    await click(buttonNamed(view.host, 'Create bot'))
+    await click(buttonNamed(view.host, 'Create Manager'))
     await view.settle()
-    const create = h.rpc.mock.calls.find(([method]) => method === 'agent.create')
+    const create = h.rpc.mock.calls.find(([method]) => method === 'manager.ensure')
     expect(create?.[1]).toMatchObject({ name: 'Codex', runtimeId: 'runtime-codex', color: 'violet', approvalMode: 'ask' })
   })
 

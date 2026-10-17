@@ -99,7 +99,9 @@ export type TeamSidebarActions = {
   onOpenRuntimeSettings: () => void
 }
 
-export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, query, onQueryChange, actions }: {
+export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, query, onQueryChange, actions, banner }: {
+  /** A card shown between the search box and the bots (the one-time Manager setup). */
+  banner?: ReactNode
   agents: Agent[]
   projects: Project[]
   sessions: Session[]
@@ -299,6 +301,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
       <input value={query} placeholder="Search" aria-label={`Search ${nouns}`} onChange={(event) => onQueryChange(event.target.value)} />
     </label>
+    {banner}
     <nav className="sidebar-scroll" aria-label={Nouns} data-tour="roster"><div role="tree" aria-label={`${Nouns} by project`}>
       {manager && !query && <section className="team-group manager-group" aria-label="Manager">
         <div className="team-group-rows">{renderRow(manager)}</div>

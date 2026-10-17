@@ -30,6 +30,7 @@ import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChi
 import { botProjectName, CompanionConversationPicker } from './CompanionConversationPicker'
 import { SignInHelp } from './SignInHelp'
 import { ProposalCard } from './ProposalCard'
+import { ManagerSetupCard } from './ManagerSetupCard'
 import { managerOf } from './teamSelectors'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, CompanionTeammatesSetting, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { NeedsYouBadge, PermissionQueueBar, nextWaitingAgent, waitingAgentsOf } from './CompanionAttention'
@@ -2229,17 +2230,15 @@ export function App() {
     setOnboardingVisible(false)
   }
   /** The onboarding's first bot: its look, colour, name, role, description and verified model. */
+  /** Onboarding and the upgrade card both set up the Manager (or return the one that exists). */
   const createOnboardedBlob = async (onboardingDraft: AgentDraft) => {
-    const draft: AgentDraft = { ...onboardingDraft, approvalMode: onboardingDraft.approvalMode ?? 'ask' }
+    const draft: AgentDraft = { ...onboardingDraft, approvalMode: 'ask' }
     try {
       // Onboarding only offers models from a verified catalog, so the chosen model is sent.
-      const result = await doRpc<{ agent?: Agent }>('agent.create', createParams(draft, { model: true, thinking: false, serviceTier: false }), (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.create'))
-      let agent = result.agent
+      const params = createParams(draft, { model: true, thinking: false, serviceTier: false })
+      const result = await doRpc<{ manager?: Agent }>('manager.ensure', params, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.create'))
+      const agent = result.manager
       if (!agent?.id) return null
-      if (draft.role.trim()) {
-        const updated = await doRpc<{ agent?: Agent }>('agent.team.update', { agentId: agent.id, role: draft.role.trim() }).catch(() => null)
-        if (updated?.agent?.id) agent = updated.agent
-      }
       mergeAgent(agent)
       setSelectedAgentId(agent.id)
       setSelectedRuntimeId(agent.runtimeId)
@@ -2264,7 +2263,7 @@ export function App() {
           </div>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <TeamSidebar agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} query={search} onQueryChange={setSearch} actions={{
+        <TeamSidebar banner={!managerOf(agents) && hasActiveBlobs ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} query={search} onQueryChange={setSearch} actions={{
           onSelect: selectAgent,
           onCreate: (projectId) => openCreate(projectId),
           onCreateProject: () => void createProject(),

@@ -96,11 +96,10 @@ describe('FirstRunOnboarding', () => {
     expect(mounted.textContent).toContain('1.2')
     expect(mounted.textContent).toContain('Signed in')
     await act(async () => { button('Continue').click(); await Promise.resolve(); await Promise.resolve() })
-    input('Helper', 'bot name')
-    input('Reviewer', 'role')
-    await act(async () => { button('Create bot').click(); await Promise.resolve() })
+    input('Max', 'name')
+    await act(async () => { button('Create Manager').click(); await Promise.resolve() })
     expect(saveName).toHaveBeenCalledWith('Sam')
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: 'runtime-codex', name: 'Helper', role: 'Reviewer', model: 'gpt-6-luna', approvalMode: 'ask' }))
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: 'runtime-codex', name: 'Max', model: 'gpt-6-luna', approvalMode: 'ask' }))
     // The first bot is customised here: the look editor sits beside the fields.
     expect(mounted.querySelector('.onboarding-bot-look')).not.toBeNull()
   })
@@ -122,20 +121,20 @@ describe('FirstRunOnboarding', () => {
     expect(codex?.querySelector('[aria-label="Copy Codex version command"]')).toBeNull()
   })
 
-  it('calls the character a bot in both looks', async () => {
+  it('introduces the Manager and says "bot" in both looks', async () => {
     mocks.rpc.mockResolvedValue({ runtimeId: 'runtime-codex', provider: 'codex', validated: true, fallback: false, models: [
       { id: 'gpt-6-sol', displayName: 'GPT-6 Sol', supportedThinking: [], serviceTiers: [], isDefault: true },
     ] })
     setThemeStyle('bitbots')
     const { host: mounted } = mount({ initialStep: 2, runtimes: [runtime] })
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    expect(mounted.textContent).toContain('Meet your first bot')
-    expect(mounted.textContent).toContain('Bot name')
-    expect(button('Create bot')).toBeTruthy()
+    expect(mounted.textContent).toContain('Meet your Manager')
+    expect(mounted.textContent).toContain('every project and bot')
+    expect(button('Create Manager')).toBeTruthy()
     act(() => setThemeStyle('blobots'))
-    expect(mounted.textContent).toContain('Meet your first bot')
+    expect(mounted.textContent).toContain('every project and bot')
     expect(mounted.textContent).not.toMatch(/\bblob\b/i)
-    expect(button('Create bot')).toBeTruthy()
+    expect(button('Create Manager')).toBeTruthy()
     act(() => setThemeStyle('bitbots'))
   })
 })

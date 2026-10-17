@@ -86,7 +86,7 @@ function type(view: HTMLElement, selector: string, value: string, index = 0) {
 
 describe('RemoteApp', () => {
   it('pairs: formats the code, waits for the owner, then lists the bots', async () => {
-    const device = fakeDevice('unpaired', ['pending', 'pending', 'approved'])
+    const device = fakeDevice('unpaired', ['pending', 'pending', 'pending', 'pending', 'pending', 'pending', 'approved'])
     const view = await mount(device)
     expect(view.querySelector('.rm-ribbon')).toBeNull()
     const connect = view.querySelector<HTMLButtonElement>('.rm-primary')!
@@ -98,7 +98,7 @@ describe('RemoteApp', () => {
     await flush()
     expect(device.pairCalls[0]).toMatchObject({ code: 'K7QM4XPD', name: 'Pixel 8' })
     expect(view.querySelector('.rm-waiting')?.textContent).toContain('Approve on your computer')
-    await flush(200)
+    await flush(400)
     expect(view.querySelector('.rm-host')?.textContent).toContain('Work PC')
     expect(view.querySelector('.rm-need')?.textContent).toContain('1 needs you')
     const rows = [...view.querySelectorAll('.rm-bot')]
@@ -138,7 +138,7 @@ describe('RemoteApp', () => {
     await flush()
     expect(device.loginCalls[0]).toMatchObject({ username: 'owner', name: 'Pixel 8' })
     expect(view.querySelector('.rm-waiting')?.textContent).toContain('Back to sign in')
-    await flush(200)
+    await flush(400)
     expect(view.querySelector('.rm-host')?.textContent).toContain('Work PC')
   })
 

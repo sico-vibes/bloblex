@@ -77,6 +77,30 @@ const fixtureSkills: Array<Record<string, unknown>> = [
   { name: 'figma-to-react', description: 'Turn a Figma frame export into React components that follow DESIGN.md.', source: 'folder', sourcePath: null, contentSha256: 'c3', enabled: false, fileCount: 7, totalBytes: 64_000, importedAt: '2026-10-16T10:00:00Z', updatedAt: '2026-10-16T10:00:00Z', disabledFor: [], nativeFor: [] },
 ]
 const fixtureRuns: Record<string, Array<Record<string, unknown>>> = {}
+/** Preview-only Manager knowledge (FIX36 D3): structured facts and a playbook. */
+const fixtureManagerFacts: Array<Record<string, unknown>> = [
+  { id: 'fact-name', category: 'identity', key: 'name', value: 'Sico Vibes', source: 'said', locked: true, createdAt: '2026-10-16T09:00:00Z', updatedAt: '2026-10-16T09:00:00Z' },
+  { id: 'fact-role', category: 'identity', key: 'role', value: 'Founder and product owner.', source: 'said', locked: false, createdAt: '2026-10-16T09:01:00Z', updatedAt: '2026-10-16T09:01:00Z' },
+  { id: 'fact-tone', category: 'style', key: 'tone', value: 'Direct, plain English. No filler or hype.', source: 'learned', locked: false, createdAt: '2026-10-16T09:02:00Z', updatedAt: '2026-10-16T09:02:00Z' },
+]
+const fixturePlaybookSeed = `# How I work
+
+I am the user's Manager. I plan, keep their notes and playbook, and ask before
+anything consequential.
+
+## First run: get to know the user
+
+Ask about their name and role, how they work, their communication style, coding
+conventions, design taste and references. Save each answer with
+\`remember_about_user\`. Never store secrets.
+
+## Proposing a team
+
+One bot per responsibility, two to six bots, each role explained in a sentence.
+`
+const fixturePlaybookVersions: Array<Record<string, unknown>> = [
+  { version: 1, text: fixturePlaybookSeed, author: 'default', createdAt: '2026-10-16T08:00:00Z' },
+]
 const composerPreviewStorageKey = 'bloblex.preview.composer-session.v1'
 
 let agents: Agent[] = [
@@ -792,6 +816,61 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     agents = sortAgents([...agents, manager])
     sequence += 1
     return { manager, created: true } as T
+  }
+  if (method === 'manager.profile.list') {
+    return { facts: fixtureManagerFacts.map((fact) => ({ ...fact })) } as T
+  }
+  if (method === 'manager.profile.set') {
+    const category = typeof params.category === 'string' ? params.category : ''
+    const key = typeof params.key === 'string' ? params.key.trim() : ''
+    const value = typeof params.value === 'string' ? params.value.trim() : ''
+    if (!['identity', 'workflow', 'style', 'conventions', 'design', 'other'].includes(category)) throw rpcError('invalid_argument', 'category must be identity, workflow, style, conventions, design or other.')
+    if (!key || key.length > 80) throw rpcError('invalid_argument', 'key is required, up to 80 characters.')
+    if (!value || value.length > 1000) throw rpcError('invalid_argument', 'value is required, up to 1000 characters.')
+    if (/(sk-[A-Za-z0-9]{8,}|ghp_|AKIA|-----BEGIN|bearer\s)/i.test(value)) throw rpcError('invalid_argument', 'That looks like a credential; the profile must never store secrets.')
+    const now = new Date().toISOString()
+    const existing = fixtureManagerFacts.find((item) => item.category === category && item.key === key)
+    if (existing) {
+      existing.value = value
+      existing.source = 'corrected'
+      if (typeof params.locked === 'boolean') existing.locked = params.locked
+      existing.updatedAt = now
+      notifyFixtureDaemon('manager.profile.changed', { action: 'updated', fact: { ...existing } })
+      return { fact: { ...existing } } as T
+    }
+    const fact = { id: `fact-${++agentSerial}`, category, key, value, source: 'said', locked: params.locked === true, createdAt: now, updatedAt: now }
+    fixtureManagerFacts.push(fact)
+    notifyFixtureDaemon('manager.profile.changed', { action: 'added', fact: { ...fact } })
+    return { fact: { ...fact } } as T
+  }
+  if (method === 'manager.profile.delete') {
+    const index = fixtureManagerFacts.findIndex((item) => item.id === params.id)
+    if (index < 0) throw rpcError('not_found', 'That fact is gone.')
+    const [removed] = fixtureManagerFacts.splice(index, 1)
+    notifyFixtureDaemon('manager.profile.changed', { action: 'deleted', id: removed.id })
+    return { deleted: true } as T
+  }
+  if (method === 'manager.playbook.get') {
+    return { playbook: { ...fixturePlaybookVersions[fixturePlaybookVersions.length - 1] } } as T
+  }
+  if (method === 'manager.playbook.history') {
+    return { versions: [...fixturePlaybookVersions].reverse().map((version) => ({ ...version })) } as T
+  }
+  if (method === 'manager.playbook.set') {
+    const text = typeof params.text === 'string' ? params.text.trim() : ''
+    if (!text || text.length > 16000) throw rpcError('invalid_argument', 'The playbook text must be 1 to 16000 characters.')
+    const version = { version: fixturePlaybookVersions.length + 1, text, author: 'user', createdAt: new Date().toISOString() }
+    fixturePlaybookVersions.push(version)
+    notifyFixtureDaemon('manager.playbook.changed', { version: { ...version } })
+    return { playbook: { ...version } } as T
+  }
+  if (method === 'manager.playbook.revert') {
+    const target = fixturePlaybookVersions.find((version) => version.version === params.version)
+    if (!target) throw rpcError('not_found', 'No such playbook version.')
+    const version = { version: fixturePlaybookVersions.length + 1, text: target.text, author: 'user', createdAt: new Date().toISOString() }
+    fixturePlaybookVersions.push(version)
+    notifyFixtureDaemon('manager.playbook.changed', { version: { ...version } })
+    return { playbook: { ...version } } as T
   }
   if (method === 'agent.create') {
     const name = typeof params.name === 'string' ? params.name.trim() : ''

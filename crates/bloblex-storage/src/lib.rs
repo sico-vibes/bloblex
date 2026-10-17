@@ -694,7 +694,7 @@ fn ensure_proposal_schema(c: &Connection) -> Result<(), StorageError> {
             id TEXT PRIMARY KEY NOT NULL,
             session_id TEXT NOT NULL,
             agent_id TEXT,
-            kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook')),
+            kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile')),
             payload TEXT NOT NULL CHECK(json_valid(payload)),
             status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
             result TEXT CHECK(result IS NULL OR json_valid(result)),
@@ -703,6 +703,128 @@ fn ensure_proposal_schema(c: &Connection) -> Result<(), StorageError> {
         );
         CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status, created_at);",
     )?;
+    // FIX36 D3 widens the `kind` CHECK with `profile`. SQLite bakes a CHECK into
+    // the table definition, so a database written by D2 is rebuilt (rows copied
+    // verbatim) instead of silently refusing the new kind.
+    let ddl: String = c.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='proposals'", [], |r| r.get(0))?;
+    if !ddl.contains("'profile'") {
+        c.execute_batch(
+            "BEGIN IMMEDIATE;
+             ALTER TABLE proposals RENAME TO proposals_pre_profile;
+             CREATE TABLE proposals(
+                 id TEXT PRIMARY KEY NOT NULL,
+                 session_id TEXT NOT NULL,
+                 agent_id TEXT,
+                 kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile')),
+                 payload TEXT NOT NULL CHECK(json_valid(payload)),
+                 status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
+                 result TEXT CHECK(result IS NULL OR json_valid(result)),
+                 created_at TEXT NOT NULL,
+                 decided_at TEXT
+             );
+             INSERT INTO proposals(id,session_id,agent_id,kind,payload,status,result,created_at,decided_at)
+                 SELECT id,session_id,agent_id,kind,payload,status,result,created_at,decided_at FROM proposals_pre_profile;
+             DROP TABLE proposals_pre_profile;
+             CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status, created_at);
+             COMMIT;",
+        )?;
+    }
+    Ok(())
+}
+
+/// The default Manager playbook (FIX36 D3), seeded once as version 1. Kept in
+/// the storage crate so a fresh database and a migration agree on the text.
+pub const DEFAULT_PLAYBOOK: &str = "\
+# How I work
+
+I am the user's Manager. I plan, keep their notes and playbook, and ask before
+anything consequential. This playbook is my guide; the user can edit it, and
+their edits win over mine.
+
+## First run: get to know the user
+
+Before doing much, hold a short, friendly interview (a few questions at a time,
+never a wall of them). Ask about:
+
+- **Name and role** — what they are called, and what they do.
+- **How they work** — solo or in a team, how they like to be handed work, and
+  anything that reliably slows them down.
+- **Communication style** — direct or gentle, short or detailed, any phrasing
+  they dislike.
+- **Coding conventions** — language, formatting, testing and review habits.
+- **Design taste** — references, brands or products they admire, and what to
+  avoid.
+- **References** — docs, repos, sites or people that define \"good\" for them.
+
+Save each answer with `remember_about_user` as a small fact. When they correct
+you, record the correction rather than a second, conflicting fact. Never store
+secrets, keys, tokens or passwords.
+
+## Onboarding a project
+
+When a project starts, ask a focused round of questions and write down the
+answers:
+
+- **Goal** — what success looks like, in one or two sentences.
+- **Users** — who it is for.
+- **Platform** — desktop, web, mobile, or a mix.
+- **Stack** — languages, frameworks and tools they expect.
+- **Design** — look, feel and references.
+- **References** — existing code, designs or products.
+- **Success** — how they will judge that it is done.
+
+## Proposing a team
+
+Once I understand the work, propose the smallest team that covers it:
+
+- One bot per responsibility, named after the job, not the person.
+- Two to six bots: enough to divide the work, few enough to stay clear.
+- Explain each role in one sentence and why it is needed.
+- Reuse an existing bot when a role already fits.
+
+I do not create projects or bots myself. I call `propose_project`, `propose_bot`
+or `assign_task` and let the user approve the card.
+
+## Ground rules
+
+- Always ask before creating a project, creating a bot or assigning a task.
+- Never store secrets — no keys, tokens or passwords anywhere.
+- Keep the user's locked preferences exactly as given; propose a change instead
+  of overwriting one.
+- Prefer a few durable facts over many small ones, and update over duplicate.
+- Keep this playbook short and useful; propose an edit with `update_playbook`.
+";
+
+/// FIX36 D3: the Manager's structured profile and its own playbook. Additive
+/// and idempotent like the other `ensure_*` schemas, so it runs on every open
+/// without a `user_version` bump. Version 1 of the playbook is seeded once.
+fn ensure_manager_knowledge_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS manager_profile(
+            id TEXT PRIMARY KEY NOT NULL,
+            category TEXT NOT NULL CHECK(category IN ('identity','workflow','style','conventions','design','other')),
+            key TEXT NOT NULL,
+            value TEXT NOT NULL CHECK(length(value)<=1000),
+            source TEXT NOT NULL CHECK(source IN ('said','learned','corrected')),
+            locked INTEGER NOT NULL DEFAULT 0 CHECK(locked IN (0,1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(category, key)
+        );
+        CREATE TABLE IF NOT EXISTS manager_playbook(
+            version INTEGER PRIMARY KEY NOT NULL,
+            text TEXT NOT NULL CHECK(length(text)<=16000),
+            author TEXT NOT NULL CHECK(author IN ('default','user','manager')),
+            created_at TEXT NOT NULL
+        );",
+    )?;
+    let empty: bool = c.query_row("SELECT NOT EXISTS(SELECT 1 FROM manager_playbook)", [], |r| r.get(0))?;
+    if empty {
+        c.execute(
+            "INSERT INTO manager_playbook(version,text,author,created_at) VALUES(1,?1,'default',?2)",
+            params![DEFAULT_PLAYBOOK.trim(), Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)],
+        )?;
+    }
     Ok(())
 }
 
@@ -1331,6 +1453,7 @@ impl Storage {
                 ensure_skills_schema(&conn)?;
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
+                ensure_manager_knowledge_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==11 {
@@ -1346,6 +1469,7 @@ impl Storage {
                 ensure_skills_schema(&conn)?;
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
+                ensure_manager_knowledge_schema(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==10 {
@@ -1362,6 +1486,7 @@ impl Storage {
                 ensure_skills_schema(&conn)?;
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
+                ensure_manager_knowledge_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1381,6 +1506,7 @@ impl Storage {
                 ensure_skills_schema(&conn)?;
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
+                ensure_manager_knowledge_schema(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -1495,6 +1621,7 @@ impl Storage {
                 ensure_skills_schema(&conn)?;
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
+                ensure_manager_knowledge_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -1809,7 +1936,7 @@ impl Storage {
         let kind = record["kind"].as_str().ok_or(StorageError::InvalidAgent)?;
         let agent_id = record["agentId"].as_str();
         let payload = &record["payload"];
-        if !["project", "bot", "task", "playbook"].contains(&kind) { return Err(StorageError::InvalidAgent); }
+        if !["project", "bot", "task", "playbook", "profile"].contains(&kind) { return Err(StorageError::InvalidAgent); }
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
@@ -1875,6 +2002,141 @@ impl Storage {
         Ok(rows.into_iter().map(|(id, session_id, agent_id, kind, payload)| json!({
             "id": id, "sessionId": session_id, "agentId": agent_id, "kind": kind, "payload": serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null)
         })).collect())
+    }
+    /// Pending proposals, oldest first, for the Manager's handover.
+    pub fn proposals_pending(&self) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT json_object('id',id,'kind',kind,'payload',json(payload),'createdAt',created_at) FROM proposals WHERE status='pending' ORDER BY created_at")?;
+        let rows = q.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter().map(|value| Ok(serde_json::from_str(&value)?)).collect()
+    }
+    /// The last `limit` decided proposals, newest first, for the handover.
+    pub fn proposals_recent_decisions(&self, limit: u32) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT json_object('id',id,'kind',kind,'payload',json(payload),'status',status,'decidedAt',decided_at) FROM proposals WHERE status IN ('approved','rejected') ORDER BY decided_at DESC, created_at DESC LIMIT ?1")?;
+        let rows = q.query_map(params![limit.clamp(1, 50)], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter().map(|value| Ok(serde_json::from_str(&value)?)).collect()
+    }
+    // ── Manager knowledge (FIX36 D3): profile facts and the playbook ───────
+    /// Every profile fact, locked first, then by category and key.
+    pub fn manager_profile_list(&self) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        profile_rows(&c)
+    }
+    /// One fact by its unique (category, key), or `None`.
+    pub fn manager_profile_get(&self, category: &str, key: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row(
+            "SELECT json_object('id',id,'category',category,'key',key,'value',value,'source',source,'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM manager_profile WHERE category=?1 AND key=?2",
+            params![category, key],
+            |r| r.get(0),
+        ).optional()?;
+        Ok(raw.map(|value| serde_json::from_str::<Value>(&value)).transpose()?)
+    }
+    /// Insert a new fact or overwrite the value/source of an existing
+    /// (category, key). `locked` is only applied when given; otherwise an
+    /// existing lock is kept. Returns the stored row.
+    pub fn manager_profile_put(&self, category: &str, key: &str, value: &str, source: &str, locked: Option<bool>) -> Result<Value, StorageError> {
+        if !["identity","workflow","style","conventions","design","other"].contains(&category) { return Err(StorageError::InvalidAgent); }
+        if !["said","learned","corrected"].contains(&source) { return Err(StorageError::InvalidAgent); }
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() || key.chars().count() > 80 || value.is_empty() || value.chars().count() > 1000 { return Err(StorageError::InvalidAgent); }
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let existing: Option<String> = tx.query_row("SELECT id FROM manager_profile WHERE category=?1 AND key=?2", params![category, key], |r| r.get(0)).optional()?;
+        match existing {
+            Some(id) => {
+                match locked {
+                    Some(locked) => tx.execute("UPDATE manager_profile SET value=?2,source=?3,locked=?4,updated_at=?5 WHERE id=?1", params![id, value, source, locked, now])?,
+                    None => tx.execute("UPDATE manager_profile SET value=?2,source=?3,updated_at=?4 WHERE id=?1", params![id, value, source, now])?,
+                };
+                let raw: String = tx.query_row(
+                    "SELECT json_object('id',id,'category',category,'key',key,'value',value,'source',source,'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM manager_profile WHERE id=?1",
+                    [id.as_str()], |r| r.get(0),
+                )?;
+                tx.commit()?;
+                Ok(serde_json::from_str(&raw)?)
+            }
+            None => {
+                let id = Uuid::new_v4().to_string();
+                tx.execute("INSERT INTO manager_profile(id,category,key,value,source,locked,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?7)", params![id, category, key, value, source, locked.unwrap_or(false), now])?;
+                let raw: String = tx.query_row(
+                    "SELECT json_object('id',id,'category',category,'key',key,'value',value,'source',source,'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM manager_profile WHERE id=?1",
+                    [id.as_str()], |r| r.get(0),
+                )?;
+                tx.commit()?;
+                Ok(serde_json::from_str(&raw)?)
+            }
+        }
+    }
+    /// Delete one fact by id. Returns whether a row was removed.
+    pub fn manager_profile_delete(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.execute("DELETE FROM manager_profile WHERE id=?1", [id])? > 0)
+    }
+    /// Delete one fact by its unique (category, key). Returns whether a row was
+    /// removed.
+    pub fn manager_profile_delete_key(&self, category: &str, key: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.execute("DELETE FROM manager_profile WHERE category=?1 AND key=?2", params![category, key.trim()])? > 0)
+    }
+    /// The current (latest) playbook version, or `AgentNotFound` (it is always
+    /// seeded, so this only fails on a broken database).
+    pub fn manager_playbook_current(&self) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row(
+            "SELECT json_object('version',version,'text',text,'author',author,'createdAt',created_at) FROM manager_playbook ORDER BY version DESC LIMIT 1",
+            [], |r| r.get(0),
+        ).optional()?;
+        Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)
+    }
+    /// The whole playbook history, newest first.
+    pub fn manager_playbook_history(&self) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT json_object('version',version,'text',text,'author',author,'createdAt',created_at) FROM manager_playbook ORDER BY version DESC")?;
+        let rows = q.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter().map(|value| Ok(serde_json::from_str(&value)?)).collect()
+    }
+    /// One playbook version by number.
+    pub fn manager_playbook_get(&self, version: i64) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row(
+            "SELECT json_object('version',version,'text',text,'author',author,'createdAt',created_at) FROM manager_playbook WHERE version=?1",
+            [version], |r| r.get(0),
+        ).optional()?;
+        Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)
+    }
+    /// Append a new playbook version (`user` or `manager`) and return it. The
+    /// version number is `max + 1`, so history is append-only.
+    pub fn manager_playbook_append(&self, text: &str, author: &str) -> Result<Value, StorageError> {
+        if !["user","manager"].contains(&author) { return Err(StorageError::InvalidAgent); }
+        let text = text.trim();
+        if text.is_empty() || text.chars().count() > 16000 { return Err(StorageError::InvalidAgent); }
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let next: i64 = tx.query_row("SELECT COALESCE(MAX(version),0)+1 FROM manager_playbook", [], |r| r.get(0))?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        tx.execute("INSERT INTO manager_playbook(version,text,author,created_at) VALUES(?1,?2,?3,?4)", params![next, text, author, now])?;
+        let raw: String = tx.query_row(
+            "SELECT json_object('version',version,'text',text,'author',author,'createdAt',created_at) FROM manager_playbook WHERE version=?1",
+            [next], |r| r.get(0),
+        )?;
+        tx.commit()?;
+        Ok(serde_json::from_str(&raw)?)
+    }
+    /// Whether the next prompt for this session must carry a Manager handover.
+    pub fn session_manager_handover(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let flag: Option<i64> = c.query_row("SELECT json_extract(data,'$.managerHandover') FROM sessions WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten();
+        Ok(flag == Some(1))
+    }
+    /// Arms (`true`) or clears the Manager handover for the next prompt.
+    pub fn set_session_manager_handover(&self, id: &str, on: bool) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE sessions SET data=json_set(COALESCE(NULLIF(data,''),'{}'),'$.managerHandover',?2) WHERE id=?1", params![id, if on { 1 } else { 0 }])?;
+        Ok(())
     }
     /// The latest assistant text of a turn, used to relay a side reply.
     pub fn turn_reply(&self, session: &str, turn: &str) -> Result<Option<String>, StorageError> {
@@ -5019,6 +5281,9 @@ fn ensure_name_free(c:&Connection,key:&str,except:Option<&str>)->Result<(),Stora
 fn project_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
     query_jsons(c, "SELECT json_object('id',id,'name',name,'path',path,'description',description,'sortOrder',sort_order,'collapsed',json(CASE WHEN collapsed=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM projects WHERE ?1=?1 ORDER BY sort_order,created_at,id", "")
 }
+fn profile_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
+    query_jsons(c, "SELECT json_object('id',id,'category',category,'key',key,'value',value,'source',source,'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM manager_profile WHERE ?1=?1 ORDER BY locked DESC, category, key", "")
+}
 fn push_team_event(tx: &Transaction<'_>, event_type: &str, payload: &Value) -> Result<Value, StorageError> {
     let id = Uuid::new_v4().to_string();
     let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -7154,5 +7419,100 @@ mod memory_tests {
         assert_eq!(row["result"]["agentId"], "a");
         assert_eq!(db.permission_get("prop-2").unwrap()["choice"], "approve");
         assert!(!db.proposal_decide("prop-2","rejected",None,"reject","2026-06-03T00:00:00.000Z").unwrap(), "the second decision loses");
+    }
+
+    #[test]
+    fn the_proposal_kind_check_widens_to_profile_and_keeps_old_rows() {
+        let db = Storage::open_in_memory().unwrap();
+        // Rebuild the D2 shape (no `profile`) and store a row in it, then run the
+        // D3 ensure again: the CHECK must widen without losing the row.
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute_batch(
+                "DROP TABLE proposals;
+                 CREATE TABLE proposals(
+                     id TEXT PRIMARY KEY NOT NULL,
+                     session_id TEXT NOT NULL,
+                     agent_id TEXT,
+                     kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook')),
+                     payload TEXT NOT NULL CHECK(json_valid(payload)),
+                     status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
+                     result TEXT CHECK(result IS NULL OR json_valid(result)),
+                     created_at TEXT NOT NULL,
+                     decided_at TEXT
+                 );
+                 CREATE INDEX idx_proposals_status ON proposals(status, created_at);",
+            ).unwrap();
+            c.execute("INSERT INTO proposals(id,session_id,agent_id,kind,payload,status,created_at) VALUES('p-old','s','a','project','{\"name\":\"X\"}','pending','2026-01-01T00:00:00.000Z')", []).unwrap();
+            ensure_proposal_schema(&c).unwrap();
+            let ddl: String = c.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='proposals'", [], |r| r.get(0)).unwrap();
+            assert!(ddl.contains("'profile'"), "the rebuilt CHECK accepts profile");
+            let kept: i64 = c.query_row("SELECT COUNT(*) FROM proposals WHERE id='p-old'", [], |r| r.get(0)).unwrap();
+            assert_eq!(kept, 1, "the rebuild copies every existing row");
+        }
+        db.upsert_runtime(&json!({"id":"rt-prof","provider":"codex","status":"online"})).unwrap();
+        db.create_session_for_agent("s-prof","rt-prof","codex",".","Manager",None).unwrap();
+        assert!(db.insert_proposal(&json!({"id":"p-profile","sessionId":"s-prof","agentId":null,"kind":"profile","payload":{"op":"set"}}),&json!({"id":"p-profile","kind":"proposal"}),"2026-01-01T00:00:00.000Z","2000-01-01T00:00:00.000Z").is_ok());
+    }
+
+    #[test]
+    fn manager_profile_is_unique_per_category_and_key_and_can_be_locked() {
+        let db = Storage::open_in_memory().unwrap();
+        let first = db.manager_profile_put("identity", "name", "Sico", "said", None).unwrap();
+        assert_eq!(first["locked"], false);
+        assert_eq!(first["source"], "said");
+        // A second write with the same (category, key) updates in place.
+        let updated = db.manager_profile_put("identity", "name", "Sico Vibes", "corrected", Some(true)).unwrap();
+        assert_eq!(updated["id"], first["id"], "the unique pair is one row");
+        assert_eq!(updated["value"], "Sico Vibes");
+        assert_eq!(updated["locked"], true);
+        // A lock is kept when a later write does not speak to it.
+        let kept = db.manager_profile_put("identity", "name", "Sico V", "learned", None).unwrap();
+        assert_eq!(kept["locked"], true);
+        db.manager_profile_put("style", "tone", "direct", "learned", None).unwrap();
+        let list = db.manager_profile_list().unwrap();
+        assert_eq!(list.len(), 2, "two distinct keys, one category");
+        assert_eq!(list[0]["key"], "name", "locked rows sort first");
+        assert_eq!(db.manager_profile_get("identity", "name").unwrap().unwrap()["value"], "Sico V");
+        assert!(db.manager_profile_delete(first["id"].as_str().unwrap()).unwrap());
+        assert!(!db.manager_profile_delete(first["id"].as_str().unwrap()).unwrap());
+        assert!(db.manager_profile_delete_key("style", "tone").unwrap());
+        assert!(db.manager_profile_list().unwrap().is_empty());
+        // Bad shapes are refused before they reach SQLite.
+        assert!(matches!(db.manager_profile_put("nope", "k", "v", "said", None), Err(StorageError::InvalidAgent)));
+        assert!(matches!(db.manager_profile_put("identity", "k", "v", "guessed", None), Err(StorageError::InvalidAgent)));
+        assert!(matches!(db.manager_profile_put("identity", "", "v", "said", None), Err(StorageError::InvalidAgent)));
+    }
+
+    #[test]
+    fn manager_playbook_is_seeded_and_versions_append() {
+        let db = Storage::open_in_memory().unwrap();
+        let seeded = db.manager_playbook_current().unwrap();
+        assert_eq!(seeded["version"], 1);
+        assert_eq!(seeded["author"], "default");
+        assert!(seeded["text"].as_str().unwrap().contains("playbook"));
+        assert!(seeded["text"].as_str().unwrap().chars().count() <= 6000, "the seed stays small");
+        let appended = db.manager_playbook_append("Edited by the user.", "user").unwrap();
+        assert_eq!(appended["version"], 2);
+        assert_eq!(db.manager_playbook_current().unwrap()["version"], 2);
+        db.manager_playbook_append("Edited by the Manager.", "manager").unwrap();
+        let history = db.manager_playbook_history().unwrap();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0]["version"], 3, "newest first");
+        assert_eq!(db.manager_playbook_get(1).unwrap()["author"], "default");
+        assert!(matches!(db.manager_playbook_append("x", "default"), Err(StorageError::InvalidAgent)));
+        assert!(matches!(db.manager_playbook_append("", "user"), Err(StorageError::InvalidAgent)));
+    }
+
+    #[test]
+    fn the_manager_handover_flag_round_trips_on_a_session() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-ho","provider":"codex","status":"online"})).unwrap();
+        db.create_session_for_agent("s-ho","rt-ho","codex",".","Manager",None).unwrap();
+        assert!(!db.session_manager_handover("s-ho").unwrap());
+        db.set_session_manager_handover("s-ho", true).unwrap();
+        assert!(db.session_manager_handover("s-ho").unwrap());
+        db.set_session_manager_handover("s-ho", false).unwrap();
+        assert!(!db.session_manager_handover("s-ho").unwrap());
     }
 }

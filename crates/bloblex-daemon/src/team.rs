@@ -147,6 +147,7 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
     if agent["systemRole"].as_str() == Some("manager") {
         lines.push(format!("You are {name}, the user's Manager. You work across all projects (list them with `list_projects`), know every {noun} (`list_blobs`), plan work, delegate with `message_blob`, and you ask the user before creating projects, {nouns} or assigning tasks."));
         lines.push("Consequential actions are proposed, not done: call `propose_project`, `propose_bot` or `assign_task`, which create nothing until the user approves the card, then end your turn. Use `project_status` to see a project's bots.".to_owned());
+        lines.push("Your notes about the user and your playbook are yours across model changes: keep the profile current with `remember_about_user` (read it with `recall_about_user`), and propose playbook edits with `update_playbook`. Never store secrets in either.".to_owned());
     } else {
         match st.db.manager_agent().ok().flatten() {
             Some(manager) => lines.push(format!("You cannot create projects or {nouns}; the Manager does that. If the user asks you to, say so briefly and tag the Manager as @{} so the user can ask them.", agent_name(&manager))),
@@ -218,6 +219,9 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
         // FIX36 D2: every consequential action is proposed and waits for the
         // owner's approval. The tools return at once with a proposal id.
         list.extend(crate::proposals::tool_schemas());
+        // FIX36 D3: the Manager's own knowledge — the user profile and the
+        // playbook. `update_playbook` and a locked edit are proposals too.
+        list.extend(crate::knowledge::tool_schemas());
     }
     // OpenCode has no native question tool over ACP, so the bridge offers one.
     if ask_user { list.push(crate::questions::tool_schema()); }
@@ -272,7 +276,11 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "propose_bot" if is_manager => crate::proposals::propose_bot(st, session_id, args).await,
                 "assign_task" if is_manager => crate::proposals::assign_task(st, session_id, args).await,
                 "project_status" if is_manager => crate::proposals::project_status(st, args).await,
-                "list_projects" | "update_blob" | "propose_project" | "propose_bot" | "assign_task" | "project_status" => Err(non_manager_error(st)),
+                "remember_about_user" if is_manager => crate::knowledge::tool_remember(st, session_id, args).await,
+                "forget_about_user" if is_manager => crate::knowledge::tool_forget(st, session_id, args).await,
+                "recall_about_user" if is_manager => crate::knowledge::tool_recall(st, args),
+                "update_playbook" if is_manager => crate::knowledge::tool_update_playbook(st, session_id, args).await,
+                "list_projects" | "update_blob" | "propose_project" | "propose_bot" | "assign_task" | "project_status" | "remember_about_user" | "forget_about_user" | "recall_about_user" | "update_playbook" => Err(non_manager_error(st)),
                 "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
                 "ask_user" if ask_user => crate::questions::ask_user_tool(st, session_id, args).await,

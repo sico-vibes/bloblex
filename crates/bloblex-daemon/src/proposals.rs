@@ -158,7 +158,7 @@ fn validate_task(args: &Value) -> Result<Value, String> {
 /// The Manager's conversation, or the non-manager refusal. The tool list only
 /// offers these tools to the Manager, but the dispatch re-checks so a stale or
 /// forged call cannot slip through.
-fn manager_of_session(st: &AppState, session_id: &str) -> Result<Value, String> {
+pub(crate) fn manager_of_session(st: &AppState, session_id: &str) -> Result<Value, String> {
     let session = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.".to_owned())?;
     if session["archived"] == true { return Err("This conversation is archived.".into()); }
     let agent_id = session["agentId"].as_str().ok_or_else(|| "Only the Manager can propose work.".to_owned())?;
@@ -168,7 +168,7 @@ fn manager_of_session(st: &AppState, session_id: &str) -> Result<Value, String> 
 }
 
 /// Write the proposal down and announce its card. Returns the proposal id.
-async fn create_proposal(st: &AppState, session_id: &str, manager: &Value, kind: &str, payload: Value, title: String, detail: Option<String>) -> Result<String, String> {
+pub(crate) async fn create_proposal(st: &AppState, session_id: &str, manager: &Value, kind: &str, payload: Value, title: String, detail: Option<String>) -> Result<String, String> {
     let id = Uuid::new_v4().to_string();
     let at = Utc::now();
     let created_at = iso(at);
@@ -266,12 +266,16 @@ fn merge_payload(base: &mut Value, edits: &Value) {
     }
 }
 
-fn describe(kind: &str, payload: &Value) -> String {
+pub(crate) fn describe(kind: &str, payload: &Value) -> String {
     match kind {
         "project" => format!("create project {}", payload["name"].as_str().unwrap_or("a project")),
         "bot" => format!("create bot {}", payload["name"].as_str().unwrap_or("a bot")),
         "task" => format!("assign a task to {}", payload["bot"].as_str().unwrap_or("a bot")),
         "playbook" => "change the Manager's playbook".to_owned(),
+        "profile" => match payload["op"].as_str().unwrap_or("set") {
+            "forget" => format!("forget what the Manager knows ({})", payload["key"].as_str().unwrap_or("a preference")),
+            _ => format!("change what the Manager knows ({})", payload["key"].as_str().unwrap_or("a preference")),
+        },
         _ => "act".to_owned(),
     }
 }
@@ -287,9 +291,38 @@ async fn apply(st: &AppState, session_id: &str, agent_id: Option<&str>, kind: &s
         "project" => apply_project(st, payload),
         "bot" => apply_bot(st, agent_id, payload).await,
         "task" => apply_task(st, session_id, payload).await,
-        // Playbook editing arrives with D3; an old/forged card is refused.
-        "playbook" => Err(invalid("Changing the Manager's playbook arrives in a later release.".into())),
+        "playbook" => apply_playbook(st, payload),
+        "profile" => apply_profile(st, payload),
         _ => Err(invalid("That proposal kind is not supported.".into())),
+    }
+}
+
+/// Append the approved playbook text as a new `manager` version.
+fn apply_playbook(st: &AppState, payload: &Value) -> Result<(Value, String), DispatchError> {
+    let text = payload["text"].as_str().map(str::trim).filter(|text| !text.is_empty()).ok_or_else(|| invalid("The playbook text is required.".into()))?;
+    if text.chars().count() > crate::knowledge::MAX_PLAYBOOK_CHARS {
+        return Err(invalid(format!("The playbook must be at most {} characters.", crate::knowledge::MAX_PLAYBOOK_CHARS)));
+    }
+    let playbook = st.db.manager_playbook_append(text, "manager").map_err(agent_error)?;
+    Ok((json!({"version": playbook["version"], "playbook": playbook}), "updated the Manager's playbook".to_owned()))
+}
+
+/// Apply an approved profile change: `set` writes the fact, `forget` removes it.
+fn apply_profile(st: &AppState, payload: &Value) -> Result<(Value, String), DispatchError> {
+    let category = payload["category"].as_str().unwrap_or("");
+    let key = payload["key"].as_str().unwrap_or("");
+    match payload["op"].as_str().unwrap_or("set") {
+        "forget" => {
+            let removed = st.db.manager_profile_delete_key(category, key).map_err(agent_error)?;
+            Ok((json!({"deleted": removed, "category": category, "key": key}), format!("forgot what the Manager knew ({key})")))
+        }
+        "set" => {
+            let value = payload["value"].as_str().unwrap_or("");
+            let source = payload["source"].as_str().unwrap_or("learned");
+            let fact = st.db.manager_profile_put(category, key, value, source, None).map_err(agent_error)?;
+            Ok((json!({"fact": fact, "category": category, "key": key}), format!("updated what the Manager knew ({key})")))
+        }
+        _ => Err(invalid("A profile proposal must be a set or a forget.".into())),
     }
 }
 
@@ -302,11 +335,19 @@ fn apply_project(st: &AppState, payload: &Value) -> Result<(Value, String), Disp
     let path = match mode {
         "existing" => {
             let path = chosen.ok_or_else(|| invalid("Choose an existing folder for the project.".into()))?;
+            // A folder must be a full path: a bare name or `./x` would resolve
+            // against the daemon's own working directory, which the user did not
+            // choose.
+            if !Path::new(path).is_absolute() { return Err(invalid("Choose a full folder path.".into())); }
             if !Path::new(path).is_dir() { return Err(invalid(format!("The folder {path} does not exist."))); }
             path.to_owned()
         }
         "new" => {
             let path = chosen.ok_or_else(|| invalid("The owner must choose a folder for the new project.".into()))?;
+            if !Path::new(path).is_absolute() { return Err(invalid("Choose a full folder path.".into())); }
+            // `create_dir_all` on an existing *file* fails with a raw OS error;
+            // refuse it plainly instead.
+            if Path::new(path).is_file() { return Err(invalid(format!("{path} is a file, not a folder."))); }
             std::fs::create_dir_all(path).map_err(|error| derr("internal", &format!("The folder could not be created: {error}"), StatusCode::INTERNAL_SERVER_ERROR))?;
             path.to_owned()
         }

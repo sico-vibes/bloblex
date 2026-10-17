@@ -1,6 +1,6 @@
 import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone } from 'lucide-react'
+import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, SlidersHorizontal, Sparkles, X, Palette, Search, Smartphone } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
 import { usePlatform } from '../transport/platform'
 import type { Agent, Snapshot } from '../types'
@@ -11,6 +11,8 @@ import { agentColorHex } from './agentColor'
 import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
 import { MemoryPage } from './MemoryPage'
+import { ManagerPage } from './ManagerPage'
+import { managerOf } from './teamSelectors'
 import { SkillsPage } from './SkillsPage'
 import { BackupPage } from './BackupPage'
 import { normalizeEngineChoice, setDictationEnginePrefs, type DictationEngineChoice } from './dictation'
@@ -39,13 +41,14 @@ import { clearCompanionPosition } from './companionPositions'
 import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
-export type SettingsPageId = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Updates'
+export type SettingsPageId = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
   { id: 'Appearance', label: 'Appearance', icon: Palette },
   { id: 'Remote', label: 'Remote', icon: Smartphone },
   { id: 'Agents', label: 'Agents', icon: Bot },
+  { id: 'Manager', label: 'Manager', icon: Sparkles },
   { id: 'Memory', label: 'Memory', icon: Brain },
   { id: 'Skills', label: 'Skills', icon: Puzzle },
   { id: 'Speech', label: 'Speech', icon: Mic },
@@ -682,6 +685,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </form>}
             </SettingsGroup>
           </>}
+
+          {!loading && page === 'Manager' && <ManagerPage manager={managerOf(snapshot?.agents ?? [])} connected={!!snapshot} onOpenManager={onOpenAgent} />}
 
           {!loading && page === 'Memory' && <MemoryPage
             agents={snapshot?.agents ?? []}

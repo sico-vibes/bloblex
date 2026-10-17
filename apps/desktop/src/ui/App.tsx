@@ -77,6 +77,7 @@ import { usePlatform } from '../transport/platform'
 import { stampCompanionDragRegions } from './companionDrag'
 import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, waitingBlobCount, type ExperimentName } from './experiments'
 import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, type MessageSearchResult } from './ExperimentalFeatures'
+import { openSafeLink } from './openSafeLink'
 import { markWhatsNewSeen, readSeenVersion, releaseNotes, shouldShowWhatsNew, WhatsNewDialog } from './WhatsNew'
 import { appVersion } from '../appRelease'
 import { ConnectionBanner } from './ConnectionBanner'
@@ -119,13 +120,6 @@ import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesk
 
 type AppliedModelState = { sessionId: string; model: string | null; hasSnapshot: boolean; loading: boolean }
 type MessageMenuTarget = { x: number; y: number; sessionId: string; messageId: string; text: string; latest: boolean; references: NonNullable<ChatMessage['references']>; attachments: Array<{ name: string; path: string }>; replyTo: ReplyTarget | null }
-async function openSafeLink(url: string) {
-  try {
-    const parsed = new URL(url)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return
-    await invokeNative('plugin:opener|open_url', { url: parsed.href })
-  } catch { /* An unavailable opener leaves the link inert. */ }
-}
 
 export function App() {
   const companion = new URLSearchParams(location.search).has('companion')

@@ -49,6 +49,7 @@ mod backup;
 mod memory;
 mod questions;
 mod proposals;
+mod knowledge;
 mod skills;
 // Remote mode (P1): the gateway, its policy and its `remote.*` API.
 mod remote;
@@ -79,6 +80,7 @@ struct AppState {
     queue: Arc<queue::Queue>,
     automations: Arc<automations::Automations>,
     memory: Arc<memory::Memory>,
+    knowledge: Arc<knowledge::Knowledge>,
     skills: Arc<skills::Skills>,
     backup_previews: Arc<backup::BackupPreviews>,
     /// Remote mode (FIX29 WP6b): the listener, the live offer, the device
@@ -814,6 +816,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "agent.get" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?; st.db.agent_get(id).map(|agent|json!({"agent":agent})).map_err(agent_error) }
         "permissions.policy.get" => { let default=st.db.default_approval_mode().map_err(agent_error)?;let agents=st.db.agent_list(false,None).map_err(agent_error)?;let per_agent=agents.iter().map(|a|json!({"agentId":a["id"],"mode":a["approvalMode"],"effectiveMode":a["effectiveApprovalMode"]})).collect::<Vec<_>>();Ok(json!({"defaultMode":default,"perAgent":per_agent})) }
         "manager.get" => st.db.manager_agent().map(|manager| json!({"manager": manager})).map_err(agent_error),
+        "manager.profile.list" | "manager.profile.set" | "manager.profile.delete" | "manager.playbook.get" | "manager.playbook.history" | "manager.playbook.set" | "manager.playbook.revert" => knowledge::rpc(st, method, &p).await,
         "manager.ensure" => {
             if let Some(manager) = st.db.manager_agent().map_err(agent_error)? { return Ok(json!({"manager": manager, "created": false})); }
             let mut fields = if p.is_object() { p.clone() } else { json!({}) };
@@ -1038,6 +1041,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 st.team.forget(id);
                 st.queue.forget(id);
                 st.memory.forget(id);
+                st.knowledge.forget(id);
                 st.skills.forget(id);
                 st.emit("session.deleted", json!({"sessionId":id})).await;
                 remove_session_gate(st, id, &gate).await;
@@ -2246,6 +2250,7 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
     // of a never-used provider session starts fresh silently.
     if resume_fallback && previous_had_turns {
         memory::forget_catalog(st, &sid);
+        knowledge::forget_context(st, &sid);
         skills::forget_index(st, &sid);
         team::note(st, &sid, context_change_notice(ContextChangeReason::FreshSession), json!({"kind":"context_reset","reason":"fresh_session","contextLost":true})).await;
     }
@@ -2534,6 +2539,13 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     // The reset event is persisted before the summary so both the RPC result
     // and subsequent session.changed event report an unknown fresh context.
     if model_changed { st.emit("session.context.reset", json!({"sessionId":sid})).await; }
+    // FIX36 D3: a model change starts a fresh provider session. For the Manager
+    // that is still the same Manager, so its next prompt carries a handover of
+    // its profile, playbook, workspace and pending work, and the transcript says
+    // so. Ordinary bots keep the plain "fresh session" notice.
+    if model_changed {
+        crate::knowledge::announce_model_change(st, sid).await;
+    }
     let updated = st.db.session_event_summary(sid).map_err(agent_error)?;
     if let Some(active) = active_to_close { let _ = active.adapter.close_session(&active.handle).await; }
     st.emit("session.changed", updated.clone()).await;
@@ -3049,9 +3061,21 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         // The skills index is the same kind of per-turn suffix: it never
         // changes the instruction hash or forces a new provider thread.
         let skills_context = crate::skills::index_for_prompt(st, &sid);
+        // The Manager's profile and playbook travel in their own per-turn block
+        // (never inside `<bloblex_team>`), so editing either never changes the
+        // instruction hash. A model change instead delivers the one-off
+        // handover on this first prompt.
+        let handover_context = crate::knowledge::handover_for_prompt(st, &sid);
+        let manager_context = crate::knowledge::context_for_prompt(st, &sid);
         let reference_context = references.as_ref().map(|(extra, _)| extra.as_str()).unwrap_or("");
         let reply_context = reply_snapshot.as_ref().map(reply_prompt_context).unwrap_or_default();
-        format!("{text}{}{}{reference_context}{reply_context}", memory_context.as_deref().unwrap_or(""), skills_context.as_deref().unwrap_or(""))
+        format!(
+            "{text}{handover}{manager}{memory}{skills}{reference_context}{reply_context}",
+            handover = handover_context.as_deref().unwrap_or(""),
+            manager = manager_context.as_deref().unwrap_or(""),
+            memory = memory_context.as_deref().unwrap_or(""),
+            skills = skills_context.as_deref().unwrap_or("")
+        )
     };
     if let Err(e) = active.adapter.prompt(&active.handle, PromptRequest { attachments, turn_id: turn.clone(), text: prompt_text, exec_options }).await {
         let permission_denied = st.denied_turns.lock().await.remove(&turn);
@@ -3726,6 +3750,7 @@ async fn forward_events_with_timeouts(
                 let notice = context_change_notice(reason);
                 let meta = json!({"kind":"context_reset","reason":reason.as_str(),"contextLost":context_lost});
                 memory::forget_catalog(&st, &sid);
+                knowledge::forget_context(&st, &sid);
                 skills::forget_index(&st, &sid);
                 team::note(&st, &sid, notice, meta).await;
                 st.emit("session.replaced", json!({"sessionId":sid,"reason":reason.as_str(),"contextLost":context_lost})).await;
@@ -3919,6 +3944,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         queue: Arc::new(queue::Queue::default()),
         automations: Arc::new(automations::Automations::default()),
         memory: Arc::new(memory::Memory::default()),
+        knowledge: Arc::new(knowledge::Knowledge::default()),
         skills: Arc::new(skills::Skills::default()),
         backup_previews: Arc::new(backup::BackupPreviews::default()),
         remote: Arc::new(remote::RemoteState::new()),
@@ -4858,7 +4884,7 @@ mod phase2a_tests {
 
     pub(crate) fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),knowledge:Arc::new(knowledge::Knowledge::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
     }
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
@@ -9084,6 +9110,245 @@ mod phase2a_tests {
         let fresh = newest_proposal_id(&st);
         proposals::sweep_at(&st, Utc::now()).await;
         assert_eq!(st.db.proposal_get(&fresh).unwrap()["status"].as_str(), Some("pending"));
+    }
+
+    // ── FIX36 D3: the Manager's profile, playbook and handover ────────────
+
+    #[tokio::test]
+    async fn manager_profile_tools_save_update_and_propose_locked_changes() {
+        let (st, _rx, _data, _boss, _worker) = proposal_state().await;
+
+        // The knowledge tools are Manager-only: hidden and refused otherwise.
+        for tool in ["remember_about_user", "forget_about_user", "recall_about_user", "update_playbook"] {
+            let refused = call_tool(&st, "worker-main", tool, json!({"category":"identity","key":"x","value":"y","text":"z"})).await;
+            assert_eq!(refused["isError"], true, "{tool} must be refused for an ordinary bot");
+            assert!(refused["content"][0]["text"].as_str().unwrap().contains("Only the Manager"), "{refused}");
+        }
+        let boss_tools = tool_names(&team::mcp_rpc(&st, "boss-main", "mcp.tools.list", &json!({})).await.unwrap());
+        for tool in ["remember_about_user", "forget_about_user", "recall_about_user", "update_playbook"] {
+            assert!(boss_tools.contains(&tool.to_owned()), "{tool} is offered to the Manager");
+        }
+        let worker_tools = tool_names(&team::mcp_rpc(&st, "worker-main", "mcp.tools.list", &json!({})).await.unwrap());
+        assert!(!worker_tools.contains(&"remember_about_user".to_owned()), "a bot is not offered the knowledge tools");
+
+        // A new key is saved (the default source is learned).
+        let saved = call_tool(&st, "boss-main", "remember_about_user", json!({"category":"identity","key":"name","value":"Sico"})).await;
+        assert!(saved.get("isError").is_none(), "{saved}");
+        let fact = st.db.manager_profile_get("identity", "name").unwrap().unwrap();
+        assert_eq!(fact["source"], "learned");
+        // An existing unlocked key is updated in place, not duplicated.
+        let updated = call_tool(&st, "boss-main", "remember_about_user", json!({"category":"identity","key":"name","value":"Sico Vibes","source":"corrected"})).await;
+        assert!(updated.get("isError").is_none(), "{updated}");
+        let facts = st.db.manager_profile_list().unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0]["value"], "Sico Vibes");
+        assert_eq!(facts[0]["source"], "corrected");
+        // A value that looks like a secret is refused before it is stored.
+        let secret = call_tool(&st, "boss-main", "remember_about_user", json!({"category":"other","key":"key","value":"ghp_ABCDEFGHIJKLMNOPQRST"})).await;
+        assert_eq!(secret["isError"], true, "{secret}");
+        // recall reads the profile back, grouped.
+        let recall = call_tool(&st, "boss-main", "recall_about_user", json!({})).await;
+        assert!(recall["content"][0]["text"].as_str().unwrap().contains("Sico Vibes"), "{recall}");
+
+        // The user locks the preference; the Manager's next change is a proposal
+        // and changes nothing until the owner approves it.
+        let fact = st.db.manager_profile_get("identity", "name").unwrap().unwrap();
+        dispatch(&st, "manager.profile.set", json!({"id":fact["id"],"category":"identity","key":"name","value":"Sico Vibes","locked":true})).await.unwrap();
+        let proposed = call_tool(&st, "boss-main", "remember_about_user", json!({"category":"identity","key":"name","value":"Sam"})).await;
+        assert!(proposed.get("isError").is_none(), "{proposed}");
+        let prop = newest_proposal_id(&st);
+        let row = st.db.proposal_get(&prop).unwrap();
+        assert_eq!(row["kind"], "profile");
+        assert_eq!(row["payload"]["op"], "set");
+        assert_eq!(row["payload"]["category"], "identity");
+        assert_eq!(st.db.manager_profile_get("identity", "name").unwrap().unwrap()["value"], "Sico Vibes", "the locked value is untouched before approval");
+        dispatch(&st, "proposal.decide", json!({"id":prop,"decision":"approve"})).await.unwrap();
+        let applied = st.db.manager_profile_get("identity", "name").unwrap().unwrap();
+        assert_eq!(applied["value"], "Sam", "approval applies the Manager's change");
+        assert_eq!(applied["locked"], true, "the lock survives the change");
+
+        // A locked forget is a proposal too; approving it removes the fact.
+        let forget = call_tool(&st, "boss-main", "forget_about_user", json!({"category":"identity","key":"name"})).await;
+        assert!(forget.get("isError").is_none(), "{forget}");
+        let forget_prop = newest_proposal_id(&st);
+        assert_eq!(st.db.proposal_get(&forget_prop).unwrap()["kind"], "profile");
+        assert!(st.db.manager_profile_get("identity", "name").unwrap().is_some(), "still there before approval");
+        dispatch(&st, "proposal.decide", json!({"id":forget_prop,"decision":"approve"})).await.unwrap();
+        assert!(st.db.manager_profile_get("identity", "name").unwrap().is_none());
+
+        // The user's own RPCs: a new key is "said", an edit is a "correction".
+        dispatch(&st, "manager.profile.set", json!({"category":"style","key":"tone","value":"Direct"})).await.unwrap();
+        let list = dispatch(&st, "manager.profile.list", json!({})).await.unwrap();
+        let tone = list["facts"].as_array().unwrap().iter().find(|fact| fact["key"] == "tone").unwrap().clone();
+        assert_eq!(tone["source"], "said");
+        dispatch(&st, "manager.profile.delete", json!({"id":tone["id"]})).await.unwrap();
+        assert!(dispatch(&st, "manager.profile.list", json!({})).await.unwrap()["facts"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn playbook_is_seeded_and_every_manager_change_is_a_proposal() {
+        let (st, _rx, _data, _boss, _worker) = proposal_state().await;
+
+        // Seeded version 1.
+        let seeded = dispatch(&st, "manager.playbook.get", json!({})).await.unwrap();
+        assert_eq!(seeded["playbook"]["version"], 1);
+        assert_eq!(seeded["playbook"]["author"], "default");
+        assert!(seeded["playbook"]["text"].as_str().unwrap().contains("playbook"));
+
+        // update_playbook is always a proposal; nothing changes until approval.
+        let proposed = call_tool(&st, "boss-main", "update_playbook", json!({"text":"# A shorter playbook","reason":"Trim it"})).await;
+        assert!(proposed.get("isError").is_none(), "{proposed}");
+        let prop = newest_proposal_id(&st);
+        let row = st.db.proposal_get(&prop).unwrap();
+        assert_eq!(row["kind"], "playbook");
+        assert_eq!(row["payload"]["text"], "# A shorter playbook");
+        assert_eq!(row["payload"]["baseVersion"], 1);
+        assert_eq!(dispatch(&st, "manager.playbook.get", json!({})).await.unwrap()["playbook"]["version"], 1, "nothing changes first");
+        dispatch(&st, "proposal.decide", json!({"id":prop,"decision":"approve"})).await.unwrap();
+        let after = dispatch(&st, "manager.playbook.get", json!({})).await.unwrap();
+        assert_eq!(after["playbook"]["version"], 2);
+        assert_eq!(after["playbook"]["author"], "manager");
+        assert_eq!(after["playbook"]["text"], "# A shorter playbook");
+
+        // The user edits and reverts directly; every version is kept.
+        dispatch(&st, "manager.playbook.set", json!({"text":"# Ours"})).await.unwrap();
+        assert_eq!(dispatch(&st, "manager.playbook.get", json!({})).await.unwrap()["playbook"]["author"], "user");
+        dispatch(&st, "manager.playbook.revert", json!({"version":1})).await.unwrap();
+        let reverted = dispatch(&st, "manager.playbook.get", json!({})).await.unwrap();
+        assert_eq!(reverted["playbook"]["version"], 4);
+        assert_eq!(reverted["playbook"]["text"], seeded["playbook"]["text"], "revert restores the old text as a new version");
+        let history = dispatch(&st, "manager.playbook.history", json!({})).await.unwrap();
+        assert_eq!(history["versions"].as_array().unwrap().len(), 4);
+        assert_eq!(history["versions"][0]["version"], 4, "history is newest first");
+        assert_eq!(dispatch(&st, "manager.playbook.revert", json!({"version":99})).await.unwrap_err().1.code, "not_found");
+    }
+
+    #[tokio::test]
+    async fn manager_context_block_is_only_for_the_manager_and_resent_only_when_it_changes() {
+        let (st, _rx, _data, boss_id, _worker) = proposal_state().await;
+
+        // Only the Manager's session produces the block.
+        assert!(crate::knowledge::context_for_prompt(&st, "worker-main").is_none(), "an ordinary bot never gets it");
+        let first = crate::knowledge::context_for_prompt(&st, "boss-main").expect("the Manager gets the block");
+        assert!(first.contains("<bloblex_manager>") && first.contains("</bloblex_manager>"));
+        assert!(first.contains("Your playbook:"), "{first}");
+        assert!(crate::knowledge::context_for_prompt(&st, "boss-main").is_none(), "an unchanged block is not re-sent");
+
+        // A profile edit changes the hash and re-sends it.
+        dispatch(&st, "manager.profile.set", json!({"category":"identity","key":"name","value":"Sico"})).await.unwrap();
+        let changed = crate::knowledge::context_for_prompt(&st, "boss-main").expect("a changed profile re-sends");
+        assert!(changed.contains("Sico"));
+        // A playbook edit re-sends it too.
+        dispatch(&st, "manager.playbook.set", json!({"text":"# Fresh playbook"})).await.unwrap();
+        assert!(crate::knowledge::context_for_prompt(&st, "boss-main").unwrap().contains("# Fresh playbook"));
+        // A context reset forgets the hash.
+        crate::knowledge::forget_context(&st, "boss-main");
+        assert!(crate::knowledge::context_for_prompt(&st, "boss-main").is_some(), "a context change forces a re-send");
+
+        // Profile and playbook edits never change the instruction hash: the
+        // block is not part of `<bloblex_team>`.
+        let link = json!({"kind":"main"});
+        let before = team::runtime_instructions(&st, &st.db.agent_get(&boss_id).unwrap(), &link, std::path::Path::new("."));
+        dispatch(&st, "manager.profile.set", json!({"category":"other","key":"extra","value":"something"})).await.unwrap();
+        dispatch(&st, "manager.playbook.set", json!({"text":"# Another playbook"})).await.unwrap();
+        let after = team::runtime_instructions(&st, &st.db.agent_get(&boss_id).unwrap(), &link, std::path::Path::new("."));
+        assert_eq!(bloblex_agent_core::instruction_sha256(&before), bloblex_agent_core::instruction_sha256(&after));
+
+        // The block respects the profile and playbook caps.
+        for index in 0..40 {
+            dispatch(&st, "manager.profile.set", json!({"category":"other","key":format!("k{index}"),"value":"x".repeat(300)})).await.unwrap();
+        }
+        dispatch(&st, "manager.playbook.set", json!({"text":"y".repeat(9000)})).await.unwrap();
+        crate::knowledge::forget_context(&st, "boss-main");
+        let big = crate::knowledge::context_for_prompt(&st, "boss-main").expect("the block is still produced");
+        assert!(big.chars().count() < 11_500, "the block stays inside its caps (was {})", big.chars().count());
+        assert!(big.contains("call recall_about_user for more"), "the profile is declared truncated");
+    }
+
+    #[tokio::test]
+    async fn a_manager_handover_is_delivered_once_and_announced() {
+        let (mut st, _rx, _data, _boss, _worker) = proposal_state().await;
+        st.db.set_setting("exec_gate.codex.instructions", &json!(true)).unwrap();
+        // Give the Manager knowledge and one decided proposal to carry.
+        dispatch(&st, "manager.profile.set", json!({"category":"identity","key":"name","value":"Sico"})).await.unwrap();
+        dispatch(&st, "manager.playbook.set", json!({"text":"# Handover playbook"})).await.unwrap();
+
+        // `announce_model_change` is what `session.model.update` runs for a
+        // Manager; it writes the notice and arms the handover.
+        crate::knowledge::announce_model_change(&st, "boss-main").await;
+        let messages = st.db.session_detail("boss-main").unwrap()["messages"].as_array().cloned().unwrap_or_default();
+        assert!(messages.iter().any(|message| message["role"] == "notice"
+            && message["meta"]["kind"] == "context_reset"
+            && message["meta"]["reason"] == "manager_handover"
+            && message["meta"]["contextLost"] == false
+            && message["content"] == "New model, same Manager. It has its notes and playbook."), "{messages:?}");
+        assert!(st.db.session_manager_handover("boss-main").unwrap(), "the handover is armed");
+        // An ordinary bot never arms one.
+        crate::knowledge::announce_model_change(&st, "worker-main").await;
+        assert!(!st.db.session_manager_handover("worker-main").unwrap(), "only the Manager hands over");
+
+        // The next prompt carries the handover exactly once, and the stored
+        // transcript keeps the typed text, not the block.
+        let adapter = Arc::new(TeamAdapter::default());
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter.clone(), claude:Arc::new(ClaudeAdapter::default()) });
+        dispatch(&st, "session.prompt", json!({"sessionId":"boss-main","text":"morning"})).await.unwrap();
+        let handover = wait_for_prompts(&adapter, |texts| texts.iter().any(|text| text.contains("<bloblex_handover>"))).await;
+        let block = handover.iter().find(|text| text.contains("<bloblex_handover>")).unwrap();
+        assert!(block.contains("Sico") && block.contains("# Handover playbook"), "{block}");
+        assert!(block.contains("</bloblex_handover>") && block.contains("Open proposals waiting"), "{block}");
+        assert!(!st.db.session_manager_handover("boss-main").unwrap(), "the handover is one-off");
+        let stored = st.db.session_detail("boss-main").unwrap()["messages"].as_array().cloned().unwrap();
+        assert!(stored.iter().any(|message| message["role"] == "user" && message["content"] == "morning"));
+        assert!(!serde_json::to_string(&stored).unwrap().contains("<bloblex_handover>"), "the block is never persisted");
+
+        // A second prompt does not repeat it.
+        dispatch(&st, "session.prompt", json!({"sessionId":"boss-main","text":"again"})).await.unwrap();
+        let _ = wait_for_prompts(&adapter, |texts| texts.iter().filter(|text| text.starts_with("again")).count() >= 1).await;
+        assert!(!adapter.prompts.lock().unwrap().iter().any(|text| text.starts_with("again") && text.contains("<bloblex_handover>")), "the handover is not repeated");
+    }
+
+    async fn wait_for_prompts(adapter: &Arc<TeamAdapter>, done: impl Fn(&[String]) -> bool) -> Vec<String> {
+        for _ in 0..250 {
+            let prompts = adapter.prompts.lock().unwrap().clone();
+            if done(&prompts) { return prompts; }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("timed out waiting for a prompt: {:?}", adapter.prompts.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn project_proposals_require_a_full_folder_path_and_refuse_a_file() {
+        let (st, _rx, _data, _boss, _worker) = proposal_state().await;
+
+        // A relative "existing" path is refused and the proposal stays pending.
+        let _ = call_tool(&st, "boss-main", "propose_project", json!({"name":"Rel","folder":{"mode":"existing","path":"relative/folder"}})).await;
+        let prop = newest_proposal_id(&st);
+        let err = dispatch(&st, "proposal.decide", json!({"id":prop,"decision":"approve"})).await.unwrap_err();
+        assert_eq!(err.1.code, "invalid_argument");
+        assert_eq!(err.1.message, "Choose a full folder path.");
+        assert_eq!(st.db.proposal_get(&prop).unwrap()["status"].as_str(), Some("pending"), "a refused approval can be retried");
+
+        // The same rule holds for a brand-new folder.
+        let _ = call_tool(&st, "boss-main", "propose_project", json!({"name":"RelNew","folder":{"mode":"new"}})).await;
+        let prop = newest_proposal_id(&st);
+        let err = dispatch(&st, "proposal.decide", json!({"id":prop,"decision":"approve","edits":{"folder":{"path":"new-folder"}}})).await.unwrap_err();
+        assert_eq!(err.1.message, "Choose a full folder path.");
+
+        // A path that is an existing *file* is refused for a new folder.
+        let dir = std::env::temp_dir().join(format!("bloblex-d3-file-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("not-a-folder.txt");
+        std::fs::write(&file, "x").unwrap();
+        let err = dispatch(&st, "proposal.decide", json!({"id":prop,"decision":"approve","edits":{"folder":{"path":file.to_string_lossy()}}})).await.unwrap_err();
+        assert!(err.1.message.contains("is a file, not a folder"), "{}", err.1.message);
+
+        // An absolute new path is created and the project stored.
+        let target = dir.join("project");
+        let approved = dispatch(&st, "proposal.decide", json!({"id":prop,"decision":"approve","edits":{"folder":{"path":target.to_string_lossy()}}})).await.unwrap();
+        assert_eq!(approved["decision"], "approved");
+        assert!(target.is_dir(), "the folder is created");
+        assert_eq!(st.db.project_list().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

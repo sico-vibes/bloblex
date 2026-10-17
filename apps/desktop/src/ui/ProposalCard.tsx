@@ -7,6 +7,7 @@ import type { JsonRecord, PermissionRequest, Project } from '../types'
 import { openProjectFolder, rpc } from '../tauri'
 import { Select } from './Select'
 import { providerBrand } from './providerBrand'
+import { ProposedPlaybook } from './PlaybookDiff'
 import './proposalCard.css'
 
 type Decision = 'approve' | 'reject'
@@ -124,7 +125,7 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
       </>}
       {kind === 'playbook' && <>
         {text(draft.reason) && <p className="proposal-reason">{text(draft.reason)}</p>}
-        <pre className="proposal-preview">{text(draft.text)}</pre>
+        <ProposedPlaybook text={text(draft.text)} />
       </>}
       {kind === 'profile' && <>
         <div className="proposal-row">

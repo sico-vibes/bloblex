@@ -1,0 +1,55 @@
+/* Settings › Manager and the playbook diff (also used by proposal cards). */
+.manager-identity { display: inline-flex; align-items: center; gap: 6px; }
+.manager-identity svg { color: var(--user-accent, var(--text-2)); }
+.manager-empty { padding: 12px 16px; }
+.manager-fact-group + .manager-fact-group { border-top: 1px solid var(--line); }
+.manager-fact-group h4 { margin: 0; padding: 12px 16px 2px; color: var(--text-3); font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.manager-facts { margin: 0; padding: 0 0 6px; list-style: none; }
+.manager-facts > li { padding: 8px 16px; display: flex; gap: 10px; align-items: flex-start; }
+.manager-facts > li:has(.manager-fact-form) { display: block; }
+.manager-fact-copy { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.manager-fact-copy strong { font-size: var(--fs-sm); font-weight: 600; }
+.manager-fact-copy span { color: var(--text-1); font-size: var(--fs-sm); line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.manager-fact-copy small { color: var(--text-3); font-size: var(--fs-2xs); }
+.manager-fact-actions { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+.manager-facts > li.locked .manager-fact-actions [aria-pressed="true"] { color: var(--user-accent, var(--text-1)); }
+.manager-facts > li:not(:hover):not(:focus-within) .manager-fact-actions .icon-button:not([aria-pressed="true"]) { opacity: .55; }
+.manager-fact-actions .danger { color: var(--danger-ink); }
+.manager-fact-form { padding: 12px 16px; display: grid; gap: 10px; }
+.manager-facts .manager-fact-form { padding: 4px 0; }
+.manager-fact-form-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 10px; }
+.manager-fact-form textarea { resize: vertical; min-height: 56px; }
+.manager-fact-lock { display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--fs-xs); }
+.manager-playbook-intro { margin: 0; padding: 12px 16px 0; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.5; }
+.manager-playbook { max-height: 340px; margin: 10px 16px 14px; padding: 4px 14px 10px; overflow: auto; color: var(--text-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-input); font-size: var(--fs-sm); line-height: 1.6; }
+.manager-playbook h1, .manager-playbook h2, .manager-playbook h3 { margin: 12px 0 4px; color: var(--text-1); font-size: var(--fs-sm); font-weight: 600; }
+.manager-playbook p { margin: 4px 0; }
+.manager-playbook ul, .manager-playbook ol { margin: 4px 0 6px; padding-left: 18px; }
+.manager-playbook code { font-size: .92em; }
+.manager-playbook-form { padding: 10px 16px 14px; display: grid; gap: 8px; }
+.manager-playbook-form textarea { min-height: 260px; resize: vertical; font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.55; }
+.manager-count { justify-self: end; color: var(--text-3); font-size: var(--fs-2xs); }
+.manager-history { border-top: 1px solid var(--line); }
+.manager-history h4 { margin: 0; padding: 12px 16px 4px; color: var(--text-3); font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.manager-history ol { margin: 0; padding: 0 0 8px; list-style: none; }
+.manager-history li { padding: 6px 16px; display: grid; gap: 8px; }
+.manager-history-row { display: flex; align-items: center; gap: 6px; }
+.manager-history-row > span { min-width: 0; flex: 1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.manager-history-row strong { font-size: var(--fs-sm); font-weight: 600; }
+.manager-history-row em { padding: 1px 6px; color: var(--text-2); font-size: var(--fs-2xs); font-style: normal; border-radius: 999px; background: var(--surface-selected); }
+.manager-history-row small { color: var(--text-3); font-size: var(--fs-xs); }
+.manager-history-row button { display: inline-flex; align-items: center; gap: 4px; }
+
+.playbook-diff { max-height: 280px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-input); font-size: var(--fs-xs); }
+.playbook-diff-line { padding: 1px 10px; display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 4px; }
+.playbook-diff-line code { color: var(--text-2); font-family: var(--font-mono); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.playbook-diff-line > span:first-child { color: var(--text-3); font-family: var(--font-mono); }
+.playbook-diff-line.add { background: color-mix(in srgb, var(--status-success) 13%, transparent); }
+.playbook-diff-line.add code, .playbook-diff-line.add > span:first-child { color: var(--text-1); }
+.playbook-diff-line.del { background: color-mix(in srgb, var(--status-danger) 12%, transparent); }
+.playbook-diff-line.del code { color: var(--text-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--status-danger) 60%, transparent); }
+.playbook-diff-fold { padding: 3px 10px; color: var(--text-3); font-size: var(--fs-2xs); border-block: 1px dashed var(--line); }
+.playbook-diff-none { margin: 0; color: var(--text-3); font-size: var(--fs-xs); }
+:root[data-bitbots="on"] .manager-playbook, :root[data-bitbots="on"] .playbook-diff { border-radius: 0; border: 2px solid var(--bb-line); }
+
+@media (max-width: 640px) { .manager-fact-form-row { grid-template-columns: 1fr; } }

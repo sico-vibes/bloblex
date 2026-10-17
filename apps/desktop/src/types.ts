@@ -318,8 +318,29 @@ export interface PermissionRequest extends JsonRecord {
 /** The Manager's proposal carried by a `kind: "proposal"` permission card. */
 export interface ProposalCard extends JsonRecord {
   id: string
-  kind: 'project' | 'bot' | 'task' | 'playbook' | string
+  kind: 'project' | 'bot' | 'task' | 'playbook' | 'profile' | string
   payload?: JsonRecord
+}
+
+/** FIX36 D3: one structured fact the Manager knows about the user. */
+export interface ManagerFact extends JsonRecord {
+  id: string
+  category: 'identity' | 'workflow' | 'style' | 'conventions' | 'design' | 'other'
+  key: string
+  value: string
+  source: 'said' | 'learned' | 'corrected'
+  /** A locked preference is the user's: the Manager must propose a change. */
+  locked: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+/** FIX36 D3: one version of the Manager's playbook, newest is current. */
+export interface PlaybookVersion extends JsonRecord {
+  version: number
+  text: string
+  author: 'default' | 'user' | 'manager'
+  createdAt?: string
 }
 
 export interface DaemonEvent extends JsonRecord {

@@ -170,6 +170,27 @@
       "params": null
     },
     {
+      "method": "manager.profile.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads the facts the Manager keeps about the user; they are the user's own notes.",
+      "params": null
+    },
+    {
+      "method": "manager.playbook.get",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads the current Manager playbook.",
+      "params": null
+    },
+    {
+      "method": "manager.playbook.history",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Reads the playbook's version history.",
+      "params": null
+    },
+    {
       "method": "project.list",
       "class": "read",
       "minTier": "viewer",
@@ -328,6 +349,34 @@
       "class": "never",
       "minTier": null,
       "why": "Creating or adopting the built-in Manager is a host-only decision; a device may read it with manager.get.",
+      "params": null
+    },
+    {
+      "method": "manager.profile.set",
+      "class": "never",
+      "minTier": null,
+      "why": "Writing what the Manager knows about the user happens at the computer; a device may only read it.",
+      "params": null
+    },
+    {
+      "method": "manager.profile.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "Deleting a profile fact happens at the computer; a device may only read it.",
+      "params": null
+    },
+    {
+      "method": "manager.playbook.set",
+      "class": "never",
+      "minTier": null,
+      "why": "Editing the Manager's playbook is a host decision; a device may read it.",
+      "params": null
+    },
+    {
+      "method": "manager.playbook.revert",
+      "class": "never",
+      "minTier": null,
+      "why": "Reverting the Manager's playbook is a host decision; a device may read it.",
       "params": null
     },
     {
@@ -800,6 +849,8 @@
     "exec.options.rejected": "drop",
     "file.changed": "drop",
     "hook.observed": "drop",
+    "manager.playbook.changed": "drop",
+    "manager.profile.changed": "drop",
     "memory.changed": "drop",
     "memory.deleted": "drop",
     "permission.auto_denied": "drop",

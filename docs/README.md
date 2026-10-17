@@ -14,7 +14,7 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 
 - **AI agents:** read [AGENTS.md](../AGENTS.md) first. It is the owner directive, with dated amendments newest first. Then [OPERATING_MODEL.md](OPERATING_MODEL.md) (the rules in effect today, derived from AGENTS.md). Then [implementation-status.md](implementation-status.md) for open gaps and [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for release state.
 - **New contributors:** [README.md](../README.md), then [windows-development.md](windows-development.md), [PRODUCT.md](../PRODUCT.md), [DESIGN.md](../DESIGN.md), [ipc-contract.md](ipc-contract.md) and [runtime-capabilities.md](runtime-capabilities.md).
-- **Release state today:** `v0.1.0-beta.29` ([releases/0.1.0-beta.29.md](releases/0.1.0-beta.29.md)). The signed updater feed is still at `v0.1.0-beta.6` ([UPDATER.md](UPDATER.md)).
+- **Release state today:** `v0.1.0-beta.30` ([releases/0.1.0-beta.30.md](releases/0.1.0-beta.30.md)). The signed updater feed is still at `v0.1.0-beta.6` ([UPDATER.md](UPDATER.md)).
 
 ## Rules and ownership
 
@@ -90,17 +90,17 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 | [FIX8_DELEGATION_TIMELINE_ORDER_SPEC.md](FIX8_DELEGATION_TIMELINE_ORDER_SPEC.md) | Delegation notices and the turn text that follows them; the shipped fix places the notice above the turn text (the spec covered text after the call only). | historical; implemented and released in `v0.1.0-beta.27` | 14 Oct 2026: added with the fix |
 | [FIX6_OPENCODE_INSTRUCTIONS_RESPAWN_SPEC.md](FIX6_OPENCODE_INSTRUCTIONS_RESPAWN_SPEC.md) | OpenCode turns failed when the blob's instructions changed; restart the process and reload the session. | historical; implemented and released in `v0.1.0-beta.26` | 14 Oct 2026: added with the fix |
 | [FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md](FIX5_OPENCODE2_PER_MODEL_EFFORT_SPEC.md) | OpenCode 2 per-model effort levels and a validated catalog. | historical; implemented and released in `v0.1.0-beta.25` | 14 Oct 2026: added with the fix |
-| [FIX33_SMALL_BACKEND_SPEC.md](FIX33_SMALL_BACKEND_SPEC.md) | Small backend items: capabilities mismatch, "bot" in both looks, `session.environment`, cloud dictation warm-up. | implemented on local `main`, unreleased; report beside it | 17 Oct 2026: added with the wave |
-| [FIX28_CATALOG_SPEC.md](FIX28_CATALOG_SPEC.md) | Model catalog cache that never blocks a send, persisted and prewarmed at boot. | implemented on local `main`, unreleased; report beside it | 17 Oct 2026: added with the wave |
-| [FIX28_SEND_SPEC.md](FIX28_SEND_SPEC.md) | A send is accepted at once and the coding agent starts behind it; `session.warm`. | implemented on local `main`, unreleased; report beside it | 17 Oct 2026: added with the wave |
-| [FIX27_CONVERSATIONS_SPEC.md](FIX27_CONVERSATIONS_SPEC.md) | Many conversations per bot, auto-titles, a stable bot-to-bot tree, readable workspaces. | implemented on local `main`, unreleased; report beside it | 17 Oct 2026: added with the wave |
-| [FIX32_SKILLS_SPEC.md](FIX32_SKILLS_SPEC.md) | One skills pool shared by every bot over MCP, with a routing block. | implemented on local `main`, unreleased; report beside it | 17 Oct 2026: added with the wave |
-| [FIX31_BACKUP_SPEC.md](FIX31_BACKUP_SPEC.md) | Back up and restore bots, memory, skills, automations and settings. | implemented on local `main`, unreleased; report beside it | 17 Oct 2026: added with the wave |
-| [FIX29_WP6A_POLICY_SPEC.md](FIX29_WP6A_POLICY_SPEC.md) | Remote: one policy file for Rust and TypeScript, with shared goldens. | implemented on local `main`, unreleased; report beside it | 17 Oct 2026: added with the wave |
-| [FIX29_WP6B_GATEWAY_SPEC.md](FIX29_WP6B_GATEWAY_SPEC.md) | Remote: the gateway in `bitbotsd` over `tailscale serve`, pairing and device cookies. | implemented on local `main`, unreleased; report beside it; live Tailscale unverified | 17 Oct 2026: added with the wave |
-| [FIX29_WP6C_PWA_SPEC.md](FIX29_WP6C_PWA_SPEC.md) | Remote: the PWA build, gateway transport and service worker. | implemented on local `main`, unreleased; report beside it | 17 Oct 2026: added with the wave |
-| [FIX29_WP6C1_BUILD_SPEC.md](FIX29_WP6C1_BUILD_SPEC.md) | Remote: the desktop crate builds before the remote app exists. | implemented on local `main`, unreleased; report beside it | 17 Oct 2026: added with the wave |
-| [FIX29_WP6D_CONTRACT_SPEC.md](FIX29_WP6D_CONTRACT_SPEC.md) | Remote: the renderer contract, hook and simulator follow the Tailscale design. | implemented on local `main`, unreleased; report beside it | 17 Oct 2026: added with the wave |
+| [FIX33_SMALL_BACKEND_SPEC.md](FIX33_SMALL_BACKEND_SPEC.md) | Small backend items: capabilities mismatch, "bot" in both looks, `session.environment`, cloud dictation warm-up. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
+| [FIX28_CATALOG_SPEC.md](FIX28_CATALOG_SPEC.md) | Model catalog cache that never blocks a send, persisted and prewarmed at boot. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
+| [FIX28_SEND_SPEC.md](FIX28_SEND_SPEC.md) | A send is accepted at once and the coding agent starts behind it; `session.warm`. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
+| [FIX27_CONVERSATIONS_SPEC.md](FIX27_CONVERSATIONS_SPEC.md) | Many conversations per bot, auto-titles, a stable bot-to-bot tree, readable workspaces. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
+| [FIX32_SKILLS_SPEC.md](FIX32_SKILLS_SPEC.md) | One skills pool shared by every bot over MCP, with a routing block. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
+| [FIX31_BACKUP_SPEC.md](FIX31_BACKUP_SPEC.md) | Back up and restore bots, memory, skills, automations and settings. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
+| [FIX29_WP6A_POLICY_SPEC.md](FIX29_WP6A_POLICY_SPEC.md) | Remote: one policy file for Rust and TypeScript, with shared goldens. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
+| [FIX29_WP6B_GATEWAY_SPEC.md](FIX29_WP6B_GATEWAY_SPEC.md) | Remote: the gateway in `bitbotsd` over `tailscale serve`, pairing and device cookies. | implemented and released in `v0.1.0-beta.30`; report beside it; live Tailscale unverified | 17 Oct 2026: added with the wave |
+| [FIX29_WP6C_PWA_SPEC.md](FIX29_WP6C_PWA_SPEC.md) | Remote: the PWA build, gateway transport and service worker. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
+| [FIX29_WP6C1_BUILD_SPEC.md](FIX29_WP6C1_BUILD_SPEC.md) | Remote: the desktop crate builds before the remote app exists. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
+| [FIX29_WP6D_CONTRACT_SPEC.md](FIX29_WP6D_CONTRACT_SPEC.md) | Remote: the renderer contract, hook and simulator follow the Tailscale design. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
 
 ## Runbooks
 
@@ -136,7 +136,7 @@ Immutable records. Only broken links were repaired. Their wording and conclusion
 
 ## Release notes
 
-Immutable records. The newest is [0.1.0-beta.29](releases/0.1.0-beta.29.md). Earlier notes are historical.
+Immutable records. The newest is [0.1.0-beta.30](releases/0.1.0-beta.30.md). Earlier notes are historical.
 
 | Document | Status | Last verified |
 | --- | --- | --- |
@@ -168,7 +168,8 @@ Immutable records. The newest is [0.1.0-beta.29](releases/0.1.0-beta.29.md). Ear
 | [releases/0.1.0-beta.26.md](releases/0.1.0-beta.26.md) | historical | 14 Oct 2026: written with the release |
 | [releases/0.1.0-beta.27.md](releases/0.1.0-beta.27.md) | historical | 14 Oct 2026: written with the release |
 | [releases/0.1.0-beta.28.md](releases/0.1.0-beta.28.md) | historical | 14 Oct 2026: written with the release |
-| [releases/0.1.0-beta.29.md](releases/0.1.0-beta.29.md) | historical (newest manual-only release) | 15 Oct 2026: written with the release |
+| [releases/0.1.0-beta.29.md](releases/0.1.0-beta.29.md) | historical | 15 Oct 2026: written with the release |
+| [releases/0.1.0-beta.30.md](releases/0.1.0-beta.30.md) | historical (newest manual-only release) | 17 Oct 2026: written with the release |
 
 ## Handoff and history
 

@@ -1,12 +1,12 @@
 # Bitbots session handoff
 
-> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.29` ([docs/releases/0.1.0-beta.29.md](docs/releases/0.1.0-beta.29.md)); later work on local `main` is unreleased. The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
+> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.30` ([docs/releases/0.1.0-beta.30.md](docs/releases/0.1.0-beta.30.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
 
 Current as of 17 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
 ## Owner review wave FIX26-FIX33 (15-17 October 2026, after beta.29)
 
-**State.** Every package below is committed on local `main`, from `25e694c` to `54b674e`, on top of the beta.29 record `cda9f46`. **Nothing is pushed or released.** No lane worktree is left; `git worktree list` shows only this checkout. Lanes followed the 16 October amendment in [AGENTS.md](AGENTS.md): the Director wrote all UI, and OpenCode `deepseek-v4.1-flash` (high) wrote the backend from a spec per package, with each diff reviewed and gated on `main` before commit. The plan is in the FIX specs listed below; owner decisions were Tailscale for Remote, a Bitbots skills pool shared over MCP, a backup holding bots, memory, skills, automations and settings (no projects, no conversations), and the word "bot" in both looks.
+**State.** Released as manual-only [v0.1.0-beta.30](docs/releases/0.1.0-beta.30.md) (tag at `ec705a1`, pushed with `main`; installer SHA-256 `f435782cc9848d86c2d8b522161e765782e5f5a4fc97bf5fe88b092fe925567d`, unsigned; the signed updater feed stays at beta.6). The packages below run from `25e694c` to `54b674e`, and `55a2447` finished the plan (rail Remote row, Archive, instant Plan and permission switches, ordered background loading, the phone conversation list). The owner accepted the Remote amendment in `AGENTS.md` on 17 October and waived its release gate once for this beta. No lane or build worktree is left. Lanes followed the 16 October amendment in [AGENTS.md](AGENTS.md): the Director wrote all UI, and OpenCode `deepseek-v4.1-flash` (high) wrote the backend from a spec per package, with each diff reviewed and gated on `main` before commit. The plan is in the FIX specs listed below; owner decisions were Tailscale for Remote, a Bitbots skills pool shared over MCP, a backup holding bots, memory, skills, automations and settings (no projects, no conversations), and the word "bot" in both looks.
 
 ### What landed
 
@@ -33,11 +33,11 @@ Current as of 17 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V
 
 ### Known issues and next steps
 
-1. **Live Remote test** with the owner's Tailscale and phone: enable, pair, install the PWA, chat as `chat`, approve as `operator`, revoke. Then the owner signs the AGENTS amendment.
+1. **Live Remote test** with the owner's Tailscale and phone: enable, pair, install the PWA, chat as `chat`, approve as `operator`, revoke. The threat-model checklists and an independent review remain owed before a non-beta release.
 2. `cargo clippy -p bloblex-desktop` has lints that predate this wave (an error in `power.rs:222` "this loop never actually loops", warnings in `lib.rs`, `speech.rs`, `updates.rs`). The clippy gate excludes the desktop crate, so nothing fails; a lane cleanup is worthwhile.
 3. `cargo clippy --all-targets` reports a `needless_borrow` in the FIX32 skills tests in `main.rs`; same lane cleanup.
 4. A fresh checkout builds the desktop crate only after `dist/` and the sidecars exist; `dist-remote` now gets a placeholder from `build.rs` (WP6c-1).
-5. Lanes on this machine: `C:\fxtarget` and `C:\fxtarget2` are private Cargo target folders used by lane worktrees; they can be deleted when no lane runs.
+5. Lanes on this machine: `C:\fxtarget` (about 20 GB) and `C:\fxtarget2` (about 6 GB) are private Cargo target folders the lanes used; the tool's safety check would not let the Director delete them, so the owner can delete them when no lane runs.
 
 ## Owner review follow-up and Bitbots (13 October 2026, after beta.19)
 

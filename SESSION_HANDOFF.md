@@ -1,8 +1,23 @@
 # Bitbots session handoff
 
-> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.32` ([docs/releases/0.1.0-beta.32.md](docs/releases/0.1.0-beta.32.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
+> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.33` ([docs/releases/0.1.0-beta.33.md](docs/releases/0.1.0-beta.33.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
 
 Current as of 17 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+
+## Beta.32 review FIX38 (18 October 2026, after beta.32)
+
+**State.** Released as [v0.1.0-beta.33](docs/releases/0.1.0-beta.33.md) (tag at `0d4c975`; installer SHA-256 `3906cc3fbcabc81aaa86f96a93d2f2aa71ea2131198fff80d2e2ef29321d83a9`), signed for the updater and published to `channel-beta`, so beta.32 installs should offer **Restart to update** by themselves. All fixes by DeepSeek lanes (briefs `docs/FIX38_H1` to `H3_*_SPEC.md`); the owner allowed the Director one direct change, the icons.
+
+| Lane | What it did | Report |
+|---|---|---|
+| H1 | Remote pairing: safe GETs may omit `Origin` (browsers never send it on same-origin GETs, so the approval poll and `/api/me` were refused); the phone no longer latches signed-out on its first `/api/me`, never demotes a waiting screen on a failed poll, never re-submits a used `#pair=` code; Tailscale turn-off removes the handler despite the CLI's help no longer listing `off`; browser-like end-to-end tests for both methods. Evidence from the owner's install: both Direct approvals recorded, live gateway refused the Origin-less poll. | `docs/FIX38_H1_REPORT.md` |
+| H2 | A bot without a conversation opens a local draft; no `agent.conversation` call, no null active session published (the companion answered it with another bot's conversation, the jump to the first bot); the first send creates the conversation, titled from the message | `docs/FIX38_H2_REPORT.md` |
+| H3 | Continuous branch lines in the classic look (four geometry faults the Bitbots dotted line hid) | `docs/FIX38_H3_REPORT.md` |
+| Director | No star or sparkle icons anywhere: Manager briefcase, What's new newspaper, pinned notes pin | `c4b0717` |
+
+**Gates on `cb48af6`:** Rust 728, clippy clean, desktop crate 64, Vitest 1157, main, remote and preview builds; preview check of the classic tree lines (guide, continuation, elbow and arrow all at x = 9 px).
+
+**Not verified:** pairing from a real phone (iPhone Safari's handling of the `__Host-` cookie), removing the live Tailscale handler, the automatic update from beta.32, the native windows.
 
 ## Beta.31 review FIX37 (18 October 2026, after beta.31)
 

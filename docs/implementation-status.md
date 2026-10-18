@@ -1,8 +1,10 @@
 # Implementation status
 
-> Status: current through `v0.1.0-beta.32` (18 October entry below). The newest release is `v0.1.0-beta.32` ([releases/0.1.0-beta.32.md](releases/0.1.0-beta.32.md)). The "Phase status" and "Work after the plan phases" tables describe the 1-12 October worktree and are historical; the "Still open" list is the current gap list.
+> Status: current through `v0.1.0-beta.33` (18 October entries below). The newest release is `v0.1.0-beta.33` ([releases/0.1.0-beta.33.md](releases/0.1.0-beta.33.md)). The "Phase status" and "Work after the plan phases" tables describe the 1-12 October worktree and are historical; the "Still open" list is the current gap list.
 
 Current as of 17 October 2026. Plan: [E2E_PLAN_V2.md](E2E_PLAN_V2.md). Handoff: [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
+
+**18 October, FIX38, released as `v0.1.0-beta.33` (tag at `0d4c975`):** remote pairing completes in a browser on both methods (safe GETs may omit `Origin`; the phone no longer latches signed-out, demotes a waiting screen or re-submits a used code; Tailscale turn-off removes the handler), a local draft for a bot without a conversation (no flash, no jump to the first bot, nothing saved before the first message), continuous branch lines in the classic look, and no star icons. Code by DeepSeek lanes except the icon change. Gates: Rust 728, clippy clean, desktop crate 64, Vitest 1157, three web builds. **Unverified:** a real phone, the beta.32 → beta.33 automatic update.
 
 **18 October, FIX37, released as `v0.1.0-beta.32` (tag at `fc7987f`):** the owner's beta.31 review, all code by DeepSeek lanes (AGENTS.md, 18 October amendment). The phone page is served as HTML; a resume that fails to start falls back to a fresh session; tooltips render in a viewport-clamped top layer; sidebar logos aligned; side-badge shadow unclipped; one deterministic selection after a delete or archive with no cross-window loop; `/` slash commands (actions, skills, Manager commands) with a hidden per-turn directive; background update check and download with a header badge, signed with a new updater key and published to `channel-beta`. Gates: Rust 723, clippy clean, desktop crate 64, Vitest 1136, three web builds. **Unverified:** a real update round trip, the phone page on a real phone, the resume fallback against a really expired sign-in, the native windows.
 

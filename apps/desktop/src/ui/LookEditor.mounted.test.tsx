@@ -11,12 +11,12 @@ vi.mock('../blob/BlobCanvas', () => ({
 }))
 
 const mounted: Array<{ root: Root; host: HTMLDivElement }> = []
-function mount(look: BlobLook) {
+function mount(look: BlobLook, locked = false) {
   const host = document.createElement('div'); document.body.append(host)
   const root = createRoot(host)
   const onLookChange = vi.fn()
   const onColorChange = vi.fn()
-  const render = (next: BlobLook) => root.render(<LookEditor look={next} color="mint" colorHex="#9be7c4" name="Pololo" onLookChange={onLookChange} onColorChange={onColorChange} />)
+  const render = (next: BlobLook) => root.render(<LookEditor look={next} color="mint" colorHex="#9be7c4" name="Pololo" locked={locked} onLookChange={onLookChange} onColorChange={onColorChange} />)
   act(() => render(look))
   mounted.push({ root, host })
   return { host, render, onLookChange, onColorChange }
@@ -144,5 +144,33 @@ describe('look editor', () => {
     expect(next.seed).not.toBe('a')
     expect(next.traits).toBeUndefined()
     expect(host.querySelector('.look-credit')?.textContent).toContain('blobatar')
+  })
+
+  // FIX39 item 13 / P5 audit F3-adjacent: the read-only editor must be inert,
+  // not merely covered by the disabled fieldset around it.
+  it('makes every control inert while the bot is locked', () => {
+    const { host, onLookChange, onColorChange } = mount({ shape: 'circle', seed: 'pololo' }, true)
+    const shapes = [...host.querySelectorAll<HTMLButtonElement>('.look-shape')]
+    expect(shapes).toHaveLength(8)
+    expect(shapes.every((button) => button.disabled)).toBe(true)
+    expect([...host.querySelectorAll<HTMLButtonElement>('.look-moods button')].every((button) => button.disabled)).toBe(true)
+    expect([...host.querySelectorAll<HTMLButtonElement>('.look-stage-actions button')].every((button) => button.disabled)).toBe(true)
+    expect([...host.querySelectorAll<HTMLButtonElement>('.look-tabs button')].every((button) => button.disabled)).toBe(true)
+    expect([...host.querySelectorAll<HTMLButtonElement>('.swatch')].every((button) => button.disabled)).toBe(true)
+    // Clicking a disabled control changes nothing.
+    click(shapes[5])
+    click(host.querySelector('.swatch'))
+    expect(onLookChange).not.toHaveBeenCalled()
+    expect(onColorChange).not.toHaveBeenCalled()
+  })
+
+  it('cannot even open the fine-tune tab while the bot is locked, and its sliders stay inert', () => {
+    const { host, onLookChange } = mount({ shape: 'circle', seed: 'pololo', traits: { 'eye.rx': 0.4 } }, true)
+    const tabs = [...host.querySelectorAll<HTMLButtonElement>('.look-tabs button')]
+    expect(tabs).toHaveLength(2)
+    expect(tabs.every((button) => button.disabled)).toBe(true)
+    click(tabs[1])
+    expect(host.querySelector('.look-slider input[type="range"]')).toBeNull()
+    expect(onLookChange).not.toHaveBeenCalled()
   })
 })

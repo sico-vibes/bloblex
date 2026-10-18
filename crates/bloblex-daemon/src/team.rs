@@ -6,7 +6,7 @@
 //! teammate's turn ends, its reply is relayed back into the sender's
 //! conversation, which wakes the sender to report to the user.
 
-use crate::{agent_error, derr, new_session, AppState, DispatchError};
+use crate::{agent_error, bot_is_locked, derr, locked_bot_error, new_session, AppState, DispatchError};
 use axum::http::StatusCode;
 use bloblex_agent_core::{ExecOptions, McpServerSpec};
 use serde_json::{json, Value};
@@ -276,11 +276,12 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "propose_bot" if is_manager => crate::proposals::propose_bot(st, session_id, args).await,
                 "assign_task" if is_manager => crate::proposals::assign_task(st, session_id, args).await,
                 "project_status" if is_manager => crate::proposals::project_status(st, args).await,
+                "set_conversation_permission" if is_manager => crate::proposals::propose_permission(st, session_id, args).await,
                 "remember_about_user" if is_manager => crate::knowledge::tool_remember(st, session_id, args).await,
                 "forget_about_user" if is_manager => crate::knowledge::tool_forget(st, session_id, args).await,
                 "recall_about_user" if is_manager => crate::knowledge::tool_recall(st, args),
                 "update_playbook" if is_manager => crate::knowledge::tool_update_playbook(st, session_id, args).await,
-                "list_projects" | "update_blob" | "propose_project" | "propose_bot" | "assign_task" | "project_status" | "remember_about_user" | "forget_about_user" | "recall_about_user" | "update_playbook" => Err(non_manager_error(st)),
+                "list_projects" | "update_blob" | "propose_project" | "propose_bot" | "assign_task" | "project_status" | "set_conversation_permission" | "remember_about_user" | "forget_about_user" | "recall_about_user" | "update_playbook" => Err(non_manager_error(st)),
                 "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
                 "ask_user" if ask_user => crate::questions::ask_user_tool(st, session_id, args).await,
@@ -380,6 +381,8 @@ async fn update_blob(st: &AppState, args: &Value) -> Result<String, String> {
     if role.is_none() && description.is_none() && instructions.is_none() { return Err("Give at least one of role, description or instructions to update.".into()); }
     let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
     let target = resolve_blob(&agents, wanted).ok_or_else(|| format!("No {} is called {wanted}.", entity_noun(false)))?;
+    // FIX39 item 13: the Manager cannot edit a locked bot either.
+    if bot_is_locked(&target) { return Err("This bot is locked. Unlock it to change its settings.".into()); }
     let target_id = target["id"].as_str().unwrap_or("").to_owned();
     if let Some(role) = &role {
         let (_agent, events) = st.db.agent_set_team(&target_id, &json!({"role":role})).map_err(|error| error.to_string())?;
@@ -698,12 +701,35 @@ pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, D
             Ok(json!({"project": project}))
         }
         "project.delete" => {
-            let events = st.db.project_delete(p["projectId"].as_str().unwrap_or("")).map_err(agent_error)?;
+            let id = p["projectId"].as_str().unwrap_or("");
+            // FIX39 item 13 / P5 audit F2: deleting a project would move its
+            // locked bots to Unassigned, which is a settings change. Refuse
+            // while any of them is locked.
+            let agents = st.db.agent_list(false, None).map_err(agent_error)?;
+            if agents.iter().any(|agent| agent["projectId"].as_str() == Some(id) && bot_is_locked(agent)) {
+                return Err(locked_bot_error());
+            }
+            let events = st.db.project_delete(id).map_err(agent_error)?;
             st.broadcast_persisted(events);
             Ok(json!({"deleted": true}))
         }
         "agent.team.update" => {
             let id = p["agentId"].as_str().unwrap_or("");
+            // FIX39 item 13: a locked bot keeps its settings. Placement the
+            // owner still expects to work (sidebar pin, sort order, visibility)
+            // stays open; a project, role or leader change is a settings change.
+            // P5 audit F2: compare against the stored values, so a write that
+            // repeats them (a drop inside the same project) stays layout, while
+            // `projectId: null` (the "Unassigned" target) and `leader` are
+            // refused like any other change.
+            if let Ok(agent) = st.db.agent_get(id) {
+                if bot_is_locked(&agent) {
+                    let project_changed = p.get("projectId").is_some_and(|project| project.as_str() != agent["projectId"].as_str());
+                    let role_changed = p.get("role").is_some_and(|role| role.as_str().map(str::trim) != agent["role"].as_str());
+                    let leader_changed = p.get("leader").is_some_and(|leader| leader.as_bool() != agent["leader"].as_bool());
+                    if project_changed || role_changed || leader_changed { return Err(locked_bot_error()); }
+                }
+            }
             // FIX36: the Manager works across every project and its leadership
             // is permanent, so neither a project nor a leader change applies.
             if let Ok(agent) = st.db.agent_get(id) {

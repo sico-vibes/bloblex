@@ -4,7 +4,7 @@ import { visibleApprovalMode } from '../approvalContract'
 import type { Agent, Project, Runtime, Session } from '../types'
 import type { AgentDraft, FieldErrors, StoredExecution } from './agentForm'
 import type { ExecutionSendGate } from '../executionContract'
-import { Archive, Check, ChevronLeft, Copy, Download, Trash2 } from 'lucide-react'
+import { Archive, Check, ChevronLeft, Copy, Download, Lock, Trash2 } from 'lucide-react'
 import { BotSaveBar, sectionDomId } from './BotPageChrome'
 import { BotWizard } from './BotWizard'
 import { labelize } from '../types'
@@ -125,7 +125,9 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
   const discardBody = mode === 'edit' && discard === 'revert' && changes.length
     ? 'These changes will be lost: ' + summarizeChanges(changes, 8) + '.'
     : discard === 'leave' && changes.length ? 'Unsaved changes: ' + summarizeChanges(changes, 8) + '.' : undefined
-  const renderSettings = (only?: BotSection[]) => <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} savedRuntimeId={agent?.runtimeId ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate}  sections={only} sessions={sessions} manager={agent?.systemRole === 'manager'} onOpenMemory={onOpenMemory} onOpenSkills={onOpenSkills} />
+  // FIX39 item 13: a locked bot's editor opens read-only behind a banner.
+  const lockedBot = mode === 'edit' && agent?.locked === true
+  const renderSettings = (only?: BotSection[]) => <BlobSettings draft={draft} runtimes={runtimes} projects={projects} errors={errors} execution={execution} agentId={agent?.id ?? null} savedRuntimeId={agent?.runtimeId ?? null} sessionId={latestSessionId} autoApprovals={mode === 'edit' ? blobActions : undefined} onDraftChange={onDraftChange} onExecutionGate={onExecutionGate}  sections={only} sessions={sessions} manager={agent?.systemRole === 'manager'} locked={lockedBot} onOpenMemory={onOpenMemory} onOpenSkills={onOpenSkills} />
   // A draft that already has a name (an import, a duplicate, a starter) is a review job, not a blank page.
   const [advanced, setAdvanced] = useState(() => mode === 'create' && draft.name.trim().length > 0)
   const wizardActive = mode === 'create' && !advanced
@@ -142,6 +144,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
           {!wizardActive && <>
           <BlobOverview draft={draft} runtime={runtime} session={session} connected={connected} model={execution.model} mode={mode} approvalMode={badgeMode} agentId={agent?.id ?? null} />
           {error && <p className="blob-page-notice error" role="alert">{error}</p>}
+          {lockedBot && <p className="blob-page-notice warning" role="status"><Lock size={15} aria-hidden="true" /> This {noun} is locked. Unlock it from the sidebar to change its settings.</p>}
           {remoteNotice && <p className="blob-page-notice" role="status">{remoteNotice}</p>}
           {localNotice && <p className="blob-page-notice error" role="alert">{localNotice}</p>}
           {bypassLine && <p className="blob-page-notice warning" role="status">Bypass is active for this {noun}. New requests are approved without asking.</p>}
@@ -159,7 +162,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
         </div>
       </div>
     </div>
-    {!wizardActive && <BotSaveBar mode={mode} noun={noun} dirty={dirty} saving={saving} changes={changes} invalidCount={invalid.length} saved={saved} canSubmit onSave={trySave} onDiscard={requestDiscard} />}
+    {!wizardActive && <BotSaveBar mode={mode} noun={noun} dirty={dirty} saving={saving} changes={changes} invalidCount={invalid.length} saved={saved} canSubmit={!lockedBot} onSave={trySave} onDiscard={requestDiscard} />}
     {discard && <ConfirmDialog title={discard === 'revert' ? 'Discard these changes?' : 'Discard unsaved changes?'} body={discardBody} confirmLabel="Discard" cancelLabel="Keep editing" onConfirm={confirmDiscard} onCancel={() => setDiscard(null)} />}
   </div>
 }

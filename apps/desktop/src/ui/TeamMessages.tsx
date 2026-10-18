@@ -110,12 +110,13 @@ export function AutoRetryNotice({ id, text, status, onCancel }: { id?: string; t
 }
 
 /** Header for a side conversation between two blobs: a centred pill with both blobs and its topic. */
-export function SideConversationHeader({ peer, peerName, target, targetName, topic }: { peer: Agent | null | undefined; peerName: string; target: Agent | null | undefined; targetName: string; topic?: string | null }) {
+export function SideConversationHeader({ peer, peerName, target, targetName, topic, permission }: { peer: Agent | null | undefined; peerName: string; target: Agent | null | undefined; targetName: string; topic?: string | null; permission?: ReactNode }) {
   return <div className="side-header" aria-label={`Side conversation between ${peerName} and ${targetName}${topic ? `: ${topic}` : ''}`}>
     <span className="side-header-pill">
       <span className="side-header-pair"><MiniBlob agent={peer} name={peerName} size={20} /><b style={accentOf(peer)}>{peerName}</b><ArrowLeftRight size={13} aria-hidden="true" /><MiniBlob agent={target} name={targetName} size={20} /><b style={accentOf(target)}>{targetName}</b></span>
       {topic && <span className="side-header-topic" title={topic}>{topic}</span>}
     </span>
+    {permission}
   </div>
 }
 

@@ -40,6 +40,9 @@ export const APPROVAL_MODE_COPY: Record<ApprovalMode, { label: string; title: st
   bypass: { label: 'Full access', title: 'Full access', detail: 'The agent acts without asking. Use only in projects you trust.' },
 }
 
+/** FIX39 item 13: the one sentence a locked bot's disabled composer controls show. */
+export const LOCKED_CONTROL_TOOLTIP = 'This bot is locked. Unlock it to change its settings.'
+
 export function sessionApprovalMode(session: Session, agent: Agent | null): { mode: ApprovalMode; pinned: boolean } {
   const pinned = session.modelLock?.approvalMode
   if (pinned === 'ask' || pinned === 'auto' || pinned === 'bypass') return { mode: pinned, pinned: true }
@@ -53,11 +56,16 @@ function ModeIcon({ mode, size = 14 }: { mode: ApprovalMode; size?: number }) {
   return <Hand size={size} aria-hidden="true" />
 }
 
-export function PermissionModeControl({ session, agent, disabled, onSessionUpdated, onError }: {
+export function PermissionModeControl({ session, agent, disabled, locked = false, note, onSessionUpdated, onAgentUpdated, onError }: {
   session: Session
   agent: Agent | null
   disabled: boolean
+  /** FIX39 item 13: the bot is locked, so the pill explains why it cannot change. */
+  locked?: boolean
+  /** Replaces the menu's closing note (the side-conversation header says when the change lands). */
+  note?: string
   onSessionUpdated: (session: Session) => void
+  onAgentUpdated?: (agent: Agent) => void
   onError: (reason: unknown) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -75,14 +83,22 @@ export function PermissionModeControl({ session, agent, disabled, onSessionUpdat
   useEffect(() => { if (open) requestAnimationFrame(() => menuRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus()) }, [open])
   useEffect(() => { setOpen(false); setConfirmBypass(false) }, [session.id])
 
-  // The choice shows at once; the daemon's answer replaces it, and a failure puts the old mode back.
+  // FIX39 item 16: the choice always writes the bot's own setting, whether or
+  // not a conversation is open. An open conversation is then brought in line by
+  // clearing its own pin, so it follows the bot from the next turn. The bot's
+  // answer replaces the optimistic value, and a failure leaves the old one.
   const apply = async (next: ApprovalMode | null) => {
     const before = session
     setSaving(true)
-    onSessionUpdated({ ...before, modelLock: { ...(before.modelLock ?? {}), approvalMode: next ?? undefined } })
+    if (!agent) { setSaving(false); onError(new Error('Choose a bot first.')); return }
+    if (!before.id.startsWith('draft:')) onSessionUpdated({ ...before, modelLock: { ...(before.modelLock ?? {}), approvalMode: undefined } })
     try {
-      const result = await rpc<{ session?: Session }>('session.model.update', { sessionId: before.id, approvalMode: next })
-      if (result.session?.id === before.id) onSessionUpdated(result.session)
+      const updated = await rpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, approvalMode: next })
+      if (updated.agent?.id) onAgentUpdated?.(updated.agent)
+      if (!before.id.startsWith('draft:')) {
+        const result = await rpc<{ session?: Session }>('session.permissions.set', { sessionId: before.id, approvalMode: null })
+        if (result.session?.id === before.id) onSessionUpdated(result.session)
+      }
     } catch (reason) { onSessionUpdated(before); onError(reason) } finally { setSaving(false) }
   }
   const choose = (next: ApprovalMode) => {
@@ -92,10 +108,14 @@ export function PermissionModeControl({ session, agent, disabled, onSessionUpdat
     void apply(next === blobMode ? null : next)
   }
   const copy = APPROVAL_MODE_COPY[mode]
+  // FIX39 item 19: a mode the Manager proposed and the owner approved is marked
+  // so the side-conversation pill says who set it.
+  const managerSet = session.modelLock?.approvalModeSource === 'manager' && pinned
   return <div ref={rootRef} className="composer-popover-anchor">
-    <button ref={triggerRef} type="button" className={`composer-pill permission-pill mode-${mode}`} aria-haspopup="menu" aria-expanded={open} aria-label={`Permissions: ${copy.title}${pinned ? ', set for this conversation' : `, ${noun} default`}`} title={copy.detail} disabled={disabled || saving} onClick={() => setOpen((value) => !value)}>
+    <button ref={triggerRef} type="button" className={`composer-pill permission-pill mode-${mode}`} aria-haspopup="menu" aria-expanded={open} aria-label={`Permissions: ${copy.title}${pinned ? ', set for this conversation' : `, ${noun} default`}${managerSet ? ', set by the Manager' : ''}`} title={locked ? LOCKED_CONTROL_TOOLTIP : copy.detail} disabled={disabled || saving} onClick={() => setOpen((value) => !value)}>
       {saving ? <LoaderCircle size={14} className="spinning" aria-hidden="true" /> : <ModeIcon mode={mode} />}
       <span>{copy.label}</span>
+      {managerSet && <small className="permission-pill-source">set by the Manager</small>}
       <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
     </button>
     {open && <div ref={menuRef} className="composer-menu permission-menu align-left" role="menu" aria-label="Permissions for this conversation" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
@@ -105,9 +125,9 @@ export function PermissionModeControl({ session, agent, disabled, onSessionUpdat
         <span className="composer-menu-text"><strong>{APPROVAL_MODE_COPY[item].title}{item === blobMode && <small className="composer-menu-tag">{Noun} default</small>}</strong><small>{APPROVAL_MODE_COPY[item].detail}</small></span>
         {item === mode && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
       </button>)}
-      <p className="composer-menu-note">Applies to this conversation only.</p>
+      <p className="composer-menu-note">{note ?? `Applies to this ${noun} from now on.`}</p>
     </div>}
-    {confirmBypass && <ConfirmDialog title="Give this conversation full access?" body={`The agent will run commands and change files without asking you. Cancel and Pause all still stop it. The ${noun}'s own setting is unchanged.`} confirmLabel="Allow full access" cancelLabel="Keep asking" onConfirm={() => { setConfirmBypass(false); void apply(blobMode === 'bypass' ? null : 'bypass') }} onCancel={() => setConfirmBypass(false)} />}
+    {confirmBypass && <ConfirmDialog title="Give this conversation full access?" body={`The agent will run commands and change files without asking you. Cancel and Pause all still stop it. This is the ${noun}'s own setting, so every conversation is affected.`} confirmLabel="Allow full access" cancelLabel="Keep asking" onConfirm={() => { setConfirmBypass(false); void apply(blobMode === 'bypass' ? null : 'bypass') }} onCancel={() => setConfirmBypass(false)} />}
   </div>
 }
 

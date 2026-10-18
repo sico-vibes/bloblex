@@ -2,7 +2,7 @@
 // the fields you can change before you approve. Nothing happens until you
 // choose Approve; Reject tells the Manager no.
 import { useState } from 'react'
-import { BookOpen, Bot, FolderPlus, ListChecks, Pencil, UserCog } from 'lucide-react'
+import { BookOpen, Bot, FolderPlus, ListChecks, Pencil, ShieldCheck, UserCog } from 'lucide-react'
 import type { JsonRecord, PermissionRequest, Project } from '../types'
 import { openProjectFolder, rpc } from '../tauri'
 import { Select } from './Select'
@@ -18,6 +18,7 @@ const KIND_LABEL: Record<string, { title: string; Icon: typeof Bot }> = {
   task: { title: 'Assign a task', Icon: ListChecks },
   playbook: { title: 'Update its playbook', Icon: BookOpen },
   profile: { title: 'Change something it knows about you', Icon: UserCog },
+  permission: { title: 'Change a conversation\'s permission', Icon: ShieldCheck },
 }
 
 const text = (value: unknown) => typeof value === 'string' ? value : ''
@@ -132,6 +133,13 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
           <div className="proposal-field"><span>About</span><p className="proposal-value">{[text(draft.category), text(draft.key)].filter(Boolean).join(' · ')}</p></div>
         </div>
         {field('value', 'New value', { multiline: true, max: 1000 })}
+      </>}
+      {kind === 'permission' && <>
+        <div className="proposal-row">
+          <div className="proposal-field"><span>Conversation</span><p className="proposal-value mono">{text(draft.conversation)}</p></div>
+          <div className="proposal-field"><span>Permission</span><p className="proposal-value">{text(draft.mode) === 'auto' ? 'Auto' : 'Ask first'}</p></div>
+        </div>
+        <p className="proposal-hint">Applies from that conversation's next turn. Full access can never be set this way.</p>
       </>}
     </div>
     <footer className="proposal-actions">

@@ -20,6 +20,11 @@
 .team-row.dragging { opacity: .6; }
 .team-row-avatar { position: relative; flex: 0 0 auto; display: grid; place-items: center; }
 .leader-badge { position: absolute; right: 1px; bottom: 2px; width: 15px; height: 15px; display: grid; place-items: center; color: #fff; border: 2px solid var(--surface-sidebar); border-radius: 50%; background: linear-gradient(160deg, #ffad42, #f27a1a); box-shadow: 0 1px 2px #0000004d; }
+/* FIX39 item 13: the locked-bot badge. Neutral (not the Manager's orange) and
+   top-left, so it never collides with the Manager's star (both never show). */
+.lock-badge { position: absolute; left: 1px; top: 2px; width: 15px; height: 15px; display: grid; place-items: center; color: var(--text-1); border: 2px solid var(--surface-sidebar); border-radius: 50%; background: var(--surface-subtle); box-shadow: 0 1px 2px #0000004d; }
+.team-row.selected .lock-badge { border-color: var(--surface-selected); }
+:root[data-theme="light"] .team-row.selected .lock-badge { border-color: #ffffff; }
 .team-row-name { min-width: 0; flex: 1; display: flex; align-items: center; gap: 5px; }
 /* The runtime logo sits on the name's line: a flex box as tall as the mark, so
    `align-items: center` puts its centre on the name's centre in both looks. */
@@ -181,6 +186,17 @@
 .chat-title .role-chip { height: 20px; margin-left: 6px; padding: 0 7px; display: inline-flex; align-items: center; line-height: 1; }
 .chat-title .conversation-auto-title { flex: 0 1 auto; height: 16px; margin-left: 10px; padding-left: 10px; display: inline-flex; align-items: center; border-left: 1px solid var(--line-strong); line-height: 1; }
 .chat-title > .side-menu-wrap { margin-left: 8px; display: inline-flex; align-items: center; }
+
+/* FIX39 P5 follow-up: the header title yields to the action side. Every part of
+   the title shrinks and truncates first, so the update badge can never cover it
+   at any window width. `.chat-title > *` above is `flex: 0 0 auto`; the two
+   text-bearing parts opt out. */
+.chat-title > .conversation-crumb { flex: 0 1 auto; }
+.chat-title > .chat-title-button { flex: 0 1 auto; }
+.chat-title > .role-chip { flex: 0 1 auto; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+
+/* FIX39 item 19: the side-conversation pill says when the Manager set the mode. */
+.permission-pill > .permission-pill-source { min-width: 0; margin-left: 2px; padding-left: 6px; overflow: hidden; color: var(--text-3); border-left: 1px solid var(--line-strong); font-size: var(--fs-2xs); font-weight: 400; text-overflow: ellipsis; }
 
 /* Plan card as a checklist once steps have been carried out. */
 .plan-card-count { margin-left: auto; color: var(--text-3); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; }

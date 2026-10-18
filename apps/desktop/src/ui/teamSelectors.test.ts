@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Project, Session } from '../types'
-import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
+import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sideSessionsFor, sidebarSubtitle, splitMentions, splitReferences } from './teamSelectors'
 
 const agent = (id: string, name: string, extra: Partial<Agent> = {}): Agent => ({ id, name, description: '', instructions: '', color: 'mint', runtimeId: 'rt', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', ...extra })
 const session = (id: string, extra: Partial<Session> = {}): Session => ({ id, runtimeId: 'rt', updatedAt: '2026-10-01T00:00:00Z', ...extra })
@@ -93,6 +93,23 @@ describe('conversationPlaceName', () => {
     expect(conversationPlaceName(session('s3', { agentId: 'a2', projectPath: String.raw`D:\code\bloblex` }), [casual], projects)).toBe('bloblex')
     expect(conversationPlaceName(session('s4', { agentId: 'a2', workspaceLabel: 'Casual' }), [casual], projects)).toBe('Casual')
     expect(conversationPlaceName(null, [], projects)).toBeNull()
+  })
+})
+
+describe('sidebarSubtitle (FIX39 item 12)', () => {
+  const models = [
+    { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5' },
+    { id: 'gpt-6', displayName: 'GPT-6' },
+  ] as const
+  it('names the catalog model and the effort, falling back to the saved id', () => {
+    expect(sidebarSubtitle({ model: 'claude-sonnet-5-5', thinking: 'high' }, 'claude', models)).toBe('Sonnet 5.5 · High')
+    expect(sidebarSubtitle({ model: 'unknown-model', thinking: 'low' }, 'codex', models)).toBe('unknown-model · Light')
+    expect(sidebarSubtitle({ model: 'claude-sonnet-5-5', thinking: null }, 'claude', models)).toBe('Sonnet 5.5')
+    expect(sidebarSubtitle({ model: 'gpt-6-luna', thinking: 'high' }, 'codex', null)).toBe('Luna 6 · High')
+  })
+  it('reads as a default when the bot has no model of its own', () => {
+    expect(sidebarSubtitle({ model: null, thinking: 'high' }, 'claude', models)).toBe('Default model')
+    expect(sidebarSubtitle({ model: '  ', thinking: null }, null, models)).toBe('Default model')
   })
 })
 

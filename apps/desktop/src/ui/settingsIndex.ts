@@ -2,10 +2,10 @@
 // group heading on that page, which the sheet scrolls to and flashes. Keep the
 // `group` strings equal to the `SettingsGroup title` values in SettingsSheet.
 
-export type SettingsPageName = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Updates'
+export type SettingsPageName = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Agents' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Updates'
 
 /** The page list, for anything that has to validate an incoming page name. */
-export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Remote', 'Agents', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Updates']
+export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Experimental', 'Remote', 'Agents', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Updates']
 
 /**
  * The page out of an open-settings event payload (C13): a known page name, or
@@ -46,8 +46,22 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'Remote', group: 'Safety', label: 'Approve requests from remote devices', keywords: 'permission approval remote security' },
   { page: 'Remote', group: 'Recent activity', label: 'Recent activity', keywords: 'log connections pairings approvals denied history' },
   { page: 'General', group: 'Editor', label: 'Editor executable', keywords: 'open files vscode notepad' },
-  { page: 'General', group: 'Experimental', label: 'Claude dynamic workflows and Ultracode', keywords: 'effort claude workflow' },
-  { page: 'General', group: 'Experimental', label: 'Usage tips', keywords: 'quota limit notice' },
+  { page: 'Experimental', group: 'Experimental', label: 'Claude dynamic workflows and Ultracode', keywords: 'effort claude workflow ultracode' },
+  { page: 'Experimental', group: 'Experimental', label: 'Usage tips', keywords: 'quota limit notice' },
+  { page: 'Experimental', group: 'Experimental', label: 'Usage bar', keywords: 'quota plan limits bottom window' },
+  { page: 'Experimental', group: 'Experimental', label: 'Runtime logos', keywords: 'claude codex opencode logo sidebar header' },
+  { page: 'Experimental', group: 'Experimental', label: 'Agent activity', keywords: 'steps commands files diffs tools' },
+  { page: 'Experimental', group: 'Experimental', label: 'Change review', keywords: 'diff keep revert files changed' },
+  { page: 'Experimental', group: 'Experimental', label: 'Message actions', keywords: 'react reply copy message' },
+  { page: 'Experimental', group: 'Experimental', label: 'Search all conversations', keywords: 'find messages history' },
+  { page: 'Experimental', group: 'Experimental', label: 'Automatic titles', keywords: 'name conversation first prompt' },
+  { page: 'Experimental', group: 'Experimental', label: 'Undo', keywords: 'archive delete eight seconds restore' },
+  { page: 'Experimental', group: 'Experimental', label: 'Shortcut sheet', keywords: 'keyboard shortcuts ctrl slash' },
+  { page: 'Experimental', group: 'Experimental', label: 'Automatic retry', keywords: 'overloaded rate limit continue' },
+  { page: 'Experimental', group: 'Experimental', label: 'Memory', keywords: 'remember notes recall facts' },
+  { page: 'Experimental', group: 'Experimental', label: 'Approval badge', keywords: 'taskbar tray windows waiting' },
+  { page: 'Experimental', group: 'Experimental', label: 'Model and effort under the name', keywords: 'sidebar subtitle model effort' },
+  { page: 'Experimental', group: 'Experimental', label: 'Lock a bot', keywords: 'lock unlock freeze settings badge' },
   { page: 'General', group: 'Power', label: 'Keep this computer awake', keywords: 'sleep power idle' },
   { page: 'General', group: 'Notifications', label: 'Notifications', keywords: 'alerts toast approval' },
   { page: 'Agents', group: 'Approvals', label: 'Default approval mode', keywords: 'permissions ask auto bypass' },

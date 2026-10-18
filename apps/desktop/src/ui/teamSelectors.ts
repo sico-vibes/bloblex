@@ -1,6 +1,8 @@
 // Pure helpers for the project-first team layout: one main conversation per
 // blob, side conversations between blobs, and project grouping.
 import type { Agent, ChatMessage, Project, Session } from '../types'
+import { presentedModelName } from './modelPresentation'
+import { labelizeEffort } from './effortLabels'
 
 const BUSY = ['starting', 'working', 'cancelling', 'waiting_permission']
 
@@ -51,6 +53,25 @@ export function conversationPreview(session: Session | null | undefined): string
     if (text) return role === 'user' && !message.meta ? `You: ${text}` : text
   }
   return null
+}
+
+/**
+ * FIX39 item 12: the line under a bot's name when the model-line experiment is
+ * on. It shows the bot's own model and effort (idle bots only; a busy bot still
+ * shows its status). No model reads "Default model". The catalog supplies the
+ * friendly name; without it the saved id is shown unchanged.
+ */
+export function sidebarSubtitle(
+  agent: Pick<Agent, 'model' | 'thinking'>,
+  provider: string | null | undefined,
+  models: readonly { id: string; displayName: string }[] | null | undefined,
+): string {
+  const wanted = typeof agent.model === 'string' && agent.model.trim() ? agent.model.trim() : null
+  if (!wanted) return 'Default model'
+  const match = models?.find((model) => model.id === wanted)
+  const label = presentedModelName(provider ?? '', match ?? { id: wanted, displayName: wanted })
+  const effort = typeof agent.thinking === 'string' && agent.thinking.trim() ? labelizeEffort(agent.thinking.trim(), provider ?? '') : null
+  return effort ? `${label} · ${effort}` : label
 }
 
 /** True for Bitbots' own per-bot folder (`<data>/workspaces/<id>`), which is not a name people know. */

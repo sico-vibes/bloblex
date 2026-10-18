@@ -40,11 +40,13 @@ function openCredit() {
  * The blob's look: a live stage that previews moods, then shape, fine-tuning
  * and colour. Every change is a draft until the page is saved.
  */
-export function LookEditor({ look, color, colorHex, name, onLookChange, onColorChange }: {
+export function LookEditor({ look, color, colorHex, name, locked = false, onLookChange, onColorChange }: {
   look: BlobLook
   color: string
   colorHex: string
   name: string
+  /** FIX39 item 13 / P5 audit: every control here is inert while the bot is locked. */
+  locked?: boolean
   /** An optional colour is saved with the look in the same draft update. */
   onLookChange: (look: BlobLook, color?: string) => void
   onColorChange: (color: string) => void
@@ -81,19 +83,19 @@ export function LookEditor({ look, color, colorHex, name, onLookChange, onColorC
         <div className="look-stage-floor" aria-hidden="true" />
       </div>
       <div className="look-moods" role="radiogroup" aria-label="Preview mood">
-        {PREVIEW_MOODS.map((item) => <button key={item.mood} type="button" role="radio" aria-checked={mood === item.mood} className={mood === item.mood ? 'active' : undefined} onClick={() => setMood(item.mood)}>{item.label}</button>)}
+        {PREVIEW_MOODS.map((item) => <button key={item.mood} type="button" role="radio" aria-checked={mood === item.mood} disabled={locked} className={mood === item.mood ? 'active' : undefined} onClick={() => setMood(item.mood)}>{item.label}</button>)}
       </div>
       <div className="look-stage-actions">
         {bitbots
-          ? <button type="button" className="ghost-button small" onClick={surprise} title="New colours, same outline"><Dices size={13} />Surprise me</button>
+          ? <button type="button" className="ghost-button small" disabled={locked} onClick={surprise} title="New colours, same outline"><Dices size={13} />Surprise me</button>
           : <>
-            <button type="button" className="ghost-button small" onClick={() => onLookChange(shuffleLook(look))} title="New eyes, same shape"><Shuffle size={13} />Shuffle</button>
-            <button type="button" className="ghost-button small" onClick={surprise} title="New eyes and colour, same shape"><Dices size={13} />Surprise me</button>
+            <button type="button" className="ghost-button small" disabled={locked} onClick={() => onLookChange(shuffleLook(look))} title="New eyes, same shape"><Shuffle size={13} />Shuffle</button>
+            <button type="button" className="ghost-button small" disabled={locked} onClick={surprise} title="New eyes and colour, same shape"><Dices size={13} />Surprise me</button>
           </>}
       </div>
     </div>
 
-    {bitbots ? <div className="look-panel"><BotEditor look={look} color={color} colorHex={colorHex} onLookChange={onLookChange} onColorChange={onColorChange} /></div> : <div className="look-panel">
+    {bitbots ? <div className="look-panel"><BotEditor look={look} color={color} colorHex={colorHex} locked={locked} onLookChange={onLookChange} onColorChange={onColorChange} /></div> : <div className="look-panel">
       <div className="look-tabs" role="tablist" aria-label="Look">
         {TABS.map((item, index) => <button
           key={item.id}
@@ -103,6 +105,7 @@ export function LookEditor({ look, color, colorHex, name, onLookChange, onColorC
           aria-selected={tab === item.id}
           aria-controls={`${tabsId}-${item.id}-panel`}
           tabIndex={tab === item.id ? 0 : -1}
+          disabled={locked}
           className={tab === item.id ? 'active' : undefined}
           onClick={() => setTab(item.id)}
           onKeyDown={(event) => onTabKey(event, index)}
@@ -111,18 +114,18 @@ export function LookEditor({ look, color, colorHex, name, onLookChange, onColorC
 
       <div className="look-tab-panel" role="tabpanel" id={`${tabsId}-${tab}-panel`} aria-labelledby={`${tabsId}-${tab}`}>
         {tab === 'style' && <>
-          <ShapeGrid look={look} colorHex={colorHex} onChange={(shape) => onLookChange({ ...look, shape })} />
+          <ShapeGrid look={look} colorHex={colorHex} locked={locked} onChange={(shape) => onLookChange({ ...look, shape })} />
           <p className="look-credit">Shapes adapted from <button type="button" className="link-button" onClick={openCredit}>blobatar</button> by Alain · MIT</p>
-          <div className="look-colour"><span className="look-section-label">Colour</span><SwatchGrid value={color} onChange={onColorChange} /></div>
+          <div className="look-colour"><span className="look-section-label">Colour</span><SwatchGrid value={color} onChange={onColorChange} disabled={locked} /></div>
         </>}
-        {tab === 'tune' && <TuneControls look={look} onChange={onLookChange} />}
+        {tab === 'tune' && <TuneControls look={look} locked={locked} onChange={onLookChange} />}
       </div>
 
     </div>}
   </div>
 }
 
-function ShapeGrid({ look, colorHex, onChange }: { look: BlobLook; colorHex: string; onChange: (shape: BlobShape) => void }) {
+function ShapeGrid({ look, colorHex, locked = false, onChange }: { look: BlobLook; colorHex: string; locked?: boolean; onChange: (shape: BlobShape) => void }) {
   const Noun = useEntityNoun({ capital: true })
   const move = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     const columns = 4
@@ -144,6 +147,7 @@ function ShapeGrid({ look, colorHex, onChange }: { look: BlobLook; colorHex: str
         data-shape={shape}
         aria-checked={selected}
         tabIndex={selected ? 0 : -1}
+        disabled={locked}
         className={`look-shape${selected ? ' selected' : ''}`}
         onClick={() => onChange(shape)}
         onKeyDown={(event) => move(event, index)}
@@ -155,7 +159,7 @@ function ShapeGrid({ look, colorHex, onChange }: { look: BlobLook; colorHex: str
   </div>
 }
 
-function TuneControls({ look, onChange }: { look: BlobLook; onChange: (look: BlobLook) => void }) {
+function TuneControls({ look, locked = false, onChange }: { look: BlobLook; locked?: boolean; onChange: (look: BlobLook) => void }) {
   const noun = useEntityNoun()
   const groups = controlsFor(look.shape)
   const pinned = look.traits ?? {}
@@ -163,16 +167,16 @@ function TuneControls({ look, onChange }: { look: BlobLook; onChange: (look: Blo
   return <div className="look-tune">
     {groups.map((group) => <fieldset key={group.title} className="look-tune-group">
       <legend>{group.title}</legend>
-      {group.controls.map((control) => <TraitSlider key={controlKey(control)} look={look} control={control} pinned={keysOf(control).some((key) => key in pinned)} onChange={onChange} />)}
+      {group.controls.map((control) => <TraitSlider key={controlKey(control)} look={look} control={control} pinned={keysOf(control).some((key) => key in pinned)} locked={locked} onChange={onChange} />)}
     </fieldset>)}
     <div className="look-tune-footer">
       <span>Untouched sliders follow the {noun}'s own seed. Shuffle to roll a new one.</span>
-      <button type="button" className="ghost-button small" disabled={Object.keys(pinned).length === 0} onClick={reset}><RotateCcw size={13} />Reset tweaks</button>
+      <button type="button" className="ghost-button small" disabled={locked || Object.keys(pinned).length === 0} onClick={reset}><RotateCcw size={13} />Reset tweaks</button>
     </div>
   </div>
 }
 
-function TraitSlider({ look, control, pinned, onChange }: { look: BlobLook; control: LookControl; pinned: boolean; onChange: (look: BlobLook) => void }) {
+function TraitSlider({ look, control, pinned, locked = false, onChange }: { look: BlobLook; control: LookControl; pinned: boolean; locked?: boolean; onChange: (look: BlobLook) => void }) {
   const id = useId()
   const [first] = keysOf(control)
   const value = traitPosition(look, first)
@@ -189,11 +193,12 @@ function TraitSlider({ look, control, pinned, onChange }: { look: BlobLook; cont
       min={0}
       max={1}
       step={0.01}
+      disabled={locked}
       value={Math.min(1, Math.round(value * 100) / 100)}
       style={{ ['--fill' as string]: `${value * 100}%` }}
       onChange={(event) => onChange(withTrait(look, control.keys, Number(event.target.value)))}
     />
-    <button type="button" className="look-slider-reset" aria-label={`Reset ${control.label.toLowerCase()}`} title="Back to the seed" disabled={!pinned} onClick={unpin}><RotateCcw size={11} /></button>
+    <button type="button" className="look-slider-reset" aria-label={`Reset ${control.label.toLowerCase()}`} title="Back to the seed" disabled={locked || !pinned} onClick={unpin}><RotateCcw size={11} /></button>
   </div>
 }
 

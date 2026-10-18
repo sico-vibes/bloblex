@@ -204,7 +204,7 @@ describe('session execution controls', () => {
 
   it('keeps an in-flight save owned by session A across A to B to A and ignores its stale result', async () => {
     let resolveSave!: (value: { session: Session }) => void
-    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? catalog : await new Promise((resolve) => { resolveSave = resolve }))
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? catalog : method === 'agent.update' ? { agent } : await new Promise((resolve) => { resolveSave = resolve }))
     const onSessionUpdated = vi.fn()
     const host = document.createElement('div'); document.body.append(host)
     const root = createRoot(host)
@@ -410,5 +410,76 @@ describe('effort availability', () => {
     await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
     expect(host.querySelector('.session-effort-note')?.textContent).toContain('Bitbots did not enable workflows for this conversation')
     expect(host.querySelector('.session-effort-note')?.textContent).toContain('new conversations')
+  })
+})
+
+// FIX39 item 13 / P5 audit S2: a locked bot's composer controls are disabled
+// and say why.
+describe('locked bot execution controls', () => {
+  it('disables the model, effort and fast controls and puts the lock sentence on them', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? catalog : {})
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={session} agent={{ ...agent, locked: true }} locked onSessionUpdated={() => undefined} onError={() => undefined} />))
+    mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const lock = 'This bot is locked. Unlock it to change its settings.'
+    const model = host.querySelector<HTMLButtonElement>('.model-pill')!
+    expect(model.disabled).toBe(true)
+    expect(model.getAttribute('title')).toBe(lock)
+    const effort = host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
+    expect(effort.disabled).toBe(true)
+    expect(effort.getAttribute('title')).toBe(lock)
+    // The fast-mode row is unreachable too.
+    expect(host.querySelector('[role="menu"]')).toBeNull()
+    await act(async () => { model.click() })
+    expect(host.querySelector('[role="menu"]')).toBeNull()
+  })
+
+  it('keeps the runtime-specific effort reason instead of the lock sentence', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? { ...catalog, provider:'opencode' } : method === 'runtime.capabilities' ? { settings:{ thinking:{ supported:true, enabled:false } } } : {})
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={session} agent={{ ...agent, locked: true }} locked onSessionUpdated={() => undefined} onError={() => undefined} />))
+    mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    const effort = host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
+    expect(effort.getAttribute('aria-disabled')).toBe('true')
+    expect(effort.getAttribute('title')).toBeNull()
+    expect(document.body.querySelector('.tip-bubble')?.textContent).toContain("OpenCode doesn't let Bitbots pick an effort level")
+  })
+})
+
+// FIX39 item 16: a bot's first conversation is a local draft, so the composer
+// writes the bot and never sends the draft id to the daemon.
+describe('draft conversation writes the bot', () => {
+  const draft: Session = { id: 'draft:agent', runtimeId: 'runtime', agentId: 'agent', state: 'idle', messages: [] }
+
+  it('writes the bot without a confirmation dialog and never calls session.model.update', async () => {
+    rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => method === 'runtime.models' ? catalog : method === 'agent.update' ? { agent: { ...agent, model: params.model } } : {})
+    const onAgentUpdated = vi.fn()
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={draft} agent={agent} onAgentUpdated={onAgentUpdated} onSessionUpdated={() => undefined} onError={() => undefined} />))
+    mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { host.querySelector<HTMLButtonElement>('.model-pill')!.click() })
+    await act(async () => { host.querySelector<HTMLElement>('[role="menuitemradio"][data-value="beta"]')!.click(); await Promise.resolve(); await Promise.resolve() })
+    expect(host.querySelector('[role="dialog"]')).toBeNull()
+    expect(rpc).toHaveBeenCalledWith('agent.update', { agentId: 'agent', model: 'beta', thinking: null })
+    expect(rpc).not.toHaveBeenCalledWith('session.model.update', expect.anything())
+    expect(onAgentUpdated).toHaveBeenCalledWith(expect.objectContaining({ id: 'agent', model: 'beta' }))
+  })
+
+  it('never sends a draft id to runtime.models or runtime.capabilities', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? catalog : method === 'runtime.capabilities' ? { settings: {} } : {})
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={draft} agent={agent} onSessionUpdated={() => undefined} onError={() => undefined} />))
+    mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const params = rpc.mock.calls.filter(([method]) => method === 'runtime.models' || method === 'runtime.capabilities').map(([, value]) => value)
+    expect(params.length).toBeGreaterThan(0)
+    for (const value of params) expect(value).not.toHaveProperty('sessionId')
   })
 })

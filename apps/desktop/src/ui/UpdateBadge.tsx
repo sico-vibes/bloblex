@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { RotateCw } from 'lucide-react'
 import {
-  BADGE_FAILED_LABEL, BADGE_RESTART_LABEL, IDLE_UPDATE_PHASE,
+  BADGE_FAILED_LABEL, BADGE_RESTART_LABEL, BADGE_RESTART_SHORT_LABEL, IDLE_UPDATE_PHASE,
   describeUpdatePhase, type UpdatePhaseState,
 } from '../updatesContract'
 
@@ -46,8 +47,31 @@ export function useUpdatePhase(): UpdatePhaseState {
   return state
 }
 
+/**
+ * FIX39 P5 follow-up: below this width the header title and the update badge
+ * compete for the same line, so the badge shrinks to an icon and a short label.
+ * The title also truncates first (team.css), so the badge can never cover it.
+ */
+export const COMPACT_BADGE_QUERY = '(max-width: 1180px)'
+
+function useCompactUpdateBadge(): boolean {
+  const [compact, setCompact] = useState(() => {
+    try { return window.matchMedia(COMPACT_BADGE_QUERY).matches } catch { return false }
+  })
+  useEffect(() => {
+    let media: MediaQueryList
+    try { media = window.matchMedia(COMPACT_BADGE_QUERY) } catch { return }
+    const onChange = () => setCompact(media.matches)
+    onChange()
+    media.addEventListener?.('change', onChange)
+    return () => media.removeEventListener?.('change', onChange)
+  }, [])
+  return compact
+}
+
 export function UpdateBadge() {
   const state = useUpdatePhase()
+  const compact = useCompactUpdateBadge()
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
 
@@ -77,14 +101,17 @@ export function UpdateBadge() {
   const tooltip = state.version ? `Bitbots ${state.version}` : 'Bitbots update'
 
   if (state.phase === 'downloading') {
-    return <span className="update-badge is-downloading" data-update-badge="downloading" role="status" aria-label={label} title={tooltip}>
+    // FIX39 P5 follow-up: at a narrow window the badge keeps only the ring and a
+    // short label, so it can never reach the conversation title.
+    const short = percent == null ? 'Updating…' : `${percent}%`
+    return <span className={`update-badge is-downloading${compact ? ' is-compact' : ''}`} data-update-badge="downloading" role="status" aria-label={label} title={tooltip}>
       <ProgressRing percent={percent} />
-      <span className="update-badge-label">{label}</span>
+      <span className="update-badge-label">{compact ? short : label}</span>
     </span>
   }
 
   if (state.phase === 'ready') {
-    return <button type="button" className="update-badge-button primary-button small" data-update-badge="ready" title={tooltip} disabled={busy} onClick={() => void restart()}>{BADGE_RESTART_LABEL}</button>
+    return <button type="button" className={`update-badge-button primary-button small${compact ? ' is-compact' : ''}`} data-update-badge="ready" title={compact ? `${BADGE_RESTART_LABEL} — ${tooltip}` : tooltip} aria-label={BADGE_RESTART_LABEL} disabled={busy} onClick={() => void restart()}>{compact && <RotateCw size={13} aria-hidden="true" />}{compact ? BADGE_RESTART_SHORT_LABEL : BADGE_RESTART_LABEL}</button>
   }
 
   if (state.phase === 'error') {

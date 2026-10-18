@@ -497,6 +497,33 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     notifyFixtureDaemon('session.changed', { session: { ...session } })
     return { session: { ...session }, modelChanged } as T
   }
+  // FIX39 item 19: the side-conversation permission pill in the browser preview.
+  if (method === 'session.permissions.set') {
+    const session = sessions.find((item) => item.id === params.sessionId)
+    if (!session) throw rpcError('not_found', 'Conversation not found.')
+    if (session.link?.kind === 'automation') throw rpcError('conflict', "A scheduled run's permission mode is fixed by the schedule.")
+    const approval = params.approvalMode
+    if (approval !== null && !['ask', 'auto', 'bypass'].includes(String(approval))) throw rpcError('invalid_argument', 'approvalMode must be ask, auto, bypass or null')
+    const nextLock: NonNullable<Session['modelLock']> = { ...(session.modelLock ?? {}) }
+    if (approval === null) { delete nextLock.approvalMode; delete nextLock.approvalModeSource }
+    else { nextLock.approvalMode = approval as 'ask' | 'auto' | 'bypass'; delete nextLock.approvalModeSource }
+    session.modelLock = nextLock
+    session.updatedAt = new Date().toISOString()
+    notifyFixtureDaemon('session.changed', { session: { ...session } })
+    return { session: { ...session } } as T
+  }
+  // FIX39 item 13: Lock and Unlock in the preview, so the badge, the read-only
+  // editor and the disabled composer pills can be looked at without a daemon.
+  if (method === 'agent.lock.set') {
+    const agent = agents.find((item) => item.id === params.agentId)
+    if (!agent) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
+    if (agent.systemRole === 'manager' && params.locked === true) throw rpcError('conflict', `The Manager cannot be locked.`)
+    const updated: Agent = { ...agent, locked: params.locked === true, updatedAt: new Date().toISOString() }
+    agents = sortAgents(agents.map((item) => item.id === updated.id ? updated : item))
+    sequence += 1
+    notifyFixtureDaemon('agent.changed', { agent: updated })
+    return { agent: updated } as T
+  }
   if (method === 'message.reaction.toggle') {
     const session = sessions.find((item) => item.id === params.sessionId)
     if (!session || session.archived || session.link?.kind === 'side') throw rpcError('not_found', 'Message conversation is unavailable.')

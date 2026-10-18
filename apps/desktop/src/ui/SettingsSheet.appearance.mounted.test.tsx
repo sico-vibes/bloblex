@@ -51,7 +51,7 @@ describe('General settings mounted controls', () => {
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     const onExperimentChange = vi.fn()
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onExperimentChange={onExperimentChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" onExperimentChange={onExperimentChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const toggle = host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!
     expect(toggle.getAttribute('aria-checked')).toBe('false')
@@ -68,7 +68,7 @@ describe('General settings mounted controls', () => {
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     const onUsageBarChange = vi.fn()
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" usageBarEnabled={false} onUsageBarChange={onUsageBarChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" usageBarEnabled={false} onUsageBarChange={onUsageBarChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const group = [...host.querySelectorAll('.settings-group')].find((section) => section.querySelector('h3')?.textContent === 'Experimental')
     expect(group?.querySelector('.experimental-tag')?.textContent).toBe('Experimental')
@@ -86,7 +86,7 @@ describe('General settings mounted controls', () => {
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     const changed = vi.fn()
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" claudeWorkflowsEnabled={false} onClaudeWorkflowsChange={changed} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" claudeWorkflowsEnabled={false} onClaudeWorkflowsChange={changed} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const toggle = host.querySelector<HTMLButtonElement>('[aria-label="Claude dynamic workflows"]')!
     expect(toggle.getAttribute('aria-checked')).toBe('false')
@@ -101,7 +101,7 @@ describe('General settings mounted controls', () => {
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     const onUsageTipsChange = vi.fn()
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" usageBarEnabled={false} usageTipsEnabled={false} onUsageTipsChange={onUsageTipsChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" usageBarEnabled={false} usageTipsEnabled={false} onUsageTipsChange={onUsageTipsChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const toggle = host.querySelector<HTMLButtonElement>('[aria-label="Usage tips"]')!
     expect(toggle.getAttribute('aria-checked')).toBe('false')
@@ -111,6 +111,25 @@ describe('General settings mounted controls', () => {
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'experimental.usageTips', value: true })
     expect(onUsageTipsChange).toHaveBeenCalledWith(true)
     expect(host.querySelector<HTMLButtonElement>('[aria-label="Usage bar"]')?.getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('moves the experimental toggles onto their own page and off General', async () => {
+    mocks.invoke.mockResolvedValue(true)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    // The page has its own nav entry and lists the moved toggles.
+    expect([...host.querySelectorAll('.settings-nav button')].map((button) => button.textContent)).toContain('Experimental')
+    const group = [...host.querySelectorAll('.settings-group')].find((section) => section.querySelector('h3')?.textContent === 'Experimental')
+    expect(group).toBeTruthy()
+    expect(group?.querySelector('[aria-label="Usage bar"]')).toBeTruthy()
+    expect(group?.querySelector<HTMLButtonElement>('[aria-label="Model and effort under the name"]')?.getAttribute('aria-checked')).toBe('false')
+    // General no longer carries the group.
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect([...host.querySelectorAll('.settings-group')].some((section) => section.querySelector('h3')?.textContent === 'Experimental')).toBe(false)
+    expect(host.querySelector('[aria-label="Usage bar"]')).toBeNull()
   })
 
   it('offers theme, text size, companion placement and hotkey controls, and persists appearance changes', async () => {

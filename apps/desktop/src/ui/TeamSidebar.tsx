@@ -1,7 +1,7 @@
 // Project-first sidebar: projects group blobs; each blob is one ongoing
 // conversation. Casual blobs (no project) live under "Unassigned".
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Archive, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Trash2, Copy as Duplicate, Download, Star } from 'lucide-react'
+import { Archive, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, Lock, LockOpen, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Trash2, Copy as Duplicate, Download, Star } from 'lucide-react'
 import type { Agent, Project, Runtime, Session } from '../types'
 import { agentLook } from '../blob/look'
 import { RuntimeMark } from './providerBrand'
@@ -10,7 +10,8 @@ import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
 import { RuntimeProblemMarker, runtimeProblem } from './RuntimeProblemMarker'
 import { shortTime } from './rosterSelectors'
-import { conversationPreview, groupAgentsByProject, isManager, mainSessionFor, managerOf, sessionIsBusy } from './teamSelectors'
+import { conversationPreview, groupAgentsByProject, isManager, mainSessionFor, managerOf, sessionIsBusy, sidebarSubtitle } from './teamSelectors'
+import { readCachedCatalogModels, useCatalogVersion } from './catalogCache'
 import { useEntityNoun } from './vocabulary'
 
 export type MenuItem = { label: string; icon?: ReactNode; onSelect?: () => void; disabled?: boolean; danger?: boolean; checked?: boolean; submenu?: MenuItem[] } | 'separator'
@@ -89,6 +90,8 @@ export type TeamSidebarActions = {
   /** Pointer drop: place the blob before or after another blob (same or another project). */
   onPlace: (agent: Agent, target: Agent, edge: 'before' | 'after') => void
   onSetHidden: (agent: Agent, hidden: boolean) => void
+  /** FIX39 item 13: lock or unlock the bot's settings. */
+  onToggleLock: (agent: Agent) => void
   onToggleUnread: (agent: Agent, session: Session | null, unread: boolean) => void
   onCopyConversationId: (agent: Agent, session: Session | null) => void
   onDeleteConversation: (agent: Agent, session: Session) => void
@@ -99,7 +102,7 @@ export type TeamSidebarActions = {
   onOpenRuntimeSettings: () => void
 }
 
-export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner }: {
+export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, sidebarModel = false, botLock = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner }: {
   /** A card shown between the search box and the bots (Manager setup). */
   banner?: ReactNode
   agents: Agent[]
@@ -108,6 +111,10 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   runtimes: Runtime[]
   /** Experimental: show each blob's runtime logo before its name. */
   runtimeLogos?: boolean
+  /** Experimental: show the bot's model and effort instead of the preview when idle. */
+  sidebarModel?: boolean
+  /** Experimental: offer Lock bot in the context menu (Unlock is always offered). */
+  botLock?: boolean
   connected: boolean
   now: number
   pinnedIds: string[]
@@ -120,6 +127,10 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   const noun = useEntityNoun()
   const nouns = useEntityNoun({ plural: true })
   const Nouns = useEntityNoun({ plural: true, capital: true })
+  // FIX39 item 12 / P5 audit S7: subscribe to the shared catalog cache so a row
+  // painted before the catalog arrived shows the model's display name once it
+  // lands (the value below is still read synchronously).
+  useCatalogVersion()
   const [showHidden, setShowHidden] = useState(false)
   const [menu, setMenu] = useState<{ kind: 'blob'; agent: Agent; x: number; y: number } | { kind: 'project'; project: Project; x: number; y: number } | { kind: 'move'; agent: Agent; x: number; y: number } | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
@@ -143,6 +154,8 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     const session = mainSessionFor(sessions, agent.id)
     const unread = !!session && unreadSessionIds.has(session.id)
     const isPinned = pinnedIds.includes(agent.id)
+    // The Manager can never be locked, so its menu never shows a lock entry.
+    const locked = agent.locked === true && !isManager(agent)
     // The Manager stays pinned at the top, works across every project and can't be removed.
     if (isManager(agent)) return [
       { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? <MailOpen size={15} /> : <Mail size={15} />, disabled: !session, onSelect: () => actions.onToggleUnread(agent, session, !unread) },
@@ -153,7 +166,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     ]
     return [
       { label: isPinned ? 'Unpin' : 'Pin', icon: isPinned ? <PinOff size={15} /> : <Pin size={15} />, onSelect: () => actions.onTogglePin(agent.id) },
-      { label: 'Move to', icon: <FolderInput size={15} />, submenu: [
+      { label: 'Move to', icon: <FolderInput size={15} />, disabled: locked, submenu: [
         ...projects.map((project) => ({ label: project.name, icon: <Folder size={15} />, checked: agent.projectId === project.id, onSelect: () => actions.onMove(agent, project.id) })),
         { label: 'Unassigned', icon: <FolderOpen size={15} />, checked: !agent.projectId, onSelect: () => actions.onMove(agent, null) },
         'separator',
@@ -161,15 +174,18 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       ] },
       { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? <MailOpen size={15} /> : <Mail size={15} />, disabled: !session, onSelect: () => actions.onToggleUnread(agent, session, !unread) },
       'separator',
-      { label: `Rename ${noun}`, icon: <Pencil size={15} />, onSelect: () => actions.onRename(agent) },
-      { label: `Edit ${noun}`, icon: <Settings2 size={15} />, onSelect: () => actions.onEdit(agent) },
+      { label: `Rename ${noun}`, icon: <Pencil size={15} />, disabled: locked, onSelect: () => actions.onRename(agent) },
+      { label: `Edit ${noun}`, icon: <Settings2 size={15} />, disabled: locked, onSelect: () => actions.onEdit(agent) },
       { label: 'Duplicate', icon: <Duplicate size={15} />, onSelect: () => actions.onDuplicate(agent) },
       { label: `Export ${noun}…`, icon: <Download size={15} />, onSelect: () => actions.onExportBlob(agent) },
       { label: 'Copy conversation ID', icon: <Copy size={15} />, disabled: !session, onSelect: () => actions.onCopyConversationId(agent, session) },
       'separator',
       { label: 'Delete conversation…', icon: <Trash2 size={15} />, danger: true, disabled: !session || sessionIsBusy(session), onSelect: () => { if (session) actions.onDeleteConversation(agent, session) } },
       { label: agent.hidden ? 'Show in sidebar' : 'Hide from sidebar', icon: agent.hidden ? <Eye size={15} /> : <EyeOff size={15} />, onSelect: () => actions.onSetHidden(agent, !agent.hidden) },
-      { label: 'Archive', icon: <Archive size={15} />, danger: true, onSelect: () => actions.onArchive(agent) },
+      ...(locked || botLock ? [
+        { label: locked ? `Unlock ${noun}` : `Lock ${noun}`, icon: locked ? <LockOpen size={15} /> : <Lock size={15} />, onSelect: () => actions.onToggleLock(agent) },
+      ] as MenuItem[] : []),
+      { label: 'Archive', icon: <Archive size={15} />, danger: true, disabled: locked, onSelect: () => actions.onArchive(agent) },
     ]
   }
   const projectMenu = (project: Project): MenuItem[] => [
@@ -219,7 +235,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     const approval = !!session && approvalSessionIds.has(session.id)
     const waiting = String(session?.state ?? '') === 'waiting_permission'
     const working = sessionIsBusy(session) && !waiting
-    const preview = !connected ? 'Offline' : (status.mood === 'offline' || status.mood === 'error') ? status.label : waiting ? 'Waiting for you' : working ? status.label : conversationPreview(session) ?? (agent.description?.trim() || 'Say hi to get started')
+    const preview = !connected ? 'Offline' : (status.mood === 'offline' || status.mood === 'error') ? status.label : waiting ? 'Waiting for you' : working ? status.label : sidebarModel ? sidebarSubtitle(agent, runtime?.provider, readCachedCatalogModels(agent.runtimeId)) : conversationPreview(session) ?? (agent.description?.trim() || 'Say hi to get started')
     const runtimeIssue = runtimeProblem(runtime)
     return <button key={agent.id} type="button" role="treeitem" data-agent-id={agent.id} aria-current={selected ? 'true' : undefined} aria-selected={selected} aria-describedby={runtimeIssue ? `runtime-problem-${runtime!.id}-${agent.id}` : undefined}
       aria-label={`${agent.name}${agent.role ? `, ${agent.role}` : ''}${isManager(agent) ? ', Manager' : ''}${approval ? ', needs approval' : unread ? ', unread' : ''}`}
@@ -232,7 +248,9 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       onClick={() => { if (suppressClick.current) { suppressClick.current = false; return } actions.onSelect(agent) }}
       onContextMenu={(event) => { event.preventDefault(); openBlobMenu(agent, event.clientX, event.clientY, event.currentTarget) }}
       onPointerDown={(event) => {
-        if (event.button !== 0) return
+        // FIX39 item 13 / P5 audit F2: a locked bot is not draggable, so a drop
+        // onto Unassigned or another project cannot even ask the daemon.
+        if (event.button !== 0 || agent.locked === true) return
         drag.current = { id: agent.id, pointerId: event.pointerId, fromX: event.clientX, fromY: event.clientY, moved: false }
         try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* capture may be unavailable */ }
       }}
@@ -283,6 +301,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       <span className="team-row-avatar">
         <BlobCanvas color={agentColorHex(agent.color)} size={50} mood={status.mood} look={agentLook(agent)} label={agent.name} track={selected} />
         {isManager(agent) && <span className="leader-badge" title="Manager" aria-hidden="true"><Star size={10} fill="currentColor" strokeWidth={0} /></span>}
+        {agent.locked === true && <span className="lock-badge" title="Locked" aria-hidden="true"><Lock size={9} /></span>}
       </span>
       <span className="bot-row-copy">
         <span className="bot-row-line">

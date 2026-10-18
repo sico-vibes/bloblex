@@ -434,6 +434,17 @@ fn derr(code: &str, msg: &str, status: StatusCode) -> DispatchError {
     )
 }
 
+/// FIX39 item 13: is this bot locked by its owner?
+fn bot_is_locked(agent: &Value) -> bool {
+    agent["locked"].as_bool().unwrap_or(false)
+}
+
+/// The one refusal every settings write to a locked bot returns, so the UI and
+/// the Manager quote the same sentence.
+fn locked_bot_error() -> DispatchError {
+    derr("conflict", "This bot is locked. Unlock it to change its settings.", StatusCode::CONFLICT)
+}
+
 fn persist_runtime_discovery(
     db: &Storage,
     discovered: Vec<bloblex_runtime::DiscoveredRuntime>,
@@ -855,6 +866,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "agent.update" => {
             let id = p["agentId"].as_str().ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
             let existing = st.db.agent_get(id).map_err(agent_error)?;
+            // FIX39 item 13: a locked bot refuses every settings change.
+            if bot_is_locked(&existing) { return Err(locked_bot_error()); }
             let mut fields = p.clone();
             fields.as_object_mut().unwrap().remove("agentId");
             let runtime_id = fields["runtimeId"].as_str().unwrap_or(existing["runtimeId"].as_str().unwrap_or("")).to_owned();
@@ -875,7 +888,16 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.broadcast_persisted(events);
             Ok(json!({"agent":agent}))
         }
-        "agent.delete" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;if st.db.agent_get(id).map_err(agent_error)?["systemRole"].as_str()==Some("manager"){return Err(derr("conflict","The Manager can't be removed; you can rename it or change its model",StatusCode::CONFLICT));}let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;st.broadcast_persisted(events);automations::pause_for_agent(st, id).await;Ok(json!({"agent":agent})) }
+        "agent.delete" => {
+            let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;
+            let existing=st.db.agent_get(id).map_err(agent_error)?;
+            if existing["systemRole"].as_str()==Some("manager") { return Err(derr("conflict","The Manager can't be removed; you can rename it or change its model",StatusCode::CONFLICT)); }
+            if bot_is_locked(&existing) { return Err(locked_bot_error()); }
+            let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;
+            st.broadcast_persisted(events);
+            automations::pause_for_agent(st, id).await;
+            Ok(json!({"agent":agent}))
+        }
         "agent.reorder" => { let rt=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;let ids=p["agentIds"].as_array().filter(|a|a.iter().all(Value::is_string)).ok_or_else(||derr("invalid_argument","agentIds must be an array of strings",StatusCode::BAD_REQUEST))?.iter().map(|v|v.as_str().unwrap().to_owned()).collect::<Vec<_>>();let (agents,events)=st.db.agent_reorder(rt,&ids).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agents":agents})) }
         "app.snapshot" => st.db.snapshot().map_err(|e| {
             derr(
@@ -956,9 +978,20 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         }
         "agent.restore" => {
             let id = p["agentId"].as_str().ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
+            // FIX39 item 13: restoring a locked bot is a settings change too.
+            if st.db.agent_get(id).map(|agent| bot_is_locked(&agent)).unwrap_or(false) { return Err(locked_bot_error()); }
             let (agent, events) = st.db.agent_restore(id).map_err(agent_error)?;
             st.broadcast_persisted(events);
             Ok(json!({"agent":agent}))
+        }
+        "agent.lock.set" => {
+            let id = p["agentId"].as_str().ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
+            let locked = p["locked"].as_bool().ok_or_else(|| derr("invalid_argument", "locked must be a boolean", StatusCode::BAD_REQUEST))?;
+            // FIX39 item 13: locking and unlocking is the one write a locked bot
+            // still accepts, and the Manager can never be locked.
+            let (agent, events) = st.db.agent_set_locked(id, locked).map_err(agent_error)?;
+            st.broadcast_persisted(events);
+            Ok(json!({"agent": agent}))
         }
         "file.revert" => {
             let id = p["sessionId"].as_str().unwrap_or("");
@@ -1082,6 +1115,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "session.new" => new_session(st, p).await,
         "session.resume" => resume_session(st, p).await,
         "session.model.update" => update_session_model(st, p).await,
+        "session.permissions.set" => set_session_permissions(st, p).await,
         "session.prompt" => {
             // A user-sent prompt supersedes any pending automatic retry.
             if let Some(sid) = p["sessionId"].as_str().filter(|id| !id.is_empty()) {
@@ -1441,6 +1475,37 @@ fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,Dis
     Ok(options)
 }
 
+/// FIX39 item 19 / P5 audit F3: the conversation's own lock, written when the
+/// owner pins a permission for one conversation (or approves the Manager's
+/// proposal for it). The daemon requires `model` and `thinking` to be present,
+/// so they come from the conversation's effective options; Claude's dynamic
+/// workflow eligibility and the effective speed and plan mode ride along, so
+/// pinning a permission changes nothing else about the conversation. A lock
+/// that already exists is kept as is. `set_by` records who chose the mode
+/// (`"manager"` for an approved proposal) so the side-conversation pill can say
+/// so; `None` clears the mark, including when the mode itself is cleared.
+fn conversation_lock_for(st: &AppState, row: &Value, approval_mode: Option<&str>, set_by: Option<&str>) -> Result<Value, DispatchError> {
+    let mut lock = if row["modelLock"].get("model").is_some() && row["modelLock"].get("thinking").is_some() {
+        row["modelLock"].clone()
+    } else {
+        let current = exec_options_for_session(st, row)?;
+        let mut fresh = json!({"model": current.model, "thinking": current.thinking});
+        if row["provider"] == "claude" { fresh["enableWorkflows"] = json!(current.enable_workflows); }
+        if let Some(tier) = current.service_tier.clone() { fresh["serviceTier"] = json!(tier); }
+        if current.plan_mode { fresh["planMode"] = json!(true); }
+        fresh
+    };
+    let map = lock.as_object_mut().ok_or_else(|| derr("invalid_argument", "this conversation's settings are invalid", StatusCode::BAD_REQUEST))?;
+    match approval_mode {
+        Some(mode) => {
+            map.insert("approvalMode".into(), json!(mode));
+            match set_by { Some(source) => { map.insert("approvalModeSource".into(), json!(source)); } None => { map.remove("approvalModeSource"); } }
+        }
+        None => { map.remove("approvalMode"); map.remove("approvalModeSource"); }
+    }
+    Ok(lock)
+}
+
 async fn resolve_session_model_lock(
     st: &AppState,
     runtime: &Value,
@@ -1574,6 +1639,8 @@ async fn migrate_legacy_agent_models(st: &AppState, runtime_id: &str, catalog: &
     let provider = catalog["provider"].as_str().unwrap_or("");
     let agents = st.db.agent_list(true, Some(runtime_id)).map_err(agent_error)?;
     for agent in agents {
+        // FIX39 item 13: a locked bot keeps its own model, even a legacy alias.
+        if bot_is_locked(&agent) { continue; }
         let Some(fields) = normalize_model_fields(provider, &agent, catalog) else { continue; };
         if let Ok((_updated, events)) = st.db.agent_update(agent["id"].as_str().unwrap_or(""), &fields) {
             st.broadcast_persisted(events);
@@ -2459,6 +2526,14 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
         return Err(derr("conflict", "model cannot change while a turn is active", StatusCode::CONFLICT));
     }
     let row = st.db.session_detail(sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
+    // FIX39 item 13: a locked bot's conversation cannot change model, effort,
+    // speed or permission either. P5 audit F1: plan mode is a per-conversation
+    // work mode, not one of the locked settings, so a request that carries only
+    // `planMode` (the Plan pill and "Approve plan") still passes.
+    let touches_locked_settings = ["model", "thinking", "serviceTier", "approvalMode"].iter().any(|key| p.get(*key).is_some());
+    if touches_locked_settings && row["agentId"].as_str().is_some_and(|agent_id| st.db.agent_get(agent_id).map(|agent| bot_is_locked(&agent)).unwrap_or(false)) {
+        return Err(locked_bot_error());
+    }
     if !matches!(row["state"].as_str(), Some("idle" | "closed" | "error" | "completed")) {
         return Err(derr("conflict", "model can only change between turns", StatusCode::CONFLICT));
     }
@@ -2584,6 +2659,45 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     // A model or effort change invalidates a pending automatic retry.
     retry::cancel_pending(st, sid, retry::DeclineReason::Superseded, false).await;
     Ok(json!({"session":updated,"modelChanged":model_changed}))
+}
+
+/// FIX39 item 19: set (or clear) a conversation's own permission pin without
+/// touching the model. Unlike `session.model.update` this is allowed while a
+/// turn runs: the choice is stored and takes effect from the next turn. The
+/// Manager's approved proposals use the same path.
+async fn set_session_permissions(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    let sid = p["sessionId"].as_str().filter(|value| !value.is_empty())
+        .ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
+    if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
+    let row = st.db.session_detail(sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
+    let approval = match p.get("approvalMode") {
+        Some(Value::Null) => None,
+        Some(Value::String(value)) if matches!(value.as_str(), "ask" | "auto" | "bypass") => Some(value.clone()),
+        _ => return Err(derr("invalid_argument", "approvalMode must be ask, auto, bypass or null", StatusCode::BAD_REQUEST)),
+    };
+    // An automation session's permission mode is fixed by the schedule.
+    if row["link"]["kind"] == "automation" {
+        return Err(derr("conflict", "A scheduled run's permission mode is fixed by the schedule.", StatusCode::CONFLICT));
+    }
+    // FIX39 item 13: a locked bot's conversation cannot change permission.
+    if row["agentId"].as_str().is_some_and(|agent_id| st.db.agent_get(agent_id).map(|agent| bot_is_locked(&agent)).unwrap_or(false)) {
+        return Err(locked_bot_error());
+    }
+    // P5 audit F3: clearing a pin on a conversation that has no lock must not
+    // create one. Adding a lock would freeze today's model and effort and would
+    // drop Claude's dynamic-workflow record, silently turning Ultracode off.
+    if approval.is_none() && !row["modelLock"].is_object() {
+        let updated = st.db.session_event_summary(sid).map_err(agent_error)?;
+        return Ok(json!({"session": updated}));
+    }
+    // The stored lock must always carry model and thinking; keep them when they
+    // are already pinned, otherwise write the effective values. The owner is
+    // the one choosing here, so no manager mark is kept.
+    let lock = conversation_lock_for(st, &row, approval.as_deref(), None)?;
+    let _ = st.db.set_session_model_lock(sid, &lock).map_err(agent_error)?;
+    let updated = st.db.session_event_summary(sid).map_err(agent_error)?;
+    st.emit("session.changed", updated.clone()).await;
+    Ok(json!({"session": updated}))
 }
 
 const MAX_REPLY_SNAPSHOT_CHARS: usize = 6_000;
@@ -10345,5 +10459,376 @@ mod phase2a_tests {
         let result = import_of(&st, &preview, json!({})).await.unwrap();
         assert_eq!(result["imported"]["memory"], 0);
         assert_eq!(result["skipped"]["memory"], 1);
+    }
+}
+
+/// FIX39 P5 (items 13, 16, 19): the bot lock, the composer's bot-level write and
+/// a conversation's own permission pin. The auditor asked for one daemon test
+/// per row of the writer table in `docs/FIX39_P5_REPORT.md`; the test names here
+/// match that table.
+#[cfg(test)]
+mod fix39_p5_tests {
+    use super::*;
+    use super::phase2a_tests::state;
+
+    const LOCK_MSG: &str = "This bot is locked. Unlock it to change its settings.";
+
+    async fn frozen_bot() -> (AppState, String) {
+        let (st, _) = state();
+        let (agent, _) = st.db.agent_create(&json!({"name":"Frozen","runtimeId":"rt-test","model":"alpha","thinking":"low"})).unwrap();
+        let id = agent["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "agent.lock.set", json!({"agentId":id,"locked":true})).await.unwrap();
+        (st, id)
+    }
+
+    async fn session_for(st: &AppState, agent_id: &str, kind: &str, peer: Option<&str>) -> String {
+        let sid = format!("sid-{}", Uuid::new_v4());
+        st.db.create_session_for_agent(&sid, "rt-test", "codex", ".", "Chat", Some(agent_id)).unwrap();
+        st.db.update_session_state(&sid, "idle").unwrap();
+        match kind {
+            "side" => { st.db.set_session_link(&sid, &json!({"kind":"side","peerAgentId":peer.unwrap(),"originSessionId":"manager-main"})).unwrap(); }
+            "automation" => { st.db.set_session_link(&sid, &json!({"kind":"automation","approvalMode":"auto"})).unwrap(); }
+            _ => {}
+        }
+        sid
+    }
+
+    async fn manager_and_session(st: &AppState) -> (String, String) {
+        *st.runtimes.write().await = vec![json!({"id":"rt-test","provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
+        let manager = dispatch(st, "manager.ensure", json!({"name":"Lead","runtimeId":"rt-test"})).await.unwrap()["manager"].clone();
+        let id = manager["id"].as_str().unwrap().to_owned();
+        // Created directly: launching a real provider is not what these tests check.
+        let main = format!("manager-main-{}", Uuid::new_v4());
+        st.db.create_session_for_agent(&main, "rt-test", "codex", ".", "Manager chat", Some(&id)).unwrap();
+        st.db.update_session_state(&main, "idle").unwrap();
+        (id, main)
+    }
+
+    #[tokio::test]
+    async fn row_agent_update_and_agent_delete_refuse_a_locked_bot() {
+        let (st, id) = frozen_bot().await;
+        let update = dispatch(&st, "agent.update", json!({"agentId":id,"name":"Thawed","model":"beta"})).await.unwrap_err();
+        assert_eq!(update.1.code, "conflict");
+        assert_eq!(update.1.message, LOCK_MSG);
+        assert_eq!(st.db.agent_get(&id).unwrap()["name"], "Frozen");
+        assert_eq!(dispatch(&st, "agent.delete", json!({"agentId":id})).await.unwrap_err().1.message, LOCK_MSG);
+        assert_eq!(st.db.agent_get(&id).unwrap()["archived"], false);
+    }
+
+    #[tokio::test]
+    async fn row_agent_restore_refuses_a_locked_bot() {
+        let (st, id) = frozen_bot().await;
+        // Storage archives without a lock check (the only archive path the UI
+        // uses is `agent.delete`, which is refused above).
+        st.db.agent_archive(&id).unwrap();
+        assert_eq!(dispatch(&st, "agent.restore", json!({"agentId":id})).await.unwrap_err().1.message, LOCK_MSG);
+        assert_eq!(st.db.agent_get(&id).unwrap()["archived"], true);
+    }
+
+    #[tokio::test]
+    async fn row_agent_team_update_keeps_layout_writes_but_refuses_settings() {
+        let (st, _) = state();
+        let (project, _) = st.db.project_create("Home", None).unwrap();
+        let project_id = project["id"].as_str().unwrap().to_owned();
+        let (agent, _) = st.db.agent_create(&json!({"name":"Frozen","runtimeId":"rt-test","model":"alpha","thinking":"low"})).unwrap();
+        let id = agent["id"].as_str().unwrap().to_owned();
+        st.db.agent_set_team(&id, &json!({"projectId": project_id})).unwrap();
+        dispatch(&st, "agent.lock.set", json!({"agentId":id,"locked":true})).await.unwrap();
+        assert_eq!(dispatch(&st, "agent.team.update", json!({"agentId":id,"role":"CTO"})).await.unwrap_err().1.message, LOCK_MSG);
+        assert_eq!(dispatch(&st, "agent.team.update", json!({"agentId":id,"projectId":"some-project"})).await.unwrap_err().1.message, LOCK_MSG);
+        // P5 audit F2: "Unassigned" (a null project) and the leader flag are
+        // settings changes too, and drag-and-drop can reach both.
+        assert_eq!(dispatch(&st, "agent.team.update", json!({"agentId":id,"projectId":null})).await.unwrap_err().1.message, LOCK_MSG);
+        assert_eq!(dispatch(&st, "agent.team.update", json!({"agentId":id,"leader":true})).await.unwrap_err().1.message, LOCK_MSG);
+        let unchanged = st.db.agent_get(&id).unwrap();
+        assert_eq!(unchanged["projectId"], project_id);
+        assert_eq!(unchanged["role"], "");
+        assert_eq!(unchanged["leader"], false);
+        // Repeating the stored project or role is a layout write, so a drop
+        // inside the same project still works.
+        assert_eq!(dispatch(&st, "agent.team.update", json!({"agentId":id,"projectId":project_id})).await.unwrap()["agent"]["projectId"], project_id);
+        assert_eq!(dispatch(&st, "agent.team.update", json!({"agentId":id,"role":""})).await.unwrap()["agent"]["role"], "");
+        // Layout the owner expects to keep working: visibility and sort order.
+        let hidden = dispatch(&st, "agent.team.update", json!({"agentId":id,"hidden":true})).await.unwrap();
+        assert_eq!(hidden["agent"]["hidden"], true);
+        dispatch(&st, "agent.team.update", json!({"agentId":id,"sortOrder":7})).await.unwrap();
+        assert_eq!(st.db.agent_get(&id).unwrap()["locked"], true);
+    }
+
+    #[tokio::test]
+    async fn row_project_delete_refuses_a_project_with_a_locked_bot() {
+        let (st, _) = state();
+        let (project, _) = st.db.project_create("Locked home", None).unwrap();
+        let project_id = project["id"].as_str().unwrap().to_owned();
+        let (agent, _) = st.db.agent_create(&json!({"name":"Homed","runtimeId":"rt-test"})).unwrap();
+        let id = agent["id"].as_str().unwrap().to_owned();
+        st.db.agent_set_team(&id, &json!({"projectId": project_id})).unwrap();
+        dispatch(&st, "agent.lock.set", json!({"agentId":id,"locked":true})).await.unwrap();
+        // P5 audit F2: deleting the project would move a locked bot to Unassigned.
+        let refused = dispatch(&st, "project.delete", json!({"projectId":project_id})).await.unwrap_err();
+        assert_eq!(refused.1.message, LOCK_MSG);
+        assert_eq!(st.db.agent_get(&id).unwrap()["projectId"], project_id);
+        assert_eq!(st.db.project_list().unwrap().len(), 1);
+        // Unlock: the project deletes and the bot is unassigned again.
+        dispatch(&st, "agent.lock.set", json!({"agentId":id,"locked":false})).await.unwrap();
+        dispatch(&st, "project.delete", json!({"projectId":project_id})).await.unwrap();
+        assert_eq!(st.db.agent_get(&id).unwrap()["projectId"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn row_session_model_update_refuses_a_locked_bot() {
+        let (st, id) = frozen_bot().await;
+        let sid = session_for(&st, &id, "main", None).await;
+        let refused = dispatch(&st, "session.model.update", json!({"sessionId":sid,"model":"beta","confirmModelChange":true})).await.unwrap_err();
+        assert_eq!(refused.1.message, LOCK_MSG);
+    }
+
+    #[tokio::test]
+    async fn row_locked_bot_keeps_plan_mode_but_refuses_a_settings_write() {
+        let (st, id) = frozen_bot().await;
+        // The execution check the runtime's own gates hold open in production.
+        for setting in ["model", "thinking"] { let _ = st.db.set_setting(&format!("exec_gate.codex.{setting}"), &json!(true)).unwrap(); }
+        // The Plan pill and "Approve plan" only send `planMode`. P5 audit F1:
+        // that must pass on a locked bot, or the conversation can never leave
+        // plan mode.
+        let sid = session_for(&st, &id, "main", None).await;
+        let planned = dispatch(&st, "session.model.update", json!({"sessionId":sid,"planMode":true})).await.unwrap();
+        assert_eq!(planned["session"]["modelLock"]["planMode"], true);
+        assert_eq!(planned["modelChanged"], false);
+        dispatch(&st, "session.model.update", json!({"sessionId":sid,"planMode":false})).await.unwrap();
+        assert!(st.db.session_detail(&sid).unwrap()["modelLock"].get("planMode").is_none());
+        // A settings write is still refused on the same locked bot.
+        let refused = dispatch(&st, "session.model.update", json!({"sessionId":sid,"serviceTier":"fast"})).await.unwrap_err();
+        assert_eq!(refused.1.code, "conflict");
+        assert_eq!(refused.1.message, LOCK_MSG);
+        assert!(st.db.session_detail(&sid).unwrap()["modelLock"].get("serviceTier").is_none());
+    }
+
+    #[tokio::test]
+    async fn row_session_permissions_set_refuses_a_locked_bot_but_works_mid_turn() {
+        let (st, id) = frozen_bot().await;
+        let sid = session_for(&st, &id, "side", Some("someone")).await;
+        assert_eq!(dispatch(&st, "session.permissions.set", json!({"sessionId":sid,"approvalMode":"auto"})).await.unwrap_err().1.message, LOCK_MSG);
+        // Unlock: the owner's own unlock path always works, and a mid-turn change
+        // is stored for the next turn.
+        dispatch(&st, "agent.lock.set", json!({"agentId":id,"locked":false})).await.unwrap();
+        st.active_turns.lock().await.insert(sid.clone(), "turn-1".into());
+        let updated = dispatch(&st, "session.permissions.set", json!({"sessionId":sid,"approvalMode":"auto"})).await.unwrap();
+        assert_eq!(updated["session"]["modelLock"]["approvalMode"], "auto");
+        assert_eq!(st.db.session_detail(&sid).unwrap()["modelLock"]["approvalMode"], "auto");
+        // Clearing it returns the conversation to the bot's mode.
+        dispatch(&st, "session.permissions.set", json!({"sessionId":sid,"approvalMode":null})).await.unwrap();
+        assert!(st.db.session_detail(&sid).unwrap()["modelLock"].get("approvalMode").is_none());
+    }
+
+    #[tokio::test]
+    async fn row_session_permissions_set_refuses_an_automation_session() {
+        let (st, _) = state();
+        let (agent, _) = st.db.agent_create(&json!({"name":"Scheduler","runtimeId":"rt-test"})).unwrap();
+        let id = agent["id"].as_str().unwrap().to_owned();
+        let sid = session_for(&st, &id, "automation", None).await;
+        let refused = dispatch(&st, "session.permissions.set", json!({"sessionId":sid,"approvalMode":"ask"})).await.unwrap_err();
+        assert_eq!(refused.1.code, "conflict");
+        assert_eq!(refused.1.message, "A scheduled run's permission mode is fixed by the schedule.");
+    }
+
+    #[tokio::test]
+    async fn row_agent_lock_set_unlocks_and_refuses_the_manager() {
+        let (st, id) = frozen_bot().await;
+        let unlocked = dispatch(&st, "agent.lock.set", json!({"agentId":id,"locked":false})).await.unwrap();
+        assert_eq!(unlocked["agent"]["locked"], false);
+        // With the lock cleared, ordinary settings writes work again.
+        dispatch(&st, "agent.update", json!({"agentId":id,"name":"Thawed"})).await.unwrap();
+        // The Manager is never lockable.
+        let (_, main) = manager_and_session(&st).await;
+        let manager_id = st.db.session_detail(&main).unwrap()["agentId"].as_str().unwrap().to_owned();
+        let refused = dispatch(&st, "agent.lock.set", json!({"agentId":manager_id,"locked":true})).await.unwrap_err();
+        assert_eq!(refused.1.code, "conflict");
+        assert_eq!(st.db.agent_get(&manager_id).unwrap()["locked"], false);
+    }
+
+    #[tokio::test]
+    async fn row_manager_update_blob_refuses_a_locked_bot() {
+        let (st, id) = frozen_bot().await;
+        let (_, main) = manager_and_session(&st).await;
+        let result = team::mcp_rpc(&st, &main, "mcp.tools.call", &json!({"name":"update_blob","arguments":{"blob":"Frozen","role":"CTO"}})).await.unwrap();
+        assert_eq!(result["isError"], true);
+        assert!(result["content"][0]["text"].as_str().unwrap_or("").contains("locked"), "{result}");
+        assert_eq!(st.db.agent_get(&id).unwrap()["role"], "", "the role is unchanged");
+        // The Manager cannot lock or unlock either.
+        assert!(team::mcp_rpc(&st, &main, "mcp.tools.call", &json!({"name":"agent.lock.set","arguments":{}})).await.unwrap()["isError"].as_bool().unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn row_clearing_a_pin_on_an_unpinned_conversation_writes_nothing() {
+        let (st, _) = state();
+        let (agent, _) = st.db.agent_create(&json!({"name":"Unpinned","runtimeId":"rt-test","model":"alpha","thinking":"low"})).unwrap();
+        let id = agent["id"].as_str().unwrap().to_owned();
+        let sid = session_for(&st, &id, "side", Some("someone")).await;
+        assert!(st.db.session_detail(&sid).unwrap()["modelLock"].is_null(), "a fresh conversation has no lock");
+        // P5 audit F3: the composer's "clear the pin" call must not create a
+        // lock, which would freeze today's model and effort and drop Claude's
+        // dynamic-workflow record.
+        let cleared = dispatch(&st, "session.permissions.set", json!({"sessionId":sid,"approvalMode":null})).await.unwrap();
+        assert!(cleared["session"]["modelLock"].is_null(), "no lock was created");
+        assert!(st.db.session_detail(&sid).unwrap()["modelLock"].is_null(), "nothing was written");
+    }
+
+    #[tokio::test]
+    async fn row_first_pin_on_a_claude_conversation_keeps_workflows() {
+        let (st, _) = state();
+        let runtime = json!({"id":"rt-claude","provider":"claude","status":"online","executablePath":"unused-test-runtime","launchArgs":[]});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await = vec![runtime];
+        let (agent, _) = st.db.agent_create(&json!({"name":"Ultra","runtimeId":"rt-claude","model":"alpha","thinking":"low"})).unwrap();
+        let id = agent["id"].as_str().unwrap().to_owned();
+        let sid = format!("sid-{}", Uuid::new_v4());
+        st.db.create_session_for_agent(&sid, "rt-claude", "claude", ".", "Chat", Some(&id)).unwrap();
+        st.db.update_session_state(&sid, "idle").unwrap();
+        let updated = dispatch(&st, "session.permissions.set", json!({"sessionId":sid,"approvalMode":"auto"})).await.unwrap();
+        let lock = updated["session"]["modelLock"].clone();
+        assert_eq!(lock["approvalMode"], json!("auto"));
+        assert_eq!(lock["model"], json!("alpha"));
+        assert_eq!(lock["thinking"], json!("low"));
+        // Dynamic workflows default on for a new Claude conversation; the pin
+        // must capture that, not drop it (which would turn Ultracode off).
+        assert_eq!(lock["enableWorkflows"], json!(true), "Claude workflows survive the pin");
+        // Clearing the mode keeps the model and effort the daemon requires and
+        // removes the Manager mark.
+        let cleared = dispatch(&st, "session.permissions.set", json!({"sessionId":sid,"approvalMode":null})).await.unwrap();
+        assert_eq!(cleared["session"]["modelLock"]["model"], json!("alpha"));
+        assert!(cleared["session"]["modelLock"].get("approvalMode").is_none());
+        assert!(cleared["session"]["modelLock"].get("approvalModeSource").is_none());
+    }
+
+    #[tokio::test]
+    async fn row_setting_a_pin_keeps_the_rest_of_an_existing_lock() {
+        let (st, _) = state();
+        let (agent, _) = st.db.agent_create(&json!({"name":"Planner","runtimeId":"rt-test","model":"alpha","thinking":"low"})).unwrap();
+        let id = agent["id"].as_str().unwrap().to_owned();
+        let sid = session_for(&st, &id, "main", None).await;
+        st.db.set_session_model_lock(&sid, &json!({"model":"alpha","thinking":"low","planMode":true,"enableWorkflows":true,"serviceTier":"priority"})).unwrap();
+        let updated = dispatch(&st, "session.permissions.set", json!({"sessionId":sid,"approvalMode":"auto"})).await.unwrap();
+        let lock = updated["session"]["modelLock"].clone();
+        assert_eq!(lock["planMode"], json!(true), "plan mode is not dropped by a permission change");
+        assert_eq!(lock["enableWorkflows"], json!(true));
+        assert_eq!(lock["serviceTier"], json!("priority"));
+        assert_eq!(lock["approvalMode"], json!("auto"));
+        assert!(lock.get("approvalModeSource").is_none(), "the owner's own choice is not marked as the Manager's");
+    }
+
+    #[tokio::test]
+    async fn row_manager_permission_proposal_needs_approval_and_rejects_full_access() {
+        let (st, target_id) = frozen_bot().await;
+        dispatch(&st, "agent.lock.set", json!({"agentId":target_id,"locked":false})).await.unwrap();
+        let (manager_id, main) = manager_and_session(&st).await;
+        let side = session_for(&st, &target_id, "side", Some(&manager_id)).await;
+        let call = |args: Value| { let st = st.clone(); let main = main.clone(); async move { team::mcp_rpc(&st, &main, "mcp.tools.call", &json!({"name":"set_conversation_permission","arguments":args})).await.unwrap() } };
+        // A side conversation the Manager did not start is refused.
+        let other = session_for(&st, &target_id, "side", Some("someone-else")).await;
+        let refused = call(json!({"conversation":other,"mode":"auto"})).await;
+        assert_eq!(refused["isError"], true);
+        // Full access is never offered.
+        let full = call(json!({"conversation":side,"mode":"bypass"})).await;
+        assert_eq!(full["isError"], true);
+        assert!(full["content"][0]["text"].as_str().unwrap_or("").contains("ask"), "{full}");
+        // A valid proposal waits for approval and changes nothing yet.
+        let pending = call(json!({"conversation":side,"mode":"auto"})).await;
+        let text = pending["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains("Waiting for the user's approval"), "{pending}");
+        assert!(st.db.session_detail(&side).unwrap()["modelLock"].get("approvalMode").is_none());
+        let proposal = st.db.proposals_pending().unwrap().into_iter().find(|p| p["kind"] == "permission").expect("a pending proposal");
+        let pid = proposal["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "proposal.decide", json!({"id":pid,"decision":"approve"})).await.unwrap();
+        let lock = st.db.session_detail(&side).unwrap()["modelLock"].clone();
+        assert_eq!(lock["approvalMode"], "auto");
+        // FIX39 item 19: the pill can say who set it.
+        assert_eq!(lock["approvalModeSource"], "manager");
+    }
+
+    #[tokio::test]
+    async fn row_permission_proposal_edits_cannot_retarget_the_card() {
+        let (st, target_id) = frozen_bot().await;
+        dispatch(&st, "agent.lock.set", json!({"agentId":target_id,"locked":false})).await.unwrap();
+        let (manager_id, main) = manager_and_session(&st).await;
+        let side = session_for(&st, &target_id, "side", Some(&manager_id)).await;
+        let pending = team::mcp_rpc(&st, &main, "mcp.tools.call", &json!({"name":"set_conversation_permission","arguments":{"conversation":side,"mode":"auto"}})).await.unwrap();
+        assert!(pending["content"][0]["text"].as_str().unwrap_or("").contains("Waiting"));
+        let pid = st.db.proposals_pending().unwrap().into_iter().find(|p| p["kind"] == "permission").unwrap()["id"].as_str().unwrap().to_owned();
+        // P5 audit S5: `proposal.decide` accepts edits, so an edited
+        // `conversation` must still be one this Manager started.
+        let foreign = session_for(&st, &target_id, "side", Some("someone-else")).await;
+        let refused = dispatch(&st, "proposal.decide", json!({"id":pid,"decision":"approve","edits":{"conversation":foreign}})).await.unwrap_err();
+        assert_eq!(refused.1.code, "invalid_argument");
+        assert!(st.db.session_detail(&foreign).unwrap()["modelLock"].get("approvalMode").is_none());
+        assert!(st.db.session_detail(&side).unwrap()["modelLock"].get("approvalMode").is_none(), "the edited card changed nothing");
+        // The untouched card still applies.
+        dispatch(&st, "proposal.decide", json!({"id":pid,"decision":"approve"})).await.unwrap();
+        assert_eq!(st.db.session_detail(&side).unwrap()["modelLock"]["approvalMode"], "auto");
+    }
+
+    #[tokio::test]
+    async fn row_proposal_apply_permission_refuses_a_bot_locked_after_the_card() {
+        let (st, target_id) = frozen_bot().await;
+        dispatch(&st, "agent.lock.set", json!({"agentId":target_id,"locked":false})).await.unwrap();
+        let (manager_id, main) = manager_and_session(&st).await;
+        let side = session_for(&st, &target_id, "side", Some(&manager_id)).await;
+        let pending = team::mcp_rpc(&st, &main, "mcp.tools.call", &json!({"name":"set_conversation_permission","arguments":{"conversation":side,"mode":"auto"}})).await.unwrap();
+        assert!(pending["content"][0]["text"].as_str().unwrap_or("").contains("Waiting"));
+        let pid = st.db.proposals_pending().unwrap().into_iter().find(|p| p["kind"] == "permission").unwrap()["id"].as_str().unwrap().to_owned();
+        // The owner locks the bot before approving the card.
+        dispatch(&st, "agent.lock.set", json!({"agentId":target_id,"locked":true})).await.unwrap();
+        let refused = dispatch(&st, "proposal.decide", json!({"id":pid,"decision":"approve"})).await.unwrap_err();
+        assert_eq!(refused.1.code, "conflict");
+        assert!(st.db.session_detail(&side).unwrap()["modelLock"].get("approvalMode").is_none());
+    }
+
+    #[tokio::test]
+    async fn row_composer_writes_the_bot_so_a_new_conversation_inherits_it() {
+        let (st, _) = state();
+        let (agent, _) = st.db.agent_create(&json!({"name":"Inheritor","runtimeId":"rt-test","approvalMode":"ask"})).unwrap();
+        let id = agent["id"].as_str().unwrap().to_owned();
+        // The composer's bot write (item 16): the daemon accepts it.
+        dispatch(&st, "agent.update", json!({"agentId":id,"approvalMode":"auto"})).await.unwrap();
+        let sid = session_for(&st, &id, "main", None).await;
+        let row = st.db.session_detail(&sid).unwrap();
+        assert_eq!(exec_options_for_session(&st, &row).unwrap().approval_mode, ApprovalMode::Auto, "a new conversation follows the bot");
+        // A draft id is still not a session the daemon knows.
+        assert_eq!(dispatch(&st, "session.model.update", json!({"sessionId":format!("draft:{id}"),"approvalMode":"auto"})).await.unwrap_err().1.code, "not_found");
+    }
+
+    #[tokio::test]
+    async fn row_legacy_model_migration_skips_a_locked_bot() {
+        let (st, _) = state();
+        let (agent, _) = st.db.agent_create(&json!({"name":"Legacy","runtimeId":"rt-test"})).unwrap();
+        let id = agent["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "agent.lock.set", json!({"agentId":id,"locked":true})).await.unwrap();
+        let catalog = json!({"validated":true,"fallback":false,"provider":"codex","models":[{"id":"gpt-6-luna","displayName":"Luna 6","supportedThinking":["low"],"defaultThinking":"low","serviceTiers":[],"defaultServiceTier":null,"hostDependent":false,"isDefault":true}]});
+        migrate_legacy_agent_models(&st, "rt-test", &catalog).await.unwrap();
+        assert_eq!(st.db.agent_get(&id).unwrap()["model"], Value::Null, "a locked bot keeps its own setting");
+        dispatch(&st, "agent.lock.set", json!({"agentId":id,"locked":false})).await.unwrap();
+        migrate_legacy_agent_models(&st, "rt-test", &catalog).await.unwrap();
+        assert_eq!(st.db.agent_get(&id).unwrap()["model"], "gpt-6-luna", "an unlocked bot is migrated");
+    }
+
+    #[tokio::test]
+    async fn exempt_writes_do_not_consult_the_lock() {
+        // Reads and creation are deliberately exempt; this test pins that so the
+        // report's table has a row for them.
+        let (st, _) = state();
+        let (agent, _) = st.db.agent_create(&json!({"name":"Fresh","runtimeId":"rt-test"})).unwrap();
+        let id = agent["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "agent.lock.set", json!({"agentId":id,"locked":true})).await.unwrap();
+        assert_eq!(dispatch(&st, "agent.get", json!({"agentId":id})).await.unwrap()["agent"]["locked"], true);
+        let created = dispatch(&st, "agent.create", json!({"name":"Another","runtimeId":"rt-test"})).await.unwrap();
+        assert_eq!(created["agent"]["locked"], false, "creation is exempt and starts unlocked");
+        // Reordering (layout) still works on a locked bot when every runtime id
+        // is sent, as the sidebar does.
+        let listed = st.db.agent_list(false, None).unwrap();
+        let mut ids: Vec<String> = listed.iter().filter(|agent| agent["runtimeId"] == "rt-test" && agent["archived"] != true).map(|agent| agent["id"].as_str().unwrap().to_owned()).collect();
+        ids.retain(|other| other != &id);
+        ids.insert(0, id.clone());
+        let reorder = dispatch(&st, "agent.reorder", json!({"runtimeId":"rt-test","agentIds":ids})).await.unwrap();
+        assert_eq!(reorder["agents"][0]["id"], id, "a locked bot can still be reordered");
     }
 }

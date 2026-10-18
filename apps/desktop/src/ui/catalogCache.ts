@@ -7,6 +7,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 import { rpc } from '../tauri'
+import { parseModelCatalog, type CatalogModel } from '../executionContract'
 
 export type CachedMethod = 'runtime.models' | 'runtime.capabilities'
 
@@ -70,6 +71,17 @@ export function readCached<T = unknown>(method: CachedMethod, params: Record<str
   return entries.get(keyOf(method, params))?.value as T | undefined
 }
 
+/**
+ * FIX39 item 12: the runtime's cached model list, parsed for a synchronous
+ * display name. Null before the boot warm-up has an answer for this runtime, so
+ * the caller can fall back to the saved model id.
+ */
+export function readCachedCatalogModels(runtimeId: string): CatalogModel[] | null {
+  const value = readCached('runtime.models', { runtimeId })
+  if (value === undefined) return null
+  return parseModelCatalog(value)?.models ?? null
+}
+
 /** True when there is no answer, or it is older than the fresh window. */
 export function isStale(method: CachedMethod, params: Record<string, unknown>, now = Date.now()) {
   return !isFresh(entries.get(keyOf(method, params)), now)
@@ -108,6 +120,15 @@ export function invalidateCatalog(runtimeId?: string) {
 export function resetCatalogCacheForTests() {
   entries.clear(); inflight.clear(); version = 0
   try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
+}
+
+/**
+ * FIX39 item 12 / P5 audit S7: re-render when the shared catalog cache changes,
+ * so a model line that was first painted before the catalog arrived shows the
+ * display name as soon as it does. The value itself is read synchronously.
+ */
+export function useCatalogVersion(): number {
+  return useSyncExternalStore(subscribe, () => version, () => version)
 }
 
 function subscribe(listener: () => void) {

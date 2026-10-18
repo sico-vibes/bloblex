@@ -1,6 +1,6 @@
 import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone, BriefcaseBusiness } from 'lucide-react'
+import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone, BriefcaseBusiness, FlaskConical } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
 import { usePlatform } from '../transport/platform'
 import type { Agent, Snapshot } from '../types'
@@ -41,11 +41,12 @@ import { clearCompanionPosition } from './companionPositions'
 import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
-export type SettingsPageId = 'General' | 'Appearance' | 'Remote' | 'Agents' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Updates'
+export type SettingsPageId = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Agents' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
   { id: 'Appearance', label: 'Appearance', icon: Palette },
+  { id: 'Experimental', label: 'Experimental', icon: FlaskConical },
   { id: 'Remote', label: 'Remote', icon: Smartphone },
   { id: 'Agents', label: 'Agents', icon: Bot },
   { id: 'Manager', label: 'Manager', icon: BriefcaseBusiness },
@@ -557,6 +558,19 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                 <div className="settings-form-actions"><button className="primary-button small" disabled={saving}>Save editor</button></div>
               </form>
             </SettingsGroup>}
+            <SettingsGroup title="Power">
+              <SettingsRow label={`Keep this computer awake while ${nouns} work`} hint={`While a ${noun} is working or a schedule is about to run, Bitbots asks Windows not to sleep on its own. It does not stop you closing the lid or choosing Sleep.`}>
+                <button type="button" className={`toggle ${keepAwake ? 'on' : ''}`} role="switch" aria-label={`Keep this computer awake while ${nouns} work`} aria-checked={keepAwake} disabled={saving} onClick={() => { const next = !keepAwake; void saveSetting('power.keepAwake', next).then((failure) => { if (!failure) setKeepAwake(next) }) }}><i /></button>
+              </SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup title="Notifications">
+              <SettingsRow label={`Notify when a ${noun} finishes or needs approval`}>
+                <button type="button" className={`toggle ${notificationsEnabled ? 'on' : ''}`} role="switch" aria-label={`Notify when a ${noun} finishes or needs approval`} aria-checked={notificationsEnabled} onClick={() => void setNotifications(!notificationsEnabled)} disabled={saving}><i /></button>
+              </SettingsRow>
+            </SettingsGroup>
+          </>}
+
+          {!loading && page === 'Experimental' && <>
             <SettingsGroup title="Experimental">
               <SettingsRow label={<span className="experimental-label">Claude dynamic workflows and Ultracode</span>} hint="On by default. New Claude Code sessions receive enableWorkflows:true as a session-local setting, which is also what makes the Ultracode effort level available. Bitbots does not edit Claude's config. Claude Code can still decline this when a managed policy forbids it. Turning it off keeps Claude's own default and hides Ultracode.">
                 <button type="button" className={`toggle ${claudeWorkflowsEnabled ? 'on' : ''}`} role="switch" aria-label="Claude dynamic workflows" aria-checked={claudeWorkflowsEnabled} disabled={saving} onClick={() => { const next = !claudeWorkflowsEnabled; void saveSetting('claude.enableWorkflows', next).then((failure) => { if (!failure) onClaudeWorkflowsChange?.(next) }) }}><i /></button>
@@ -581,16 +595,6 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               </SettingsRow>}
               <SettingsRow label={<span className="experimental-label">Steer a running Codex turn<span className="experimental-tag">Experimental</span></span>} hint={`Adds Steer beside Queue while a Codex ${noun} works, which adds your message to the turn that is running now. It uses Codex's turn/steer request and has not been verified against a live Codex turn. If the turn already ended, the message is queued instead. Claude Code and OpenCode only queue.`}>
                 <button type="button" className={`toggle ${steerGate ? 'on' : ''}`} role="switch" aria-label="Steer a running Codex turn" aria-checked={steerGate} disabled={saving} onClick={() => { const next = !steerGate; void saveSetting('exec_gate.codex.steer', next).then((failure) => { if (!failure) setSteerGate(next) }) }}><i /></button>
-              </SettingsRow>
-            </SettingsGroup>
-            <SettingsGroup title="Power">
-              <SettingsRow label={`Keep this computer awake while ${nouns} work`} hint={`While a ${noun} is working or a schedule is about to run, Bitbots asks Windows not to sleep on its own. It does not stop you closing the lid or choosing Sleep.`}>
-                <button type="button" className={`toggle ${keepAwake ? 'on' : ''}`} role="switch" aria-label={`Keep this computer awake while ${nouns} work`} aria-checked={keepAwake} disabled={saving} onClick={() => { const next = !keepAwake; void saveSetting('power.keepAwake', next).then((failure) => { if (!failure) setKeepAwake(next) }) }}><i /></button>
-              </SettingsRow>
-            </SettingsGroup>
-            <SettingsGroup title="Notifications">
-              <SettingsRow label={`Notify when a ${noun} finishes or needs approval`}>
-                <button type="button" className={`toggle ${notificationsEnabled ? 'on' : ''}`} role="switch" aria-label={`Notify when a ${noun} finishes or needs approval`} aria-checked={notificationsEnabled} onClick={() => void setNotifications(!notificationsEnabled)} disabled={saving}><i /></button>
               </SettingsRow>
             </SettingsGroup>
           </>}

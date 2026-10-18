@@ -1360,3 +1360,26 @@ describe('opt-in conversation experiments', () => {
     expect(document.activeElement?.id).toBe('conversation-message-message%3Aside-u')
   })
 })
+
+// FIX39 P5 follow-up: the composer issue the Director reported as a gap.
+describe('FIX39 P5 follow-up', () => {
+  // FIX39 item 16 / P5 audit S1: the permission control is safe mid-turn (it
+  // writes the bot and stores the conversation change for the next turn).
+  it('keeps the permission pill usable while a turn runs, unlike the model and effort controls', async () => {
+    const working = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', state: 'working', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'm1', role: 'user', content: 'Hello' }] })
+    configure(snapshot({ sessions: [working, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    h.getActiveSession.mockResolvedValue('session-claude')
+    const view = startApp()
+    await view.settle()
+    const permission = view.host.querySelector<HTMLButtonElement>('.composer-controls-start .permission-pill')!
+    expect(permission).not.toBeNull()
+    expect(permission.disabled).toBe(false)
+    expect(view.host.querySelector<HTMLButtonElement>('.composer-controls-end .model-pill')?.disabled).toBe(true)
+    // The effort pill is disabled, or aria-disabled when it has its own reason.
+    const effort = view.host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
+    expect(effort.disabled || effort.getAttribute('aria-disabled') === 'true').toBe(true)
+    await click(permission)
+    expect(view.host.querySelector('.permission-menu')).not.toBeNull()
+    expect(view.host.querySelector('.composer-menu-note')?.textContent).toBe('Applies to this bot from now on.')
+  })
+})

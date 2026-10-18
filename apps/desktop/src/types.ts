@@ -180,6 +180,8 @@ export interface Agent extends JsonRecord {
   /** FIX36: only the one built-in Manager carries "manager". */
   systemRole?: 'manager' | null
   hidden?: boolean
+  /** FIX39 item 13: the owner locked this bot's settings. */
+  locked?: boolean
 }
 
 export interface Project extends JsonRecord {
@@ -264,6 +266,8 @@ export interface SessionModelLock {
   serviceTier?: string | null
   enableWorkflows?: boolean
   approvalMode?: ApprovalMode | null
+  /** FIX39 item 19: who chose the pinned mode. `manager` marks an approved Manager proposal. */
+  approvalModeSource?: 'manager' | null
   planMode?: boolean
 }
 

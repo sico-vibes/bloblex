@@ -422,6 +422,13 @@
       "params": null
     },
     {
+      "method": "agent.lock.set",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not lock or unlock a bot.",
+      "params": null
+    },
+    {
       "method": "project.create",
       "class": "never",
       "minTier": null,
@@ -636,6 +643,13 @@
       "class": "never",
       "minTier": null,
       "why": "A remote device must not change a conversation's model, effort or approval mode.",
+      "params": null
+    },
+    {
+      "method": "session.permissions.set",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not change a conversation's permission mode.",
       "params": null
     },
     {

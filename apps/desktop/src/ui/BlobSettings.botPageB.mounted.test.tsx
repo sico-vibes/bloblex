@@ -46,15 +46,17 @@ interface HarnessProps {
   sections?: React.ComponentProps<typeof BlobSettings>['sections']
   sessions?: Session[]
   memoryEnabled?: boolean
+  locked?: boolean
   onOpenMemory?: () => void
   autoApprovals?: React.ComponentProps<typeof BlobSettings>['autoApprovals']
   onValue?: (draft: AgentDraft) => void
 }
 
-function Harness({ initial = draft(), agentId = 'agent-1', sections, sessions, memoryEnabled, onOpenMemory, autoApprovals, onValue }: HarnessProps) {
+function Harness({ initial = draft(), agentId = 'agent-1', sections, sessions, memoryEnabled, locked, onOpenMemory, autoApprovals, onValue }: HarnessProps) {
   const [value, setValue] = useState(initial)
   return <BlobSettings
     draft={value}
+    locked={locked}
     runtimes={[runtime]}
     errors={{}}
     execution={{ model: initial.model, thinking: initial.thinking, serviceTier: initial.serviceTier, maxConcurrency: 1 }}
@@ -274,5 +276,38 @@ describe('B11 sections prop', () => {
     for (const id of ['look', 'profile', 'team', 'model', 'permissions', 'notifications', 'details', 'memory']) {
       expect(view.host.querySelector(`#bot-section-${id}`), id).not.toBeNull()
     }
+  })
+})
+
+// FIX39 item 13 / P5 audit S3: the read-only editor is one disabled fieldset,
+// and the look controls are inert on their own too (the fieldset does not reach
+// a canvas-based control in every engine).
+describe('locked bot editor (FIX39 item 13)', () => {
+  it('disables the whole settings body and the look controls', async () => {
+    const view = mount(<Harness locked sections={['look']} />)
+    await view.settle()
+    const body = view.host.querySelector<HTMLFieldSetElement>('fieldset.blob-settings-body')!
+    expect(body).not.toBeNull()
+    expect(body.disabled).toBe(true)
+    expect(body.getAttribute('aria-label')).toBe('Locked bot settings')
+    const look = view.host.querySelector('#bot-section-look')!
+    const shapes = [...look.querySelectorAll<HTMLButtonElement>('.look-shape, .bot-shape')]
+    expect(shapes.length).toBeGreaterThan(0)
+    expect(shapes.every((button) => button.disabled)).toBe(true)
+    const moods = [...look.querySelectorAll<HTMLButtonElement>('.look-moods button')]
+    expect(moods.length).toBeGreaterThan(0)
+    expect(moods.every((button) => button.disabled)).toBe(true)
+    const swatches = [...look.querySelectorAll<HTMLButtonElement>('button.bot-swatch, button.swatch')]
+    expect(swatches.length).toBeGreaterThan(0)
+    expect(swatches.every((button) => button.disabled)).toBe(true)
+  })
+
+  it('leaves the editor alone when the bot is not locked', async () => {
+    const view = mount(<Harness sections={['look']} />)
+    await view.settle()
+    const body = view.host.querySelector<HTMLFieldSetElement>('fieldset.blob-settings-body')!
+    expect(body.disabled).toBe(false)
+    const look = view.host.querySelector('#bot-section-look')!
+    expect([...look.querySelectorAll<HTMLButtonElement>('.look-shape, .bot-shape')].some((button) => !button.disabled)).toBe(true)
   })
 })

@@ -69,4 +69,18 @@ describe('proposal card', () => {
     await flush()
     expect(h.rpc).toHaveBeenCalledWith('proposal.decide', { id: 'prop-1', decision: 'reject' })
   })
+
+  // FIX39 item 19: the Manager's permission card shows the conversation and the
+  // mode, and never offers full access.
+  it('shows a conversation permission change without offering full access', async () => {
+    await mount(proposal('permission', { conversation: 'side-7', mode: 'auto' }))
+    expect(host!.textContent).toContain("Change a conversation's permission")
+    expect(host!.textContent).toContain('side-7')
+    expect(host!.textContent).toContain('Auto')
+    expect(host!.textContent).toContain('Full access can never be set this way.')
+    expect(host!.querySelector('[role="dialog"]')).toBeNull()
+    await act(async () => { button('Approve').click() })
+    await flush()
+    expect(h.rpc).toHaveBeenCalledWith('proposal.decide', { id: 'prop-1', decision: 'approve' })
+  })
 })

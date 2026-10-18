@@ -438,6 +438,10 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
         ("look", "ALTER TABLE agents ADD COLUMN look TEXT"),
         ("notification_level", "ALTER TABLE agents ADD COLUMN notification_level TEXT"),
         ("system_role", "ALTER TABLE agents ADD COLUMN system_role TEXT"),
+        // FIX39 item 13: the owner's lock. A locked bot's settings are frozen
+        // (the daemon enforces it); stored here so it survives a cleared webview
+        // profile or a restored backup, and is never device-local.
+        ("locked", "ALTER TABLE agents ADD COLUMN locked INTEGER NOT NULL DEFAULT 0"),
     ] {
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name=?1)", [column], |r| r.get(0))?;
         if !exists { c.execute(ddl, [])?; }
@@ -694,7 +698,7 @@ fn ensure_proposal_schema(c: &Connection) -> Result<(), StorageError> {
             id TEXT PRIMARY KEY NOT NULL,
             session_id TEXT NOT NULL,
             agent_id TEXT,
-            kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile')),
+            kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile','permission')),
             payload TEXT NOT NULL CHECK(json_valid(payload)),
             status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
             result TEXT CHECK(result IS NULL OR json_valid(result)),
@@ -703,11 +707,12 @@ fn ensure_proposal_schema(c: &Connection) -> Result<(), StorageError> {
         );
         CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status, created_at);",
     )?;
-    // FIX36 D3 widens the `kind` CHECK with `profile`. SQLite bakes a CHECK into
-    // the table definition, so a database written by D2 is rebuilt (rows copied
-    // verbatim) instead of silently refusing the new kind.
+    // FIX36 D3 widens the `kind` CHECK with `profile`; FIX39 P5 widens it again
+    // with `permission` (a Manager-proposed side-conversation mode). SQLite bakes
+    // a CHECK into the table definition, so an older database is rebuilt (rows
+    // copied verbatim) instead of silently refusing the new kind.
     let ddl: String = c.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='proposals'", [], |r| r.get(0))?;
-    if !ddl.contains("'profile'") {
+    if !ddl.contains("'profile'") || !ddl.contains("'permission'") {
         c.execute_batch(
             "BEGIN IMMEDIATE;
              ALTER TABLE proposals RENAME TO proposals_pre_profile;
@@ -715,7 +720,7 @@ fn ensure_proposal_schema(c: &Connection) -> Result<(), StorageError> {
                  id TEXT PRIMARY KEY NOT NULL,
                  session_id TEXT NOT NULL,
                  agent_id TEXT,
-                 kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile')),
+                 kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile','permission')),
                  payload TEXT NOT NULL CHECK(json_valid(payload)),
                  status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
                  result TEXT CHECK(result IS NULL OR json_valid(result)),
@@ -1681,7 +1686,7 @@ impl Storage {
     pub fn agent_list(&self, include_archived: bool, runtime_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         {
-            let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
+            let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END)) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
             let vals=q.query_map(params![include_archived,runtime_id],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
             vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
         }
@@ -1786,6 +1791,25 @@ impl Storage {
             if leader { tx.execute("UPDATE agents SET leader=0 WHERE leader=1 AND id!=?1", [id])?; }
             tx.execute("UPDATE agents SET leader=?2,updated_at=?3 WHERE id=?1", params![id, leader, now])?;
         }
+        let agent = agent_read(&tx, id)?;
+        let event = push_agent_event(&tx, "updated", &agent)?;
+        tx.commit()?;
+        Ok((agent, vec![event]))
+    }
+    /// FIX39 item 13: set or clear a bot's lock. The lock is the one setting a
+    /// locked bot still accepts, and the Manager can never be locked (the owner
+    /// must always be able to recover it). Returns the updated agent and the
+    /// `agent.changed` events to broadcast.
+    pub fn agent_set_locked(&self, id: &str, locked: bool) -> Result<(Value, Vec<Value>), StorageError> {
+        validate_agent_id(id)?;
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let old = agent_read(&tx, id)?;
+        if old["archived"] == true { return Err(StorageError::AgentConflict); }
+        if old["systemRole"].as_str() == Some("manager") && locked { return Err(StorageError::AgentConflict); }
+        if old["locked"].as_bool().unwrap_or(false) == locked { tx.commit()?; return Ok((old, vec![])); }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        tx.execute("UPDATE agents SET locked=?2,updated_at=?3 WHERE id=?1", params![id, locked, now])?;
         let agent = agent_read(&tx, id)?;
         let event = push_agent_event(&tx, "updated", &agent)?;
         tx.commit()?;
@@ -1936,7 +1960,7 @@ impl Storage {
         let kind = record["kind"].as_str().ok_or(StorageError::InvalidAgent)?;
         let agent_id = record["agentId"].as_str();
         let payload = &record["payload"];
-        if !["project", "bot", "task", "playbook", "profile"].contains(&kind) { return Err(StorageError::InvalidAgent); }
+        if !["project", "bot", "task", "playbook", "profile", "permission"].contains(&kind) { return Err(StorageError::InvalidAgent); }
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
@@ -4308,7 +4332,7 @@ impl Storage {
         Ok(result)
     }
     fn agent_rows_locked(&self,c:&Connection,include_archived:bool)->Result<Vec<Value>,StorageError>{
-        let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
+        let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END)) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
         let mut q=c.prepare(sql)?;let vals=q.query_map([include_archived],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
     }
     fn session_detail_locked(&self, c: &Connection, id: &str) -> Result<Value, StorageError> {
@@ -5303,7 +5327,7 @@ fn push_team_event(tx: &Transaction<'_>, event_type: &str, payload: &Value) -> R
     tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,?3,?4)", params![id, ts, event_type, payload.to_string()])?;
     Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":event_type,"payload":payload}))
 }
-fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all')) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
+fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END)) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
 fn insert_agent(tx:&Transaction<'_>,id:&str,v:&Value,name:&str,key:&str,pos:i64,now:&str)->Result<(),StorageError>{let color=v["color"].as_str().unwrap_or("mint");let color=if color.starts_with('#'){color.to_ascii_uppercase()}else{color.into()};tx.execute("INSERT INTO agents(id,name,name_key,description,instructions,color,outfit,runtime_id,model,thinking,service_tier,approval_mode,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at,notification_level,role,system_role) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?18,?19,?20,?21)",params![id,name,key,v["description"].as_str().unwrap_or(""),v["instructions"].as_str().unwrap_or(""),color,v["outfit"].as_str().unwrap_or("auto"),v["runtimeId"].as_str().unwrap_or(""),nullable(&v["model"]),nullable(&v["thinking"]),nullable(&v["serviceTier"]),nullable(&v["approvalMode"]),v.get("customArgs").cloned().unwrap_or(json!([])).to_string(),v.get("customEnv").cloned().unwrap_or(json!({})).to_string(),v["maxConcurrency"].as_i64().unwrap_or(1),nullable(&v["defaultProject"]),pos,now,nullable(&v["notificationLevel"]),v["role"].as_str().unwrap_or(""),if v["systemRole"].as_str()==Some("manager"){Some("manager")}else{None}])?;tx.execute("UPDATE agents SET look=?2 WHERE id=?1",params![id,look_column(&v["look"])])?;Ok(())}
 fn push_agent_event(tx:&Transaction<'_>,action:&str,a:&Value)->Result<Value,StorageError>{let payload=json!({"action":action,"agentId":a["id"],"runtimeId":a["runtimeId"],"updatedAt":a["updatedAt"],"archived":a["archived"],"sortOrder":a["sortOrder"],"notificationLevel":a["notificationLevel"]});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'agent.changed',?3)",params![id,ts,payload.to_string()])?;Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"agent.changed","payload":payload}))}
 fn snapshot_requested(v:&Value)->Value{
@@ -6964,6 +6988,111 @@ mod tests {
         let done = db.finalize_latest_assistant("split", "turn-split", "Final text").unwrap();
         assert_eq!(done["content"], "Final text");
         assert_eq!(message_shape(&db, "split"), vec![("assistant".to_owned(), "Final text".to_owned())]);
+    }
+
+    /// FIX39 item 13: an old database (no `locked` column, as the previous
+    /// version wrote it) must open, gain the column defaulted to false, and keep
+    /// a lock set afterwards across a full close and reopen.
+    #[test]
+    fn a_pre_fix39_database_gains_the_locked_column_and_keeps_a_lock() {
+        let root = std::env::temp_dir().join(format!("bloblex-lock-migration-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("db.sqlite");
+        let id = {
+            let db = Storage::open(&path).unwrap();
+            db.upsert_runtime(&json!({"id":"rt-lock","provider":"codex"})).unwrap();
+            let (agent, _) = db.agent_create(&json!({"name":"Freezer","runtimeId":"rt-lock"})).unwrap();
+            agent["id"].as_str().unwrap().to_owned()
+        };
+        // Rewind the schema to the previous version: no `locked` column.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("ALTER TABLE agents DROP COLUMN locked").unwrap();
+            assert!(!conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='locked')", [], |r| r.get::<_, bool>(0)).unwrap());
+        }
+        {
+            let db = Storage::open(&path).unwrap();
+            let agent = db.agent_get(&id).unwrap();
+            assert_eq!(agent["locked"], json!(false), "an old bot reads as unlocked");
+            assert!(!db.agent_list(false, None).unwrap().iter().any(|row| row["locked"] != json!(false)));
+            let (updated, events) = db.agent_set_locked(&id, true).unwrap();
+            assert_eq!(updated["locked"], json!(true));
+            assert!(!events.is_empty());
+        }
+        {
+            let db = Storage::open(&path).unwrap();
+            assert_eq!(db.agent_get(&id).unwrap()["locked"], json!(true), "the lock survives a reopen");
+            let (again, events) = db.agent_set_locked(&id, true).unwrap();
+            assert_eq!(again["locked"], json!(true));
+            assert!(events.is_empty(), "setting the same lock again broadcasts nothing");
+            let (open, _) = db.agent_set_locked(&id, false).unwrap();
+            assert_eq!(open["locked"], json!(false));
+        }
+        let _ = fs::remove_dir_all(root.join("backups"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_manager_can_never_be_locked() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-mgr","provider":"codex"})).unwrap();
+        let (manager, _) = db.agent_create(&json!({"name":"Manager","runtimeId":"rt-mgr","systemRole":"manager"})).unwrap();
+        let id = manager["id"].as_str().unwrap();
+        assert!(matches!(db.agent_set_locked(id, true), Err(StorageError::AgentConflict)));
+        assert_eq!(db.agent_get(id).unwrap()["locked"], json!(false));
+    }
+
+    /// FIX39 item 19: a database written by the previous version has a
+    /// `proposals.kind` CHECK that omits `permission`; opening it must rebuild
+    /// the table, keep every existing row, and then accept the new kind.
+    #[test]
+    fn a_pre_fix39_proposals_table_gains_the_permission_kind() {
+        let root = std::env::temp_dir().join(format!("bloblex-proposal-migration-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("db.sqlite");
+        {
+            let db = Storage::open(&path).unwrap();
+            db.upsert_runtime(&json!({"id":"rt-prop","provider":"codex"})).unwrap();
+            db.create_session("s-prop", "rt-prop", "codex", ".", "Chat").unwrap();
+            db.insert_proposal(
+                &json!({"id":"old-task","sessionId":"s-prop","agentId":Value::Null,"kind":"task","payload":{"bot":"Mate","project":"","brief":"do it"}}),
+                &json!({"id":"old-task","sessionId":"s-prop","kind":"proposal","status":"pending"}),
+                "2026-01-01T00:00:00.000Z", "2026-12-31T00:00:00.000Z",
+            ).unwrap();
+            // Rewind the kind CHECK to the previous version's definition.
+            let conn = db.conn.lock().unwrap();
+            conn.execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE proposals RENAME TO proposals_old;
+                 CREATE TABLE proposals(
+                     id TEXT PRIMARY KEY NOT NULL,
+                     session_id TEXT NOT NULL,
+                     agent_id TEXT,
+                     kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile')),
+                     payload TEXT NOT NULL CHECK(json_valid(payload)),
+                     status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
+                     result TEXT CHECK(result IS NULL OR json_valid(result)),
+                     created_at TEXT NOT NULL,
+                     decided_at TEXT
+                 );
+                 INSERT INTO proposals SELECT * FROM proposals_old;
+                 DROP TABLE proposals_old;
+                 COMMIT;",
+            ).unwrap();
+            assert!(!conn.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='proposals'", [], |r| r.get::<_, String>(0)).unwrap().contains("'permission'"));
+        }
+        {
+            let db = Storage::open(&path).unwrap();
+            db.insert_proposal(
+                &json!({"id":"new-permission","sessionId":"s-prop","agentId":Value::Null,"kind":"permission","payload":{"conversation":"side-1","mode":"auto"}}),
+                &json!({"id":"new-permission","sessionId":"s-prop","kind":"proposal","status":"pending"}),
+                "2026-01-02T00:00:00.000Z", "2026-12-31T00:00:00.000Z",
+            ).unwrap();
+            let kinds = db.proposals_pending().unwrap().into_iter().filter_map(|p| p["kind"].as_str().map(str::to_owned)).collect::<Vec<_>>();
+            assert!(kinds.contains(&"task".to_owned()) && kinds.contains(&"permission".to_owned()), "{kinds:?}");
+        }
+        let _ = fs::remove_dir_all(root.join("backups"));
+        fs::remove_dir_all(root).unwrap();
     }
 }
 

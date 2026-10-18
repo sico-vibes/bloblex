@@ -46,7 +46,7 @@ const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; name: string; sente
   { value: 'bypass', name: 'Bypass', sentence: 'nothing asks; use only on a computer and project you trust', Icon: ShieldAlert },
 ]
 
-export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, savedRuntimeId, sessionId, autoApprovals, sections, sessions, memoryEnabled, manager = false, onOpenMemory, onOpenSkills, onDraftChange, onArchive, onExecutionGate }: {
+export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, savedRuntimeId, sessionId, autoApprovals, sections, sessions, memoryEnabled, manager = false, locked = false, onOpenMemory, onOpenSkills, onDraftChange, onArchive, onExecutionGate }: {
   draft: AgentDraft
   runtimes: Runtime[]
   projects?: Project[]
@@ -69,6 +69,8 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
   onOpenSkills?: () => void
   /** Editing the built-in Manager: no project, can't be archived. */
   manager?: boolean
+  /** FIX39 item 13: a locked bot's settings open read-only behind a banner. */
+  locked?: boolean
   onDraftChange: (draft: AgentDraft) => void
   onArchive?: () => void
   onExecutionGate?: (gate: ExecutionSendGate) => void
@@ -230,13 +232,14 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     onDraftChange({ ...draft, approvalMode: mode })
   }
 
-  return <>
+  return <fieldset className="blob-settings-body" disabled={locked} aria-label={locked ? 'Locked bot settings' : undefined}>
     {show('look') && <EditGroup id="look" title="Look" label="Appearance">
       <LookEditor
         look={draftLook(draft, agentId)}
         color={draft.color}
         colorHex={previewHex(draft.color, agentColorHex('mint'))}
         name={draft.name.trim() || `New ${noun}`}
+        locked={locked}
         onLookChange={(look, color) => onDraftChange({ ...draft, look, color: color ?? draft.color })}
         onColorChange={(color) => onDraftChange({ ...draft, color })}
       />
@@ -402,7 +405,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       </div>
     </section>}
     {bypassOpen && <BypassConfirmDialog blobName={draft.name} onCancel={() => setBypassOpen(false)} onConfirm={() => { setBypassOpen(false); onDraftChange({ ...draft, approvalMode: 'bypass' satisfies ApprovalMode }) }} />}
-  </>
+  </fieldset>
 }
 
 /**

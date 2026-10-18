@@ -33,10 +33,13 @@ describe('conversation permission mode', () => {
     expect(sessionApprovalMode(session, { ...agent, effectiveApprovalMode:'bypass' }).mode).toBe('bypass')
   })
 
-  it('pins a conversation mode, confirms full access, and clears the pin when the blob mode is chosen', async () => {
+  it('writes the bot and clears the conversation pin, confirming full access', async () => {
     const updated = vi.fn()
-    rpc.mockImplementation(async (_method: string, params: Record<string, unknown>) => ({ session:{ ...session, modelLock:{ ...session.modelLock, approvalMode:params.approvalMode } } }))
-    const host = mount(<PermissionModeControl session={session} agent={agent} disabled={false} onSessionUpdated={updated} onError={() => undefined} />)
+    const agentUpdated = vi.fn()
+    rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => method === 'agent.update'
+      ? { agent: { ...agent, approvalMode: params.approvalMode } }
+      : { session: { ...session, modelLock: { ...session.modelLock, approvalMode: undefined } } })
+    const host = mount(<PermissionModeControl session={session} agent={agent} disabled={false} onSessionUpdated={updated} onAgentUpdated={agentUpdated} onError={() => undefined} />)
     const trigger = host.querySelector<HTMLButtonElement>('.permission-pill')!
     expect(trigger.textContent).toContain('Ask first')
     expect(trigger.getAttribute('aria-label')).toContain('bot default')
@@ -45,23 +48,45 @@ describe('conversation permission mode', () => {
     const items = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
     expect(items.map((item) => item.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false'])
     expect(items[0].textContent).toContain('Bot default')
+    // Choosing Auto writes the bot, not the conversation, and drops the pin.
     await act(async () => { items[1].click() })
     await flush()
-    expect(rpc).toHaveBeenLastCalledWith('session.model.update', { sessionId:'session', approvalMode:'auto' })
-    expect(updated).toHaveBeenCalledWith(expect.objectContaining({ modelLock:expect.objectContaining({ approvalMode:'auto' }) }))
+    expect(rpc).toHaveBeenCalledWith('agent.update', { agentId: 'agent', approvalMode: 'auto' })
+    expect(rpc).toHaveBeenCalledWith('session.permissions.set', { sessionId: 'session', approvalMode: null })
+    expect(rpc).not.toHaveBeenCalledWith('session.model.update', expect.anything())
+    expect(agentUpdated).toHaveBeenCalledWith(expect.objectContaining({ id: 'agent', approvalMode: 'auto' }))
+    expect(updated).toHaveBeenCalledWith(expect.objectContaining({ id: 'session' }))
 
+    // Full access still asks first, then writes the bot.
+    rpc.mockClear()
     await act(async () => { trigger.click() })
     await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[2].click() })
     expect(host.querySelector('[role="dialog"]')?.textContent).toContain('full access')
-    expect(rpc).toHaveBeenCalledTimes(1)
+    expect(rpc).not.toHaveBeenCalled()
     await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === 'Allow full access')!.click() })
     await flush()
-    expect(rpc).toHaveBeenLastCalledWith('session.model.update', { sessionId:'session', approvalMode:'bypass' })
+    expect(rpc).toHaveBeenCalledWith('agent.update', { agentId: 'agent', approvalMode: 'bypass' })
 
+    // The bot's own default clears the bot's setting again.
+    rpc.mockClear()
     await act(async () => { trigger.click() })
     await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[0].click() })
     await flush()
-    expect(rpc).toHaveBeenLastCalledWith('session.model.update', { sessionId:'session', approvalMode:null })
+    expect(rpc).toHaveBeenCalledWith('agent.update', { agentId: 'agent', approvalMode: null })
+  })
+
+  it('writes the bot directly for a bot with no conversation open', async () => {
+    const updated = vi.fn()
+    const agentUpdated = vi.fn()
+    rpc.mockImplementation(async (method: string) => method === 'agent.update' ? { agent } : { session })
+    const draft: Session = { id: 'draft:agent', runtimeId: 'runtime', agentId: 'agent', state: 'idle', messages: [] }
+    const host = mount(<PermissionModeControl session={draft} agent={agent} disabled={false} onSessionUpdated={updated} onAgentUpdated={agentUpdated} onError={() => undefined} />)
+    await act(async () => { host.querySelector<HTMLButtonElement>('.permission-pill')!.click() })
+    await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[1].click() })
+    await flush()
+    expect(rpc).toHaveBeenCalledWith('agent.update', { agentId: 'agent', approvalMode: 'auto' })
+    expect(rpc).not.toHaveBeenCalledWith('session.permissions.set', expect.anything())
+    expect(agentUpdated).toHaveBeenCalled()
   })
 
   it('closes on Escape and stays disabled while a turn is running', async () => {
@@ -72,6 +97,30 @@ describe('conversation permission mode', () => {
     expect(open.querySelector('[role="menu"]')).not.toBeNull()
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true })) })
     expect(open.querySelector('[role="menu"]')).toBeNull()
+  })
+
+  // FIX39 item 13 / P5 audit S2.
+  it('explains the lock on a disabled pill instead of the usual detail', () => {
+    const host = mount(<PermissionModeControl session={session} agent={agent} disabled locked onSessionUpdated={() => undefined} onError={() => undefined} />)
+    const trigger = host.querySelector<HTMLButtonElement>('.permission-pill')!
+    expect(trigger.disabled).toBe(true)
+    expect(trigger.getAttribute('title')).toBe('This bot is locked. Unlock it to change its settings.')
+    // Unlocked, the pill keeps its own explanation.
+    const open = mount(<PermissionModeControl session={session} agent={agent} disabled={false} onSessionUpdated={() => undefined} onError={() => undefined} />)
+    expect(open.querySelector<HTMLButtonElement>('.permission-pill')?.getAttribute('title')).toBe('You approve each command and file change.')
+  })
+
+  // FIX39 item 19: the side-conversation pill says when the Manager set the mode.
+  it('marks a Manager-set conversation mode', () => {
+    const managerSet: Session = { ...session, modelLock: { ...session.modelLock, approvalMode: 'auto', approvalModeSource: 'manager' } }
+    const host = mount(<PermissionModeControl session={managerSet} agent={agent} disabled={false} onSessionUpdated={() => undefined} onError={() => undefined} />)
+    const trigger = host.querySelector<HTMLButtonElement>('.permission-pill')!
+    expect(trigger.textContent).toContain('set by the Manager')
+    expect(trigger.getAttribute('aria-label')).toContain('set by the Manager')
+    // The owner's own pin shows no such mark.
+    const own: Session = { ...session, modelLock: { ...session.modelLock, approvalMode: 'auto' } }
+    const plain = mount(<PermissionModeControl session={own} agent={agent} disabled={false} onSessionUpdated={() => undefined} onError={() => undefined} />)
+    expect(plain.querySelector('.permission-pill')?.textContent).not.toContain('set by the Manager')
   })
 })
 

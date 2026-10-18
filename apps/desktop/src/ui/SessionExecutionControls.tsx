@@ -5,7 +5,7 @@ import { rpc } from '../tauri'
 import { parseModelCatalog, type CatalogModel, type ModelCatalog, type ServiceTierOption } from '../executionContract'
 import { ConfirmDialog } from './BlobPage'
 import { useCachedRpc } from './catalogCache'
-import { moveMenuFocus, usePopoverDismiss } from './ComposerControls'
+import { LOCKED_CONTROL_TOOLTIP, moveMenuFocus, usePopoverDismiss } from './ComposerControls'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { positionFromPointer, SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
 import { Tip } from './Tip'
@@ -13,6 +13,7 @@ import { labelizeEffort, effortIconName, type EffortIconName } from './effortLab
 import { concreteModelForSelection } from './modelPreferences'
 import { organizeModels, presentedModelName } from './modelPresentation'
 import { EXECUTION_PICKER_EVENT } from './slashCommands'
+import { isDraftSession } from './teamSelectors'
 import { Skeleton } from './Skeleton'
 export { labelizeEffort } from './effortLabels'
 
@@ -24,10 +25,13 @@ type EffortDraft = { sessionId: string; model: string | null; value: string | nu
 export const MODEL_FIRST_REASON = 'Available after you pick a model'
 export const PICK_MODEL_LABEL = 'Pick a model'
 
-export function SessionExecutionControls({ session, agent, onSessionUpdated, onError }: {
+export function SessionExecutionControls({ session, agent, locked = false, onSessionUpdated, onAgentUpdated, onError }: {
   session: Session
   agent: Agent
+  /** FIX39 item 13: a locked bot greys out every composer execution control. */
+  locked?: boolean
   onSessionUpdated: (session: Session) => void
+  onAgentUpdated?: (agent: Agent) => void
   onError: (reason: unknown) => void
 }) {
   const [pendingModel, setPendingModel] = useState<PendingModel | null>(null)
@@ -44,17 +48,22 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   const serviceTier = rawSessionLock.serviceTier === undefined ? agent.serviceTier : rawSessionLock.serviceTier
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
 
+  // FIX39 item 16: a bot's first conversation is a local draft with no daemon
+  // row, so its composer writes the bot itself. A real conversation keeps
+  // today's per-conversation call (which also updates the provider session).
+  const draftTarget = isDraftSession(session)
   // The catalog comes from the shared cache: the runtime-wide list (warmed at
   // boot) shows at once, and this conversation's own list replaces it when it
-  // arrives. A model or workflows change refreshes it in the background.
-  const modelsQuery = useCachedRpc('runtime.models', { runtimeId: session.runtimeId, sessionId: session.id }, { fallback: { runtimeId: session.runtimeId }, revalidate: [model, rawSessionLock.enableWorkflows] })
+  // arrives. A model or workflows change refreshes it in the background. A
+  // draft id is never sent to the daemon.
+  const modelsQuery = useCachedRpc('runtime.models', draftTarget ? { runtimeId: session.runtimeId } : { runtimeId: session.runtimeId, sessionId: session.id }, { fallback: { runtimeId: session.runtimeId }, revalidate: [model, rawSessionLock.enableWorkflows] })
   const catalog = useMemo<ModelCatalog | null>(() => modelsQuery.value === undefined ? null : parseModelCatalog(modelsQuery.value), [modelsQuery.value])
   const catalogUnavailable = (modelsQuery.value === undefined && !!modelsQuery.error) || (modelsQuery.value !== undefined && (!catalog || catalog.models.length === 0))
 
   // When the daemon says effort cannot be chosen (this model has no levels, or
   // the runtime does not allow it) the pill is shown greyed out with the reason
   // instead of failing on use. The answer is per model for OpenCode.
-  const capsQuery = useCachedRpc<{ settings?: { thinking?: { supported?: boolean; enabled?: boolean; reason?: string } } }>('runtime.capabilities', { runtimeId: session.runtimeId, sessionId: session.id, ...(model ? { model } : {}) }, { fallback: { runtimeId: session.runtimeId } })
+  const capsQuery = useCachedRpc<{ settings?: { thinking?: { supported?: boolean; enabled?: boolean; reason?: string } } }>('runtime.capabilities', draftTarget ? { runtimeId: session.runtimeId, ...(model ? { model } : {}) } : { runtimeId: session.runtimeId, sessionId: session.id, ...(model ? { model } : {}) }, { fallback: { runtimeId: session.runtimeId } })
   const thinkingGate = capsQuery.value?.settings?.thinking
   const thinkingLocked: 'unsupported' | 'gated' | 'no-levels' | null = !thinkingGate ? null
     : thinkingGate.supported === false ? (thinkingGate.reason === 'model_has_no_effort_levels' ? 'no-levels' : 'unsupported')
@@ -71,7 +80,7 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
   const activeDraft = effortDraft?.sessionId === session.id && effortDraft.model === model ? effortDraft.value : undefined
   const saving = savingSessionIds.has(session.id)
   const sessionBusy = ['starting', 'working', 'cancelling', 'waiting_permission'].includes(String(session.state ?? '').toLowerCase())
-  const controlsDisabled = saving || sessionBusy
+  const controlsDisabled = saving || sessionBusy || locked
 
   const save = async (sessionId: string, nextModel: string | null, nextThinking: string | null, confirmModelChange = false): Promise<boolean> => {
     if (savingRef.current.has(sessionId)) return false
@@ -79,6 +88,14 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
     const generation = sessionGeneration.current
     setSavingSessionIds((current) => new Set(current).add(sessionId))
     try {
+      // FIX39 item 16: the composer always writes the bot, so the choice holds
+      // for every later conversation.
+      const bot = await rpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, model: nextModel, thinking: nextThinking })
+      if (bot.agent?.id) onAgentUpdated?.(bot.agent)
+      if (isDraftSession(session)) {
+        return mounted.current && currentSessionId.current === sessionId && sessionGeneration.current === generation
+      }
+      // An open conversation is additionally brought in line, as today.
       const result = await rpc<{ session?: Session }>('session.model.update', {
         sessionId, model: nextModel, thinking: nextThinking, confirmModelChange,
       })
@@ -113,8 +130,12 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
     savingRef.current.add(sessionId)
     setSavingSessionIds((current) => new Set(current).add(sessionId))
     try {
-      const result = await rpc<{ session?: Session }>('session.model.update', { sessionId, serviceTier: enabled ? fastTier.id : null })
-      if (mounted.current && currentSessionId.current === sessionId && result.session?.id === sessionId) onSessionUpdated(result.session)
+      const bot = await rpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, serviceTier: enabled ? fastTier.id : null })
+      if (bot.agent?.id) onAgentUpdated?.(bot.agent)
+      if (!isDraftSession(session)) {
+        const result = await rpc<{ session?: Session }>('session.model.update', { sessionId, serviceTier: enabled ? fastTier.id : null })
+        if (mounted.current && currentSessionId.current === sessionId && result.session?.id === sessionId) onSessionUpdated(result.session)
+      }
     } catch (reason) { if (mounted.current && currentSessionId.current === sessionId) onError(reason) } finally {
       savingRef.current.delete(sessionId)
       if (mounted.current) setSavingSessionIds((current) => { const next = new Set(current); next.delete(sessionId); return next })
@@ -123,8 +144,8 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
 
   return <div className="session-execution-controls" aria-label="Conversation model controls">
     {catalog && catalog.models.length > 0
-      ? <ModelMenu provider={catalog.provider} models={catalog.models} model={model ?? null} label={modelLabel} ariaLabel={modelAriaLabel} fastTier={fastTier} fastOn={fastOn} disabled={sessionBusy} saving={saving} onSelect={(next) => {
-        if (next !== model) { setEffortDraft(null); setPendingModel({ sessionId:session.id, model:next }) }
+      ? <ModelMenu provider={catalog.provider} models={catalog.models} model={model ?? null} label={modelLabel} ariaLabel={modelAriaLabel} fastTier={fastTier} fastOn={fastOn} locked={locked} disabled={sessionBusy || locked} saving={saving} onSelect={(next) => {
+        if (next !== model) { setEffortDraft(null); if (draftTarget) void save(session.id, next, null, false); else setPendingModel({ sessionId:session.id, model:next }) }
       }} onFast={(enabled) => void setFast(enabled)} />
       : catalogUnavailable
         ? <button type="button" className="composer-pill model-pill unavailable" aria-label={`Conversation model, ${modelLabel}; model catalog unavailable`} title="Model choices are unavailable until the runtime reports a catalog." disabled><span>{modelLabel}</span></button>
@@ -138,6 +159,7 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
       defaultThinking={selectedModel?.defaultThinking ?? null}
       unavailableReason={catalogUnavailable ? 'Runtime model capabilities are unavailable. Bitbots cannot verify or change effort levels without a validated catalog.' : selectedModel ? null : catalog ? 'The selected model is not in the validated runtime catalog. Bitbots cannot verify selectable effort levels.' : 'Runtime model capabilities are still unavailable.'}
       lockedReason={!model ? MODEL_FIRST_REASON : thinkingLocked === 'no-levels' ? `${selectedModel?.displayName ?? 'This model'} has no effort levels, so it always runs at its own default.` : thinkingLocked ? `${providerBrand(catalog?.provider ?? "").name || "This runtime"} doesn't let Bitbots pick an effort level yet, so it uses the model's own default.` : null}
+      locked={locked}
       workflowEnabled={rawSessionLock.enableWorkflows === true}
       value={thinking}
       draftValue={activeDraft}
@@ -146,11 +168,11 @@ export function SessionExecutionControls({ session, agent, onSessionUpdated, onE
       onCancel={() => setEffortDraft(null)}
       onCommit={requestEffort}
     />
-    {pendingForSession && <ConfirmDialog title="Change this conversation's model?" body="Switching models mid-conversation can significantly degrade performance and continuity. The provider may reset its context. Your saved messages stay in Bitbots." confirmLabel="Change model" cancelLabel="Keep current model" confirmDisabled={controlsDisabled} onConfirm={() => { void save(session.id, pendingForSession.model, pendingForSession.model === model ? thinking ?? null : null, true) }} onCancel={() => setPendingModel(null)} />}
+    {pendingForSession && !draftTarget && <ConfirmDialog title="Change this conversation's model?" body="Switching models mid-conversation can significantly degrade performance and continuity. The provider may reset its context. Your saved messages stay in Bitbots." confirmLabel="Change model" cancelLabel="Keep current model" confirmDisabled={controlsDisabled} onConfirm={() => { void save(session.id, pendingForSession.model, pendingForSession.model === model ? thinking ?? null : null, true) }} onCancel={() => setPendingModel(null)} />}
   </div>
 }
 
-function EffortControl({ provider, providerStyle, modelName, efforts, defaultThinking, unavailableReason, lockedReason, workflowEnabled, value, draftValue, disabled, onPreview, onCancel, onCommit }: {
+function EffortControl({ provider, providerStyle, modelName, efforts, defaultThinking, unavailableReason, lockedReason, locked = false, workflowEnabled, value, draftValue, disabled, onPreview, onCancel, onCommit }: {
   provider: string
   providerStyle: EffortMeterStyle
   modelName: string
@@ -159,6 +181,8 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
   unavailableReason: string | null
   /** Set when the runtime cannot change effort at all: the pill is greyed out with this tooltip. */
   lockedReason?: string | null
+  /** FIX39 item 13: the bot is locked, so the disabled pill explains why. */
+  locked?: boolean
   workflowEnabled: boolean
   value: string | null | undefined
   draftValue: string | null | undefined
@@ -316,7 +340,7 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
   const triggerLabel = lockedReason === MODEL_FIRST_REASON ? 'Effort'
     : value && efforts.includes(value) ? labelizeEffort(value, provider) : unlistedValue ? labelizeEffort(unlistedValue, provider) : defaultThinking ? labelizeEffort(defaultThinking, provider) : 'Model default'
   const savedTop = efforts.length > 1 && value === efforts[efforts.length - 1]
-  const trigger = <button type="button" className={`composer-pill session-effort-trigger ${savedTop ? 'highest' : ''} ${isTopTierEffort(value) ? 'max-tier' : ''} ${lockedReason ? 'locked' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={lockedReason ? `Effort: ${triggerLabel}. ${lockedReason}` : `Effort: ${triggerLabel}`} aria-disabled={lockedReason ? true : undefined} disabled={disabled && !lockedReason} onClick={toggle}>
+  const trigger = <button type="button" className={`composer-pill session-effort-trigger ${savedTop ? 'highest' : ''} ${isTopTierEffort(value) ? 'max-tier' : ''} ${lockedReason ? 'locked' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={lockedReason ? `Effort: ${triggerLabel}. ${lockedReason}` : `Effort: ${triggerLabel}`} aria-disabled={lockedReason ? true : undefined} title={locked && !lockedReason ? LOCKED_CONTROL_TOOLTIP : undefined} disabled={disabled && !lockedReason} onClick={toggle}>
     <EffortIcon value={lockedReason === MODEL_FIRST_REASON ? null : value && efforts.includes(value) ? value : unlistedValue ?? defaultThinking ?? null} />
     <span>{triggerLabel}</span>
     <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
@@ -364,7 +388,7 @@ export function shortModelName(name: string) {
   return name.replace(/^claude\s+(?=\S)/i, '')
 }
 
-function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn, disabled, saving, onSelect, onFast }: {
+function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn, locked = false, disabled, saving, onSelect, onFast }: {
   provider: string
   models: CatalogModel[]
   model: string | null
@@ -372,6 +396,8 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
   ariaLabel: string
   fastTier: ServiceTierOption | null
   fastOn: boolean
+  /** FIX39 item 13: the bot is locked, so the disabled pill explains why. */
+  locked?: boolean
   disabled: boolean
   saving: boolean
   onSelect: (model: string) => void
@@ -407,7 +433,7 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
   }, [disabled])
   const choose = (next: string) => { close(true); onSelect(next) }
   return <div ref={rootRef} className="composer-popover-anchor">
-    <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''}`} title="Choose which model this conversation uses" aria-haspopup="menu" aria-expanded={open} aria-label={`Conversation model: ${ariaLabel}${fastOn ? ', fast mode on' : ''}`} disabled={disabled || (saving && !open)} onClick={() => setOpen((value) => !value)}>
+    <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''}`} title={locked ? LOCKED_CONTROL_TOOLTIP : 'Choose which model this conversation uses'} aria-haspopup="menu" aria-expanded={open} aria-label={`Conversation model: ${ariaLabel}${fastOn ? ', fast mode on' : ''}`} disabled={disabled || (saving && !open)} onClick={() => setOpen((value) => !value)}>
       {saving ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : fastOn ? <Zap size={13} aria-hidden="true" className="model-pill-fast" /> : null}
       <ProviderLogo provider={provider} size={14} />
       <i className="model-pill-divider" aria-hidden="true" />

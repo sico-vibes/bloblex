@@ -72,6 +72,8 @@ export const BETA_CHANNEL_EXPLANATION = 'Includes pre-releases. Used by default 
 
 export const BADGE_DOWNLOADING_LABEL = 'Downloading update'
 export const BADGE_RESTART_LABEL = 'Restart to update'
+/** FIX39 P5 follow-up: the ready badge at narrow window widths, where the full sentence covered the conversation title. */
+export const BADGE_RESTART_SHORT_LABEL = 'Restart'
 export const BADGE_FAILED_LABEL = UPDATE_FAILED_MESSAGE
 export const AUTO_DOWNLOAD_LABEL = 'Download updates automatically'
 export const AUTO_DOWNLOAD_HINT = 'Downloads new versions in the background. You still choose when to restart.'

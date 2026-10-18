@@ -53,6 +53,10 @@ pub fn tool_schemas() -> Vec<Value> {
         json!({"name":"project_status","description":"Show a project's bots with their latest conversation title, state and last activity.","inputSchema":{"type":"object","properties":{
             "project":{"type":"string","description":"A project id or exact project name."}
         },"required":["project"],"additionalProperties":false}}),
+        json!({"name":"set_conversation_permission","description":"Propose a permission change for a side conversation you started, for the user to approve. Nothing changes until they approve the card. Allowed modes are \"ask\" and \"auto\"; full access can never be set here.","inputSchema":{"type":"object","properties":{
+            "conversation":{"type":"string","description":"The side conversation's id, from list_conversations."},
+            "mode":{"type":"string","enum":["ask","auto"],"description":"The permission mode for that conversation from its next turn."}
+        },"required":["conversation","mode"],"additionalProperties":false}}),
     ]
 }
 
@@ -155,6 +159,19 @@ fn validate_task(args: &Value) -> Result<Value, String> {
     Ok(json!({"bot":bot,"project":project,"brief":brief}))
 }
 
+/// FIX39 item 19: a permission change for one side conversation. Full access is
+/// never offered: the Manager may only choose Ask first or Auto.
+fn validate_permission(args: &Value) -> Result<Value, String> {
+    let map = args.as_object().ok_or("the permission proposal must be an object.")?;
+    reject_unknown(map, &["conversation", "mode"], "the permission proposal")?;
+    let conversation = required_str(map, "conversation", 80)?;
+    let mode = required_str(map, "mode", 10)?;
+    if !matches!(mode.as_str(), "ask" | "auto") {
+        return Err("mode must be \"ask\" or \"auto\"; full access is never set here.".into());
+    }
+    Ok(json!({"conversation": conversation, "mode": mode}))
+}
+
 /// The Manager's conversation, or the non-manager refusal. The tool list only
 /// offers these tools to the Manager, but the dispatch re-checks so a stale or
 /// forged call cannot slip through.
@@ -227,6 +244,30 @@ pub async fn assign_task(st: &AppState, session_id: &str, args: &Value) -> Resul
     Ok(waiting(&id))
 }
 
+/// FIX39 item 19: propose a permission change for a side conversation the
+/// Manager itself started. Locked bots refuse it, and full access is never
+/// offered.
+pub async fn propose_permission(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
+    let manager = manager_of_session(st, session_id)?;
+    let payload = validate_permission(args)?;
+    let conversation = payload["conversation"].as_str().unwrap_or("").to_owned();
+    let row = st.db.session_detail(&conversation).map_err(|_| format!("No conversation {conversation}."))?;
+    if row["link"]["kind"] != "side" { return Err("Only a side conversation between two bots can be changed here.".into()); }
+    let manager_id = manager["id"].as_str().unwrap_or("");
+    if row["link"]["peerAgentId"].as_str() != Some(manager_id) {
+        return Err("Only a side conversation the Manager started can be changed here.".into());
+    }
+    let target_id = row["agentId"].as_str().unwrap_or("").to_owned();
+    if st.db.agent_get(&target_id).map(|agent| crate::bot_is_locked(&agent)).unwrap_or(false) {
+        return Err("This bot is locked. Unlock it to change its settings.".into());
+    }
+    let mode = payload["mode"].as_str().unwrap_or("ask").to_owned();
+    let target = st.db.agent_get(&target_id).ok().and_then(|agent| agent["name"].as_str().map(str::to_owned)).unwrap_or_else(|| "the bot".into());
+    let detail = format!("Conversation {conversation} · applies from the next turn");
+    let id = create_proposal(st, session_id, &manager, "permission", payload, format!("Change {target}'s conversation permission to {mode}"), Some(detail)).await?;
+    Ok(waiting(&id))
+}
+
 /// Read-only: a project's bots, each with its latest conversation title, state
 /// and last activity.
 pub async fn project_status(st: &AppState, args: &Value) -> Result<String, String> {
@@ -271,6 +312,7 @@ pub(crate) fn describe(kind: &str, payload: &Value) -> String {
         "project" => format!("create project {}", payload["name"].as_str().unwrap_or("a project")),
         "bot" => format!("create bot {}", payload["name"].as_str().unwrap_or("a bot")),
         "task" => format!("assign a task to {}", payload["bot"].as_str().unwrap_or("a bot")),
+        "permission" => format!("set a conversation's permission to {}", payload["mode"].as_str().unwrap_or("a mode")),
         "playbook" => "change the Manager's playbook".to_owned(),
         "profile" => match payload["op"].as_str().unwrap_or("set") {
             "forget" => format!("forget what the Manager knows ({})", payload["key"].as_str().unwrap_or("a preference")),
@@ -291,6 +333,7 @@ async fn apply(st: &AppState, session_id: &str, agent_id: Option<&str>, kind: &s
         "project" => apply_project(st, payload),
         "bot" => apply_bot(st, agent_id, payload).await,
         "task" => apply_task(st, session_id, payload).await,
+        "permission" => apply_permission(st, agent_id, payload).await,
         "playbook" => apply_playbook(st, payload),
         "profile" => apply_profile(st, payload),
         _ => Err(invalid("That proposal kind is not supported.".into())),
@@ -411,6 +454,34 @@ async fn apply_task(st: &AppState, session_id: &str, payload: &Value) -> Result<
     let brief = payload["brief"].as_str().unwrap_or("");
     let delegation = crate::team::delegate(st, session_id, &json!({"blob": bot, "message": brief})).await.map_err(invalid)?;
     Ok((json!({"sideSessionId": delegation.side, "topic": delegation.title, "bot": delegation.target_name}), format!("assigned a task to {}", delegation.target_name)))
+}
+
+/// Apply an approved permission change to one side conversation. Full access is
+/// refused even here, and a locked bot refuses the change. P5 audit S5: the
+/// proposal may have been edited before approval, so the target conversation is
+/// re-checked against the Manager that proposed it, exactly as at create time.
+async fn apply_permission(st: &AppState, agent_id: Option<&str>, payload: &Value) -> Result<(Value, String), DispatchError> {
+    let conversation = payload["conversation"].as_str().unwrap_or("").to_owned();
+    let mode = payload["mode"].as_str().unwrap_or("ask").to_owned();
+    if !matches!(mode.as_str(), "ask" | "auto") {
+        return Err(invalid("A conversation permission must be ask or auto.".into()));
+    }
+    let row = st.db.session_detail(&conversation).map_err(|_| invalid("That conversation is no longer available.".into()))?;
+    if row["link"]["kind"] != "side" { return Err(invalid("That conversation is not a side conversation.".into())); }
+    let manager_id = agent_id.unwrap_or("");
+    if row["link"]["peerAgentId"].as_str() != Some(manager_id) {
+        return Err(invalid("That conversation was not started by the Manager that proposed this change.".into()));
+    }
+    let target_id = row["agentId"].as_str().unwrap_or("").to_owned();
+    if st.db.agent_get(&target_id).map(|agent| crate::bot_is_locked(&agent)).unwrap_or(false) {
+        return Err(derr("conflict", "This bot is locked. Unlock it to change its settings.", StatusCode::CONFLICT));
+    }
+    // P5 audit F3: the same lock builder the owner's own RPC uses, so an
+    // approved proposal does not drop Claude workflows or plan mode either.
+    let lock = crate::conversation_lock_for(st, &row, Some(&mode), Some("manager"))?;
+    let updated = st.db.set_session_model_lock(&conversation, &lock).map_err(agent_error)?;
+    st.emit("session.changed", updated).await;
+    Ok((json!({"sessionId": conversation, "approvalMode": mode}), format!("set a conversation's permission to {mode}")))
 }
 
 async fn post_note(st: &AppState, session_id: &str, text: &str, id: &str, kind: &str, decision: &str) {

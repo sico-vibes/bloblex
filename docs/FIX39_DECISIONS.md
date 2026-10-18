@@ -167,3 +167,17 @@ Modelled on Claude Code's "Background tasks" panel: a collapsible section in the
 - Clicking a row opens that task's conversation, the bot-to-bot sub-conversation, with its live activity.
 - Finished tasks collapse into "N finished".
 - It belongs with recommendation 11 (live visibility) in P9 and uses the same data: running and queued side sessions, P6's queue state and P8's limited state.
+
+## P13: fixes found by the real-CLI tests (P11, 18 October, evening)
+
+P11's live runs found two real bugs that the unit tests could not (`docs/FIX39_P11_REPORT.md`, "Findings").
+
+- **Claude cannot change a conversation's permission mid-session.**
+  - After `session.permissions.set`, the next Claude turn fails with `config_unsupported` ("Requested execution settings were unsupported"). Codex and OpenCode complete the same scenario.
+  - This is the likely real cause of the friend's "paths still denied" (item 19).
+  - **Fix:** apply the new permission mode to a running Claude conversation by relaunching its process with the new mode and resuming the same provider session, with P6's recap as the fallback if the resume fails. Prove it with the P11 live scenario (`permissionChange` must succeed for Claude) and an offline replay.
+- **Steer is disabled for every provider in the daemon** (the `exec_gate.*.steer` defaults are closed), although the Codex adapter accepts it.
+  - With P9's "Steer vs Queue" setting, Steer must actually steer where the provider supports it: Codex today, plus any other provider whose adapter supports it.
+  - **Fix:** open the gate per provider capability, route by the setting, and fall back to Queue with the honest line elsewhere. Prove it with the P11 steer scenario.
+- **Codex `provider_error` on daemon first turns:** most likely quota. Re-record the Codex daemon fixture when the quota recovers; no code change unless it reproduces with quota available.
+- **When:** after P8 and P9 are merged. It shares the adapters, `main.rs` and the steer routing.

@@ -1,8 +1,27 @@
 # Bitbots session handoff
 
-> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.31` ([docs/releases/0.1.0-beta.31.md](docs/releases/0.1.0-beta.31.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
+> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.32` ([docs/releases/0.1.0-beta.32.md](docs/releases/0.1.0-beta.32.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
 
 Current as of 17 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+
+## Beta.31 review FIX37 (18 October 2026, after beta.31)
+
+**State.** Released as [v0.1.0-beta.32](docs/releases/0.1.0-beta.32.md) (tag at `fc7987f`; installer SHA-256 `594334e6b094d61fbf5258efd75fe3554e505623b879100eb756b188707fd58a`), signed for the updater with a **new key** in `%USERPROFILE%\.bloblex-release` and published to `channel-beta`, so beta.32 and later update themselves; older installs install beta.32 by hand. The owner asked that **all code, UI included, goes to DeepSeek lanes** this wave ([AGENTS.md](AGENTS.md), 18 October amendment): the Director wrote the briefs `docs/FIX37_G1` to `G6_*_SPEC.md`, reviewed each report and diff, merged, gated and checked the preview; it wrote no production code.
+
+| Lane | What it did | Report |
+|---|---|---|
+| G1 | Phone page served as `text/html` (it downloaded as a file); a provider resume that fails to initialize falls back to a fresh session (the "coding agent is not available" after signing in again; cause found in the app's event log: `Claude resume did not initialize`) | `docs/FIX37_G1_REPORT.md` |
+| G2 | Sidebar logos centred with a 5 px gap; every tooltip in a viewport-clamped portal; side-chat badge shadow above the frame fade | `docs/FIX37_G2_REPORT.md` |
+| G3 | One deterministic selection after a delete or archive; stale active-session ids ignored; no re-publish loop with the companion; no auto-create/empty-removal chain; no unread dots from moving selection | `docs/FIX37_G3_REPORT.md` |
+| G4 | `/` slash menu: actions, the bot's skills, Manager commands; `session.prompt` `command` with a hidden per-turn directive; `skills.forAgent` | `docs/FIX37_G4_REPORT.md` |
+| G5 | Background update check every 4 h and download; "Downloading update" / "Restart to update" in the header; Settings › Updates mirrors it; release script refuses a build without updater artifacts | `docs/FIX37_G5_REPORT.md` |
+| G6 | Preview fixture stand-ins for the update phase and an export parity test (the preview had gone blank) | `docs/FIX37_G6_REPORT.md` |
+
+**Gates on `6330ccc`:** Rust 723 passed, clippy clean, desktop crate 64, Vitest 1136, main, remote and preview builds. Preview checks: logos (0 px offset, 5 px gap), tooltip clamped at the right edge, slash menu for a bot and for the Manager, update badge.
+
+**Not verified:** an update round trip on a real install (first possible with beta.33), the phone page on a real phone, the resume fallback against a really expired sign-in, the native windows. A resume slower than 8 s now starts fresh. The update badge only shows when the header actions are visible (a bot selected).
+
+**Owner to do:** back up `%USERPROFILE%\.bloblex-release`; delete `C:\fxt`, `C:\fxtarget` and `C:\fxtarget2` when no lane runs.
 
 ## Beta.30 review wave FIX34-FIX36 (17 October 2026, after beta.30)
 

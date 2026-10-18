@@ -4,7 +4,7 @@ Bitbots (formerly Bloblex)
 
 Local Windows desktop control plane for Claude Code, Codex, and OpenCode. A React/Tauri shell and a companion window share state from the `bitbotsd` daemon. Each provider CLI keeps its own login.
 
-**Status: `v0.1.0-beta.31`** (the version in `Cargo.toml` and `package.json`), published as a manual, unsigned NSIS installer. The signed updater feed stays at `v0.1.0-beta.6`. Full native acceptance and a clean-machine install remain open ([docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)). Release notes: [docs/releases/0.1.0-beta.31.md](docs/releases/0.1.0-beta.31.md). History and dated records: [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and [docs/implementation-status.md](docs/implementation-status.md). The hub for every document is [docs/README.md](docs/README.md).
+**Status: `v0.1.0-beta.32`** (the version in `Cargo.toml` and `package.json`), published as an NSIS installer that is not Authenticode-signed but is signed for the updater (new key) and offered on the beta update channel; versions before beta.32 must install it by hand. Full native acceptance and a clean-machine install remain open ([docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)). Release notes: [docs/releases/0.1.0-beta.32.md](docs/releases/0.1.0-beta.32.md). History and dated records: [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and [docs/implementation-status.md](docs/implementation-status.md). The hub for every document is [docs/README.md](docs/README.md).
 
 ## Continue this project
 

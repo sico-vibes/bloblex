@@ -7,7 +7,7 @@ import { answerUsageAnalytics } from '../ui/analyticsFixtures'
 import { normalizeAnalytics } from '../ui/analyticsFormat'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from '../executionContract'
 import type { UsageAnalyticsRequest } from '../analyticsTypes'
-import { parseUpdateChannel, type UpdateChannel, type UpdateInfo, type UpdateProgress, type UpdatesState } from '../updatesContract'
+import { IDLE_UPDATE_PHASE, parseUpdateChannel, type UpdateChannel, type UpdateInfo, type UpdatePhaseState, type UpdateProgress, type UpdatesState } from '../updatesContract'
 import { entityNoun } from '../ui/vocabulary'
 import { themeStyle } from '../blob/bitbots'
 import { REMOTE_METHODS } from '../remote/remoteContract'
@@ -1087,9 +1087,13 @@ export async function readBlobImport(_selectionToken: string) {
   }, null, 2)
 }
 export async function writeBlobExport(_selectionToken: string, _text: string) {}
+// Preview stand-ins for the backup types `src/tauri.ts` exports, so the backup
+// page type-checks against the fixture bridge unchanged.
+export type BackupInclude = { memory?: boolean; skills?: boolean; automations?: boolean; settings?: boolean }
+export type BackupStats = { bots: number; memory: number; skills: number; automations: number; settings: number }
 export async function selectBackupExportPath() { return 'preview-backup-export-token' }
 export async function selectBackupImportPath() { return 'preview-backup-import-token' }
-export async function writeBackupExport(_selectionToken: string, _include?: unknown) {
+export async function writeBackupExport(_selectionToken: string, _include?: BackupInclude) {
   return { path: 'C:\\Users\\you\\Documents\\bitbots-backup-2026-10-17.bitbots-backup.json', stats: { bots: agents.length, memory: fixtureMemory.length, skills: fixtureSkills.length, automations: 1, settings: 9 } }
 }
 export async function previewBackupImport(_selectionToken: string) {
@@ -1242,6 +1246,33 @@ export async function listenForUpdateAvailable(handler: (info: UpdateInfo) => vo
 export async function listenForUpdateProgress(handler: (progress: UpdateProgress) => void): Promise<Unlisten> {
   updateProgressHandlers.add(handler)
   return () => { updateProgressHandlers.delete(handler) }
+}
+
+const updateStateHandlers = new Set<(state: UpdatePhaseState) => void>()
+const UPDATE_PHASE_FLAGS = ['downloading', 'ready', 'error'] as const
+
+// Preview flag `?update=downloading|ready|error` seeds the background-updater
+// phase (version 0.1.0-beta.99, 42% while downloading) so the update badge can
+// be inspected in the browser; with no flag the phase is idle.
+function fixtureUpdatePhase(): UpdatePhaseState {
+  const flag = flags().get('update')
+  if (flag === 'downloading') return { phase: 'downloading', version: '0.1.0-beta.99', downloadedBytes: 42, totalBytes: 100, message: null }
+  if (flag === 'ready') return { phase: 'ready', version: '0.1.0-beta.99', downloadedBytes: null, totalBytes: null, message: null }
+  if (flag === 'error') return { phase: 'error', version: '0.1.0-beta.99', downloadedBytes: null, totalBytes: null, message: null }
+  return IDLE_UPDATE_PHASE
+}
+
+export async function updatesPhase(): Promise<UpdatePhaseState> {
+  return fixtureUpdatePhase()
+}
+
+export async function listenForUpdateState(handler: (state: UpdatePhaseState) => void): Promise<Unlisten> {
+  updateStateHandlers.add(handler)
+  const flag = flags().get('update')
+  if (flag && (UPDATE_PHASE_FLAGS as readonly string[]).includes(flag)) {
+    window.setTimeout(() => handler(fixtureUpdatePhase()), 0)
+  }
+  return () => { updateStateHandlers.delete(handler) }
 }
 
 export async function runtimeCapabilities(runtimeId: string, agentId?: string) {

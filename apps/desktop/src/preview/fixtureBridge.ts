@@ -760,7 +760,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const now = new Date().toISOString()
     if ((fixtureSettings['experimental.autoTitles'] === true || flags().has('experiments')) && session.link?.kind !== 'side' && !(session.messages ?? []).some((m) => m.role === 'user')) {
       const owner = agents.find((a) => a.id === session.agentId)
-      if (owner && session.title === owner.name) session.title = String(params.text ?? '').split(/\s+/).slice(0, 6).join(' ').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').slice(0, 48)
+      if (owner && (session.title === owner.name || session.title === 'New chat')) session.title = String(params.text ?? '').split(/\s+/).slice(0, 6).join(' ').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').slice(0, 48)
     }
     session.messages = [...(session.messages ?? []), { id: `preview-user-${next}`, turnId: `preview-turn-${next}`, sequence: next, role: 'user', content: String(params.text ?? ''), createdAt: now, ...(references.length ? { references } : {}), ...(replySnapshot ? { meta: { replyTo: replySnapshot } } : {}) }]
     session.updatedAt = now
@@ -980,13 +980,16 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     sequence += 1
     return { session } as T
   }
-  if (method === 'agent.conversation') {
+  if (method === 'agent.conversation' || method === 'agent.conversation.create') {
     const agent = agents.find((item) => item.id === params.agentId && !item.archived)
     if (!agent) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
-    const existing = sessions.filter((session) => session.agentId === agent.id && !session.archived && !session.link).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0]
+    const existing = method === 'agent.conversation' ? sessions.filter((session) => session.agentId === agent.id && !session.archived && !session.link).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0] : undefined
     if (existing) return { session: { ...existing }, created: false } as T
     const project = projects.find((item) => item.id === agent.projectId)
-    const session: Session = { id: `session-new-${sessions.length + 1}`, runtimeId: agent.runtimeId, agentId: agent.id, title: agent.name, projectPath: project?.path ?? `C:/Bloblex/workspaces/${agent.id}`, state: 'idle', modelLock: { model: agent.model, thinking: agent.thinking }, contextUsed: null, contextSize: null, updatedAt: new Date().toISOString(), messages: [] }
+    const title = typeof params.title === 'string' && params.title.trim() ? params.title.trim() : 'New chat'
+    // Like the daemon, a lazily created conversation is stored untitled and named
+    // from the first message, never with the bot's own name.
+    const session: Session = { id: `session-new-${sessions.length + 1}`, runtimeId: agent.runtimeId, agentId: agent.id, title, projectPath: project?.path ?? `C:/Bloblex/workspaces/${agent.id}`, state: 'idle', modelLock: { model: agent.model, thinking: agent.thinking }, contextUsed: null, contextSize: null, updatedAt: new Date().toISOString(), messages: [] }
     sessions = [...sessions, session]
     return { session, created: true } as T
   }

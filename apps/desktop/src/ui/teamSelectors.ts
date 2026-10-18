@@ -297,3 +297,27 @@ export function isEmptyConversation(session: Session | null | undefined): boolea
   if (!Array.isArray(session.messages)) return false
   return !session.messages.some((message) => message.role === 'user' || message.role === 'assistant')
 }
+
+/** The id a locally drafted conversation carries: it is never a daemon session id. */
+export const DRAFT_SESSION_PREFIX = 'draft:'
+
+/** True for the local stand-in shown before a bot's first message is sent. */
+export function isDraftSession(session: Session | null | undefined): boolean {
+  return !!session && typeof session.id === 'string' && session.id.startsWith(DRAFT_SESSION_PREFIX)
+}
+
+/**
+ * A local stand-in for a bot's first conversation, so the composer is ready the
+ * moment the bot is picked. It is never sent to the daemon and has no row: the
+ * real conversation is created with the first message.
+ */
+export function draftSessionFor(agent: Agent): Session {
+  return {
+    id: `${DRAFT_SESSION_PREFIX}${agent.id}`,
+    runtimeId: agent.runtimeId,
+    agentId: agent.id,
+    title: 'New conversation',
+    state: 'idle',
+    messages: [],
+  }
+}

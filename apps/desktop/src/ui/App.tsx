@@ -27,7 +27,7 @@ import { botProjectName, CompanionConversationPicker } from './CompanionConversa
 import { SignInHelp } from './SignInHelp'
 import { ProposalCard } from './ProposalCard'
 import { ManagerSetupCard } from './ManagerSetupCard'
-import { managerOf } from './teamSelectors'
+import { draftSessionFor, isDraftSession, managerOf } from './teamSelectors'
 import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, CompanionTeammatesSetting, FocusTicker, sessionSteps, teamLine } from './CompanionTeam'
 import { NeedsYouBadge, PermissionQueueBar, nextWaitingAgent, waitingAgentsOf } from './CompanionAttention'
 import { CompanionActivitySummary, CompanionRemoteRow, useWorkingSince, CompanionSettingCopy } from './CompanionPanels'
@@ -399,8 +399,13 @@ export function App() {
   const handledArchiveRef = useRef<string | null>(null)
   /** Every conversation's blob, kept so a removed id can still be traced to its owner. */
   const sessionOwnersRef = useRef(new Map<string, string | null>())
-  /** Blobs whose conversation was just deleted or archived: do not auto-open a fresh one for them. */
-  const suppressedAutoCreate = useRef(new Set<string>())
+  /**
+   * Conversations the UI just created, until a snapshot confirms them. A refresh
+   * can arrive before the daemon's new row is in its list; without this the
+   * reconcile effect would read the missing id as a removal and move the
+   * selection to another bot.
+   */
+  const pendingSessionIds = useRef(new Set<string>())
   snapshotRef.current = snapshot
   selectedAgentIdRef.current = selectedAgentId
   selectedRuntimeIdRef.current = selectedRuntimeId
@@ -533,8 +538,11 @@ export function App() {
     : runtimes.find((runtime) => runtime.id === selectedRuntimeId) ?? runtimes[0] ?? null
   const sideSession = sideSessionId ? sessions.find((session) => session.id === sideSessionId && isSideSession(session)) ?? null : null
   const hasActiveBlobs = activeAgents(agents).length > 0
+  // A bot with no conversation opens into a local draft: nothing is stored until
+  // the first message, so no daemon session and no row exist before then.
+  const draftEligible = !companion && !!activeSelectedAgent && connection === 'connected' && runtimeUsable(selectedRuntime)
   const selectedSession = sideSession ?? (activeSelectedAgent
-    ? sessions.find((session) => session.id === selectedSessionId && session.agentId === activeSelectedAgent.id && !isSideSession(session) && !session.archived) ?? mainSessionFor(sessions, activeSelectedAgent.id)
+    ? sessions.find((session) => session.id === selectedSessionId && session.agentId === activeSelectedAgent.id && !isSideSession(session) && !session.archived) ?? mainSessionFor(sessions, activeSelectedAgent.id) ?? (draftEligible ? draftSessionFor(activeSelectedAgent) : null)
     : !hasActiveBlobs && !companion ? null
     : sessions.find((session) => session.id === selectedSessionId && (!selectedRuntime || session.runtimeId === selectedRuntime.id))
       ?? sessions.find((session) => session.id === activeSessionId && (!selectedRuntime || session.runtimeId === selectedRuntime.id))
@@ -720,7 +728,7 @@ export function App() {
   const companionMode = effectiveApprovalMode(companionAgent)
 
   useEffect(() => {
-    const sessionId = selectedSession?.id
+    const sessionId = isDraftSession(selectedSession) ? null : selectedSession?.id
     if (!sessionId) {
       appliedModelRequest.current += 1
       setAppliedModelState(null)
@@ -1189,6 +1197,10 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    // A local draft is not a stored conversation: the shared active session is
+    // left alone, so opening a bot with no conversation cannot round-trip through
+    // the companion and pull the selection elsewhere.
+    if (isDraftSession(selectedSession)) return
     if (!activeSelectedAgent && selectedSession && selectedSession.runtimeId !== selectedRuntimeId) setSelectedRuntimeId(selectedSession.runtimeId)
     if (selectedSession && selectedSession.id !== activeSessionId) {
       const owner = selectedSession.agentId ? agents.find((agent) => agent.id === selectedSession.agentId) : undefined
@@ -1201,24 +1213,6 @@ export function App() {
       void setActiveSession(null)
     }
   }, [activeSelectedAgent, selectedSession, selectedRuntimeId, activeSessionId, selectedSessionId, agents])
-
-  // A bot with no conversation opens straight into one (its project is already
-  // known), so the composer is there to type in. Nothing is said in it until
-  // the first message.
-  const autoCreatedFor = useRef(new Set<string>())
-  useEffect(() => {
-    if (companion || connection !== 'connected' || !activeSelectedAgent || selectedSession || sideSessionId || !runtimeUsable(selectedRuntime)) return
-    if (autoCreatedFor.current.has(activeSelectedAgent.id)) return
-    // A blob whose conversation was just deleted or archived is not given a fresh one
-    // until the person selects it again.
-    if (suppressedAutoCreate.current.has(activeSelectedAgent.id)) return
-    // The selection is mid-reconcile (its conversation just left the snapshot): wait.
-    if (selectedSessionId && !sessions.some((session) => session.id === selectedSessionId)) return
-    const agent = activeSelectedAgent
-    autoCreatedFor.current.add(agent.id)
-    // The same get-or-create a click on the bot uses; try again later if it could not run yet.
-    void ensureConversation(agent).then((result) => { if (!result) autoCreatedFor.current.delete(agent.id) })
-  }, [companion, connection, activeSelectedAgent, selectedSession, sideSessionId, selectedRuntime, selectedSessionId])
 
   // A conversation left without a single message is not kept: leaving it
   // removes it, so the list only holds conversations that happened.
@@ -1234,10 +1228,6 @@ export function App() {
     const left = sessionsRef.current.find((session) => session.id === previous)
     if (!left || !isEmptyConversation(left) || pendingSendsRef.current.some((item) => item.sessionId === previous)) return
     if ((snapshot?.queues?.[previous]?.items ?? []).length > 0) return
-    const ownerId = String(left.agentId ?? '')
-    autoCreatedFor.current.delete(ownerId)
-    // The empty conversation is gone for good: do not immediately auto-open another one.
-    if (ownerId) suppressedAutoCreate.current.add(ownerId)
     void rpc('session.delete.schedule', { sessionId: previous }).then(() => {
       setSnapshot((current) => current ? { ...current, sessions: (current.sessions ?? []).filter((session) => session.id !== previous) } : current)
     }).catch(() => undefined)
@@ -1258,9 +1248,13 @@ export function App() {
   // next visible blob's. Every other effect must leave that choice alone.
   useEffect(() => {
     if (!snapshot || !selectionBooted.current || !selectedSessionId) return
-    if (sessions.some((session) => session.id === selectedSessionId)) return
+    if (sessions.some((session) => session.id === selectedSessionId)) { pendingSessionIds.current.delete(selectedSessionId); return }
+    // A conversation this window just created may not be in a snapshot yet: wait
+    // for it rather than reading the missing id as a removal. A delete is final,
+    // so it falls through to the reconcile below.
+    if (pendingSessionIds.current.has(selectedSessionId) && !(snapshot.deletedSessionIds ?? []).includes(selectedSessionId)) return
+    pendingSessionIds.current.delete(selectedSessionId)
     const ownerId = sessionOwnersRef.current.get(selectedSessionId) ?? null
-    if (ownerId) suppressedAutoCreate.current.add(ownerId)
     const next = nextSelectionAfterRemoval(sessions, agents, ownerId)
     if (!next) { setSelectedSessionId(null); return }
     const owner = agents.find((agent) => agent.id === next.agentId)
@@ -1580,27 +1574,29 @@ export function App() {
     if (current && !isSideSession(current) && (current.messages ?? []).length === 0 && current.agentId === agent.id) { selectAgent(agent); return }
     void createConversation(agent)
   }
-  const createConversation = async (agent: Agent, options: { quiet?: boolean } = {}) => {
+  const createConversation = async (agent: Agent, options: { quiet?: boolean } = {}): Promise<Session | null> => {
+    if (ensuringConversation.current.has(agent.id)) return null
+    ensuringConversation.current.add(agent.id)
     try {
       const result = await rpc<{ session?: Session }>('agent.conversation.create', { agentId: agent.id })
-      if (!result.session?.id) return
-      suppressedAutoCreate.current.delete(agent.id)
-      autoCreatedFor.current.delete(agent.id)
+      if (!result.session?.id) return null
       // A new conversation has nothing in it yet; saying so lets the empty rules apply at once.
       upsertSession({ ...result.session, messages: result.session.messages ?? [] })
+      pendingSessionIds.current.add(result.session.id)
       setSideSessionId(null)
       setSelectedAgentId(agent.id)
       setSelectedSessionId(result.session.id)
       void setActiveSession(result.session.id)
       if (!options.quiet) setRosterAnnouncement(`Started a new conversation with ${agent.name}.`)
       requestAnimationFrame(() => composerRef.current?.focus())
-    } catch (reason) { if (!options.quiet) setError(messageOf(reason)) }
+      return result.session
+    } catch (reason) { if (!options.quiet) setError(messageOf(reason)); return null }
+    finally { ensuringConversation.current.delete(agent.id) }
   }
   const renameConversation = async (session: Session, title: string) => {
     try { await rpc('session.rename', { sessionId: session.id, title }); await refresh() } catch (reason) { setError(messageOf(reason)) }
   }
   const selectConversation = (session: Session) => {
-    if (session.agentId) { suppressedAutoCreate.current.delete(session.agentId); autoCreatedFor.current.delete(session.agentId) }
     setSideSessionId(null)
     setSelectedSessionId(session.id)
     void setActiveSession(session.id)
@@ -1799,9 +1795,18 @@ export function App() {
     const sentCommand = slashCommand ?? leadingCommand(text, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' })
     const outbound = sentCommand && slashCommand ? commandMessage(sentCommand, text) : text
     if ((!outbound && ready.length === 0) || attachments.some((item) => item.status === 'staging') || !selectedSession || !runtimeUsable(selectedRuntime)) return
-    const sessionId = selectedSession.id
+    // The first message of a locally drafted conversation is what creates it: the
+    // daemon stores the row then (and titles it from this text).
+    let target = selectedSession
+    if (isDraftSession(target)) {
+      const agent = activeSelectedAgent
+      const created = agent ? await createConversation(agent, { quiet: true }) : null
+      if (!created) { setError('Could not start the conversation. Try again.'); return }
+      target = created
+    }
+    const sessionId = target.id
     // A live turn, a message still on its way, or a chosen time puts it in the daemon's durable queue.
-    const queueIt = !!dueAt || ['working', 'starting', 'waiting_permission'].includes(selectedSession.state ?? '') || pendingSends.some((item) => item.sessionId === sessionId)
+    const queueIt = !!dueAt || ['working', 'starting', 'waiting_permission'].includes(target.state ?? '') || pendingSends.some((item) => item.sessionId === sessionId)
     const sentReplyTarget = replyTarget
     const sentRefs = conversationRefs
     const sentChip = slashCommand
@@ -1874,7 +1879,7 @@ export function App() {
       setSnapshot((current) => current ? { ...current, queues: { ...current.queues, [sessionId]: state } } : current)
     } catch { /* The queue is optional chrome; the conversation keeps working without it. */ }
   }, [])
-  useEffect(() => { if (selectedSession?.id && connection === 'connected') void loadQueue(selectedSession.id) }, [selectedSession?.id, connection, loadQueue])
+  useEffect(() => { if (selectedSession?.id && !isDraftSession(selectedSession) && connection === 'connected') void loadQueue(selectedSession.id) }, [selectedSession?.id, connection, loadQueue])
   const queueRpc = async (method: string, params: Record<string, unknown>) => {
     if (!selectedSession) return
     try { await doRpc(method, { sessionId: selectedSession.id, ...params }) } catch { /* inline */ }
@@ -2023,9 +2028,6 @@ export function App() {
 
   const selectAgent = (agent: Agent) => {
     const main = mainSessionFor(sessions, agent.id)
-    // A deliberate choice clears the "do not auto-open" mark left by a delete or archive.
-    suppressedAutoCreate.current.delete(agent.id)
-    autoCreatedFor.current.delete(agent.id)
     setSideSessionId(null)
     setAnalyticsOpen(false)
     setSchedulesOpen(false)
@@ -2033,9 +2035,11 @@ export function App() {
     setSelectedRuntimeId(agent.runtimeId)
     setSelectedSessionId(main?.id ?? null)
     void setActiveRuntime(agent.runtimeId)
-    void setActiveSession(main?.id ?? null)
+    // A bot with no conversation is not announced as the active session: there is
+    // none to announce yet. Its local draft is shown instead, and the conversation
+    // is created (and announced) with the first message.
+    if (main) void setActiveSession(main.id)
     setBlobPage((page) => page && page.agentId !== agent.id ? null : page)
-    if (!main) void ensureConversation(agent)
   }
   /** Jump to a blob and its latest conversation; the delegation chips link here. */
   const openBlobConversation = (agentId: string) => {
@@ -2047,23 +2051,6 @@ export function App() {
     const exists = (current.sessions ?? []).some((item) => item.id === session.id)
     return exists ? mergeHydratedSession(current, session.id, session) : { ...current, sessions: [session, ...(current.sessions ?? [])] }
   })
-  /** Opens a blob's single conversation, creating it in the blob's workspace the first time. */
-  const ensureConversation = async (agent: Agent) => {
-    if (ensuringConversation.current.has(agent.id) || connection !== 'connected') return null
-    const runtime = runtimes.find((item) => item.id === agent.runtimeId)
-    if (!runtimeUsable(runtime)) return null
-    ensuringConversation.current.add(agent.id)
-    try {
-      const result = await doRpc<{ session?: Session }>('agent.conversation', { agentId: agent.id }, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'session.new'))
-      if (!result.session?.id) return null
-      upsertSession(result.session)
-      setSelectedAgentId((current) => {
-        if (current === agent.id) { setSelectedSessionId(result.session!.id); void setActiveSession(result.session!.id) }
-        return current
-      })
-      return result.session
-    } catch { return null } finally { ensuringConversation.current.delete(agent.id) }
-  }
   const openSideConversation = (sessionId: string | undefined | null) => {
     if (!sessionId) return
     if (!sideSessionId) sideReturn.current = { agentId: activeSelectedAgent?.id ?? null, sessionId: selectedSession?.id ?? null }
@@ -2210,8 +2197,6 @@ export function App() {
     if (!target) return
     const owner = activeAgents(agents).find((item) => item.id === target.agentId)
     if (!owner) return
-    suppressedAutoCreate.current.delete(owner.id)
-    autoCreatedFor.current.delete(owner.id)
     if (owner.id !== activeSelectedAgent?.id) {
       setSelectedAgentId(owner.id)
       setSelectedRuntimeId(owner.runtimeId)

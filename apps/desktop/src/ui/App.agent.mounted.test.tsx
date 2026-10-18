@@ -840,16 +840,24 @@ describe('blob roster and editor', () => {
     expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Invoice helper'])
   })
 
-  it('opens a blob without a conversation through agent.conversation', async () => {
-    const created = session({ id: 'session-invoice', runtimeId: 'runtime-codex', agentId: 'agent-invoice', title: 'Invoice helper', updatedAt: '2026-10-02T02:00:00.000Z' })
-    withRpc((method) => method === 'agent.conversation' ? { session: created, created: true } : undefined)
+  it('opens a blob without a conversation into a local draft, then stores it on the first message', async () => {
+    const created = session({ id: 'session-invoice', runtimeId: 'runtime-codex', agentId: 'agent-invoice', title: 'New chat', updatedAt: '2026-10-02T02:00:00.000Z', messages: [] })
+    withRpc((method) => method === 'agent.conversation.create' ? { session: created } : undefined)
     const view = startApp()
     await view.settle()
     await click(view.host.querySelector('.team-row[data-agent-id="agent-invoice"]'))
     await view.settle()
-    expect(h.rpc).toHaveBeenCalledWith('agent.conversation', { agentId: 'agent-invoice' })
-    expect(h.rpc).not.toHaveBeenCalledWith('session.new', expect.anything())
+    // A draft: the composer is ready, nothing has been stored yet.
     expect(view.host.querySelector('.composer-box textarea')?.getAttribute('aria-label')).toBe('Message Invoice helper')
+    expect(h.rpc).not.toHaveBeenCalledWith('agent.conversation', expect.anything())
+    expect(h.rpc).not.toHaveBeenCalledWith('agent.conversation.create', expect.anything())
+    expect(h.rpc).not.toHaveBeenCalledWith('session.new', expect.anything())
+    // The first message is what creates the conversation.
+    await typeInto(view.host.querySelector('.composer-box textarea'), 'Parse the March invoices')
+    await act(async () => { view.host.querySelector<HTMLButtonElement>('.send-button')!.click() })
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('agent.conversation.create', { agentId: 'agent-invoice' })
+    expect(h.rpc).toHaveBeenCalledWith('session.prompt', expect.objectContaining({ sessionId: 'session-invoice', text: 'Parse the March invoices' }))
   })
 
   it('starts a new conversation next to the old one, without archiving it', async () => {

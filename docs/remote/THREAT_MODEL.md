@@ -183,7 +183,7 @@ mobile data or an outside attacker.
 | N7 | UPnP opens more than Bitbots asked for, or leaves a mapping behind | Only with the owner's consent; maps only `remote.nativePort` over TCP; removed on disable and at daemon shutdown; the lease is renewed while on | A crash between mapping and removal leaves the forward until the lease ends; a router with a broken UPnP stack |
 | N8 | Firewall changes without the owner knowing | One inbound rule, `Bitbots-Remote`, for the Native port only, added and removed only through an elevated prompt the owner accepts; no console window | The owner widens the rule by hand |
 | N9 | Bitbots contacting third parties (IP echo, relays, DNS) | None: the external address comes from the router (UPnP) or the owner; carrier-NAT and private addresses are detected locally; the self-test is the owner opening `/api/ping` from a phone | — |
-| N10 | `/api/ping` as a probe | Answers only `{"ok":true}`; records "reached from" as a public address or "this network"; rate-limited like other unauthenticated routes | Anyone who can reach the port learns that something answers there, which the sign-in page shows anyway |
+| N10 | `/api/ping` as a probe | Answers only a fixed, content-free marker, `{"ok":true,"app":"bitbots","role":"remote-gateway"}` (FIX39 P3; nothing about the host, owner or account); records "reached from" as a public address or "this network"; rate-limited like other unauthenticated routes | Anyone who can reach the port learns that something answers there, which the sign-in page shows anyway |
 | N11 | A signed-out device learns which method is on | `/api/me` refusals name `native` or `tailscale` and nothing else (no host name, no device data) | The method is visible from the address anyway |
 | N12 | Test runs open firewall prompts or bind the internet | Under `#[cfg(test)]` the listener binds `127.0.0.1` only; no test runs real `netsh`, PowerShell or UPnP discovery | — |
 
@@ -203,3 +203,33 @@ here is independently reviewed yet.
 - [ ] A live test from a phone on mobile data: port forward, certificate warning and fingerprint check, sign-in, approval.
 - [ ] A live UPnP test on a real router, including that the mapping is gone after Remote turns off.
 - [ ] A check that the key file's permissions are applied on a real Windows install.
+
+## 14. FIX39 changes (18 October 2026)
+
+Implementer-tested means the package's own unit, mounted and fake-process tests. Nothing in this section is independently reviewed, and nothing was exercised on a real tailnet, router or phone.
+
+### 14.1 Remote
+
+- **Origin: no change.** The FIX39 packages did not alter the `Origin` rule in [PROTOCOL.md](PROTOCOL.md) §4.1. The rule that safe reads may omit `Origin` comes from FIX38 and still stands.
+- **Tool steps (P2).** Over Remote, a tool step's `title` is replaced by a generic "Tool" unless the device is allowed tool output. `label`, `pattern`, `url`, `path` and `command` are withheld by default. Titles such as "Ran cargo test C:/…" can carry paths and command text. The shared policy goldens prove this in both Rust and TypeScript.
+- **Ping marker (P3).** `GET /api/ping` answers a fixed marker that names the app and its role and nothing else. It lets one Bitbots copy recognise another on the same port.
+- **Remote discard of a task branch (P10, finding 6, not yet reviewed).** `proposal.decide` with `discard: true` on a `merge` proposal removes a task's copy and branch. The operator tier may call `proposal.decide` when approvals from remote are on, so a paired operator device can discard a task branch. The discard is bounded to that repository's own `<repo>-bitbots` copy and `bitbots/*` branch, and it is refused while the task is still working. Whether a phone should be able to discard at all is an owner decision.
+- **One copy only (P3).** A second copy of Bitbots that already serves Remote is refused, not shared. The daemon exits when its app exits (a parent watchdog), so a stale process cannot keep a port. Single-instance focus was not exercised live.
+- **Wide layout (P3).** The wide browser layout is a presentation change. It does not change what any device may call.
+
+### 14.2 Local diagnostics (P12)
+
+The export is local. It is written only after the owner picks a path in the native save dialog. Nothing is uploaded. No paired device can call `diagnostics.preview` or `diagnostics.export`; both are `never` remote.
+
+**The logs never contain:** message, prompt, reply, streamed or thinking text; recap or summary text; command text or output; file contents or diffs; credentials, tokens, passwords, cookies (including Remote cookies), capability values or provider sign-in data; environment values; or Tailscale status JSON.
+
+**The logs do contain:** IDs, error classes, provider names, versions, timings and exit codes. The daemon and the shell both write through a central redacting writer. A test scans every log call site and fails if one logs a field named text, prompt, content, message, command, secret, token, cookie, password or credential. Logs are daily files, 14 kept, at most about 20 MB in total.
+
+**The export zip contains:**
+- `README.txt`, saying what is inside;
+- `environment.json`: app and protocol versions, OS, architecture and OS version, coding-agent names and versions. No executable paths;
+- `settings.json`: secrets removed; `profile.about` and every `internal.*` key omitted;
+- `events.json`: the last 200 app events, through an allowlist of identifiers, states, error classes, providers, versions, timings, counters and flags. Questions, titles, inputs, content and paths are dropped;
+- the recent log files, redacted again on the way in.
+
+**Known limits.** Redaction is pattern-based, so a secret in an unusual shape could pass it. `remote.native.account.username` is kept, as a label that says which account is configured. The zip is not encrypted, and sending it anywhere is the owner's decision.

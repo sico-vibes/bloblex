@@ -62,6 +62,11 @@ allowlist, presence and versioning.
 - The **serve origin** is `https://<DNSName>` (or `https://<DNSName>:8443`), where `DNSName`
   comes from `tailscale status --json` with the trailing dot removed. It is the only accepted
   `Origin` (§4.1).
+- **Port choice (FIX39 P3).** If the configured port is held by another Bitbots copy, `enable`
+  is refused with `conflict`. If another program holds it, the gateway moves to the next free
+  loopback port: the configured port, then +1 to +9 skipping the Native port, then an
+  OS-assigned port. Ports inside a Windows reserved range are skipped the same way. The chosen
+  port is saved as `remote.port` and is the one `tailscale serve` publishes.
 - Every request reaches the gateway from `127.0.0.1`, because `tailscaled` proxies it. The
   gateway therefore never trusts the peer address, and per-address rate limits are meaningless;
   limits are per device and per pairing offer.
@@ -322,6 +327,11 @@ and resumes. No partial in-memory state is trusted across the gap.
 - An `instructions` string of any length is replaced by `{ "hasInstructions": true }`.
 - Absolute filesystem paths in `projectPath` fields are reduced to their last two segments.
 - Any key whose name matches `/token|secret|password|credential|capability/i` is removed.
+- **Tool steps (FIX39 P2).** A tool entry's `title` becomes `"Tool"`, and its `label`, `pattern`,
+  `url`, `path` and `command` are removed, unless `includeToolOutput` is set. Titles such as
+  "Ran cargo test C:/…" carry command and path text, so they are not sent by default. The shared
+  policy goldens (`apps/desktop/src/remote/fixtures/policy-goldens.json`) prove both behaviours in
+  Rust and TypeScript.
 
 The daemon itself never sends raw provider login credentials (`docs/ipc-contract.md:266`), and
 the capability token is memory-only and never leaves the native shell
@@ -595,7 +605,7 @@ the `Host` is still required on every `/api/*` request. `/api/ping` is the one r
 | Route | Purpose |
 |---|---|
 | `POST /api/login` | `{username, password, name, kind, platform}`. A wrong pair is `401 login_invalid` (same answer for an unknown username); a locked-out source or a global pause is `429 rate_limited`. A device that already holds a valid cookie gets `200 {state:"approved"}`. Otherwise it starts the owner's approval exactly like `POST /api/pair` (`202 {state:"pending"}`, `remote.pairing.requested` with `method:"native"`), then `GET /api/pair` reports the outcome and sets the cookie. |
-| `GET /api/ping` | Unauthenticated self-test, outside the `Origin` check so it can be opened from an address bar. Answers `{"ok":true}` only; records `native.lastReachedAt` and `lastReachedFrom` (a public address, or "this network") and emits `remote.changed`. Rate-limited. |
+| `GET /api/ping` | Unauthenticated self-test, outside the `Origin` check so it can be opened from an address bar. Answers only the fixed marker `{"ok":true,"app":"bitbots","role":"remote-gateway"}` (FIX39 P3; nothing about the host, owner or account); records `native.lastReachedAt` and `lastReachedFrom` (a public address, or "this network") and emits `remote.changed`. Rate-limited. |
 | `GET /api/me` | Unchanged when signed in, plus `method`. A refusal (`unauthorized`, `device_revoked`) now also carries `"method"` so a signed-out client shows the matching screen: username and password for `native`, the pairing code for `tailscale`. |
 
 **Desktop-only methods** (all `never` remote, on the loopback API): `remote.method.set

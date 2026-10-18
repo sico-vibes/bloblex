@@ -65,3 +65,42 @@ It reads `../../crates/bloblex-daemon/src` and `../../apps/desktop/src-tauri/src
 3. F3: make the secret regex accept a quoted key (JSON), with tests.
 4. F4: narrow `is_secret_key` so token counters and commit hashes survive, with a test.
 5. F5 to F9 as described. Re-run the daemon diagnostics tests, `cargo clippy --workspace --exclude bloblex-desktop -- -D warnings`, the `bloblex-desktop` lib tests, and `DiagnosticsDialog.mounted.test.tsx`, then update `docs/FIX39_P12_REPORT.md`.
+
+
+## Re-check (Sonnet), verbatim
+
+The auditor re-checked the follow-up and replied:
+
+FAIL
+
+One must-fix remains. The F1–F5 and F7–F9 fixes check out when I read the code, except that F5 and F7 have small gaps noted below. I did not re-run the gates.
+
+**Must fix**
+
+1. **F6 is wrong, so the `debug` level does nothing.** `crates/bloblex-daemon/src/diagnostics.rs:53` returns `bloblex_daemon=debug,info`.
+   - The daemon's binary is `[[bin]] name = "bitbotsd"` (`crates/bloblex-daemon/Cargo.toml:7`), and there is no lib target. Its crate name, and so its `module_path!()` and tracing target, is `bitbotsd`.
+   - The build output confirms it: `C:\fxt\a1\debug\deps` holds only `bitbotsd*.d` and no `bloblex_daemon*.d`.
+   - The directive therefore matches nothing, and the hidden `debug` setting behaves exactly like `info`.
+   - Change it to `bitbotsd=debug,info` at `diagnostics.rs:53`. Update the assertion at `diagnostics.rs:589` and the doc comment at `diagnostics.rs:48-50`.
+   - Add a test that would catch this. For example, build an `EnvFilter` from `log_directive("debug")` and check that `bitbotsd` is enabled at debug while a dependency target such as `hyper` is not. Alternatively, derive the name from `module_path!()`.
+
+**Checked and fine**
+
+- **F1:** `scrub_events` is now an allowlist (`diagnostics.rs:126,184`). A real `permission.requested` question payload is tested at both unit level (`diagnostics.rs:664`) and zip level (`main.rs:10534`), with `perm-1` and `s-2` surviving. I found no free-text key in the allowlist. The only text-like value is a bot `role` label, which is not conversation content.
+- **F2:** `profile.about` and every `internal.*` key become `[omitted]` (`diagnostics.rs:157,212`). Both unit and zip tests cover it. Keeping `remote.native.account.username` is stated as a conscious choice.
+- **F3:** The regex now accepts a quoted key (`diagnostics.rs:75`), and the JSON test is at `diagnostics.rs:558`.
+- **F4:** `inputTokens`, `outputTokens`, `contextTokens`, `tokenCount` and `commitHash` are no longer treated as secrets. `token`, `*Token`, `tokenHash`, and a key named exactly `hash` are still redacted.
+- **F5:** The scan test now asserts it found sources and call sites per root, matches bare `warn!` through `trace!` and `log_shell(`, and skips the definition line (`main.rs:10630-10683`). It still ends the inspected call at the next `);`, which the report says.
+- **F7:** The shell redactor now redacts every `Bearer`, and the keyed forms (`=`, `:`, JSON) for `token`, `password`, `secret`, `capability`, `credential`, `authorization`, `cookie`, `api_key` and `apikey` (`lib.rs:862-917`). I traced the slicing and the loops, and they stay on char boundaries and always advance. It still has no `sk-…` or `bloblex_remote=` rules, and `Bearer` is matched only as `Bearer ` or `bearer `. That is acceptable, since the shell logs only fixed messages.
+- **F8:** The shell prunes only when the day changes (`lib.rs:829,853`).
+- **F9:** The dialog focuses its first button on open, and its capture-phase Escape handler calls `stopPropagation` (`DiagnosticsDialog.tsx:21,31-42`).
+
+
+## Second re-check (Sonnet), on main after the F6 fix, verbatim
+
+PASS
+
+- `crates/bloblex-daemon/src/diagnostics.rs:53` sets `LOG_TARGET = "bitbotsd"`, and `log_directive("debug")` (line 58) now returns `bitbotsd=debug,info`.
+- That matches the real target. `Cargo.toml:6-8` has `[[bin]] name = "bitbotsd"` with `path = "src/main.rs"`, and there is no `src/lib.rs`, so `diagnostics` is a module of the bin crate (`main.rs:39`).
+- The tests at lines 594-654 check this. One asserts the exact string. The other builds a real `EnvFilter` and checks that a `bitbotsd` DEBUG callsite is always enabled, a `hyper` DEBUG callsite is never enabled, and `info` leaves `bitbotsd` DEBUG off.
+- I read the code and tests only. I didn't run them, and I wrote no files.

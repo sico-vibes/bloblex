@@ -1,8 +1,63 @@
 # Bitbots session handoff
 
-> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.33` ([docs/releases/0.1.0-beta.33.md](docs/releases/0.1.0-beta.33.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
+> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.34` ([docs/releases/0.1.0-beta.34.md](docs/releases/0.1.0-beta.34.md)), in preparation: the Director tags it after the release gates. The last tagged release is `v0.1.0-beta.33` ([docs/releases/0.1.0-beta.33.md](docs/releases/0.1.0-beta.33.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
 
 Current as of 17 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+
+## Beta.33 review FIX39 (18 October 2026)
+
+**State.** Ready for release as `v0.1.0-beta.34` ([release note](docs/releases/0.1.0-beta.34.md)); not yet tagged or published. Thirteen packages (P1 to P13) on `main`, from `14777cb` (Wave A) to `4ba7367` (P10), with the decision, research and audit records in `docs/`. Gates were run at `4ba7367`. The owner's 24 feedback items are in [docs/FIX39_FEEDBACK.md](docs/FIX39_FEEDBACK.md); the decisions that override the research are in [docs/FIX39_DECISIONS.md](docs/FIX39_DECISIONS.md).
+
+**Four-model pipeline** (AGENTS.md, 18 October amendment). DeepSeek V4.1 Flash researched each item (`FIX39_RESEARCH_R1` to `R3`, and the T3 study `FIX40_T3_RESEARCH`). Claude Sonnet 5.5 audited the research and then every package. GPT Sol 6.1 and OpenCode DeepSeek lanes implemented the packages in separate worktrees; where a run hit a usage limit, a second lane took it over, and the report says so. Claude Haiku 5.5 wrote these documents. The Director only ran the lanes, checked them, relayed the owner's decisions, merged, gated and committed.
+
+| Package | Items | Commit | Audit | Report |
+|---|---|---|---|---|
+| P1 | 1, 2, 3, 5 to 9, 14, 15: usage dialog, effort picker, one search, update banner, checklist, Manager card, star badge, dividers, empty usage, sidebar previews | `14777cb` | PASS WITH FIXES, fixed | [P1 report](docs/FIX39_P1_REPORT.md), [audit](docs/FIX39_P1_AUDIT.md) |
+| P2 | 17 readable activity; item 4 shape validation | `14777cb` | PASS WITH FIXES, fixed (F1 Remote tool titles) | [P2](docs/FIX39_P2_REPORT.md), [audit](docs/FIX39_P2_AUDIT.md) |
+| P3 | 23 Tailscale errors and port conflicts, 24 wide browser layout, 10 companion drag; parent watchdog and single instance | `14777cb` | PASS WITH FIXES, fixed except F3 (recorded, no change) and F4 (owed) | [P3](docs/FIX39_P3_REPORT.md), [audit](docs/FIX39_P3_AUDIT.md) |
+| P4 | 4 eight symmetrical shapes, shape-preserving Shuffle and Surprise me, migration | `14777cb` | PASS WITH FIXES, fixed | [P4](docs/FIX39_P4_REPORT.md), [audit](docs/FIX39_P4_AUDIT.md) |
+| P5 | 11 Experimental page, 12 model under the name, 13 lock a bot, 16 composer writes the bot, 19 permission in a conversation; update badge over the title (Director check) | `53773fd` | PASS WITH FIXES, fixed | [P5](docs/FIX39_P5_REPORT.md), [audit](docs/FIX39_P5_AUDIT.md) |
+| P6 | 18 many conversations per bot, 20 context recap, 21 tags, 19.4 task in its project, 19.5 denial text | `122ab81` | PASS WITH FIXES, fixed; restart gap open | [P6](docs/FIX39_P6_REPORT.md), [audit](docs/FIX39_P6_AUDIT.md) |
+| P7 | 22 Bitbots tool set for the Manager, task briefs, routing by role, tags and project | `fd738b2` | FAIL (B1), fixed in a follow-up; re-check PASS | [P7](docs/FIX39_P7_REPORT.md), [audit](docs/FIX39_P7_AUDIT.md) |
+| P8 | Watchdog (T3 recommendations 3 and 4): "Limited until", bounded retry, continuation after a crash | `53d193d` | PASS WITH FIXES, fixed | [P8](docs/FIX39_P8_REPORT.md), [audit](docs/FIX39_P8_AUDIT.md) |
+| P9 | Working bots panel, Full access default, Steer or Queue setting (T3 recommendation 11) | `dc3a131` | PASS WITH FIXES, fixed | [P9](docs/FIX39_P9_REPORT.md), [audit](docs/FIX39_P9_AUDIT.md) |
+| P10 | Separate worktree for a code task when another task works in the same repo, merged back on approval (T3 recommendation 13) | `4ba7367` | PASS WITH FIXES, fixed | [P10](docs/FIX39_P10_REPORT.md), [audit](docs/FIX39_P10_AUDIT.md) |
+| P11 | Real-CLI reliability suite with offline replay (T3 recommendation 10) | `e8d3dab` | FAIL (10 findings), addressed in a follow-up; re-check PASS | [P11](docs/FIX39_P11_REPORT.md), [audit](docs/FIX39_P11_AUDIT.md) |
+| P12 | Local diagnostics: rolling redacted logs, Export diagnostics | `543f422` | PASS WITH FIXES, fixed | [P12](docs/FIX39_P12_REPORT.md), [audit](docs/FIX39_P12_AUDIT.md) |
+| P13 | Claude permission change mid-conversation; steer gate per provider capability | `8409827` (docs `d237172`) | PASS (two optional nits) | [P13](docs/FIX39_P13_REPORT.md), [audit](docs/FIX39_P13_AUDIT.md) |
+
+Other records: [FIX39 owner decisions](docs/FIX39_DECISIONS.md), [Director's browser checks](docs/FIX39_DIRECTOR_CHECKS.md), [research audit](docs/FIX39_RESEARCH_AUDIT.md), [T3 research](docs/FIX40_T3_RESEARCH.md). Contract changes are in [docs/ipc-contract.md](docs/ipc-contract.md) ("FIX39 additions"), the threat model in [docs/remote/THREAT_MODEL.md](docs/remote/THREAT_MODEL.md) §14.
+
+**Gates on `4ba7367`:**
+- Rust workspace excluding the desktop crate: 877 passed, 0 failed. Clippy with `-D warnings`: clean.
+- Desktop crate library: 61 passed.
+- Vitest: 1290 tests in 174 files passed.
+- Main, remote and preview web builds succeed. No sparkle icons.
+- Real CLIs, live, outside the normal gates: Claude Haiku 5.5 and OpenCode pass, including the Claude permission change. Codex steer accepted; its two-turn run is a reported usage-limit skip (quota).
+
+**Evidence class.** Most behaviour is tested with fake adapters, a fake Tailscale command, mounted UI tests and temporary databases. Live: the three real CLIs for P11 and P13 (Claude and OpenCode fully; Codex only the steer). Not verified: anything in the list below.
+
+**Not verified.**
+- Pairing from a real phone over Tailscale, and Native Remote on a real router and mobile data.
+- The native windows: companion drag on Windows, a second launch focusing the first window (P3 F4), the Working bots panel, the wide Remote layout, and the Director's visual checks in both looks and both themes.
+- The update round trip from beta.33 to beta.34, and the single-instance and update-then-restart behaviour (needs a throwaway build).
+- The friend's exact reproductions: the lost context after a restart, and the permission in a sub-conversation.
+- The Codex daemon steer and the Codex daemon fixture: the account was out of quota. The Codex fixture is a rewrite of a real capture for the pinned model (P11 follow-up).
+- Real Manager routing and question tone with a live model.
+
+**Owner to-dos.**
+1. Decide item 4 (the shapes): the owner makes the final call on the Grok-style set.
+2. Decide the defaults the packages chose: Full access for new bots (decision 5); the overload retry stays under Experimental › Automatic retry and is off by default (P8 N1); usage-limit resume is on by default. P8 N2 (no quota probe when there is no stored snapshot) also needs the owner's confirmation; with no reset time the conversation stays Limited and asks.
+3. Decide whether a phone may approve a merge with Discard. The `proposal.decide` tier allows it when approvals from remote are on (P10 finding 6).
+4. Confirm the Native and Tailscale threat-model review before any non-beta release (THREAT_MODEL §13, and the Remote checklist).
+5. Re-record the Codex daemon fixture when quota returns.
+6. Remove the lane worktrees and Cargo target folders named in the package reports after the release, as AGENTS.md (14 October amendment) requires once their diffs are merged.
+
+**Known issues carried.**
+- A queued side conversation that was waiting when the daemon stopped has no turn after a restart; it starts again only when a new message is delivered (P6, not implemented).
+- `debug` log level takes effect at the next daemon start (P12).
+- A continued side conversation whose merged or discarded copy is gone is repointed at the repository root, so a follow-up never runs in a deleted folder (P10 finding 1). Whether the provider's own history still applies there was not exercised live.
+- Desktop-crate clippy lints that predate FIX39 remain outside the gate.
 
 ## Beta.32 review FIX38 (18 October 2026, after beta.32)
 

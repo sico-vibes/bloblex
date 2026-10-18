@@ -78,3 +78,43 @@ Decisions: "One daemon test per tool covers both outcomes: approval needed and a
 2. Fix F1 to F4, then F5 and F6.
 3. Take the F7 points that are cheap (Manager excluded from `manager_blobs`, `freeOnly` wording, Edit button on the Open card, label consistency); report any it leaves.
 4. Rerun the daemon tests, clippy, `tsc -b` and the ProposalCard vitest file, and update `docs/FIX39_P7_REPORT.md` with the changes.
+
+
+## Re-check (Sonnet), verbatim
+
+The auditor re-checked the follow-up and replied:
+
+PASS
+
+B1 and F1–F7 are all resolved. I read the diff and the new tests but did not rerun the gates. The report's numbers (409 daemon tests, 1257 vitest) are consistent with the diff, and the Director's post-merge gates cover them.
+
+**B1 is fixed.**
+- `sync_bot_permission` (`proposals.rs:753-766`) no longer calls `conversation_lock_for` or builds a lock.
+- It touches only sessions that already have `modelLock.approvalMode`. It drops `approvalMode` and `approvalModeSource`, keeps the rest of the lock, and swallows errors per session.
+- Both callers (`proposals.rs:570` and `:742`) write the bot first and then call it without `?`, so the approval cannot fail halfway.
+- `exec_options_for_session` (`main.rs:1459-1471`) then follows the bot for any chat without a pin.
+- `p7_permission_change_releases_pins_and_bot_stays_the_source_of_truth` (`team_p7_tests.rs:276-299`) covers all four cases I asked for.
+- The two P5 tests in `main.rs` that asserted the old per-conversation pin now assert the bot's mode and no lock.
+
+**F1–F7 are done.**
+- **F1:** the `? id:` separator is replaced with `·`.
+- **F2:** `manager_conversations` (`team.rs:969-999`) now returns `startedByYou`, `topic`, `agentName`, `peerName` and a `latestReply` clipped to 300 characters. The `main.rs` assertions are strict again, and there are cap and newest-first tests.
+- **F3:** `describe` (`proposals.rs:362-383`) prefers `targetName`, `botName` and the conversation title, and has a test.
+- **F4:** `manager_of_session` now guards only the `update` and `open` branches. `sweep_at` takes `proposal_decision`, and nothing calls the sweep from inside a decision, so there is no lock-order problem.
+- **F5:** the table test is built from the real tool schemas, and there is a bypass-refusal test.
+- **F6:** `assign_task` checks depth at creation (`proposals.rs:273`) and `delegate` still re-checks it. `p7_depth_is_refused_before_a_card_is_shown` proves no pending card is left.
+- **F7:**
+  - **`manager_blobs`:** it excludes the Manager, and `freeOnly` now says it means "not tied to a project".
+  - **Project filter:** it goes through `normalized_path`, so a differently cased or slashed path matches.
+  - **`apply_update`:** a comment documents that both halves are validated first.
+  - **`ProposalCard.tsx`:** the Edit button is hidden on the Open card, and both bot cards use one `permissionLabel`.
+  - **Tool lists:** `knowledge.rs` is now the only place the tool names are listed.
+
+`main.rs` still changes tests only.
+
+Nothing is left to fix. These are notes for the Director:
+- **Failing-first not run:** the report admits it ran the B1 tests only after the fix. By reading the old code, which built a lock for every session, the four B1 assertions would fail on it.
+- **Item 19 pill:** the "set by Manager" `approvalModeSource` marker is now never produced, because approvals no longer pin a conversation. This follows from the bot-wide design. The comment on `conversation_lock_for` (`main.rs:1488-1495`) still mentions the Manager-proposal case and could be trimmed later.
+- **Stray doc change:** `docs/FIX39_AUDIT_IMPL_BRIEF.md` shows as modified (line endings only). It is not part of this package and should be left out of the merge.
+- **Still to check by hand:** the look-preview colour `#a7f3d0` and the cards in both looks and both themes, plus a real Manager chat for routing.
+- **Release notes:** they should say that the Manager's `read_conversation` can send up to 30 messages of any non-archived conversation to the model provider.

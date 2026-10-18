@@ -69,3 +69,30 @@ Findings are ordered by severity.
 4. Make the permission/steer tests assert something that can fail (finding 4).
 5. Re-record the Codex daemon row; tighten the sanitised-summary test (finding 5).
 6. Items 6-10 as time allows; items 6 and 7 are quick.
+
+
+## Re-check (Sonnet), verbatim
+
+The auditor re-checked the follow-up and replied:
+
+PASS
+
+All ten findings are closed. I re-read the code and fixtures and did not re-run the gates. I take the report's gate results as given.
+
+- **1. Cheap models:** The Claude and Codex suites pin `claude-haiku-5-5`/medium and `gpt-6-luna`/medium through `options()`. ACP keeps `opencode/deepseek-v4.1-flash-free`. No Claude or Codex fixture names a default model any more. The opencode fixture mentions `claude-*` and `gpt-6.1-sol` only inside the provider's model catalogue listing (lines 6 and 9), which is public data.
+- **2. Masking:** My greps for `DESKTOP-PUF7IHB`, `Sico`, `Vibes`, `C:\Users`, `C:/Users`, `AppData`, `USERPROFILE` and `Claude Docs` across `crates/*/tests/live/**` return nothing. `serverName`, `planType`, `cwd`, the MCP server `name` and `resetsAt` all read `<masked>` or `<masked-path>`. `mcpTools` is `[]`. All three `wire_replay.rs` copies have the same md5, `5fe1ebb019ef36caedd07c4baaa73eb5`.
+- **3. Model report:** `assert_two_turn` now requires a non-empty model in all three suites (claude `:329`, codex `:323`, acp `:313`).
+- **4. Permission and steer tests:** They now assert on the outcome. The mode is changed between turns, and an unsupported steer or rejected change must carry a non-empty message.
+- **5. Daemon suite:** Codex is recorded as `limitOrUnavailable: "reported"`. An unclassified first-turn error panics (`live_cli.rs:388`). The sanitised-summary test requires `turn`, `modelReported` and `secondTurn` to be true for any started provider that did not report a limit (`:565-584`).
+- **6. Skip classifier:** The auth terms are gone from the classifier (claude `:197-210`). The report says all four copies were narrowed; I read only the Claude one in full.
+- **7. Scratch recording:** Each suite records to `*.recording.ndjson` first (claude `:101`, codex `:97`, acp `:96`).
+- **8. Timeout text:** It now says "two minutes", matching the 120 s value.
+- **9. Limit fixtures:** Only Codex has one, and the report says so.
+- **10. Clippy:** The report says it is clean on the test targets.
+
+**Not blocking:**
+- The report states that `codex-two-turn.ndjson` is a rewrite of a real capture, not a fresh recording, because the account is out of quota. The merge notes should say so, and it should be re-recorded when quota returns.
+- `docs/FIX39_DECISIONS.md` (line 128) and `docs/FIX39_AUDIT_IMPL_BRIEF.md` still show as modified in this worktree, and the report says the `DECISIONS.md` edit is not the implementer's. The Director should confirm they come from the owner before merging.
+- The Claude fixture keeps rate-limit utilisation figures (0.82, 0.1) and `org_level_disabled`. They identify nobody, so I would leave them.
+
+Must-fix items remaining: none.

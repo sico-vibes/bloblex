@@ -79,3 +79,27 @@ A merge card that lapses after 24 hours leaves the copy and record in place. The
 - The slug is ASCII-only, at most 40 characters and never empty, so it is safe as both a branch and a folder name.
 - Hot files: `team.rs` and `proposals.rs` changes are additive and short. `storage/lib.rs` is limited to the CHECK lists. `App.tsx` and `TeamSidebar.tsx` are untouched.
 - Both looks and themes: the card uses existing tokens and classes only.
+
+
+## Re-check (Sonnet), verbatim
+
+The auditor re-checked the follow-up and replied:
+
+PASS
+
+I read the follow-up section and the diff against all seven findings. I did not re-run the gates, so the passing counts in the report are the implementer's.
+
+- **Finding 1 (must-fix):** fixed. `finish_worktree` (`proposals.rs`) clears the `worktree` record and repoints the conversation at the repo root through the new `set_session_project_path` (`storage/lib.rs:1868`). It runs after a merge, a discard, a copy that was already missing, and the empty-copy cleanup. `p10_a_follow_up_after_a_merge_runs_in_an_existing_folder` merges, delegates again with no topic, and asserts the same side conversation now has an existing `projectPath`.
+- **Finding 2 (must-fix):** fixed. `repo_is_busy_elsewhere` (`team.rs:179`) now counts a session as busy if `session_busy` is true or it has a delivery in `team.queued`. The repo comparison is unchanged. The new test covers a stored `working` state with no live turn, and a real queued first delegation (`started == false`) followed by a second one that still gets its own copy.
+- **Finding 3 (must-fix):** fixed.
+  - `apply_merge` and the discard branch of `decide` refuse with a `conflict` error when `session_busy` is true, and `decide` does so before recording the rejection, so the card stays pending.
+  - `remove_after_merge` and `discard` now return whether the folder is gone. When it is not, the record is kept and the note or summary says the copy could not be removed.
+  - `p10_refuses_a_merge_or_discard_while_the_task_is_still_running` asserts nothing merged, the copy survives and the proposal is still pending, for both approve and discard.
+- **Finding 4:** done. The dirty-checkout message (`worktree.rs:211`) no longer tells the owner to stash.
+- **Finding 5:** recorded in the report, no code change needed.
+- **Finding 6:** recorded for the threat-model owner.
+- **Finding 7:** done. The report lists tests for a merge conflict, a diverged history that gets a merge commit, and an already-merged branch. I checked the finding-2 test in the diff, not these three. The `--no-ff` merge commit now uses a fixed `Bitbots` identity, which is a correct change.
+
+No remaining must-fix items.
+
+Residual risk, not blocking: the busy check sees a delegation only once `deliver` has queued it or the session state has changed. If the Manager issues two `delegate` calls in parallel, the second can run its check before the first spawned `deliver` has registered. The window is milliseconds against a git spawn, so it is narrow. A cheap closing option later is to mark the side session `starting` inside `delegate`, before the spawn (`team.rs:577`).

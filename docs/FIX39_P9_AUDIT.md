@@ -60,3 +60,25 @@ Files outside the original rec. 11 list (`agentForm.ts`, onboarding, Manager set
 ## After the fixes
 
 Rerun the UI tests for `WorkingBotsPanel`, `busySend`, `App.agent.mounted` and `SettingsSheet.appearance`, plus `tsc -b`. The Director still owes the four look and theme combinations, the narrow rail, and a live Codex steer check after the merge.
+
+
+## Re-check (Sonnet), verbatim
+
+The auditor re-checked the follow-up and replied:
+
+PASS
+
+I re-checked the follow-up against each audit finding and the current files. I did not re-run the gates, so the report's gate counts are the implementer's own.
+
+- **F1:** `WorkingBotsPanel.tsx:21` returns `'Loading'` for a row with no turns and no messages, and `:47` filters those rows out. They are not counted, show no elapsed time and start no timer. Live states on a thin row (limited, waiting for permission, starting, busy, queued/waiting) are checked first, so they still show their real status. A thin row is never reported as Done. Tests: `busySend.test.ts:43-44` and the mounted case at `WorkingBotsPanel.mounted.test.tsx:36` (thin row absent, then "1 finished" with `1h 0m` after hydration).
+- **F2:** `:24` maps any last turn state other than `completed` or `working` to Failed, with `cancelled` handled separately. `busySend.test.ts:55` covers it.
+- **F3:** `:35` no longer falls back to `session.updatedAt`. A missing `completedAt` gives `—`. `busySend.test.ts:59` covers it.
+- **F4:** The pre-send "Steering is unavailable" line is gone. `App.tsx:2533` and `:3709` render the explanation only from `deliveryNotice`, after a send was actually queued by the fallback. The report says `App.agent.mounted.test.tsx` now checks for no reason line before sending and for the explanation after the queuing send. I did not open that test.
+- **F5:** `steerRuntimeId` (`busySend.ts:23-26`) probes `runtime.capabilities` only while the session is `working`, `starting` or `waiting_permission`. `App.tsx:689` and `:720` use it, so the companion gets the same gate.
+- **F6:**
+  - `docs/FIX39_AUDIT_IMPL_BRIEF.md` no longer shows in `git status`.
+  - The two composer classes moved to `shell.css:260-261`.
+  - `.p9-cache/` is still untracked, as expected. The Director must stage files by name and delete it link-safely after the merge.
+- **F7:** `App.companion.mounted.test.tsx` adds a case where Enter calls `session.steer` and Ctrl+Enter calls `session.queue.add`.
+
+One non-blocking note: the capability probe now starts only when a turn goes live. A busy send made before the probe replies queues, with the "unavailable" notice after sending. The message is not lost.

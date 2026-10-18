@@ -50,3 +50,20 @@ The daemon (`proposals.rs:449`) matches the project by id or case-insensitive tr
 
 ## Scope
 Files outside the listed set are all justified in the report (`SettingsSheet.tsx`/`settingsIndex.ts` for the setting row, `BlobSettings.tsx` for the stale cap text, `ProposalCard.tsx` for risk 7, `agent-core/lib.rs` for 19.5). `App.tsx` is touched only for the empty state and the indicator. `tiers.json` is correctly unchanged.
+
+
+## Re-check (Sonnet), verbatim
+
+The auditor re-checked the follow-up and replied:
+
+PASS
+
+All five findings are fixed, and I found no remaining must-fix items. I read the code and tests only; I did not re-run the gates.
+
+- **Finding 1:** `deliver` now takes a `retry` flag (`team.rs:650`). A retried item that is refused again goes back to the front through `requeue_front` (`team.rs:700`) with no notice. This covers both the global-limit conflict branch and the `session_busy` branch. A first arrival still queues at the back. Two tests cover it: `row_a_refused_drain_keeps_the_queue_order` (`main.rs:11009`) and `row_repeated_refused_drains_write_one_waiting_notice` (`main.rs:11031`).
+- **Finding 2:** `queue_delivery` only writes the notice when `meta.kind == "blob_message"` (`team.rs:678`). A `blob_reply` queues silently, and `row_a_reply_to_a_busy_origin_adds_no_waiting_notice` (`main.rs:11055`) covers it.
+- **Finding 3:** `announce_model_change` calls `announce_context_loss` only when `session_has_conversation_history` is true (`knowledge.rs:430`). The Manager path is unchanged. `row_a_model_change_on_a_never_prompted_bot_stays_silent` (`main.rs:11147`) covers it.
+- **Finding 4:** `projectForDraft` (`ProposalCard.tsx:38`) matches by id or by trimmed, case-insensitive name, as the daemon does. The folder line shows the path, or "Project not found" for an unknown name, and is absent when no project is named (`ProposalCard.tsx:145`). The mounted and unit tests cover these cases.
+- **Finding 5:** The new UI tests cover the waiting indicator (`App.agent.mounted.test.tsx:1095`) and the "Bots working at once" setting (`SettingsSheet.appearance.mounted.test.tsx:156`). The restart gap for `st.team.queued` is now stated in the report. The extra `MessageMeta` type addition (`direction: 'waiting'`, `state?: 'queued'`) in `types.ts` only adds types for fields the daemon already emits.
+
+The restart gap is not implemented, only documented. That is acceptable for merge; the Director decides whether to schedule the `relay_failure` startup pass.

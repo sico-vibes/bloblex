@@ -126,6 +126,11 @@ Events:
 | `budget.list` | `{}` | **Retired:** `budget.list`, `budget.set` and `budget.delete` return `unsupported` (`crates/bloblex-daemon/src/main.rs:992`; AGENTS.md, 12 October 2026 amendment). The rows below are historical. `{ "policies": Budget[] }` with active reservations where available. `Budget.scopeType` supports `global`, `host`, `runtime`, `agent`, `blob`, `session`, and `project`; `blob` policies use a blob ID as `scopeId`. |
 | `budget.set` | `{ "id": string, "scopeType": "global"|"host"|"runtime"|"agent"|"blob"|"session"|"project", "scopeId"?: string|null, "period": string, "metric": string, "hardLimit": number, ... }` | Persists a policy; most restrictive applicable hard cap wins. `blob` requires an active blob ID in `scopeId` and matches sessions whose `agentId` equals that ID. Existing `agent` scope retains its provider-ID behavior. Reusing an ID for a different scope, target, period, or metric clears its old reservations atomically. |
 | `budget.delete` | `{ "policyId": string }` | Removes that policy and its reservations atomically. Blob-scoped policies are also removed atomically when their blob is archived/deleted with `agent.delete`. |
+| `agent.lock.set` | `{ "agentId": string, "locked": boolean }` | `{ "agent": Agent }`. Locks or unlocks a bot (FIX39). The Manager cannot be locked. Which writes a lock refuses is listed under "FIX39 additions" below. Never remote. |
+| `session.permissions.set` | `{ "sessionId": string, "approvalMode": "ask"\|"auto"\|"bypass"\|null }` | Session summary. Pins one conversation's permission mode from its next turn, also while a turn runs. `null` removes the pin so the conversation follows its bot again; with no pin it writes nothing. Refuses automation sessions and locked bots. Never remote. |
+| `diagnostics.preview` | `{}` | `{ generatedAt, fileName, files: [{ name, sizeBytes }] }`: what the export zip holds. Never remote. |
+| `diagnostics.export` | `{}` | `{ fileName, sizeBytes, uncompressedBytes, files, base64 }`: the zip, base64-encoded over loopback RPC. The shell writes it through the native save dialog with its own commands; no path from the webview is used. Never remote. |
+| `skills.forAgent` | `{ "agentId": string }` | `{ "skills": [{ name, description, source }] }`: the shared skills switched on for one bot. Added in FIX37 (beta.32) and listed here for the first time. `invalid_argument` without `agentId`. |
 
 ### RPC methods dispatched but not in the table above
 
@@ -177,6 +182,8 @@ After every finished turn the queue is drained once: a `turn.completed` on an id
 
 ### Automatic retry after overload and rate limits
 
+> **Superseded in part by FIX39 (P8), see "FIX39 additions" below.** Overloaded retries are bounded at three attempts (`OVERLOADED_MAX_ATTEMPTS`, `crates/bloblex-daemon/src/retry.rs:16`), not five. Rate-limited failures now become the Limited state, with the reset time, and are not retried by this switch. The rest of this section still describes the beta.19 behaviour.
+
 Opt-in via `experimental.autoRetry` (default false). With it off the daemon never schedules a retry and emits no retry notices or events. When on, a terminal turn error that carried an `overloaded` or `rateLimited` recovery hint and whose provider delivery was `acknowledged` may schedule one automatic retry: a `retry` queue item that sends the literal text `Please continue.` as a new turn in the same session, with the same locked model, effort and approval mode. A turn whose delivery is `unknown` always declines, because resending could charge a paid prompt twice. Overloaded backoff is `5s * 2^(attempt-1)` plus up to 100% jitter, up to 5 attempts. Rate-limited retries need a known reset: `max(reset of the provider's blocked quota windows) + 15s + 0..30s`, up to 2 attempts, and wait longer than `retry.maxWaitSecs` (default 21600, 0 to 86400; 0 means never wait for a window) declines. `authRequired` and hint-less failures stay silent. The decision is stored in `turns.data.retryDecision` as `{"decision":"retry"|"decline","reason":"<code>","at":"<rfc3339>"}`; reasons are `disabled`, `not_acknowledged`, `no_hint`, `auth_required`, `unknown_reset`, `too_long`, `max_attempts`, `superseded`, `pending_retry`, `session_unavailable`, or `cancelled`. Retry items bypass the queue pause and fire from the same due loop; a user prompt, a Stop, a model/effort change, or an archived/deleted session cancels any pending retry. After a restart a retry overdue by more than ten minutes is dropped with a notice "Automatic retry skipped because Bitbots was not running."
 
 Schedule and decline notices use role `notice` with meta `{"kind":"auto_retry","status":"scheduled"|"declined"|"cancelled"|"skipped",...}`. Events: `turn.retry_scheduled` `{sessionId,turnId,itemId,retryKind:"overloaded"|"rate_limited",attempt,maxAttempts,runAt}`; `turn.retry_declined` `{sessionId,turnId?,reason}`. The eventual `auto_retry` user message carries `meta.kind == "auto_retry"` so the UI renders a notice instead of a bubble.
@@ -208,6 +215,41 @@ The MCP bridge adds `memory_search`, `memory_get`, `memory_write`, `memory_updat
 Persona: `profile.about` (string up to 1500 characters) is included in each blob's runtime instructions beside `profile.name` as `About the user (from their own notes): …`. Editing it is an explicit user change and does change the instruction hash (the per-blob persona remains the existing `instructions` field).
 
 Events: `memory.changed {record}` and `memory.deleted {id}`.
+
+### FIX39 additions (18 October 2026)
+
+Names and shapes come from the package reports (`docs/FIX39_P<n>_REPORT.md`) and the code. No new event name was added in this wave; several existing payloads gained fields.
+
+**Settings keys** (`settings.set` validates each; anything outside the allowlist is refused):
+
+- `concurrency.botsAtOnce`: integer 1 to 16, default 4. The one limit on bots working at once. It replaces the per-bot cap, which is no longer enforced, although `agents.maxConcurrency` is still stored. `runtime.capabilities` reports it as `globalConcurrency.limit`.
+- `experimental.resumeAfterUsageLimits`: JSON boolean, default on (an absent key means on). Resumes a Limited conversation when its window opens. With it off the conversation waits for you.
+- `experimental.autoRetry`: unchanged, default off. It now covers transient failures only (overloaded, a dropped stream, a process that fails to start), with up to three attempts. Rate-limited failures become the Limited state below and are no longer retried by this switch.
+- `diagnostics.logLevel`: `info` (default) or `debug`. Hidden in the UI. It takes effect at the next daemon start, and dependencies stay at `info`.
+- `composer.busySendMode`: `steer` (default) or `queue`. What a send does while a bot works. Steer is used only where `runtime.capabilities` reports steering; otherwise the composer queues and says so.
+- `exec_gate.codex.steer` is seeded open. A one-time migration opens an existing closed gate once. `session.steer` refuses only a provider whose adapter cannot steer; today that is every provider except Codex, and those answer `unsupported`.
+- `experimental.sidebarModel` and `experimental.botLock` are the two new Experimental features, stored like the others under `experimental.<name>`.
+
+**Remote status** (`remote.status`): `tailscale` also reports `starting` and `not_running`. `remote.enable` on a port that another Bitbots copy already serves is refused with `conflict`. A port held by another program moves the gateway to the next free loopback port (the configured port, then +1 to +9 skipping the Native port, then an OS-assigned port), and the chosen port is saved as `remote.port`.
+
+**Limits and turn errors.**
+
+- A session in a usage or rate limit has `state: "limited"` and `limitedUntil` (RFC 3339, or null when the provider gave no reset time). `limitedUntil` appears in `session.list`, `session.get` and `session.changed`. With no reset time the conversation stays limited and asks you; it never retries on an unknown window.
+- `turn.error` carries `state` (for example `limited`) and `recoveryHandled: true` when a retry or continuation has already been scheduled for that turn. Clients hide those turn errors. The retry events are the ones from beta.19 (`turn.retry_scheduled`, `turn.retry_declined`).
+- Notices: "Limited until <time>. I'll pick up when the window opens.", "Retrying (n of 3)…", and "Picking up where it left off" before a one-off `Continue where you left off.` prompt. A continuation follows a restart, a provider crash or a timeout, and at most three recoveries run per conversation.
+- A lost session gets a summary. When a resume fails or a model changes, the next prompt carries one bounded `<bloblex_recap>` block: the last eight user and assistant messages (600 characters each), up to 12 changed file paths, 6000 characters in all. It is added to that one prompt, is never stored or logged, and the notice reads "Started a fresh session. The agent was given a summary of the conversation."
+
+**Locks** (`agent.lock.set`). While a bot is locked these refuse with "This bot is locked. Unlock it to change its settings.": `agent.update`, `agent.delete`, `agent.restore`; `agent.team.update` when the project, role or leader would change (including to Unassigned); `project.delete` while a locked bot is in that project; `session.model.update` except `planMode`; `session.permissions.set`; the Manager's `update_blob`; approval of a Manager permission proposal; and the legacy model migration. Still allowed: unlocking, `agent.create`, hiding and sort order, `planMode`, and every read.
+
+**Tags.** `project.update` and `agent.team.update` accept `tags`: an array of strings, trimmed and lower-cased, 1 to 24 characters each, at most 8, de-duplicated. `[]` clears them. The Manager's tag changes go through approval; a locked bot refuses a tag change.
+
+**Merge proposals** (P10). A coding task that shares its repository with another working task runs in its own git worktree, beside the repository, on a `bitbots/<slug>` branch. A researcher-tagged or researcher-role bot never gets one. When the task completes, a proposal of kind `merge` offers the merge. `proposal.decide` with `approve` merges (fast-forward, else a merge commit; never forced) and removes the copy and branch. `reject` keeps the branch unless `discard: true` is sent, which removes the copy and branch. Merge and discard are refused while the task is still working, and a dirty main checkout refuses a merge with the proposal left pending. Remote devices with operator tier can send `discard` when approvals from remote are on (see [remote/THREAT_MODEL.md](remote/THREAT_MODEL.md) §14).
+
+**Manager tool set** (P5, P7). These are tools on the local MCP bridge, not daemon RPC methods, and ordinary bots do not get them. Read tools need no approval: `list_blobs`, `read_blob`, `list_projects`, `read_project`, `project_status`, `list_conversations`, `read_conversation` and `get_conversation_permission`. Change tools create a proposal that waits for owner approval: `propose_bot`, `update_blob` (name, description, role, instructions, tags, look, model, effort and permission; never Full access), `propose_project`, `update_project`, `assign_task` (a brief, a done goal and a report-back are required), `message_blob`, `start_conversation`, `open_conversation` and `set_conversation_permission` (only `ask` or `auto`, and only for a side conversation the Manager started). `ask_user` is unchanged. Proposal kinds now stored are `bot`, `project`, `task`, `open`, `permission`, `merge`, plus the FIX36 `playbook` and `profile`. Decisions emit `proposal.changed {id,kind,sessionId,status,result,decidedAt}` with `status` `approved`, `rejected` or `expired`, and `permission.resolved`.
+
+**Tool steps** (P2). A tool step may carry a short `label`, and a `pattern`, `url` or `path` where the provider gave one. Remote devices do not receive these fields by default (see [remote/PROTOCOL.md](remote/PROTOCOL.md) §7).
+
+**Working bots** (P9) is a UI panel built from side sessions, queued notices and turn state. It adds no RPC.
 
 ## Desktop notifications
 

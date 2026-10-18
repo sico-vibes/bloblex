@@ -124,3 +124,16 @@ Gaps:
 
 - No sparkle or star icons were added. The lock uses `Lock` / `LockOpen`, the tab uses `FlaskConical`, the card uses `ShieldCheck`. The Manager's star is untouched.
 - Themes: the `.lock-badge` uses theme tokens plus light-theme and selected-row overrides. It has no `data-bitbots` override like `.leader-badge` at `bitbots.css:296`, but it is already circular. The Director's screenshots should confirm both looks and both themes, including S3.
+
+
+## Re-check (Sonnet), verbatim
+
+The auditor re-checked the follow-up and replied:
+
+The Re-check section isn't in `docs/FIX39_P5_AUDIT.md`. My Bash append and my Edit were both denied, so I wrote nothing.
+
+My verdict is PASS. I checked F1, F2, F3, S1–S5, S7, S8 and the update badge against the code, and each is fixed. I did not re-run the gates. S3's layout fix is only pinned by a CSS test, so the Director's screenshots, including the badge at 1024 px, are still owed. S6 is still unassigned: the denial text in `bloblex_agent_core` is outside P5's files.
+
+If you grant write access to that file, I'll append the section.
+
+**PASS**

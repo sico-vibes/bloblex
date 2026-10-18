@@ -14,7 +14,7 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 
 - **AI agents:** read [AGENTS.md](../AGENTS.md) first. It is the owner directive, with dated amendments newest first. Then [OPERATING_MODEL.md](OPERATING_MODEL.md) (the rules in effect today, derived from AGENTS.md). Then [implementation-status.md](implementation-status.md) for open gaps and [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for release state.
 - **New contributors:** [README.md](../README.md), then [windows-development.md](windows-development.md), [PRODUCT.md](../PRODUCT.md), [DESIGN.md](../DESIGN.md), [ipc-contract.md](ipc-contract.md) and [runtime-capabilities.md](runtime-capabilities.md).
-- **Release state today:** `v0.1.0-beta.30` ([releases/0.1.0-beta.30.md](releases/0.1.0-beta.30.md)). The signed updater feed is still at `v0.1.0-beta.6` ([UPDATER.md](UPDATER.md)).
+- **Release state today:** last tagged `v0.1.0-beta.33`. `v0.1.0-beta.34` ([releases/0.1.0-beta.34.md](releases/0.1.0-beta.34.md)) is in preparation with the FIX39 wave and is not yet tagged. Beta.32 and later update themselves ([UPDATER.md](UPDATER.md)).
 
 ## Rules and ownership
 
@@ -119,6 +119,40 @@ Status values: `current`, `superseded by <link>`, `historical`, or `in flight` (
 | [FIX29_WP6C1_BUILD_SPEC.md](FIX29_WP6C1_BUILD_SPEC.md) | Remote: the desktop crate builds before the remote app exists. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
 | [FIX29_WP6D_CONTRACT_SPEC.md](FIX29_WP6D_CONTRACT_SPEC.md) | Remote: the renderer contract, hook and simulator follow the Tailscale design. | implemented and released in `v0.1.0-beta.30`; report beside it | 17 Oct 2026: added with the wave |
 
+### FIX39 and FIX40 wave (18 October 2026)
+
+Owner feedback, decisions, research, briefs, reports and audits for the beta.33 review. Each package's report and audit sit side by side. The release is [0.1.0-beta.34](releases/0.1.0-beta.34.md) (in preparation). Commits and verdicts are in [SESSION_HANDOFF.md](../SESSION_HANDOFF.md).
+
+| Document | Purpose | Status | Last verified |
+| --- | --- | --- | --- |
+| [FIX39_FEEDBACK.md](FIX39_FEEDBACK.md) | The owner's and a friend's review of beta.33: 24 numbered items. | current input | 18 Oct 2026: added with the wave |
+| [FIX39_DECISIONS.md](FIX39_DECISIONS.md) | The owner's answers, the decisions the audit made, and packages P1 to P13 with their file scopes. Overrides the research where they differ. | current | 18 Oct 2026: added with the wave |
+| [FIX39_DIRECTOR_CHECKS.md](FIX39_DIRECTOR_CHECKS.md) | The Director's browser-preview checks after Wave A; the update-badge failure was handed to P5. | current | 18 Oct 2026: added with the wave |
+| [FIX39_DOCS_BRIEF.md](FIX39_DOCS_BRIEF.md) | Brief for this wave's documentation lane (Claude Haiku 5.5). | historical brief | 18 Oct 2026: added with the wave |
+| [FIX39_RESEARCH_BRIEF.md](FIX39_RESEARCH_BRIEF.md) | Brief for the research lane (DeepSeek): investigate every item, change no code. | historical brief | 18 Oct 2026: added with the wave |
+| [FIX39_RESEARCH_R1.md](FIX39_RESEARCH_R1.md) | Research for items 1 to 15 (UI and UX), with file:line evidence and proposed designs. | historical; superseded by decisions where they differ | 18 Oct 2026: added with the wave |
+| [FIX39_RESEARCH_R2.md](FIX39_RESEARCH_R2.md) | Research for items 16 to 20 (conversations, activity, permissions, context loss). | historical; superseded by decisions where they differ | 18 Oct 2026: added with the wave |
+| [FIX39_RESEARCH_R3.md](FIX39_RESEARCH_R3.md) | Research for items 21 to 24 (Manager projects, Bitbots tool set, Tailscale, browser layout). | historical; superseded by decisions where they differ | 18 Oct 2026: added with the wave |
+| [FIX39_RESEARCH_AUDIT.md](FIX39_RESEARCH_AUDIT.md) | Claude Sonnet 5.5's audit of the three research reports: a verdict per item, the package plan and the owner's questions. | historical; the owner's answers are in FIX39_DECISIONS.md | 18 Oct 2026: added with the wave |
+| [FIX39_AUDIT_RESEARCH_BRIEF.md](FIX39_AUDIT_RESEARCH_BRIEF.md) | Brief for the research audit (Claude Sonnet 5.5). | historical brief | 18 Oct 2026: added with the wave |
+| [FIX39_IMPLEMENT_BRIEF.md](FIX39_IMPLEMENT_BRIEF.md) | Brief for the implementation lanes (GPT Sol 6.1): rules and gates. | historical brief | 18 Oct 2026: added with the wave |
+| [FIX39_AUDIT_IMPL_BRIEF.md](FIX39_AUDIT_IMPL_BRIEF.md) | Brief for the audit of each implementation diff (Claude Sonnet 5.5). | historical brief | 18 Oct 2026: added with the wave |
+| [FIX40_T3_RESEARCH_BRIEF.md](FIX40_T3_RESEARCH_BRIEF.md) | Brief for studying T3 Code's agent runtime and the owner's vision. | historical brief | 18 Oct 2026: added with the wave |
+| [FIX40_T3_RESEARCH.md](FIX40_T3_RESEARCH.md) | T3 Code research with file:line evidence and a recommendations table. P0 items were folded into FIX39 (P6, P8); the rest into P7, P9, P10 and P11. | current research | 18 Oct 2026: added with the wave |
+| [FIX39_P1_REPORT.md](FIX39_P1_REPORT.md) · [FIX39_P1_AUDIT.md](FIX39_P1_AUDIT.md) | P1: usage dialog, effort picker, one search, update banner, checklist, Manager card, star badge, dividers, empty usage, sidebar previews. | implemented in `14777cb`; audit PASS WITH FIXES, fixed; in beta.34 | 18 Oct 2026: added with the wave |
+| [FIX39_P2_REPORT.md](FIX39_P2_REPORT.md) · [FIX39_P2_AUDIT.md](FIX39_P2_AUDIT.md) | P2: readable agent activity (items 17 and the shape validation of item 4). | implemented in `14777cb`; audit PASS WITH FIXES, fixed; in beta.34 | 18 Oct 2026: added with the wave |
+| [FIX39_P3_REPORT.md](FIX39_P3_REPORT.md) · [FIX39_P3_AUDIT.md](FIX39_P3_AUDIT.md) | P3: Remote errors and port conflicts, the wide browser layout, companion drag, parent watchdog and single instance. | implemented in `14777cb`; audit PASS WITH FIXES, fixed except F3 (recorded) and F4 (owed); in beta.34 | 18 Oct 2026: added with the wave |
+| [FIX39_P4_REPORT.md](FIX39_P4_REPORT.md) · [FIX39_P4_AUDIT.md](FIX39_P4_AUDIT.md) | P4: eight symmetrical bot shapes, shape-preserving Shuffle and Surprise me, name migration. | implemented in `14777cb`; audit PASS WITH FIXES, fixed; in beta.34 | 18 Oct 2026: added with the wave |
+| [FIX39_P5_REPORT.md](FIX39_P5_REPORT.md) · [FIX39_P5_AUDIT.md](FIX39_P5_AUDIT.md) | P5: Experimental page, model under the name, lock a bot, the composer writes the bot, permissions in a conversation. | implemented in `53773fd`; audit PASS WITH FIXES, fixed; in beta.34 | 18 Oct 2026: added with the wave |
+| [FIX39_P6_REPORT.md](FIX39_P6_REPORT.md) · [FIX39_P6_AUDIT.md](FIX39_P6_AUDIT.md) | P6: parallel conversations with one bot and the global limit, context recap, tags, task folders, denial text. | implemented in `122ab81`; audit PASS WITH FIXES, fixed; restart gap open | 18 Oct 2026: added with the wave |
+| [FIX39_P7_REPORT.md](FIX39_P7_REPORT.md) · [FIX39_P7_AUDIT.md](FIX39_P7_AUDIT.md) | P7: the Manager's Bitbots tool set, task briefs, routing by role, tags and project. | implemented in `fd738b2`; audit FAIL, fixed in a follow-up; no re-audit recorded | 18 Oct 2026: added with the wave |
+| [FIX39_P8_REPORT.md](FIX39_P8_REPORT.md) · [FIX39_P8_AUDIT.md](FIX39_P8_AUDIT.md) | P8: watchdog, "Limited until", bounded retry and continuation after a crash or timeout. | implemented in `53d193d`; audit PASS WITH FIXES, fixed; in beta.34 | 18 Oct 2026: added with the wave |
+| [FIX39_P9_REPORT.md](FIX39_P9_REPORT.md) · [FIX39_P9_AUDIT.md](FIX39_P9_AUDIT.md) | P9: Working bots panel, Full access as the default for new bots, Steer or Queue setting. | implemented in `dc3a131`; audit PASS WITH FIXES, fixed; in beta.34 | 18 Oct 2026: added with the wave |
+| [FIX39_P10_REPORT.md](FIX39_P10_REPORT.md) · [FIX39_P10_AUDIT.md](FIX39_P10_AUDIT.md) | P10: a separate git worktree for a code task when another task works in the same repo, merged back on approval. | implemented in `4ba7367`; audit PASS WITH FIXES, fixed; in beta.34 | 18 Oct 2026: added with the wave |
+| [FIX39_P11_REPORT.md](FIX39_P11_REPORT.md) · [FIX39_P11_AUDIT.md](FIX39_P11_AUDIT.md) | P11: real-CLI reliability suite with offline replay of recorded transcripts. | implemented in `e8d3dab`; audit FAIL, addressed in a follow-up; no re-audit recorded; Codex fixture to re-record | 18 Oct 2026: added with the wave |
+| [FIX39_P12_REPORT.md](FIX39_P12_REPORT.md) · [FIX39_P12_AUDIT.md](FIX39_P12_AUDIT.md) | P12: rolling redacted logs and Export diagnostics. | implemented in `543f422`; audit PASS WITH FIXES, fixed; in beta.34 | 18 Oct 2026: added with the wave |
+| [FIX39_P13_REPORT.md](FIX39_P13_REPORT.md) · [FIX39_P13_AUDIT.md](FIX39_P13_AUDIT.md) | P13: Claude permission change mid-conversation, and the steer gate per provider capability. | implemented in `8409827`; audit PASS (two optional nits); in beta.34 | 18 Oct 2026: added with the wave |
+
 ## Runbooks
 
 | Document | Purpose | Status | Last verified |
@@ -153,7 +187,7 @@ Immutable records. Only broken links were repaired. Their wording and conclusion
 
 ## Release notes
 
-Immutable records. The newest is [0.1.0-beta.30](releases/0.1.0-beta.30.md). Earlier notes are historical.
+Immutable records. The newest is [0.1.0-beta.34](releases/0.1.0-beta.34.md), in preparation and not yet tagged. Earlier notes are historical.
 
 | Document | Status | Last verified |
 | --- | --- | --- |
@@ -186,7 +220,8 @@ Immutable records. The newest is [0.1.0-beta.30](releases/0.1.0-beta.30.md). Ear
 | [releases/0.1.0-beta.27.md](releases/0.1.0-beta.27.md) | historical | 14 Oct 2026: written with the release |
 | [releases/0.1.0-beta.28.md](releases/0.1.0-beta.28.md) | historical | 14 Oct 2026: written with the release |
 | [releases/0.1.0-beta.29.md](releases/0.1.0-beta.29.md) | historical | 15 Oct 2026: written with the release |
-| [releases/0.1.0-beta.30.md](releases/0.1.0-beta.30.md) | historical (newest manual-only release) | 17 Oct 2026: written with the release |
+| [releases/0.1.0-beta.30.md](releases/0.1.0-beta.30.md) | historical | 17 Oct 2026: written with the release |
+| [releases/0.1.0-beta.34.md](releases/0.1.0-beta.34.md) | in preparation (FIX39 wave; not yet tagged) | 18 Oct 2026: written with the wave |
 
 ## Handoff and history
 

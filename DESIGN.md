@@ -46,3 +46,15 @@ Rounded rectangular bill with 14 px compact and 22 px expanded corners, an opaqu
 Appearance may use system, dark or light surfaces. Light surfaces use the same semantic tokens with dark text. Type scale tokens may scale proportionally from a 13 px through 16 px body size.
 
 The companion keeps its dark token palette over transparency when the main window uses the light theme.
+
+## FIX39 visual rules (18 October 2026)
+
+These rules came from the owner's review and the audits (item numbers refer to [docs/FIX39_FEEDBACK.md](docs/FIX39_FEEDBACK.md)). Both looks and both themes follow them.
+
+- **Bot shapes (item 4).** Eight shapes, symmetrical by default, in this order: Circle, Pebble, Squircle, Capsule, Triangle, Hexagon, Cloud, Droplet. Each has soft shading and two equal, upright pill eyes mirrored around the centre. Eye tuning (size, height, spacing, Squareness) changes only the eyes. Shuffle and Surprise me never change the shape; they change the eyes and the colour. Older names migrate: round and sun become Circle, organic and cat become Pebble, boxy becomes Squircle.
+- **The Manager's badge (item 8).** A filled white star on an orange circle, on the Manager's avatar. It is the only star or sparkle icon in the app. Do not use `Sparkles`, `Sparkle`, `Wand2`, `WandSparkles`, ✦, ✧ or ✨ anywhere. It is the one exception to monochrome chrome.
+- **Model line under a bot's name (item 12).** With the "Model and effort under the name" experiment on, the sidebar's second line shows the model and effort, for example "Sonnet 5.5 · High", or "Default model" when none is set. While a bot is working or waiting, the status takes that line. System notices are never the preview (item 15).
+- **Lock badge (item 13).** A locked bot shows a circle with a lock on its avatar, placed like the Manager's badge. Its editor opens read-only behind a banner, its controls are disabled, and its composer model, effort and permission controls show "This bot is locked. Unlock it to change its settings."
+- **Working bots panel.** A collapsible section in the session rail. Each row shows the bot's face, name, the task's short title, its status (working, starting, waiting, waiting for approval, limited, done, failed, cancelled) and the elapsed time. Finished tasks collapse into "N finished". It uses the same tokens in both looks and both themes.
+- **Update badge (item 5 and the Director's browser check).** The badge never covers the conversation title. Below a window width of 1180 px it shows an icon with a short label ("Restart"), or the ring with the percentage while downloading; at 1180 px and wider it shows the full label. The title truncates first. The banner's View and Later buttons use `.primary-button.small` and `.ghost-button.small`.
+- **Settings groups (item 9).** Each group after the first is separated from the one before by a divider, in both looks.

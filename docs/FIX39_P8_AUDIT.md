@@ -83,3 +83,26 @@
 ## Windows
 
 Nothing path-specific was added. The storage and daemon tests use `std::env::temp_dir()` and clean up. The report's note that `cargo fmt --check` fails across the whole repository is believable in this checkout, but the new daemon code (`retry.rs`, `main.rs`) is written as dense one-line statements that will fail rustfmt. Run `rustfmt` on the touched hunks only, if the Director wants them tidy.
+
+
+## Re-check (Sonnet), verbatim
+
+The auditor re-checked the follow-up and replied:
+
+PASS
+
+I read the follow-up against F1–F7 and the diff. I did not rerun the gates, so the report's results (all suites green, clippy clean, 1256 UI tests) are unchecked by me.
+
+- **F1: fixed.** `main.rs:4008-4016` now has an `else` branch for the no-turn case. It sets the session to `error`, drops the active turn, emits `session.changed`, and emits `turn.error` with `turnId: null`. `provider_error_without_a_watched_turn_still_reports_once` (`main.rs:6295`) covers it, and the report says it failed with the `else` body disabled.
+- **F2: fixed.** `failed_prompt_terminal(had_active_turn)` (`lib.rs:912`) returns `TurnErrorReported` only when the `Error` was queued (`lib.rs:1238`). With no active turn it returns `Protocol` (`lib.rs:1242`), so the daemon finalizes the turn. The test (`lib.rs:1413`) exercises that helper, not the live `prompt` transport. The helper is the only source of the error at both call sites, so I accept that.
+- **F3: fixed.** The hint is sent after the `was_cancelled` return, inside the `had_active_turn` branch and before the `Error` (`lib.rs:1226-1233`).
+- **F4: fixed.** The aria-label now reads "Longest retry delay" (`SettingsSheet.tsx:603`).
+- **F5: fixed.** `watchdog_due_sessions` (`storage lib.rs:2712`) selects only due, unarchived limited sessions. `retry.rs:721` iterates only those ids, and the test is at `storage lib.rs:7972`.
+- **F6: fixed.** `retry.rs:513-514` is now one sentence.
+- **F7: fixed.** The side-session tests are at `main.rs:8308` and `main.rs:8325`. `teamSelectors.test.ts:154` covers the sidebar label and `types.test.ts:171` covers `turn.error` state and `recoveryHandled`.
+
+No must-fix items remain.
+
+Optional, small: the new `else` branch in F1 (`main.rs:4008-4016`) skips `team::after_turn`, which the old code reached with a `None` turn. The only visible difference is that a no-turn error no longer pauses a non-empty prompt queue (`queue::after_turn` marks it paused on `turn.error`). Add `team::after_turn(&st, &sid, None, "turn.error", ...)` there if you want strict parity. It doesn't block the merge.
+
+The audit's decision notes (N1–N5) are unchanged and still need the owner's call.

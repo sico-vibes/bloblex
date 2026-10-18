@@ -90,3 +90,42 @@ The owner chose to fold the T3 research's P0 items into this release (`docs/FIX4
   - a killed turn continues on the next activation with the recap.
 
   Nothing in the retry or continuation path logs conversation text.
+
+## More owner decisions (18 October, evening): borrow two T3 defaults and schedule every remaining recommendation
+
+5. **Full access is the default permission for new bots.** The owner chose this in place of "Ask first".
+   - Onboarding, the create wizard, the Manager setup and bot templates all default to Full access, and the UI says so plainly.
+   - Existing bots keep their setting.
+   - **Unchanged by AGENTS.md:** automations still never run with bypass, approvals from Remote stay off by default, and the Manager still cannot *propose* Full access for a bot. Only the owner sets it.
+6. **Steer vs Queue becomes a visible setting** (T3's model).
+   - Settings › General gets "When you send while a bot is working": **Steer** (reaches it now, where the provider supports it) or **Queue** (waits for the turn to end).
+   - It comes with a one-line explanation and a keyboard modifier that sends the other way. It is shown in the composer while a bot works.
+   - When the provider can't steer, it falls back to Queue and says so.
+7. **Every remaining T3 recommendation is scheduled** (`docs/FIX40_T3_RESEARCH.md`, §3):
+   - **P7 (extended):**
+     - **Rec. 12:** delegation carries a brief, a done goal and a report-back. The Manager fills these in its tool calls; there is no form for the user.
+     - **Rec. 14:** the Manager proposes creating a bot or project when none fits.
+     - **Routing by role, tags and project:**
+       - "do some research" goes to a free bot tagged researcher;
+       - "research … for project P", or any mention of P, goes to P's researcher, or the Manager proposes creating one;
+       - the Manager resolves the project before acting and asks with options when unsure.
+   - **P9:** rec. 11 (live, visible activity and bot-to-bot messages in a running sub-conversation), plus decisions 5 and 6 above.
+   - **P10:** rec. 13. A code-writing delegation gets its own git worktree when another task is working in the same repo; the Manager chooses this invisibly and merges back with approval.
+   - **P11:** rec. 10, the real-CLI reliability suite (below).
+
+## P11: reliability tests against the real CLIs (recommendation 10)
+
+- **Live tests** run only when `BITBOTS_LIVE_TESTS=1`; they are skipped in the normal gates.
+- **Models:** the cheapest from each provider, with simple prompts such as "which model are you?" and a short multi-turn exchange:
+  - **Claude Code:** `claude-haiku-5-5`, effort medium.
+  - **Codex:** `gpt-6-luna`, effort medium.
+  - **OpenCode:** `opencode/deepseek-v4.1-flash-free`. This is the free Zen model, for tests only; the lanes keep using the Go plan.
+- **Scenarios**, per provider, through Bitbots' real adapter and daemon path: start, turn, model report, second turn in the same session, resume after a daemon restart, a steer or queue while working, a permission-mode change, and a usage-limit or unavailable answer turning into a clean reported state or skip, not a failure.
+- **Transcript replay:** the live runs record sanitised transcripts. Those transcripts become fixtures that a normal, offline test replays through the real adapters on every gate, as T3 does, so regressions are caught without spending tokens.
+- **Rules:**
+  - never print or store credentials;
+  - fixtures contain no personal paths or secrets;
+  - the tests use temporary data folders, never the owner's real `~/.claude`, `~/.codex` or Bitbots data;
+  - a usage limit is a reported skip with the reset time.
+- **Files:** new test files and fixture folders under `crates/bloblex-adapter-*/tests` and `crates/bloblex-daemon/tests`, a small recorder helper, and a `docs/` note added by the documentation lane. P11 touches no production code, except a test-only hook if one is truly needed.
+- **When:** now, in parallel with P6, because its files are separate.

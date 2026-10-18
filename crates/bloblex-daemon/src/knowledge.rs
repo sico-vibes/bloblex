@@ -345,7 +345,7 @@ fn playbook_text(st: &AppState) -> String {
 /// suffix and the handover.
 fn manager_knowledge_body(st: &AppState) -> String {
     format!(
-        "What you know about the user (locked preferences first):\n{}\n\nYour playbook:\n{}\n\nWorkspace:\n{}",
+        "What you know about the user (locked preferences first):\n{}\n\nYour playbook:\n{}\n\nTools: list_projects/list_blobs, read_project/read_blob, list_conversations/read_conversation, project_status, get_conversation_permission. Propose writes with propose_project/propose_bot, update_project/update_blob, assign_task/start_conversation/message_blob, open_conversation, set_conversation_permission. Fill the brief, doneGoal and reportBack yourself.\n\nWorkspace:\n{}",
         profile_lines(st),
         capped(&playbook_text(st), MAX_PLAYBOOK_BLOCK),
         workspace_summary(st),

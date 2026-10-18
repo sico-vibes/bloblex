@@ -4645,6 +4645,14 @@ mod phase2a_tests {
     }
     #[tokio::test]
     async fn manager_delegates_to_a_teammate_and_is_woken_by_the_relayed_reply() {
+        async fn approve_message(st: &AppState, session: &str, mut args: Value) -> Value {
+            args["doneGoal"] = json!("Task complete"); args["reportBack"] = json!("Results and evidence");
+            let response = call_tool(st,session,"message_blob",args).await;
+            assert_ne!(response["isError"],true,"{response}");
+            assert!(response["content"][0]["text"].as_str().unwrap().contains("approval"));
+            let proposal = st.db.proposals_pending().unwrap().last().unwrap().clone();
+            dispatch(st,"proposal.decide",json!({"id":proposal["id"],"decision":"approve"})).await.unwrap()
+        }
         let (mut st, _) = state();
         let runtime_id = "rt-team";
         st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
@@ -4672,14 +4680,15 @@ mod phase2a_tests {
         let listed = call_tool(&st, &main, "list_blobs", json!({})).await;
         let roster = listed["content"][0]["text"].as_str().unwrap();
         assert!(roster.contains("- Lead (you) [manager] — CTO") && roster.contains("- Mate"), "{roster}");
-        for (args, error) in [(json!({"blob":"Lead","message":"hi"}), "cannot message yourself"), (json!({"blob":"Nobody","message":"hi"}), "No teammate is called that"), (json!({"blob":"Mate","message":"  "}), "message is required")] {
+        for (mut args, error) in [(json!({"blob":"Lead","message":"hi"}), "cannot delegate to yourself"), (json!({"blob":"Nobody","message":"hi"}), "No bot matches"), (json!({"blob":"Mate","message":"  "}), "brief cannot be empty")] {
+            args["doneGoal"]=json!("Task complete"); args["reportBack"]=json!("Evidence");
             let result = call_tool(&st, &main, "message_blob", args).await;
             assert_eq!(result["isError"], true);
             assert!(result["content"][0]["text"].as_str().unwrap().contains(error), "{result}");
         }
 
-        let sent = call_tool(&st, &main, "message_blob", json!({"blob":"@mate","message":"Check the build\nDetails follow."})).await;
-        assert!(sent.get("isError").is_none() && sent["content"][0]["text"].as_str().unwrap().starts_with("Sent to Mate in \"Check the build\""), "{sent}");
+        let sent = approve_message(&st, &main, json!({"blob":"@mate","message":"Check the build\nDetails follow."})).await;
+        assert_eq!(sent["decision"], "approved");
         let side = st.db.side_session(&mate_id, &lead_id).unwrap().expect("side conversation");
         // Without a topic, the conversation is titled from the brief's first words.
         assert_eq!(st.db.session_detail(&side).unwrap()["link"], json!({"kind":"side","peerAgentId":lead_id,"peerName":"Lead","originSessionId":main,"spawnedFromSessionId":main,"topic":"Check the build"}));
@@ -4692,34 +4701,39 @@ mod phase2a_tests {
         let side_messages = wait_for_messages(&st, &side, |m| m.iter().any(|m| m["role"] == "assistant")).await;
         assert_eq!(side_messages[0]["meta"]["kind"], "blob_message");
         let main_messages = wait_for_messages(&st, &main, |m| m.iter().any(|m| m["role"] == "assistant" && m["content"] == "handled: [Reply from Mate]")).await;
-        assert_eq!(main_messages[0]["role"], "notice");
-        assert_eq!(main_messages[0]["meta"]["kind"], "delegation");
-        assert_eq!(main_messages[0]["meta"]["sideSessionId"], side.as_str());
+        let delegation = main_messages.iter().find(|m| m["meta"]["kind"] == "delegation").unwrap();
+        assert_eq!(delegation["meta"]["sideSessionId"], side.as_str());
         let reply = main_messages.iter().find(|m| m["meta"]["kind"] == "blob_reply").expect("relayed reply");
         assert_eq!(reply["content"], "[Reply from Mate]\nhandled: Check the build");
         assert_eq!(reply["meta"]["fromName"], "Mate");
 
         // A follow-up reuses the same side conversation instead of opening another.
-        call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"One more thing"})).await;
+        approve_message(&st, &main, json!({"blob":"Mate","message":"One more thing"})).await;
         assert_eq!(st.db.side_session(&mate_id, &lead_id).unwrap().as_deref(), Some(side.as_str()));
         wait_for_messages(&st, &main, |m| m.iter().filter(|m| m["meta"]["kind"] == "blob_reply").count() == 2).await;
         assert_eq!(st.db.session_list(false).unwrap().iter().filter(|s| s["agentId"] == mate_id.as_str()).count(), 1);
 
         // A topic starts a separate, titled conversation; an id continues an earlier one.
-        let topical = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"Draft the release notes","topic":"\"Release notes\""})).await;
-        assert!(topical["content"][0]["text"].as_str().unwrap().starts_with("Sent to Mate in \"Release notes\""), "{topical}");
+        let topical = approve_message(&st, &main, json!({"blob":"Mate","message":"Draft the release notes","topic":"\"Release notes\""})).await;
+        assert_eq!(topical["decision"], "approved");
         wait_for_messages(&st, &main, |m| m.iter().filter(|m| m["meta"]["kind"] == "blob_reply").count() == 3).await;
         let notes = st.db.side_session(&mate_id, &lead_id).unwrap().unwrap();
         assert_ne!(notes, side);
         assert_eq!(st.db.session_detail(&notes).unwrap()["title"], "Release notes");
-        call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"Back to the build","conversation":side})).await;
+        approve_message(&st, &main, json!({"blob":"Mate","message":"Back to the build","conversation":side})).await;
         wait_for_messages(&st, &main, |m| m.iter().filter(|m| m["meta"]["kind"] == "blob_reply").count() == 4).await;
         assert_eq!(st.db.session_list(false).unwrap().iter().filter(|s| s["agentId"] == mate_id.as_str()).count(), 2);
         assert_eq!(st.db.session_detail(&side).unwrap()["link"]["topic"], "Check the build", "continuing keeps the topic");
         let listed = call_tool(&st, &main, "list_conversations", json!({"blob":"Mate"})).await;
-        let listed = listed["content"][0]["text"].as_str().unwrap();
-        assert!(listed.contains(&format!("- {side} · \"Check the build\" with Mate · you started it")) && listed.contains("\"Release notes\"") && listed.contains("Latest reply: handled:"), "{listed}");
-        let unknown = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"hi","conversation":"missing"})).await;
+        let listed: Value = serde_json::from_str(listed["content"][0]["text"].as_str().unwrap()).unwrap();
+        let rows = listed["conversations"].as_array().unwrap();
+        let build = rows.iter().find(|row| row["id"] == side.as_str()).expect("the build conversation");
+        assert_eq!(build["startedByYou"], true, "{listed}");
+        assert_eq!(build["topic"], "Check the build", "{listed}");
+        assert_eq!(build["agentName"], "Mate", "{listed}");
+        let notes_row = rows.iter().find(|row| row["title"] == "Release notes").expect("the notes conversation");
+        assert_eq!(notes_row["topic"], "Release notes", "{listed}");
+        let unknown = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"hi","conversation":"missing","doneGoal":"Done","reportBack":"Evidence"})).await;
         assert!(unknown["content"][0]["text"].as_str().unwrap().contains("No conversation has the id missing"));
         // The teammate cannot continue a conversation the Manager started; it answers there automatically.
         let mate_main = dispatch(&st, "agent.conversation", json!({"agentId":mate_id})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
@@ -4736,10 +4750,11 @@ mod phase2a_tests {
         let sent_prompt = adapter.prompts.lock().unwrap().iter().rev().find(|text| text.starts_with("Follow up on #Check the build")).cloned().expect("referenced prompt");
         assert!(sent_prompt.contains("<bloblex_references>") && sent_prompt.contains(&format!("conversation \"{side}\"")), "{sent_prompt}");
 
-        // A chain that has already hopped too often refuses to go further.
+        // A chain that has already hopped too often is refused before a card is shown.
         st.team.set_depth(&main, 6);
-        let refused = call_tool(&st, &main, "message_blob", json!({"blob":"Mate","message":"again"})).await;
-        assert!(refused["content"][0]["text"].as_str().unwrap().contains("too many bots"));
+        let refused=call_tool(&st,&main,"message_blob",json!({"blob":"Mate","message":"again","doneGoal":"Done","reportBack":"Evidence"})).await;
+        assert_eq!(refused["isError"], true);
+        assert!(refused["content"][0]["text"].as_str().unwrap().contains("too many bots"), "{refused}");
         let _ = std::fs::remove_dir_all(data_dir);
     }
     #[tokio::test]
@@ -4826,6 +4841,9 @@ mod phase2a_tests {
         assert!(projects["content"][0]["text"].as_str().unwrap().contains("Rocket"), "{projects}");
         let updated = call_tool(&st, "boss-create", "update_blob", json!({"blob":"Worker","role":"VP","description":"Sets direction.","instructions":"New style."})).await;
         assert!(updated.get("isError").is_none(), "{updated}");
+        assert_eq!(st.db.agent_get(&mate_id).unwrap()["role"], "", "still awaiting approval");
+        let proposal = st.db.proposals_pending().unwrap().last().unwrap().clone();
+        dispatch(&st,"proposal.decide",json!({"id":proposal["id"],"decision":"approve"})).await.unwrap();
         let worker = st.db.agent_get(&mate_id).unwrap();
         assert_eq!((worker["role"].as_str(), worker["description"].as_str(), worker["instructions"].as_str()), (Some("VP"), Some("Sets direction."), Some("New style.")));
         assert_eq!(worker["leader"], false);
@@ -9381,7 +9399,7 @@ mod phase2a_tests {
         assert_eq!(st.db.agent_list(false, None).unwrap().len(), 2, "manager + worker only");
 
         // assign_task: no side conversation yet.
-        let task = call_tool(&st, "boss-main", "assign_task", json!({"bot":"Worker","brief":"Investigate the flaky test."})).await;
+        let task = call_tool(&st, "boss-main", "assign_task", json!({"bot":"Worker","brief":"Investigate the flaky test.","doneGoal":"Task complete with evidence","reportBack":"Results and open questions"})).await;
         assert_eq!(task["isError"], Value::Null, "{task}");
         assert_eq!(st.db.side_session(&worker_id, &boss_id).unwrap(), None, "no conversation before approval");
         assert_eq!(proposal_cards(&st).len(), 3, "three pending proposals, each a card");
@@ -9453,7 +9471,7 @@ mod phase2a_tests {
         assert_ne!(scout["effectiveApprovalMode"], "bypass");
 
         // assign_task approve: a side conversation exactly like message_blob.
-        let _ = call_tool(&st, "boss-main", "assign_task", json!({"bot":"Worker","brief":"Check the build\nDetails follow."})).await;
+        let _ = call_tool(&st, "boss-main", "assign_task", json!({"bot":"Worker","brief":"Check the build\nDetails follow.","doneGoal":"Task complete with evidence","reportBack":"Results and open questions"})).await;
         let task_prop = newest_proposal_id(&st);
         let decided = dispatch(&st, "proposal.decide", json!({"id":task_prop,"decision":"approve"})).await.unwrap();
         assert_eq!(decided["result"]["bot"], "Worker");
@@ -9468,7 +9486,7 @@ mod phase2a_tests {
 
         // assign_task reject: nothing is delivered.
         let before = st.db.session_list(false).unwrap().len();
-        let _ = call_tool(&st, "boss-main", "assign_task", json!({"bot":"Worker","brief":"Never sent"})).await;
+        let _ = call_tool(&st, "boss-main", "assign_task", json!({"bot":"Worker","brief":"Never sent","doneGoal":"Task complete with evidence","reportBack":"Results and open questions"})).await;
         let rejected_prop = newest_proposal_id(&st);
         assert_eq!(dispatch(&st, "proposal.decide", json!({"id":rejected_prop,"decision":"reject"})).await.unwrap()["decision"], "rejected");
         assert_eq!(st.db.session_list(false).unwrap().len(), before, "a rejected task opens no conversation");
@@ -10803,10 +10821,11 @@ mod fix39_p5_tests {
         let proposal = st.db.proposals_pending().unwrap().into_iter().find(|p| p["kind"] == "permission").expect("a pending proposal");
         let pid = proposal["id"].as_str().unwrap().to_owned();
         dispatch(&st, "proposal.decide", json!({"id":pid,"decision":"approve"})).await.unwrap();
-        let lock = st.db.session_detail(&side).unwrap()["modelLock"].clone();
-        assert_eq!(lock["approvalMode"], "auto");
-        // FIX39 item 19: the pill can say who set it.
-        assert_eq!(lock["approvalModeSource"], "manager");
+        // FIX39 item 16 / P7 audit B1: the approved change is the bot's, not a
+        // pin on this conversation, so the conversation keeps following the bot.
+        assert_eq!(st.db.agent_get(&target_id).unwrap()["approvalMode"], "auto");
+        assert!(st.db.session_detail(&side).unwrap()["modelLock"].is_null(), "no conversation pin is created");
+        assert_eq!(crate::exec_options_for_session(&st, &st.db.session_detail(&side).unwrap()).unwrap().approval_mode.as_str(), "auto");
     }
 
     #[tokio::test]
@@ -10825,9 +10844,10 @@ mod fix39_p5_tests {
         assert_eq!(refused.1.code, "invalid_argument");
         assert!(st.db.session_detail(&foreign).unwrap()["modelLock"].get("approvalMode").is_none());
         assert!(st.db.session_detail(&side).unwrap()["modelLock"].get("approvalMode").is_none(), "the edited card changed nothing");
-        // The untouched card still applies.
+        // The untouched card still applies — to the bot, not as a conversation pin.
         dispatch(&st, "proposal.decide", json!({"id":pid,"decision":"approve"})).await.unwrap();
-        assert_eq!(st.db.session_detail(&side).unwrap()["modelLock"]["approvalMode"], "auto");
+        assert_eq!(st.db.agent_get(&target_id).unwrap()["approvalMode"], "auto");
+        assert!(st.db.session_detail(&side).unwrap()["modelLock"].is_null());
     }
 
     #[tokio::test]
@@ -11233,15 +11253,21 @@ mod fix39_p6_tests {
         assert!(roster.contains("tags: reviewer"), "{roster}");
         let status = tool_text(&st, &boss, "project_status", json!({"project":"Signup"})).await;
         assert!(status.contains("tags: ui, backend"), "{status}");
-        // The Manager may set a project's tags and description directly.
+        // The Manager proposes tags and description; the owner approves.
         let updated = tool_text(&st, &boss, "update_project", json!({"project":project_id,"description":"The sign-up flow.","tags":["growth"]})).await;
-        assert!(updated.contains("tags: growth"), "{updated}");
+        assert!(updated.contains("approval"), "{updated}");
+        assert_eq!(st.db.project_get(&project_id).unwrap()["tags"],json!(["ui","backend"]));
+        let proposal = st.db.proposals_pending().unwrap().last().unwrap().clone();
+        dispatch(&st,"proposal.decide",json!({"id":proposal["id"],"decision":"approve"})).await.unwrap();
         let project = st.db.project_get(&project_id).unwrap();
         assert_eq!(project["tags"], json!(["growth"]));
         assert_eq!(project["description"], "The sign-up flow.");
         // The Manager may set a bot's tags too.
         let updated = tool_text(&st, &boss, "update_blob", json!({"blob":"Worker","tags":["payments"]})).await;
         assert!(!updated.contains("isError"));
+        assert_eq!(st.db.agent_get(&worker_id).unwrap()["tags"], json!(["reviewer"]));
+        let proposal = st.db.proposals_pending().unwrap().last().unwrap().clone();
+        dispatch(&st,"proposal.decide",json!({"id":proposal["id"],"decision":"approve"})).await.unwrap();
         assert_eq!(st.db.agent_get(&worker_id).unwrap()["tags"], json!(["payments"]));
     }
 
@@ -11272,8 +11298,11 @@ mod fix39_p6_tests {
             install(&mut st, &adapter);
             let boss = manager_session(&st).await;
             st.db.agent_create(&json!({"name":"Worker","runtimeId":"rt-test"})).unwrap();
-            let started = tool_text(&st, &boss, "message_blob", json!({"blob":"Worker","message":"Do it.","topic":"Now"})).await;
-            assert!(started.contains("working on it"), "{started}");
+            let started = tool_text(&st, &boss, "message_blob", json!({"blob":"Worker","message":"Do it.","topic":"Now","doneGoal":"Task complete","reportBack":"Results"})).await;
+            assert!(started.contains("approval"), "{started}");
+            let proposal = st.db.proposals_pending().unwrap().last().unwrap().clone();
+            let approved = dispatch(&st,"proposal.decide",json!({"id":proposal["id"],"decision":"approve"})).await.unwrap();
+            assert_eq!(approved["result"]["started"],true);
         }
         // Queued: the single global slot is taken.
         {
@@ -11285,8 +11314,11 @@ mod fix39_p6_tests {
             let worker_id = worker["id"].as_str().unwrap().to_owned();
             dispatch(&st, "settings.set", json!({"key":"concurrency.botsAtOnce","value":1})).await.unwrap();
             assert!(st.db.create_reserved_turn("p6-busy", &boss, 1).unwrap(), "the only slot is taken");
-            let queued = tool_text(&st, &boss, "message_blob", json!({"blob":"Worker","message":"Do it.","topic":"Now"})).await;
-            assert!(queued.contains("queued"), "{queued}");
+            let queued = tool_text(&st, &boss, "message_blob", json!({"blob":"Worker","message":"Do it.","topic":"Now","doneGoal":"Task complete","reportBack":"Results"})).await;
+            assert!(queued.contains("approval"), "{queued}");
+            let proposal = st.db.proposals_pending().unwrap().last().unwrap().clone();
+            let approved = dispatch(&st,"proposal.decide",json!({"id":proposal["id"],"decision":"approve"})).await.unwrap();
+            assert_eq!(approved["result"]["started"],false);
             // The side conversation says it is waiting instead of looking idle.
             let _ = adapter;
             assert!(wait_until(|| {

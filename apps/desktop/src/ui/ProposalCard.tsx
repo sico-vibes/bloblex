@@ -2,9 +2,11 @@
 // the fields you can change before you approve. Nothing happens until you
 // choose Approve; Reject tells the Manager no.
 import { useState } from 'react'
+import { BlobCanvas } from '../blob/BlobCanvas'
+import type { BlobLook } from '../blob/look'
 import { BookOpen, Bot, FolderPlus, ListChecks, Pencil, ShieldCheck, UserCog } from 'lucide-react'
 import type { JsonRecord, PermissionRequest, Project } from '../types'
-import { openProjectFolder, rpc } from '../tauri'
+import { openProjectFolder, rpc, setActiveRuntime, setActiveSession } from '../tauri'
 import { Select } from './Select'
 import { providerBrand } from './providerBrand'
 import { ProposedPlaybook } from './PlaybookDiff'
@@ -18,10 +20,13 @@ const KIND_LABEL: Record<string, { title: string; Icon: typeof Bot }> = {
   task: { title: 'Assign a task', Icon: ListChecks },
   playbook: { title: 'Update its playbook', Icon: BookOpen },
   profile: { title: 'Change something it knows about you', Icon: UserCog },
-  permission: { title: 'Change a conversation\'s permission', Icon: ShieldCheck },
+  permission: { title: 'Change a bot\'s permission', Icon: ShieldCheck },
 }
 
 const text = (value: unknown) => typeof value === 'string' ? value : ''
+
+/** The same words for a bot's permission in the create and update cards. */
+const permissionLabel = (value: unknown) => text(value) === 'auto' ? 'Auto' : 'Ask first'
 
 /** A folder name made from the project name: no characters Windows forbids. */
 export function folderNameFor(name: string): string {
@@ -71,10 +76,15 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
   const [busy, setBusy] = useState(false)
   if (!proposal) return null
   const kind = String(proposal.kind)
-  const { title, Icon } = KIND_LABEL[kind] ?? { title: 'Do something', Icon: Pencil }
+  const updating = draft.action === 'update' && (kind === 'bot' || kind === 'project')
+  const opening = kind === 'task' && draft.action === 'open'
+  const { title, Icon } = updating
+    ? { title: kind === 'bot' ? 'Update a bot' : 'Update a project', Icon: Pencil }
+    : opening ? { title: 'Open a conversation', Icon: ListChecks }
+      : KIND_LABEL[kind] ?? { title: 'Do something', Icon: Pencil }
   const set = (key: string, value: unknown) => setDraft((current) => ({ ...current, [key]: value }))
   const folder = (draft.folder ?? {}) as JsonRecord
-  const needsFolder = kind === 'project' && folder.mode === 'new' && !text(folder.path)
+  const needsFolder = kind === 'project' && !updating && folder.mode === 'new' && !text(folder.path)
   // FIX39 P6 audit finding 4: the task's folder line uses the same match as the
   // daemon (id or trimmed, case-insensitive name), so the card never understates
   // where an approved task may write.
@@ -83,7 +93,11 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
     setBusy(true)
     try {
       const edits = decision === 'approve' ? proposalEdits(original, draft) : undefined
-      await rpc('proposal.decide', { id: proposal.id, decision, ...(edits ? { edits } : {}) })
+      const result = await rpc<{ result?: { sessionId?: string; runtimeId?: string; action?: string } }>('proposal.decide', { id: proposal.id, decision, ...(edits ? { edits } : {}) })
+      if (decision === 'approve' && opening && result.result?.action === 'open' && result.result.sessionId) {
+        if (result.result.runtimeId) await setActiveRuntime(result.result.runtimeId)
+        await setActiveSession(result.result.sessionId)
+      }
       onDecided?.(decision)
     } catch (reason) {
       onError?.(reason instanceof Error ? reason.message : 'That could not be done.')
@@ -97,19 +111,25 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
     <span>{label}</span>
     {editing
       ? options.multiline
-        ? <textarea rows={4} maxLength={options.max} value={text(draft[key])} onChange={(event) => set(key, event.target.value)} />
-        : <input maxLength={options.max} value={text(draft[key])} onChange={(event) => set(key, event.target.value)} />
+        ? <textarea rows={4} maxLength={options.max} value={text(draft[key])} onChange={(event) => set(key, (key === 'model' || key === 'thinking') && !event.target.value ? null : event.target.value)} />
+        : <input maxLength={options.max} value={text(draft[key])} onChange={(event) => set(key, (key === 'model' || key === 'thinking') && !event.target.value ? null : event.target.value)} />
       : <p className={options.multiline ? 'proposal-value multiline' : 'proposal-value'}>{text(draft[key]) || '—'}</p>}
   </label>
+
+  const lookPreview = (value: unknown) => <div className="proposal-field">
+    <span>Look</span>
+    <BlobCanvas color="#a7f3d0" size={56} decorative track={false} label="Proposed look" look={value as BlobLook | null} />
+    <p className="proposal-value">{text((value as JsonRecord | null)?.shape) || 'Default look'}</p>
+  </div>
 
   return <section className="proposal-card" aria-label={`${managerName} proposes: ${title}`}>
     <header className="proposal-head">
       <span className="proposal-icon" aria-hidden="true"><Icon size={15} /></span>
       <div><small>{managerName} proposes</small><strong>{title}</strong></div>
-      {kind !== 'playbook' && <button type="button" className="ghost-button small" aria-pressed={editing} onClick={() => setEditing((value) => !value)}><Pencil size={12} aria-hidden="true" />{editing ? 'Done editing' : 'Edit'}</button>}
+      {kind !== 'playbook' && !opening && <button type="button" className="ghost-button small" aria-pressed={editing} onClick={() => setEditing((value) => !value)}><Pencil size={12} aria-hidden="true" />{editing ? 'Done editing' : 'Edit'}</button>}
     </header>
     <div className="proposal-body">
-      {kind === 'project' && <>
+      {kind === 'project' && !updating && <>
         {field('name', 'Name', { max: 80 })}
         {field('description', 'What it is for', { multiline: true, max: 500 })}
         <div className="proposal-field"><span>Folder</span>
@@ -117,7 +137,7 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
           {folder.mode === 'new' && <button type="button" className="secondary-button small" onClick={() => void chooseParent()}><FolderPlus size={12} aria-hidden="true" />{text(folder.path) ? 'Choose another place' : 'Choose where'}</button>}
         </div>
       </>}
-      {kind === 'bot' && <>
+      {kind === 'bot' && !updating && <>
         {field('name', 'Name', { max: 40 })}
         {field('role', 'Role', { max: 40 })}
         {field('description', 'What it does', { max: 255 })}
@@ -130,20 +150,49 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
           </label>
           <label className="proposal-field"><span>Project</span>
             {editing
-              ? <Select ariaLabel="Project" variant="field" value={text(draft.project)} onChange={(value) => set('project', value)} options={[{ value: '', label: 'No project' }, ...projects.map((project) => ({ value: project.name, label: project.name }))]} />
-              : <p className="proposal-value">{text(draft.project) || 'No project'}</p>}
+              ? <Select ariaLabel="Project" variant="field" value={projectForDraft(projects, text(draft.project))?.id || text(draft.project)} onChange={(value) => set('project', value)} options={[{ value: '', label: 'No project' }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} />
+              : <p className="proposal-value">{projectForDraft(projects, text(draft.project))?.name || text(draft.project) || 'No project'}</p>}
           </label>
         </div>
       </>}
-      {kind === 'task' && <>
+      {(kind === 'bot' || kind === 'project') && !updating && <>
+        {Array.isArray(draft.tags) && <div className="proposal-field"><span>Tags</span><p className="proposal-value">{draft.tags.join(', ') || 'No tags'}</p></div>}
+        {kind === 'bot' && <>
+          {text(draft.thinking) && field('thinking', 'Effort')}
+          {text(draft.approvalMode) && <div className="proposal-field"><span>Permission</span><p className="proposal-value">{permissionLabel(draft.approvalMode)}</p></div>}
+          {draft.look != null && lookPreview(draft.look)}
+        </>}
+      </>}
+      {kind === 'task' && !opening && <>
         <div className="proposal-row">
-          <div className="proposal-field"><span>For</span><p className="proposal-value">{text(draft.bot)}</p></div>
-          {text(draft.project) && <div className="proposal-field"><span>Project</span><p className="proposal-value">{text(draft.project)}</p></div>}
+          <div className="proposal-field"><span>For</span><p className="proposal-value">{text(draft.botName) || text(draft.bot)}</p></div>
+          {text(draft.project) && <div className="proposal-field"><span>Project</span><p className="proposal-value">{text(draft.projectName) || taskProject?.name || text(draft.project)}</p></div>}
         </div>
         {/* FIX39 risk 7: a delegated task runs in the project's folder, which
             widens where its Auto mode may write. Show that folder on the card. */}
         {text(draft.project) && <div className="proposal-field"><span>Folder it runs in</span><p className="proposal-value mono">{taskProject ? taskProject.path || '—' : 'Project not found'}</p></div>}
-        {field('brief', 'The task', { multiline: true, max: 8000 })}
+        {text(draft.conversation) && field('conversation', 'Continue conversation')}
+        {text(draft.topic) && field('topic', 'Topic', { max: 60 })}
+        {field('brief', 'The task', { multiline: true, max: 180000 })}
+        {field('doneGoal', 'Done when', { multiline: true, max: 4000 })}
+        {field('reportBack', 'Report back', { multiline: true, max: 4000 })}
+      </>}
+      {updating && <>
+        <div className="proposal-field"><span>{kind === 'bot' ? 'Bot' : 'Project'}</span><p className="proposal-value">{text(draft.targetName) || text(draft.blob) || text(draft.project)}</p></div>
+        {Object.entries(draft).filter(([key]) => !['action', 'blob', 'project', 'targetName'].includes(key)).map(([key, value]) => {
+          const label = ({ name: 'Name', description: 'What it is for', role: 'Role', instructions: 'Instructions', model: 'Model', thinking: 'Effort', approvalMode: 'Permission', tags: 'Tags', look: 'Look' } as Record<string, string>)[key] ?? key
+          if (key === 'look') return <div key={key}>{lookPreview(value)}</div>
+          if (key === 'tags') return <label className="proposal-field" key={key}><span>{label}</span>{editing
+            ? <input aria-label="Tags" value={Array.isArray(value) ? value.join(', ') : ''} onChange={(event) => set('tags', event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean))} />
+            : <p className="proposal-value">{Array.isArray(value) ? value.join(', ') || 'No tags' : 'No tags'}</p>}</label>
+          if (key === 'approvalMode') return <label className="proposal-field" key={key}><span>{label}</span>{editing
+            ? <Select ariaLabel="Permission" variant="field" value={text(value)} onChange={(mode) => set(key, mode)} options={[{ value: 'ask', label: 'Ask first' }, { value: 'auto', label: 'Auto' }]} />
+            : <p className="proposal-value">{permissionLabel(value)}</p>}</label>
+          return <div key={key}>{field(key, label, { multiline: key === 'instructions' || key === 'description', max: key === 'instructions' ? 4000 : undefined })}</div>
+        })}
+      </>}
+      {opening && <>
+        <div className="proposal-field"><span>Conversation</span><p className="proposal-value">{text(draft.title)} · {text(draft.conversation)}</p></div>
       </>}
       {kind === 'playbook' && <>
         {text(draft.reason) && <p className="proposal-reason">{text(draft.reason)}</p>}
@@ -160,7 +209,7 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
           <div className="proposal-field"><span>Conversation</span><p className="proposal-value mono">{text(draft.conversation)}</p></div>
           <div className="proposal-field"><span>Permission</span><p className="proposal-value">{text(draft.mode) === 'auto' ? 'Auto' : 'Ask first'}</p></div>
         </div>
-        <p className="proposal-hint">Applies from that conversation's next turn. Full access can never be set this way.</p>
+        <p className="proposal-hint">Changes this bot's permission for all its conversations, from their next turn. Full access can never be set this way.</p>
       </>}
     </div>
     <footer className="proposal-actions">

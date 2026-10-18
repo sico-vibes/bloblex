@@ -3,8 +3,9 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const h = vi.hoisted(() => ({ rpc: vi.fn(), openProjectFolder: vi.fn() }))
-vi.mock('../tauri', () => ({ rpc: h.rpc, openProjectFolder: h.openProjectFolder }))
+const h = vi.hoisted(() => ({ rpc: vi.fn(), openProjectFolder: vi.fn(), setActiveRuntime: vi.fn(), setActiveSession: vi.fn() }))
+vi.mock('../tauri', () => ({ rpc: h.rpc, openProjectFolder: h.openProjectFolder, setActiveRuntime: h.setActiveRuntime, setActiveSession: h.setActiveSession }))
+vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => <div aria-label="Proposed look" /> }))
 import { folderNameFor, joinFolder, ProposalCard, proposalEdits, projectForDraft } from './ProposalCard'
 import type { PermissionRequest, Project } from '../types'
 
@@ -16,6 +17,7 @@ const button = (label: string) => [...host!.querySelectorAll('button')].find((it
 beforeEach(() => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   h.rpc.mockReset(); h.rpc.mockResolvedValue({})
+  h.setActiveRuntime.mockReset(); h.setActiveSession.mockReset()
   h.openProjectFolder.mockReset()
 })
 afterEach(() => { if (root) act(() => root!.unmount()); host?.remove(); root = null; host = null })
@@ -82,7 +84,7 @@ describe('proposal card', () => {
   // mode, and never offers full access.
   it('shows a conversation permission change without offering full access', async () => {
     await mount(proposal('permission', { conversation: 'side-7', mode: 'auto' }))
-    expect(host!.textContent).toContain("Change a conversation's permission")
+    expect(host!.textContent).toContain("Change a bot's permission")
     expect(host!.textContent).toContain('side-7')
     expect(host!.textContent).toContain('Auto')
     expect(host!.textContent).toContain('Full access can never be set this way.')
@@ -127,4 +129,51 @@ describe('task folder line (FIX39 risk 7)', () => {
     expect(projectForDraft(projects, 'Missing')).toBeUndefined()
     expect(projectForDraft(projects, '  ')).toBeUndefined()
   })
+})
+
+// P7: the owner reviews the Manager's actual change and task contract.
+describe('P7 tool proposals', () => {
+  it('shows every proposed bot field', async () => {
+    await mount(proposal('bot', { action: 'update', blob: 'Scout', name: 'Sage', tags: ['researcher'], model: 'm1', thinking: 'high', approvalMode: 'auto', look: { shape: 'circle' } }))
+    expect(host!.textContent).toContain('Update a bot')
+    for (const value of ['Scout', 'Sage', 'researcher', 'm1', 'high', 'Auto', 'circle']) expect(host!.textContent).toContain(value)
+    expect(host!.textContent).not.toContain('Coding agent')
+    await act(async () => { button('Approve').click() })
+    expect(h.rpc).toHaveBeenCalledWith('proposal.decide', { id: 'prop-1', decision: 'approve' })
+  })
+  it('shows project edits without asking for a new folder', async () => {
+    await mount(proposal('project', { action: 'update', project: 'Portal', tags: ['research'] }))
+    expect(host!.textContent).toContain('Update a project')
+    expect(host!.textContent).toContain('Portal')
+    expect(host!.textContent).toContain('research')
+    expect(host!.textContent).not.toContain('Choose where')
+    expect(button('Approve').disabled).toBe(false)
+  })
+  it('shows the Manager-filled task contract without a form', async () => {
+    await mount(proposal('task', { bot: 'Scout', brief: 'Research the market', doneGoal: 'Three checked sources', reportBack: 'Findings and links' }))
+    for (const value of ['Research the market', 'Three checked sources', 'Findings and links']) expect(host!.textContent).toContain(value)
+    expect(host!.querySelector('input, textarea')).toBeNull()
+  })
+  it('shows which conversation will open', async () => {
+    await mount(proposal('task', { action: 'open', conversation: 'side-1', title: 'Research' }))
+    expect(host!.textContent).toContain('Open a conversation')
+    expect(host!.textContent).toContain('side-1')
+    expect(host!.textContent).toContain('Research')
+    expect(host!.textContent).not.toContain('The task')
+  })
+})
+
+it('opens only the conversation returned by an approved open proposal', async () => {
+  h.rpc.mockResolvedValue({ result: { action: 'open', sessionId: 'approved-side', runtimeId: 'rt1' } })
+  await mount(proposal('task', { action: 'open', conversation: 'side-1', title: 'Research' }))
+  expect(h.setActiveSession).not.toHaveBeenCalled()
+  await act(async () => { button('Approve').click() })
+  expect(h.setActiveRuntime).toHaveBeenCalledWith('rt1')
+  expect(h.setActiveSession).toHaveBeenCalledWith('approved-side')
+})
+
+it('does not open a rejected proposal', async () => {
+  await mount(proposal('task', { action: 'open', conversation: 'side-1', title: 'Research' }))
+  await act(async () => { button('Reject').click() })
+  expect(h.setActiveSession).not.toHaveBeenCalled()
 })

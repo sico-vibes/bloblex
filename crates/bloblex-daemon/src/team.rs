@@ -30,6 +30,8 @@ pub struct Team {
     pub data_dir: StdMutex<Option<PathBuf>>,
     /// Hop depth of the turn currently running in a session.
     depth: StdMutex<HashMap<String, u32>>,
+    /// A proposal can be approved only once, even when two surfaces decide it.
+    pub(crate) proposal_decision: Mutex<()>,
     /// Prompts waiting for a busy session to finish its turn.
     queued: Mutex<HashMap<String, VecDeque<Queued>>>,
 }
@@ -98,6 +100,18 @@ pub(crate) fn entity_noun(plural: bool) -> String {
     if plural { format!("{word}s") } else { word.to_owned() }
 }
 
+/// FIX39 P7 audit F6: whether delegating from this session would exceed the hop
+/// limit. Used when the proposal is created, so the owner is never shown a card
+/// that could never succeed; the delivery path re-checks it.
+pub(crate) fn depth_exceeded(st: &AppState, session_id: &str) -> bool {
+    st.team.depth.lock().unwrap().get(session_id).copied().unwrap_or(0) + 1 > MAX_DEPTH
+}
+
+/// The one message both the creation-time and delivery-time depth checks return.
+pub(crate) fn depth_error() -> String {
+    format!("This request has already passed between too many {}. Report back to the user instead.", entity_noun(true))
+}
+
 fn user_name(st: &AppState) -> Option<String> {
     st.db.settings().ok().and_then(|settings| settings["profile.name"].as_str().map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned))
 }
@@ -163,8 +177,8 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
         None => format!("You are a casual {noun}, not tied to a project. Your scratch workspace is {}; take general requests and work wherever the user points you.", workspace.display()),
     });
     if agent["systemRole"].as_str() == Some("manager") {
-        lines.push(format!("You are {name}, the user's Manager. You work across all projects (list them with `list_projects`), know every {noun} (`list_blobs`), plan work, delegate with `message_blob`, and you ask the user before creating projects, {nouns} or assigning tasks."));
-        lines.push("Consequential actions are proposed, not done: call `propose_project`, `propose_bot` or `assign_task`, which create nothing until the user approves the card, then end your turn. Use `project_status` to see a project's bots.".to_owned());
+        lines.push(format!("You are {name}, the user's Manager: chat like a capable team lead. Ground yourself with list_projects and list_blobs, then route by role, description, tags and project. Resolve any project mentioned by name, tags or context before acting; when unsure, ask_user with concrete options. With no project, research goes to a free bot tagged researcher; for project P, use P's researcher. If none fits, propose_bot for that project (or propose_project when a project is needed); do small things yourself when appropriate; you ask the user before creating projects, bots or assigning tasks."));
+        lines.push("Read details with your read tools, and make every write an approval card: creating or updating projects and bots, assigning or messaging, opening a conversation and changing a permission are all proposed and wait for the owner. Your notes list the exact tool names. Fill brief/message, doneGoal and reportBack yourself from the chat; never ask the user to fill a task form. Use a new topic for parallel work or conversation to follow up. Locked bots refuse settings changes; never propose Full access. After proposing, say briefly who will do what and end your turn. Approval outcomes are recorded here; teammate replies arrive later and wake you to report back.".into());
         lines.push("Your notes about the user and your playbook are yours across model changes: keep the profile current with `remember_about_user` (read it with `recall_about_user`), and propose playbook edits with `update_playbook`. Never store secrets in either.".to_owned());
     } else {
         match st.db.manager_agent().ok().flatten() {
@@ -174,7 +188,7 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
     }
     lines.push(String::new());
     lines.push("Teammates are separate agents with their own tools and memory. Use the bloblex tools: `list_blobs` shows the team (name, role, what each is for, whether they are busy); `message_blob` sends one teammate a message in a private side conversation between the two of you; `list_conversations` lists your side conversations, each with a short topic.".into());
-    lines.push(format!("When the user tags a {noun} with @Name, or asks you to hand work to someone, write that teammate a self-contained brief (they cannot see this conversation: include the goal, context, paths, constraints and what to send back) and send it with `message_blob`. Then tell the user in one short sentence who you asked and end your turn: do not wait, poll or sleep. The reply arrives later in this conversation as a message starting with \"[Reply from <name>]\". When it arrives, report to the user: what they did or found, your own verdict, and any open questions."));
+    lines.push(format!("When the user tags a {noun} with @Name, or asks you to hand work to someone, write that teammate a self-contained brief (they cannot see this conversation: include the goal, context, paths, constraints and what to send back) and send it with `message_blob` (the Manager fills doneGoal and reportBack too, and waits for approval). Then tell the user in one short sentence who you asked and end your turn: do not wait, poll or sleep. The reply arrives later in this conversation as a message starting with \"[Reply from <name>]\". When it arrives, report to the user: what they did or found, your own verdict, and any open questions."));
     lines.push("Each side conversation has a topic, like a chat title. Before messaging a teammate, check `list_conversations`: if one you started with them is about the same subject, continue it by passing its id as `conversation` (they keep the context there). Otherwise start a new one and give it a short `topic` of 3 to 6 words. When the user references a conversation with #, continue that one.".into());
     if link["kind"] == "side" {
         let peer = link["peerName"].as_str().unwrap_or(noun.as_str());
@@ -211,7 +225,7 @@ pub fn attach(st: &AppState, session_id: &str, agent_id: Option<&str>, link: &Va
 /// conversations or schedule anything. Memory tools are only listed while
 /// `experimental.memory` is on; automation runs may keep memory tools but the
 /// write rails restrict them to blob scope.
-fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: bool, noun: &str, nouns: &str) -> Value {
+fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: bool, noun: &str, _nouns: &str) -> Value {
     let memory = if memory_enabled { crate::memory::tool_schemas() } else { Vec::new() };
     // The shared skills pool is read-only, so every bot gets it, including
     // automation runs (the index is what tells a bot the pool exists).
@@ -228,19 +242,28 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
         json!({"name":"schedule_task","description":format!("Propose a scheduled task for your {noun}. It is created disabled and will never run until the user approves it in Bitbots. Use this only when the user asks for something recurring or at a set time."),"inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}}),
         json!({"name":"list_my_schedules","description":format!("List this {noun}'s scheduled tasks, whether each is enabled, and when it next runs."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
     ];
-    // Only the Manager may list projects or change blobs. Creating a bot is no
-    // longer a direct bridge call: the Manager proposes it and the owner
-    // approves (FIX36 D2), so `create_blob` is gone.
     if is_manager {
-        list.push(json!({"name":"list_projects","description":format!("List the projects a {noun} can belong to: id, name, folder, tags and description. Match a job's project tags to a {noun}'s tags to pick who does the work. Only the Manager may call it; a bot cannot join or create a project itself."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
-        list.push(json!({"name":"update_blob","description":format!("Update an existing {noun}'s role, description, instructions or tags. Tags are a small routing vocabulary (at most 8, each up to 24 characters). Only the Manager may change {nouns}; it cannot change a {noun}'s runtime, permission mode or project, and cannot archive or delete one."),"inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":format!("The {noun}'s name or id.")},"role":{"type":"string","description":"A new role label (optional, up to 40 characters)."},"description":{"type":"string","description":"A new purpose (optional, up to 255 characters)."},"instructions":{"type":"string","description":"New instructions (optional, up to 4000 characters)."},"tags":{"type":"array","items":{"type":"string"},"description":"The bot's tags, replacing the current set (optional, at most 8, each up to 24 characters; [] clears them)."}},"required":["blob"],"additionalProperties":false}}));
-        list.push(json!({"name":"update_project","description":"Update an existing project's description or tags. Tags are a small routing vocabulary (at most 8, each up to 24 characters). Only the Manager may call it.","inputSchema":{"type":"object","properties":{"project":{"type":"string","description":"A project id or exact project name."},"description":{"type":"string","description":"A new one-sentence purpose (optional, up to 255 characters)."},"tags":{"type":"array","items":{"type":"string"},"description":"The project's tags, replacing the current set (optional, at most 8, each up to 24 characters; [] clears them)."}},"required":["project"],"additionalProperties":false}}));
-        // FIX36 D2: every consequential action is proposed and waits for the
-        // owner's approval. The tools return at once with a proposal id.
+        // Same names for existing tools; the Manager's write variants always
+        // create approval cards. Ordinary bots keep the original schemas.
+        list.extend(manager_tool_schemas());
         list.extend(crate::proposals::tool_schemas());
-        // FIX36 D3: the Manager's own knowledge — the user profile and the
-        // playbook. `update_playbook` and a locked edit are proposals too.
         list.extend(crate::knowledge::tool_schemas());
+        for tool in &mut list {
+            if tool["name"] == "message_blob" {
+                tool["description"] = json!("Propose messaging a teammate. Supply the brief, doneGoal and reportBack yourself; the owner only approves the card. For parallel work give a new topic; to continue pass conversation. Nothing is sent before approval.");
+                let props = tool["inputSchema"]["properties"].as_object_mut().unwrap();
+                for key in ["doneGoal", "reportBack", "project"] { props.insert(key.into(), json!({"type":"string"})); }
+                tool["inputSchema"]["required"] = json!(["blob","message","doneGoal","reportBack"]);
+            }
+            if tool["name"] == "list_blobs" {
+                tool["description"] = json!("List bots with ids, role, description, tags, project and busy/available status. Filter by project (id/name), role, tag or freeOnly. Research without a project uses a free researcher (freeOnly = not tied to a project); a named project uses its own researcher, or propose_bot if none fits.");
+                tool["inputSchema"]["properties"] = json!({"project":{"type":"string","description":"A project id or exact name."},"role":{"type":"string"},"tag":{"type":"string"},"freeOnly":{"type":"boolean","description":"true means bots not tied to a project (free bots), not merely idle."}});
+            }
+            if tool["name"] == "list_conversations" {
+                tool["description"] = json!("List Bitbots conversations and their status, newest first (up to 100). Optional bot and project filters. Use read_conversation for recent messages.");
+                tool["inputSchema"]["properties"]["project"] = json!({"type":"string"});
+            }
+        }
     }
     // OpenCode has no native question tool over ACP, so the bridge offers one.
     if ask_user { list.push(crate::questions::tool_schema()); }
@@ -274,6 +297,11 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
     // Changing blobs is reserved for the Manager's own blob. Side conversations
     // of the Manager are allowed (the session's agent is the Manager);
     // automation sessions never reach here.
+    // Manager identity follows the session's bot, not the session's own archived
+    // flag: an archived Manager conversation must not fall through to the
+    // ordinary team tools (which would send without an approval card). Every
+    // Manager write still re-checks `manager_of_session`, which refuses an
+    // archived conversation, so a downgrade is impossible.
     let is_manager = session.as_ref().is_some_and(|row| {
         row["agentId"].as_str().is_some_and(|id| st.db.agent_get(id).is_ok_and(|agent| agent["systemRole"].as_str() == Some("manager") && agent["archived"] != true))
     });
@@ -286,12 +314,18 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
             }
             let args = &params["arguments"];
             let result = match name {
+                "list_blobs" if is_manager => manager_blobs(st, session_id, args).await,
                 "list_blobs" => list_blobs(st, session_id).await,
+                "list_conversations" if is_manager => manager_conversations(st, session_id, args),
                 "list_conversations" => list_conversations(st, session_id, args).await,
+                "message_blob" if is_manager => crate::proposals::propose_message(st, session_id, args).await,
                 "message_blob" => message_blob(st, session_id, args).await,
                 "list_projects" if is_manager => list_projects(st).await,
-                "update_blob" if is_manager => update_blob(st, args).await,
-                "update_project" if is_manager => update_project(st, args).await,
+                "update_blob" if is_manager => crate::proposals::propose_update(st, session_id, "bot", args).await,
+                "update_project" if is_manager => crate::proposals::propose_update(st, session_id, "project", args).await,
+                "read_blob" | "read_project" | "read_conversation" | "get_conversation_permission" if is_manager => manager_read(st, name, args).await,
+                "open_conversation" if is_manager => crate::proposals::propose_open(st, session_id, args).await,
+                "start_conversation" if is_manager => crate::proposals::propose_start(st, session_id, args).await,
                 "propose_project" if is_manager => crate::proposals::propose_project(st, session_id, args).await,
                 "propose_bot" if is_manager => crate::proposals::propose_bot(st, session_id, args).await,
                 "assign_task" if is_manager => crate::proposals::assign_task(st, session_id, args).await,
@@ -301,7 +335,7 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "forget_about_user" if is_manager => crate::knowledge::tool_forget(st, session_id, args).await,
                 "recall_about_user" if is_manager => crate::knowledge::tool_recall(st, args),
                 "update_playbook" if is_manager => crate::knowledge::tool_update_playbook(st, session_id, args).await,
-                "list_projects" | "update_blob" | "update_project" | "propose_project" | "propose_bot" | "assign_task" | "project_status" | "set_conversation_permission" | "remember_about_user" | "forget_about_user" | "recall_about_user" | "update_playbook" => Err(non_manager_error(st)),
+                "read_blob" | "read_project" | "read_conversation" | "get_conversation_permission" | "open_conversation" | "start_conversation" | "list_projects" | "update_blob" | "update_project" | "propose_project" | "propose_bot" | "assign_task" | "project_status" | "set_conversation_permission" | "remember_about_user" | "forget_about_user" | "recall_about_user" | "update_playbook" => Err(non_manager_error(st)),
                 "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
                 "ask_user" if ask_user => crate::questions::ask_user_tool(st, session_id, args).await,
@@ -348,15 +382,17 @@ async fn list_blobs(st: &AppState, session_id: &str) -> Result<String, String> {
         if let Some(role) = agent["role"].as_str().filter(|r| !r.trim().is_empty()) { line.push_str(&format!(" — {role}")); }
         line.push_str(&format!(" · {provider} · project: {project} · {}", if busy { "busy" } else { "available" }));
         // FIX39 item 21: a bot's tags are the routing signal the Manager matches
-        // against a project's tags.
+        // against a project's tags. The id follows the tags so the line reads in
+        // one order (P7 audit F1).
         line.push_str(&tags_suffix(&agent["tags"]));
+        line.push_str(&format!(" · id: {id}"));
         if let Some(description) = agent["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) { line.push_str(&format!("\n  {description}")); }
         rows.push(line);
     }
     Ok(if rows.is_empty() { format!("No {} are on the team yet.", entity_noun(true)) } else { format!("Your team:\n{}", rows.join("\n")) })
 }
 
-fn resolve_blob(agents: &[Value], wanted: &str) -> Option<Value> {
+pub(crate) fn resolve_blob(agents: &[Value], wanted: &str) -> Option<Value> {
     let wanted = wanted.trim().trim_start_matches('@').to_lowercase();
     agents.iter().find(|agent| agent["id"].as_str() == Some(wanted.as_str()) || agent["name"].as_str().is_some_and(|name| name.trim().to_lowercase() == wanted)).cloned()
 }
@@ -395,63 +431,6 @@ async fn list_projects(st: &AppState) -> Result<String, String> {
     Ok(format!("Projects you can attach a {} to:\n{}", entity_noun(false), rows.join("\n")))
 }
 
-/// Manager-only: update a blob's role, purpose or instructions (never its
-/// runtime, mode, project, archive or deletion).
-async fn update_blob(st: &AppState, args: &Value) -> Result<String, String> {
-    let wanted = args["blob"].as_str().map(str::trim).filter(|blob| !blob.is_empty()).ok_or("blob is required.")?;
-    let role = bounded_text(args, "role", 40)?;
-    let description = bounded_text(args, "description", 255)?;
-    let instructions = bounded_text(args, "instructions", 4000)?;
-    // FIX39 item 21: the Manager may set a bot's routing tags. Validated by the
-    // storage layer (at most 8, each 1–24 characters, lower-cased, de-duplicated).
-    let tags = args.get("tags").filter(|value| !value.is_null()).cloned();
-    if role.is_none() && description.is_none() && instructions.is_none() && tags.is_none() { return Err("Give at least one of role, description, instructions or tags to update.".into()); }
-    let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
-    let target = resolve_blob(&agents, wanted).ok_or_else(|| format!("No {} is called {wanted}.", entity_noun(false)))?;
-    // FIX39 item 13: the Manager cannot edit a locked bot either.
-    if bot_is_locked(&target) { return Err("This bot is locked. Unlock it to change its settings.".into()); }
-    let target_id = target["id"].as_str().unwrap_or("").to_owned();
-    if role.is_some() || tags.is_some() {
-        let mut fields = json!({});
-        if let Some(role) = &role { fields["role"] = json!(role); }
-        if let Some(tags) = &tags { fields["tags"] = tags.clone(); }
-        let (_agent, events) = st.db.agent_set_team(&target_id, &fields).map_err(|error| error.to_string())?;
-        st.broadcast_persisted(events);
-    }
-    if description.is_some() || instructions.is_some() {
-        let mut fields = json!({});
-        if let Some(description) = &description { fields["description"] = json!(description); }
-        if let Some(instructions) = &instructions { fields["instructions"] = json!(instructions); }
-        let (_agent, events) = st.db.agent_update(&target_id, &fields).map_err(|error| error.to_string())?;
-        st.broadcast_persisted(events);
-    }
-    Ok(format!("Updated {} {}.", entity_noun(false), target["name"].as_str().unwrap_or(wanted)))
-}
-
-/// Manager-only: set a project's description or tags. A direct write, matching
-/// `update_blob`'s precedent (reversible, and the Manager may route work by
-/// tags); nothing is deleted. Tags reach the Manager through this tool and
-/// through `list_projects`, never through the instruction text, so editing them
-/// never changes the instruction hash (FIX39 risk 5).
-async fn update_project(st: &AppState, args: &Value) -> Result<String, String> {
-    let wanted = args["project"].as_str().map(str::trim).filter(|project| !project.is_empty()).ok_or("project is required.")?;
-    let description = bounded_text(args, "description", 255)?;
-    let tags = args.get("tags").filter(|value| !value.is_null()).cloned();
-    if description.is_none() && tags.is_none() { return Err("Give a description or tags to update.".into()); }
-    let projects = st.db.project_list().map_err(|error| error.to_string())?;
-    let project = projects.iter().find(|project| project["id"].as_str() == Some(wanted) || project["name"].as_str().is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted)))
-        .ok_or_else(|| format!("No project matches \"{wanted}\"."))?
-        .clone();
-    let id = project["id"].as_str().unwrap_or("").to_owned();
-    let mut fields = json!({});
-    if let Some(description) = &description { fields["description"] = json!(description); }
-    if let Some(tags) = &tags { fields["tags"] = tags.clone(); }
-    let (updated, events) = st.db.project_update(&id, &fields).map_err(|error| error.to_string())?;
-    st.broadcast_persisted(events);
-    let name = updated["name"].as_str().unwrap_or(wanted);
-    Ok(format!("Updated project {name}{}.", tags_suffix(&updated["tags"])))
-}
-
 /// One delivered brief: the side conversation it opened (or continued), its
 /// topic, and the teammate's name. Shared by `message_blob` and by FIX36 D2's
 /// `assign_task` approval, so a task is delivered exactly like a message.
@@ -488,7 +467,7 @@ pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> R
     let target_id = target["id"].as_str().unwrap_or("").to_owned();
     if target_id == from_id { return Err("You cannot message yourself.".into()); }
     let depth = st.team.depth.lock().unwrap().get(session_id).copied().unwrap_or(0) + 1;
-    if depth > MAX_DEPTH { return Err(format!("This request has already passed between too many {}. Report back to the user instead.", entity_noun(true))); }
+    if depth > MAX_DEPTH { return Err(depth_error()); }
     let from_name = agent_name(&from);
     let target_name = agent_name(&target);
     let topic = args["topic"].as_str().and_then(clean_topic);
@@ -539,7 +518,7 @@ pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> R
 }
 
 /// A conversation id the sender may continue: one they started with this teammate.
-fn continuable(st: &AppState, id: &str, from_id: &str, target_id: &str, target_name: &str) -> Result<String, String> {
+pub(crate) fn continuable(st: &AppState, id: &str, from_id: &str, target_id: &str, target_name: &str) -> Result<String, String> {
     let row = st.db.session_detail(id).map_err(|_| format!("No conversation has the id {id}. Call list_conversations to see yours."))?;
     let link = &row["link"];
     if link["kind"] != "side" || row["archived"] == true { return Err(format!("{id} is not an open side conversation. Call list_conversations to see yours.")); }
@@ -558,7 +537,7 @@ fn clean_topic(raw: &str) -> Option<String> {
 }
 
 /// A title for a conversation started without a topic: the brief's first words.
-fn topic_from(message: &str) -> String {
+pub(crate) fn topic_from(message: &str) -> String {
     let line = message.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("Conversation");
     let words = line.split_whitespace().take(7).collect::<Vec<_>>().join(" ");
     let mut topic = words.trim_end_matches(|c: char| ",.;:!?".contains(c)).to_owned();
@@ -884,4 +863,160 @@ pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, D
         "agent.conversations" => agent_conversations(st, p).await,
         _ => Err(derr("not_found", "unknown method", StatusCode::NOT_FOUND)),
     }
+}
+
+#[cfg(test)]
+#[path = "team_p7_tests.rs"]
+mod p7_tests;
+
+/// Stable Manager-only additions to the existing local, session-capability
+/// bridge. No daemon RPC or listener is added by this tool surface.
+fn manager_tool_schemas() -> Vec<Value> {
+    let mut list = vec![json!({"name":"list_projects","description":"List registered projects, folders, descriptions and routing tags. No disk scanning.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}})];
+    for (name, key, description) in [
+        ("read_blob", "blob", "Read a bot's identity, instructions, role, tags, look, model, effort, permission and lock. Environment values and credentials are excluded."),
+        ("read_project", "project", "Read one registered project's folder, description and routing tags."),
+        ("read_conversation", "conversation", "Read a conversation's status and last 30 messages (each clipped to 4000 characters)."),
+        ("get_conversation_permission", "conversation", "Read the bot's permission and any effective conversation pin; permissions belong to the bot."),
+        ("open_conversation", "conversation", "Propose opening an existing conversation in Bitbots. The owner approves before selection changes."),
+    ] {
+        list.push(json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":{key:{"type":"string","description":"An exact id or name (conversation requires an id)."}},"required":[key],"additionalProperties":false}}));
+    }
+    let mut fields = json!({
+        "blob":{"type":"string","description":"Exact bot id or name."},
+        "name":{"type":"string","maxLength":40}, "description":{"type":"string","maxLength":255},
+        "role":{"type":"string","maxLength":40}, "instructions":{"type":"string","maxLength":4000},
+        "look":{"type":["object","null"],"description":"Bitbots look: shape, optional seed, traits and bot outline/colors, as returned by read_blob."},
+        "model":{"type":["string","null"]}, "thinking":{"type":["string","null"],"description":"Effort id, or null for model default."},
+        "approvalMode":{"type":"string","enum":["ask","auto"]},
+        "tags":{"type":"array","maxItems":8,"items":{"type":"string","minLength":1,"maxLength":24}}
+    });
+    list.push(json!({"name":"update_blob","description":"Update an existing bot by proposing a settings change for approval. Never Full access. Locked bots refuse every edit. Only listed fields can change; tags replace the current set.","inputSchema":{"type":"object","properties":fields,"required":["blob"],"additionalProperties":false}}));
+    fields = json!({"project":{"type":"string"},"description":{"type":"string","maxLength":255},"tags":{"type":"array","maxItems":8,"items":{"type":"string","minLength":1,"maxLength":24}}});
+    list.push(json!({"name":"update_project","description":"Propose changes to a project's description or tags. Nothing changes before owner approval.","inputSchema":{"type":"object","properties":fields,"required":["project"],"additionalProperties":false}}));
+    let mut start = crate::proposals::tool_schemas().into_iter().find(|tool| tool["name"] == "assign_task").unwrap();
+    start["name"] = json!("start_conversation");
+    start["description"] = json!("Propose a new parallel side conversation with a bot. Supply brief, doneGoal, reportBack and a short topic yourself; the owner approves before work starts.");
+    // Unlike assign_task, this tool always creates a new side conversation.
+    start["inputSchema"]["properties"].as_object_mut().unwrap().remove("conversation");
+    start["inputSchema"]["required"] = json!(["bot","brief","doneGoal","reportBack","topic"]);
+    list.push(start);
+    list
+}
+
+pub(crate) fn project_named(st: &AppState, wanted: &str) -> Result<Value, String> {
+    let projects = st.db.project_list().map_err(|error| error.to_string())?;
+    let wanted = wanted.trim();
+    if let Some(project) = projects.iter().find(|p| p["id"].as_str() == Some(wanted)) { return Ok(project.clone()); }
+    let matches = projects.into_iter().filter(|p| p["name"].as_str().is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted))).collect::<Vec<_>>();
+    match matches.as_slice() {
+        [project] => Ok(project.clone()),
+        [] => Err(format!("No project matches {wanted}. List projects and propose_project if needed.")),
+        _ => Err("Several projects have that name. Ask the user with options, then use its id.".into()),
+    }
+}
+
+pub(crate) fn blob_named(st: &AppState, wanted: &str) -> Result<Value, String> {
+    let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
+    resolve_blob(&agents, wanted).ok_or_else(|| format!("No bot matches {wanted}. List bots and propose_bot if none fits."))
+}
+
+pub(crate) fn readable_conversation(st: &AppState, wanted: &str) -> Result<Value, String> {
+    let row = st.db.session_detail(wanted).map_err(|_| "That conversation is no longer available.".to_owned())?;
+    if row["archived"] == true { return Err("That conversation is archived.".into()); }
+    Ok(row)
+}
+
+fn selected_fields(value: &Value, keys: &[&str]) -> Value {
+    let mut out = json!({});
+    for key in keys { if let Some(value) = value.get(*key) { out[*key] = value.clone(); } }
+    out
+}
+
+async fn manager_read(st: &AppState, name: &str, args: &Value) -> Result<String, String> {
+    let (key, limit) = match name { "read_blob" => ("blob", 80), "read_project" => ("project", 200), _ => ("conversation", 80) };
+    let wanted = bounded_text(args, key, limit)?.ok_or_else(|| format!("{key} is required."))?;
+    let result = match name {
+        "read_blob" => selected_fields(&blob_named(st, &wanted)?, &["id","name","description","role","instructions","look","color","model","thinking","runtimeId","projectId","tags","locked","approvalMode","effectiveApprovalMode","systemRole"]),
+        "read_project" => selected_fields(&project_named(st, &wanted)?, &["id","name","path","description","tags"]),
+        _ => {
+            let row = readable_conversation(st, &wanted)?;
+            let mut out = selected_fields(&row, &["id","agentId","title","state","projectPath","updatedAt"]);
+            if name == "get_conversation_permission" {
+                let agent = st.db.agent_get(row["agentId"].as_str().unwrap_or("")).map_err(|_| "That bot is no longer available.".to_owned())?;
+                let options = crate::exec_options_for_session(st, &row).map_err(|error| error.1.message)?;
+                out["botPermission"] = agent["effectiveApprovalMode"].clone();
+                out["effectivePermission"] = json!(options.approval_mode.as_str());
+                out["locked"] = json!(bot_is_locked(&agent));
+            } else {
+                let messages = row["messages"].as_array().cloned().unwrap_or_default();
+                let start = messages.len().saturating_sub(30);
+                out["messages"] = json!(messages[start..].iter().map(|message| json!({"role":message["role"],"content":message["content"].as_str().unwrap_or("").chars().take(4000).collect::<String>()})).collect::<Vec<_>>());
+                out["earlierMessagesOmitted"] = json!(start);
+            }
+            out
+        }
+    };
+    Ok(result.to_string())
+}
+
+/// A path key for comparing project folders across case and slash differences
+/// (P7 audit F7). Windows treats `C:\X` and `c:/x/` as the same folder.
+fn normalized_path(path: &str) -> String {
+    path.trim().replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+fn manager_conversations(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
+    let me = st.db.session_detail(session_id).ok().and_then(|row| row["agentId"].as_str().map(str::to_owned)).unwrap_or_default();
+    let blob = bounded_text(args, "blob", 80)?.map(|wanted| blob_named(st, &wanted)).transpose()?;
+    let project = bounded_text(args, "project", 200)?.map(|wanted| project_named(st, &wanted)).transpose()?;
+    let agents = st.db.agent_list(true, None).map_err(|error| error.to_string())?;
+    let name_of = |id: &str| agents.iter().find(|agent| agent["id"] == id).map(agent_name).unwrap_or_else(|| "A former teammate".into());
+    let project_path = project.as_ref().and_then(|project| project["path"].as_str()).map(normalized_path);
+    let sessions = st.db.session_list(false).map_err(|error| error.to_string())?;
+    let rows = sessions.iter()
+        .filter(|row| blob.as_ref().is_none_or(|blob| row["agentId"] == blob["id"]))
+        .filter(|row| project_path.as_ref().is_none_or(|path| row["projectPath"].as_str().map(normalized_path).as_ref() == Some(path)))
+        .take(100)
+        .map(|row| {
+            let link = &row["link"];
+            let id = row["id"].as_str().unwrap_or("");
+            let side = link["kind"] == "side";
+            let started_by_you = side && !me.is_empty() && link["peerAgentId"].as_str() == Some(me.as_str());
+            let peer = if started_by_you { row["agentId"].as_str().unwrap_or("") } else { link["peerAgentId"].as_str().unwrap_or("") };
+            // The Manager's prompt relies on this line: who started it, the
+            // topic, the peer and the latest reply (P7 audit F2).
+            let mut out = selected_fields(row, &["id","agentId","title","state","projectPath","updatedAt"]);
+            out["agentName"] = json!(row["agentId"].as_str().map(name_of));
+            out["topic"] = link["topic"].clone();
+            out["startedByYou"] = json!(started_by_you);
+            out["peerName"] = if side { json!(name_of(peer)) } else { Value::Null };
+            out["latestReply"] = json!(st.db.last_reply(id).ok().flatten().map(|reply| one_line(&reply, 300)));
+            out
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({"conversations":rows}).to_string())
+}
+
+async fn manager_blobs(st: &AppState, session_id: &str, args: &Value) -> Result<String,String> {
+    let project = bounded_text(args,"project",200)?.map(|name| project_named(st,&name)).transpose()?;
+    let role = bounded_text(args,"role",40)?;
+    let tag = bounded_text(args,"tag",24)?;
+    if args.get("freeOnly").is_some_and(|value| !value.is_boolean()) { return Err("freeOnly must be a boolean.".into()); }
+    let free = args["freeOnly"] == true;
+    if free && project.is_some() { return Err("Choose a project or freeOnly, not both.".into()); }
+    if project.is_none() && role.is_none() && tag.is_none() && !free { return list_blobs(st,session_id).await; }
+    let agents = st.db.agent_list(false,None).map_err(|error| error.to_string())?;
+    let sessions = st.db.session_list(false).map_err(|error| error.to_string())?;
+    let bots = agents.iter().filter(|bot| bot["hidden"] != true)
+        // P7 audit F7: the Manager must not be offered as its own delegate
+        // (even when it carries a matching tag); validate_task_target refuses it
+        // later, but with a confusing message.
+        .filter(|bot| bot["systemRole"].as_str() != Some("manager"))
+        .filter(|bot| !free || bot["projectId"].is_null())
+        .filter(|bot| project.as_ref().is_none_or(|project| bot["projectId"] == project["id"]))
+        .filter(|bot| role.as_ref().is_none_or(|role| bot["role"].as_str().is_some_and(|actual| actual.eq_ignore_ascii_case(role))))
+        .filter(|bot| tag.as_ref().is_none_or(|tag| bot["tags"].as_array().is_some_and(|tags| tags.iter().any(|actual| actual.as_str().is_some_and(|actual| actual.eq_ignore_ascii_case(tag))))))
+        .map(|bot| { let mut out = selected_fields(bot,&["id","name","role","description","tags","projectId","locked"]); out["busy"] = json!(sessions.iter().any(|session| session["agentId"] == bot["id"] && matches!(session["state"].as_str(),Some("starting"|"working"|"waiting_permission")))); out }).collect::<Vec<_>>();
+    Ok(json!({"bots":bots,"ifNone":"Propose a suitable bot for the resolved project, or a free bot when no project was named. Ask the user with options if the project is unclear."}).to_string())
 }

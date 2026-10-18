@@ -1,1 +1,1 @@
-{"contextAfterRestart":true,"limitOrUnavailable":"none","modelReported":true,"modelSelected":"claude-haiku-5-5","permissionChange":"error:config-unsupported","provider":"claude","queue":"queued","resumeAfterRestart":"completed","secondTurn":true,"start":true,"steer":"unsupported","turn":true}
+{"contextAfterRestart":true,"limitOrUnavailable":"none","modelReported":true,"modelSelected":"claude-haiku-5-5","permissionChange":"completed","provider":"claude","queue":"queued","resumeAfterRestart":"completed","secondTurn":true,"start":true,"steer":"unsupported","turn":true}

@@ -627,3 +627,46 @@ async fn fake_provider_emits_prompt_accepted_once_per_prompt_and_not_without_a_s
     let _ = std::fs::remove_dir_all(root);
 }
 
+
+/// FIX39 P13: a permission-mode change on a running Claude conversation
+/// relaunches the process with the new mode and resumes the same provider
+/// session. The real CLI answers a control request at once but emits
+/// `system/init` only once a turn begins, so the resume must be proven without
+/// waiting for an init that never arrives.
+#[tokio::test]
+async fn changed_mode_resumes_a_silent_session_without_waiting_for_init() {
+    let (root, private, audit_path) = paths();
+    let system_root = setup_test_acl(&root);
+    let adapter = ClaudeAdapter::with_test_acl_executable(private, system_root);
+    let rt = runtime(&audit_path, &["--fake-lazy-resume-init"]);
+    let (tx, mut rx) = mpsc::channel(32);
+    let first = ExecOptions { model: Some("claude-sonnet-test".into()), ..ExecOptions::default() };
+    let handle = adapter
+        .new_session(&rt, NewSessionRequest { session_id: "s-lazy-resume".into(), project_path: root.clone(), exec_options: first.clone() }, tx)
+        .await
+        .unwrap();
+    wait_session_start(&mut rx).await;
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-one".into(), text: "one".into(), exec_options: first.clone() })
+        .await
+        .unwrap();
+    let seen = events_through_turn(&mut rx).await;
+    assert!(seen.iter().any(|event| matches!(event, AgentEvent::TurnCompleted)), "the first turn completes: {seen:?}");
+
+    let changed = ExecOptions { approval_mode: bloblex_agent_core::ApprovalMode::Auto, ..first };
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-two".into(), text: "two".into(), exec_options: changed })
+        .await
+        .unwrap();
+    let seen = events_through_turn(&mut rx).await;
+    assert!(seen.iter().any(|event| matches!(event, AgentEvent::TurnCompleted)), "the changed-mode turn completes once the resume probe wakes the silent session: {seen:?}");
+
+    let rows = audit(&audit_path);
+    assert!(
+        rows.iter().any(|row| row["args"].as_array().unwrap().iter().any(|value| value == "--resume")),
+        "the changed mode relaunches by resuming the same provider session"
+    );
+    adapter.close_session(&handle).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    std::fs::remove_dir_all(root).unwrap();
+}

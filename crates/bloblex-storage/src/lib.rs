@@ -85,7 +85,7 @@ fn migrate_exec_snapshots(c:&mut Connection,path:Option<&Path>,backup_done:bool)
     }
     tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_usage_exec_snapshot ON usage_events(exec_snapshot_id);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_provider_update ON usage_events(runtime_id,provider_update_id) WHERE provider_update_id IS NOT NULL;")?;
-    let gates=[("exec_gate.claude.model",true),("exec_gate.claude.thinking",true),("exec_gate.claude.instructions",true),("exec_gate.codex.model",true),("exec_gate.codex.thinking",true),("exec_gate.codex.serviceTier",true),("exec_gate.codex.instructions",true),("exec_gate.codex.steer",false),("exec_gate.opencode.model",true),("exec_gate.opencode.thinking",true),("exec_gate.opencode.instructions",true)];
+    let gates=[("exec_gate.claude.model",true),("exec_gate.claude.thinking",true),("exec_gate.claude.instructions",true),("exec_gate.codex.model",true),("exec_gate.codex.thinking",true),("exec_gate.codex.serviceTier",true),("exec_gate.codex.instructions",true),("exec_gate.codex.steer",true),("exec_gate.opencode.model",true),("exec_gate.opencode.thinking",true),("exec_gate.opencode.instructions",true)];
     for (key,enabled) in gates {
         let changed=tx.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,?2)",params![key,if enabled{"true"}else{"false"}])?;
         if changed>0 { push_settings_event(&tx,key,enabled)?; }
@@ -568,6 +568,20 @@ fn ensure_opencode_effort_gate_open(c: &Connection) -> Result<(), StorageError> 
     let done: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1)", [MARKER], |r| r.get(0))?;
     if done { return Ok(()); }
     c.execute("UPDATE settings SET value='true' WHERE key='exec_gate.opencode.thinking' AND value='false'", [])?;
+    c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,'true')", [MARKER])?;
+    Ok(())
+}
+
+/// One-time: FIX39 P13 opens the steer gate wherever the adapter can truly steer
+/// (Codex today). Databases seeded earlier carry `exec_gate.codex.steer = false`
+/// as the close-all default, which disabled steering for every provider even
+/// though the Codex adapter accepts it. Open it once; the marker keeps any later
+/// operator choice intact.
+fn ensure_steer_gate_open(c: &Connection) -> Result<(), StorageError> {
+    const MARKER: &str = "migration.steerGateOpened";
+    let done: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1)", [MARKER], |r| r.get(0))?;
+    if done { return Ok(()); }
+    c.execute("UPDATE settings SET value='true' WHERE key='exec_gate.codex.steer' AND value='false'", [])?;
     c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,'true')", [MARKER])?;
     Ok(())
 }
@@ -1486,6 +1500,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_steer_gate_open(&conn)?;
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
@@ -1502,6 +1517,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_steer_gate_open(&conn)?;
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
@@ -1519,6 +1535,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_steer_gate_open(&conn)?;
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
@@ -1539,6 +1556,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_steer_gate_open(&conn)?;
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
@@ -1654,6 +1672,7 @@ impl Storage {
                 ensure_automation_schema(&conn)?;
                 ensure_memory_schema(&conn)?;
                 ensure_opencode_effort_gate_open(&conn)?;
+                ensure_steer_gate_open(&conn)?;
                 ensure_session_project_backfill(&conn)?;
                 ensure_model_catalog_schema(&conn)?;
                 ensure_skills_schema(&conn)?;
@@ -5649,6 +5668,26 @@ mod tests {
     fn remove_session_controls_migration(c: &Connection) {
         c.execute_batch("DROP TABLE IF EXISTS message_reactions; DROP INDEX IF EXISTS idx_messages_session_id_id; ALTER TABLE sessions DROP COLUMN model_lock_json; DROP TABLE IF EXISTS quota_snapshots; DELETE FROM schema_migrations WHERE version IN (6,7,8,9,10,11,12); PRAGMA user_version=5; ALTER TABLE sessions DROP COLUMN archived; ALTER TABLE sessions DROP COLUMN title_override; ALTER TABLE agents DROP COLUMN outfit; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
     }
+    #[test]
+    fn steer_gate_migration_opens_a_seeded_closed_gate_once() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);").unwrap();
+        c.execute("INSERT INTO settings(key,value) VALUES('exec_gate.codex.steer','false')", []).unwrap();
+        ensure_steer_gate_open(&c).unwrap();
+        assert_eq!(c.query_row("SELECT value FROM settings WHERE key='exec_gate.codex.steer'", [], |r| r.get::<_, String>(0)).unwrap(), "true");
+        assert!(c.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key='migration.steerGateOpened')", [], |r| r.get::<_, bool>(0)).unwrap());
+        // A later operator choice is kept: the marker stops a second run.
+        c.execute("UPDATE settings SET value='false' WHERE key='exec_gate.codex.steer'", []).unwrap();
+        ensure_steer_gate_open(&c).unwrap();
+        assert_eq!(c.query_row("SELECT value FROM settings WHERE key='exec_gate.codex.steer'", [], |r| r.get::<_, String>(0)).unwrap(), "false");
+    }
+
+    #[test]
+    fn a_new_database_seeds_the_steer_gate_open() {
+        let db = Storage::open_in_memory().unwrap();
+        assert_eq!(db.settings().unwrap()["exec_gate.codex.steer"], json!(true), "FIX39 P13: the gate follows the adapter capability");
+    }
+
     #[test]
     fn quota_cache_migration_preserves_v9_history_and_keeps_last_good_on_failure() {
         let root = std::env::temp_dir().join(format!("bloblex-quota-migration-{}", Uuid::new_v4()));

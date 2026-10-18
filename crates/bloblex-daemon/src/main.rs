@@ -1800,7 +1800,20 @@ async fn preflight_exec_options(st:&AppState,runtime:&Value,provider:&str,option
 /// `docs/evidence/opencode-effort-2026-10-13.md`), so they are open unless
 /// explicitly disabled. The stored `exec_gate.*` value remains the off-switch.
 fn gate_default(provider: &str, setting: &str) -> bool {
-    (provider == "claude" && setting == "serviceTier") || (provider == "opencode" && setting == "thinking")
+    (provider == "claude" && setting == "serviceTier")
+        || (provider == "opencode" && setting == "thinking")
+        // FIX39 P13: the steer gate follows the adapter's capability. It is open
+        // wherever the adapter can truly steer, so P9's "Steer vs Queue" setting
+        // decides, and closed everywhere else (an honest Queue fallback). The
+        // stored `exec_gate.<provider>.steer` value stays the off-switch.
+        || (setting == "steer" && provider_can_steer(provider))
+}
+/// Whether a provider's adapter implements true mid-turn steering. This is the
+/// capability behind `runtime_capabilities().settings.steer`; the
+/// `exec_gate.<provider>.steer` default and `session.steer` both read it, so a
+/// provider whose adapter supports steering is never gated off by accident.
+fn provider_can_steer(provider: &str) -> bool {
+    matches!(provider, "codex")
 }
 const EXEC_UNAVAILABLE: &str = "The requested setting is unavailable for this runtime until its execution check passes.";
 fn safe_requested_options(options: &ExecOptions) -> Value {
@@ -1863,10 +1876,10 @@ async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError
     let runtime=st.runtimes.read().await.iter().find(|r|r["id"]==runtime_id).cloned().ok_or_else(||derr("not_found","runtime not found",StatusCode::NOT_FOUND))?;
     let provider=runtime["provider"].as_str().unwrap_or("");
     let table:[(&str,bool,&str,&str);6]=match provider{
-        "claude"=>[("model",true,"spawn","provider_echo"),("thinking",true,"spawn","usage_effect"),("serviceTier",true,"spawn","request_shape"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape"),("steer",false,"turn","none")],
-        "codex"=>[("model",true,"spawn","provider_echo"),("thinking",true,"turn","usage_effect"),("serviceTier",true,"turn","provider_echo"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape"),("steer",true,"turn","none")],
-        "opencode"=>[("model",true,"session","provider_echo"),("thinking",true,"session","provider_echo"),("serviceTier",false,"session","none"),("instructions",true,"session","successful_turn"),("customEnv",true,"process","request_shape"),("steer",false,"turn","none")],
-        _=>[("model",false,"turn","none"),("thinking",false,"turn","none"),("serviceTier",false,"turn","none"),("instructions",false,"turn","none"),("customEnv",false,"process","none"),("steer",false,"turn","none")],
+        "claude"=>[("model",true,"spawn","provider_echo"),("thinking",true,"spawn","usage_effect"),("serviceTier",true,"spawn","request_shape"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape"),("steer",provider_can_steer("claude"),"turn","none")],
+        "codex"=>[("model",true,"spawn","provider_echo"),("thinking",true,"turn","usage_effect"),("serviceTier",true,"turn","provider_echo"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape"),("steer",provider_can_steer("codex"),"turn","none")],
+        "opencode"=>[("model",true,"session","provider_echo"),("thinking",true,"session","provider_echo"),("serviceTier",false,"session","none"),("instructions",true,"session","successful_turn"),("customEnv",true,"process","request_shape"),("steer",provider_can_steer("opencode"),"turn","none")],
+        _=>[("model",false,"turn","none"),("thinking",false,"turn","none"),("serviceTier",false,"turn","none"),("instructions",false,"turn","none"),("customEnv",false,"process","none"),("steer",provider_can_steer(""),"turn","none")],
     };
     let settings=st.db.settings().map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
     // OpenCode publishes an effort option per model. When a model is in scope the
@@ -3168,9 +3181,14 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         }
     }
     let mut active = active;
-    // 4. Codex takes its permission mode at launch, so a changed mode relaunches
-    //    the process before the prompt is delivered.
-    if active.runtime.provider == "codex" && active.launch_approval_mode != exec_options.approval_mode {
+    // 4. Claude and Codex take their permission mode at launch, so a changed
+    //    mode relaunches the process before the prompt is delivered (FIX39 P13:
+    //    a Claude conversation's mid-session permission change failed before
+    //    this branch covered it). The relaunch resumes the same provider
+    //    session; if that resume fails the conversation continues on a fresh
+    //    provider session and this prompt alone carries the P6 recap, exactly as
+    //    a rejected resume during activation does.
+    if matches!(active.runtime.provider.as_str(), "codex" | "claude") && active.launch_approval_mode != exec_options.approval_mode {
         let old = {
             let _guard = gate.lock().await;
             if !session_gate_is_current(st, &sid, &gate).await || session_is_deleted(st, &sid).await || !st.db.session_exists(&sid).unwrap_or(false) {
@@ -3193,18 +3211,20 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
             return;
         }
         let project_path = st.db.session_detail(&sid).ok().and_then(|row| row["projectPath"].as_str().map(PathBuf::from)).unwrap_or_default();
-        let (tx, rx) = tokio::sync::mpsc::channel(256);
-        let handle = match old.adapter.resume_session(
+        let previous_had_turns = st.db.session_had_provider_turns(&sid).unwrap_or(false);
+        let (handle, rx, resume_fallback) = match resume_or_start_fresh(
+            st,
+            old.adapter.clone(),
             &old.runtime,
-            ResumeSessionRequest {
-                session_id: sid.clone(),
-                provider_session_id: old.handle.provider_session_id.clone(),
-                project_path,
-                exec_options: exec_options.clone(),
-            },
-            tx,
-        ).await {
-            Ok(handle) => handle,
+            &sid,
+            old.handle.provider_session_id.clone(),
+            project_path,
+            exec_options.clone(),
+            previous_had_turns,
+        )
+        .await
+        {
+            Ok(result) => result,
             Err(error) => {
                 finish_activation_failure(st, &sid, &turn, &derr("provider_error", &error.to_string(), StatusCode::BAD_GATEWAY)).await;
                 return;
@@ -3225,6 +3245,12 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
             let _ = active.adapter.close_session(&active.handle).await;
             finish_activation_failure(st, &sid, &turn, &derr("conflict", "session changed while execution options were being applied", StatusCode::CONFLICT)).await;
             return;
+        }
+        if resume_fallback && previous_had_turns {
+            memory::forget_catalog(st, &sid);
+            knowledge::forget_context(st, &sid);
+            skills::forget_index(st, &sid);
+            knowledge::announce_context_loss(st, &sid).await;
         }
         let state = st.clone();
         let stream_id = sid.clone();
@@ -3321,7 +3347,7 @@ async fn session_steer(st: &AppState, p: Value) -> Result<Value, DispatchError> 
     if session["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
     if session["link"]["kind"] == "side" { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
     let provider = session["provider"].as_str().unwrap_or("");
-    if provider != "codex" {
+    if !provider_can_steer(provider) {
         return Err(derr("unsupported", "Steering is unavailable for this runtime.", StatusCode::BAD_REQUEST));
     }
     let settings = st.db.settings().map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
@@ -5555,6 +5581,78 @@ mod phase2a_tests {
         assert!(adapter.prompts.lock().unwrap().is_empty(), "a failed activation never prompts");
         assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(st.db.session_detail("uninitialized-then-failed").unwrap()["state"], "error");
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    /// FIX39 P13: a Claude conversation whose permission mode changes while its
+    /// process is already running. Before this package only Codex relaunched, so
+    /// Claude answered `config_unsupported`. The relaunch resumes the same
+    /// provider session; when the resume fails the conversation continues on a
+    /// fresh provider session and this prompt alone carries the P6 recap.
+    async fn p13_setup(adapter: Arc<PromptResumeAdapter>, sid: &str) -> (AppState, PathBuf) {
+        let (mut st, _events) = state();
+        let project = std::env::temp_dir().join(format!("bloblex-p13-{sid}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&project).unwrap();
+        let runtime = json!({"id":"rt-test","provider":"claude","status":"online","executablePath":std::env::current_exe().unwrap(),"launchArgs":[]});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await = vec![runtime];
+        st.db.create_session(sid, "rt-test", "claude", &project.to_string_lossy(), "Permission chat").unwrap();
+        st.db.set_session_provider_id(sid, "saved-provider-id", true).unwrap();
+        st.db.merge_session_data(sid, &json!({"providerTurns":1})).unwrap();
+        st.db.append_message(sid, "p13-old", "user", "Please fix the failing test").unwrap();
+        st.db.append_message(sid, "p13-old-answer", "assistant", "I fixed it and the suite is green.").unwrap();
+        st.db.update_session_state(sid, "idle").unwrap();
+        // The bot's mode is now auto; the live process was launched on ask.
+        st.db.set_setting("permissions.default_mode", &json!("auto")).unwrap();
+        st.adapters = Arc::new(Adapters { acp: Arc::new(AcpAdapter::default()), codex: adapter.clone(), claude: adapter.clone() });
+        let handle = SessionHandle { session_id: sid.into(), provider_session_id: "saved-provider-id".into(), capabilities: bloblex_agent_core::AgentCapabilities { resume: true, ..Default::default() } };
+        st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime: RuntimeSpec { runtime_id: "rt-test".into(), provider: "claude".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None }, adapter, launch_approval_mode: ApprovalMode::Ask });
+        (st, project)
+    }
+
+    async fn p13_prompt_arrives(adapter: &Arc<PromptResumeAdapter>, prefix: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if adapter.prompts.lock().unwrap().iter().any(|text| text.starts_with(prefix)) { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn p13_claude_permission_change_relaunches_and_resumes_the_same_session() {
+        let adapter = Arc::new(PromptResumeAdapter { reject_resume: false, fail_resume: false, fail_new: false, resume_calls: Default::default(), new_calls: Default::default(), prompts: StdMutex::new(Vec::new()), events: StdMutex::new(None) });
+        let (st, project) = p13_setup(adapter.clone(), "p13-permission").await;
+        let result = dispatch(&st, "session.prompt", json!({"sessionId":"p13-permission","text":"now use auto mode"})).await.unwrap();
+        assert_eq!(result["accepted"], true);
+        p13_prompt_arrives(&adapter, "now use auto mode").await;
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the changed mode relaunches and resumes the same provider session");
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 0, "a successful resume keeps the provider context");
+        {
+            let prompts = adapter.prompts.lock().unwrap();
+            assert!(prompts[0].starts_with("now use auto mode"));
+            assert!(!prompts[0].contains("<bloblex_recap>"), "no recap when the resume kept the context");
+        }
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[tokio::test]
+    async fn p13_claude_permission_change_falls_back_to_the_recap_when_resume_fails() {
+        let adapter = Arc::new(PromptResumeAdapter { reject_resume: false, fail_resume: true, fail_new: false, resume_calls: Default::default(), new_calls: Default::default(), prompts: StdMutex::new(Vec::new()), events: StdMutex::new(None) });
+        let (st, project) = p13_setup(adapter.clone(), "p13-permission-fallback").await;
+        let result = dispatch(&st, "session.prompt", json!({"sessionId":"p13-permission-fallback","text":"now use auto mode"})).await.unwrap();
+        assert_eq!(result["accepted"], true);
+        p13_prompt_arrives(&adapter, "now use auto mode").await;
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1, "a failed resume continues on a fresh provider session");
+        {
+            let prompts = adapter.prompts.lock().unwrap();
+            assert!(prompts[0].starts_with("now use auto mode"), "the user's text still leads: {}", prompts[0]);
+            assert!(prompts[0].contains("<bloblex_recap>"), "the P6 recap is the fallback, not a config error: {}", prompts[0]);
+            assert!(prompts[0].contains("Please fix the failing test"));
+        }
+        assert_eq!(context_reset_notices(&st, "p13-permission-fallback"), 1, "the lost context is announced exactly once");
+        assert!(!st.db.session_detail("p13-permission-fallback").unwrap().to_string().contains("<bloblex_recap>"), "the recap is never stored");
         std::fs::remove_dir_all(project).unwrap();
     }
 
@@ -8078,11 +8176,16 @@ mod phase2a_tests {
         install_queue_adapter(&mut st, &adapter);
         let sid = "steer-gate";
         queue_session(&st, &adapter, sid).await;
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"exec_gate.codex.steer","value":"true"})).await.unwrap_err().1.code, "invalid_argument", "the steer gate accepts only a JSON boolean");
+        // FIX39 P13: Codex's adapter can steer, so the gate is open by default
+        // and an idle conversation is the only refusal left.
+        assert_eq!(dispatch(&st, "session.steer", json!({"sessionId":sid,"text":"add this"})).await.unwrap_err().1.code, "conflict");
+        // The stored value stays the off-switch.
+        dispatch(&st, "settings.set", json!({"key":"exec_gate.codex.steer","value":false})).await.unwrap();
         assert_eq!(
             dispatch(&st, "session.steer", json!({"sessionId":sid,"text":"add this"})).await.unwrap_err().1.message,
             "Steering is turned off for this runtime."
         );
-        assert_eq!(dispatch(&st, "settings.set", json!({"key":"exec_gate.codex.steer","value":"true"})).await.unwrap_err().1.code, "invalid_argument", "the steer gate accepts only a JSON boolean");
         dispatch(&st, "settings.set", json!({"key":"exec_gate.codex.steer","value":true})).await.unwrap();
         let idle = dispatch(&st, "session.steer", json!({"sessionId":sid,"text":"add this"})).await.unwrap_err();
         assert_eq!((idle.1.code.as_str(), idle.1.message.as_str()), ("conflict", "Nothing is running to steer."));
@@ -8160,7 +8263,11 @@ mod phase2a_tests {
         assert_eq!(caps["settings"]["steer"]["supported"], true);
         assert_eq!(caps["settings"]["steer"]["scope"], "turn");
         assert_eq!(caps["settings"]["steer"]["evidence"], "none");
-        assert_eq!(caps["settings"]["steer"]["enabled"], false);
+        assert_eq!(caps["settings"]["steer"]["enabled"], true, "FIX39 P13: the gate follows the adapter capability, and Codex can steer");
+        st.db.set_setting("exec_gate.codex.steer", &json!(false)).unwrap();
+        let disabled = dispatch(&st, "runtime.capabilities", json!({"runtimeId":"rt-test"})).await.unwrap();
+        assert_eq!(disabled["settings"]["steer"]["enabled"], false);
+        assert_eq!(disabled["settings"]["steer"]["reason"], "execution entry gate is disabled");
         st.db.set_setting("exec_gate.codex.steer", &json!(true)).unwrap();
         let enabled = dispatch(&st, "runtime.capabilities", json!({"runtimeId":"rt-test"})).await.unwrap();
         assert_eq!(enabled["settings"]["steer"]["enabled"], true);

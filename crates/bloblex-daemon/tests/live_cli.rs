@@ -581,6 +581,31 @@ fn daemon_live_summaries_are_present_and_sanitised() {
                 "{} recorded no second turn in the same session",
                 path.display()
             );
+            // FIX39 P13: a conversation's permission change must take effect by
+            // relaunching and resuming the provider session, never a config error.
+            assert_eq!(
+                value["permissionChange"],
+                "completed",
+                "{} recorded a permission change that did not complete",
+                path.display()
+            );
+            // FIX39 P13: the steer gate is open wherever the adapter can steer,
+            // and every other provider is an honest Queue fallback.
+            if value["provider"] == "codex" {
+                assert_ne!(
+                    value["steer"],
+                    "unsupported",
+                    "{} recorded Codex steering as unsupported",
+                    path.display()
+                );
+            } else {
+                assert_eq!(
+                    value["steer"],
+                    "unsupported",
+                    "{} should fall back to Queue instead of steering",
+                    path.display()
+                );
+            }
         }
         for forbidden in ["prompt", "text", "content", "message", "path", "token", "id"] {
             assert!(

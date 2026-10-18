@@ -60,7 +60,15 @@ fn main() {
         // emitting `system/init`, which the adapter reports as a failed resume.
         return;
     }
-    emit(json!({"type":"system","subtype":"init","session_id":session_id,"model":model.clone().unwrap_or_else(||"init-only-echo".into())}));
+    // Claude Code emits `system/init` on a resumed process only once a turn
+    // begins. This mode mimics that: a resume stays silent until it is woken,
+    // but answers a `get_context_usage` control request at once, which is what
+    // FIX39 P13's resume probe relies on.
+    let lazy_resume_init = args.iter().any(|arg| arg == "--fake-lazy-resume-init")
+        && args.iter().any(|arg| arg == "--resume");
+    if !lazy_resume_init {
+        emit(json!({"type":"system","subtype":"init","session_id":session_id,"model":model.clone().unwrap_or_else(||"init-only-echo".into())}));
+    }
     if args.iter().any(|arg| arg == "--fake-startup-generic-error") {
         emit(json!({"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0},"errors":["Provider request failed"]}));
     }
@@ -73,7 +81,10 @@ fn main() {
     for line in stdin.lock().lines().flatten() {
         let Ok(input) = serde_json::from_str::<Value>(&line) else { continue };
         wire_replay::input(&input);
-        if input["type"] == "control_request" && input["request"]["subtype"] == "list_models" {
+        if input["type"] == "control_request" && input["request"]["subtype"] == "get_context_usage" {
+            // A live resumed session answers the P13 probe at once.
+            emit(json!({"type":"control_response","response":{"subtype":"success","request_id":input["request_id"],"response":{"context":{"used":0,"size":1000}}}}));
+        } else if input["type"] == "control_request" && input["request"]["subtype"] == "list_models" {
             emit(json!({"type":"control_response","response":{"subtype":"success","request_id":input["request_id"],"response":{"models":[{"value":"claude-sonnet-test","displayName":"Test Sonnet","providerId":"anthropic","supportedEffortLevels":["low","high"],"defaultEffort":"low","supportsFastMode":true}],"resolvedModel":"claude-sonnet-test"}}}));
         } else if input["type"] == "control_request" && input["request"]["subtype"] == "get_settings" {
             emit(json!({"type":"control_response","response":{"subtype":"success","request_id":input["request_id"],"response":{"effective":{},"sources":[],"applied":{"model":"claude-sonnet-test","effort":"low","ultracodeAvailable":false}}}}));

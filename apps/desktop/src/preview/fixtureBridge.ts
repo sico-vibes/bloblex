@@ -680,7 +680,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   if (method === 'session.steer') {
     const session = sessions.find((item) => item.id === params.sessionId)
     if (!session || session.archived) throw rpcError('not_found', 'Conversation not found.')
-    if (fixtureSettings['exec_gate.codex.steer'] !== true) throw rpcError('unsupported', 'Steering is turned off for this runtime.')
+    if (fixtureSettings['exec_gate.codex.steer'] === false) throw rpcError('unsupported', 'Steering is turned off for this runtime.')
     if (!['working', 'waiting_permission'].includes(String(session.state))) throw rpcError('conflict', 'Nothing is running to steer.')
     const text = typeof params.text === 'string' ? params.text.trim() : ''
     if (!text) throw rpcError('invalid_argument', 'text must contain 1 to 100000 UTF-8 bytes')
@@ -802,9 +802,10 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const supported = { supported: true, enabled: true, scope: 'agent', evidence: 'preview' }
     // Like the real daemon, OpenCode keeps effort behind its execution check.
     const thinking = params.runtimeId === 'runtime-opencode' ? { ...supported, enabled: false, reason: 'execution entry gate is disabled' } : supported
-    // Steering exists for Codex only, off until the user turns the gate on, and is never proven.
+    // Steering exists for Codex only, is open by default (FIX39 P13: the gate
+    // follows the adapter's capability) and is never proven.
     const steer = params.runtimeId === 'runtime-codex'
-      ? { supported: true, enabled: fixtureSettings['exec_gate.codex.steer'] === true, scope: 'turn', evidence: 'none', ...(fixtureSettings['exec_gate.codex.steer'] === true ? {} : { reason: 'execution entry gate is disabled' }) }
+      ? { supported: true, enabled: fixtureSettings['exec_gate.codex.steer'] !== false, scope: 'turn', evidence: 'none', ...(fixtureSettings['exec_gate.codex.steer'] === false ? { reason: 'execution entry gate is disabled' } : {}) }
       : { supported: false, enabled: false, scope: 'turn', evidence: 'none', reason: 'setting is unsupported by this runtime' }
     return { runtimeId: params.runtimeId, settings: { model: supported, thinking, serviceTier: supported, instructions: supported, customEnv: supported, steer } } as T
   }

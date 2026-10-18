@@ -834,6 +834,14 @@ impl ClaudeAdapter {
         let reader = conn.clone();
         let (resume_ready_tx, resume_ready_rx) = tokio::sync::oneshot::channel();
         let check_resume = provider_session_id.is_some();
+        // Claude emits `system/init` only once a turn's input arrives, so a
+        // resumed process is silent until then. A lightweight control request
+        // wakes it: a live session answers within a couple of seconds, and a
+        // session the provider no longer has answers with the resume-rejected
+        // result instead. This keeps resume detection before the prompt
+        // without ever blocking on a turn that must not be delivered yet.
+        let resume_probe = format!("bloblex-resume-{}", Uuid::new_v4());
+        let resume_probe_read = resume_probe.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             let mut resume_ready_tx = Some(resume_ready_tx);
@@ -864,6 +872,16 @@ impl ClaudeAdapter {
                         } else if v["type"].as_str() == Some("system")
                             && v["subtype"].as_str() == Some("init")
                         {
+                            if let Some(tx) = resume_ready_tx.take() {
+                                let _ = tx.send(Ok(()));
+                            }
+                        } else if v["type"].as_str() == Some("control_response")
+                            && v["response"]["request_id"].as_str() == Some(resume_probe_read.as_str())
+                        {
+                            // A live session answers the probe at once; init is
+                            // only emitted once a turn begins, so the probe is
+                            // what proves a resumed process is still usable
+                            // before the prompt is written.
                             if let Some(tx) = resume_ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
@@ -928,6 +946,18 @@ impl ClaudeAdapter {
             }
         });
         if check_resume {
+            if let Err(error) = write_control(
+                &conn,
+                json!({"type":"control_request","request_id":resume_probe,"request":{"subtype":"get_context_usage"}}),
+            )
+            .await
+            {
+                let _ = conn.process_tree.terminate();
+                let _ = conn.child.lock().await.kill().await;
+                return Err(AdapterError::ResumeFailed(format!(
+                    "Claude resume probe could not be sent: {error}"
+                )));
+            }
             match tokio::time::timeout(StdDuration::from_secs(8), resume_ready_rx).await {
                 Ok(Ok(Ok(()))) => {}
                 Ok(Ok(Err(error))) => {

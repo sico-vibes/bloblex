@@ -25,7 +25,7 @@ vi.mock('../tauri', () => ({
   inDesktop: false,
 }))
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => <span /> }))
-import { loginProblem, RemoteApp, signedOutMethod } from './RemoteApp'
+import { connectProblem, loginProblem, RemoteApp, signedOutMethod } from './RemoteApp'
 
 const refused = (code: string, method?: string) => Object.assign(new Error(code), { code }, method ? { method } : {})
 const meFor = (tier: RemoteMe['device']['tier'], extra: Partial<RemoteMe> = {}): RemoteMe => ({ protocolVersion: 1, device: { id: 'd1', name: 'Pixel 8', tier }, host: { name: 'Work PC' }, approvalsFromRemote: false, quietHoursActive: false, method: 'tailscale', ...extra })
@@ -69,9 +69,9 @@ const flush = async (ms = 60) => { await act(async () => { await new Promise((re
 beforeEach(() => { h.rpc.mockReset(); h.rpc.mockResolvedValue({}) })
 afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null })
 
-async function mount(device: ReturnType<typeof fakeDevice>) {
+async function mount(device: RemoteDeviceApi) {
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  await act(async () => { root!.render(<RemoteApp device={device as unknown as RemoteDeviceApi} pollMs={20} />) })
+  await act(async () => { root!.render(<RemoteApp device={device} pollMs={20} />) })
   await flush()
   return host
 }
@@ -112,6 +112,70 @@ describe('RemoteApp', () => {
     await act(async () => { view.querySelector<HTMLButtonElement>('.rm-primary')!.click() })
     await flush(120)
     expect(view.querySelector('.rm-notice')?.textContent).toContain('declined')
+  })
+
+  it('keeps waiting and never re-submits when the approval poll fails', async () => {
+    const device = {
+      me: vi.fn(async () => { throw refused('unauthorized') }),
+      pair: vi.fn(async () => ({ state: 'pending' as const })),
+      // The poll always fails (offline, forbidden origin, a blip): the phone
+      // must sit on "Approve on your computer", not fall back or re-submit.
+      pairStatus: vi.fn(async () => { throw refused('network') }),
+      login: vi.fn(),
+      logout: vi.fn(async () => undefined),
+      onConnection: (handler: (status: 'online') => void) => { handler('online'); return () => undefined },
+    }
+    const view = await mount(device as unknown as RemoteDeviceApi)
+    type(view, '.rm-connect input', 'K7QM4XPD', 0)
+    await act(async () => { view.querySelector<HTMLButtonElement>('.rm-primary')!.click() })
+    await flush()
+    expect(device.pair).toHaveBeenCalledTimes(1)
+    expect(view.querySelector('.rm-waiting')?.textContent).toContain('Approve on your computer')
+    await flush(200)
+    expect(device.pair).toHaveBeenCalledTimes(1)
+    expect(view.querySelector('.rm-waiting')).not.toBeNull()
+    expect(view.querySelector('.rm-connect h1')?.textContent).toBe('Approve on your computer')
+  })
+
+  it('reloads straight into the waiting screen without re-submitting the code', async () => {
+    const device = {
+      // A paired-but-pending device whose cookie the host has not handed over
+      // yet: the reload finds the request still pending.
+      me: vi.fn(async () => { throw refused('unauthorized') }),
+      pair: vi.fn(async () => ({ state: 'pending' as const })),
+      pairStatus: vi.fn(async () => 'pending' as const),
+      login: vi.fn(),
+      logout: vi.fn(async () => undefined),
+      onConnection: (handler: (status: 'online') => void) => { handler('online'); return () => undefined },
+    }
+    const view = await mount(device as unknown as RemoteDeviceApi)
+    expect(view.querySelector('.rm-waiting')?.textContent).toContain('Approve on your computer')
+    expect(device.pair).not.toHaveBeenCalled()
+    await flush(100)
+    expect(device.pair).not.toHaveBeenCalled()
+  })
+
+  it('explains an origin refusal instead of asking for a new code', async () => {
+    const device = {
+      me: vi.fn(async () => { throw refused('forbidden_origin') }),
+      pair: vi.fn(),
+      pairStatus: vi.fn(async () => 'expired' as const),
+      login: vi.fn(),
+      logout: vi.fn(async () => undefined),
+      onConnection: (handler: (status: 'online') => void) => { handler('online'); return () => undefined },
+    }
+    const view = await mount(device as unknown as RemoteDeviceApi)
+    expect(view.querySelector('.rm-notice')?.textContent).toContain('opened from the address shown on the computer')
+    expect(view.querySelector('.rm-connect h1')?.textContent).toBe('Connect to your computer')
+  })
+
+  it('words a refused sign-in, code or poll by the gateway code', () => {
+    expect(connectProblem(refused('pairing_invalid'))).toBe('That code did not work. Check it, or show a new one on the computer.')
+    expect(connectProblem(refused('forbidden_origin'))).toContain('opened from the address shown on the computer')
+    expect(connectProblem(refused('rate_limited'))).toContain('Too many tries')
+    expect(connectProblem(refused('network'))).toContain('Could not reach the computer')
+    expect(connectProblem(new Error('The host said no.'))).toBe('The host said no.')
+    expect(loginProblem(refused('forbidden_origin'))).toContain('opened from the address shown on the computer')
   })
 
   it('a removed device lands on the code screen with an explanation', async () => {

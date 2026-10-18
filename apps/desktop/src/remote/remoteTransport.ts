@@ -25,6 +25,7 @@ export type RemoteErrorCode =
   | 'unauthorized'
   | 'device_revoked'
   | 'login_invalid'
+  | 'forbidden_origin'
   | 'forbidden_remote'
   | 'tier_required'
   | 'approvals_disabled'
@@ -192,6 +193,7 @@ const DEFAULT_MESSAGES: Partial<Record<RemoteErrorCode, string>> = {
   unauthorized: 'This device is not signed in to the host.',
   device_revoked: 'This device was removed. Pair it again to continue.',
   login_invalid: 'That username or password is not right.',
+  forbidden_origin: 'Open this page from the address shown on the computer.',
   forbidden_remote: 'That is not available to a remote device.',
   tier_required: 'This device needs a higher permission level for that.',
   approvals_disabled: 'Approvals from remote devices are switched off on the host.',
@@ -314,6 +316,28 @@ export function createRemoteTransport(options: RemoteTransportOptions = {}): Rem
     stopSocket()
   }
 
+  /**
+   * A call the host answered proves this device is usable again (for example a
+   * cookie-free `/api/pair` that just returned `approved`). Clear the latch so
+   * the follow-up `/api/me` is not refused locally.
+   */
+  function leaveSignedOut(): void {
+    if (!isSignedOut) return
+    isSignedOut = false
+    connection = 'connecting'
+    statusListener?.('connecting')
+  }
+
+  /**
+   * Whether this failure means the device may not act, or is merely not signed
+   * in yet. `/api/me` is the "who am I" probe: a `401` there is the normal
+   * not-paired answer the app turns into the connect screen, never a sign-out.
+   */
+  function isAuthFailure(path: string, code: string): boolean {
+    if (isCookieFreeRoute(path) || path === '/api/me') return false
+    return isAuthCode(code)
+  }
+
   async function readEnvelope(response: RemoteResponse): Promise<unknown> {
     let data: unknown = null
     try {
@@ -350,12 +374,13 @@ export function createRemoteTransport(options: RemoteTransportOptions = {}): Rem
       throw new RemoteCallError('network', messageOf(reason), 0)
     }
     try {
-      return await readEnvelope(response)
+      const result = await readEnvelope(response)
+      leaveSignedOut()
+      return result
     } catch (reason) {
-      // `/api/pair` and `/api/login` run without the device cookie, so a failure
-      // there is never a sign-out; every other 401 means the device's cookie is
-      // no longer good.
-      if (reason instanceof RemoteCallError && isAuthCode(reason.code) && !isCookieFreeRoute(path)) enterSignedOut()
+      // `/api/me` is the normal not-paired probe, and `/api/pair`/`/api/login`
+      // run without the device cookie, so a failure there is never a sign-out.
+      if (reason instanceof RemoteCallError && isAuthFailure(path, reason.code)) enterSignedOut()
       throw reason
     }
   }

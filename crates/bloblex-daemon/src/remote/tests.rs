@@ -1837,3 +1837,253 @@ async fn native_global_pause_writes_one_denied_line() {
     let denied: Vec<&Value> = entries.iter().filter(|entry| entry["kind"] == "denied").collect();
     assert_eq!(denied.len(), 1, "one line for the pause: {entries:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Browser-like end-to-end flow (FIX38 H1)
+//
+// These tests drive the gateway exactly as a browser does, not as `curl` does:
+// a cookie jar that keeps what the host sets, no `Origin` on same-origin
+// `GET`/`HEAD` (Fetch standard), `Origin` on `POST` and the WebSocket handshake,
+// and `Sec-Fetch-Site: same-origin` on every request. That is the header shape
+// the beta.32 phone sends — and the shape `require_origin` used to refuse.
+
+/// The names a browser may set. Only what the host sends is kept.
+const COOKIE_NAMES: [&str; 2] = [DEVICE_COOKIE, PAIR_COOKIE];
+
+/// A minimal, browser-faithful cookie jar: stores `name=value`, honours
+/// `Max-Age=0` as a delete, and joins what it holds into one `Cookie` header.
+#[derive(Default)]
+struct BrowserJar {
+    cookies: std::sync::Mutex<std::collections::HashMap<String, String>>,
+}
+
+impl BrowserJar {
+    fn header(&self) -> Option<String> {
+        let cookies = self.cookies.lock().unwrap();
+        if cookies.is_empty() {
+            return None;
+        }
+        Some(COOKIE_NAMES.iter().filter_map(|name| cookies.get(*name).map(|value| format!("{name}={value}"))).collect::<Vec<_>>().join("; "))
+    }
+
+    fn absorb(&self, response: &reqwest::Response) {
+        for value in response.headers().get_all("set-cookie").iter() {
+            let Ok(text) = value.to_str() else { continue };
+            let mut parts = text.split(';');
+            let Some((name, value)) = parts.next().and_then(|pair| pair.split_once('=')) else { continue };
+            let name = name.trim();
+            let value = value.trim();
+            let expired = parts.any(|attribute| attribute.trim().eq_ignore_ascii_case("max-age=0"));
+            let mut cookies = self.cookies.lock().unwrap();
+            if value.is_empty() || expired {
+                cookies.remove(name);
+            } else {
+                cookies.insert(name.to_string(), value.to_string());
+            }
+        }
+    }
+}
+
+/// A browser talking to one gateway. `base` is where it points its address bar
+/// and `origin` is what it puts in `Origin` on a state-changing request.
+struct Browser {
+    client: reqwest::Client,
+    base: String,
+    origin: String,
+    jar: BrowserJar,
+}
+
+impl Browser {
+    fn tailscale(port: u16) -> Self {
+        Self::new(format!("http://127.0.0.1:{port}"), ORIGIN.to_string(), false)
+    }
+
+    fn native(port: u16) -> Self {
+        let base = format!("https://127.0.0.1:{port}");
+        Self::new(base.clone(), base, true)
+    }
+
+    fn new(base: String, origin: String, insecure: bool) -> Self {
+        let mut builder = reqwest::Client::builder().no_proxy();
+        if insecure {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+        Self {
+            client: builder.build().unwrap(),
+            base,
+            origin,
+            jar: BrowserJar::default(),
+        }
+    }
+
+    /// A same-origin `GET`: no `Origin`, `Sec-Fetch-Site: same-origin`, cookies.
+    async fn get(&self, path: &str) -> reqwest::Response {
+        let mut request = self.client.get(format!("{}{path}", self.base)).header("Sec-Fetch-Site", "same-origin");
+        if let Some(cookie) = self.jar.header() {
+            request = request.header("Cookie", cookie);
+        }
+        let response = request.send().await.unwrap();
+        self.jar.absorb(&response);
+        response
+    }
+
+    /// A same-origin `POST`: `Origin` and `Sec-Fetch-Site: same-origin`, cookies.
+    async fn post(&self, path: &str, body: &Value) -> reqwest::Response {
+        let mut request = self
+            .client
+            .post(format!("{}{path}", self.base))
+            .header("Origin", &self.origin)
+            .header("Sec-Fetch-Site", "same-origin")
+            .header("Content-Type", "application/json");
+        if let Some(cookie) = self.jar.header() {
+            request = request.header("Cookie", cookie);
+        }
+        let response = request.json(body).send().await.unwrap();
+        self.jar.absorb(&response);
+        response
+    }
+
+    /// Opens `/api/events` as a browser does: the handshake carries `Origin` and
+    /// the device cookie.
+    async fn socket(&self) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+        let mut request = format!("{}/api/events", self.base).replace("http://", "ws://").replace("https://", "wss://").into_client_request().unwrap();
+        request.headers_mut().insert("Origin", self.origin.parse().unwrap());
+        if let Some(cookie) = self.jar.header() {
+            request.headers_mut().insert("Cookie", cookie.parse().unwrap());
+        }
+        let (socket, _) = tokio_tungstenite::connect_async(request).await.expect("the upgrade succeeds");
+        socket
+    }
+}
+
+#[tokio::test]
+async fn tailscale_pairing_completes_for_a_browser() {
+    let gateway = gateway().await;
+    let code = dispatch(&gateway.st, "remote.pair.begin", json!({})).await.unwrap()["code"].as_str().unwrap().to_string();
+    let browser = Browser::tailscale(gateway.port);
+
+    // A signed-out browser first asks who it is. Browsers send no Origin on a
+    // same-origin GET; the answer is 401 (no cookie), never 403 (no Origin).
+    let me = browser.get("/api/me").await;
+    assert_eq!(me.status(), StatusCode::UNAUTHORIZED, "a GET without Origin must reach the handler");
+    assert_eq!(me.json::<Value>().await.unwrap()["error"]["code"], "unauthorized");
+
+    // The poll with no offer yet is `expired`, again without an Origin.
+    let idle = browser.get("/api/pair").await;
+    assert_eq!(idle.status(), StatusCode::OK);
+    assert_eq!(idle.json::<Value>().await.unwrap()["state"], "expired");
+
+    // Submitting the code carries an Origin and locks the offer.
+    let submitted = browser
+        .post("/api/pair", &json!({"code": code, "name": "Pixel 8", "kind": "phone", "platform": "Android 15"}))
+        .await;
+    assert_eq!(submitted.status(), StatusCode::ACCEPTED);
+    assert_eq!(submitted.json::<Value>().await.unwrap()["state"], "pending");
+    let requested = super::events_last(&gateway.st, "remote.pairing.requested").await;
+    assert_eq!(requested["payload"]["name"], "Pixel 8");
+    let pairing_id = requested["payload"]["pairingId"].as_str().unwrap().to_string();
+
+    // The owner approves on the desktop.
+    super::rpc(&gateway.st, "remote.pair.confirm", &json!({"pairingId": pairing_id, "approve": true, "tier": "chat"})).await.unwrap();
+
+    // The phone's poll (no Origin) now sees the approval and is handed the
+    // device cookie; the browser keeps it.
+    let polled = browser.get("/api/pair").await;
+    assert_eq!(polled.status(), StatusCode::OK);
+    let approved: Value = polled.json().await.unwrap();
+    assert_eq!(approved["state"], "approved");
+    assert!(browser.jar.header().is_some_and(|cookie| cookie.contains(DEVICE_COOKIE)), "the browser kept the device cookie");
+
+    // /api/me (no Origin) now answers, with the device cookie.
+    let me = browser.get("/api/me").await;
+    assert_eq!(me.status(), StatusCode::OK);
+    let me: Value = me.json().await.unwrap();
+    assert_eq!(me["device"]["tier"], "chat");
+    assert_eq!(me["method"], "tailscale");
+
+    // A state-changing RPC needs its Origin and works.
+    let rpc = browser.post("/api/rpc", &json!({"v": 1, "id": "req_1", "method": "daemon.health", "params": {}})).await;
+    assert_eq!(rpc.status(), StatusCode::OK);
+    assert_eq!(rpc.json::<Value>().await.unwrap()["ok"], true);
+
+    // The events socket opens with the Origin a browser always sends there.
+    let mut socket = browser.socket().await;
+    let frame = gateway.cursor(&mut socket, 0).await;
+    assert!(frame["type"].is_string(), "the socket streamed a frame: {frame}");
+}
+
+#[tokio::test]
+async fn native_pairing_completes_for_a_browser() {
+    let gateway = native_gateway().await;
+    let browser = Browser::native(gateway.port);
+
+    // Signing in carries an Origin.
+    let signed = browser
+        .post("/api/login", &json!({"username": "owner", "password": "correct horse battery", "name": "Pixel 8", "kind": "phone", "platform": "Android 15"}))
+        .await;
+    assert_eq!(signed.status(), StatusCode::ACCEPTED);
+    assert_eq!(signed.json::<Value>().await.unwrap()["state"], "pending");
+    let pairing_id = super::events_last(&gateway.st, "remote.pairing.requested").await["payload"]["pairingId"].as_str().unwrap().to_string();
+    super::rpc(&gateway.st, "remote.pair.confirm", &json!({"pairingId": pairing_id, "approve": true, "tier": "operator"})).await.unwrap();
+
+    // The poll (no Origin) approves and sets the cookie.
+    let polled = browser.get("/api/pair").await;
+    assert_eq!(polled.status(), StatusCode::OK);
+    assert_eq!(polled.json::<Value>().await.unwrap()["state"], "approved");
+    assert!(browser.jar.header().is_some_and(|cookie| cookie.contains(DEVICE_COOKIE)));
+    let me = browser.get("/api/me").await;
+    assert_eq!(me.status(), StatusCode::OK);
+    let me: Value = me.json().await.unwrap();
+    assert_eq!(me["method"], "native");
+    assert_eq!(me["device"]["tier"], "operator");
+    let rpc = browser.post("/api/rpc", &json!({"v": 1, "id": "req_1", "method": "daemon.health", "params": {}})).await;
+    assert_eq!(rpc.status(), StatusCode::OK);
+    assert_eq!(rpc.json::<Value>().await.unwrap()["ok"], true);
+}
+
+#[tokio::test]
+async fn a_cross_site_request_is_refused_on_both_methods() {
+    // Tailscale: a cross-site POST (Origin + Sec-Fetch-Site) is refused.
+    let gateway = gateway().await;
+    let cross = gateway
+        .client
+        .post(gateway.url("/api/pair"))
+        .header("Origin", "https://evil.example")
+        .header("Sec-Fetch-Site", "cross-site")
+        .json(&json!({"code": "AAAA-AAAA"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross.status(), StatusCode::FORBIDDEN);
+    assert_eq!(cross.json::<Value>().await.unwrap()["error"]["code"], "forbidden_origin");
+    // A cross-site GET (no Origin, Sec-Fetch-Site: cross-site) is refused too.
+    for site in ["cross-site", "same-site"] {
+        let response = gateway.client.get(gateway.url("/api/pair")).header("Sec-Fetch-Site", site).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "Sec-Fetch-Site: {site}");
+    }
+    // A same-origin GET with a wrong Origin is refused.
+    let wrong = gateway.client.get(gateway.url("/api/pair")).header("Origin", "https://evil.example.ts.net").header("Sec-Fetch-Site", "same-origin").send().await.unwrap();
+    assert_eq!(wrong.status(), StatusCode::FORBIDDEN);
+
+    // Native: the Tailscale origin is refused, and a cross-site GET as well.
+    let native = native_gateway().await;
+    let foreign = native
+        .post("/api/login", "127.0.0.1", "https://work-pc.tail1234.ts.net", None, &json!({}))
+        .await;
+    assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+    let cross_get = native.client.get(native.url("/api/me")).header("Sec-Fetch-Site", "cross-site").send().await.unwrap();
+    assert_eq!(cross_get.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_websocket_upgrade_without_an_origin_is_refused() {
+    let gateway = gateway().await;
+    let (_, token) = seed_device(&gateway.st, "dev-ws", "chat", None);
+    let mut request = gateway.url("/api/events").replace("http://", "ws://").into_client_request().unwrap();
+    request.headers_mut().insert("Cookie", format!("{DEVICE_COOKIE}={token}").parse().unwrap());
+    match tokio_tungstenite::connect_async(request).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => assert_eq!(response.status(), StatusCode::FORBIDDEN),
+        other => panic!("expected a 403 upgrade: {other:?}"),
+    }
+}
+

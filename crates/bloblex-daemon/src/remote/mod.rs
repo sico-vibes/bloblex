@@ -834,20 +834,16 @@ pub async fn disable(st: &AppState) -> Result<Value, DispatchError> {
     let mut warning = None;
     if was_enabled {
         if let Some(serve_port) = serve_port {
-            match tailscale::help_documents_off(cli.as_ref()) {
-                Ok(true) => {
-                    let off_args = tailscale::serve_off_args(serve_port);
-                    match tailscale::run_checked(cli.as_ref(), &off_args) {
-                        Ok(output) if !output.success => {
-                            warning = Some("Tailscale did not remove the Bitbots address. Remove it in the Tailscale admin console if it stays listed.".to_string());
-                        }
-                        Ok(_) => {}
-                        Err(message) => warning = Some(message),
-                    }
+            // `tailscale serve --https=<port> off` is the one-handler removal.
+            // The installed CLI accepts it even when `serve --help` does not
+            // list the `off` token, so it is run directly and its answer read;
+            // "handler does not exist" means there was nothing to remove.
+            let off_args = tailscale::serve_off_args(serve_port);
+            match tailscale::run_checked(cli.as_ref(), &off_args) {
+                Ok(output) if !output.success && !tailscale::serve_already_absent(&output) => {
+                    warning = Some("Tailscale did not remove the Bitbots address. Remove it in the Tailscale admin console if it stays listed.".to_string());
                 }
-                Ok(false) => {
-                    warning = Some("The installed Tailscale CLI does not document turning one serve handler off, so Bitbots left it alone. Remove the Bitbots address with `tailscale serve` if it stays listed.".to_string());
-                }
+                Ok(_) => {}
                 Err(message) => warning = Some(message),
             }
         }

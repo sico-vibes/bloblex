@@ -72,8 +72,20 @@ export function loginProblem(reason: unknown): string {
   switch (errorCode(reason)) {
     case 'login_invalid': return 'That username or password is not right.'
     case 'rate_limited': return 'Sign-in is paused after too many tries. Wait a few minutes, then try again.'
+    case 'forbidden_origin': return 'This page must be opened from the address shown on the computer.'
     case 'network': return 'Could not reach the computer. Check that it is awake and that Remote is on.'
     default: return messageOf(reason, 'Could not sign in. Try again.')
+  }
+}
+
+/** Words for a refused code submission, by the gateway's code. */
+export function connectProblem(reason: unknown): string {
+  switch (errorCode(reason)) {
+    case 'pairing_invalid': return 'That code did not work. Check it, or show a new one on the computer.'
+    case 'forbidden_origin': return 'This page must be opened from the address shown on the computer.'
+    case 'rate_limited': return 'Too many tries. Wait a minute, then show a new code and try again.'
+    case 'network': return 'Could not reach the computer. Check that it is awake and on Tailscale.'
+    default: return messageOf(reason, 'That code did not work. Check it, or show a new one on the computer.')
   }
 }
 
@@ -144,10 +156,15 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
       setMethod(way)
       const again = way === 'native' ? 'Sign in again to come back.' : 'Pair it again to come back.'
       if (code === 'device_revoked') { signOut(`This device was removed on the computer. ${again}`); return }
+      if (code === 'forbidden_origin') { setNotice('This page must be opened from the address shown on the computer.'); setScreen('connect'); return }
       if (code === 'network') { setNotice(way === 'native' ? 'Could not reach the computer. Check that it is awake and that Remote is on.' : 'Could not reach the computer. Check that it is awake and on Tailscale.'); setScreen('connect'); return }
-      // Not paired: a pairing may still be waiting for the owner.
-      const state = await device.pairStatus().catch(() => 'expired' as const)
-      setScreen(state === 'pending' ? 'waiting' : 'connect')
+      // Not paired, or the owner has not decided yet. Only an explicit
+      // `pending`/`approved` may move the screen forward, and a failed
+      // `pairStatus` (network, offline, forbidden) must never pull a device
+      // that is already waiting back to the code screen or re-submit a code.
+      const state = await device.pairStatus().catch(() => null)
+      if (state === 'pending' || state === 'approved') { setScreen('waiting'); return }
+      setScreen((current) => (current === 'waiting' ? 'waiting' : 'connect'))
     }
   }, [device, signOut])
 
@@ -194,15 +211,18 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
 
   const connect = async (code: string, name: string) => {
     setNotice(null)
+    // Clear the scanned/pasted code from the address *before* the request, so a
+    // reload (a service-worker update, a phone restart) cannot re-read `#pair=`
+    // and re-submit a code the live offer has already locked.
+    try { history.replaceState(null, '', location.pathname) } catch { /* not in a browser */ }
     const about = describeThisDevice(typeof navigator === 'undefined' ? '' : navigator.userAgent)
     const deviceName = deviceNameFor(name, about.kind)
     try {
       await device.pair({ code: code.replace('-', ''), name: deviceName, ...about })
       setPendingName(deviceName)
       setScreen('waiting')
-      try { history.replaceState(null, '', location.pathname) } catch { /* not in a browser */ }
     } catch (reason) {
-      setNotice(errorCode(reason) === 'network' ? 'Could not reach the computer. Check that it is awake and on Tailscale.' : 'That code did not work. Check it, or show a new one on the computer.')
+      setNotice(connectProblem(reason))
     }
   }
 

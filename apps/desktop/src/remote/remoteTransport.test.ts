@@ -122,7 +122,7 @@ describe('remoteTransport rpc', () => {
   })
 
   it('keeps every gateway error code distinct', async () => {
-    const codes = ['unauthorized', 'device_revoked', 'login_invalid', 'forbidden_remote', 'tier_required', 'approvals_disabled', 'quiet_hours', 'invalid_params', 'payload_too_large', 'rate_limited']
+    const codes = ['unauthorized', 'device_revoked', 'login_invalid', 'forbidden_origin', 'forbidden_remote', 'tier_required', 'approvals_disabled', 'quiet_hours', 'invalid_params', 'payload_too_large', 'rate_limited']
     for (const code of codes) {
       const { transport } = harness(() => errResult(code, code === 'unauthorized' ? 401 : 400))
       await expect(transport.rpc('session.list')).rejects.toMatchObject({ code, message: `denied: ${code}` })
@@ -218,6 +218,44 @@ describe('remoteTransport pairing and session', () => {
     const { transport } = harness(() => errResult('pairing_invalid', 401))
     await expect(transport.pair({ code: 'WRNG-0000', name: 'Pixel', kind: 'phone', platform: 'Android' })).rejects.toMatchObject({ code: 'pairing_invalid' })
     expect(transport.signedOut()).toBe(false)
+  })
+
+  it('does not sign out on a not-paired /api/me, and recovers after pairing', async () => {
+    const me = { protocolVersion: 1, device: { id: 'd1', name: 'Pixel 8', tier: 'chat' }, host: { name: 'Work PC' }, approvalsFromRemote: false, quietHoursActive: false, method: 'tailscale' }
+    let paired = false
+    const { transport } = harness((url) => {
+      if (url === '/api/me') return paired ? jsonResponse(me) : errResult('unauthorized', 401)
+      if (url === '/api/pair') { paired = true; return jsonResponse({ state: 'pending' }, 202) }
+      return okResult(null)
+    })
+    // The "who am I" probe answers 401 on a device that has never paired. That
+    // must not latch the transport into a permanent signed-out state.
+    await expect(transport.me()).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(transport.signedOut()).toBe(false)
+    await transport.pair({ code: 'K7QM4XPD', name: 'Pixel 8', kind: 'phone', platform: 'Android' })
+    expect(transport.signedOut()).toBe(false)
+    expect(await transport.me()).toMatchObject({ device: { id: 'd1' } })
+  })
+
+  it('never signs out on a forbidden_origin refusal', async () => {
+    const { transport } = harness(() => errResult('forbidden_origin', 403))
+    await expect(transport.rpc('session.list')).rejects.toMatchObject({ code: 'forbidden_origin' })
+    expect(transport.signedOut()).toBe(false)
+  })
+
+  it('recovers from a signed-out latch once a cookie-free route succeeds again', async () => {
+    let revoked = true
+    const { transport } = harness((url) => {
+      if (url === '/api/rpc') return revoked ? errResult('unauthorized', 401) : okResult({ sessions: [] })
+      if (url === '/api/login') { revoked = false; return jsonResponse({ state: 'approved' }) }
+      return okResult(null)
+    })
+    await expect(transport.rpc('session.list')).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(transport.signedOut()).toBe(true)
+    // A signed-in-again sign-in clears the latch, so the device is usable.
+    await transport.login({ username: 'owner', password: 'secret', name: 'Pixel 8', kind: 'phone', platform: 'Android' })
+    expect(transport.signedOut()).toBe(false)
+    await expect(transport.rpc('session.list')).resolves.toEqual({ sessions: [] })
   })
 })
 

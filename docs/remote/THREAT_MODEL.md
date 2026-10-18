@@ -63,7 +63,7 @@ Every control below exists because of that sentence, and the product says it in 
 | T6 | Snapshot leaks secrets (env values, instructions, absolute paths) | `redactSnapshotForRemote` strips env values and instruction text, shortens paths, drops keys named like secrets | New fields added later; the redaction test uses an allowlist-minded fixture and must be extended with each new snapshot field. |
 | T7 | Attachment used to read arbitrary files | Attachments are refused from remote in v1 | None while refused. |
 | T8 | *Superseded:* device key theft from a browser | No device keys; the cookie replaces them (see T32) | — |
-| T9 | Malicious web page drives the PWA | Cookie is `SameSite=Strict` and `HttpOnly`; `Origin` must equal the serve origin on every `/api/*` request and WebSocket upgrade; CSP `connect-src 'self'`, `frame-ancestors 'none'` | Browser vulnerabilities. |
+| T9 | Malicious web page drives the PWA | Cookie is `SameSite=Strict` and `HttpOnly`; a state-changing request and the WebSocket upgrade must carry an `Origin` equal to an accepted origin, and a safe `GET`/`HEAD` that carries one must match (a browser omits it same-origin); `Sec-Fetch-Site: cross-site`/`same-site` is refused; CSP `connect-src 'self'`, `frame-ancestors 'none'` | Browser vulnerabilities. |
 | T10 | *Superseded:* replay of recorded Noise frames | TLS inside WireGuard; a recorded request is useless without the cookie | — |
 | T11 | Denial of service on the host | Per-device rate limits; 256 KiB body cap; one event socket per device; reachable only from the tailnet | A paired device can still cost bandwidth until removed. |
 | T12 | Prompt injection makes a bot exfiltrate through Remote | Remote adds no new tool or egress; the bot's capabilities and approval mode are unchanged | Existing agent risk, unchanged. |
@@ -149,8 +149,9 @@ Source: [REVIEW_NOTES.md](REVIEW_NOTES.md). These rows continue the table in sec
       device.
 - [ ] Pairing offer locked by the first correct code; later submissions refused; owner approval
       implemented.
-- [ ] Cookie attributes, `Origin` check and Tailscale-login check tested, including a request
-      with a forged login header and no cookie.
+- [ ] Cookie attributes, the `Origin`/`Sec-Fetch-Site` check and the Tailscale-login check tested,
+      including a browser-like `GET` with no `Origin`, a cross-site `GET`/`POST` refused, and a
+      request with a forged login header and no cookie.
 - [ ] Tests prove the gateway never issues `tailscale serve reset` or `tailscale funnel`, and
       that it refuses to start when Funnel is on.
 - [ ] The listener binds `127.0.0.1` only (test).
@@ -178,7 +179,7 @@ mobile data or an outside attacker.
 | N3 | Flooding unauthenticated routes (`/api/login`, `/api/pair`, `/api/ping`, static files) | Per-source token bucket, 30 requests / 10 s with burst 60, before any work | A botnet spread across many addresses; the daemon is not a hardened public web server |
 | N4 | Man in the middle on first contact | TLS is mandatory (plain HTTP refused); the browser warns once because the certificate is self-made, and Settings › Remote shows the SHA-256 fingerprint to compare | An owner who clicks through the warning without comparing the fingerprint on a hostile network |
 | N5 | Theft of the TLS key | The key lives in the data folder with user-only access (`icacls /inheritance:r /grant:r <user>:F` on Windows, mode 0600 elsewhere); "New certificate" replaces it and changes the fingerprint | Malware running as the user can read it, and the cookie store too |
-| N6 | Cross-site use of a device cookie, or a hostile name pointed at the host (DNS rebinding) | `Origin` and `Host` must name the certificate's own addresses; a Tailscale origin is refused under Native and the reverse; cookies keep `Secure`, `HttpOnly`, `SameSite=Strict` | None known beyond §9 |
+| N6 | Cross-site use of a device cookie, or a hostile name pointed at the host (DNS rebinding) | `Origin` (when sent; a safe `GET` may omit it) and `Host` must name the certificate's own addresses; a Tailscale origin is refused under Native and the reverse; cookies keep `Secure`, `HttpOnly`, `SameSite=Strict` | None known beyond §9 |
 | N7 | UPnP opens more than Bitbots asked for, or leaves a mapping behind | Only with the owner's consent; maps only `remote.nativePort` over TCP; removed on disable and at daemon shutdown; the lease is renewed while on | A crash between mapping and removal leaves the forward until the lease ends; a router with a broken UPnP stack |
 | N8 | Firewall changes without the owner knowing | One inbound rule, `Bitbots-Remote`, for the Native port only, added and removed only through an elevated prompt the owner accepts; no console window | The owner widens the rule by hand |
 | N9 | Bitbots contacting third parties (IP echo, relays, DNS) | None: the external address comes from the router (UPnP) or the owner; carrier-NAT and private addresses are detected locally; the self-test is the owner opening `/api/ping` from a phone | — |

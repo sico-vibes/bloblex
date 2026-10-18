@@ -424,18 +424,13 @@ fn normalize_target(target: &str) -> String {
     target.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
-/// Whether `tailscale serve --help` documents the `off` form. The gateway
-/// refuses to guess: if the installed CLI does not document it, turning Remote
-/// off reports an error instead of silently leaving the handler in place.
-pub fn help_documents_off(cli: &dyn TailscaleCli) -> Result<bool, String> {
-    let output = cli.run(&["serve", "--help"])?;
-    let text = format!("{}\n{}", output.stdout, output.stderr);
-    // The `off` token as its own word (`[off]`, `<target> [off]`), not a
-    // substring of an unrelated word.
-    let documented = text
-        .split(|character: char| !character.is_alphanumeric() && character != '[' && character != ']')
-        .any(|token| token == "off" || token == "[off]");
-    Ok(documented)
+/// Whether a failed `tailscale serve --https=<port> off` really means there was
+/// nothing to remove. The installed CLI answers
+/// `error: failed to remove web serve: handler does not exist` when the port
+/// carries no handler, which is the outcome we wanted, not a failure.
+pub fn serve_already_absent(output: &CliOutput) -> bool {
+    let text = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
+    text.contains("handler does not exist") || text.contains("no serve config")
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +448,10 @@ pub fn serve_on_args(serve_port: u16, remote_port: u16) -> Vec<String> {
 
 /// `tailscale serve --https=<port> off` — removes only our handler on that
 /// port. Never `serve reset`, which would remove the user's other handlers.
+///
+/// Tailscale 1.104 accepts this form even though `serve --help` no longer lists
+/// the `off` token (it lists only `status`, `reset`, `drain`, `clear`, ...), so
+/// the gateway runs it and reads the result rather than gating on the help text.
 pub fn serve_off_args(serve_port: u16) -> Vec<String> {
     vec!["serve".to_string(), format!("--https={serve_port}"), "off".to_string()]
 }
@@ -691,7 +690,6 @@ pub(crate) mod tests {
             }
             other => panic!("{other:?}"),
         }
-        assert!(help_documents_off(&fake).unwrap());
         for call in fake.calls() {
             let argv: Vec<&str> = call.iter().map(String::as_str).collect();
             assert!(!is_forbidden_argv(&argv), "{argv:?}");
@@ -720,9 +718,42 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn help_without_off_is_not_treated_as_supported() {
+    fn a_missing_handler_is_not_a_removal_failure() {
+        // The installed CLI (1.104.1) answers this when the port is free; the
+        // off command was still accepted, so turning Remote off is complete.
+        let absent = CliOutput {
+            success: false,
+            stdout: String::new(),
+            stderr: "error: failed to remove web serve: handler does not exist".to_string(),
+        };
+        assert!(serve_already_absent(&absent));
+        // A genuine refusal still warns.
+        let refused = CliOutput {
+            success: false,
+            stdout: String::new(),
+            stderr: "error: access denied".to_string(),
+        };
+        assert!(!serve_already_absent(&refused));
+        // A success is never treated as "already absent".
+        assert!(!serve_already_absent(&CliOutput {
+            success: true,
+            stdout: String::new(),
+            stderr: String::new(),
+        }));
+    }
+
+    #[test]
+    fn help_without_the_off_token_does_not_stop_removal() {
+        // Tailscale 1.104 lists only status/reset/drain/clear in `serve --help`
+        // yet still accepts `--https=<port> off`; the removal must not be gated
+        // on the help text. The exact help output of the installed CLI:
         let fake = FakeCli::new(RUNNING_STATUS, EMPTY_SERVE);
-        *fake.help_text.lock().unwrap() = "Usage: tailscale serve [flags] <target>".to_string();
-        assert!(!help_documents_off(&fake).unwrap());
+        *fake.help_text.lock().unwrap() =
+            "USAGE\n  tailscale serve <target>\n  tailscale serve status [--json]\n  tailscale serve reset\n".to_string();
+        // The off argv is still what Bitbots issues and the fake accepts.
+        let off_args = serve_off_args(443);
+        assert_eq!(off_args, vec!["serve", "--https=443", "off"]);
+        assert!(!is_forbidden_argv(&argv(&off_args)));
+        assert!(run_checked(&fake, &off_args).unwrap().success);
     }
 }

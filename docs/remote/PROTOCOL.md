@@ -108,6 +108,7 @@ The gateway adds its own error codes, used only on the remote path:
 
 | Code | Meaning |
 |---|---|
+| `forbidden_origin` | §4.1 step 1: the request did not come from an accepted origin for the active method. |
 | `forbidden_remote` | The method is not on the remote allowlist, or it is `never` remote. |
 | `tier_required` | The call is allowed at a higher tier than the device holds. |
 | `approvals_disabled` | Approvals from remote are switched off on the host. |
@@ -137,9 +138,19 @@ which **device** may act, and at which tier. Every rule in this section runs on 
 
 In this order:
 
-1. **Origin.** The `Origin` header must be present and equal the serve origin (§2.1). A missing
-   or different `Origin` is refused with HTTP 403 before anything else runs. This applies to the
-   WebSocket upgrade too.
+1. **Origin.** The request is checked against the active method's origin set (§2.1, §13).
+   - A **safe method** (`GET`, `HEAD`) may omit `Origin`: a browser does not send it on a
+     same-origin `GET`/`HEAD` (Fetch standard — only CORS requests and non-`GET`/`HEAD`
+     same-origin requests carry it). When `Origin` is present it must equal an accepted origin.
+     When `Sec-Fetch-Site` is present it must be `same-origin` or `none`; `cross-site` or
+     `same-site` is refused.
+   - A **state-changing method** (`POST` and anything else) must carry an accepted `Origin`, and
+     a `Sec-Fetch-Site` of `cross-site` or `same-site` is refused.
+   - The **WebSocket upgrade** (`/api/events`) must carry an accepted `Origin`, because every
+     browser sends it on the handshake.
+
+   A request that fails this check is refused with HTTP 403, code `forbidden_origin`, before
+   anything else runs.
 2. **Cookie.** The device cookie must be present. The gateway hashes it with SHA-256 and looks up
    `remote_devices.token_sha256`. No match: HTTP 401, `unauthorized`. A revoked or expired
    device: HTTP 401, `device_revoked`. (`/api/pair` is the only route that runs without it.)
@@ -573,8 +584,11 @@ rcgen, SANs: the hostname, interface addresses, loopback and the known external 
 fingerprint is in `remote.status.native.fingerprint`. Plain HTTP connections are dropped. The
 Tailscale listener stays loopback-only and is not running at the same time.
 
-**Checks.** As §4.1, except that `Origin` and `Host` must name one of the certificate's own
-addresses on the Native port; an origin that belongs to the other method is refused.
+**Checks.** As §4.1, except that `Origin`, when present, and `Host` must name one of the
+certificate's own addresses on the Native port; an origin that belongs to the other method is
+refused. A safe `GET`/`HEAD` may omit `Origin` (the browser does not send it same-origin), but
+the `Host` is still required on every `/api/*` request. `/api/ping` is the one route outside the
+`Origin` check, so the owner can open it from an address bar.
 
 **Routes added or changed:**
 

@@ -16,7 +16,7 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         ConnectInfo, Extension, Request, State,
     },
-    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -101,14 +101,36 @@ pub fn router(state: WebState) -> Router {
         .with_state(state)
 }
 
-/// Every `/api/*` request must carry the serve origin. The WebSocket upgrade is
-/// an `/api/*` request, so it is checked here too (PROTOCOL §4.1 step 1). On
-/// Native the `Host` must also be one of the certificate's authorities.
+/// Every `/api/*` request is checked against the active method's origin set
+/// (PROTOCOL §4.1 step 1). On Native the `Host` must also name one of the
+/// certificate's authorities.
+///
+/// **Browsers do not send `Origin` on a same-origin `GET`/`HEAD`** (Fetch
+/// standard: only CORS requests and non-GET/HEAD same-origin requests carry it).
+/// So a safe method may omit `Origin`; when it is present it must match, and a
+/// `Sec-Fetch-Site` that names another site is refused. The WebSocket handshake
+/// and every state-changing method still require a matching `Origin`, because a
+/// browser always sends it there.
 async fn require_origin(State(state): State<WebState>, request: Request, next: Next) -> Response {
+    let websocket = is_websocket_upgrade(request.headers());
+    let safe = matches!(*request.method(), Method::GET | Method::HEAD);
     let origin = request.headers().get(header::ORIGIN).and_then(|value| value.to_str().ok()).map(str::to_owned);
+    let fetch_site = request
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_ascii_lowercase);
     let accepted = state.remote.accepted_origins(&state.daemon);
     let origin_ok = origin.as_deref().is_some_and(|origin| accepted.iter().any(|candidate| candidate == origin));
-    if !origin_ok {
+    let cross_site = matches!(fetch_site.as_deref(), Some("cross-site") | Some("same-site"));
+    let refused = if safe && !websocket {
+        // A missing `Origin` is normal here; a present one must still match.
+        (origin.is_some() && !origin_ok) || cross_site
+    } else {
+        // State-changing methods and the WebSocket handshake always carry it.
+        !origin_ok || cross_site
+    };
+    if refused {
         return forbidden_origin();
     }
     if state.remote.active_method(&state.daemon) == super::METHOD_NATIVE {
@@ -122,10 +144,19 @@ async fn require_origin(State(state): State<WebState>, request: Request, next: N
     next.run(request).await
 }
 
+/// The events socket is a WebSocket upgrade; browsers always send `Origin` on
+/// the handshake, so it keeps the stricter rule.
+fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
+}
+
 fn forbidden_origin() -> Response {
     (
         StatusCode::FORBIDDEN,
-        Json(remote_error("", "unauthorized", "This request did not come from this computer's Bitbots Remote address.")),
+        Json(remote_error("", "forbidden_origin", "This request did not come from this computer's Bitbots Remote address.")),
     )
         .into_response()
 }

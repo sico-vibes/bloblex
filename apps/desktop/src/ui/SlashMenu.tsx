@@ -1,8 +1,5 @@
 import { Fragment } from 'react'
-import {
-  Activity, BookOpen, BookmarkPlus, CheckSquare, ClipboardList, CircleHelp, Compass,
-  FileDown, Gauge, MessageSquarePlus, Pencil, Sparkles, Users, Wand2, type LucideIcon,
-} from 'lucide-react'
+import { Activity, BookOpen, BookmarkPlus, CheckSquare, ClipboardList, CircleHelp, Compass, FileDown, Gauge, MessageSquarePlus, Pencil, Users, type LucideIcon, MessagesSquare, Cpu } from 'lucide-react'
 import { X } from 'lucide-react'
 import type { SlashCommand, SlashItem } from './slashCommands'
 
@@ -10,12 +7,12 @@ import type { SlashCommand, SlashItem } from './slashCommands'
 const ICONS: Record<string, LucideIcon> = {
   plan: ClipboardList,
   new: MessageSquarePlus,
-  model: Wand2,
+  model: Cpu,
   effort: Gauge,
   rename: Pencil,
   export: FileDown,
   help: CircleHelp,
-  interview: Sparkles,
+  interview: MessagesSquare,
   onboard: Compass,
   team: Users,
   status: Activity,

@@ -1,6 +1,6 @@
 import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, SlidersHorizontal, Sparkles, X, Palette, Search, Smartphone } from 'lucide-react'
+import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone, BriefcaseBusiness } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
 import { usePlatform } from '../transport/platform'
 import type { Agent, Snapshot } from '../types'
@@ -48,7 +48,7 @@ const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHori
   { id: 'Appearance', label: 'Appearance', icon: Palette },
   { id: 'Remote', label: 'Remote', icon: Smartphone },
   { id: 'Agents', label: 'Agents', icon: Bot },
-  { id: 'Manager', label: 'Manager', icon: Sparkles },
+  { id: 'Manager', label: 'Manager', icon: BriefcaseBusiness },
   { id: 'Memory', label: 'Memory', icon: Brain },
   { id: 'Skills', label: 'Skills', icon: Puzzle },
   { id: 'Speech', label: 'Speech', icon: Mic },

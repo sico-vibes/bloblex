@@ -1,3 +1,4 @@
+import { Pin } from 'lucide-react'
 // The Memory group on the bot page (FIX22 B9): this bot's own notes, read-only,
 // and a one-line activity summary from the conversations already loaded. The
 // notes come from the daemon's existing `memory.list` (see MemoryPage.tsx); the
@@ -102,7 +103,7 @@ export function BotMemoryGroup({ agentId, enabled, sessions, onOpenMemory }: {
         {notes !== null && notes.length > 0 && <ul className="memory-list bot-memory-list">
           {notes.map((note) => <li key={note.id} className="memory-row">
             <div className="memory-main">
-              <strong className="memory-title">{note.pinned && <span className="memory-pin" title="Pinned">★</span>}{note.title}</strong>
+              <strong className="memory-title">{note.pinned && <span className="memory-pin" title="Pinned"><Pin size={12} aria-hidden="true" /></span>}{note.title}</strong>
               <p className="memory-body">{note.body}</p>
             </div>
           </li>)}

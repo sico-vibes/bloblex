@@ -3,7 +3,7 @@
 // stay when the Manager's model changes. The Manager can only propose changes
 // to a locked fact or to the playbook; edits made here apply at once.
 import { useCallback, useEffect, useState } from 'react'
-import { Lock, LockOpen, Pencil, Plus, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
+import { Lock, LockOpen, Pencil, Plus, RotateCcw, Trash2, BriefcaseBusiness } from 'lucide-react'
 import type { Agent, ManagerFact, PlaybookVersion } from '../types'
 import { listenForDaemonEvents, rpc } from '../tauri'
 import { SettingsGroup, SettingsRow } from './SettingsParts'
@@ -115,7 +115,7 @@ export function ManagerPage({ manager, connected = true, onOpenManager }: { mana
 
     <SettingsGroup title="Manager">
       {manager
-        ? <SettingsRow label={<span className="manager-identity"><Sparkles size={14} aria-hidden="true" />{manager.name}</span>} hint={`${manager.model ? `${manager.model} · ` : ''}Name, look, model and personality are set on its page. Changing the model starts a fresh conversation; it keeps everything below.`}>
+        ? <SettingsRow label={<span className="manager-identity"><BriefcaseBusiness size={14} aria-hidden="true" />{manager.name}</span>} hint={`${manager.model ? `${manager.model} · ` : ''}Name, look, model and personality are set on its page. Changing the model starts a fresh conversation; it keeps everything below.`}>
           <button type="button" className="secondary-button small" onClick={() => onOpenManager(manager.id)}>Open</button>
         </SettingsRow>
         : <SettingsRow label="No Manager yet" hint="Set one up from the card at the top of the sidebar. It plans the work with you and asks before it creates anything." />}

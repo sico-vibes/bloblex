@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, BarChart3, Compass, FolderOpen, Globe, Keyboard, MessageSquare, MessageSquarePlus, Palette, PanelRight, Search, Settings2, Smartphone, Sparkles, UserPlus, type LucideIcon } from 'lucide-react'
+import { Bot, BarChart3, Compass, FolderOpen, Globe, Keyboard, MessageSquare, MessageSquarePlus, Palette, PanelRight, Search, Settings2, Smartphone, UserPlus, type LucideIcon, Newspaper } from 'lucide-react'
 import { useDialogAccessibility } from './dialogFocus'
 import { categoryOf, groupQuickSwitcherResults, rankQuickSwitcherItems, type QuickSwitcherIcon, type QuickSwitcherItem } from './quickSwitcherModel'
 import { useEntityNoun } from './vocabulary'
@@ -19,7 +19,7 @@ const ICONS: Record<QuickSwitcherIcon, LucideIcon> = {
   tour: Compass,
   shortcuts: Keyboard,
   details: PanelRight,
-  'whats-new': Sparkles,
+  'whats-new': Newspaper,
 }
 
 function ItemIcon({ item }: { item: QuickSwitcherItem }) {

@@ -3,7 +3,7 @@
 // remove notes, and write a few lines about themselves.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RowCopy } from './SettingsParts'
-import { Check, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Check, Pencil, Plus, Trash2, Pin } from 'lucide-react'
 import type { Agent, MemoryRecord, Project } from '../types'
 import { isMemoryRecord } from '../types'
 import { rpc } from '../tauri'
@@ -88,7 +88,7 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
 
   const row = (record: MemoryRecord) => <li key={record.id} className={`memory-row${record.reviewed ? '' : ' unreviewed'}`}>
     <div className="memory-main">
-      <strong className="memory-title">{record.pinned && <span className="memory-pin" title="Pinned">★</span>}{record.title}</strong>
+      <strong className="memory-title">{record.pinned && <span className="memory-pin" title="Pinned"><Pin size={12} aria-hidden="true" /></span>}{record.title}</strong>
       <span className="memory-meta">
         {KINDS.find((kind) => kind.value === record.kind)?.label ?? record.kind} · {scopeLabel(record, agents, projects)} · {record.origin === 'agent' ? `Saved by a ${noun}` : 'Written by you'}
       </span>

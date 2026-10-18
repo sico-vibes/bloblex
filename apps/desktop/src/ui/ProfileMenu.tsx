@@ -1,7 +1,7 @@
 import { rpc } from '../tauri'
 import { usePlatform } from '../transport/platform'
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
-import { ArchiveRestore, CalendarClock, Sparkles, ChevronsUpDown, Compass, Gauge, LogOut, Pencil, Settings2, Keyboard, Smartphone } from 'lucide-react'
+import { ArchiveRestore, CalendarClock, ChevronsUpDown, Compass, Gauge, LogOut, Pencil, Settings2, Keyboard, Smartphone, Newspaper } from 'lucide-react'
 import { startTour } from './tour/startTour'
 import { useRemoteStatus } from '../remote/useRemote'
 import type { ConnectionState } from '../types'
@@ -141,7 +141,7 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
       {remoteAvailable === true && onRemote && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onRemote)}><Smartphone size={15} />Remote</button>}
       {onBackup && <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onBackup)}><ArchiveRestore size={15} />Backup</button>}
       <span className="menu-separator" role="separator" />
-      {onWhatsNew && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onWhatsNew)}><Sparkles size={15} />What’s new</button>}
+      {onWhatsNew && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onWhatsNew)}><Newspaper size={15} />What’s new</button>}
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(startTour)}><Compass size={15} />Take the tour</button>
       <span className="menu-separator" role="separator" />
       <button type="button" role="menuitem" className="menu-item" onClick={() => run(() => { setDraft(name); setEditing(true) })}><Pencil size={15} />{name ? 'Edit name' : 'Add your name'}</button>

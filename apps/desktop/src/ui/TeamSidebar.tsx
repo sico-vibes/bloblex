@@ -1,7 +1,7 @@
 // Project-first sidebar: projects group blobs; each blob is one ongoing
 // conversation. Casual blobs (no project) live under "Unassigned".
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Archive, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Star, Trash2, Copy as Duplicate, Download } from 'lucide-react'
+import { Archive, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Trash2, Copy as Duplicate, Download, BriefcaseBusiness } from 'lucide-react'
 import type { Agent, Project, Runtime, Session } from '../types'
 import { agentLook } from '../blob/look'
 import { RuntimeMark } from './providerBrand'
@@ -283,7 +283,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       }}>
       <span className="team-row-avatar">
         <BlobCanvas color={agentColorHex(agent.color)} size={50} mood={status.mood} look={agentLook(agent)} label={agent.name} track={selected} />
-        {isManager(agent) && <span className="leader-badge" title="Manager" aria-hidden="true"><Star size={8} strokeWidth={0} fill="currentColor" /></span>}
+        {isManager(agent) && <span className="leader-badge" title="Manager" aria-hidden="true"><BriefcaseBusiness size={8} strokeWidth={2.6} /></span>}
       </span>
       <span className="bot-row-copy">
         <span className="bot-row-line">

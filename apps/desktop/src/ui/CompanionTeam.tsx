@@ -3,7 +3,7 @@
 // to a face and the line it is working on. Same projects, roles, leader and
 // side conversations as the main window.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeftRight, ArrowUpRight, Check, ClipboardList, Copy, LayoutGrid, Pin, PinOff, Terminal, X } from 'lucide-react'
+import { ArrowUpRight, Check, ClipboardList, Copy, LayoutGrid, Pin, PinOff, Terminal, X, ArrowLeftRight, BriefcaseBusiness } from 'lucide-react'
 import type { Agent, ChatMessage, Project, Runtime, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -93,7 +93,7 @@ export function CompanionPeers({ agents, projects, sessions, runtimes, connected
           const state = blobState(agent, sessions, runtimes, connected)
           const line = peerLine(agent, sessions, state)
           return <button key={agent.id} type="button" className={`peer state-${state}`} style={{ ['--peer' as string]: agentColorHex(agent.color), animationDelay: `${index * 45}ms` }} aria-keyshortcuts={`Control+${index + 1}${state === 'waiting' ? ' N' : ''}`} aria-label={`${agent.name}${agent.leader ? ', team leader' : ''}: ${line}`} title={`${agent.name}: ${line}`} onClick={() => onSelect(agent)}>
-            <span className="peer-face"><Face agent={agent} size={22} mood={state === 'offline' ? 'offline' : 'idle'} />{agent.leader && <i className="peer-leader" aria-hidden="true">★</i>}</span>
+            <span className="peer-face"><Face agent={agent} size={22} mood={state === 'offline' ? 'offline' : 'idle'} />{agent.leader && <i className="peer-leader" aria-hidden="true"><BriefcaseBusiness size={8} strokeWidth={2.6} /></i>}</span>
             {/* One line per chip so the name has room; what it is doing is in the tooltip and the label. */}
             <span className="peer-copy"><b className={state === 'working' ? 'shimmer' : undefined}>{agent.name}</b></span>
             {state !== 'idle' && state !== 'offline' && <i className={`peer-state-dot ${state}`} aria-hidden="true" />}

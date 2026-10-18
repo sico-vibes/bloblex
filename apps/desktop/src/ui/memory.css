@@ -14,7 +14,7 @@
 .memory-row.unreviewed { border-color: var(--warning-line); }
 .memory-main { min-width: 0; flex: 1; display: grid; gap: 3px; }
 .memory-title { font-size: var(--fs-md, 14px); font-weight: 500; overflow-wrap: anywhere; }
-.memory-pin { margin-right: 6px; color: var(--warning); }
+.memory-pin { margin-right: 6px; display: inline-flex; vertical-align: -1px; color: var(--warning); }
 .memory-meta { color: var(--text-3); font-size: var(--fs-xs); }
 .memory-body { margin: 2px 0 0; color: var(--text-2); font-size: var(--fs-sm); line-height: 1.5; display: -webkit-box; overflow: hidden; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: pre-wrap; overflow-wrap: anywhere; }
 .memory-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }

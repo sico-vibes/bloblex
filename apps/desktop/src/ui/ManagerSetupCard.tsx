@@ -1,7 +1,7 @@
 // For people who used Bitbots before the Manager existed: a one-time card in
 // the sidebar that sets it up. The old team leader stays an ordinary bot.
 import { useState } from 'react'
-import { Sparkles, X } from 'lucide-react'
+import { X, BriefcaseBusiness } from 'lucide-react'
 import type { Agent, Runtime } from '../types'
 import { createDraft, type AgentDraft } from './agentForm'
 import { providerBrand } from './providerBrand'
@@ -36,7 +36,7 @@ export function ManagerSetupCard({ runtimes, disabled, onCreate }: {
   }
   return <section className="manager-setup" aria-label="Set up your Manager">
     <header>
-      <span className="manager-setup-icon" aria-hidden="true"><Sparkles size={14} /></span>
+      <span className="manager-setup-icon" aria-hidden="true"><BriefcaseBusiness size={14} /></span>
       <strong>Meet your Manager</strong>
       <button type="button" className="queue-icon" aria-label="Later" title="Later" onClick={later}><X size={13} /></button>
     </header>

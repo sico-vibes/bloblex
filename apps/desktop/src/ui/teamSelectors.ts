@@ -33,6 +33,18 @@ export function sessionIsBusy(session: Session | null | undefined) {
   return BUSY.includes(String(session?.state ?? '').toLowerCase())
 }
 
+/**
+ * FIX39 item 18: the conversation's last message is a delegation notice saying
+ * the delivery is queued behind the global limit. A delegated conversation in
+ * this state must not render the bot's empty "Ready when you are" screen.
+ */
+export function isWaitingDelegation(messages: readonly ChatMessage[] | undefined): boolean {
+  const last = messages?.length ? messages[messages.length - 1] : undefined
+  if (String(last?.role ?? '') !== 'notice') return false
+  const meta = last?.meta
+  return meta?.kind === 'delegation' && (meta as Record<string, unknown>).state === 'queued'
+}
+
 function messageText(message: ChatMessage) {
   const raw = typeof message.content === 'string' ? message.content : typeof message.text === 'string' ? message.text : ''
   return raw.replace(/```[\s\S]*?```/g, ' ').replace(/[*_`#>]/g, '').replace(/\s+/g, ' ').trim()

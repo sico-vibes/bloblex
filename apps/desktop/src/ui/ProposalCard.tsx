@@ -28,6 +28,20 @@ export function folderNameFor(name: string): string {
   return name.trim().replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-').replace(/[-. ]+$/, '') || 'New project'
 }
 
+/**
+ * FIX39 P6 audit finding 4: a task's named project is matched by the daemon by
+ * id or by a trimmed, case-insensitive name. The card must resolve it the same
+ * way, or it shows "—" while the delegated bot still runs and writes in that
+ * project's folder. Undefined means the name matches nothing (the daemon will
+ * refuse it).
+ */
+export function projectForDraft(projects: readonly Project[], name: string | undefined): Project | undefined {
+  const wanted = (name ?? '').trim()
+  if (!wanted) return undefined
+  const lower = wanted.toLowerCase()
+  return projects.find((project) => project.id === wanted || project.name.trim().toLowerCase() === lower)
+}
+
 /** The full path of a new project folder inside the chosen parent. */
 export function joinFolder(parent: string, name: string): string {
   const separator = parent.includes('\\') ? '\\' : '/'
@@ -61,6 +75,10 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
   const set = (key: string, value: unknown) => setDraft((current) => ({ ...current, [key]: value }))
   const folder = (draft.folder ?? {}) as JsonRecord
   const needsFolder = kind === 'project' && folder.mode === 'new' && !text(folder.path)
+  // FIX39 P6 audit finding 4: the task's folder line uses the same match as the
+  // daemon (id or trimmed, case-insensitive name), so the card never understates
+  // where an approved task may write.
+  const taskProject = kind === 'task' ? projectForDraft(projects, text(draft.project)) : undefined
   const decide = async (decision: Decision) => {
     setBusy(true)
     try {
@@ -122,6 +140,9 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
           <div className="proposal-field"><span>For</span><p className="proposal-value">{text(draft.bot)}</p></div>
           {text(draft.project) && <div className="proposal-field"><span>Project</span><p className="proposal-value">{text(draft.project)}</p></div>}
         </div>
+        {/* FIX39 risk 7: a delegated task runs in the project's folder, which
+            widens where its Auto mode may write. Show that folder on the card. */}
+        {text(draft.project) && <div className="proposal-field"><span>Folder it runs in</span><p className="proposal-value mono">{taskProject ? taskProject.path || '—' : 'Project not found'}</p></div>}
         {field('brief', 'The task', { multiline: true, max: 8000 })}
       </>}
       {kind === 'playbook' && <>

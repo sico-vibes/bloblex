@@ -62,6 +62,7 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'Experimental', group: 'Experimental', label: 'Approval badge', keywords: 'taskbar tray windows waiting' },
   { page: 'Experimental', group: 'Experimental', label: 'Model and effort under the name', keywords: 'sidebar subtitle model effort' },
   { page: 'Experimental', group: 'Experimental', label: 'Lock a bot', keywords: 'lock unlock freeze settings badge' },
+  { page: 'General', group: 'Work', label: 'Bots working at once', keywords: 'concurrency parallel limit queue waiting slots' },
   { page: 'General', group: 'Power', label: 'Keep this computer awake', keywords: 'sleep power idle' },
   { page: 'General', group: 'Notifications', label: 'Notifications', keywords: 'alerts toast approval' },
   { page: 'Agents', group: 'Approvals', label: 'Default approval mode', keywords: 'permissions ask auto bypass' },

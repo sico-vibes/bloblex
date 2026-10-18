@@ -1,8 +1,9 @@
 // Project-first sidebar: projects group blobs; each blob is one ongoing
 // conversation. Casual blobs (no project) live under "Unassigned".
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Archive, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, Lock, LockOpen, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Trash2, Copy as Duplicate, Download, Star } from 'lucide-react'
+import { Archive, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, Lock, LockOpen, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Tag, Trash2, X, Copy as Duplicate, Download, Star } from 'lucide-react'
 import type { Agent, Project, Runtime, Session } from '../types'
+import { rpc } from '../tauri'
 import { agentLook } from '../blob/look'
 import { RuntimeMark } from './providerBrand'
 import { BlobCanvas } from '../blob/BlobCanvas'
@@ -11,6 +12,7 @@ import { deriveCompanionStatus } from './companionStatus'
 import { RuntimeProblemMarker, runtimeProblem } from './RuntimeProblemMarker'
 import { shortTime } from './rosterSelectors'
 import { conversationPreview, groupAgentsByProject, isManager, mainSessionFor, managerOf, sessionIsBusy, sidebarSubtitle } from './teamSelectors'
+import { friendlyErrorText } from './errorCopy'
 import { readCachedCatalogModels, useCatalogVersion } from './catalogCache'
 import { useEntityNoun } from './vocabulary'
 
@@ -74,6 +76,71 @@ function MenuButton({ item, open, onOpen, onClose }: { item: Exclude<MenuItem, '
   </>
 }
 
+/** FIX39 item 21: what a tag editor is opened for. */
+export type TagTarget = { kind: 'project' | 'bot'; id: string; name: string; tags: string[] }
+
+/**
+ * The small tag editor behind a project's or a bot's right-click menu. Tags are
+ * the routing vocabulary the Manager matches a job to; the owner edits them here
+ * (`project.update` / `agent.team.update`), and the Manager sets them through its
+ * own tools. Self-contained: it saves with `rpc` and lets the usual
+ * `project.changed`/`agent.changed` events update the sidebar.
+ */
+export function TagEditor({ target, onClose }: { target: TagTarget; onClose: () => void }) {
+  const [tags, setTags] = useState<string[]>(target.tags)
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { inputRef.current?.focus() }, [])
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); onClose() } }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+  const add = () => {
+    const tag = draft.trim().toLocaleLowerCase()
+    if (!tag) return
+    if (tag.length > 24) { setError('A tag can be at most 24 characters.'); return }
+    if (!tags.includes(tag) && tags.length >= 8) { setError('At most 8 tags.'); return }
+    if (!tags.includes(tag)) setTags([...tags, tag])
+    setDraft('')
+    setError(null)
+  }
+  const save = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      if (target.kind === 'project') await rpc('project.update', { projectId: target.id, tags })
+      else await rpc('agent.team.update', { agentId: target.id, tags })
+      onClose()
+    } catch (reason) {
+      setError(friendlyErrorText(typeof reason === 'string' ? reason : reason instanceof Error ? reason.message : null))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <div className="tag-editor-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="tag-editor" role="dialog" aria-modal="true" aria-label={`Tags for ${target.name}`}>
+      <header className="tag-editor-head"><strong>Tags for {target.name}</strong><button type="button" className="icon-button tiny" aria-label="Close" onClick={onClose}><X size={15} /></button></header>
+      <p className="tag-editor-hint">Tags help the Manager pick the right bot and project for a job. Up to 8, one or two words each.</p>
+      <div className="tag-chips">
+        {tags.map((tag) => <span key={tag} className="tag-chip">{tag}<button type="button" aria-label={`Remove ${tag}`} onClick={() => setTags((current) => current.filter((item) => item !== tag))}><X size={11} /></button></span>)}
+        {tags.length === 0 && <span className="tag-empty">No tags yet.</span>}
+      </div>
+      <div className="tag-editor-add">
+        <input ref={inputRef} value={draft} maxLength={24} aria-label="New tag" placeholder="Add a tag" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); add() } }} />
+        <button type="button" className="secondary-button small" onClick={add}>Add</button>
+      </div>
+      {error && <p className="tag-editor-error" role="alert">{error}</p>}
+      <footer className="tag-editor-actions">
+        <button type="button" className="ghost-button small" onClick={onClose}>Cancel</button>
+        <button type="button" className="primary-button small" disabled={busy} onClick={() => void save()}>Save tags</button>
+      </footer>
+    </section>
+  </div>
+}
+
 export type TeamSidebarActions = {
   onSelect: (agent: Agent) => void
   onCreate: (projectId: string | null) => void
@@ -133,6 +200,8 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   useCatalogVersion()
   const [showHidden, setShowHidden] = useState(false)
   const [menu, setMenu] = useState<{ kind: 'blob'; agent: Agent; x: number; y: number } | { kind: 'project'; project: Project; x: number; y: number } | { kind: 'move'; agent: Agent; x: number; y: number } | null>(null)
+  // FIX39 item 21: the tag editor is opened from a project's or a bot's menu.
+  const [tagTarget, setTagTarget] = useState<TagTarget | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
   const [dropHint, setDropHint] = useState<DropHint | null>(null)
   const [announcement, setAnnouncement] = useState('')
@@ -177,6 +246,8 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       { label: `Rename ${noun}`, icon: <Pencil size={15} />, disabled: locked, onSelect: () => actions.onRename(agent) },
       { label: `Edit ${noun}`, icon: <Settings2 size={15} />, disabled: locked, onSelect: () => actions.onEdit(agent) },
       { label: 'Duplicate', icon: <Duplicate size={15} />, onSelect: () => actions.onDuplicate(agent) },
+      // FIX39 item 21: tags are a settings change, so a locked bot refuses them.
+      { label: 'Tags…', icon: <Tag size={15} />, disabled: locked, onSelect: () => setTagTarget({ kind: 'bot', id: agent.id, name: agent.name, tags: [...(agent.tags ?? [])] }) },
       { label: `Export ${noun}…`, icon: <Download size={15} />, onSelect: () => actions.onExportBlob(agent) },
       { label: 'Copy conversation ID', icon: <Copy size={15} />, disabled: !session, onSelect: () => actions.onCopyConversationId(agent, session) },
       'separator',
@@ -191,6 +262,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   const projectMenu = (project: Project): MenuItem[] => [
     { label: `New ${noun} here`, icon: <Plus size={15} />, onSelect: () => actions.onCreate(project.id) },
     { label: 'Rename project', icon: <Pencil size={15} />, onSelect: () => actions.onRenameProject(project) },
+    { label: 'Tags…', icon: <Tag size={15} />, onSelect: () => setTagTarget({ kind: 'project', id: project.id, name: project.name, tags: [...(project.tags ?? [])] }) },
     { label: 'Change folder…', icon: <FolderOpen size={15} />, onSelect: () => actions.onChangeProjectFolder(project) },
     'separator',
     { label: 'Delete project', icon: <Trash2 size={15} />, danger: true, onSelect: () => actions.onDeleteProject(project) },
@@ -339,6 +411,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
               {project.collapsed ? <ChevronRight size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
               <Folder size={13} aria-hidden="true" />
               <span title={project.path ?? undefined}>{project.name}</span>
+              {project.tags && project.tags.length > 0 && <span className="project-tags" title={project.tags.join(', ')}>{project.tags.map((tag) => <span key={tag} className="project-tag">{tag}</span>)}</span>}
             </button> : <span className="team-group-title"><FolderOpen size={13} aria-hidden="true" /><span>Unassigned</span></span>}
             <span className="team-group-actions">
               <button type="button" className="icon-button tiny" aria-label={`New ${noun} in ${project?.name ?? 'Unassigned'}`} title={`New ${noun}`} onClick={() => actions.onCreate(project?.id ?? null)}><Plus size={14} /></button>
@@ -358,6 +431,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     {menu?.kind === 'blob' && <TeamMenu label={`${menu.agent.name} actions`} position={menu} items={blobMenu(menu.agent)} onClose={closeMenu} />}
     {menu?.kind === 'project' && <TeamMenu label={`${menu.project.name} actions`} position={menu} items={projectMenu(menu.project)} onClose={closeMenu} />}
     {menu?.kind === 'move' && <TeamMenu label={`Move ${menu.agent.name} to a project`} position={menu} items={moveMenu(menu.agent)} onClose={closeMenu} />}
+    {tagTarget && <TagEditor target={tagTarget} onClose={() => { setTagTarget(null); requestAnimationFrame(() => menuTrigger.current?.focus()) }} />}
     <div className="sr-only" role="status" aria-live="polite">{announcement}</div>
   </div>
 }

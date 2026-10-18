@@ -276,6 +276,9 @@ pub async fn project_status(st: &AppState, args: &Value) -> Result<String, Strin
     let project = projects.iter().find(|project| project["id"].as_str() == Some(wanted) || project["name"].as_str().is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted))).ok_or_else(|| format!("No project matches \"{wanted}\"."))?;
     let project_id = project["id"].as_str().unwrap_or("");
     let name = project["name"].as_str().unwrap_or("Project");
+    // FIX39 item 21: a project's tags are the routing signal, so `project_status`
+    // shows them too.
+    let tags = project["tags"].as_array().map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>()).unwrap_or_default();
     let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
     let sessions = st.db.session_list(false).unwrap_or_default();
     let rows = agents.iter().filter(|agent| agent["projectId"].as_str() == Some(project_id)).map(|agent| {
@@ -287,8 +290,9 @@ pub async fn project_status(st: &AppState, args: &Value) -> Result<String, Strin
         };
         format!("- {} — {state} · \"{title}\" · last active {activity} UTC", agent["name"].as_str().unwrap_or("Bot"))
     }).collect::<Vec<_>>();
-    if rows.is_empty() { return Ok(format!("Project \"{name}\" has no bots yet.")); }
-    Ok(format!("Bots in \"{name}\":\n{}", rows.join("\n")))
+    let tagged = if tags.is_empty() { String::new() } else { format!(" · tags: {}", tags.join(", ")) };
+    if rows.is_empty() { return Ok(format!("Project \"{name}\"{tagged} has no bots yet.")); }
+    Ok(format!("Project \"{name}\"{tagged}:\n{}", rows.join("\n")))
 }
 
 // ---------------------------------------------------------------------------
@@ -445,15 +449,20 @@ async fn apply_bot(st: &AppState, agent_id: Option<&str>, payload: &Value) -> Re
 async fn apply_task(st: &AppState, session_id: &str, payload: &Value) -> Result<(Value, String), DispatchError> {
     let payload = validate_task(payload).map_err(invalid)?;
     let bot = payload["bot"].as_str().unwrap_or("");
+    // FIX39 item 19.4: the task's project decides the folder the delegated
+    // conversation runs in, so the approver sees — and the daemon uses — the
+    // exact place the bot may write with `auto`.
+    let mut project_path = Value::Null;
     if let Some(project) = payload["project"].as_str().filter(|project| !project.is_empty()) {
         let projects = st.db.project_list().map_err(agent_error)?;
-        if !projects.iter().any(|candidate| candidate["id"].as_str() == Some(project) || candidate["name"].as_str().is_some_and(|name| name.trim().eq_ignore_ascii_case(project))) {
-            return Err(invalid(format!("No project matches \"{project}\".")));
-        }
+        let found = projects.iter().find(|candidate| candidate["id"].as_str() == Some(project) || candidate["name"].as_str().is_some_and(|name| name.trim().eq_ignore_ascii_case(project)));
+        let found = found.ok_or_else(|| invalid(format!("No project matches \"{project}\".")))?;
+        project_path = json!(found["path"].as_str().unwrap_or(""));
     }
     let brief = payload["brief"].as_str().unwrap_or("");
-    let delegation = crate::team::delegate(st, session_id, &json!({"blob": bot, "message": brief})).await.map_err(invalid)?;
-    Ok((json!({"sideSessionId": delegation.side, "topic": delegation.title, "bot": delegation.target_name}), format!("assigned a task to {}", delegation.target_name)))
+    let delegation = crate::team::delegate(st, session_id, &json!({"blob": bot, "message": brief, "projectPath": project_path})).await.map_err(invalid)?;
+    let verb = if delegation.started { "started a task for" } else { "queued a task for" };
+    Ok((json!({"sideSessionId": delegation.side, "topic": delegation.title, "bot": delegation.target_name, "started": delegation.started, "projectPath": project_path}), format!("{verb} {}", delegation.target_name)))
 }
 
 /// Apply an approved permission change to one side conversation. Full access is

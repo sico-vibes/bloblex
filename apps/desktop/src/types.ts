@@ -182,6 +182,8 @@ export interface Agent extends JsonRecord {
   hidden?: boolean
   /** FIX39 item 13: the owner locked this bot's settings. */
   locked?: boolean
+  /** FIX39 item 21: the routing vocabulary the Manager matches to a project's tags. */
+  tags?: string[]
 }
 
 export interface Project extends JsonRecord {
@@ -190,6 +192,9 @@ export interface Project extends JsonRecord {
   path: string | null
   sortOrder: number
   collapsed?: boolean
+  description?: string
+  /** FIX39 item 21: what kind of work this project is for, for Manager routing. */
+  tags?: string[]
 }
 
 /** Side conversation between two blobs, or a scheduled run; absent on a blob's main conversation. */
@@ -214,7 +219,9 @@ export interface MessageMeta extends JsonRecord {
   reason?: 'compaction' | 'fresh_session' | 'restart' | string
   contextLost?: boolean
   replyTo?: { sourceSessionId: string; messageId: string; role?: 'user' | 'assistant'; author?: string; excerpt?: string; truncated?: boolean; createdAt?: string | null }
-  direction?: 'sent' | 'failed'
+  direction?: 'sent' | 'failed' | 'waiting'
+  /** A queued delegation notice (FIX39 item 18): the delivery waits for a slot. */
+  state?: 'queued'
   peerAgentId?: string
   peerName?: string
   fromAgentId?: string

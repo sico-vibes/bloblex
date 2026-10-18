@@ -1090,6 +1090,29 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.composer-box textarea')?.getAttribute('aria-label')).toBe('Message Claude')
   })
 
+  // FIX39 item 18 (P6 audit finding 5): a queued delegation shows a waiting
+  // indicator instead of the bot's empty "Ready when you are" screen.
+  it('shows a waiting indicator for a queued side conversation', async () => {
+    const main = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', updatedAt: '2026-10-02T03:00:00.000Z', messages: [
+      { id: 'u1', role: 'user', content: 'Ask @Codex to check the tests.' },
+      { id: 'n1', role: 'notice', content: 'Check the tests', meta: { kind: 'delegation', direction: 'sent', peerAgentId: 'agent-codex', peerName: 'Codex', sideSessionId: 'session-side' } },
+    ] })
+    const side = session({ id: 'session-side', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Check the tests', state: 'idle', updatedAt: '2026-10-02T02:30:00.000Z', link: { kind: 'side', peerAgentId: 'agent-claude', peerName: 'Claude', originSessionId: 'session-claude', topic: 'Check the tests' }, messages: [
+      { id: 's1', role: 'notice', content: 'Waiting for Codex to finish another conversation.', meta: { kind: 'delegation', direction: 'waiting', state: 'queued' } },
+    ] })
+    configure(snapshot({ sessions: [main, side, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    const view = startApp()
+    await view.settle()
+    const chips = [...view.host.querySelectorAll('.team-chip')]
+    expect(chips.length).toBeGreaterThan(0)
+    await click(chips[0])
+    expect(view.host.querySelector('.side-header')).not.toBeNull()
+    // The queued conversation says it is waiting, with no empty first-run screen.
+    expect(view.host.querySelector('.session-first-state')).toBeNull()
+    const indicator = view.host.querySelector('.working-indicator.waiting')
+    expect(indicator?.textContent).toContain('Waiting for Codex to finish another conversation')
+  })
+
   it('answers an inline question with the chosen option', async () => {
     const waiting = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', state: 'waiting_permission', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'u1', role: 'user', content: 'Write a script.' }] })
     const question = { id: 'perm-q', sessionId: 'session-claude', runtimeId: 'runtime-claude', status: 'pending', kind: 'question', title: 'Claude has a question', choices: ['answer', 'dismiss'], questions: [{ id: 'Which language?', header: 'Language', question: 'Which language?', options: [{ label: 'Python', description: '' }, { label: 'JavaScript', description: '' }], multiSelect: false, allowOther: true }] }

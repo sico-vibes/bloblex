@@ -427,6 +427,7 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
         description TEXT NOT NULL DEFAULT '',
         sort_order INTEGER NOT NULL DEFAULT 0,
         collapsed INTEGER NOT NULL DEFAULT 0,
+        tags TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );")?;
@@ -442,6 +443,9 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
         // (the daemon enforces it); stored here so it survives a cleared webview
         // profile or a restored backup, and is never device-local.
         ("locked", "ALTER TABLE agents ADD COLUMN locked INTEGER NOT NULL DEFAULT 0"),
+        // FIX39 item 21: the routing vocabulary. Small, lower-cased tags on both
+        // projects and bots so the Manager can match a job to a bot.
+        ("tags", "ALTER TABLE agents ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"),
     ] {
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name=?1)", [column], |r| r.get(0))?;
         if !exists { c.execute(ddl, [])?; }
@@ -450,6 +454,8 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
     // Additive on older databases, like the agents columns above.
     let has_project_description: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name='description')", [], |r| r.get(0))?;
     if !has_project_description { c.execute("ALTER TABLE projects ADD COLUMN description TEXT NOT NULL DEFAULT ''", [])?; }
+    let has_project_tags: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name='tags')", [], |r| r.get(0))?;
+    if !has_project_tags { c.execute("ALTER TABLE projects ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'", [])?; }
     // At most one built-in Manager, enforced by a partial unique index rather
     // than by convention: a second `system_role='manager'` row cannot exist.
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_manager ON agents(system_role) WHERE system_role='manager'", [])?;
@@ -962,6 +968,20 @@ fn memory_validate_tags(tags: &Value) -> Result<String, StorageError> {
         let tag = item.as_str().map(str::trim).ok_or(StorageError::InvalidAgent)?;
         if tag.is_empty() || tag.chars().count() > 32 { return Err(StorageError::InvalidAgent); }
         out.push(tag.to_owned());
+    }
+    Ok(serde_json::to_string(&out)?)
+}
+/// FIX39 item 21: tags on a project or a bot. A small, lower-cased routing
+/// vocabulary: at most 8, each 1–24 characters, trimmed, de-duplicated, `[]`
+/// clears them. Stored as a JSON array string.
+fn validate_entity_tags(tags: &Value) -> Result<String, StorageError> {
+    let items = tags.as_array().ok_or(StorageError::InvalidAgent)?;
+    if items.len() > 8 { return Err(StorageError::InvalidAgent); }
+    let mut out: Vec<String> = Vec::new();
+    for item in items {
+        let tag = item.as_str().map(str::trim).map(str::to_lowercase).ok_or(StorageError::InvalidAgent)?;
+        if tag.is_empty() || tag.chars().count() > 24 { return Err(StorageError::InvalidAgent); }
+        if !out.contains(&tag) { out.push(tag); }
     }
     Ok(serde_json::to_string(&out)?)
 }
@@ -1686,7 +1706,7 @@ impl Storage {
     pub fn agent_list(&self, include_archived: bool, runtime_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         {
-            let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END)) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
+            let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'tags',json(tags)) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
             let vals=q.query_map(params![include_archived,runtime_id],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
             vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
         }
@@ -1731,6 +1751,10 @@ impl Storage {
         if let Some(description) = input.get("description") {
             let description = match description { Value::Null => String::new(), Value::String(d) if d.chars().count() <= 255 => d.trim().to_owned(), _ => return Err(StorageError::InvalidAgent) };
             tx.execute("UPDATE projects SET description=?2,updated_at=?3 WHERE id=?1", params![id, description, now])?;
+        }
+        if let Some(tags) = input.get("tags") {
+            let tags = validate_entity_tags(tags)?;
+            tx.execute("UPDATE projects SET tags=?2,updated_at=?3 WHERE id=?1", params![id, tags, now])?;
         }
         if let Some(collapsed) = input.get("collapsed") {
             tx.execute("UPDATE projects SET collapsed=?2 WHERE id=?1", params![id, collapsed.as_bool().ok_or(StorageError::InvalidAgent)?])?;
@@ -1779,6 +1803,10 @@ impl Storage {
         if let Some(role) = input.get("role") {
             let role = role.as_str().map(str::trim).filter(|r| r.chars().count() <= 40).ok_or(StorageError::InvalidAgent)?;
             tx.execute("UPDATE agents SET role=?2,updated_at=?3 WHERE id=?1", params![id, role, now])?;
+        }
+        if let Some(tags) = input.get("tags") {
+            let tags = validate_entity_tags(tags)?;
+            tx.execute("UPDATE agents SET tags=?2,updated_at=?3 WHERE id=?1", params![id, tags, now])?;
         }
         if let Some(hidden) = input.get("hidden") {
             tx.execute("UPDATE agents SET hidden=?2,updated_at=?3 WHERE id=?1", params![id, hidden.as_bool().ok_or(StorageError::InvalidAgent)?, now])?;
@@ -2161,6 +2189,27 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         c.execute("UPDATE sessions SET data=json_set(COALESCE(NULLIF(data,''),'{}'),'$.managerHandover',?2) WHERE id=?1", params![id, if on { 1 } else { 0 }])?;
         Ok(())
+    }
+    /// FIX39 item 20: whether the next prompt for this session must carry a
+    /// bounded recap of Bitbots' own record. Only the fact is stored, never the
+    /// text, so it survives a restart between the context loss and the prompt.
+    pub fn session_recap_pending(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let flag: Option<i64> = c.query_row("SELECT json_extract(data,'$.recapPending') FROM sessions WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten();
+        Ok(flag == Some(1))
+    }
+    /// Arms (`true`) or clears the one-off recap for the next prompt.
+    pub fn set_session_recap_pending(&self, id: &str, on: bool) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE sessions SET data=json_set(COALESCE(NULLIF(data,''),'{}'),'$.recapPending',?2) WHERE id=?1", params![id, if on { 1 } else { 0 }])?;
+        Ok(())
+    }
+    /// Whether the conversation has any user or assistant message, so a recap
+    /// has something to summarise (a warm-up of a never-prompted session does
+    /// not).
+    pub fn session_has_conversation_history(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND role IN ('user','assistant'))", [id], |r| r.get(0))?)
     }
     /// The latest assistant text of a turn, used to relay a side reply.
     pub fn turn_reply(&self, session: &str, turn: &str) -> Result<Option<String>, StorageError> {
@@ -3441,18 +3490,18 @@ impl Storage {
         )?;
         Ok(())
     }
-    pub fn create_reserved_turn(&self, id: &str, session: &str) -> Result<bool, StorageError> {
+    /// Reserve one active turn. FIX39 item 18 (owner decision of 18 October
+    /// 2026): there is no per-bot cap any more — one bot may run many
+    /// conversations at once. The only limit is the global one, passed in from
+    /// the setting ("Bots working at once", 1–16, default 4), and a single
+    /// conversation still runs one turn at a time.
+    pub fn create_reserved_turn(&self, id: &str, session: &str, max_active: i64) -> Result<bool, StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let agent: Option<String> = tx.query_row("SELECT agent_id FROM sessions WHERE id=?1", [session], |r| r.get(0))?;
         let active: i64 = tx.query_row("SELECT count(*) FROM active_turn_reservations", [], |r| r.get(0))?;
-        if active >= 4 { return Ok(false); }
+        if active >= max_active.clamp(1, 16) { return Ok(false); }
         if tx.query_row("SELECT EXISTS(SELECT 1 FROM active_turn_reservations WHERE session_id=?1)", [session], |r| r.get::<_, bool>(0))? { return Ok(false); }
-        if let Some(agent_id) = agent.as_deref() {
-            let configured: i64 = tx.query_row("SELECT max_concurrency FROM agents WHERE id=?1", [agent_id], |r| r.get(0))?;
-            let count: i64 = tx.query_row("SELECT count(*) FROM active_turn_reservations WHERE agent_id=?1", [agent_id], |r| r.get(0))?;
-            if count >= configured.clamp(1, 4) { return Ok(false); }
-        }
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         tx.execute("INSERT INTO turns(id,session_id,state,created_at,started_at) VALUES(?1,?2,'working',?3,?3)", params![id, session, now])?;
         tx.execute("INSERT INTO active_turn_reservations(turn_id,session_id,agent_id,created_at) VALUES(?1,?2,?3,?4)", params![id, session, agent, now])?;
@@ -5316,7 +5365,7 @@ pub fn file_detail(path: &str, raw: &Value) -> Value {
 fn runtime_exists(c:&Connection,id:&str)->Result<bool,StorageError>{Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM runtimes WHERE id=?1)",[id],|r|r.get(0))?)}
 fn ensure_name_free(c:&Connection,key:&str,except:Option<&str>)->Result<(),StorageError>{let n:i64=c.query_row("SELECT count(*) FROM agents WHERE name_key=?1 AND archived=0 AND (?2 IS NULL OR id!=?2)",params![key,except],|r|r.get(0))?;if n>0{Err(StorageError::AgentConflict)}else{Ok(())}}
 fn project_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
-    query_jsons(c, "SELECT json_object('id',id,'name',name,'path',path,'description',description,'sortOrder',sort_order,'collapsed',json(CASE WHEN collapsed=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM projects WHERE ?1=?1 ORDER BY sort_order,created_at,id", "")
+    query_jsons(c, "SELECT json_object('id',id,'name',name,'path',path,'description',description,'sortOrder',sort_order,'collapsed',json(CASE WHEN collapsed=1 THEN 'true' ELSE 'false' END),'tags',json(tags),'createdAt',created_at,'updatedAt',updated_at) FROM projects WHERE ?1=?1 ORDER BY sort_order,created_at,id", "")
 }
 fn profile_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
     query_jsons(c, "SELECT json_object('id',id,'category',category,'key',key,'value',value,'source',source,'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM manager_profile WHERE ?1=?1 ORDER BY locked DESC, category, key", "")
@@ -5327,7 +5376,7 @@ fn push_team_event(tx: &Transaction<'_>, event_type: &str, payload: &Value) -> R
     tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,?3,?4)", params![id, ts, event_type, payload.to_string()])?;
     Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":event_type,"payload":payload}))
 }
-fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END)) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
+fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'tags',json(tags)) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
 fn insert_agent(tx:&Transaction<'_>,id:&str,v:&Value,name:&str,key:&str,pos:i64,now:&str)->Result<(),StorageError>{let color=v["color"].as_str().unwrap_or("mint");let color=if color.starts_with('#'){color.to_ascii_uppercase()}else{color.into()};tx.execute("INSERT INTO agents(id,name,name_key,description,instructions,color,outfit,runtime_id,model,thinking,service_tier,approval_mode,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at,notification_level,role,system_role) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?18,?19,?20,?21)",params![id,name,key,v["description"].as_str().unwrap_or(""),v["instructions"].as_str().unwrap_or(""),color,v["outfit"].as_str().unwrap_or("auto"),v["runtimeId"].as_str().unwrap_or(""),nullable(&v["model"]),nullable(&v["thinking"]),nullable(&v["serviceTier"]),nullable(&v["approvalMode"]),v.get("customArgs").cloned().unwrap_or(json!([])).to_string(),v.get("customEnv").cloned().unwrap_or(json!({})).to_string(),v["maxConcurrency"].as_i64().unwrap_or(1),nullable(&v["defaultProject"]),pos,now,nullable(&v["notificationLevel"]),v["role"].as_str().unwrap_or(""),if v["systemRole"].as_str()==Some("manager"){Some("manager")}else{None}])?;tx.execute("UPDATE agents SET look=?2 WHERE id=?1",params![id,look_column(&v["look"])])?;Ok(())}
 fn push_agent_event(tx:&Transaction<'_>,action:&str,a:&Value)->Result<Value,StorageError>{let payload=json!({"action":action,"agentId":a["id"],"runtimeId":a["runtimeId"],"updatedAt":a["updatedAt"],"archived":a["archived"],"sortOrder":a["sortOrder"],"notificationLevel":a["notificationLevel"]});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'agent.changed',?3)",params![id,ts,payload.to_string()])?;Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"agent.changed","payload":payload}))}
 fn snapshot_requested(v:&Value)->Value{
@@ -5790,7 +5839,7 @@ mod tests {
         {
             let db = Storage::open(&path).unwrap();
             db.create_session("reserve-session", "rt", "codex", ".", "Reserve").unwrap();
-            assert!(db.create_reserved_turn("reserve-turn", "reserve-session").unwrap());
+            assert!(db.create_reserved_turn("reserve-turn", "reserve-session", 4).unwrap());
             assert_eq!(db.active_turn_reservation_count().unwrap(), 1);
         }
         let db = Storage::open(&path).unwrap();
@@ -5800,17 +5849,107 @@ mod tests {
         let _ = fs::remove_file(path);
     }
     #[test]
-    fn durable_reservations_enforce_the_global_cap_of_four() {
+    fn durable_reservations_enforce_the_global_cap() {
         let db = Storage::open_in_memory().unwrap();
         for index in 0..5 {
             let session = format!("s-cap-{index}");
             db.create_session(&session, "rt", "codex", ".", "Cap").unwrap();
         }
         for index in 0..4 {
-            assert!(db.create_reserved_turn(&format!("t-cap-{index}"), &format!("s-cap-{index}")).unwrap());
+            assert!(db.create_reserved_turn(&format!("t-cap-{index}"), &format!("s-cap-{index}"), 4).unwrap());
         }
-        assert!(!db.create_reserved_turn("t-cap-4", "s-cap-4").unwrap());
+        assert!(!db.create_reserved_turn("t-cap-4", "s-cap-4", 4).unwrap());
         assert_eq!(db.active_turn_reservation_count().unwrap(), 4);
+    }
+    /// FIX39 item 18 (owner decision): the per-bot cap is gone. One bot may hold
+    /// several active turns at once; only the global limit (here raised to 8)
+    /// refuses the next one.
+    #[test]
+    fn one_bot_may_run_many_turns_and_only_the_global_cap_refuses() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-many","provider":"codex"})).unwrap();
+        let (agent, _) = db.agent_create(&json!({"name":"Many","runtimeId":"rt-many","maxConcurrency":1})).unwrap();
+        let agent_id = agent["id"].as_str().unwrap();
+        for index in 0..4 {
+            let session = format!("s-many-{index}");
+            db.create_session_for_agent(&session, "rt-many", "codex", ".", "Many", Some(agent_id)).unwrap();
+            assert!(db.create_reserved_turn(&format!("t-many-{index}"), &session, 8).unwrap(), "turn {index} of one bot with maxConcurrency 1");
+        }
+        let fifth = "s-many-4";
+        db.create_session_for_agent(fifth, "rt-many", "codex", ".", "Many", Some(agent_id)).unwrap();
+        assert!(db.create_reserved_turn("t-many-4", fifth, 8).unwrap(), "a fifth conversation of the same bot starts");
+        // Two conversations of the same bot are independent: the global limit is
+        // what refuses, and only at its own number (8 here).
+        for index in 5..8 {
+            let session = format!("s-many-{index}");
+            db.create_session_for_agent(&session, "rt-many", "codex", ".", "Many", Some(agent_id)).unwrap();
+            assert!(db.create_reserved_turn(&format!("t-many-{index}"), &session, 8).unwrap());
+        }
+        let ninth = "s-many-9";
+        db.create_session_for_agent(ninth, "rt-many", "codex", ".", "Many", Some(agent_id)).unwrap();
+        assert!(!db.create_reserved_turn("t-many-9", ninth, 8).unwrap(), "the global cap of 8 refuses the ninth");
+    }
+    /// FIX39 item 21: tags round-trip on projects and bots, validate, and an
+    /// empty array clears them.
+    #[test]
+    fn tags_round_trip_and_validate_on_projects_and_bots() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-tags","provider":"codex"})).unwrap();
+        let (project, _) = db.project_create("Tagged", None).unwrap();
+        let project_id = project["id"].as_str().unwrap();
+        assert_eq!(project["tags"], json!([]), "a new project starts with no tags");
+        let (updated, events) = db.project_update(project_id, &json!({"tags":["UI"," ui ","Backend"]})).unwrap();
+        assert_eq!(updated["tags"], json!(["ui","backend"]), "trimmed, lower-cased and de-duplicated");
+        assert!(events.iter().any(|event| event["type"] == "project.changed"));
+        let (cleared, _) = db.project_update(project_id, &json!({"tags":[]})).unwrap();
+        assert_eq!(cleared["tags"], json!([]));
+        assert!(db.project_update(project_id, &json!({"tags":"ui"})).is_err(), "a non-array is refused");
+        assert!(db.project_update(project_id, &json!({"tags":[1,2]})).is_err());
+        assert!(db.project_update(project_id, &json!({"tags":["x".repeat(25)]})).is_err());
+        assert!(db.project_update(project_id, &json!({"tags":["a","b","c","d","e","f","g","h","i"]})).is_err(), "at most eight");
+        let (agent, _) = db.agent_create(&json!({"name":"Taggable","runtimeId":"rt-tags"})).unwrap();
+        let agent_id = agent["id"].as_str().unwrap();
+        let (tagged, events) = db.agent_set_team(agent_id, &json!({"tags":["research","Research"]})).unwrap();
+        assert_eq!(tagged["tags"], json!(["research"]));
+        assert!(events.iter().any(|event| event["type"] == "agent.changed"));
+        assert_eq!(db.agent_list(false, None).unwrap()[0]["tags"], json!(["research"]), "agent_list carries tags");
+    }
+    /// FIX39 item 21: an old database (no `tags` column on either table) must
+    /// open, gain the column defaulted to `[]`, and keep tags set afterwards.
+    #[test]
+    fn a_pre_fix39_database_gains_the_tags_columns() {
+        let root = std::env::temp_dir().join(format!("bloblex-tags-migration-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("db.sqlite");
+        {
+            let db = Storage::open(&path).unwrap();
+            db.upsert_runtime(&json!({"id":"rt-tags-mig","provider":"codex"})).unwrap();
+            db.project_create("Old", None).unwrap();
+            db.agent_create(&json!({"name":"OldBot","runtimeId":"rt-tags-mig"})).unwrap();
+        }
+        // Rewind the schema to the previous version: no `tags` column anywhere.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("ALTER TABLE agents DROP COLUMN tags; ALTER TABLE projects DROP COLUMN tags;").unwrap();
+        }
+        {
+            let db = Storage::open(&path).unwrap();
+            let projects = db.project_list().unwrap();
+            assert_eq!(projects[0]["tags"], json!([]), "an old project reads with no tags");
+            let agents = db.agent_list(false, None).unwrap();
+            assert_eq!(agents[0]["tags"], json!([]), "an old bot reads with no tags");
+            let (project, _) = db.project_update(projects[0]["id"].as_str().unwrap(), &json!({"tags":["kept"]})).unwrap();
+            assert_eq!(project["tags"], json!(["kept"]));
+            let (agent, _) = db.agent_set_team(agents[0]["id"].as_str().unwrap(), &json!({"tags":["kept"]})).unwrap();
+            assert_eq!(agent["tags"], json!(["kept"]));
+        }
+        {
+            let db = Storage::open(&path).unwrap();
+            assert_eq!(db.project_list().unwrap()[0]["tags"], json!(["kept"]), "project tags survive a reopen");
+            assert_eq!(db.agent_list(false, None).unwrap()[0]["tags"], json!(["kept"]), "bot tags survive a reopen");
+        }
+        let _ = fs::remove_dir_all(root.join("backups"));
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn analytics_reconciles_reported_tokens_filters_paths_and_omits_legacy_money() {

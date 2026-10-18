@@ -4,7 +4,7 @@ import type { Runtime } from '../types'
 import { EMPTY_DISCOVERY_STATUS, useRuntimeDiscovery } from './runtimeDiscovery'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chooseOption, helpTipText, selectOptions, selectTrigger } from './testSelect'
+import { chooseOption, helpTipText, selectOptions, selectTrigger, selectValue } from './testSelect'
 import { EXPERIMENTS } from './experiments'
 import { SettingsSheet } from './SettingsSheet'
 import { setThemeStyle } from '../blob/bitbots'
@@ -151,6 +151,21 @@ describe('General settings mounted controls', () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(selectTrigger(host, 'Companion start position')).not.toBeNull()
     expect(host.querySelector('[aria-label="Show/hide with Ctrl+Alt+B"]')).not.toBeNull()
+  })
+
+  it('offers the global "Bots working at once" limit and saves it', async () => {
+    mocks.invoke.mockResolvedValue(true)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { 'concurrency.botsAtOnce': 4 } } : {})
+    setThemeStyle('bitbots')
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    // FIX39 item 18: this is the only concurrency limit, shown as a General setting.
+    expect(selectValue(host, 'bots working at once')).toBe('4')
+    const options = await selectOptions(host, 'bots working at once')
+    expect(options.map((option) => option.value)).toEqual(Array.from({ length: 16 }, (_, index) => String(index + 1)))
+    await chooseOption(host, 'bots working at once', '2')
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'concurrency.botsAtOnce', value: 2 })
   })
 
   it('shows a startup hotkey conflict in the error banner and turns the switch off', async () => {

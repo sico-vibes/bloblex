@@ -539,10 +539,12 @@ function CapabilityField({ label, state, setting, children }: { label: string; s
 }
 
 function concurrencyText(capabilities: RuntimeCapabilities | null, stored: number) {
-  const agent = capabilities?.agentConcurrency
-  if (!agent) return `Saved cap ${stored}. Effective cap not reported.`
-  const configured = agent.configuredMaxConcurrency === null ? 'not reported' : String(agent.configuredMaxConcurrency)
-  return `Configured ${configured} · effective ${agent.effectiveMaxConcurrency} · active ${agent.active}`
+  // FIX39 item 18: there is no per-bot cap any more. Only the global limit
+  // ("Bots working at once") applies; the saved per-bot value is kept for the
+  // record but no longer enforced.
+  const global = capabilities?.globalConcurrency
+  if (!global) return `Saved cap ${stored}, no longer enforced. Global limit not reported.`
+  return `Up to ${global.limit} bot conversations at once · ${global.active} running`
 }
 
 function envNote(setting: CapabilitySetting) {

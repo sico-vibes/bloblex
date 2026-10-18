@@ -37,6 +37,12 @@ pub struct Team {
 #[derive(Clone)]
 struct Queued { text: String, meta: Value, depth: u32 }
 
+/// The tags line the team tools add to a project or a bot, or an empty string.
+fn tags_suffix(tags: &Value) -> String {
+    let list = tags.as_array().map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>()).unwrap_or_default();
+    if list.is_empty() { String::new() } else { format!(" · tags: {}", list.join(", ")) }
+}
+
 impl Team {
     fn token_for(&self, session_id: &str) -> String {
         let mut tokens = self.tokens.lock().unwrap();
@@ -65,6 +71,18 @@ impl Team {
     #[cfg(test)]
     pub(crate) async fn queued_len(&self, session_id: &str) -> usize {
         self.queued.lock().await.get(session_id).map_or(0, VecDeque::len)
+    }
+    /// Queue a delivery with a real `meta`, so a test can exercise the waiting
+    /// notice (`kind: "blob_message"`) or the silent reply path (`blob_reply`).
+    #[cfg(test)]
+    pub(crate) async fn enqueue_meta_for_test(&self, session_id: &str, text: &str, meta: Value) {
+        self.queued.lock().await.entry(session_id.to_owned()).or_default().push_back(Queued { text: text.to_owned(), meta, depth: 0 });
+    }
+    /// The texts currently queued for a session, front first, so a test can prove
+    /// a refused retry did not reorder the queue.
+    #[cfg(test)]
+    pub(crate) async fn queued_texts(&self, session_id: &str) -> Vec<String> {
+        self.queued.lock().await.get(session_id).map(|queue| queue.iter().map(|item| item.text.clone()).collect()).unwrap_or_default()
     }
 }
 
@@ -214,8 +232,9 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
     // longer a direct bridge call: the Manager proposes it and the owner
     // approves (FIX36 D2), so `create_blob` is gone.
     if is_manager {
-        list.push(json!({"name":"list_projects","description":format!("List the projects a {noun} can belong to: id, name, folder and description. Only the Manager may call it; a bot cannot join or create a project itself."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
-        list.push(json!({"name":"update_blob","description":format!("Update an existing {noun}'s role, description or instructions. Only the Manager may change {nouns}; it cannot change a {noun}'s runtime, permission mode or project, and cannot archive or delete one."),"inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":format!("The {noun}'s name or id.")},"role":{"type":"string","description":"A new role label (optional, up to 40 characters)."},"description":{"type":"string","description":"A new purpose (optional, up to 255 characters)."},"instructions":{"type":"string","description":"New instructions (optional, up to 4000 characters)."}},"required":["blob"],"additionalProperties":false}}));
+        list.push(json!({"name":"list_projects","description":format!("List the projects a {noun} can belong to: id, name, folder, tags and description. Match a job's project tags to a {noun}'s tags to pick who does the work. Only the Manager may call it; a bot cannot join or create a project itself."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
+        list.push(json!({"name":"update_blob","description":format!("Update an existing {noun}'s role, description, instructions or tags. Tags are a small routing vocabulary (at most 8, each up to 24 characters). Only the Manager may change {nouns}; it cannot change a {noun}'s runtime, permission mode or project, and cannot archive or delete one."),"inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":format!("The {noun}'s name or id.")},"role":{"type":"string","description":"A new role label (optional, up to 40 characters)."},"description":{"type":"string","description":"A new purpose (optional, up to 255 characters)."},"instructions":{"type":"string","description":"New instructions (optional, up to 4000 characters)."},"tags":{"type":"array","items":{"type":"string"},"description":"The bot's tags, replacing the current set (optional, at most 8, each up to 24 characters; [] clears them)."}},"required":["blob"],"additionalProperties":false}}));
+        list.push(json!({"name":"update_project","description":"Update an existing project's description or tags. Tags are a small routing vocabulary (at most 8, each up to 24 characters). Only the Manager may call it.","inputSchema":{"type":"object","properties":{"project":{"type":"string","description":"A project id or exact project name."},"description":{"type":"string","description":"A new one-sentence purpose (optional, up to 255 characters)."},"tags":{"type":"array","items":{"type":"string"},"description":"The project's tags, replacing the current set (optional, at most 8, each up to 24 characters; [] clears them)."}},"required":["project"],"additionalProperties":false}}));
         // FIX36 D2: every consequential action is proposed and waits for the
         // owner's approval. The tools return at once with a proposal id.
         list.extend(crate::proposals::tool_schemas());
@@ -272,6 +291,7 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "message_blob" => message_blob(st, session_id, args).await,
                 "list_projects" if is_manager => list_projects(st).await,
                 "update_blob" if is_manager => update_blob(st, args).await,
+                "update_project" if is_manager => update_project(st, args).await,
                 "propose_project" if is_manager => crate::proposals::propose_project(st, session_id, args).await,
                 "propose_bot" if is_manager => crate::proposals::propose_bot(st, session_id, args).await,
                 "assign_task" if is_manager => crate::proposals::assign_task(st, session_id, args).await,
@@ -281,7 +301,7 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "forget_about_user" if is_manager => crate::knowledge::tool_forget(st, session_id, args).await,
                 "recall_about_user" if is_manager => crate::knowledge::tool_recall(st, args),
                 "update_playbook" if is_manager => crate::knowledge::tool_update_playbook(st, session_id, args).await,
-                "list_projects" | "update_blob" | "propose_project" | "propose_bot" | "assign_task" | "project_status" | "set_conversation_permission" | "remember_about_user" | "forget_about_user" | "recall_about_user" | "update_playbook" => Err(non_manager_error(st)),
+                "list_projects" | "update_blob" | "update_project" | "propose_project" | "propose_bot" | "assign_task" | "project_status" | "set_conversation_permission" | "remember_about_user" | "forget_about_user" | "recall_about_user" | "update_playbook" => Err(non_manager_error(st)),
                 "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
                 "ask_user" if ask_user => crate::questions::ask_user_tool(st, session_id, args).await,
@@ -327,6 +347,9 @@ async fn list_blobs(st: &AppState, session_id: &str) -> Result<String, String> {
         if agent["systemRole"].as_str() == Some("manager") { line.push_str(" [manager]"); }
         if let Some(role) = agent["role"].as_str().filter(|r| !r.trim().is_empty()) { line.push_str(&format!(" — {role}")); }
         line.push_str(&format!(" · {provider} · project: {project} · {}", if busy { "busy" } else { "available" }));
+        // FIX39 item 21: a bot's tags are the routing signal the Manager matches
+        // against a project's tags.
+        line.push_str(&tags_suffix(&agent["tags"]));
         if let Some(description) = agent["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) { line.push_str(&format!("\n  {description}")); }
         rows.push(line);
     }
@@ -365,6 +388,7 @@ async fn list_projects(st: &AppState) -> Result<String, String> {
         let id = project["id"].as_str().unwrap_or("");
         let path = project["path"].as_str().map(str::trim).filter(|path| !path.is_empty()).unwrap_or("(no folder)");
         let mut line = format!("- {name} (id {id}) · {path}");
+        line.push_str(&tags_suffix(&project["tags"]));
         if let Some(description) = project["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) { line.push_str(&format!("\n  {description}")); }
         line
     }).collect::<Vec<_>>();
@@ -378,14 +402,20 @@ async fn update_blob(st: &AppState, args: &Value) -> Result<String, String> {
     let role = bounded_text(args, "role", 40)?;
     let description = bounded_text(args, "description", 255)?;
     let instructions = bounded_text(args, "instructions", 4000)?;
-    if role.is_none() && description.is_none() && instructions.is_none() { return Err("Give at least one of role, description or instructions to update.".into()); }
+    // FIX39 item 21: the Manager may set a bot's routing tags. Validated by the
+    // storage layer (at most 8, each 1–24 characters, lower-cased, de-duplicated).
+    let tags = args.get("tags").filter(|value| !value.is_null()).cloned();
+    if role.is_none() && description.is_none() && instructions.is_none() && tags.is_none() { return Err("Give at least one of role, description, instructions or tags to update.".into()); }
     let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
     let target = resolve_blob(&agents, wanted).ok_or_else(|| format!("No {} is called {wanted}.", entity_noun(false)))?;
     // FIX39 item 13: the Manager cannot edit a locked bot either.
     if bot_is_locked(&target) { return Err("This bot is locked. Unlock it to change its settings.".into()); }
     let target_id = target["id"].as_str().unwrap_or("").to_owned();
-    if let Some(role) = &role {
-        let (_agent, events) = st.db.agent_set_team(&target_id, &json!({"role":role})).map_err(|error| error.to_string())?;
+    if role.is_some() || tags.is_some() {
+        let mut fields = json!({});
+        if let Some(role) = &role { fields["role"] = json!(role); }
+        if let Some(tags) = &tags { fields["tags"] = tags.clone(); }
+        let (_agent, events) = st.db.agent_set_team(&target_id, &fields).map_err(|error| error.to_string())?;
         st.broadcast_persisted(events);
     }
     if description.is_some() || instructions.is_some() {
@@ -398,6 +428,30 @@ async fn update_blob(st: &AppState, args: &Value) -> Result<String, String> {
     Ok(format!("Updated {} {}.", entity_noun(false), target["name"].as_str().unwrap_or(wanted)))
 }
 
+/// Manager-only: set a project's description or tags. A direct write, matching
+/// `update_blob`'s precedent (reversible, and the Manager may route work by
+/// tags); nothing is deleted. Tags reach the Manager through this tool and
+/// through `list_projects`, never through the instruction text, so editing them
+/// never changes the instruction hash (FIX39 risk 5).
+async fn update_project(st: &AppState, args: &Value) -> Result<String, String> {
+    let wanted = args["project"].as_str().map(str::trim).filter(|project| !project.is_empty()).ok_or("project is required.")?;
+    let description = bounded_text(args, "description", 255)?;
+    let tags = args.get("tags").filter(|value| !value.is_null()).cloned();
+    if description.is_none() && tags.is_none() { return Err("Give a description or tags to update.".into()); }
+    let projects = st.db.project_list().map_err(|error| error.to_string())?;
+    let project = projects.iter().find(|project| project["id"].as_str() == Some(wanted) || project["name"].as_str().is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted)))
+        .ok_or_else(|| format!("No project matches \"{wanted}\"."))?
+        .clone();
+    let id = project["id"].as_str().unwrap_or("").to_owned();
+    let mut fields = json!({});
+    if let Some(description) = &description { fields["description"] = json!(description); }
+    if let Some(tags) = &tags { fields["tags"] = tags.clone(); }
+    let (updated, events) = st.db.project_update(&id, &fields).map_err(|error| error.to_string())?;
+    st.broadcast_persisted(events);
+    let name = updated["name"].as_str().unwrap_or(wanted);
+    Ok(format!("Updated project {name}{}.", tags_suffix(&updated["tags"])))
+}
+
 /// One delivered brief: the side conversation it opened (or continued), its
 /// topic, and the teammate's name. Shared by `message_blob` and by FIX36 D2's
 /// `assign_task` approval, so a task is delivered exactly like a message.
@@ -405,12 +459,21 @@ pub(crate) struct Delegation {
     pub side: String,
     pub title: String,
     pub target_name: String,
+    /// Whether the turn started at once or was queued behind the global limit.
+    /// FIX39 item 18: the Manager must not be told work is running when it is
+    /// only waiting for a slot.
+    pub started: bool,
 }
 
 async fn message_blob(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
     let delegation = delegate(st, session_id, args).await?;
     let (target_name, title, side) = (&delegation.target_name, &delegation.title, &delegation.side);
-    Ok(format!("Sent to {target_name} in \"{title}\" (conversation {side}). They are working on it; their reply will arrive here as a message starting with \"[Reply from {target_name}]\". Tell the user you asked {target_name} and end your turn now."))
+    let state = if delegation.started {
+        "They are working on it"
+    } else {
+        "They are finishing another conversation, so this one is queued and starts as soon as a slot frees"
+    };
+    Ok(format!("Sent to {target_name} in \"{title}\" (conversation {side}). {state}; their reply will arrive here as a message starting with \"[Reply from {target_name}]\". Tell the user you asked {target_name} and end your turn now."))
 }
 
 pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> Result<Delegation, String> {
@@ -449,19 +512,30 @@ pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> R
         None => {
             let title = topic.unwrap_or_else(|| topic_from(&message));
             let link = json!({"kind":"side","peerAgentId":from_id,"peerName":from_name,"originSessionId":session_id,"spawnedFromSessionId":session_id,"topic":title});
-            let created = new_session(st, json!({"agentId":target_id,"projectPath":workspace_for(st, &target),"title":title,"link":link})).await
+            // FIX39 item 19.4: an approved task that names a project runs the
+            // delegated conversation in that project's folder, so the `auto`
+            // classifier can touch the files the task is about. Without it the
+            // bot works in its own scratch workspace and every project path is
+            // outside the allowed set.
+            let project_path = args["projectPath"].as_str().map(str::trim).filter(|path| !path.is_empty())
+                .map(std::path::PathBuf::from).filter(|path| path.is_dir())
+                .unwrap_or_else(|| workspace_for(st, &target));
+            let created = new_session(st, json!({"agentId":target_id,"projectPath":project_path,"title":title,"link":link})).await
                 .map_err(|error| format!("Could not open a conversation with {target_name}: {}", error.1.message))?;
             (created["id"].as_str().unwrap_or("").to_owned(), title)
         }
     };
+    // FIX39 item 18: with no per-bot cap, a delivery starts unless the
+    // conversation is mid-turn or every global slot is taken.
+    let started = !session_busy(st, &side).await && st.db.active_turn_reservation_count().unwrap_or(0) < crate::global_concurrency_limit(st).max(0) as u64;
     let preview = message.chars().take(280).collect::<String>();
     note_above_turn_text(st, session_id, &preview, json!({"kind":"delegation","direction":"sent","peerAgentId":target_id,"peerName":target_name,"sideSessionId":side,"topic":title})).await;
     let state = st.clone();
     let side_for_task = side.clone();
     tokio::spawn(async move {
-        deliver(&state, &side_for_task, message, json!({"kind":"blob_message","fromAgentId":from_id,"fromName":from_name}), depth).await;
+        deliver(&state, &side_for_task, message, json!({"kind":"blob_message","fromAgentId":from_id,"fromName":from_name}), depth, false).await;
     });
-    Ok(Delegation { side, title, target_name })
+    Ok(Delegation { side, title, target_name, started })
 }
 
 /// A conversation id the sender may continue: one they started with this teammate.
@@ -570,19 +644,76 @@ pub(crate) async fn note(st: &AppState, session_id: &str, content: &str, meta: V
 }
 
 /// Prompts a session now, or queues the prompt until its current turn ends.
-async fn deliver(st: &AppState, session_id: &str, text: String, meta: Value, depth: u32) {
+/// `retry` is true when the drain is re-delivering an item it just popped, so a
+/// second refusal puts it back at the FRONT (order kept) and never writes a
+/// second "Waiting for" notice.
+async fn deliver(st: &AppState, session_id: &str, text: String, meta: Value, depth: u32, retry: bool) {
     if session_busy(st, session_id).await {
-        st.team.queued.lock().await.entry(session_id.to_owned()).or_default().push_back(Queued { text, meta, depth });
+        if retry { requeue_front(st, session_id, text, meta, depth).await; }
+        else { queue_delivery(st, session_id, text, meta, depth).await; }
         return;
     }
     st.team.depth.lock().unwrap().insert(session_id.to_owned(), depth);
     if let Err(error) = crate::session_prompt_for_team(st, json!({"sessionId":session_id,"text":text.clone(),"meta":meta.clone()})).await {
+        st.team.depth.lock().unwrap().remove(session_id);
         if error.1.code == "conflict" {
-            st.team.queued.lock().await.entry(session_id.to_owned()).or_default().push_front(Queued { text, meta, depth });
+            // The global limit refused it. A retry goes back to the front with no
+            // new notice; a first arrival queues at the back and says so.
+            if retry { requeue_front(st, session_id, text, meta, depth).await; }
+            else { queue_delivery(st, session_id, text, meta, depth).await; }
         } else {
-            st.team.depth.lock().unwrap().remove(session_id);
             relay_failure(st, session_id, &error.1.message).await;
         }
+    }
+}
+
+/// Queues one delivery behind a busy conversation and makes it visible. FIX39
+/// item 18: an empty side conversation used to render the bot's "Ready when you
+/// are" screen while its work sat in an in-memory queue; the visible notice means
+/// the wait is honest and the conversation is never mistaken for idle.
+async fn queue_delivery(st: &AppState, session_id: &str, text: String, meta: Value, depth: u32) {
+    // FIX39 P6 audit finding 2: only a forwarded delegation says it is waiting. A
+    // side reply relayed back to a busy origin queues silently — nothing new is
+    // waiting, and the text would name the origin's own bot in its own chat.
+    let notify = meta["kind"] == "blob_message";
+    // Only the first item that makes the queue non-empty writes the notice, so a
+    // delivery retried as slots come and go does not stack "Waiting for" lines.
+    let was_empty = {
+        let mut queues = st.team.queued.lock().await;
+        let queue = queues.entry(session_id.to_owned()).or_default();
+        let was_empty = queue.is_empty();
+        queue.push_back(Queued { text, meta, depth });
+        was_empty
+    };
+    if !was_empty || !notify { return; }
+    let name = st.db.session_detail(session_id).ok()
+        .and_then(|row| row["agentId"].as_str().and_then(|id| st.db.agent_get(id).ok()))
+        .map(|agent| agent_name(&agent))
+        .unwrap_or_else(|| "The teammate".into());
+    note(st, session_id, &format!("Waiting for {name} to finish another conversation."), json!({"kind":"delegation","direction":"waiting","state":"queued"})).await;
+}
+
+/// Puts a refused delivery back at the FRONT of its queue with no notice. FIX39
+/// P6 audit finding 1: the drain pops the front item and may still be refused
+/// (the global limit is held by another conversation), so re-delivering it must
+/// not move it behind messages that arrived after it.
+async fn requeue_front(st: &AppState, session_id: &str, text: String, meta: Value, depth: u32) {
+    st.team.queued.lock().await.entry(session_id.to_owned()).or_default().push_front(Queued { text, meta, depth });
+}
+
+/// FIX39 item 18: after any turn ends, try every session with a queued delivery,
+/// not only the one that just finished. The global limit can be what refused a
+/// delivery, so a turn ending in a *different* conversation must release it.
+pub(crate) async fn drain_queued_deliveries(st: &AppState, preferred: Option<&str>) {
+    let mut ids: Vec<String> = st.team.queued.lock().await.iter().filter(|(_, queue)| !queue.is_empty()).map(|(id, _)| id.clone()).collect();
+    if let Some(preferred) = preferred {
+        ids.retain(|id| id != preferred);
+        ids.insert(0, preferred.to_owned());
+    }
+    for sid in ids {
+        if session_busy(st, &sid).await { continue; }
+        let next = st.team.queued.lock().await.get_mut(&sid).and_then(VecDeque::pop_front);
+        if let Some(next) = next { deliver(st, &sid, next.text, next.meta, next.depth, true).await; }
     }
 }
 
@@ -614,7 +745,7 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
                         _ => format!("The turn failed: {}", detail.unwrap_or_else(|| "the provider reported an error".into())),
                     };
                     let text = format!("[Reply from {name}]\n{reply}");
-                    deliver(&st, origin, text, json!({"kind":"blob_reply","fromAgentId":target_id,"fromName":name,"sideSessionId":session_id}), depth).await;
+                    deliver(&st, origin, text, json!({"kind":"blob_reply","fromAgentId":target_id,"fromName":name,"sideSessionId":session_id}), depth, false).await;
                 }
             }
         }
@@ -623,8 +754,9 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
         // The durable user queue drains before Team deliveries, so a queued
         // prompt is sent first and any pending team delivery follows it.
         crate::queue::after_turn(&st, &session_id, &outcome).await;
-        let next = st.team.queued.lock().await.get_mut(&session_id).and_then(VecDeque::pop_front);
-        if let Some(next) = next { deliver(&st, &session_id, next.text, next.meta, next.depth).await; }
+        // FIX39 item 18: drain this session first, then any other session whose
+        // delivery was refused by the global limit while this turn held a slot.
+        drain_queued_deliveries(&st, Some(&session_id)).await;
     });
 }
 
@@ -727,7 +859,10 @@ pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, D
                     let project_changed = p.get("projectId").is_some_and(|project| project.as_str() != agent["projectId"].as_str());
                     let role_changed = p.get("role").is_some_and(|role| role.as_str().map(str::trim) != agent["role"].as_str());
                     let leader_changed = p.get("leader").is_some_and(|leader| leader.as_bool() != agent["leader"].as_bool());
-                    if project_changed || role_changed || leader_changed { return Err(locked_bot_error()); }
+                    // FIX39 item 21: a locked bot's tags are locked with the rest
+                    // of its settings.
+                    let tags_changed = p.get("tags").is_some_and(|tags| tags != &agent["tags"]);
+                    if project_changed || role_changed || leader_changed || tags_changed { return Err(locked_bot_error()); }
                 }
             }
             // FIX36: the Manager works across every project and its leadership

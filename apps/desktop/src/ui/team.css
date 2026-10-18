@@ -213,3 +213,23 @@
 /* The Manager: pinned above every project, set apart by a hairline. */
 .manager-group { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 :root[data-bitbots="on"] .manager-group { border-bottom: 2px dotted var(--bb-line); }
+
+/* FIX39 item 21: tags. Small, monochrome, tertiary — the routing vocabulary the
+   Manager matches a job to. Shown as chips on a project row and edited in a
+   small dialog from the project's or a bot's right-click menu. */
+.project-tags { display: inline-flex; gap: 4px; margin-left: 6px; overflow: hidden; }
+.project-tag { max-width: 90px; padding: 0 5px; overflow: hidden; color: var(--text-3); border: 1px solid var(--line); border-radius: 5px; background: var(--surface-subtle); font-size: var(--fs-2xs); font-weight: 500; line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; }
+.tag-editor-backdrop { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, #000 42%, transparent); }
+.tag-editor { width: min(360px, 100%); padding: 14px; display: grid; gap: 10px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-overlay); box-shadow: var(--shadow-pop); }
+.tag-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tag-editor-hint { margin: 0; color: var(--text-3); font-size: var(--fs-2xs); line-height: 1.45; }
+.tag-chips { min-height: 28px; display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-chip { padding: 2px 4px 2px 8px; display: inline-flex; align-items: center; gap: 4px; color: var(--text-1); border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); font-size: var(--fs-xs); }
+.tag-chip > button { width: 16px; height: 16px; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 4px; background: transparent; }
+.tag-chip > button:hover { color: var(--text-1); background: var(--surface-hover); }
+.tag-empty { color: var(--text-3); font-size: var(--fs-2xs); }
+.tag-editor-add { display: flex; gap: 6px; }
+.tag-editor-add > input { flex: 1 1 auto; min-width: 0; height: 30px; padding: 0 9px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-raised); font-size: var(--fs-sm); }
+.tag-editor-add > input:focus { outline: none; border-color: var(--line-focus); }
+.tag-editor-error { margin: 0; color: var(--danger, #e5484d); font-size: var(--fs-2xs); }
+.tag-editor-actions { display: flex; justify-content: flex-end; gap: 8px; }

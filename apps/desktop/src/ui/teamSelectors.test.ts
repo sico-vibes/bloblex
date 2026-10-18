@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Project, Session } from '../types'
-import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sideSessionsFor, sidebarSubtitle, splitMentions, splitReferences } from './teamSelectors'
+import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, isWaitingDelegation, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sideSessionsFor, sidebarSubtitle, splitMentions, splitReferences } from './teamSelectors'
 
 const agent = (id: string, name: string, extra: Partial<Agent> = {}): Agent => ({ id, name, description: '', instructions: '', color: 'mint', runtimeId: 'rt', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', ...extra })
 const session = (id: string, extra: Partial<Session> = {}): Session => ({ id, runtimeId: 'rt', updatedAt: '2026-10-01T00:00:00Z', ...extra })
@@ -132,5 +132,21 @@ describe('conversationTree', () => {
     expect(main1.children.map((node) => [node.session.id, node.kind, node.role])).toEqual([['side-asked', 'side', 'sender']])
     expect(tree.find((node) => node.session.id === 'side-received')?.role).toBe('receiver')
     expect(ancestorIds(tree, 'side-asked')).toEqual(['main-1'])
+  })
+
+  // FIX39 item 18: a queued delegation is visible, so a side conversation never
+  // shows the bot's empty "Ready when you are" screen while its work waits.
+  it('recognises a queued delegation notice as the waiting state', () => {
+    const messages = (meta: Record<string, unknown>, role = 'notice') => [{ id: 'm1', role, content: 'x', meta }]
+    expect(isWaitingDelegation(messages({ kind: 'delegation', state: 'queued' }))).toBe(true)
+    // The sent-delegation notice and the plain fresh-session notice are not it.
+    expect(isWaitingDelegation(messages({ kind: 'delegation', direction: 'sent' }))).toBe(false)
+    expect(isWaitingDelegation(messages({ kind: 'context_reset', reason: 'fresh_session' }))).toBe(false)
+    // Only the last message decides: work has started once a later message exists.
+    expect(isWaitingDelegation([{ id: 'm1', role: 'notice', content: 'Waiting', meta: { kind: 'delegation', state: 'queued' } }, { id: 'm2', role: 'assistant', content: 'Done' }])).toBe(false)
+    expect(isWaitingDelegation([])).toBe(false)
+    expect(isWaitingDelegation(undefined)).toBe(false)
+    // A user message with no meta is not a notice.
+    expect(isWaitingDelegation(messages({ kind: 'delegation', state: 'queued' }, 'user'))).toBe(false)
   })
 })

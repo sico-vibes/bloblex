@@ -131,6 +131,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [profileAbout, setProfileAbout] = useState('')
   const [sharedMemoryWrites, setSharedMemoryWrites] = useState(false)
   const [keepAwake, setKeepAwake] = useState(false)
+  // FIX39 item 18: the only concurrency limit — "Bots working at once",
+  // default 4, range 1–16. There is no per-bot cap any more.
+  const [botsAtOnce, setBotsAtOnce] = useState(4)
   const [speechEngine, setSpeechEngine] = useState<DictationEngineChoice>('local')
   const [cloudConsent, setCloudConsent] = useState(false)
   const [consentFor, setConsentFor] = useState<DictationEngineChoice | null>(null)
@@ -193,6 +196,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       if (typeof settings['profile.about'] === 'string') setProfileAbout(settings['profile.about'])
       setSharedMemoryWrites(settings['memory.sharedAgentWrites'] === true)
       setKeepAwake(settings['power.keepAwake'] === true)
+      if (typeof settings['concurrency.botsAtOnce'] === 'number') setBotsAtOnce(settings['concurrency.botsAtOnce'])
       const loadedEngine = normalizeEngineChoice(settings['speech.engine'])
       setSpeechEngine(loadedEngine)
       setCloudConsent(settings['speech.cloud.consent'] === true)
@@ -558,6 +562,11 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                 <div className="settings-form-actions"><button className="primary-button small" disabled={saving}>Save editor</button></div>
               </form>
             </SettingsGroup>}
+            <SettingsGroup title="Work">
+              <SettingsRow label={`${Nouns} working at once`} hint={`How many conversations run at the same time across every ${noun}. A bot can be in as many conversations as you like; this is the only limit. Extra work waits its turn and says so.`}>
+                <Select ariaLabel={`${nouns} working at once`} variant="muted" value={String(botsAtOnce)} disabled={saving} onChange={(value) => { const next = Number(value); void saveSetting('concurrency.botsAtOnce', next).then((failure) => { if (!failure) setBotsAtOnce(next) }) }} options={Array.from({ length: 16 }, (_, index) => { const count = index + 1; return { value: String(count), label: String(count) } })} />
+              </SettingsRow>
+            </SettingsGroup>
             <SettingsGroup title="Power">
               <SettingsRow label={`Keep this computer awake while ${nouns} work`} hint={`While a ${noun} is working or a schedule is about to run, Bitbots asks Windows not to sleep on its own. It does not stop you closing the lid or choosing Sleep.`}>
                 <button type="button" className={`toggle ${keepAwake ? 'on' : ''}`} role="switch" aria-label={`Keep this computer awake while ${nouns} work`} aria-checked={keepAwake} disabled={saving} onClick={() => { const next = !keepAwake; void saveSetting('power.keepAwake', next).then((failure) => { if (!failure) setKeepAwake(next) }) }}><i /></button>

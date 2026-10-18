@@ -158,3 +158,12 @@ The background service logs only to stderr, which nobody keeps, and there is no 
   - UI: the Settings row, the profile menu item and the preview dialog;
   - tests.
 - **When:** now. It touches only the tracing set-up and routing in `main.rs`, separate from P7 and P8's areas.
+
+## P9 addition: a "Working bots" side panel (owner, 18 October, evening)
+
+Modelled on Claude Code's "Background tasks" panel: a collapsible section in the side panel (session rail) that lists the bots currently working on tasks the Manager (or any bot) assigned.
+
+- Each row shows the bot's face, its name, the task's short title and its status (working, waiting, limited or done), with elapsed time.
+- Clicking a row opens that task's conversation, the bot-to-bot sub-conversation, with its live activity.
+- Finished tasks collapse into "N finished".
+- It belongs with recommendation 11 (live visibility) in P9 and uses the same data: running and queued side sessions, P6's queue state and P8's limited state.

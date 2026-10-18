@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Bitbots",
   "mainBinaryName": "Bitbots",
-  "version": "0.1.0-beta.31",
+  "version": "0.1.0-beta.32",
   "identifier": "com.bitbots.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -52,7 +52,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBCMjJGNTc4RkQ3NUEwMEIKUldRTG9IWDllUFVpQzJrYnM4QmU4aWxPbEZuQlVycmNsOW82Vi9tcFNEYTZHU2pkWUs5Mi9lSjkK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxMzZBNUUyMzZGMjY2MTEKUldRUlp2STI0cVUyTWVjbUZMYkh0UlJSSW1mTndranA2RDVoNzY4MUxCekJ2YkFQK2J2Sm1Pem4K",
       "endpoints": [
         "https://github.com/sico-vibes/bloblex/releases/latest/download/latest.json"
       ],

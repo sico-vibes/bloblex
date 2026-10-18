@@ -58,3 +58,35 @@ Answers to the questions in `docs/FIX39_RESEARCH_AUDIT.md`, plus the decisions t
   - Locked bots refuse every change. Ordinary bots keep today's tools.
   - One daemon test per tool covers both outcomes: approval needed and a refusal.
   - The tool list in the Manager's prompt stays stable, so it does not change the instruction hash on every turn.
+
+## P8: watchdog (the T3 research's P0 recommendations 3 and 4, folded in by the owner, 18 October)
+
+The owner chose to fold the T3 research's P0 items into this release (`docs/FIX40_T3_RESEARCH.md`, §3). Recommendations 1 and 2 are already part of P6. P8 covers the other two:
+
+- **Usage limits become a state, not an error (recommendation 3).**
+  - Classify quota and rate-limit failures from every provider, with the reset time when the provider gives one.
+  - Mark the conversation "Limited until <time>" in the transcript, sidebar and companion.
+  - Resume it automatically when the window opens: a scheduled sweep in the daemon, on by default. Settings › Experimental gets "Resume after usage limits".
+  - Never loop on an expired or unknown window; with no reset time, back off and ask.
+  - Evidence and design: T3 `UsageLimitRecoveryWorker.ts`, `ClaudeAdapterV2.ts:2749-2831`, cited in the research.
+- **Bounded retry and continuation (recommendation 4).**
+  - Transient provider failures get a bounded retry with jittered backoff and one owner per turn. These include process start failures, dropped streams and 5xx errors; usage limits are excluded (they take the state above).
+  - After a turn is killed or crashes (app restart, timeout), the next activation continues it with a one-off "Continue where you left off" prompt. The chain is bounded, and the context recap from P6 is included when the resume failed.
+  - The user sees one honest line, for example "Retrying (2 of 3)…" or "Picking up where it left off", never a pile of errors.
+- **Files:**
+  - adapter error mapping in `crates/bloblex-adapter-{claude,codex,acp}`;
+  - `crates/bloblex-daemon/src/retry.rs`;
+  - `main.rs`, the turn start, failure and continuation path only;
+  - `quota.rs` / `quota_sources.rs`;
+  - the `crates/bloblex-storage/src/lib.rs` state columns, with a migration tested on a previous-version database;
+  - `apps/desktop/src/remote/tiers.json` rows for new events;
+  - UI: the notice copy in `errorCopy.ts`, the "Limited" state in `teamSelectors.ts` / `TeamSidebar.tsx` and the transcript notice, and the Experimental toggle.
+- **When:** after P6 is merged; it shares `main.rs` and storage. It may run in parallel with P7 only if each keeps to its own areas of `main.rs` (P8 the turn path, P7 the tool routing).
+- **Done means:** tests that fail on today's code for each of these:
+  - a Claude, a Codex and an OpenCode usage-limit error become "Limited" with the right reset time;
+  - the sweep resumes it;
+  - an expired window does not loop;
+  - a transient failure is retried within the bound and then reported once;
+  - a killed turn continues on the next activation with the recap.
+
+  Nothing in the retry or continuation path logs conversation text.

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BlobCanvas } from './BlobCanvas'
 import { setBitbotsEnabled } from './bitbots'
 import * as soundCues from './soundCues'
+import * as lookPaint from './look/paint'
 
 type FrameCallback = (timestamp: number) => void
 
@@ -245,11 +246,24 @@ describe('BlobCanvas mounted lifecycle', () => {
   })
 
   it('traces the look silhouette and defaults to the round mascot', () => {
-    const sun = mount(<BlobCanvas color="#e67f72" size={100} mood="idle" look={{ shape: 'sun', seed: 'petals' }} />)
+    const traceForm = lookPaint.traceForm
+    const traces: Array<{ arcs: number; lines: number }> = []
+    const trace = vi.spyOn(lookPaint, 'traceForm').mockImplementation((...args) => {
+      const arcs = context.arc.mock.calls.length
+      const lines = context.lineTo.mock.calls.length
+      traceForm(...args)
+      traces.push({ arcs: context.arc.mock.calls.length - arcs, lines: context.lineTo.mock.calls.length - lines })
+    })
+    const cloud = mount(<BlobCanvas color="#e67f72" size={100} mood="idle" look={{ shape: 'cloud', seed: 'puffs' }} />)
     flushFrame(clock)
-    // A sun's petals are circles unioned with its core outline.
-    expect(context.arc.mock.calls.length).toBeGreaterThanOrEqual(6)
-    sun.unmount()
+    // Every shading pass retraces the core outline and exactly three mirrored lobes.
+    expect(traces.length).toBeGreaterThan(0)
+    for (const { arcs, lines } of traces) {
+      expect(arcs).toBe(3)
+      expect(lines).toBeGreaterThan(40)
+    }
+    cloud.unmount()
+    trace.mockRestore()
     context.arc.mockClear()
     context.lineTo.mockClear()
     const mascot = mount(<BlobCanvas color="#e67f72" size={100} mood="idle" />)

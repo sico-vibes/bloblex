@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRemoteLayout, type LayoutOverride } from './layout'
+import { Select } from '../ui/Select'
 import { ArrowLeft, Check, Download, Eye, EyeOff, List, LogOut, Monitor, RefreshCw, Send, ShieldAlert, Smartphone, WifiOff } from 'lucide-react'
 import { fetchSnapshot, listenForDaemonEvents, previewMode, rpc } from '../tauri'
 import type { Agent, PermissionRequest, Session, Snapshot } from '../types'
@@ -112,6 +114,9 @@ function sendProblem(reason: unknown, hostName: string): string {
  */
 export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { device?: RemoteDeviceApi; pollMs?: number } = {}) {
   const device = useMemo(() => deviceProp ?? createPreviewDeviceApi(), [deviceProp])
+  const { layout, override, changeOverride } = useRemoteLayout()
+  const wide = layout === 'wide'
+  const [rosterQuery, setRosterQuery] = useState('')
   const noun = useEntityNoun()
   const nouns = useEntityNoun({ plural: true })
   const [screen, setScreen] = useState<Screen>('checking')
@@ -261,7 +266,7 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
   const openAgent = (id: string) => { setAgentId(id); setConversationId(null); setListOpen(false); setScreen('chat') }
   const preApproval = screen === 'checking' || screen === 'connect' || screen === 'waiting'
 
-  return <div className="rm-stage">
+  return <div className="rm-stage" data-layout={layout}>
     <div className="rm-phone" data-screen={screen}>
       {previewMode && <p className="rm-ribbon" role="note">Preview · simulated, not connected to a computer</p>}
       {updateReady && <p className="rm-update" role="status">A new version is ready.<button type="button" onClick={applyUpdate}>Reload</button></p>}
@@ -272,13 +277,13 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
       {screen === 'waiting' && <WaitingScreen name={pendingName} back={native ? 'Back to sign in' : 'Use a different code'} onCancel={() => setScreen('connect')} />}
       {!preApproval && <>
         <header className="rm-top">
-          {screen === 'chat'
+          {screen === 'chat' && !wide
             ? <button type="button" className="rm-icon" aria-label={`Back to ${nouns}`} onClick={() => setScreen('bots')}><ArrowLeft size={19} /></button>
             : <img className="rm-logo" src={logo} alt="" width="26" height="26" />}
           {screen === 'chat' && activeAgent
             ? <>
               <div className="rm-title"><strong>{activeAgent.name}</strong><small>{activeSession?.title?.trim() || peerLine(activeAgent, sessions, blobState(activeAgent, sessions, runtimes, online))}</small></div>
-              {conversations.length > 1 && <button type="button" className="rm-icon rm-list-button" aria-label={`${activeAgent.name}'s conversations`} aria-haspopup="dialog" onClick={() => setListOpen(true)}><List size={19} /></button>}
+              {!wide && conversations.length > 1 && <button type="button" className="rm-icon rm-list-button" aria-label={`${activeAgent.name}'s conversations`} aria-haspopup="dialog" onClick={() => setListOpen(true)}><List size={19} /></button>}
             </>
             : <div className="rm-host" aria-label={`Computer: ${hostName}, ${online ? 'online' : 'not connected'}`}>
               <StatusDot status={online ? 'working' : connection === 'reconnecting' || connection === 'connecting' ? 'waiting' : 'offline'} />
@@ -287,16 +292,26 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
         </header>
         {!online && <p className="rm-connection" role="status">{connection === 'offline' ? `Offline. Bitbots will reconnect to ${hostName} when the network is back.` : `Reconnecting to ${hostName}…`}</p>}
         {me?.quietHoursActive && <p className="rm-connection quiet" role="status">Quiet hours: this device can read but not send.</p>}
+        <div className={wide ? 'rm-workspace' : 'rm-content'}>
+        {(wide || screen === 'bots') && <aside className="rm-roster" aria-label={nouns}>
+          {wide && <>
+            <div className="rm-roster-top"><strong>{hostName}</strong><button type="button" className="rm-text-button" onClick={() => setScreen(screen === 'device' ? activeAgent ? 'chat' : 'bots' : 'device')}>This device</button></div>
+            <input className="rm-roster-search" aria-label={`Search ${nouns}`} placeholder={`Search ${nouns}`} value={rosterQuery} onChange={(event) => setRosterQuery(event.target.value)} />
+          </>}
+          <BotsScreen hostName={hostName} agents={wide ? agents.filter((agent) => agent.name.toLowerCase().includes(rosterQuery.toLowerCase())) : agents} sessions={sessions} runtimes={runtimes} online={online} loaded={snapshot !== null} waiting={waiting} nouns={nouns} onOpen={openAgent} onRetry={() => void refresh()} />
+          {wide && activeAgent && <section className="rm-roster-conversations" aria-label={`${activeAgent.name}'s conversations`}><h2>{activeAgent.name}'s conversations</h2><ul className="rm-convos">{conversations.map((session) => <li key={session.id}><button type="button" className={session.id === activeSession?.id ? 'on' : ''} aria-current={session.id === activeSession?.id ? 'true' : undefined} onClick={() => { setConversationId(session.id); setScreen('chat') }}><span><strong>{session.title?.trim() || 'New conversation'}</strong><small>{shortWhen(session.updatedAt ?? session.createdAt)}</small></span></button></li>)}</ul></section>}
+        </aside>}
         <main className="rm-main">
-          {screen === 'bots' && <BotsScreen hostName={hostName} agents={agents} sessions={sessions} runtimes={runtimes} online={online} loaded={snapshot !== null} waiting={waiting} nouns={nouns} onOpen={openAgent} onRetry={() => void refresh()} />}
+          {wide && screen === 'bots' && <section className="rm-empty-chat"><h2>Choose a {noun}</h2><p>Open a conversation from the list.</p></section>}
           {screen === 'chat' && activeAgent && <ChatScreen key={activeSession?.id ?? 'none'} agent={activeAgent} session={activeSession} permissions={snapshot?.permissions ?? []} hostName={hostName} online={online} tier={tier}
             canApprove={tier === 'operator' && me?.approvalsFromRemote === true} quiet={me?.quietHoursActive === true} nouns={nouns} />}
-          {screen === 'device' && me && <DeviceScreen me={me} noun={noun} onLogout={() => void logout()} />}
+          {screen === 'device' && me && <DeviceScreen me={me} noun={noun} onLogout={() => void logout()} layoutOverride={override} onLayoutChange={changeOverride} />}
         </main>
-        <nav className="rm-tabs" aria-label="Sections">
+        </div>
+        {!wide && <nav className="rm-tabs" aria-label="Sections">
           <button type="button" className={screen === 'bots' || screen === 'chat' ? 'on' : ''} onClick={() => setScreen('bots')}><Monitor size={19} aria-hidden="true" /><span>{nouns.charAt(0).toUpperCase() + nouns.slice(1)}</span>{waiting.length > 0 && <i className="rm-badge" aria-label={`${waiting.length} need you`}>{waiting.length}</i>}</button>
           <button type="button" className={screen === 'device' ? 'on' : ''} onClick={() => setScreen('device')}><Smartphone size={19} aria-hidden="true" /><span>This device</span></button>
-        </nav>
+        </nav>}
       </>}
       {listOpen && activeAgent && <ConversationSheet agentName={activeAgent.name} conversations={conversations} current={activeSession?.id ?? null}
         onClose={() => setListOpen(false)} onChoose={(id) => { setConversationId(id); setListOpen(false) }} />}
@@ -487,9 +502,10 @@ function ChatScreen({ agent, session, permissions, hostName, online, tier, canAp
   </section>
 }
 
-function DeviceScreen({ me, noun, onLogout }: { me: RemoteMe; noun: string; onLogout: () => void }) {
+function DeviceScreen({ me, noun, onLogout, layoutOverride, onLayoutChange }: { me: RemoteMe; noun: string; onLogout: () => void; layoutOverride: LayoutOverride; onLayoutChange: (value: string) => void }) {
   return <section className="rm-device">
     <h2>{me.device.name}</h2>
+    <div className="rm-layout-choice"><span>Layout</span><Select ariaLabel="Layout" value={layoutOverride} onChange={onLayoutChange} options={[{ value: 'auto', label: 'Auto' }, { value: 'phone', label: 'Phone' }, { value: 'wide', label: 'Wide' }]} /></div>
     <dl className="rm-facts">
       <div><dt>Connected to</dt><dd>{me.host.name}</dd></div>
       <div><dt>This device may</dt><dd>{TIER_WORD[me.device.tier]}</dd></div>

@@ -31,7 +31,7 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
     role: 'Code reviewer',
     description: 'Reviews changes for correctness, readability and risk before they are merged.',
     color: 'blue',
-    shape: 'boxy',
+    shape: 'squircle',
     instructions: [
       'You review code changes and report problems before they reach the main branch.',
       'Read the whole diff first, then the surrounding files, before judging any single line.',
@@ -88,7 +88,7 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
     role: 'Refactoring helper',
     description: 'Reshapes code for clarity and reuse while keeping behaviour and tests intact.',
     color: 'violet',
-    shape: 'organic',
+    shape: 'pebble',
     instructions: [
       'You refactor code without changing what it does.',
       'Start by naming the smell you are removing and the behaviour that must stay the same.',
@@ -145,7 +145,7 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
     role: '',
     description: '',
     color: 'mint',
-    shape: 'round',
+    shape: 'circle',
     instructions: '',
   },
 ] as const

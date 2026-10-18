@@ -1,7 +1,7 @@
 // Project-first sidebar: projects group blobs; each blob is one ongoing
 // conversation. Casual blobs (no project) live under "Unassigned".
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Archive, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Trash2, Copy as Duplicate, Download, BriefcaseBusiness } from 'lucide-react'
+import { Archive, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Trash2, Copy as Duplicate, Download, Star } from 'lucide-react'
 import type { Agent, Project, Runtime, Session } from '../types'
 import { agentLook } from '../blob/look'
 import { RuntimeMark } from './providerBrand'
@@ -99,8 +99,8 @@ export type TeamSidebarActions = {
   onOpenRuntimeSettings: () => void
 }
 
-export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, query, onQueryChange, actions, banner }: {
-  /** A card shown between the search box and the bots (the one-time Manager setup). */
+export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner }: {
+  /** A card shown between the search box and the bots (Manager setup). */
   banner?: ReactNode
   agents: Agent[]
   projects: Project[]
@@ -114,8 +114,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   unreadSessionIds: ReadonlySet<string>
   approvalSessionIds: ReadonlySet<string>
   selectedAgentId: string | null
-  query: string
-  onQueryChange: (query: string) => void
+  onOpenSearch: () => void
   actions: TeamSidebarActions
 }) {
   const noun = useEntityNoun()
@@ -132,7 +131,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   const suppressClick = useRef(false)
   const [runtimeTooltipAgentId, setRuntimeTooltipAgentId] = useState<string | null>(null)
   const menuTrigger = useRef<HTMLElement | null>(null)
-  const groups = useMemo(() => groupAgentsByProject(agents, projects, query, showHidden), [agents, projects, query, showHidden])
+  const groups = useMemo(() => groupAgentsByProject(agents, projects, showHidden), [agents, projects, showHidden])
   const manager = managerOf(agents)
   const pinned = pinnedIds.map((id) => agents.find((agent) => agent.id === id && !agent.archived && (showHidden || !agent.hidden))).filter((agent): agent is Agent => !!agent)
   const hiddenCount = agents.filter((agent) => !agent.archived && agent.hidden).length
@@ -283,7 +282,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       }}>
       <span className="team-row-avatar">
         <BlobCanvas color={agentColorHex(agent.color)} size={50} mood={status.mood} look={agentLook(agent)} label={agent.name} track={selected} />
-        {isManager(agent) && <span className="leader-badge" title="Manager" aria-hidden="true"><BriefcaseBusiness size={8} strokeWidth={2.6} /></span>}
+        {isManager(agent) && <span className="leader-badge" title="Manager" aria-hidden="true"><Star size={10} fill="currentColor" strokeWidth={0} /></span>}
       </span>
       <span className="bot-row-copy">
         <span className="bot-row-line">
@@ -297,13 +296,13 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   }
 
   return <div className="team-sidebar">
-    <label className="sidebar-search"><span className="sr-only">Search {nouns}</span>
+    <button type="button" className="sidebar-search" aria-label={`Search ${nouns}, conversations, projects, and actions`} aria-haspopup="dialog" aria-keyshortcuts="Control+k" onClick={onOpenSearch}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
-      <input value={query} placeholder="Search" aria-label={`Search ${nouns}`} onChange={(event) => onQueryChange(event.target.value)} />
-    </label>
+      <span>Search</span><kbd aria-hidden="true">Ctrl K</kbd>
+    </button>
     {banner}
     <nav className="sidebar-scroll" aria-label={Nouns} data-tour="roster"><div role="tree" aria-label={`${Nouns} by project`}>
-      {manager && !query && <section className="team-group manager-group" aria-label="Manager">
+      {manager && <section className="team-group manager-group" aria-label="Manager">
         <div className="team-group-rows">{renderRow(manager)}</div>
       </section>}
       {pinned.length > 0 && <section className="team-group" aria-label="Pinned">
@@ -313,7 +312,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       {groups.map(({ project, agents: members }) => {
         const key = project?.id ?? 'unassigned'
         const rows = members.filter((agent) => !pinnedIds.includes(agent.id))
-        if (!project && rows.length === 0 && members.length === 0 && projects.length > 0 && !query) return null
+        if (!project && rows.length === 0 && members.length === 0 && projects.length > 0) return null
         return <section key={key} data-project-id={project?.id ?? 'unassigned'} className={`team-group ${dropHint?.kind === 'project' && dropHint.projectId === (project?.id ?? null) ? 'drop-target' : ''}`} aria-label={project?.name ?? 'Unassigned'}>
           <div className="team-group-head">
             {project ? <button type="button" className="team-group-toggle" aria-expanded={!project.collapsed} onClick={() => actions.onToggleProjectCollapsed(project)}

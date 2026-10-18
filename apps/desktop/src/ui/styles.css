@@ -73,6 +73,13 @@
 .usage-block-heading { margin-bottom: 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .usage-block-heading h3 { margin: 0; color: var(--text-1); font-size: var(--fs-sm); font-weight: 600; }
 .usage-block-heading > span { color: var(--text-3); font-size: var(--fs-2xs); text-align: right; }
+.usage-block-heading.quota-heading { align-items: center; justify-content: flex-start; }
+.quota-heading h3 { flex-shrink: 0; }
+.quota-heading .usage-divider { flex: 0 0 1px; height: 14px; background: var(--line); }
+.quota-heading .usage-provenance { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.quota-heading .tip { flex-shrink: 0; }
+.quota-heading .usage-info-button { width: 24px; height: 24px; }
+.quota-heading .usage-refresh-button { flex-shrink: 0; margin-left: auto; }
 .usage-token-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .usage-token { min-width: 0; padding: 9px 10px; display: grid; align-content: center; gap: 4px; border-radius: var(--radius-sm); background: var(--surface-subtle); }
 .usage-token span { color: var(--text-3); font-size: var(--fs-2xs); }

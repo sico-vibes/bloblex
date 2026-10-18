@@ -50,7 +50,7 @@ describe('bot templates', () => {
 
   it('applies name, text, role, colour and shape while keeping where and how it runs', () => {
     const template = BOT_TEMPLATES[0]
-    const applied = applyTemplate(draft({ look: { shape: 'cat', seed: 'keep-me' } }), template)
+    const applied = applyTemplate(draft({ look: { shape: 'pebble', seed: 'keep-me' } }), template)
     expect(applied.name).toBe(template.name)
     expect(applied.description).toBe(template.description)
     expect(applied.instructions).toBe(template.instructions)

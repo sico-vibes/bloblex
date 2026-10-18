@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, CalendarClock, ChevronDown, Mail, Newspaper, Pencil, Play, Plus, Trash2, FlaskConical, GitBranch } from 'lucide-react'
 import type { Agent, Automation, AutomationRun } from '../types'
+import { rpcFailure } from '../executionContract'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
 import { agentColorHex } from './agentColor'
@@ -126,7 +127,7 @@ export function SchedulesView(props: SchedulesViewProps) {
   const act = async (id: string, work: () => Promise<void>) => {
     setBusy(id)
     setProblem(null)
-    try { await work() } catch (reason) { setProblem(reason instanceof Error ? reason.message : 'That did not work.') } finally { setBusy(null) }
+    try { await work() } catch (reason) { setProblem(rpcFailure(reason).message) } finally { setBusy(null) }
   }
 
   const card = (automation: Automation) => <ScheduleCard key={automation.id} automation={automation} agent={agentById.get(automation.agentId)} nowMs={nowMs} busy={busy === automation.id}
@@ -293,7 +294,7 @@ function AutomationEditor({ existing, template, agents, defaultAgentId, onClose,
     if (!schedule) return
     let active = true
     const timer = window.setTimeout(() => {
-      onPreview(schedule).then((rows) => { if (active) setPreview(rows) }).catch((reason) => { if (active) setPreviewError(reason instanceof Error ? reason.message : 'That schedule is not valid.') })
+      onPreview(schedule).then((rows) => { if (active) setPreview(rows) }).catch((reason) => { if (active) setPreviewError(rpcFailure(reason).message) })
     }, 300)
     return () => { active = false; window.clearTimeout(timer) }
   }, [scheduleKey]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -307,7 +308,7 @@ function AutomationEditor({ existing, template, agents, defaultAgentId, onClose,
     try {
       await onSave({ agentId, name: name.trim(), prompt: prompt.trim(), schedule, sessionMode, approvalMode, maxRuntimeSecs: Number(maxRuntime) })
     } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : 'The automation could not be saved.')
+      setFailure(rpcFailure(reason).message)
       setSaving(false)
     }
   }

@@ -1772,7 +1772,7 @@ async fn native_ping_is_open_and_records_where_it_came_from() {
     // route is unauthenticated and exempt from the origin check.
     let response = gateway.client.get(gateway.url("/api/ping")).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.json::<Value>().await.unwrap(), json!({"ok": true}));
+    assert_eq!(response.json::<Value>().await.unwrap(), json!({"ok": true, "app": "bitbots", "role": "remote-gateway"}));
 
     let status = super::rpc(&gateway.st, "remote.status", &json!({})).await.unwrap();
     assert_eq!(status["native"]["lastReachedFrom"], "this network");
@@ -2087,3 +2087,78 @@ async fn a_websocket_upgrade_without_an_origin_is_refused() {
     }
 }
 
+
+#[tokio::test]
+async fn fix39_another_bitbots_gateway_refuses_enable_without_serving() {
+    let gateway = gateway().await;
+    let ping: Value = gateway.client.get(gateway.url("/api/ping")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(ping["app"], "bitbots");
+    assert_eq!(ping["role"], "remote-gateway");
+    let (st, _) = crate::phase2a_tests::state();
+    let fake = Arc::new(FakeCli::new(RUNNING_STATUS, EMPTY_SERVE));
+    st.remote.set_cli(fake.clone());
+    st.db.set_setting("remote.port", &json!(gateway.port)).unwrap();
+    let error = super::enable(&st).await.unwrap_err();
+    assert_eq!(error.1.code, "conflict");
+    assert!(error.1.message.contains("Another copy of Bitbots"));
+    assert_eq!(st.remote.tailscale_state(), super::tailscale::TailscaleState::PortInUse);
+    assert!(st.remote.bound_address().is_none());
+    let refreshed = dispatch(&st, "remote.status", json!({})).await.unwrap();
+    assert_eq!(refreshed["tailscale"], "port_in_use");
+    assert!(refreshed["error"].as_str().unwrap().contains("Another copy of Bitbots"));
+    assert!(!fake.calls().iter().any(|args| args.iter().any(|arg| arg == "--bg")));
+
+    // The other copy quits. A status reload ("Check again") drops the conflict
+    // and hands the switch back off, not stuck on "error" with no message.
+    super::disable(&gateway.st).await.unwrap();
+    for _ in 0..50 {
+        if !super::is_bitbots_gateway(gateway.port).await {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let recovered = dispatch(&st, "remote.status", json!({})).await.unwrap();
+    assert_eq!(recovered["tailscale"], "ready");
+    assert_eq!(recovered["link"], "off");
+    assert!(recovered["error"].is_null());
+}
+
+#[tokio::test]
+async fn fix39_foreign_listener_falls_back_and_serves_the_persisted_port() {
+    let foreign = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = foreign.local_addr().unwrap().port();
+    // Answer the ownership probe with an unrelated JSON service.
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = foreign.accept().await.unwrap();
+        let mut request = [0; 2048];
+        let _ = stream.read(&mut request).await;
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}").await.unwrap();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    });
+    let (st, _) = crate::phase2a_tests::state();
+    let fake = Arc::new(FakeCli::new(RUNNING_STATUS, EMPTY_SERVE));
+    st.remote.set_cli(fake.clone());
+    st.db.set_setting("remote.port", &json!(port)).unwrap();
+    super::enable(&st).await.unwrap();
+    let chosen = st.remote.bound_address().unwrap().port();
+    assert_ne!(chosen, port);
+    assert_eq!(super::remote_port(&st), chosen);
+    assert!(fake.calls().contains(&super::tailscale::serve_on_args(443, chosen)));
+    super::disable(&st).await.unwrap();
+    task.abort();
+}
+
+/// F1: the candidate loop must survive a Windows reserved or excluded port
+/// range, which fails with `PermissionDenied`, and must only probe an endpoint
+/// that something actually occupies.
+#[test]
+fn bind_failures_that_rule_out_only_one_candidate() {
+    use std::io::ErrorKind;
+    assert!(super::bind_error_allows_fallback(ErrorKind::AddrInUse));
+    assert!(super::bind_error_allows_fallback(ErrorKind::PermissionDenied));
+    assert!(super::bind_error_is_occupied(ErrorKind::AddrInUse));
+    assert!(!super::bind_error_is_occupied(ErrorKind::PermissionDenied));
+    // Anything else stays fatal, as before.
+    assert!(!super::bind_error_allows_fallback(ErrorKind::InvalidInput));
+    assert!(!super::bind_error_allows_fallback(ErrorKind::AddrNotAvailable));
+}

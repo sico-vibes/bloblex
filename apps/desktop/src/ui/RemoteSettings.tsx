@@ -22,9 +22,11 @@ const TIER_HINT: Record<RemoteTier, string> = {
 /** What to do when Tailscale is not ready, one plain step list per state. */
 export const TAILSCALE_FIX: Record<Exclude<RemoteTailscaleState, 'ready'>, { title: string; steps: string[] }> = {
   not_installed: { title: 'Tailscale is not installed', steps: ['Install Tailscale on this computer from tailscale.com/download.', 'Sign in, then install it on your phone with the same account.'] },
+  starting: { title: 'Tailscale is starting', steps: ['Wait a moment for Tailscale to connect, then check again.'] },
+  not_running: { title: 'Tailscale is not running', steps: ['Open Tailscale on this computer, then check again.'] },
   logged_out: { title: 'Tailscale is signed out', steps: ['Open Tailscale from the system tray and sign in.', 'Use the same account on your phone.'] },
   https_disabled: { title: 'HTTPS is off for your tailnet', steps: ['Open the Tailscale admin console and go to DNS.', 'Turn on MagicDNS and HTTPS Certificates, then check again.'] },
-  port_in_use: { title: 'The Remote port is busy', steps: ['Another app is using the port Bitbots listens on.', 'Close that app, or restart Bitbots, then check again.'] },
+  port_in_use: { title: 'The Remote port is busy', steps: ['Read the message below: another copy of Bitbots or another HTTPS service may be using this port.', 'Quit the other copy, or free the HTTPS port, then check again.'] },
   funnel_on: { title: 'Tailscale Funnel is on', steps: ['Funnel would publish Bitbots to the whole internet, so Remote will not start.', 'Run "tailscale funnel reset" or turn Funnel off in Tailscale, then check again.'] },
 }
 

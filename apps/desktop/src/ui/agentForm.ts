@@ -100,7 +100,7 @@ export function createDraft(runtimes: readonly Runtime[], selectedRuntimeId: str
     ?? runtimes.find((runtime) => runtimeUsable(runtime))?.id
     ?? runtimes[0]?.id
     ?? ''
-  return { name: '', description: '', instructions: '', color: 'mint', look: { shape: 'round', seed: `blob-${Math.floor(Math.random() * 0xffffffff).toString(36)}` }, runtimeId, defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null, role: '', projectId: null, leader: false }
+  return { name: '', description: '', instructions: '', color: 'mint', look: { shape: 'circle', seed: `blob-${Math.floor(Math.random() * 0xffffffff).toString(36)}` }, runtimeId, defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null, role: '', projectId: null, leader: false }
 }
 
 export function starterDraft(runtime: Runtime): AgentDraft {
@@ -174,7 +174,7 @@ export function duplicateParams(source: Agent, name: string): Record<string, unk
     description: source.description,
     instructions: source.instructions,
     color: source.color,
-    look: normalizeLook(source.look) ?? { shape: 'round', seed: source.id },
+    look: normalizeLook(source.look) ?? { shape: 'circle', seed: source.id },
     model: source.model,
     thinking: source.thinking,
     serviceTier: source.serviceTier,

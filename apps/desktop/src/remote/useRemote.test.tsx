@@ -153,6 +153,19 @@ describe('useRemote', () => {
     expect(current().error).toMatch(/Tailscale is not installed/)
   })
 
+  it('keeps the exact daemon message from a string rejection after reload', async () => {
+    await mount()
+    h.rpc.mockImplementation(async (method: string) => {
+      if (method === 'remote.enable') throw 'conflict: Another copy of Bitbots is already serving Remote on this computer.'
+      if (method === 'remote.status') return status({ enabled: false, tailscale: 'port_in_use' })
+      return {}
+    })
+    await act(async () => { await hook!.enable() })
+    await flush()
+    expect(current().error).toBe('Another copy of Bitbots is already serving Remote on this computer.')
+    expect(current().status?.tailscale).toBe('port_in_use')
+  })
+
   it('keeps the pairing offer until the phone locks it', async () => {
     await mount()
     const offer: PairingOffer = { code: 'K7QM-4XPD', url: 'https://work-pc.tail1234.ts.net', qrPayload: 'https://work-pc.tail1234.ts.net', expiresAt: new Date(Date.now() + 300_000).toISOString(), attemptsLeft: 5 }

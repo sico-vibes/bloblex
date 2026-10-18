@@ -134,7 +134,7 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
     {step === 2 && <section className="onboarding-step onboarding-bot-step"><h1 id="onboarding-title" tabIndex={-1} ref={headingRef}>Meet your Manager</h1><p>Your Manager runs your team: it knows every project and {noun}, plans the work with you, and asks before it creates anything. Give it a look, a name and a model. You can change them later.</p>
       <div className="onboarding-bot-layout">
         <div className="onboarding-bot-look">
-          <LookEditor look={look} color={draft.color} colorHex={colorHex} name={draft.name.trim() || 'Manager'} onLookChange={(next) => setDraft({ ...draft, look: next })} onColorChange={(next) => setDraft({ ...draft, color: next })} />
+          <LookEditor look={look} color={draft.color} colorHex={colorHex} name={draft.name.trim() || 'Manager'} onLookChange={(next, color) => setDraft({ ...draft, look: next, color: color ?? draft.color })} onColorChange={(next) => setDraft({ ...draft, color: next })} />
         </div>
         <div className="onboarding-bot-fields">
           <label className="onboarding-field">Name<input className="text-input" value={draft.name} maxLength={40} onChange={(event) => setDraft({ ...draft, name: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter' && ready) { event.preventDefault(); void create() } }} /></label>

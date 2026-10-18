@@ -914,7 +914,7 @@ async fn emit_update(tx: &SessionEventSink, p: &Value, context_model: Option<Str
         "tool_call" => Some(AgentEvent::ToolStarted {
             tool_call_id: u["toolCallId"].as_str().unwrap_or("tool").into(),
             kind: u["kind"].as_str().unwrap_or("other").into(),
-            title: u["title"].as_str().unwrap_or("Tool call").into(),
+            title: tool_activity(u["kind"].as_str().unwrap_or("other"), u, u["title"].as_str().unwrap_or("Tool call")).label,
             raw: u.clone(),
         }),
         "tool_call_update" => {
@@ -1364,6 +1364,19 @@ fn resume_rejected_evidence(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn activity_titles_include_the_tool_target() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let sink = SessionEventSink::new(tx);
+        for (kind, input, expected) in [
+            ("read", json!({"path":"README.md"}), "Read README.md"),
+            ("execute", json!({"command":"cargo test\necho complete"}), "Ran cargo test"),
+        ] {
+            emit_update(&sink, &json!({"update":{"sessionUpdate":"tool_call","toolCallId":"tool","kind":kind,"title":kind,"rawInput":input}}), None).await;
+            assert!(matches!(rx.recv().await, Some(AgentEvent::ToolStarted { title, .. }) if title == expected), "{kind}");
+        }
+    }
 
     #[tokio::test]
     async fn session_relay_never_drops_critical_events_when_target_is_full() {

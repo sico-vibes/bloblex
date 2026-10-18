@@ -62,15 +62,15 @@ describe('Bitbots character engine', () => {
 
   it('swaps the silhouette with a squash, and snaps under reduced motion', () => {
     const engine = new BlobEngine()
-    expect(engine.form.shape).toBe('round')
-    engine.setLook({ shape: 'sun', seed: 'a' })
-    expect(engine.form.shape).toBe('sun')
+    expect(engine.form.shape).toBe('circle')
+    engine.setLook({ shape: 'cloud', seed: 'a' })
+    expect(engine.form.shape).toBe('cloud')
     step(engine, 60)
     expect(engine.sy).toBeLessThan(0.95)
     step(engine, 600)
     expect(engine.sy).toBeCloseTo(1, 2)
     const form = engine.form
-    engine.setLook({ shape: 'sun', seed: 'a' })
+    engine.setLook({ shape: 'cloud', seed: 'a' })
     expect(engine.form).toBe(form)
     engine.reducedMotion = true
     engine.setLook({ shape: 'triangle', seed: 'a' })

@@ -66,7 +66,7 @@ let root: Root | null = null
 let host: HTMLDivElement | null = null
 const flush = async (ms = 60) => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)) }) }
 
-beforeEach(() => { h.rpc.mockReset(); h.rpc.mockResolvedValue({}) })
+beforeEach(() => { (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true; localStorage.clear(); vi.restoreAllMocks(); media(390, false); h.rpc.mockReset(); h.rpc.mockResolvedValue({}) })
 afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null })
 
 async function mount(device: RemoteDeviceApi) {
@@ -98,7 +98,8 @@ describe('RemoteApp', () => {
     await flush()
     expect(device.pairCalls[0]).toMatchObject({ code: 'K7QM4XPD', name: 'Pixel 8' })
     expect(view.querySelector('.rm-waiting')?.textContent).toContain('Approve on your computer')
-    await flush(400)
+    const pairedBy = Date.now() + 3000
+    while (!view.querySelector('.rm-host') && Date.now() < pairedBy) await flush(50)
     expect(view.querySelector('.rm-host')?.textContent).toContain('Work PC')
     expect(view.querySelector('.rm-need')?.textContent).toContain('1 needs you')
     const rows = [...view.querySelectorAll('.rm-bot')]
@@ -272,5 +273,55 @@ describe('RemoteApp', () => {
     await flush()
     expect(device.logout).toHaveBeenCalled()
     expect(view.querySelector('.rm-connect h1')?.textContent).toBe('Connect to your computer')
+  })
+})
+
+function media(width: number, fine: boolean) {
+  const queries = new Map<string, { matches: boolean; listeners: Set<() => void> }>()
+  vi.spyOn(window, 'matchMedia').mockImplementation((query) => {
+    const entry = { matches: query.includes('min-width') ? width >= 900 : fine, listeners: new Set<() => void>() }
+    queries.set(query, entry)
+    return { get matches() { return entry.matches }, media: query, onchange: null,
+      addEventListener: (_: string, listener: () => void) => entry.listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => entry.listeners.delete(listener),
+      addListener: () => {}, removeListener: () => {}, dispatchEvent: () => true } as unknown as MediaQueryList
+  })
+  return (query: string, matches: boolean) => act(() => {
+    const entry = queries.get(query)!
+    entry.matches = matches
+    for (const listener of entry.listeners) listener()
+  })
+}
+
+describe('Remote responsive layout', () => {
+  it('shows the roster alongside chat on a wide fine-pointer screen and reacts to resizing', async () => {
+    const change = media(1440, true)
+    const view = await mount(fakeDevice(meFor('chat')))
+    expect(view.querySelector('[data-layout="wide"]')).not.toBeNull()
+    await act(async () => { view.querySelector<HTMLButtonElement>('.rm-bot')!.click() })
+    expect(view.querySelector('.rm-bots')).not.toBeNull()
+    expect(view.querySelector('.rm-chat')).not.toBeNull()
+    expect(view.querySelector('.rm-tabs')).toBeNull()
+    change('(min-width: 900px)', false)
+    expect(view.querySelector('[data-layout="phone"]')).not.toBeNull()
+    expect(view.querySelector('.rm-tabs')).not.toBeNull()
+  })
+
+  it('keeps a phone layout for coarse pointers and honours a stored override', async () => {
+    media(1440, false)
+    const view = await mount(fakeDevice(meFor('chat')))
+    expect(view.querySelector('[data-layout="phone"]')).not.toBeNull()
+  })
+
+  it('lets This device switch layouts and saves the override', async () => {
+    media(1440, true)
+    localStorage.setItem('bitbots.remote.layout', 'phone')
+    const view = await mount(fakeDevice(meFor('chat')))
+    expect(view.querySelector('[data-layout="phone"]')).not.toBeNull()
+    await act(async () => { [...view.querySelectorAll<HTMLButtonElement>('.rm-tabs button')].find((b) => b.textContent?.includes('This device'))!.click() })
+    await act(async () => { view.querySelector<HTMLButtonElement>('.rm-layout-choice .select-trigger')!.click() })
+    await act(async () => { [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((o) => o.textContent === 'Wide')!.click() })
+    expect(view.querySelector('[data-layout="wide"]')).not.toBeNull()
+    expect(localStorage.getItem('bitbots.remote.layout')).toBe('wide')
   })
 })

@@ -90,6 +90,7 @@ export function normalizeBot(raw: unknown): BotStyle | undefined {
 
 /** The robot a blob silhouette maps to when the user has not chosen an outline. */
 const SHAPE_FOR_BLOB: Record<string, BotShape> = {
+  circle: 'circle', pebble: 'circle', squircle: 'square',
   round: 'circle', organic: 'circle', droplet: 'circle', sun: 'hexagon', hexagon: 'hexagon',
   boxy: 'square', triangle: 'square', cat: 'square', capsule: 'rectangle', cloud: 'rectangle',
 }
@@ -115,10 +116,10 @@ export function sameBot(a: BotStyle | undefined, b: BotStyle | undefined) {
 }
 
 /** A random but tasteful combination, for "Surprise me". */
-export function randomBot(random: () => number = Math.random): BotStyle {
+export function randomBot(shape: BotShape, random: () => number = Math.random): BotStyle {
   const pick = <T,>(items: readonly T[]) => items[Math.min(items.length - 1, Math.floor(random() * items.length))]
   return {
-    shape: pick(BOT_SHAPES),
+    shape,
     shell: pick(SHELL_SWATCHES).value,
     trim: pick(TRIM_SWATCHES).value,
     screen: pick(SCREEN_SWATCHES).value,

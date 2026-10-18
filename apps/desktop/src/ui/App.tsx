@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, CornerDownRight, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Home, LoaderCircle, MessageCircle, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Search, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
+import { Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, CornerDownRight, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Home, Info, LoaderCircle, MessageCircle, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
 import { COMPANION_CHAT_SIZE_LABELS, COMPANION_CHAT_SIZES, isCompanionChatSize, MAX_COMPANION_PEERS, type CompanionChatSize } from '../blob/companionLayout'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
@@ -14,6 +14,7 @@ import { AnalyticsView } from './AnalyticsView'
 import { SchedulesView, type AutomationInput } from './SchedulesView'
 import type { DaemonSchedule } from './automationSchedule'
 import { usageTokenBuckets } from './usagePresentation'
+import { Tip } from './Tip'
 import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermission } from './permissionSelection'
 import { ApprovalCard } from './ApprovalCard'
 import bloblexLogo from '../assets/bloblex-128.png'
@@ -355,7 +356,6 @@ export function App() {
   /** The per-bot conversations column; open unless it was closed before. */
   const [convosOpen, setConvosOpen] = useState(() => { try { return localStorage.getItem('bloblex.conversations.open') !== '0' } catch { return true } })
   const setConvosVisible = (open: boolean) => { setConvosOpen(open); try { localStorage.setItem('bloblex.conversations.open', open ? '1' : '0') } catch { /* preference only */ } }
-  const [search, setSearch] = useState('')
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false)
   const openQuickSwitcher = useCallback(() => setQuickSwitcherOpen(true), [])
   const [pins, setPins] = useState<SidebarPins>(() => companion ? emptyPins() : readPins())
@@ -2381,7 +2381,6 @@ export function App() {
         <div className="sidebar-top">
           <div className="brand-lockup"><img className="brand-logo" src={bloblexLogo} alt="Bitbots logo" /><strong>Bitbots</strong></div>
           <div className="sidebar-create-actions">
-            <button type="button" className="icon-button" title="Quick switcher" aria-label="Open quick switcher" onClick={() => setQuickSwitcherOpen(true)}><Search size={16} /></button>
             <button data-testid="create-blob" className="icon-button" title={`Create ${noun}`} aria-label={`Create ${noun}`} disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={() => openCreate()}><Plus size={17} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setCreateMenuOpen(false); restoreCreateFocus() } }}>
               <button type="button" className="icon-button small" title={`Import a ${noun} setup`} aria-label={`${Noun} actions`} aria-haspopup="menu" aria-expanded={createMenuOpen} disabled={connection !== 'connected' || busy} onClick={() => setCreateMenuOpen((open) => !open)}><ChevronDown size={14} /></button>
@@ -2396,7 +2395,7 @@ export function App() {
           </div>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <TeamSidebar banner={!managerOf(agents) && hasActiveBlobs ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} query={search} onQueryChange={setSearch} actions={{
+        <TeamSidebar banner={!managerOf(agents) && connection === 'connected' ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} onOpenSearch={openQuickSwitcher} actions={{
           onSelect: selectAgent,
           onCreate: (projectId) => openCreate(projectId),
           onCreateProject: () => void createProject(),
@@ -2920,7 +2919,7 @@ function DiffViewer({ path, content, onClose }: { path: string; content: string;
 function QuotaDetails({ quotas, refreshing, onRefresh }: { quotas: Record<string, unknown>[]; refreshing: boolean; onRefresh: () => void }) {
   const rows = quotaRows(quotas)
   return <section className="usage-block quota-details" aria-label="Plan usage limits">
-    <div className="usage-block-heading"><h3>Plan usage limits</h3><span>Reported by each CLI account</span><button type="button" className="icon-button usage-refresh-button" aria-label="Refresh plan usage" title="Refresh plan usage" onClick={onRefresh} disabled={refreshing}><RefreshCw size={14} className={refreshing ? 'spinning' : ''} /></button></div>
+    <div className="usage-block-heading quota-heading"><h3>Plan usage limits</h3><span className="usage-divider" aria-hidden="true" /><span className="usage-provenance">Reported by each CLI account</span><Tip text="Each coding agent reports its own plan limits from its signed-in account. Token counts describe recorded activity; plan limits are a separate account quota." describe><button type="button" className="icon-button usage-info-button" aria-label="About plan usage limits"><Info size={14} /></button></Tip><button type="button" className="icon-button usage-refresh-button" aria-label="Refresh plan usage" title="Refresh plan usage" onClick={onRefresh} disabled={refreshing}><RefreshCw size={14} className={refreshing ? 'spinning' : ''} /></button></div>
     {rows.length ? <div className="quota-cards">{rows.map((row) => {
       const updated = updatedAgo(row.fetchedAt)
       return <article key={row.provider} className="quota-card" data-provider={row.provider}>
@@ -2935,12 +2934,13 @@ function QuotaDetails({ quotas, refreshing, onRefresh }: { quotas: Record<string
         }) : <p className="quota-card-empty">{row.status ?? 'Unavailable'}</p>}
         {row.stale && <p className="quota-card-empty">{row.status}: last successful reading retained.</p>}
       </article>
-    })}</div> : <p className="usage-empty-line">No supported provider account quota source is available.</p>}
+    })}</div> : <p className="usage-empty-line">No account quota source available.</p>}
   </section>
 }
 
-function UsageSheet({ summary, period, quotas, loading, quotaRefreshing, onRefreshQuota, onPeriodChange, onOpenHistory, onClose }: { summary: Record<string, unknown> | null; period: 'today' | 'month'; quotas: Record<string, unknown>[]; loading: boolean; quotaRefreshing: boolean; onRefreshQuota: () => void; onPeriodChange: (period: 'today' | 'month') => void; onOpenHistory: () => void; onClose: () => void }) {
+export function UsageSheet({ summary, period, quotas, loading, quotaRefreshing, onRefreshQuota, onPeriodChange, onOpenHistory, onClose }: { summary: Record<string, unknown> | null; period: 'today' | 'month'; quotas: Record<string, unknown>[]; loading: boolean; quotaRefreshing: boolean; onRefreshQuota: () => void; onPeriodChange: (period: 'today' | 'month') => void; onOpenHistory: () => void; onClose: () => void }) {
   const { ref: dialogRef, close } = useDialogAccessibility(onClose)
+  const tokenBuckets = summary ? usageTokenBuckets(summary) : []
   return <div className="sheet-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}><section ref={dialogRef} className="usage-sheet" role="dialog" aria-modal="true" aria-labelledby="usage-title">
     <header><div><p className="eyebrow">USAGE</p><h2 id="usage-title">Usage summary</h2><small className="usage-scope">All runtimes on this device</small></div><button className="icon-button" data-dialog-initial-focus aria-label="Close usage summary" onClick={close}><X size={17} /></button></header>
     <div className="usage-sheet-body">
@@ -2948,10 +2948,10 @@ function UsageSheet({ summary, period, quotas, loading, quotaRefreshing, onRefre
       <section className="usage-block">
         <div className="usage-block-heading"><h3>Token usage</h3><span>{summary && typeof summary.from === 'string' && typeof summary.to === 'string' ? `${shortDate(summary.from)} – ${shortDate(summary.to)}` : 'Recorded activity'}</span></div>
         <div className="usage-period-switch" aria-label="Usage date range"><button className={period === 'today' ? 'active' : ''} aria-pressed={period === 'today'} onClick={() => onPeriodChange('today')}>Today</button><button className={period === 'month' ? 'active' : ''} aria-pressed={period === 'month'} onClick={() => onPeriodChange('month')}>This month</button></div>
-        {loading ? <div className="sheet-loading" role="status" aria-busy="true"><Skeleton variant="row" lines={4} /><span className="sr-only">Loading the daemon summary…</span></div> : summary ? <div className="usage-token-grid">{usageTokenBuckets(summary).map((bucket) => <div className="usage-token" key={bucket.key}><span>{bucket.label}</span><strong>{bucket.value}</strong></div>)}</div> : <div className="sheet-empty"><CircleHelp size={20} /><strong>Usage summary unavailable</strong><p>The daemon did not return token usage for this period.</p></div>}
+        {loading ? <div className="sheet-loading" role="status" aria-busy="true"><Skeleton variant="row" lines={4} /><span className="sr-only">Loading the daemon summary…</span></div> : summary ? tokenBuckets.every((bucket) => bucket.value === 'N/A') ? <p className="usage-empty-line" data-usage-empty>No usage yet {period === 'today' ? 'today' : 'this month'}.</p> : <div className="usage-token-grid">{tokenBuckets.map((bucket) => <div className="usage-token" key={bucket.key}><span>{bucket.label}</span><strong>{bucket.value}</strong></div>)}</div> : <div className="sheet-empty"><CircleHelp size={20} /><strong>Usage summary unavailable</strong><p>The daemon did not return token usage for this period.</p></div>}
       </section>
     </div>
-    <footer><span>Token counts describe recorded activity. Plan limits are a separate account quota.</span><button type="button" className="secondary-button small" onClick={onOpenHistory}>Usage history</button></footer>
+    <footer><button type="button" className="secondary-button small" onClick={onOpenHistory}>Usage history</button></footer>
   </section></div>
 }
 

@@ -29,7 +29,6 @@ mod updates;
 mod speech;
 mod power;
 mod migrate;
-mod snap;
 
 #[cfg(test)]
 mod file_inspection_tests;
@@ -260,6 +259,7 @@ fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
 
     let mut command = Command::new(&executable_copy);
     command
+        .env("BLOBLEX_PARENT_PID", std::process::id().to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1927,40 +1927,24 @@ fn companion_launch_spot(
     clamp_physical_position(x, y, width, height, area_x, area_y, area_width, area_height)
 }
 
-/// After the window has stopped moving for a moment, snaps it to a nearby work-area edge or
-/// corner. Each move bumps a generation so only the last quiet one acts; our own corrective
-/// move produces another Moved event whose snap is a no-op.
-fn schedule_companion_snap(window: &WebviewWindow, generation: &Arc<AtomicU64>, resizing: &Arc<AtomicBool>) {
-    let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
-    let window = window.clone();
-    let generation = Arc::clone(generation);
-    let resizing = Arc::clone(resizing);
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(380));
-        if generation.load(Ordering::SeqCst) != mine || resizing.load(Ordering::SeqCst) {
-            return;
+enum PositionWrite { Moved, Flush }
+
+/// A single worker per window waits for quiet; no monitor query, file IO or
+/// thread creation happens on a move event. A close flushes the last position.
+fn debounce_position_writes(receive: std::sync::mpsc::Receiver<PositionWrite>, quiet: Duration, mut write: impl FnMut()) {
+    use std::sync::mpsc::RecvTimeoutError;
+    let mut pending = false;
+    loop {
+        let message = if pending { receive.recv_timeout(quiet) } else {
+            receive.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        };
+        match message {
+            Ok(PositionWrite::Moved) => pending = true,
+            Ok(PositionWrite::Flush) => { write(); pending = false; }
+            Err(RecvTimeoutError::Timeout) => { write(); pending = false; }
+            Err(RecvTimeoutError::Disconnected) => { if pending { write(); } return; }
         }
-        let Ok(position) = window.outer_position() else { return };
-        let Ok(size) = window.outer_size() else { return };
-        let center = (position.x + size.width as i32 / 2, position.y + size.height as i32 / 2);
-        let monitors = window.available_monitors().unwrap_or_default();
-        let Some(monitor) = monitors.iter().find(|monitor| {
-            let area = monitor.work_area();
-            center.0 >= area.position.x
-                && center.0 < area.position.x + area.size.width as i32
-                && center.1 >= area.position.y
-                && center.1 < area.position.y + area.size.height as i32
-        }) else { return };
-        let area = monitor.work_area();
-        let (x, y) = snap::snap_position(
-            position.x, position.y, size.width as i32, size.height as i32,
-            (area.position.x, area.position.y, area.size.width as i32, area.size.height as i32),
-            monitor.scale_factor(),
-        );
-        if (x, y) != (position.x, position.y) {
-            let _ = window.set_position(PhysicalPosition::new(x, y));
-        }
-    });
+    }
 }
 
 fn persist_companion_position(app: &AppHandle, window: &WebviewWindow) {
@@ -2073,16 +2057,20 @@ fn make_companion(app: &AppHandle, start_at_last_position: bool) -> tauri::Resul
     let app_handle = app.clone();
     let resize_flag = Arc::clone(&app.state::<AppState>().companion_resize_in_progress);
     let window_for_event = window.clone();
-    let snap_generation = Arc::new(AtomicU64::new(0));
-    let snap_resize_flag = Arc::clone(&resize_flag);
+    let (position_write, receive) = std::sync::mpsc::channel();
+    let writer_app = app.clone();
+    let writer_window = window.clone();
+    thread::spawn(move || debounce_position_writes(receive, Duration::from_millis(300), || {
+        persist_companion_position(&writer_app, &writer_window);
+    }));
     window.on_window_event(move |event| {
         if let WindowEvent::Moved(_) = event {
             if !resize_flag.load(Ordering::SeqCst) {
-                persist_companion_position(&app_handle, &window_for_event);
-                schedule_companion_snap(&window_for_event, &snap_generation, &snap_resize_flag);
+                let _ = position_write.send(PositionWrite::Moved);
             }
         }
         if let WindowEvent::CloseRequested { api, .. } = event {
+            let _ = position_write.send(PositionWrite::Flush);
             api.prevent_close();
             let _ = window_for_event.hide();
             let _ = app_handle.emit("bloblex-companion-visible-changed", false);
@@ -2383,6 +2371,14 @@ pub fn run() {
     // builder creates the WebView2 profile under the new identifier.
     migrate::migrate_before_start();
     tauri::Builder::default()
+        // Must register first: a second launch must never start another daemon.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| {
             if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
                 return;
@@ -2537,6 +2533,9 @@ pub fn run() {
         .expect("Bitbots desktop application failed to start")
         .run(|app, event| {
             if let RunEvent::Exit = event {
+                if let Some(window) = app.get_webview_window("companion") {
+                    persist_companion_position(app, &window);
+                }
                 updates::stop_background_checker(app);
                 if let Some(power) = app.try_state::<power::PowerState>() {
                     power.release();
@@ -2727,5 +2726,28 @@ mod runtime_terminal_tests {
                 "irm https://chatgpt.com/codex/install.ps1 | iex; codex login",
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod companion_persistence_tests {
+    use super::*;
+
+    #[test]
+    fn rapid_moves_write_once_after_quiet_and_close_flushes() {
+        let (send, receive) = std::sync::mpsc::channel();
+        let (written, writes) = std::sync::mpsc::channel();
+        // Queue the burst before starting the worker so scheduler load cannot
+        // accidentally turn the burst into separate quiet periods.
+        for _ in 0..20 { send.send(PositionWrite::Moved).unwrap(); }
+        let worker = thread::spawn(move || debounce_position_writes(receive, Duration::from_millis(40), || { written.send(()).unwrap(); }));
+        writes.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(writes.recv_timeout(Duration::from_millis(100)).is_err());
+        send.send(PositionWrite::Moved).unwrap();
+        send.send(PositionWrite::Flush).unwrap();
+        writes.recv_timeout(Duration::from_secs(2)).unwrap();
+        drop(send);
+        worker.join().unwrap();
+        assert!(writes.try_recv().is_err());
     }
 }

@@ -43,8 +43,7 @@ describe('team selectors', () => {
     const projects: Project[] = [{ id: 'p2', name: 'Zeta', path: null, sortOrder: 1 }, { id: 'p1', name: 'Alpha', path: null, sortOrder: 0 }]
     const agents = [agent('a', 'Ann', { projectId: 'p2' }), agent('b', 'Bo', { projectId: 'p1', role: 'CTO' }), agent('c', 'Cy'), agent('d', 'Di', { hidden: true }), agent('e', 'Ed', { projectId: 'gone' }), agent('f', 'Fi', { archived: true })]
     expect(groupAgentsByProject(agents, projects).map((group) => [group.project?.name ?? 'Unassigned', group.agents.map((item) => item.name)])).toEqual([['Alpha', ['Bo']], ['Zeta', ['Ann']], ['Unassigned', ['Cy', 'Ed']]])
-    expect(groupAgentsByProject(agents, projects, '', true).at(-1)?.agents.map((item) => item.name)).toEqual(['Cy', 'Di', 'Ed'])
-    expect(groupAgentsByProject(agents, projects, 'cto').map((group) => group.project?.name)).toEqual(['Alpha'])
+    expect(groupAgentsByProject(agents, projects, true).at(-1)?.agents.map((item) => item.name)).toEqual(['Cy', 'Di', 'Ed'])
     expect(leaderOf([agent('x', 'X'), agent('y', 'Y', { leader: true })])?.id).toBe('y')
   })
 
@@ -53,6 +52,16 @@ describe('team selectors', () => {
     expect(conversationPreview(session('s', { messages: [{ role: 'assistant', content: 'Done' }, { role: 'notice', content: 'x', meta: { kind: 'delegation', peerName: 'Codex' } }] }))).toBe('Messaged Codex')
     expect(conversationPreview(session('s', { messages: [{ role: 'user', content: '[Reply from Codex] ok', meta: { kind: 'blob_reply', fromName: 'Codex' } }] }))).toBe('Message from Codex')
     expect(conversationPreview(session('s', { messages: [{ role: 'thinking', content: 'hmm' }] }))).toBeNull()
+    expect(conversationPreview(session('s', { messages: [{ role: 'notice', content: 'x', meta: { kind: 'blob_created', name: 'Ada' } }] }))).toBe('Created Ada')
+  })
+
+  it('skips context resets and other system notices when finding a real preview', () => {
+    for (const kind of ['context_reset', 'model_changed', 'bypass', 'future_notice']) {
+      const notice = { role: 'notice', content: 'System-only text', meta: { kind } }
+      expect(conversationPreview(session('s', { messages: [{ role: 'assistant', content: 'Done' }, notice] }))).toBe('Done')
+      expect(conversationPreview(session('s', { messages: [notice] }))).toBeNull()
+    }
+    expect(conversationPreview(session('s', { messages: [{ role: 'notice', content: 'A notice without metadata' }] }))).toBeNull()
   })
 
   it('finds the @mention being typed and the blobs a prompt mentions', () => {

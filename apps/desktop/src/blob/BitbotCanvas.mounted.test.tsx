@@ -25,7 +25,7 @@ function mount(node: React.ReactNode) {
 describe('BlobCanvas in Bitbots mode', () => {
   it('draws a robot with the antenna off and speed one, in the outline the look asks for', () => {
     setBitbotsEnabled(true)
-    const element = mount(<BlobCanvas color="#2b49a3" size={60} mood="thinking" label="Vex" look={{ shape: 'round', seed: 's', bot: { shape: 'hexagon' } }} />)
+    const element = mount(<BlobCanvas color="#2b49a3" size={60} mood="thinking" label="Vex" look={{ shape: 'circle', seed: 's', bot: { shape: 'hexagon' } }} />)
     const frame = element.querySelector('.bitbot-frame')!
     expect(frame.getAttribute('data-bitbot-shape')).toBe('hexagon')
     expect(frame.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Vex, thinking')

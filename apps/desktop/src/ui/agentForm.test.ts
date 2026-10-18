@@ -5,7 +5,7 @@ import { CLIENT_MESSAGES, createParams, draftFromAgent, duplicateParams, isAgent
 function agent(partial: Partial<Agent> = {}): Agent {
   return {
     id: 'agent-claude', name: 'Claude', description: 'Default', instructions: 'Be brief', color: '#f38c6f', runtimeId: 'runtime-claude',
-    look: { shape: 'cat', seed: 'claude' }, model: 'gpt-test', thinking: 'high', serviceTier: 'flex', customArgs: ['--yes'], customEnv: { MODE: 'test' }, maxConcurrency: 2,
+    look: { shape: 'pebble', seed: 'claude' }, model: 'gpt-test', thinking: 'high', serviceTier: 'flex', customArgs: ['--yes'], customEnv: { MODE: 'test' }, maxConcurrency: 2,
     defaultProject: 'C:/work/site', sortOrder: 0, archived: false, createdAt: 't0', updatedAt: 't0', ...partial,
   }
 }
@@ -57,13 +57,13 @@ describe('agent draft validation', () => {
     const renamed = { ...baseline, name: 'Claude Prime' }
     expect(isAgentDirty(renamed, baseline)).toBe(true)
     expect(updateParams(baseline.runtimeId && 'agent-claude', renamed, baseline)).toEqual({ agentId: 'agent-claude', name: 'Claude Prime' })
-    expect(updateParams('agent-claude', { ...baseline, look: { shape: 'sun', seed: 'claude' } }, baseline)).toEqual({ agentId: 'agent-claude', look: { shape: 'sun', seed: 'claude' } })
-    expect(isAgentDirty({ ...baseline, look: { shape: 'cat', seed: 'claude', traits: {} } }, baseline)).toBe(false)
-    expect(updateParams('agent-claude', { ...baseline, look: { shape: 'cat', seed: 'claude' } }, baseline)).toEqual({ agentId: 'agent-claude' })
+    expect(updateParams('agent-claude', { ...baseline, look: { shape: 'cloud', seed: 'claude' } }, baseline)).toEqual({ agentId: 'agent-claude', look: { shape: 'cloud', seed: 'claude' } })
+    expect(isAgentDirty({ ...baseline, look: { shape: 'pebble', seed: 'claude', traits: {} } }, baseline)).toBe(false)
+    expect(updateParams('agent-claude', { ...baseline, look: { shape: 'pebble', seed: 'claude' } }, baseline)).toEqual({ agentId: 'agent-claude' })
     expect(updateParams('agent-claude', { ...baseline, color: 'coral' }, baseline)).toEqual({ agentId: 'agent-claude' })
     expect(updateParams('agent-claude', { ...baseline, defaultProject: '   ' }, baseline)).toEqual({ agentId: 'agent-claude', defaultProject: null })
     const created = createParams({ ...baseline, name: '  Pink sibling  ', color: '#F0A0C4' })
-    expect(created).toEqual({ name: 'Pink sibling', runtimeId: 'runtime-claude', description: 'Default', instructions: 'Be brief', color: 'pink', look: { shape: 'cat', seed: 'claude' }, defaultProject: 'C:/work/site' })
+    expect(created).toEqual({ name: 'Pink sibling', runtimeId: 'runtime-claude', description: 'Default', instructions: 'Be brief', color: 'pink', look: { shape: 'pebble', seed: 'claude' }, defaultProject: 'C:/work/site' })
     expect(created).not.toHaveProperty('model')
     expect(created).not.toHaveProperty('customEnv')
     const cancelled = baseline
@@ -74,7 +74,7 @@ describe('agent draft validation', () => {
   it('copies inert execution fields on duplicate and omits archived', () => {
     const source = agent()
     expect(duplicateParams(source, 'Copy of Claude')).toEqual({
-      name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default', instructions: 'Be brief', color: '#f38c6f', look: { shape: 'cat', seed: 'claude' },
+      name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default', instructions: 'Be brief', color: '#f38c6f', look: { shape: 'pebble', seed: 'claude' },
       model: 'gpt-test', thinking: 'high', serviceTier: 'flex', customArgs: ['--yes'], customEnv: { MODE: 'test' }, maxConcurrency: 2, defaultProject: 'C:/work/site',
     })
     expect(duplicateParams(source, 'Copy of Claude')).not.toHaveProperty('archived')

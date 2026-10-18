@@ -53,6 +53,18 @@ beforeEach(() => {
 })
 
 describe('session execution controls', () => {
+  it('does not append a model-default label when Codex effort is Max', async () => {
+    rpc.mockResolvedValue({ ...catalog, provider: 'codex', models: [{ ...catalog.models[0], supportedThinking: ['medium', 'max'], defaultThinking: 'medium' }] })
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={{ ...session, modelLock: { model: 'alpha', thinking: 'max' } }} agent={agent} onSessionUpdated={() => undefined} onError={() => undefined} />))
+    mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
+    expect(host.querySelector('.session-effort-popover')?.textContent).toContain('Max')
+    expect(host.querySelector('.session-effort-popover')?.textContent).not.toContain('Model default')
+  })
+
   it('surfaces and repairs an invalid saved effort without changing the model or marking the runtime broken', async () => {
     const onError = vi.fn()
     const onSessionUpdated = vi.fn()

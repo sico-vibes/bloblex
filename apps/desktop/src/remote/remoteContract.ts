@@ -32,7 +32,7 @@ export type RemoteMethodId = 'tailscale' | 'native'
  * every other state names the fix the Settings page has to show.
  * (`docs/ipc-contract.md:147`, `docs/remote/PROTOCOL.md:2.1`.)
  */
-export type RemoteTailscaleState = 'not_installed' | 'logged_out' | 'https_disabled' | 'port_in_use' | 'funnel_on' | 'ready'
+export type RemoteTailscaleState = 'not_installed' | 'starting' | 'not_running' | 'logged_out' | 'https_disabled' | 'port_in_use' | 'funnel_on' | 'ready'
 
 export interface RemoteDevice {
   id: string

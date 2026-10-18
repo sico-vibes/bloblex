@@ -7,6 +7,7 @@ import { Check, Pencil, Plus, Trash2, Pin } from 'lucide-react'
 import type { Agent, MemoryRecord, Project } from '../types'
 import { isMemoryRecord } from '../types'
 import { rpc } from '../tauri'
+import { rpcFailure } from '../executionContract'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { Select } from './Select'
 import { ConfirmDialog } from './BlobPage'
@@ -66,7 +67,7 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
       setProblem(null)
     } catch (reason) {
       setRecords([])
-      setProblem(reason instanceof Error ? reason.message : 'Notes could not be loaded.')
+      setProblem(rpcFailure(reason).message)
     }
   }, [])
   useEffect(() => { if (connected) void load() }, [connected, load])
@@ -74,7 +75,7 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true)
     setProblem(null)
-    try { await work(); await load() } catch (reason) { setProblem(reason instanceof Error ? reason.message : 'That did not work.') } finally { setBusy(false) }
+    try { await work(); await load() } catch (reason) { setProblem(rpcFailure(reason).message) } finally { setBusy(false) }
   }
 
   const visible = useMemo(() => {
@@ -129,7 +130,7 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
         <button type="button" className="secondary-button small" disabled={!aboutDirty || aboutOver || aboutSaving || !connected} onClick={async () => {
           setAboutSaving(true)
           setProblem(null)
-          try { await onAboutSave(aboutDraft.trim()) } catch (reason) { setProblem(reason instanceof Error ? reason.message : 'That could not be saved.') } finally { setAboutSaving(false) }
+          try { await onAboutSave(aboutDraft.trim()) } catch (reason) { setProblem(rpcFailure(reason).message) } finally { setAboutSaving(false) }
         }}>{aboutSaving ? 'Saving…' : 'Save'}</button>
       </div>
     </section>
@@ -208,7 +209,7 @@ function NoteEditor({ existing, agents, projects, onClose, onSave }: {
     setSaving(true)
     setFailure(null)
     try { await onSave({ scope, ...(needsTarget ? { scopeId } : {}), kind, title: title.trim(), body: body.trim(), pinned }) } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : 'The note could not be saved.')
+      setFailure(rpcFailure(reason).message)
       setSaving(false)
     }
   }

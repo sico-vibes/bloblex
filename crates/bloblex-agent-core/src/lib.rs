@@ -14,6 +14,107 @@ impl ApprovalMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionClassification { pub allowed: bool, pub category: &'static str, pub summary: String }
+
+/// Presentation only: never used to classify permissions. Raw tool input stays
+/// separate so a collapsed activity row can name the work without dumping it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolActivity {
+    pub category: &'static str,
+    pub verb: &'static str,
+    pub target: Option<String>,
+    pub label: String,
+}
+
+pub fn tool_activity(kind: &str, raw: &Value, fallback: &str) -> ToolActivity {
+    let input = [&raw["input"], &raw["arguments"], &raw["rawInput"]]
+        .into_iter().find(|value| value.is_object()).unwrap_or(raw);
+    let field = |keys: &[&str]| keys.iter().find_map(|key| {
+        raw[*key].as_str().or_else(|| input[*key].as_str())
+            .map(str::trim).filter(|value| !value.is_empty())
+    });
+    let name = raw["name"].as_str().or(raw["tool"].as_str()).unwrap_or(kind);
+    let name = name.to_ascii_lowercase();
+    let kind = kind.to_ascii_lowercase();
+    let is = |names: &[&str]| names.contains(&name.as_str()) || names.contains(&kind.as_str());
+    let command = field(&["command"]).map(str::to_owned)
+        .or_else(|| raw["command"].as_array().map(|parts| parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")))
+        .or_else(|| is(&["execute", "exec", "bash", "shell", "terminal", "command", "commandexecution"])
+            .then(|| raw["rawInput"].as_str().map(str::to_owned)).flatten());
+    let path = field(&["path", "file_path", "filePath"])
+        .or_else(|| raw["locations"][0]["path"].as_str())
+        .or_else(|| raw["changes"][0]["path"].as_str());
+    let changes = raw["changes"].as_array().map(|items| items.len()).unwrap_or(0);
+    let pattern = field(&["pattern", "query"]).or_else(|| raw["action"]["query"].as_str());
+    let url = field(&["url"]);
+    // The tool or kind decides the category first. A bare `command` argument
+    // only counts when the row has no identity of its own, so an MCP tool that
+    // happens to take a `command` argument is not called a shell command.
+    let dynamic = |value: &str| matches!(value, "" | "other" | "tool" | "tool call");
+    let has_identity = !(dynamic(name.as_str()) && dynamic(kind.as_str()));
+    let command_tool = is(&["execute", "exec", "bash", "shell", "terminal", "command", "commandexecution"]);
+    let (category, verb, target, empty) = if command_tool {
+        ("command", "Ran", command.clone(), "a command")
+    } else if is(&["read", "imageview", "notebook_read", "notebookread"]) {
+        ("read", "Read", path.map(str::to_owned), "a file")
+    } else if is(&["edit", "write", "file_edit", "file_write", "filechange", "notebookedit"]) {
+        let target = if changes > 1 { Some(format!("{changes} files")) } else { path.map(str::to_owned) };
+        ("file", "Edited", target, "files")
+    } else if is(&["list", "ls"]) {
+        ("read", "Listed", path.map(str::to_owned), "files")
+    } else if is(&["fetch", "webfetch"]) {
+        // A host is enough in the row; the full URL stays in tool detail.
+        let host = url.and_then(|url| url.split_once("://").map(|(_, rest)| rest))
+            .and_then(|rest| rest.split(['/', '?', '#']).next())
+            .map(|host| host.rsplit('@').next().unwrap_or(host).to_owned());
+        ("search", "Fetched", host, "a page")
+    } else if is(&["glob", "grep", "search", "websearch", "web_search"]) {
+        let target = pattern.map(|pattern| match path {
+            Some(path) => format!("{pattern} in {path}"),
+            None => pattern.to_owned(),
+        }).or_else(|| path.map(str::to_owned));
+        ("search", "Searched", target, "files or the web")
+    } else if command.is_some() && !has_identity {
+        ("command", "Ran", command, "a command")
+    } else {
+        ("tool", "Used", None, "a tool")
+    };
+    let head = |value: &str| -> String {
+        let line = value.lines().next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
+        let chars: Vec<char> = line.chars().collect();
+        if chars.len() > 80 { format!("{}…", chars[..80].iter().collect::<String>()) } else { line }
+    };
+    // A path keeps its file name, so it is shortened from the left.
+    let tail = |value: &str| -> String {
+        let line = value.lines().next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
+        let chars: Vec<char> = line.chars().collect();
+        if chars.len() > 80 { format!("…{}", chars[chars.len() - 80..].iter().collect::<String>()) } else { line }
+    };
+    let meaningful_fallback = !fallback.trim().is_empty()
+        && ![name.as_str(), kind.as_str(), "tool call"].contains(&fallback.to_ascii_lowercase().as_str());
+    let label = if category == "tool" {
+        head(if fallback.trim().is_empty() { "Used a tool" } else { fallback })
+    } else if target.is_none() && meaningful_fallback {
+        if category == "command" {
+            format!("Ran {}", head(fallback).trim_start_matches("Ran "))
+        } else {
+            head(fallback)
+        }
+    } else if category == "command" {
+        format!("Ran {}", target.as_deref().map(head).filter(|text| !text.is_empty()).unwrap_or_else(|| empty.into()))
+    } else if category == "search" {
+        let target = match (pattern, path) {
+            (Some(pattern), Some(path)) => format!("{} in {}", head(pattern), tail(path)),
+            (Some(pattern), None) => head(pattern),
+            (None, Some(path)) => tail(path),
+            (None, None) => target.as_deref().map(head).unwrap_or_default(),
+        };
+        format!("{verb} {}", if target.is_empty() { empty.into() } else { target })
+    } else {
+        format!("{verb} {}", target.as_deref().map(tail).filter(|text| !text.is_empty()).unwrap_or_else(|| empty.into()))
+    };
+    ToolActivity { category, verb, target, label }
+}
+
 pub fn permission_summary(tool_kind:&str,raw:&Value)->String{
     let kind=tool_kind.to_ascii_lowercase();
     if ["shell","bash","command","terminal"].contains(&kind.as_str()) {let s=raw.get("command").and_then(Value::as_str).or_else(||raw.get("rawInput").and_then(Value::as_str)).or_else(||raw["toolCall"]["rawInput"].as_str()).or_else(||raw["params"]["toolCall"]["rawInput"].as_str()).or_else(||raw.as_str()).unwrap_or("");return safe_summary(&kind,&command_head(s));}
@@ -1196,5 +1297,60 @@ mod exec_option_tests {
         let encoded = serde_json::to_value(&report).unwrap();
         assert_eq!(encoded["costIsCumulative"], true);
         assert!(encoded.get("cost_is_cumulative").is_none());
+    }
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn readable_tool_activity_covers_all_provider_shapes() {
+        for (kind, raw, label, category) in [
+            ("Bash", json!({"input":{"command":"cargo test\nWrite-Output done"}}), "Ran cargo test", "command"),
+            ("Glob", json!({"input":{"pattern":"**/*.ts"}}), "Searched **/*.ts", "search"),
+            ("Grep", json!({"input":{"pattern":"TODO","path":"src"}}), "Searched TODO in src", "search"),
+            ("Read", json!({"input":{"file_path":"src/main.ts"}}), "Read src/main.ts", "read"),
+            ("Edit", json!({"input":{"file_path":"src/main.ts"}}), "Edited src/main.ts", "file"),
+            ("commandExecution", json!({"command":"npm test"}), "Ran npm test", "command"),
+            ("webSearch", json!({"action":{"query":"Rust docs"}}), "Searched Rust docs", "search"),
+            ("read", json!({"locations":[{"path":"README.md"}]}), "Read README.md", "read"),
+            ("execute", json!({"rawInput":{"command":"cargo check"}}), "Ran cargo check", "command"),
+            ("WebFetch", json!({"input":{"url":"https://example.com/private?q=secret"}}), "Fetched example.com", "search"),
+        ] {
+            let activity = tool_activity(kind, &raw, kind);
+            assert_eq!(activity.label, label, "{kind}");
+            assert_eq!(activity.category, category, "{kind}");
+        }
+        let activity = tool_activity("Bash", &json!({"command":"x".repeat(200)}), "Bash");
+        assert!(activity.label.chars().count() <= 85);
+        assert_eq!(tool_activity("other", &json!({}), "Reviewed dependencies").label, "Reviewed dependencies");
+        assert_eq!(tool_activity("read", &json!({}), "Read README.md").label, "Read README.md");
+        assert_eq!(tool_activity("execute", &json!({}), "cargo test\necho done").label, "Ran cargo test");
+    }
+
+    #[test]
+    fn audit_followups_keep_paths_identity_and_file_counts() {
+        let long = "C:/Users/someone/very/deep/folder/structure/that/goes/on/and/on/more/and/more/src/file.ts";
+        // F3: a long path keeps its file name (shortened from the left).
+        let read = tool_activity("Read", &json!({"input":{"file_path":long}}), "Read");
+        assert_eq!(read.category, "read");
+        assert!(read.label.starts_with("Read …"), "{}", read.label);
+        assert!(read.label.ends_with("file.ts"), "{}", read.label);
+        // F3: the path in "pattern in path" is shortened from the left too.
+        let grep = tool_activity("Grep", &json!({"input":{"pattern":"needle","path":long}}), "Grep");
+        assert!(grep.label.starts_with("Searched needle in …"), "{}", grep.label);
+        assert!(grep.label.ends_with("file.ts"), "{}", grep.label);
+        // F4: a non-shell tool with a `command` argument stays a tool.
+        let mcp = tool_activity("mcpToolCall", &json!({"arguments":{"command":"rm -rf /"}}), "mcpToolCall");
+        assert_eq!(mcp.category, "tool");
+        assert!(!mcp.label.starts_with("Ran"), "{}", mcp.label);
+        // F5: a multi-file change names the count.
+        let changes = tool_activity("fileChange", &json!({"changes":[{"path":"a.ts"},{"path":"b.ts"},{"path":"c.ts"}]}), "fileChange");
+        assert_eq!(changes.category, "file");
+        assert_eq!(changes.label, "Edited 3 files");
+        // F6: NotebookRead (no underscore) is a read.
+        assert_eq!(tool_activity("NotebookRead", &json!({}), "NotebookRead").category, "read");
     }
 }

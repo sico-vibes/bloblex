@@ -5,7 +5,8 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, FileText, Globe, ShieldAlert, Terminal, Wrench } from 'lucide-react'
 import type { JsonRecord } from '../types'
-import { activityCategory, activitySummary, type ActivityGroup, type ConversationItem } from './conversation'
+import { activityCategory, activityInput, activitySummary, activityToolName, type ActivityGroup, type ConversationItem } from './conversation'
+import './ActivityDetails.css'
 
 const TEAM_TOOLS: Record<string, string> = {
   list_blobs: 'Checked the team',
@@ -29,20 +30,53 @@ function detailOf(item: ConversationItem): JsonRecord {
 }
 
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null
+const shorten = (value: string, from: 'head' | 'tail' = 'head') => {
+  const line = value.split(/[\r\n]/, 1)[0].trim().replace(/\s+/g, ' ')
+  const chars = [...line]
+  if (chars.length <= 80) return line
+  return from === 'tail' ? `…${chars.slice(-80).join('')}` : `${chars.slice(0, 80).join('')}…`
+}
+const short = (value: string) => shorten(value)
+/** A path keeps its file name, so it is shortened from the left. */
+const shortPath = (value: string) => shorten(value, 'tail')
 
 /** A readable name for one step. */
 export function activityTitle(item: ConversationItem): string {
   const activity = item.activity ?? {}
   const detail = detailOf(item)
+  const input = activityInput(item)
   const category = activityCategory(item)
-  if (category === 'file') return text(detail.path) ?? text(activity.path) ?? 'Edited a file'
+  const path = text(detail.path) ?? text(activity.path) ?? text(input.file_path) ?? text(input.filePath) ?? text(input.path)
   const tool = text(detail.tool)
   const toolName = tool?.split(' · ').pop() ?? null
   if (toolName === 'load_skill') { const name = loadedSkillName(detail.input ?? detail.arguments); return name ? `Used skill: ${name}` : 'Used a skill' }
   if (toolName && TEAM_TOOLS[toolName]) return TEAM_TOOLS[toolName]
-  if (category === 'command') return text(detail.command) ?? text(activity.title) ?? 'Ran a command'
-  if (category === 'search') return text(detail.query) ? `Searched: ${text(detail.query)}` : text(activity.title) ?? 'Searched the web'
-  return text(activity.title) ?? toolName ?? 'Used a tool'
+  const label = text(detail.label)
+  const title = text(activity.title)
+  const fallback = label ?? (title && ![activityToolName(item), String(activity.kind ?? '').toLowerCase(), 'tool call'].includes(title.toLowerCase()) ? title : null)
+  if (category === 'command') {
+    const command = text(detail.command) ?? text(input.command)
+    if (command) return `Ran ${short(command)}`
+    return fallback ? `Ran ${short(fallback).replace(/^Ran /, '')}` : 'Ran a command'
+  }
+  if (category === 'file') {
+    const fileCount = Number(detail.fileCount ?? input.fileCount)
+    if (Number.isFinite(fileCount) && fileCount > 1) return `Edited ${fileCount} files`
+    return path ? `Edited ${shortPath(path)}` : fallback ? shortPath(fallback) : 'Edited a file'
+  }
+  if (category === 'read') {
+    const verb = ['list', 'ls'].includes(activityToolName(item)) ? 'Listed' : 'Read'
+    return path ? `${verb} ${shortPath(path)}` : fallback ? shortPath(fallback) : `${verb} a file`
+  }
+  if (category === 'search') {
+    const url = text(detail.url) ?? text(input.url)
+    if (url) { try { return `Fetched ${short(new URL(url).host)}` } catch { return 'Fetched a page' } }
+    const pattern = text(detail.pattern) ?? text(detail.query) ?? text(input.pattern) ?? text(input.query)
+    if (pattern) return path ? `Searched ${short(pattern)} in ${shortPath(path)}` : `Searched ${short(pattern)}`
+    if (path) return `Searched ${shortPath(path)}`
+    return fallback ? short(fallback) : 'Searched files or the web'
+  }
+  return short(text(detail.label) ?? text(activity.title) ?? toolName ?? 'Used a tool')
 }
 
 function stateOf(item: ConversationItem) {
@@ -56,7 +90,7 @@ function stateOf(item: ConversationItem) {
 function StepIcon({ item }: { item: ConversationItem }) {
   const category = activityCategory(item)
   if (stateOf(item) === 'failed') return <ShieldAlert size={13} aria-hidden="true" />
-  if (category === 'file') return <FileText size={13} aria-hidden="true" />
+  if (category === 'file' || category === 'read') return <FileText size={13} aria-hidden="true" />
   if (category === 'search') return <Globe size={13} aria-hidden="true" />
   if (category === 'command') return <Terminal size={13} aria-hidden="true" />
   return <Wrench size={13} aria-hidden="true" />
@@ -66,10 +100,12 @@ function StepDetail({ item, onDiff }: { item: ConversationItem; onDiff?: (path: 
   const detail = detailOf(item)
   const blocks: Array<{ label: string; value: string; mono?: boolean }> = []
   const add = (label: string, value: unknown, mono = true) => { const content = text(value); if (content) blocks.push({ label, value: content, mono }) }
-  add('Command', detail.command)
+  add('Command', detail.command ?? activityInput(item).command)
   add('Tool', detail.tool, false)
   add('Input', detail.input)
   add('Query', detail.query, false)
+  add('Pattern', detail.pattern, false)
+  add('URL', detail.url)
   add('Path', detail.path)
   add('Progress', detail.progress, false)
   add('Output', detail.output)
@@ -113,11 +149,25 @@ export function ActivitySummaryLine({ group, onDiff }: { group: ActivityGroup; o
       <span>{summary}{group.failed > 0 ? ` · ${group.failed} failed` : ''}</span>
       {open ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
     </button>
-    {open && <ol className="activity-steps">{group.items.map((item) => <Step key={item.id} item={item} onDiff={onDiff} />)}</ol>}
+    {open && <GroupedSteps items={group.items} onDiff={onDiff} />}
   </section>
 }
 
-/** A flat list of steps (the companion's Activity view). */
+const STEP_GROUPS = [
+  ['command', 'Commands'], ['read', 'Files'], ['search', 'Searches'], ['file', 'Edits'], ['tool', 'Other'],
+] as const
+
+function GroupedSteps({ items, onDiff, flat }: { items: ConversationItem[]; onDiff?: (path: string, content: string) => void; flat?: boolean }) {
+  return <>{STEP_GROUPS.map(([category, label]) => {
+    const steps = items.filter((item) => activityCategory(item) === category || (category === 'tool' && activityCategory(item) === 'turn'))
+    return steps.length > 0 && <div className="activity-step-group" key={category}>
+      <h4>{label}</h4>
+      <ol className={`activity-steps${flat ? ' flat' : ''}`} aria-label={label}>{steps.map((item) => <Step key={item.id} item={item} onDiff={onDiff} />)}</ol>
+    </div>
+  })}</>
+}
+
+/** The companion uses the same readable groups as the conversation, laid flat. */
 export function ActivitySteps({ items }: { items: ConversationItem[] }) {
-  return <ol className="activity-steps flat">{items.map((item) => <Step key={item.id} item={item} />)}</ol>
+  return <GroupedSteps items={items} flat />
 }

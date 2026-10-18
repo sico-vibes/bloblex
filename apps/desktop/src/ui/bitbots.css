@@ -293,6 +293,7 @@
 :root[data-bitbots="on"] .sidebar-foot { border-top: 2px dotted var(--bb-line); }
 :root[data-bitbots="on"] .first-run-prompt { border-bottom: 2px dotted var(--bb-line); background: var(--bb-panel); }
 :root[data-bitbots="on"] .sidebar-search { border: 2px solid var(--bb-line); background: var(--bb-input); }
+:root[data-bitbots="on"] .leader-badge { border-radius: 50%; }
 :root[data-bitbots="on"] .roster-section-label { color: var(--bb-ink-3); }
 :root[data-bitbots="on"] .blob-block,
 :root[data-bitbots="on"] .pinned-row,

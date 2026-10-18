@@ -31,12 +31,12 @@ const setPreviewSelection = (agentId: string) => {
 // Remote mode preview: one shared simulator, seeded once from the URL. Flags are
 // `?remote=off|on|<tailscale state>` and `?devices=0|1|3`; the default is off
 // with no devices so the empty state is what people see first. A Tailscale state
-// (`not_installed`, `logged_out`, `https_disabled`, `port_in_use`, `funnel_on`)
-// shows the host refusing to start and naming the fix; `on` and `ready` seed a
-// working serve address.
+// (`not_installed`, `starting`, `not_running`, `logged_out`, `https_disabled`,
+// `port_in_use`, `funnel_on`) shows the host refusing to start and naming the
+// fix; `on` and `ready` seed a working serve address.
 const remoteSimulator = createRemoteSimulator()
 let remoteFixtureSeeded = false
-const REMOTE_PREVIEW_FLAGS = ['off', 'on', 'ready', 'not_installed', 'logged_out', 'https_disabled', 'port_in_use', 'funnel_on'] as const
+const REMOTE_PREVIEW_FLAGS = ['off', 'on', 'ready', 'not_installed', 'starting', 'not_running', 'logged_out', 'https_disabled', 'port_in_use', 'funnel_on'] as const
 const remoteFixtureSeed = (): RemoteSeed => {
   const search = flags()
   const devicesParam = search.get('devices')
@@ -176,7 +176,7 @@ const teamFields: Record<string, Partial<Agent>> = {
   'agent-opencode': { role: 'Researcher' },
 }
 agents = agents.map((agent) => ({ projectId: null, role: '', leader: false, hidden: false, ...agent, ...teamFields[agent.id] }))
-agents.push({ id: 'agent-pololo', name: 'Pololo', look: { shape: 'sun', seed: 'pololo' }, description: 'UI/UX designer: finds and adapts component references.', instructions: '', color: '#2fbf9b', runtimeId: 'runtime-opencode', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 2, archived: false, createdAt: minutesAgo(900), updatedAt: minutesAgo(900), projectId: 'project-board', role: 'UI/UX Designer', leader: false, hidden: false })
+agents.push({ id: 'agent-pololo', name: 'Pololo', look: { shape: 'cloud', seed: 'pololo' }, description: 'UI/UX designer: finds and adapts component references.', instructions: '', color: '#2fbf9b', runtimeId: 'runtime-opencode', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 2, archived: false, createdAt: minutesAgo(900), updatedAt: minutesAgo(900), projectId: 'project-board', role: 'UI/UX Designer', leader: false, hidden: false })
 // FIX36: the one built-in Manager previews as an ordinary bot that carries
 // systemRole "manager" and works across every project (projectId null).
 const managerDescription = 'Runs your team: knows every project and bot, plans the work and asks before it acts.'
@@ -1086,7 +1086,7 @@ export async function readBlobImport(_selectionToken: string) {
   return JSON.stringify({
     format: 'bloblex.blob.v1', name: 'Mochi', description: 'Reviews pull requests and keeps the test suite green.', colour: '#f6a04d',
     instructions: 'Read the diff first. Run the tests before you say something works. Keep reviews short and kind.',
-    model: 'gpt-6.1-sol', thinking: 'low', speed: null, look: { shape: 'cat', seed: 'mochi' }, defaultApprovalMode: 'ask', providerId: 'codex',
+    model: 'gpt-6.1-sol', thinking: 'low', speed: null, look: { shape: 'pebble', seed: 'mochi' }, defaultApprovalMode: 'ask', providerId: 'codex',
   }, null, 2)
 }
 export async function writeBlobExport(_selectionToken: string, _text: string) {}

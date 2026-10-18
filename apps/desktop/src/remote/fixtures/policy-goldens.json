@@ -1055,6 +1055,71 @@
           }
         ]
       }
+    },
+    {
+      "name": "fix39-activity-fields-hidden",
+      "method": "session.get",
+      "options": {},
+      "input": {
+        "tools": [
+          {
+            "id": "fix39-tool",
+            "title": "Ran cargo test C:/private",
+            "detail": {
+              "label": "Ran cargo test C:/private/project",
+              "pattern": "private*",
+              "url": "https://private.example/path",
+              "path": "C:/private/project/src/file.ts",
+              "command": "cargo test C:/private/project"
+            }
+          }
+        ]
+      },
+      "expect": {
+        "tools": [
+          {
+            "id": "fix39-tool",
+            "title": "Tool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "fix39-activity-fields-allowed",
+      "method": "session.get",
+      "options": {
+        "includeToolOutput": true
+      },
+      "input": {
+        "tools": [
+          {
+            "id": "fix39-tool",
+            "title": "Ran cargo test C:/private",
+            "detail": {
+              "label": "Ran cargo test C:/private/project",
+              "pattern": "private*",
+              "url": "https://private.example/path",
+              "path": "C:/private/project/src/file.ts",
+              "command": "cargo test C:/private/project"
+            }
+          }
+        ]
+      },
+      "expect": {
+        "tools": [
+          {
+            "id": "fix39-tool",
+            "title": "Ran cargo test C:/private",
+            "detail": {
+              "label": "Ran cargo test C:/private/project",
+              "pattern": "private*",
+              "url": "https://private.example/path",
+              "path": "C:/private/project/src/file.ts",
+              "command": "cargo test C:/private/project"
+            }
+          }
+        ]
+      }
     }
   ],
   "snapshots": [
@@ -1520,6 +1585,89 @@
           "appearance.style": "dark"
         },
         "sequence": 42
+      }
+    },
+    {
+      "name": "fix39-activity-fields-hidden",
+      "options": {},
+      "input": {
+        "sessions": [
+          {
+            "id": "s",
+            "tools": [
+              {
+                "id": "fix39-tool",
+                "title": "Ran cargo test C:/private",
+                "detail": {
+                  "label": "Ran cargo test C:/private/project",
+                  "pattern": "private*",
+                  "url": "https://private.example/path",
+                  "path": "C:/private/project/src/file.ts",
+                  "command": "cargo test C:/private/project"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "sessions": [
+          {
+            "id": "s",
+            "tools": [
+              {
+                "id": "fix39-tool",
+                "title": "Tool"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "fix39-activity-fields-allowed",
+      "options": {
+        "includeToolOutput": true
+      },
+      "input": {
+        "sessions": [
+          {
+            "id": "s",
+            "tools": [
+              {
+                "id": "fix39-tool",
+                "title": "Ran cargo test C:/private",
+                "detail": {
+                  "label": "Ran cargo test C:/private/project",
+                  "pattern": "private*",
+                  "url": "https://private.example/path",
+                  "path": "C:/private/project/src/file.ts",
+                  "command": "cargo test C:/private/project"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "sessions": [
+          {
+            "id": "s",
+            "tools": [
+              {
+                "id": "fix39-tool",
+                "title": "Ran cargo test C:/private",
+                "detail": {
+                  "label": "Ran cargo test C:/private/project",
+                  "pattern": "private*",
+                  "url": "https://private.example/path",
+                  "path": "C:/private/project/src/file.ts",
+                  "command": "cargo test C:/private/project"
+                }
+              }
+            ]
+          }
+        ]
       }
     }
   ],

@@ -1,5 +1,5 @@
 /* Bitbots Remote: the phone-first client shell. Tokens from theme.css. Touch
-   targets are 44 px; on a desktop browser the app sits in a phone-sized frame. */
+   targets are 44 px; wide screens can show the roster alongside a conversation. */
 
 html, body, #root { height: 100%; }
 body { margin: 0; background: var(--surface-app); color: var(--text-1); -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
@@ -164,3 +164,25 @@ button, input, textarea { font: inherit; }
 
 :focus-visible { outline: 2px solid var(--user-accent, var(--text-1)); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .rm-waiting-dots i, .rm-sheet, .rm-sheet-backdrop, .rm-bot, .rm-switch, .rm-switch i { animation: none; transition: none; } }
+
+/* One set of screens, arranged by the resolved viewport/pointer preference. */
+.rm-content { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.rm-content > .rm-roster { min-height: 0; flex: 1; overflow-y: auto; padding: 14px; }
+.rm-content > .rm-main:empty { display: none; }
+.rm-roster-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.rm-text-button { min-height: 44px; border: 0; background: transparent; color: var(--text-2); cursor: pointer; }
+.rm-roster-search { box-sizing: border-box; width: 100%; min-height: 44px; margin-bottom: 14px; padding: 8px 12px; color: var(--text-1); background: var(--surface-input); border: 1px solid var(--line); border-radius: 10px; }
+.rm-layout-choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.rm-stage[data-layout="wide"] { padding: 0; background: var(--surface-app); }
+[data-layout="wide"] .rm-phone { width: 100%; height: 100dvh; border: 0; border-radius: 0; box-shadow: none; }
+.rm-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); }
+.rm-workspace > .rm-roster { min-height: 0; overflow-y: auto; padding: 16px; border-right: 1px solid var(--line); background: var(--surface-panel); }
+.rm-workspace > .rm-main { min-width: 0; }
+.rm-roster-conversations h2 { margin: 22px 0 10px; color: var(--text-2); font-size: 13px; font-weight: 600; }
+.rm-roster-conversations .rm-convos { max-height: none; }
+.rm-empty-chat { height: 100%; display: grid !important; align-content: center; justify-items: center; color: var(--text-2); }
+.rm-empty-chat h2 { color: var(--text-1); font-size: 18px; font-weight: 600; }
+[data-layout="wide"] .rm-device { max-width: 640px; margin: 16px auto; }
+[data-layout="wide"] .rm-connect, [data-layout="wide"] .rm-waiting { width: min(420px, 100%); align-self: center; box-sizing: border-box; }
+[data-layout="wide"] .rm-msg { max-width: min(80%, 800px); }
+[data-layout="wide"] .rm-log { padding: 24px; }

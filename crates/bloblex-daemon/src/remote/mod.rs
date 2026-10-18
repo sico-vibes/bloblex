@@ -242,6 +242,7 @@ struct Inner {
     link: &'static str,
     error: Option<String>,
     tailscale: tailscale::TailscaleState,
+    gateway_conflict_port: Option<u16>,
     serve_port: Option<u16>,
     serve_origin: Option<String>,
     running: Option<RunningServer>,
@@ -295,6 +296,7 @@ impl RemoteState {
                 link: "off",
                 error: None,
                 tailscale: tailscale::TailscaleState::NotInstalled,
+                gateway_conflict_port: None,
                 serve_port: None,
                 serve_origin: None,
                 running: None,
@@ -704,6 +706,13 @@ pub async fn start_at_boot(st: &AppState) {
 /// a port Bitbots uses, the gateway stops serving (THREAT_MODEL T30).
 async fn refresh_tailscale(st: &AppState) {
     let remote = st.remote.clone();
+    // A reload must not erase a local gateway conflict just because Tailscale
+    // itself is healthy. Re-check the marker so Check again can also recover.
+    let conflict_port = remote.inner.lock().unwrap().gateway_conflict_port;
+    if let Some(port) = conflict_port {
+        if is_bitbots_gateway(port).await { return; }
+        remote.inner.lock().unwrap().gateway_conflict_port = None;
+    }
     let cli = remote.cli().await;
     let target = tailscale::target_for(remote_port(st));
     let probe = tailscale::probe(cli.as_ref(), &target);
@@ -715,6 +724,12 @@ async fn refresh_tailscale(st: &AppState) {
             inner.serve_origin = status.origin(serve_port);
             if inner.link == "error" {
                 inner.error = None;
+                // A recovered conflict must not leave the switch stuck on
+                // "error" until the next enable: with Remote off it is off
+                // again. While Remote is on, the link keeps its own state.
+                if !inner.enabled {
+                    inner.link = "off";
+                }
             }
         }
         tailscale::Probe::Unavailable { state, message } => {
@@ -731,6 +746,67 @@ async fn refresh_tailscale(st: &AppState) {
             }
         }
     }
+}
+
+/// A foreign listener may use any protocol; a slow or oversized reply is not
+/// allowed to block startup. The fixed marker carries no host or user data.
+async fn is_bitbots_gateway(port: u16) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_millis(500))
+        .build() else { return false };
+    let Ok(mut response) = client.get(format!("http://127.0.0.1:{port}/api/ping")).send().await else { return false };
+    if !response.status().is_success() { return false; }
+    let mut body = Vec::new();
+    while let Ok(Some(chunk)) = response.chunk().await {
+        if body.len() + chunk.len() > 1024 { return false; }
+        body.extend_from_slice(&chunk);
+    }
+    let Ok(marker) = serde_json::from_slice::<Value>(&body) else { return false };
+    marker["ok"] == true && marker["app"] == "bitbots" && marker["role"] == "remote-gateway"
+}
+
+/// A failed bind that only rules out this candidate, so the loop should try the
+/// next one. `PermissionDenied` matters on Windows, where a port inside a
+/// Hyper-V, WSL or Docker excluded range fails with WSAEACCES (10013) rather
+/// than `AddrInUse`, and the default port can sit in such a range.
+fn bind_error_allows_fallback(kind: std::io::ErrorKind) -> bool {
+    matches!(kind, std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied)
+}
+
+/// Only an occupied endpoint can belong to another copy of Bitbots, so only an
+/// `AddrInUse` failure is worth probing for the marker; a permission failure
+/// means nothing is listening there.
+fn bind_error_is_occupied(kind: std::io::ErrorKind) -> bool {
+    kind == std::io::ErrorKind::AddrInUse
+}
+
+async fn bind_gateway(requested: u16, native_port: u16) -> Result<tokio::net::TcpListener, (u16, String)> {
+    let mut candidates = vec![requested];
+    if requested != 0 {
+        candidates.extend((1..=9).filter_map(|offset| requested.checked_add(offset)).filter(|port| *port != native_port));
+        candidates.push(0);
+    }
+    for port in candidates {
+        match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) => {
+                // Ownership matters at the configured endpoint. Once a foreign
+                // listener forced fallback, skip busy candidates to find a free
+                // one; a neighbour is not evidence that our endpoint is owned.
+                if bind_error_is_occupied(error.kind()) && port == requested && is_bitbots_gateway(port).await {
+                    return Err((port, "Another copy of Bitbots is already serving Remote on this computer. Quit the other copy (or restart Bitbots), then try again.".to_string()));
+                }
+                // A busy or reserved port only rules out this candidate; any
+                // other failure is fatal for the whole attempt.
+                if !bind_error_allows_fallback(error.kind()) {
+                    return Err((port, format!("Bitbots could not listen on Remote port {port}. Check this computer's network permissions, then try again.")));
+                }
+            }
+        }
+    }
+    Err((requested, "Bitbots could not find a free loopback port for Remote.".to_string()))
 }
 
 /// Turns Remote on: probe Tailscale, bind loopback, publish with `serve`.
@@ -752,8 +828,25 @@ pub async fn enable(st: &AppState) -> Result<Value, DispatchError> {
 
     let remote = st.remote.clone();
     let cli = remote.cli().await;
-    let remote_port = remote_port(st);
-    let probe = tailscale::probe(cli.as_ref(), &tailscale::target_for(remote_port));
+    // Bind first: probing before the bind would race another launcher. Only an
+    // occupied port is probed, and the probe never follows redirects or proxies.
+    let requested_port = remote_port(st);
+    let native_port = native::configured_port(st);
+    let listener = match bind_gateway(requested_port, native_port).await {
+        Ok(listener) => listener,
+        Err((port, message)) => {
+            {
+                let mut inner = remote.inner.lock().unwrap();
+                inner.tailscale = tailscale::TailscaleState::PortInUse;
+                inner.gateway_conflict_port = Some(port);
+            }
+            remote.set_link("error", Some(message.clone()));
+            emit_status(st).await;
+            return Err(derr("conflict", &message, StatusCode::CONFLICT));
+        }
+    };
+    let bound_port = listener.local_addr().map_err(|_| derr("internal", "The remote listener could not start.", StatusCode::INTERNAL_SERVER_ERROR))?.port();
+    let probe = tailscale::probe(cli.as_ref(), &tailscale::target_for(bound_port));
     let (status, serve_port) = match probe {
         tailscale::Probe::Ready { status, serve_port, .. } => (status, serve_port),
         tailscale::Probe::Unavailable { state, message } => {
@@ -768,15 +861,6 @@ pub async fn enable(st: &AppState) -> Result<Value, DispatchError> {
         }
     };
 
-    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", remote_port)).await {
-        Ok(listener) => listener,
-        Err(_) => {
-            let message = format!("Port {remote_port} is already in use on this computer.");
-            remote.set_link("error", Some(message.clone()));
-            emit_status(st).await;
-            return Err(derr("conflict", &message, StatusCode::CONFLICT));
-        }
-    };
     let addr = listener.local_addr().map_err(|_| derr("internal", "The remote listener could not start.", StatusCode::INTERNAL_SERVER_ERROR))?;
     // Belt and braces: the bind is loopback by construction.
     if !addr.ip().is_loopback() {
@@ -808,10 +892,12 @@ pub async fn enable(st: &AppState) -> Result<Value, DispatchError> {
         inner.link = "online";
         inner.error = None;
         inner.tailscale = tailscale::TailscaleState::Ready;
+        inner.gateway_conflict_port = None;
         inner.serve_port = Some(serve_port);
         inner.serve_origin = status.origin(serve_port);
         inner.running = Some(running);
     }
+    let _ = st.db.set_setting("remote.port", &json!(addr.port()));
     let _ = st.db.set_setting("remote.enabled", &json!(true));
     let _ = st.db.set_setting("remote.servePort", &json!(serve_port));
     emit_status(st).await;

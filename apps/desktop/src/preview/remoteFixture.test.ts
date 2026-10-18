@@ -59,6 +59,8 @@ describe('remote preview simulator (host side)', () => {
   it('refuses to enable, and says why, for every Tailscale state but ready', async () => {
     const states: Record<Exclude<RemoteTailscaleState, 'ready'>, RegExp> = {
       not_installed: /install tailscale/i,
+      starting: /starting/i,
+      not_running: /not running/i,
       logged_out: /sign in/i,
       https_disabled: /HTTPS certificates are off/i,
       port_in_use: /443 and 8443/i,

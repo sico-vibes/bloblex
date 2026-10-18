@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { rpcFailure } from '../executionContract'
 import { listenForDaemonEvents, rpc } from '../tauri'
 import {
   DEFAULT_REMOTE_SECURITY,
@@ -140,7 +141,7 @@ export function useRemote(enabled = true) {
   const run = useCallback(async (action: () => Promise<void>) => {
     setState((current) => ({ ...current, busy: true, error: null }))
     try { await action() } catch (reason) {
-      const message = reason && typeof reason === 'object' && 'message' in reason ? String((reason as { message: unknown }).message) : 'That did not work. Try again.'
+      const message = rpcFailure(reason).message
       if (alive.current) setState((current) => ({ ...current, error: message }))
     } finally {
       if (alive.current) setState((current) => ({ ...current, busy: false }))

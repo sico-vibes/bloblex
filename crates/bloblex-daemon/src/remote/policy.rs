@@ -418,7 +418,13 @@ enum FieldPolicy {
     FileName,
     PathTail,
     ToolDetail,
+    ToolTitle,
 }
+
+/// The title a remote device sees in place of a tool's real one. The real title
+/// now carries a command head, a path, a pattern or a URL (FIX39 item 17), so it
+/// leaves the host only with `includeToolOutput`.
+const GENERIC_TOOL_TITLE: &str = "Tool";
 
 /// The name of the array the value sits in, when the value is an array item's
 /// field (`[..., "files", "[]", "path"]` -> `files`).
@@ -450,6 +456,10 @@ fn field_policy(path: &[String]) -> FieldPolicy {
         "detail" => match array_container(path) {
             Some("tools") => FieldPolicy::ToolDetail,
             Some("turns") | Some("files") => FieldPolicy::Drop,
+            _ => FieldPolicy::Default,
+        },
+        "title" => match array_container(path) {
+            Some("tools") => FieldPolicy::ToolTitle,
             _ => FieldPolicy::Default,
         },
         "path" => match array_container(path) {
@@ -511,6 +521,13 @@ fn redact_node(value: &Value, path: &mut Vec<String>, options: &RedactOptions) -
                     FieldPolicy::ToolDetail => {
                         if options.include_tool_output {
                             out.insert(key.clone(), redact_node(entry, path, options));
+                        }
+                    }
+                    FieldPolicy::ToolTitle => {
+                        if options.include_tool_output || !entry.is_string() {
+                            out.insert(key.clone(), redact_node(entry, path, options));
+                        } else {
+                            out.insert(key.clone(), Value::String(GENERIC_TOOL_TITLE.to_string()));
                         }
                     }
                     FieldPolicy::Default => {

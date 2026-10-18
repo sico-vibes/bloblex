@@ -44,8 +44,9 @@ export function conversationPreview(session: Session | null | undefined): string
     const role = String(message.role ?? '')
     if (role === 'thinking') continue
     if (role === 'notice' && message.meta?.kind === 'delegation') return `Messaged ${message.meta.peerName ?? 'a teammate'}`
-    if (message.meta?.kind === 'blob_reply') return `Message from ${message.meta.fromName ?? 'a teammate'}`
     if (role === 'notice' && message.meta?.kind === 'blob_created') return `Created ${typeof message.meta.name === 'string' ? message.meta.name : 'a teammate'}`
+    if (role === 'notice') continue
+    if (message.meta?.kind === 'blob_reply') return `Message from ${message.meta.fromName ?? 'a teammate'}`
     const text = messageText(message)
     if (text) return role === 'user' && !message.meta ? `You: ${text}` : text
   }
@@ -86,18 +87,16 @@ export function managerOf(agents: readonly Agent[]): Agent | null {
   return agents.find((agent) => isManager(agent) && !agent.archived) ?? null
 }
 
-export function groupAgentsByProject(agents: readonly Agent[], projects: readonly Project[], query = '', showHidden = false): ProjectGroup[] {
-  const needle = query.trim().toLowerCase()
+export function groupAgentsByProject(agents: readonly Agent[], projects: readonly Project[], showHidden = false): ProjectGroup[] {
   // The Manager is pinned above every project, never inside one.
-  const visible = agents.filter((agent) => !agent.archived && !isManager(agent) && (showHidden || agent.hidden !== true)
-    && (!needle || [agent.name, agent.role, agent.description].some((value) => typeof value === 'string' && value.toLowerCase().includes(needle))))
+  const visible = agents.filter((agent) => !agent.archived && !isManager(agent) && (showHidden || agent.hidden !== true))
   const known = new Set(projects.map((project) => project.id))
   const groups: ProjectGroup[] = [...projects]
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
     .map((project) => ({ project, agents: visible.filter((agent) => agent.projectId === project.id) }))
   // Within a group, blobs keep the daemon's order (runtime, then saved position).
   groups.push({ project: null, agents: visible.filter((agent) => !agent.projectId || !known.has(agent.projectId)) })
-  return needle ? groups.filter((group) => group.agents.length > 0) : groups
+  return groups
 }
 
 export function leaderOf(agents: readonly Agent[]) {

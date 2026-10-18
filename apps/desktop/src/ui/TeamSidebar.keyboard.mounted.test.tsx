@@ -46,7 +46,7 @@ afterEach(() => {
 
 function mount(list: TeamSidebarActions) {
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  act(() => root!.render(<TeamSidebar agents={[alpha, beta, gamma]} projects={projects} sessions={[]} runtimes={[]} connected now={Date.now()} pinnedIds={[]} unreadSessionIds={new Set()} approvalSessionIds={new Set()} selectedAgentId="agent-beta" query="" onQueryChange={vi.fn()} actions={list} />))
+  act(() => root!.render(<TeamSidebar agents={[alpha, beta, gamma]} projects={projects} sessions={[]} runtimes={[]} connected now={Date.now()} pinnedIds={[]} unreadSessionIds={new Set()} approvalSessionIds={new Set()} selectedAgentId="agent-beta" onOpenSearch={vi.fn()} actions={list} />))
   return host
 }
 

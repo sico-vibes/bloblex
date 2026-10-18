@@ -256,6 +256,7 @@ export function renderTierTableMarkdown(): string {
 // | agents[].instructions                            | `{ hasInstructions: true }` when non-empty                     |
 // | messages[].attachments[].path                    | file name only                                                 |
 // | tools[]/turns[]/files[] detail                   | removed by default; `includeToolOutput` restores tool detail   |
+// | tools[].title                                     | replaced with a generic title by default; restored with tool output |
 // | providerSessionId                                | removed                                                        |
 // | keys matching the SENSITIVE_KEY pattern          | removed                                                        |
 // | settings                                         | reduced to SETTINGS_ALLOWLIST                                  |
@@ -328,6 +329,10 @@ type FieldPolicy =
   | 'fileName'
   | 'pathTail'
   | 'toolDetail'
+  | 'toolTitle'
+
+/** The title a remote device sees in place of a tool's real one (FIX39 item 17). */
+const GENERIC_TOOL_TITLE = 'Tool'
 
 /**
  * The name of the array the value sits in, when the value is an array item's
@@ -363,6 +368,8 @@ function fieldPolicy(path: readonly string[]): FieldPolicy {
       if (container === 'turns' || container === 'files') return 'drop'
       return 'default'
     }
+    case 'title':
+      return arrayContainer(path) === 'tools' ? 'toolTitle' : 'default'
     case 'path': {
       const container = arrayContainer(path)
       if (container === 'attachments') return 'fileName'
@@ -404,6 +411,9 @@ function redactNode(value: unknown, path: readonly string[], options: RedactOpti
           continue
         case 'toolDetail':
           if (options.includeToolOutput) out[key] = redactNode(entry, childPath, options)
+          continue
+        case 'toolTitle':
+          out[key] = options.includeToolOutput || typeof entry !== 'string' ? redactNode(entry, childPath, options) : GENERIC_TOOL_TITLE
           continue
         default:
           out[key] = redactNode(entry, childPath, options)

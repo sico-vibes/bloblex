@@ -330,6 +330,8 @@ describe('update banner', () => {
     views.push(view)
     await view.settle()
     expect(view.host.querySelector('[data-update-banner]')?.textContent).toContain('Update 0.2.0 is available')
+    expect(buttonNamed(view.host, 'View')?.className).toBe('primary-button small')
+    expect(buttonNamed(view.host, 'Later')?.className).toBe('ghost-button small')
     await act(async () => { buttonNamed(view.host, 'Later')!.click() })
     expect(view.host.querySelector('[data-update-banner]')).toBeNull()
     expect(localStorage.getItem(DISMISSED_UPDATE_VERSION_KEY)).toBe('0.2.0')

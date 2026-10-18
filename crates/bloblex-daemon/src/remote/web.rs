@@ -558,7 +558,7 @@ async fn login_post(
 }
 
 /// `GET /api/ping` (FIX35 C2 §4): the self-test. It is unauthenticated and
-/// answers nothing but `{"ok":true}`, so the owner can open it from a phone to
+/// answers only a fixed gateway marker, so the owner can open it from a phone to
 /// confirm the address is reachable. It records where the reach came from (a
 /// public address, or "this network") and emits `remote.changed`, which is what
 /// the desktop shows as "Reached from …".
@@ -574,7 +574,7 @@ async fn ping_get(
             .emit("remote.changed", json!({"status": state.remote.status_value(&state.daemon)}))
             .await;
     }
-    json_response(StatusCode::OK, json!({"ok": true}))
+    json_response(StatusCode::OK, json!({"ok": true, "app": "bitbots", "role": "remote-gateway"}))
 }
 
 async fn pair_get(State(state): State<WebState>, headers: HeaderMap) -> Response {

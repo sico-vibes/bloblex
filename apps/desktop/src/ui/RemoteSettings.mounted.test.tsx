@@ -23,6 +23,7 @@ let host: HTMLDivElement | null = null
 const flush = async (ms = 80) => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)) }) }
 
 beforeEach(() => {
+  ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   simulator = createRemoteSimulator()
   simulator.reset({ enabled: false, devices: 0 })
   events.length = 0
@@ -81,6 +82,17 @@ describe('RemoteSettings', () => {
     simulator.reset({ enabled: false, devices: 0, tailscale: 'https_disabled' })
     const view = await mount()
     expect(view.querySelector('.remote-fix')?.textContent).toContain('HTTPS is off for your tailnet')
+    expect(view.querySelector<HTMLButtonElement>('[aria-label="Allow remote devices"]')!.disabled).toBe(true)
+  })
+
+  it.each([
+    ['port_in_use', 'The Remote port is busy'],
+    ['starting', 'Tailscale is starting'],
+    ['not_running', 'Tailscale is not running'],
+  ] as const)('explains %s and disables enabling until it is fixed', async (tailscale, title) => {
+    simulator.reset({ enabled: false, devices: 0, tailscale })
+    const view = await mount()
+    expect(view.querySelector('.remote-fix')?.textContent).toContain(title)
     expect(view.querySelector<HTMLButtonElement>('[aria-label="Allow remote devices"]')!.disabled).toBe(true)
   })
 

@@ -54,7 +54,7 @@ export function parseSharedBlob(text: string): SharedBlob {
   const model = nullableText(parsed.model, 160, 'model')
   const thinking = nullableText(parsed.thinking, 80, 'thinking')
   const speed = nullableText(parsed.speed, 80, 'speed')
-  const look = parsed.look === undefined ? { shape: 'round' as const, seed: name } : normalizeLook(parsed.look)
+  const look = parsed.look === undefined ? { shape: 'circle' as const, seed: name } : normalizeLook(parsed.look)
   if (!look) throw new Error(`The ${noun} look is not valid.`)
   let providerId: string | undefined
   if (parsed.providerId !== undefined && parsed.providerId !== null) {

@@ -1,0 +1,11 @@
+.activity-step-group > h4 {
+  margin: 12px 0 4px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.activity-step-group:first-child > h4 { margin-top: 8px; }
+
+/* The companion renders the same groups in a small window: keep the flat list flat. */
+:root[data-bitbots="on"] .activity-steps.flat { border: 0; }

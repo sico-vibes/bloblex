@@ -86,4 +86,14 @@ describe('Settings › Manager', () => {
     await act(async () => { button('Restore').click() })
     expect(h.rpc).toHaveBeenCalledWith('manager.playbook.revert', { version: 1 })
   })
+
+  it('shows the daemon text, with the code prefix stripped, for a plain string rejection', async () => {
+    h.rpc.mockImplementation(async (method: string) => {
+      if (method === 'manager.profile.list') return Promise.reject('conflict: Real reason')
+      if (method === 'manager.playbook.history') return { versions }
+      return {}
+    })
+    await mount()
+    expect(host!.querySelector('[role="alert"]')?.textContent).toBe('Real reason')
+  })
 })

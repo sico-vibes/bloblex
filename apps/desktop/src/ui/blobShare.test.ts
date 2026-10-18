@@ -18,12 +18,12 @@ describe('blob share format', () => {
   it('round trips looks and gives older files a round look', () => {
     const agent = { id: 'agent-1', name: 'Helper', description: '', instructions: '', color: '#aabbcc', look: { shape: 'sun', seed: 'x', traits: { 'sun.n': 0.4 } }, model: null, thinking: null, serviceTier: null } as never
     const value = JSON.parse(serializeBlob(agent, 'codex'))
-    expect(value.look).toEqual({ shape: 'sun', seed: 'x', traits: { 'sun.n': 0.4 } })
+    expect(value.look).toEqual({ shape: 'circle', seed: 'x', traits: { 'sun.n': 0.4 } })
     expect(parseSharedBlob(JSON.stringify(value)).look).toEqual(value.look)
     const plain = JSON.parse(serializeBlob({ ...(agent as object), look: null } as never, 'codex'))
-    expect(plain.look).toEqual({ shape: 'round', seed: 'agent-1' })
+    expect(plain.look).toEqual({ shape: 'circle', seed: 'agent-1' })
     const { look: _look, ...older } = base
-    expect(parseSharedBlob(JSON.stringify(older)).look).toEqual({ shape: 'round', seed: 'Helper' })
+    expect(parseSharedBlob(JSON.stringify(older)).look).toEqual({ shape: 'circle', seed: 'Helper' })
     expect(() => parseSharedBlob(JSON.stringify({ ...base, look: { shape: 'star' } }))).toThrow(/look is not valid/)
   })
 

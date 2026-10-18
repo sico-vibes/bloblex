@@ -15,11 +15,10 @@
 .brand-lockup { display: flex; align-items: center; gap: 9px; }
 .brand-lockup strong { font-size: var(--fs-md); font-weight: 600; }
 .brand-logo { width: 22px; height: 22px; flex: 0 0 auto; object-fit: contain; }
-.sidebar-search { margin: 0 10px 8px; height: 34px; padding: 0 10px; display: flex; align-items: center; gap: 8px; color: var(--text-3); border-radius: var(--radius-md); background: var(--surface-raised); }
-.sidebar-search:focus-within { box-shadow: var(--focus-ring); }
-.sidebar-search input { min-width: 0; flex: 1; height: 100%; padding: 0; color: var(--text-1); border: 0; outline: 0; background: transparent; font-size: var(--fs-sm); }
-.sidebar-search input::placeholder { color: var(--text-3); }
-.sidebar-search input:focus-visible { box-shadow: none; }
+.sidebar-search { flex-shrink: 0; margin: 0 10px 8px; height: 34px; padding: 0 10px; display: flex; align-items: center; gap: 8px; color: var(--text-3); border: 0; border-radius: var(--radius-md); background: var(--surface-raised); font-size: var(--fs-sm); text-align: left; }
+.sidebar-search:focus-visible { box-shadow: var(--focus-ring); }
+.sidebar-search > span { flex: 1; }
+.sidebar-search kbd { color: var(--text-3); font-family: inherit; font-size: var(--fs-2xs); }
 
 .sidebar-scroll { min-height: 0; flex: 1; padding: 2px 8px 8px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 .bot-list { display: flex; flex-direction: column; gap: 2px; }
@@ -419,10 +418,10 @@
 .launch-checklist-window { width: min(420px, 100%); height: 176px; margin: 0 auto; overflow: hidden; scrollbar-width: none; -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 30%, #000 70%, transparent 100%); mask-image: linear-gradient(to bottom, transparent 0, #000 30%, #000 70%, transparent 100%); transition: opacity 400ms ease; }
 .launch-checklist-window::-webkit-scrollbar { display: none; }
 .launch-intro[data-phase="greeting"] .launch-checklist-window, .launch-intro[data-phase="ready"] .launch-checklist-window { opacity: .55; }
-.launch-checklist { width: 100%; margin: 0; padding: 66px 0; display: grid; gap: 2px; list-style: none; }
+.launch-checklist { width: min(320px, 100%); margin: 0 auto; padding: 66px 0; display: grid; gap: 2px; list-style: none; }
 .launch-checklist li { animation: launch-row-in 320ms cubic-bezier(.2, .8, .2, 1) both; }
 @keyframes launch-row-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-.launch-checklist li { min-height: 44px; display: grid; grid-template-columns: 20px minmax(0, max-content); justify-content: center; align-items: center; gap: 10px; }
+.launch-checklist li { min-height: 44px; display: grid; grid-template-columns: 20px minmax(0, 1fr); justify-content: start; align-items: center; gap: 10px; }
 .launch-check-icon { position: relative; width: 20px; height: 20px; display: grid; place-items: center; color: var(--text-3); }
 .launch-check-icon.has-provider { overflow: visible; }
 .launch-check-icon.has-provider > .provider-logo { width: 16px; height: 16px; }
@@ -438,8 +437,8 @@
 .launch-check-copy { min-width: 0; display: grid; gap: 2px; }
 .launch-spinner { width: 12px; height: 12px; display: block; border: 1.5px solid var(--line-strong); border-top-color: var(--text-2); border-radius: 50%; animation: launch-spin 800ms linear infinite; }
 @keyframes launch-spin { to { transform: rotate(360deg); } }
-.launch-checklist strong { font-size: var(--fs-sm); font-weight: 500; }
-.launch-checklist small { color: var(--text-2); font-size: var(--fs-xs); }
+.launch-checklist strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); font-weight: 500; }
+.launch-checklist small { color: var(--text-2); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .launch-actions, .onboarding-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .launch-actions { margin-top: 14px; }
 .launch-warning-notice { padding: 10px 14px; display: flex; align-items: center; gap: 10px; color: var(--text-1); border-bottom: 1px solid var(--warning-line); background: var(--surface-warning); font-size: var(--fs-sm); }

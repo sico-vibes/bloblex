@@ -161,4 +161,10 @@ describe('MemoryPage', () => {
     await click(q('[aria-label="Let bots use memory"]'))
     expect(props.onEnabledChange).toHaveBeenCalledWith(true)
   })
+
+  it('shows the daemon text, with the code prefix stripped, for a plain string rejection', async () => {
+    mocks.rpc.mockImplementation(async (method: string) => method === 'memory.list' ? Promise.reject('conflict: Real reason') : {})
+    await mount()
+    expect(q('[role="alert"]')?.textContent).toBe('Real reason')
+  })
 })

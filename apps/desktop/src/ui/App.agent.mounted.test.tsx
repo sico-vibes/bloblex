@@ -245,6 +245,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const view of mounted.splice(0)) view.unmount()
+  sessionStorage.clear()
   vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -477,14 +478,14 @@ describe('blob roster and editor', () => {
     const create = h.rpc.mock.calls.find((call) => call[0] === 'agent.create')
     expect(create?.[1]).toStrictEqual({
       name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default agent for Claude.', instructions: '', color: '#f38c6f',
-      look: { shape: 'round', seed: 'agent-claude' }, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
+      look: { shape: 'circle', seed: 'agent-claude' }, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
     })
     expect(create?.[1]).not.toHaveProperty('archived')
     expect(rows(view.host).some((row) => row.textContent?.includes('Copy of Claude'))).toBe(true)
   })
 
   it('copies a chosen look on duplicate', async () => {
-    const source = agent({ ...claude, look: { shape: 'sun', seed: 'claude', traits: { 'sun.n': 0.2 } } })
+    const source = agent({ ...claude, look: { shape: 'cloud', seed: 'claude', traits: { 'sun.n': 0.2 } } })
     h.fetchSnapshot.mockResolvedValue(snapshot({ agents: [source, codex, invoice, opencode, retired] }))
     const view = startApp()
     await view.settle()
@@ -494,7 +495,7 @@ describe('blob roster and editor', () => {
     const create = h.rpc.mock.calls.find((call) => call[0] === 'agent.create')
     expect(create?.[1]).toStrictEqual({
       name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default agent for Claude.', instructions: '', color: '#f38c6f',
-      look: { shape: 'sun', seed: 'claude', traits: { 'sun.n': 0.2 } }, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
+      look: { shape: 'cloud', seed: 'claude', traits: { 'sun.n': 0.2 } }, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
     })
   })
 
@@ -783,6 +784,7 @@ describe('blob roster and editor', () => {
     const managerRow = view.host.querySelector('.manager-group .team-row[data-agent-id="agent-manager"]')!
     expect(managerRow.getAttribute('aria-label')).toBe('Manager, Manager, Manager')
     expect(managerRow.querySelector('.leader-badge')).not.toBeNull()
+    expect(managerRow.querySelector('.leader-badge svg[fill="currentColor"]')).not.toBeNull()
     expect([...view.host.querySelectorAll('.team-group[aria-label="Unassigned"] .team-row strong')].map((node) => node.textContent)).toEqual(['Codex', 'Invoice helper', 'OpenCode'])
   })
 
@@ -830,14 +832,36 @@ describe('blob roster and editor', () => {
     expect([...view.host.querySelectorAll('.team-group[aria-label="Board"] .team-row strong')].map((node) => node.textContent)).toEqual(['Codex'])
   })
 
-  it('filters blobs by name or role from the search box', async () => {
+  it('opens the quick switcher from the only sidebar search control and searches bots there', async () => {
     configure(snapshot({ agents: [{ ...claude, role: 'Copywriter' }, codex, invoice, opencode, retired] }))
     const view = startApp()
     await view.settle()
-    await typeInto(view.host.querySelector<HTMLInputElement>('input[aria-label="Search bots"]'), 'copy')
-    expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Claude'])
-    await typeInto(view.host.querySelector<HTMLInputElement>('input[aria-label="Search bots"]'), 'invoice')
-    expect(rows(view.host).map((row) => row.querySelector('strong')?.textContent)).toEqual(['Invoice helper'])
+    expect(view.host.querySelector('.sidebar-create-actions [aria-label="Open quick switcher"]')).toBeNull()
+    const search = view.host.querySelector<HTMLButtonElement>('button.sidebar-search')!
+    expect(search?.textContent).toContain('Ctrl K')
+    await click(search)
+    await view.settle()
+    const input = view.host.querySelector<HTMLInputElement>('.quick-switcher input')!
+    expect(document.activeElement).toBe(input)
+    await typeInto(input, 'invoice')
+    expect(view.host.querySelector('.quick-switcher [data-result-id="agent-invoice"]')?.textContent).toContain('Invoice helper')
+    expect(rows(view.host)).toHaveLength(4)
+    await press(input, 'Escape')
+    await view.settle()
+    expect(view.host.querySelector('.quick-switcher')).toBeNull()
+    await press(search, 'k', { ctrlKey: true })
+    await view.settle()
+    expect(view.host.querySelector('.quick-switcher')).not.toBeNull()
+  })
+
+  it.each([{ agents: [] }, { agents: [claude] }])('shows Manager setup with zero or existing bots despite an earlier Later ($agents.length bots)', async ({ agents }) => {
+    sessionStorage.setItem('bitbots.managerSetup.later', '1')
+    localStorage.getItem = vi.fn((key: string) => key === 'bloblex.firstRun.complete' ? '1' : null)
+    configure(snapshot({ agents, sessions: [] }))
+    const view = startApp()
+    await view.settle()
+    expect(view.host.querySelector('.manager-setup')?.textContent).toContain('Meet your Manager')
+    expect(view.host.querySelector('.manager-setup [aria-label="Later"]')).toBeNull()
   })
 
   it('opens a blob without a conversation into a local draft, then stores it on the first message', async () => {
@@ -1169,7 +1193,7 @@ describe('opt-in conversation experiments', () => {
     expect(view.host.querySelector('.conversation-auto-title')).toBeNull()
     await press(document.body, '/', { ctrlKey: true })
     expect(view.host.querySelector('[aria-label="Keyboard shortcuts"]')).toBeNull()
-    await click(view.host.querySelector('[aria-label="Open quick switcher"]'))
+    await click(view.host.querySelector('button.sidebar-search'))
     expect(view.host.textContent).not.toContain('Search messages')
   })
   it('edits drafts, retries only the latest user text, and keeps history intact', async () => {
@@ -1293,7 +1317,7 @@ describe('opt-in conversation experiments', () => {
     await click(buttonNamed(view.host, 'Keep it')); await view.settle()
     await click(buttonNamed(view.host, 'Keep')); await view.settle()
     expect(view.host.querySelector('.change-review')).toBeNull()
-    await click(view.host.querySelector('[aria-label="Open quick switcher"]'))
+    await click(view.host.querySelector('button.sidebar-search'))
     await press(document.body, 'Escape')
     expect(view.host.querySelector('.change-review')).toBeNull()
   })
@@ -1327,7 +1351,7 @@ describe('opt-in conversation experiments', () => {
     const original = h.rpc.getMockImplementation()!
     h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => method === 'search.messages' ? { results: [{ sessionId: 'side', blobId: 'agent-claude', title: 'Side topic', role: 'user', messageId: 'side-u', createdAt: '2026-10-10T12:00:00Z', snippet: 'Side needle' }] } : original(method, params))
     const view = startApp(); await view.settle()
-    await click(view.host.querySelector('[aria-label="Open quick switcher"]')); await click(view.host.querySelector('[data-result-id="search-messages"]')); await view.settle()
+    await click(view.host.querySelector('button.sidebar-search')); await click(view.host.querySelector('[data-result-id="search-messages"]')); await view.settle()
     await typeInto(view.host.querySelector<HTMLInputElement>('[aria-label="Search message text"]'), 'needle')
     await act(async () => { await vi.advanceTimersByTimeAsync(200) })
     await click(view.host.querySelector('[role="option"]')); await view.settle()

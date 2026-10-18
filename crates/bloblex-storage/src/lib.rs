@@ -5182,7 +5182,7 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
 /// A blob look: one of the silhouette names, an optional seed and up to 48
 /// pinned trait positions in [0, 1]. Kept small so it travels in every snapshot.
 fn valid_look(look: &Value) -> bool {
-    const SHAPES: [&str; 10] = ["round","organic","boxy","capsule","cloud","droplet","hexagon","sun","triangle","cat"];
+    const SHAPES: [&str; 13] = ["circle","pebble","squircle","round","organic","boxy","capsule","cloud","droplet","hexagon","sun","triangle","cat"];
     let Some(object) = look.as_object() else { return false };
     if object.keys().any(|key| !["shape","seed","traits","bot"].contains(&key.as_str())) { return false; }
     // Bitbots theme styling: a robot outline and three colours, all optional.
@@ -5242,10 +5242,20 @@ pub fn tool_detail(kind: &str, raw: &Value) -> Value {
     let mut put = |key: &str, value: Option<String>| {
         if let Some(text) = value.map(|text| clip_text(&text, DETAIL_TEXT_LIMIT)).filter(|text| !text.is_empty()) { detail.insert(key.into(), json!(text)); }
     };
+    let input = [&raw["input"], &raw["arguments"], &raw["rawInput"]].into_iter().find(|value| value.is_object()).unwrap_or(raw);
+    let field = |keys: &[&str]| keys.iter().find_map(|key| raw[*key].as_str().or_else(|| input[*key].as_str()));
     let command = raw["command"].as_str().map(str::to_owned)
         .or_else(|| raw["command"].as_array().map(|parts| parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")))
-        .or_else(|| raw["input"]["command"].as_str().map(str::to_owned))
-        .or_else(|| raw["rawInput"]["command"].as_str().map(str::to_owned));
+        .or_else(|| input["command"].as_str().map(str::to_owned))
+        .or_else(|| matches!(kind.to_ascii_lowercase().as_str(), "exec" | "execute" | "shell" | "bash" | "command" | "commandexecution" | "terminal").then(|| raw["rawInput"].as_str().map(str::to_owned)).flatten());
+    // Only a shell tool gets a "Ran …" row label. A tool that merely takes a
+    // `command` argument (an MCP call) is not renamed into a command.
+    if matches!(kind.to_ascii_lowercase().as_str(), "exec" | "execute" | "shell" | "bash" | "command" | "commandexecution" | "terminal") {
+        if let Some(command) = &command {
+            let line = command.lines().next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
+            if !line.is_empty() { put("label", Some(format!("Ran {}", clip_text(&line, 80)))); }
+        }
+    }
     put("command", command);
     put("output", value_text(&raw["aggregatedOutput"]).or_else(|| value_text(&raw["output"])).or_else(|| value_text(&raw["rawOutput"])).or_else(|| raw["outputDelta"].as_str().map(str::to_owned)).or_else(|| if raw["type"] == "tool_result" { value_text(&raw["content"]) } else { None }));
     let tool = raw["tool"].as_str().or(raw["name"].as_str()).map(|name| match raw["server"].as_str().or(raw["namespace"].as_str()) { Some(server) if !server.is_empty() => format!("{server} · {name}"), _ => name.to_owned() });
@@ -5255,10 +5265,13 @@ pub fn tool_detail(kind: &str, raw: &Value) -> Value {
     put("input", arguments.map(|text| clip_text(&text, 1500)));
     put("result", value_text(&raw["result"]).or_else(|| value_text(&raw["contentItems"])));
     put("progress", raw["progress"].as_str().or(raw["message"].as_str()).map(str::to_owned));
-    put("query", raw["query"].as_str().or(raw["action"]["query"].as_str()).map(str::to_owned));
-    put("path", raw["path"].as_str().or(raw["input"]["file_path"].as_str()).or(raw["input"]["path"].as_str()).or(raw["changes"][0]["path"].as_str()).or(raw["locations"][0]["path"].as_str()).map(str::to_owned));
+    put("query", field(&["query"]).or(raw["action"]["query"].as_str()).map(str::to_owned));
+    put("pattern", field(&["pattern"]).map(str::to_owned));
+    put("url", field(&["url"]).map(str::to_owned));
+    put("path", field(&["path", "file_path", "filePath"]).or(raw["changes"][0]["path"].as_str()).or(raw["locations"][0]["path"].as_str()).map(str::to_owned));
     put("error", raw["error"]["message"].as_str().or(raw["error"].as_str()).map(str::to_owned).or_else(|| if raw["is_error"] == true { value_text(&raw["content"]) } else { None }));
     if let Some(code) = raw["exitCode"].as_i64() { detail.insert("exitCode".into(), json!(code)); }
+    if let Some(changes) = raw["changes"].as_array() { if changes.len() > 1 { detail.insert("fileCount".into(), json!(changes.len())); } }
     if let Some(status) = raw["status"].as_str().filter(|status| matches!(*status, "inProgress" | "completed" | "failed" | "declined")) { detail.insert("resultStatus".into(), json!(status)); }
     if let Some(success) = raw["success"].as_bool() { detail.insert("success".into(), json!(success)); }
     if !detail.is_empty() { detail.insert("kind".into(), json!(kind)); }
@@ -6484,7 +6497,7 @@ mod tests {
     #[test]
     fn tool_details_are_bounded_provider_neutral_and_merge_start_with_completion() {
         let codex_command = tool_detail("commandExecution", &json!({"type":"commandExecution","command":"npm test","aggregatedOutput":"2 passing","exitCode":0}));
-        assert_eq!(codex_command, json!({"command":"npm test","output":"2 passing","exitCode":0,"kind":"commandExecution"}));
+        assert_eq!(codex_command, json!({"command":"npm test","label":"Ran npm test","output":"2 passing","exitCode":0,"kind":"commandExecution"}));
         let mcp = tool_detail("mcpToolCall", &json!({"server":"bloblex","tool":"message_blob","arguments":{"blob":"Gogo"},"result":{"content":[{"type":"text","text":"Sent to Gogo."}]}}));
         assert_eq!(mcp["tool"], "bloblex · message_blob");
         assert!(mcp["input"].as_str().unwrap().contains("\"blob\": \"Gogo\""));
@@ -6527,6 +6540,7 @@ mod tests {
         let tool = &detail["tools"][0];
         assert_eq!((tool["turnId"].as_str(), tool["title"].as_str(), tool["state"].as_str()), (Some("t-tools"), Some("npm test"), Some("completed")));
         assert_eq!(tool["detail"]["command"], "npm test", "the command from the start survives the completion");
+        assert_eq!(tool["detail"]["label"], "Ran npm test", "the short label also survives completion");
         assert_eq!(tool["detail"]["output"], "ok");
         let stream = detail["tools"].as_array().unwrap().iter().find(|item| item["id"] == "stream").unwrap();
         assert_eq!(stream["detail"]["command"], "cargo test");
@@ -7514,5 +7528,51 @@ mod memory_tests {
         assert!(db.session_manager_handover("s-ho").unwrap());
         db.set_session_manager_handover("s-ho", false).unwrap();
         assert!(!db.session_manager_handover("s-ho").unwrap());
+    }
+}
+
+#[cfg(test)]
+mod fix39_activity_tests {
+    use super::*;
+
+    #[test]
+    fn valid_look_accepts_new_and_legacy_shapes() {
+        for shape in ["circle", "pebble", "squircle", "round", "organic", "boxy", "capsule", "cloud", "droplet", "hexagon", "sun", "triangle", "cat"] {
+            assert!(valid_look(&json!({"shape":shape,"seed":"stable"})), "{shape}");
+        }
+        assert!(!valid_look(&json!({"shape":"unknown"})));
+    }
+
+    #[test]
+    fn tool_detail_extracts_targets_before_clipping_input() {
+        let glob = tool_detail("Glob", &json!({"name":"Glob","input":{"pattern":"**/*.ts","path":"src"}}));
+        assert_eq!(glob["pattern"], "**/*.ts");
+        assert_eq!(glob["path"], "src");
+        let clipped = tool_detail("Glob", &json!({"input":{"aaa":"x".repeat(1600),"pattern":"**/*.rs"}}));
+        assert!(!clipped["input"].as_str().unwrap().contains("pattern"));
+        assert_eq!(clipped["pattern"], "**/*.rs", "targets survive input clipping");
+        let fetch = tool_detail("WebFetch", &json!({"input":{"url":"https://example.com/docs"}}));
+        assert_eq!(fetch["url"], "https://example.com/docs");
+        let command = "cargo test\nWrite-Output done";
+        let bash = tool_detail("Bash", &json!({"input":{"command":command}}));
+        assert_eq!(bash["command"], command);
+        assert_eq!(bash["label"], "Ran cargo test");
+        let read = tool_detail("read", &json!({"rawInput":{"filePath":"README.md"}}));
+        assert_eq!(read["path"], "README.md");
+    }
+
+    #[test]
+    fn audit_followups_label_only_commands_and_count_files() {
+        // F4: a non-shell tool with a `command` argument gets no "Ran …" label.
+        let mcp = tool_detail("mcpToolCall", &json!({"arguments":{"command":"rm -rf /"}}));
+        assert!(mcp.get("label").is_none(), "{mcp}");
+        // F6: an empty command line produces no label.
+        let empty = tool_detail("Bash", &json!({"input":{"command":"   \n  "}}));
+        assert!(empty.get("label").is_none(), "{empty}");
+        // F5: a multi-file change records how many files it touched.
+        let changes = tool_detail("fileChange", &json!({"changes":[{"path":"a.ts"},{"path":"b.ts"}]}));
+        assert_eq!(changes["fileCount"], 2);
+        let single = tool_detail("fileChange", &json!({"changes":[{"path":"a.ts"}]}));
+        assert!(single.get("fileCount").is_none(), "{single}");
     }
 }

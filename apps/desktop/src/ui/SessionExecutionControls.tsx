@@ -327,7 +327,6 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
       <div className="session-effort-popover-heading">
         <span className="session-effort-title">Effort</span>
         <span className={`session-effort-value ${isTopTierEffort(visibleIndex >= 0 ? efforts[visibleIndex] : null) ? 'ultra' : ''}`} aria-live="polite"><span key={visibleLabel} className="session-effort-value-in">{visibleLabel}</span></span>
-        {defaultThinking && efforts.length > 0 && !visibleLabel.startsWith('Model default') && <span className="session-effort-default-label">Model default · {labelizeEffort(defaultThinking, provider)}</span>}
       </div>
       {efforts.length > 0 ? <>
         <div className="session-effort-meter-frame">

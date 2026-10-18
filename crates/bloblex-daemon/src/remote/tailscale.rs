@@ -162,6 +162,8 @@ fn read_pipe(pipe: Option<impl Read>) -> String {
 pub enum TailscaleState {
     NotInstalled,
     LoggedOut,
+    Starting,
+    NotRunning,
     HttpsDisabled,
     PortInUse,
     FunnelOn,
@@ -173,6 +175,8 @@ impl TailscaleState {
         match self {
             TailscaleState::NotInstalled => "not_installed",
             TailscaleState::LoggedOut => "logged_out",
+            TailscaleState::Starting => "starting",
+            TailscaleState::NotRunning => "not_running",
             TailscaleState::HttpsDisabled => "https_disabled",
             TailscaleState::PortInUse => "port_in_use",
             TailscaleState::FunnelOn => "funnel_on",
@@ -262,16 +266,25 @@ pub fn probe(cli: &dyn TailscaleCli, target: &str) -> Probe {
         }
     };
     if !status_output.success {
+        // Some CLI versions return non-zero while still providing a useful
+        // BackendState. Preserve sign-in/starting advice in that case.
+        if let Ok(status) = parse_status_json(&status_output.stdout) {
+            if !status.backend_state.is_empty() && !status.is_running() {
+                return evaluate(&status, &ServeStatus::default());
+            }
+        }
+        // Never echo stderr (it may include account or machine information).
+        // A failed service connection or permission error is not a sign-out.
         return Probe::Unavailable {
-            state: TailscaleState::LoggedOut,
-            message: "Tailscale is not running or is signed out. Open Tailscale and sign in.".to_string(),
+            state: TailscaleState::NotRunning,
+            message: "Bitbots could not reach the Tailscale service. Open Tailscale on this computer, then check again.".to_string(),
         };
     }
     let mut status = match parse_status_json(&status_output.stdout) {
         Ok(status) => status,
         Err(_) => {
             return Probe::Unavailable {
-                state: TailscaleState::LoggedOut,
+                state: TailscaleState::NotRunning,
                 message: "Tailscale did not return a status Bitbots can read.".to_string(),
             }
         }
@@ -288,10 +301,12 @@ pub fn probe(cli: &dyn TailscaleCli, target: &str) -> Probe {
 /// Map a parsed status onto the state the UI shows.
 pub fn evaluate(status: &TailscaleStatus, serve: &ServeStatus) -> Probe {
     if !status.is_running() {
-        return Probe::Unavailable {
-            state: TailscaleState::LoggedOut,
-            message: "Tailscale is not connected. Open Tailscale and sign in.".to_string(),
+        let (state, message) = match status.backend_state.as_str() {
+            "Starting" | "NoState" => (TailscaleState::Starting, "Tailscale is starting. Wait a moment, then check again."),
+            "NeedsLogin" => (TailscaleState::LoggedOut, "Tailscale is signed out. Open Tailscale and sign in."),
+            _ => (TailscaleState::NotRunning, "Tailscale is not running. Open Tailscale on this computer, then check again."),
         };
+        return Probe::Unavailable { state, message: message.to_string() };
     }
     if status.cert_domains.is_empty() || status.dns_name.as_deref().is_none_or(str::is_empty) {
         return Probe::Unavailable {
@@ -556,6 +571,45 @@ pub(crate) mod tests {
 
     fn ready_status() -> TailscaleStatus {
         parse_status_json(RUNNING_STATUS).unwrap()
+    }
+
+    #[test]
+    fn fix39_starting_and_stopped_are_not_logged_out() {
+        for (backend, expected) in [("Starting", "starting"), ("NoState", "starting"), ("Stopped", "not_running"), ("NeedsLogin", "logged_out")] {
+            let status = parse_status_json(&format!(r#"{{"BackendState":"{backend}"}}"#)).unwrap();
+            match evaluate(&status, &ServeStatus::default()) {
+                Probe::Unavailable { state, .. } => assert_eq!(state.as_str(), expected),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn fix39_nonzero_status_keeps_a_reported_login_state() {
+        struct SignedOut;
+        impl TailscaleCli for SignedOut {
+            fn run(&self, _: &[&str]) -> Result<CliOutput, String> {
+                Ok(CliOutput { success: false, stdout: r#"{"BackendState":"NeedsLogin"}"#.to_string(), stderr: String::new() })
+            }
+        }
+        match probe(&SignedOut, "http://127.0.0.1:48620") {
+            Probe::Unavailable { state, .. } => assert_eq!(state.as_str(), "logged_out"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn fix39_daemon_connection_failure_is_not_running() {
+        struct Stopped;
+        impl TailscaleCli for Stopped {
+            fn run(&self, _: &[&str]) -> Result<CliOutput, String> {
+                Ok(CliOutput { success: false, stdout: String::new(), stderr: "failed to connect to local tailscaled".to_string() })
+            }
+        }
+        match probe(&Stopped, "http://127.0.0.1:48620") {
+            Probe::Unavailable { state, .. } => assert_eq!(state.as_str(), "not_running"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

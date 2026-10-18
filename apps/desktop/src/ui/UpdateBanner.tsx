@@ -20,8 +20,8 @@ export function rememberDismissedUpdateVersion(version: string) {
 export function UpdateAvailableBanner({ version, onView, onLater }: { version: string; onView: () => void; onLater: () => void }) {
   return <div className="update-banner" role="status" data-update-banner>
     <p>Update {version} is available</p>
-    <button type="button" className="pill-button" onClick={onView}>View</button>
-    <button type="button" className="pill-button" onClick={onLater}>Later</button>
+    <button type="button" className="primary-button small" onClick={onView}>View</button>
+    <button type="button" className="ghost-button small" onClick={onLater}>Later</button>
   </div>
 }
 

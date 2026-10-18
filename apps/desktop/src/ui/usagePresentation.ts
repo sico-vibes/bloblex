@@ -1,7 +1,7 @@
 export type UnknownRecord = Record<string, unknown>
 
 export function tokenValue(value: unknown): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 'Unknown'
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'N/A'
   return new Intl.NumberFormat(undefined, { notation: value >= 10_000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value)
 }
 

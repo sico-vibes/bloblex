@@ -64,7 +64,7 @@ interface Particle {
 }
 
 const INK = 'rgb(14,14,16)'
-const SPINNING_SHAPES = new Set<string>(['boxy', 'hexagon', 'sun', 'triangle'])
+const SPINNING_SHAPES = new Set<string>(['squircle', 'hexagon', 'triangle'])
 const LIGHT_INK = 'rgb(240,242,246)'
 
 const C = {

@@ -58,8 +58,9 @@ describe('mounted conversation controls', () => {
     expect(view.host.querySelector('.activity-steps')).toBeNull()
     await act(async () => { toggle.click() })
     const steps = [...view.host.querySelectorAll<HTMLButtonElement>('.activity-step-head')]
-    expect(steps.map((step) => step.querySelector('.activity-step-title')?.textContent)).toEqual(['npm test', 'Messaged a teammate', 'src/a.ts'])
-    await act(async () => { steps[0].click(); steps[1].click() })
+    expect([...view.host.querySelectorAll('h4')].map((heading) => heading.textContent)).toEqual(['Commands', 'Edits', 'Other'])
+    expect(steps.map((step) => step.querySelector('.activity-step-title')?.textContent)).toEqual(['Ran npm test', 'Edited src/a.ts', 'Messaged a teammate'])
+    await act(async () => { steps[0].click(); steps[2].click() })
     const details = [...view.host.querySelectorAll('.activity-step-detail')].map((detail) => detail.textContent)
     expect(details[0]).toContain('1 failing')
     expect(details[0]).toContain('Exit code 1')

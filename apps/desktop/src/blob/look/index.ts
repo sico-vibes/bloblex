@@ -5,7 +5,7 @@
 // The shape vocabulary, trait keys and face fitting are adapted from blobatar
 // (https://github.com/Alain00/blobatar), MIT License, Copyright (c) 2026 Alain.
 
-import { BLOB_SHAPES, layoutForm, shapeForPosition, type BlobShape, type FormLayout } from './forms'
+import { BLOB_SHAPES, layoutForm, type BlobShape, type FormLayout } from './forms'
 import { traits, type TraitOverrides } from './seed'
 import { normalizeBot, type BotStyle } from './bot'
 
@@ -24,8 +24,8 @@ export interface BlobLook {
 }
 
 export const SHAPE_LABELS: Record<BlobShape, string> = {
-  round: 'Round', organic: 'Organic', boxy: 'Boxy', capsule: 'Capsule', cloud: 'Cloud',
-  droplet: 'Droplet', hexagon: 'Hexagon', sun: 'Sun', triangle: 'Triangle', cat: 'Cat',
+  circle: 'Circle', pebble: 'Pebble', squircle: 'Squircle', capsule: 'Capsule',
+  triangle: 'Triangle', hexagon: 'Hexagon', cloud: 'Cloud', droplet: 'Droplet',
 }
 
 /**
@@ -33,7 +33,7 @@ export const SHAPE_LABELS: Record<BlobShape, string> = {
  * face of onboarding, the welcome wave and the companion's default look.
  */
 export const MASCOT_LOOK: BlobLook = {
-  shape: 'round',
+  shape: 'circle',
   seed: 'bloblex',
   traits: {
     'body.r': 0.999, 'body.ratio': 0.5, 'body.n': 0.25,
@@ -41,6 +41,8 @@ export const MASCOT_LOOK: BlobLook = {
     'eye.n': 0.4, 'eye.lean': 0.5, 'eye.lean2': 0.5, 'eye.dy': 0.5, 'gaze.x': 0.5, 'gaze.y': 0.25,
   },
 }
+
+const LEGACY_SHAPES: Readonly<Partial<Record<string, BlobShape>>> = Object.freeze({ round: 'circle', organic: 'pebble', boxy: 'squircle', sun: 'circle', cat: 'pebble' })
 
 const TRAIT_KEY = /^[a-z][a-z0-9]*(\.[a-z0-9]+)*$/
 export const MAX_LOOK_TRAITS = 48
@@ -53,8 +55,9 @@ export function isBlobShape(value: unknown): value is BlobShape {
 export function normalizeLook(raw: unknown): BlobLook | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const value = raw as Record<string, unknown>
-  if (!isBlobShape(value.shape)) return null
-  const look: BlobLook = { shape: value.shape }
+  const shape = isBlobShape(value.shape) ? value.shape : typeof value.shape === 'string' && Object.hasOwn(LEGACY_SHAPES, value.shape) ? LEGACY_SHAPES[value.shape] : undefined
+  if (!shape) return null
+  const look: BlobLook = { shape }
   if (typeof value.seed === 'string' && value.seed.trim() && value.seed.length <= 80) look.seed = value.seed
   if (value.traits && typeof value.traits === 'object' && !Array.isArray(value.traits)) {
     const pinned: TraitOverrides = {}
@@ -71,7 +74,7 @@ export function normalizeLook(raw: unknown): BlobLook | null {
 /** The look an agent wears: its stored look, else a round blob seeded by its id. */
 export function agentLook(agent: { id?: string | null; look?: unknown } | null | undefined): BlobLook {
   const stored = normalizeLook(agent?.look)
-  return { shape: stored?.shape ?? 'round', seed: stored?.seed || agent?.id || 'blob', traits: stored?.traits, ...(stored?.bot ? { bot: stored.bot } : {}) }
+  return { shape: stored?.shape ?? 'circle', seed: stored?.seed || agent?.id || 'blob', traits: stored?.traits, ...(stored?.bot ? { bot: stored.bot } : {}) }
 }
 
 /** The look the editor previews: the draft's look, else the default for this blob id. */
@@ -88,15 +91,6 @@ function lookKey(look: BlobLook) {
   return JSON.stringify([look.shape, look.seed ?? '', pinned, look.bot ?? null])
 }
 
-/**
- * Body presets. Every blob gets the same footprint: the body's size,
- * proportion and squareness are fixed per silhouette, while the face and the
- * shape's own details (lumps, petals, ears) still come from the seed.
- */
-const BODY_PRESETS: TraitOverrides = { 'body.r': 0.999, 'body.ratio': 0.5, 'body.n': 0.25, 'capsule.squat': 0.5, 'droplet.tip': 0.5 }
-// Boxy reads `body.n` over its own squarer range.
-const SHAPE_PRESETS: Partial<Record<BlobShape, TraitOverrides>> = { boxy: { 'body.n': 0.45 } }
-
 const cache = new Map<string, FormLayout>()
 
 /** The resolved geometry for a look. Memoised: every avatar redraws from it. */
@@ -105,7 +99,7 @@ export function resolveForm(look: BlobLook | null | undefined): FormLayout {
   const key = lookKey(value)
   let form = cache.get(key)
   if (!form) {
-    form = layoutForm(value.shape, traits(value.seed || 'blob', { ...value.traits, ...BODY_PRESETS, ...SHAPE_PRESETS[value.shape] }))
+    form = layoutForm(value.shape, traits(value.seed || 'blob', value.traits))
     if (cache.size > 400) cache.clear()
     cache.set(key, form)
   }
@@ -123,10 +117,12 @@ export function withTrait(look: BlobLook, keys: string | readonly string[], posi
   return { ...look, traits: next }
 }
 
-/** A fresh seed. With `anyShape`, the silhouette is drawn from the seed too. */
-export function shuffleLook(look: BlobLook, anyShape = false, random: () => number = Math.random): BlobLook {
-  const seed = `blob-${Math.floor(random() * 0xffffffff).toString(36)}`
-  return { shape: anyShape ? shapeForPosition(random()) : look.shape, seed }
+/** A fresh face, retaining the silhouette and alternate robot styling. */
+export function shuffleLook(look: BlobLook, random: () => number = Math.random): BlobLook {
+  let seed = `blob-${Math.floor(random() * 0xffffffff).toString(36)}`
+  if (seed === look.seed) seed += '-next'
+  const { traits: _traits, ...rest } = look
+  return { ...rest, seed }
 }
 
 export interface LookControl {
@@ -137,33 +133,17 @@ export interface LookControl {
   shapes?: readonly BlobShape[]
 }
 
-/** Silhouettes whose eyes come from the seeded face fit (the cat draws its own). */
-const SEEDED_FACES = BLOB_SHAPES.filter((shape) => shape !== 'cat')
-
 export interface LookControlGroup { title: string; controls: readonly LookControl[] }
 
 /** A curated set: the trait keys that read well as sliders, per silhouette. */
 export const LOOK_CONTROLS: readonly LookControlGroup[] = [
   {
-    title: 'Details',
-    controls: [
-      { keys: 'body.rot', label: 'Tilt', shapes: ['boxy', 'hexagon', 'triangle'] },
-      { keys: 'poly.round', label: 'Corner rounding', shapes: ['hexagon', 'triangle'] },
-      { keys: 'sun.n', label: 'Petals', shapes: ['sun'] },
-      { keys: 'sun.r', label: 'Petal size', shapes: ['sun'] },
-      { keys: 'cloud.n', label: 'Puffs', shapes: ['cloud'] },
-      { keys: 'cat.ear', label: 'Ear spread', shapes: ['cat'] },
-    ],
-  },
-  {
     title: 'Eyes',
     controls: [
       { keys: 'eye.rx', label: 'Size' },
       { keys: 'eye.ratio', label: 'Height' },
-      { keys: 'eye.n', label: 'Squareness', shapes: SEEDED_FACES },
+      { keys: 'eye.n', label: 'Squareness' },
       { keys: 'eye.gap', label: 'Spacing' },
-      { keys: 'eye.lean', label: 'Lean', shapes: SEEDED_FACES },
-      { keys: ['eye.scale', 'eye.stretch'], label: 'Asymmetry', shapes: SEEDED_FACES },
       { keys: 'gaze.y', label: 'Height on face' },
     ],
   },

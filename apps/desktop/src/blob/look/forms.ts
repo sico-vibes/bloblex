@@ -1,16 +1,16 @@
-// The ten blob silhouettes and the face that fits inside each one.
+// The eight symmetric blob silhouettes and the face that fits inside each one.
 //
 // Adapted from blobatar (https://github.com/Alain00/blobatar, packages/blobatar
 // src/shape.ts, src/styles/shapes.ts, src/styles/compose.ts and
 // src/styles/blob.ts at a7fd546), MIT License, Copyright (c) 2026 Alain. See
-// THIRD_PARTY_NOTICES.md. The trait keys, ranges and silhouette parameters are
-// kept as published so a seed reads the same way; the outlines are sampled into
+// THIRD_PARTY_NOTICES.md. Eye trait keys retain stored tuning; body geometry
+// is now fixed and symmetric. The outlines are sampled into
 // point lists instead of SVG path strings, because the Bitbots engine draws on
 // a canvas and morphs the outline (the mailbox state) point by point.
 
 import type { Traits } from './seed'
 
-export const BLOB_SHAPES = ['round', 'organic', 'boxy', 'capsule', 'cloud', 'droplet', 'hexagon', 'sun', 'triangle', 'cat'] as const
+export const BLOB_SHAPES = ['circle', 'pebble', 'squircle', 'capsule', 'triangle', 'hexagon', 'cloud', 'droplet'] as const
 export type BlobShape = typeof BLOB_SHAPES[number]
 
 export type Pt = readonly [number, number]
@@ -47,7 +47,7 @@ export interface CatFeatures {
   stripes: Array<[Pt, Pt]>
 }
 
-interface Body extends Ellipse { n: number; rot: number; radii: number[]; sides?: number; round?: number }
+interface Body extends Ellipse { n: number; rot: number; sides?: number; round?: number }
 
 // ---------------------------------------------------------------------------
 // Sampled primitives.
@@ -95,28 +95,6 @@ export function superellipse({ cx, cy, rx, ry, n = 4, rot = 0 }: Ellipse & { n?:
   const p = raw.map(([x, y]): Pt => [cx + x * cos - y * sin, cy + x * sin + y * cos])
   const out: Pt[] = [p[0]]
   for (let i = 1; i < 13; i += 3) cubic(out, p[i - 1], p[i], p[i + 1], p[i + 2], steps)
-  out.pop()
-  return out
-}
-
-/** Radii around a circle joined by a closed Catmull-Rom spline. */
-function blobPath(cx: number, cy: number, rx: number, ry: number, radii: number[], rot = 0): Pt[] {
-  const n = radii.length
-  const t0 = (rot * Math.PI) / 180
-  const p = radii.map((m, i): Pt => {
-    const a = t0 + (2 * Math.PI * i) / n
-    return [cx + rx * m * Math.cos(a), cy + ry * m * Math.sin(a)]
-  })
-  const at = (i: number) => p[((i % n) + n) % n]
-  const out: Pt[] = []
-  for (let i = 0; i < n; i++) {
-    const [x0, y0] = at(i - 1)
-    const [x1, y1] = at(i)
-    const [x2, y2] = at(i + 1)
-    const [x3, y3] = at(i + 2)
-    if (i === 0) out.push([x1, y1])
-    cubic(out, [x1, y1], [x1 + (x2 - x0) / 6, y1 + (y2 - y0) / 6], [x2 - (x3 - x1) / 6, y2 - (y3 - y1) / 6], [x2, y2], 10)
-  }
   out.pop()
   return out
 }
@@ -191,220 +169,91 @@ function clockwise(points: Pt[]): Pt[] {
 
 interface ShapeDef {
   core: number
-  /** Replaces the fitted eyes, for silhouettes with their own face (the cat). */
-  eyes?(t: Traits, face: Ellipse): FormEye[]
-  features?(t: Traits, b: Body, face: Ellipse): CatFeatures
-  body?(t: Traits, b: Body): void
+  body?(b: Body): void
   face?(b: Body): Ellipse
-  decorate?(t: Traits, b: Body, petals: Circle[], extras: Pt[][]): void
+  decorate?(b: Body, petals: Circle[], extras: Pt[][]): void
   path?(b: Body): Pt[]
 }
 
-const poly = (b: Body) => polygon(b)
-const spline = (b: Body) => blobPath(b.cx, b.cy, b.rx, b.ry, b.radii, b.rot)
 const shrunk = (k: number) => (b: Body): Ellipse => ({ cx: b.cx, cy: b.cy, rx: b.rx * k, ry: b.ry * k })
-const splineFace = (b: Body): Ellipse => shrunk(Math.min(...b.radii) * 0.95)(b)
 
+// Body parameters never read the seed: shuffling only changes the face.
 const SHAPES: Record<BlobShape, ShapeDef> = {
-  round: { core: 1 },
-  organic: { core: 0.98, path: spline, face: splineFace },
-  boxy: {
+  circle: { core: 1 },
+  pebble: {
+    core: 1,
+    body: (b) => { b.ry *= 0.84; b.n = 2.6 },
+  },
+  squircle: {
     core: 0.86,
-    body: (t, b) => { b.n = t.num('body.n', 3.4, 6); b.rot = t.num('body.rot', -20, 20) },
+    body: (b) => { b.n = 4.6 },
   },
   capsule: {
     core: 1.02,
-    body: (t, b) => { b.ry *= t.num('capsule.squat', 0.55, 0.68) },
+    body: (b) => { b.ry *= 0.615 },
     face: shrunk(0.94),
-    decorate: (_t, b, petals) => { for (const s of [-1, 1]) petals.push({ cx: b.cx + s * (b.rx - b.ry), cy: b.cy, r: b.ry }) },
+    decorate: (b, petals) => { for (const s of [-1, 1]) petals.push({ cx: b.cx + s * (b.rx - b.ry), cy: b.cy, r: b.ry }) },
     path: (b) => box(b.cx, b.cy, b.rx - b.ry, b.ry),
   },
+  triangle: {
+    core: 1.15, path: polygon,
+    body: (b) => { b.sides = 3; b.round = 0.37 },
+    face: (b) => ({ cx: b.cx, cy: b.cy + b.ry * 0.1, rx: b.rx * 0.54, ry: b.ry * 0.36 }),
+  },
+  hexagon: {
+    core: 1.05, path: polygon, face: shrunk(0.84),
+    body: (b) => { b.sides = 6; b.round = 0.37 },
+  },
   cloud: {
-    core: 0.78, face: splineFace, path: spline,
-    decorate: (t, b, petals) => {
-      const count = t.int('cloud.n', 4, 6)
-      for (let i = 0; i < count; i++) {
-        const a = Math.PI + (Math.PI * (i + 0.5)) / count
-        petals.push({ cx: b.cx + Math.cos(a) * b.rx * 0.8, cy: b.cy + Math.sin(a) * b.rx * 0.5, r: b.rx * t.num(`cloud.r${i}`, 0.44, 0.62) })
-      }
+    core: 0.78,
+    body: (b) => { b.ry *= 0.72; b.n = 3 },
+    face: shrunk(0.94),
+    decorate: (b, petals) => {
+      for (const s of [-1, 1]) petals.push({ cx: b.cx + s * b.rx * 0.65, cy: b.cy - b.rx * 0.35, r: b.rx * 0.5 })
+      petals.push({ cx: b.cx, cy: b.cy - b.rx * 0.6, r: b.rx * 0.6 })
     },
   },
   droplet: {
     core: 0.78,
-    body: (_t, b) => { b.cy += 0.22 * b.ry; b.n = 2 },
+    body: (b) => { b.cy += 0.22 * b.ry },
     face: (b) => ({ cx: b.cx, cy: b.cy + b.ry * 0.05, rx: b.rx * 0.88, ry: b.ry * 0.88 }),
-    decorate: (t, b, _petals, extras) => { extras.push(taper(b.cx, b.cy, b.rx, b.ry, t.num('droplet.tip', 1.4, 1.65))) },
+    decorate: (b, _petals, extras) => { extras.push(taper(b.cx, b.cy, b.rx, b.ry, 1.525)) },
   },
-  hexagon: {
-    core: 1.05, path: poly, face: shrunk(0.84),
-    body: (t, b) => { b.sides = 6; b.rot = t.num('body.rot', -12, 12); b.round = t.num('poly.round', 0.24, 0.5) },
-  },
-  sun: {
-    core: 0.7,
-    decorate: (t, b, petals) => {
-      const count = t.int('sun.n', 6, 9)
-      const dist = b.rx * t.num('sun.dist', 1.0, 1.08)
-      const pr = b.rx * t.num('sun.r', 0.2, 0.26)
-      const off = t.num('sun.rot', 0, 2 * Math.PI)
-      for (let i = 0; i < count; i++) {
-        const a = off + (2 * Math.PI * i) / count
-        petals.push({ cx: b.cx + Math.cos(a) * dist, cy: b.cy + Math.sin(a) * dist, r: pr })
-      }
-    },
-  },
-  triangle: {
-    core: 1.15, path: poly,
-    body: (t, b) => { b.sides = 3; b.rot = t.num('body.rot', -5, 5); b.round = t.num('poly.round', 0.24, 0.5) },
-    face: (b) => ({ cx: b.cx, cy: b.cy + b.ry * 0.1, rx: b.rx * 0.54, ry: b.ry * 0.36 }),
-  },
-  cat: {
-    core: 0.9,
-    // A wide dome sitting low, leaving room for the ears above it.
-    body: (_t, b) => { b.rx *= 1.12; b.ry *= 0.9; b.cy += b.ry * 0.16; b.n = 2.35 },
-    face: (b) => ({ cx: b.cx, cy: b.cy + b.ry * 0.08, rx: b.rx * 0.82, ry: b.ry * 0.72 }),
-    decorate: (t, b, _petals, extras) => {
-      const lean = t.num('cat.ear', -0.06, 0.06)
-      for (const s of [-1, 1]) extras.push(roundedTriangle(earPoints(b, s, lean), 0.42))
-    },
-    eyes: (t, face) => {
-      const rx = face.rx * t.num('eye.rx', 0.19, 0.22)
-      const ry = rx * t.num('eye.ratio', 1.04, 1.16)
-      const gap = face.rx * t.num('eye.gap', 0.4, 0.44)
-      const cy = face.cy - face.ry * t.num('gaze.y', 0.06, 0.16)
-      return [-1, 1].map((s) => ({ cx: face.cx + s * gap, cy, rx, ry, n: 2, rot: 0 }))
-    },
-    features: (t, b, face) => {
-      const lean = t.num('cat.ear', -0.06, 0.06)
-      const noseY = face.cy + face.ry * 0.2
-      const whiskers: Array<[Pt, Pt]> = []
-      for (const s of [-1, 1]) {
-        for (const k of [-1, 0, 1]) {
-          const x0 = face.cx + s * face.rx * 0.5
-          const y0 = noseY + face.ry * (0.1 + k * 0.1)
-          whiskers.push([[x0, y0], [x0 + s * face.rx * 0.62, y0 + face.ry * k * 0.16 - face.ry * 0.02]])
-        }
-      }
-      const top = b.cy - b.ry
-      const stripes: Array<[Pt, Pt]> = [-1, 0, 1].map((k): [Pt, Pt] => [[b.cx + k * b.rx * 0.2, top + b.ry * 0.02], [b.cx + k * b.rx * 0.17, top + b.ry * (k === 0 ? 0.3 : 0.24)]])
-      return {
-        innerEars: [-1, 1].map((s) => roundedTriangle(shrinkTowards(earPoints(b, s, lean), 0.52, 0.18), 0.5)),
-        muzzle: { cx: face.cx, cy: noseY + face.ry * 0.14, rx: face.rx * 0.46, ry: face.ry * 0.36 },
-        nose: { cx: face.cx, cy: noseY, r: face.rx * 0.075 },
-        mouth: { cx: face.cx, cy: noseY + face.ry * 0.12, w: face.rx * 0.13 },
-        whiskers,
-        stripes: t('cat.stripes') < 0.75 ? stripes : [],
-      }
-    },
-  },
-}
-
-/** An ear: inner base on the crown, outer base on the shoulder, apex up and out. */
-function earPoints(b: Body, s: number, lean: number): [Pt, Pt, Pt] {
-  const top = b.cy - b.ry
-  return [
-    [b.cx + s * b.rx * 0.2, top + b.ry * 0.06],
-    [b.cx + s * b.rx * (0.66 + lean), top - b.ry * 0.5],
-    [b.cx + s * b.rx * 0.9, b.cy - b.ry * 0.5],
-  ]
-}
-
-/** Moves a triangle's corners toward its centroid by `k`, then down by `drop` of its height. */
-function shrinkTowards(points: [Pt, Pt, Pt], k: number, drop: number): [Pt, Pt, Pt] {
-  const cx = (points[0][0] + points[1][0] + points[2][0]) / 3
-  const cy = (points[0][1] + points[1][1] + points[2][1]) / 3
-  const height = Math.max(...points.map((p) => p[1])) - Math.min(...points.map((p) => p[1]))
-  return points.map(([x, y]): Pt => [cx + (x - cx) * k, cy + (y - cy) * k + height * drop]) as [Pt, Pt, Pt]
-}
-
-/** A triangle with each corner cut back by `round` and joined through the vertex. */
-function roundedTriangle(v: [Pt, Pt, Pt], round: number): Pt[] {
-  const k = round / 2
-  const cut = (i: number, j: number): Pt => [v[i][0] + (v[j][0] - v[i][0]) * k, v[i][1] + (v[j][1] - v[i][1]) * k]
-  const out: Pt[] = [cut(0, 2)]
-  for (let i = 0; i < 3; i++) {
-    quad(out, out[out.length - 1], v[i], cut(i, (i + 1) % 3), 8)
-    line(out, out[out.length - 1], cut((i + 1) % 3, i), 6)
-  }
-  out.pop()
-  return clockwise(out)
-}
-
-/**
- * Seed bands for a random silhouette: rounds and pebbles are everyday, the
- * louder shapes stay finds. Each midpoint is what a shape tile writes.
- */
-const BANDS: ReadonlyArray<readonly [BlobShape, number]> = [
-  ['round', 0.22], ['organic', 0.46], ['boxy', 0.58], ['capsule', 0.68], ['cloud', 0.77],
-  ['droplet', 0.84], ['hexagon', 0.89], ['sun', 0.93], ['triangle', 0.96], ['cat', 1],
-]
-
-export function shapeForPosition(value: number): BlobShape {
-  return (BANDS.find(([, upTo]) => value < upTo) ?? BANDS[BANDS.length - 1])[0]
 }
 
 /** Fits the eye cluster against the silhouette's face region on both axes. */
 function faceFit(t: Traits, b: Body, face: Ellipse): FormEye[] {
-  const rx = b.rx
-  const er0 = t.num('eye.rx', 0.075, 0.105) * rx
-  const ratio = t.num('eye.ratio', 1.9, 3.2)
-  const scale = t.num('eye.scale', 0.78, 1.24)
-  const stretch = t.num('eye.stretch', 0.85, 1.18)
-  const clearance = t.num('eye.gap', 0.1, 0.24) * rx
-  const wide = er0 * Math.max(1, scale)
-  const tall = er0 * ratio * Math.max(1, scale * stretch)
-  const gap0 = wide + rx * 0.03 + clearance
-
-  const gx = t.jitter('gaze.x', 0.09) * face.rx
+  const er0 = t.num('eye.rx', 0.075, 0.12) * b.rx
+  const ratio = t.num('eye.ratio', 2.2, 3.2)
+  const clearance = t.num('eye.gap', 0.1, 0.24) * b.rx
+  const gap0 = er0 + b.rx * 0.03 + clearance
   const gy = t.num('gaze.y', -0.2, 0.08) * face.ry
-  const dy = t.jitter('eye.dy', 0.04) * face.ry
-  const reach = Math.hypot(wide, tall)
-  const need = Math.hypot((Math.abs(gx) + gap0 + reach) / face.rx, (Math.abs(gy) + Math.abs(dy) + reach) / face.ry)
+  const reach = Math.hypot(er0, er0 * ratio)
+  const need = Math.hypot((gap0 + reach) / face.rx, (Math.abs(gy) + reach) / face.ry)
   const fit = need > 0.9 ? 0.9 / need : 1
-
-  const er = er0 * fit
-  const eyeRy = er * ratio
-  const gap = gap0 * fit
-  const room = Math.max(0, Math.min(1, clearance / tall))
-  const bound = Math.min(12, (Math.asin(room) * 180) / Math.PI)
-  const lean = t.num('eye.lean', -1, 1) * bound
-  const lean2 = Math.max(-12, Math.min(12, lean + t.jitter('eye.lean2', 3.5)))
-
-  const cx = face.cx + gx * fit
+  const rx = er0 * fit
   const cy = face.cy + gy * fit
-  return [
-    { cx: cx - gap, cy, rx: er, ry: eyeRy, n: t.num('eye.n', 3.5, 6), rot: lean },
-    { cx: cx + gap, cy: cy + dy * fit, rx: er * scale, ry: eyeRy * scale * stretch, n: t.num('eye.n', 3.5, 6), rot: lean2 },
-  ]
+  // Both eyes share the same tuning and mirror around the face centre.
+  // Legacy asymmetry, lean and gaze-x pins are intentionally ignored at rest.
+  return [-1, 1].map((s) => ({ cx: face.cx + s * gap0 * fit, cy, rx, ry: rx * ratio, n: t.num('eye.n', 2.4, 3.6), rot: 0 }))
 }
 
-/**
- * The layout for one silhouette. The body is centred in the frame (blobatar
- * jitters it by up to 1.5 units; a moving character does not need that).
- */
+/** A fixed, upright silhouette with a seed-tuned, mirrored face. */
 export function layoutForm(shape: BlobShape, t: Traits): FormLayout {
   const def = SHAPES[shape]
-  const r = t.num('body.r', 31, 38) * def.core
-  const body: Body = {
-    cx: 50,
-    cy: 50,
-    rx: r,
-    ry: r * t.num('body.ratio', 0.92, 1.08),
-    n: t.num('body.n', 1.9, 2.5),
-    rot: 0,
-    radii: Array.from({ length: t.int('body.pts', 6, 8) }, (_, i) => 1 + t.jitter(`body.r${i}`, 0.16)),
-  }
-  def.body?.(t, body)
+  const r = 38 * def.core
+  const body: Body = { cx: 50, cy: 50, rx: r, ry: r, n: 2, rot: 0 }
+  def.body?.(body)
   const face = def.face?.(body) ?? { cx: body.cx, cy: body.cy, rx: body.rx, ry: body.ry }
   const petals: Circle[] = []
   const extras: Pt[][] = []
-  def.decorate?.(t, body, petals, extras)
+  def.decorate?.(body, petals, extras)
   return {
     shape,
     outline: clockwise(def.path ? def.path(body) : superellipse(body)),
     petals,
     extras: extras.map(clockwise),
     face,
-    eyes: def.eyes ? def.eyes(t, face) : faceFit(t, body, face),
-    ...(def.features ? { glint: true, features: def.features(t, body, face) } : {}),
+    eyes: faceFit(t, body, face),
   }
 }

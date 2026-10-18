@@ -24,6 +24,7 @@
 :root[data-theme="light"] .settings-nav { background: var(--surface-sidebar); }
 
 .settings-group { margin-top: 22px; }
+.settings-group ~ .settings-group { border-top: 1px solid var(--line); padding-top: 20px; }
 .settings-group-head { min-height: 28px; margin: 0 0 8px; padding: 0 4px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .settings-group-head h3 { margin: 0; color: var(--text-3); font-size: var(--fs-xs); font-weight: 500; }
 .model-picker-provider { display: inline-flex; align-items: center; gap: 7px; }

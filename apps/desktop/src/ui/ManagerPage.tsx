@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Lock, LockOpen, Pencil, Plus, RotateCcw, Trash2, BriefcaseBusiness } from 'lucide-react'
 import type { Agent, ManagerFact, PlaybookVersion } from '../types'
 import { listenForDaemonEvents, rpc } from '../tauri'
+import { rpcFailure } from '../executionContract'
 import { SettingsGroup, SettingsRow } from './SettingsParts'
 import { Select } from './Select'
 import { PlaybookDiff } from './PlaybookDiff'
@@ -80,7 +81,7 @@ export function ManagerPage({ manager, connected = true, onOpenManager }: { mana
       setProblem(null)
     } catch (reason) {
       setFacts((current) => current ?? [])
-      setProblem(reason instanceof Error ? reason.message : 'Could not load what the Manager knows.')
+      setProblem(rpcFailure(reason).message)
     }
   }, [])
 
@@ -96,7 +97,7 @@ export function ManagerPage({ manager, connected = true, onOpenManager }: { mana
   const act = async (work: () => Promise<unknown>) => {
     setBusy(true)
     setProblem(null)
-    try { await work(); await load() } catch (reason) { setProblem(reason instanceof Error ? reason.message : 'That did not work. Try again.') } finally { setBusy(false) }
+    try { await work(); await load() } catch (reason) { setProblem(rpcFailure(reason).message) } finally { setBusy(false) }
   }
   const saveFact = (draft: FactDraft) => act(async () => {
     await rpc('manager.profile.set', { ...(draft.id ? { id: draft.id } : {}), category: draft.category, key: draft.key, value: draft.value, locked: draft.locked })

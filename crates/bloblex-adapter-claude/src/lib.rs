@@ -567,7 +567,7 @@ async fn parse_line(
                                 .send(AgentEvent::ToolStarted {
                                     tool_call_id: c["id"].as_str().unwrap_or("claude-tool").into(),
                                     kind: c["name"].as_str().unwrap_or("tool").into(),
-                                    title: c["name"].as_str().unwrap_or("Claude tool").into(),
+                                    title: tool_activity(c["name"].as_str().unwrap_or("tool"), c, c["name"].as_str().unwrap_or("Claude tool")).label,
                                     raw: c.clone(),
                                 })
                                 .await;
@@ -1280,6 +1280,25 @@ impl AgentAdapter for ClaudeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn activity_titles_include_the_tool_target() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let id = Mutex::new(None);
+        let permissions = Mutex::new(HashMap::new());
+        let active = Mutex::new(Some("turn".to_owned()));
+        let context = Mutex::new(ClaudeContextWindow::default());
+        for (name, input, expected) in [
+            ("Bash", json!({"command":"cargo test\necho complete"}), "Ran cargo test"),
+            ("Glob", json!({"pattern":"*.ts"}), "Searched *.ts"),
+            ("Grep", json!({"pattern":"TODO","path":"src"}), "Searched TODO in src"),
+            ("Read", json!({"file_path":"README.md"}), "Read README.md"),
+            ("Edit", json!({"file_path":"README.md"}), "Edited README.md"),
+        ] {
+            parse_line(&tx, &json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":name,"id":"tool","input":input}]}}), &id, &permissions, "session", &active, &context).await;
+            assert!(matches!(rx.recv().await, Some(AgentEvent::ToolStarted { title, raw, .. }) if title == expected && raw["input"] == input), "{name}");
+        }
+    }
     #[test] fn permission_modes_have_typed_launch_flags_only_for_bypass(){let bypass=permission_args(bloblex_agent_core::ApprovalMode::Bypass);assert!(bypass.contains(&"bypassPermissions"));assert!(bypass.contains(&"--allow-dangerously-skip-permissions"));assert!(!bypass.contains(&"--permission-prompt-tool"));for mode in [bloblex_agent_core::ApprovalMode::Ask,bloblex_agent_core::ApprovalMode::Auto]{let args=permission_args(mode);assert!(args.contains(&"--permission-mode"));assert!(args.contains(&"default"));assert!(!args.contains(&"bypassPermissions"));assert!(!args.contains(&"--permission-prompt-tool"));}}
     #[test]
     fn control_request_parser_preserves_wire_id_and_input() {

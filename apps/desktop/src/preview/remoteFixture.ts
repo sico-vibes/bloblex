@@ -86,6 +86,8 @@ function nativeFingerprintFor(serial: number): string {
 /** The fix the Settings page shows, one line per state (`docs/remote/ARCHITECTURE.md:99-101`). */
 const TAILSCALE_FIX: Record<Exclude<RemoteTailscaleState, 'ready'>, string> = {
   not_installed: 'Tailscale is not installed. Install Tailscale on this computer and sign in, then turn Remote on again.',
+  starting: 'Tailscale is starting. Wait a moment, then check again.',
+  not_running: 'Tailscale is not running. Open Tailscale on this computer, then check again.',
   logged_out: 'Tailscale is not signed in. Sign in to Tailscale on this computer, then turn Remote on again.',
   https_disabled: 'HTTPS certificates are off for your tailnet. Turn them on in the Tailscale admin settings, then turn Remote on again.',
   port_in_use: 'Tailscale cannot publish this computer: ports 443 and 8443 are both in use. Free one of them, then turn Remote on again.',

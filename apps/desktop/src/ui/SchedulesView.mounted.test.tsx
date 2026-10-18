@@ -166,4 +166,13 @@ describe('SchedulesView', () => {
     expect(onSetPaused).toHaveBeenCalledWith(true)
     expect(q('[role="alert"]')?.textContent).toBe('The daemon refused.')
   })
+
+  it('shows the daemon text, with the code prefix stripped, for a plain string rejection', async () => {
+    const onSetPaused = vi.fn(async () => Promise.reject('conflict: Real reason'))
+    view([], { onSetPaused })
+    await click(q('[aria-label="Pause all automations"]'))
+    await flush()
+    expect(onSetPaused).toHaveBeenCalledWith(true)
+    expect(q('[role="alert"]')?.textContent).toBe('Real reason')
+  })
 })

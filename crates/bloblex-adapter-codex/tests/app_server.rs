@@ -191,7 +191,7 @@ async fn fake_peer_forwards_modern_command_output_deltas_and_mcp_details() {
         events.push(event);
         if done { break; }
     }
-    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolStarted { tool_call_id, title, raw, .. } if tool_call_id == "cmd-modern" && title == "cargo test -p bloblex-storage" && raw["cwd"] == "D:/project")));
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolStarted { tool_call_id, title, raw, .. } if tool_call_id == "cmd-modern" && title == "Ran cargo test -p bloblex-storage" && raw["cwd"] == "D:/project")));
     let chunks = events.iter().filter_map(|event| match event {
         AgentEvent::ToolUpdated { tool_call_id, raw } if tool_call_id == "cmd-modern" => raw["outputDelta"].as_str(),
         _ => None,

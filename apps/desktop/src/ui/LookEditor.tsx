@@ -5,11 +5,12 @@ import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { useBitbots } from '../blob/bitbots'
 import { BotEditor } from './BotEditor'
 import {
-  BLOB_SHAPES, SHAPE_LABELS, controlsFor, randomBot, shuffleLook, traitPosition, withTrait,
+  BLOB_SHAPES, SHAPE_LABELS, controlsFor, randomBot, resolveBot, shuffleLook, traitPosition, withTrait,
   type BlobLook, type BlobShape, type LookControl,
 } from '../blob/look'
 import { inDesktop } from '../tauri'
 import { SwatchGrid } from './SwatchGrid'
+import { AGENT_SWATCHES, swatchForColor } from './agentColor'
 import { useEntityNoun } from './vocabulary'
 
 type LookTab = 'style' | 'tune'
@@ -44,14 +45,25 @@ export function LookEditor({ look, color, colorHex, name, onLookChange, onColorC
   color: string
   colorHex: string
   name: string
-  onLookChange: (look: BlobLook) => void
+  /** An optional colour is saved with the look in the same draft update. */
+  onLookChange: (look: BlobLook, color?: string) => void
   onColorChange: (color: string) => void
 }) {
   const [tab, setTab] = useState<LookTab>('style')
   const bitbots = useBitbots()
   const [mood, setMood] = useState<BlobMood>('idle')
   const tabsId = useId()
-  const pinned = Object.keys(look.traits ?? {}).length
+  const visibleKeys = new Set(controlsFor(look.shape).flatMap((group) => group.controls.flatMap(keysOf)))
+  const pinned = Object.keys(look.traits ?? {}).filter((key) => visibleKeys.has(key)).length
+  const surprise = () => {
+    if (bitbots) {
+      onLookChange({ ...look, bot: randomBot(resolveBot(look, colorHex).shape) })
+      return
+    }
+    const choices = AGENT_SWATCHES.filter((swatch) => swatch.key !== swatchForColor(color))
+    const nextColor = choices[Math.floor(Math.random() * choices.length)].key
+    onLookChange(shuffleLook(look), nextColor)
+  }
 
   const onTabKey = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
@@ -73,10 +85,10 @@ export function LookEditor({ look, color, colorHex, name, onLookChange, onColorC
       </div>
       <div className="look-stage-actions">
         {bitbots
-          ? <button type="button" className="ghost-button small" onClick={() => onLookChange({ ...look, bot: randomBot() })} title="A random outline and colours"><Dices size={13} />Surprise me</button>
+          ? <button type="button" className="ghost-button small" onClick={surprise} title="New colours, same outline"><Dices size={13} />Surprise me</button>
           : <>
-            <button type="button" className="ghost-button small" onClick={() => onLookChange(shuffleLook(look))} title="New face and proportions, same shape"><Shuffle size={13} />Shuffle</button>
-            <button type="button" className="ghost-button small" onClick={() => onLookChange(shuffleLook(look, true))} title="A random shape and face"><Dices size={13} />Surprise me</button>
+            <button type="button" className="ghost-button small" onClick={() => onLookChange(shuffleLook(look))} title="New eyes, same shape"><Shuffle size={13} />Shuffle</button>
+            <button type="button" className="ghost-button small" onClick={surprise} title="New eyes and colour, same shape"><Dices size={13} />Surprise me</button>
           </>}
       </div>
     </div>
@@ -113,7 +125,7 @@ export function LookEditor({ look, color, colorHex, name, onLookChange, onColorC
 function ShapeGrid({ look, colorHex, onChange }: { look: BlobLook; colorHex: string; onChange: (shape: BlobShape) => void }) {
   const Noun = useEntityNoun({ capital: true })
   const move = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const columns = 5
+    const columns = 4
     const delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowDown' ? columns : event.key === 'ArrowUp' ? -columns : 0
     if (!delta) return
     event.preventDefault()

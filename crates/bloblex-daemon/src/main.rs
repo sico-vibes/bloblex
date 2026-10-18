@@ -3942,6 +3942,48 @@ async fn start_ws(
     ws.on_upgrade(move |s| ws_client(s, st)).into_response()
 }
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    use std::time::Duration;
+    // Only shell-launched daemons opt in. Hold the Windows process handle,
+    // rather than polling a pid that can be reused after the shell crashes.
+    let (parent_sender, mut parent_gone) = tokio::sync::oneshot::channel::<()>();
+    let mut parent_sender = Some(parent_sender);
+    if let Some(pid) = std::env::var_os("BLOBLEX_PARENT_PID") {
+        let pid: u32 = pid.to_str().ok_or("Invalid parent pid")?.parse()?;
+        if pid == 0 || pid == std::process::id() { return Err("Invalid parent pid".into()); }
+        let sender = parent_sender.take().unwrap();
+        #[cfg(windows)]
+        {
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+                fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
+                fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+            }
+            // SYNCHRONIZE only: no process memory access or termination rights.
+            let handle = unsafe { OpenProcess(0x0010_0000, 0, pid) };
+            if handle.is_null() { return Err("The desktop parent process is unavailable.".into()); }
+            let handle = handle as usize;
+            std::thread::spawn(move || {
+                let handle = handle as *mut std::ffi::c_void;
+                unsafe { WaitForSingleObject(handle, u32::MAX); CloseHandle(handle); }
+                let _ = sender.send(());
+                // Bound cleanup even if an adapter is stuck during shutdown.
+                std::thread::sleep(Duration::from_secs(5));
+                std::process::exit(0);
+            });
+        }
+        #[cfg(unix)]
+        std::thread::spawn(move || {
+            extern "C" { fn getppid() -> u32; }
+            while unsafe { getppid() } == pid { std::thread::sleep(Duration::from_millis(250)); }
+            let _ = sender.send(());
+            std::thread::sleep(Duration::from_secs(5));
+            std::process::exit(0);
+        });
+    }
+    // Keep the sender alive when launched without a shell; that path must not
+    // interpret a dropped oneshot sender as a parent exit.
+    let _standalone_parent_sender = parent_sender;
     let db_path = std::env::var_os("BLOBLEX_DB_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -4051,7 +4093,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
     std::io::stdout().flush()?;
     let shutdown = st.stopping.clone();
-    tokio::select! {r=axum::serve(listener,app.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(async move{shutdown.notified().await}).into_future()=>r?,_=tokio::signal::ctrl_c()=>{}}
+    tokio::select! {r=axum::serve(listener,app.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(async move{shutdown.notified().await}).into_future()=>r?,_=tokio::signal::ctrl_c()=>{},_= &mut parent_gone=>{}}
     // Remove Bitbots' own UPnP mapping before the process exits, so no router
     // is left forwarding the port after Remote has stopped.
     remote::shutdown(&st).await;

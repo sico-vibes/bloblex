@@ -136,8 +136,8 @@ describe('robot styling', () => {
   })
 
   it('surprise me stays inside the palettes', () => {
-    const bot = randomBot(() => 0.5)
-    expect(BOT_SHAPES).toContain(bot.shape)
+    const bot = randomBot('hexagon', () => 0.5)
+    expect(bot.shape).toBe('hexagon')
     expect(bot.shell).toMatch(/^#[0-9a-f]{6}$/)
   })
 })

@@ -12,6 +12,21 @@ const HIDDEN_TOOL_KINDS = new Set(['reasoning'])
 const HIDDEN_MESSAGE_ROLES = new Set(['thinking', 'reasoning'])
 const COMMAND_KINDS = new Set(['commandexecution', 'exec', 'execute', 'shell', 'bash', 'command', 'terminal'])
 const SEARCH_KINDS = new Set(['websearch', 'search', 'web_search', 'fetch', 'webfetch'])
+const READ_KINDS = new Set(['read', 'imageview', 'notebook_read', 'notebookread', 'list', 'ls'])
+const EDIT_KINDS = new Set(['edit', 'write', 'file_edit', 'file_write', 'filechange', 'notebookedit'])
+
+/** Stored inputs can be objects, JSON text, or clipped JSON from older turns. */
+export function activityInput(item: ConversationItem): JsonRecord {
+  const detail = item.activity?.detail as JsonRecord | undefined
+  let input = detail?.input ?? detail?.arguments
+  if (typeof input === 'string') { try { input = JSON.parse(input) } catch { return {} } }
+  return input && typeof input === 'object' && !Array.isArray(input) ? input as JsonRecord : {}
+}
+
+export function activityToolName(item: ConversationItem): string {
+  const detail = item.activity?.detail as JsonRecord | undefined
+  return String(detail?.tool ?? item.activity?.kind ?? detail?.kind ?? '').split(' · ').pop()!.toLowerCase()
+}
 
 type Ordered = ConversationItem & { sequence: number | null; timestamp: number | null; tie: number; turnId: string | null }
 
@@ -110,13 +125,20 @@ export function buildConversationItems(session: Session): ConversationItem[] {
   return result.map(({ kind, id, value, activity, activityKind }) => ({ kind, id, value, activity, activityKind }))
 }
 
-export function activityCategory(item: ConversationItem): 'command' | 'search' | 'file' | 'tool' | 'turn' {
+export function activityCategory(item: ConversationItem): 'command' | 'search' | 'read' | 'file' | 'tool' | 'turn' {
   if (item.activityKind === 'file') return 'file'
   if (item.activityKind === 'turn') return 'turn'
   const kind = String(item.activity?.kind ?? '').toLowerCase()
-  if (kind === 'filechange') return 'file'
-  if (COMMAND_KINDS.has(kind) || typeof (item.activity?.detail as JsonRecord | undefined)?.command === 'string') return 'command'
-  if (SEARCH_KINDS.has(kind)) return 'search'
+  const tool = activityToolName(item)
+  // The tool or kind decides first; a bare `command` argument only counts when
+  // the tool has no identity of its own (a generic or older row), so an MCP tool
+  // that happens to take a `command` argument is not called a shell command.
+  if (EDIT_KINDS.has(kind) || EDIT_KINDS.has(tool)) return 'file'
+  if (COMMAND_KINDS.has(kind) || COMMAND_KINDS.has(tool)) return 'command'
+  if (SEARCH_KINDS.has(kind) || SEARCH_KINDS.has(tool) || ['glob', 'grep'].includes(tool)) return 'search'
+  if (READ_KINDS.has(kind) || READ_KINDS.has(tool)) return 'read'
+  const dynamic = (value: string) => !value || value === 'other' || value === 'tool' || value === 'tool call'
+  if (dynamic(kind) && dynamic(tool) && (typeof (item.activity?.detail as JsonRecord | undefined)?.command === 'string' || typeof activityInput(item).command === 'string')) return 'command'
   return 'tool'
 }
 
@@ -133,6 +155,9 @@ export function groupConversationActivity(items: ConversationItem[]): GroupedCon
     while (end < items.length && items[end].kind === 'activity' && items[end].activityKind !== 'turn') end += 1
     const activityItems = items.slice(index, end)
     const categories = activityItems.map(activityCategory)
+    // Filesystem searches stay in the existing summary's tool count. The
+    // "searched the web" count is only for the existing web/search kinds.
+    const fileSearch = (entry: ConversationItem) => ['glob', 'grep'].includes(activityToolName(entry))
     const failed = activityItems.filter((entry) => ['error', 'failed', 'rejected'].includes(String(entry.activity?.state ?? entry.activity?.status ?? '').toLowerCase())).length
     const running = activityItems.find((entry) => ['running', 'working', 'started'].includes(String(entry.activity?.state ?? entry.activity?.status ?? '').toLowerCase()))
     const title = running?.activity?.title ?? running?.activity?.command ?? running?.activity?.kind
@@ -142,8 +167,8 @@ export function groupConversationActivity(items: ConversationItem[]): GroupedCon
       turnId: typeof activityItems[0].activity?.turnId === 'string' ? activityItems[0].activity.turnId : null,
       items: activityItems,
       commands: categories.filter((category) => category === 'command').length,
-      tools: categories.filter((category) => category === 'tool').length,
-      searches: categories.filter((category) => category === 'search').length,
+      tools: categories.filter((category, index) => category === 'tool' || category === 'read' || (category === 'search' && fileSearch(activityItems[index]))).length,
+      searches: categories.filter((category, index) => category === 'search' && !fileSearch(activityItems[index])).length,
       files: categories.filter((category) => category === 'file').length,
       failed,
       runningTitle: running ? String(title ?? 'Agent activity') : null,

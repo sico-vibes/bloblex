@@ -929,7 +929,7 @@ async fn write_response(process: &SharedProcess, id: &Value, result: Value) -> R
 fn codex_item_title(item: &Value) -> String {
     let text = |value: &Value| value.as_str().map(str::trim).filter(|text| !text.is_empty()).map(str::to_owned);
     match item["type"].as_str().unwrap_or("") {
-        "commandExecution" => text(&item["command"]).unwrap_or_else(|| "Ran a command".into()),
+        "commandExecution" => tool_activity("commandExecution", item, "Ran a command").label,
         "mcpToolCall" => match (text(&item["server"]), text(&item["tool"])) {
             (Some(server), Some(tool)) => format!("{server} · {tool}"),
             (_, Some(tool)) => tool,
@@ -940,13 +940,13 @@ fn codex_item_title(item: &Value) -> String {
             (_, Some(tool)) => tool,
             _ => "Used a tool".into(),
         },
-        "webSearch" => text(&item["query"]).map(|query| format!("Searched: {query}")).unwrap_or_else(|| "Searched the web".into()),
+        "webSearch" => tool_activity("webSearch", item, "Searched the web").label,
         "fileChange" => "Edited files".into(),
         "imageView" => text(&item["path"]).map(|path| format!("Viewed {path}")).unwrap_or_else(|| "Viewed an image".into()),
-        other => text(&item["command"]).or_else(|| text(&item["name"])).unwrap_or_else(|| match other {
+        other => tool_activity(other, item, &text(&item["name"]).unwrap_or_else(|| match other {
             "" => "Codex step".into(),
             other => other.chars().enumerate().flat_map(|(index, ch)| if index > 0 && ch.is_uppercase() { vec![' ', ch.to_ascii_lowercase()] } else if index == 0 { vec![ch.to_ascii_uppercase()] } else { vec![ch] }).collect(),
-        }),
+        })).label,
     }
 }
 
@@ -1836,14 +1836,19 @@ impl AgentAdapter for CodexAdapter {
 mod tests {
     use super::*;
     #[test]
+    fn activity_titles_keep_full_commands_out_of_the_row() {
+        assert_eq!(codex_item_title(&json!({"type":"commandExecution","command":"cargo test\necho complete"})), "Ran cargo test");
+        assert_eq!(codex_item_title(&json!({"type":"webSearch","action":{"query":"Rust docs"}})), "Searched Rust docs");
+    }
+    #[test]
     fn reasoning_items_are_not_activity_and_other_items_get_readable_titles() {
         assert!(map_notification("item/started", &json!({"item":{"type":"reasoning","id":"rs","summary":[],"content":[]}})).is_none());
         assert!(map_notification("item/completed", &json!({"item":{"type":"reasoning","id":"rs"}})).is_none());
         let title = |item: Value| match map_notification("item/started", &json!({"item":item})) { Some(AgentEvent::ToolStarted { title, .. }) => title, other => panic!("{other:?}") };
-        assert_eq!(title(json!({"type":"commandExecution","id":"c","command":"npm test"})), "npm test");
+        assert_eq!(title(json!({"type":"commandExecution","id":"c","command":"npm test"})), "Ran npm test");
         assert_eq!(title(json!({"type":"mcpToolCall","id":"m","server":"bloblex","tool":"message_blob"})), "bloblex · message_blob");
         assert_eq!(title(json!({"type":"dynamicToolCall","id":"d","namespace":"search","tool":"find_page"})), "search · find_page");
-        assert_eq!(title(json!({"type":"webSearch","id":"w","query":"tauri drag"})), "Searched: tauri drag");
+        assert_eq!(title(json!({"type":"webSearch","id":"w","query":"tauri drag"})), "Searched tauri drag");
         assert_eq!(title(json!({"type":"somethingNew","id":"x"})), "Something new");
     }
 
@@ -1860,7 +1865,7 @@ mod tests {
     #[test]
     fn modern_codex_command_mcp_and_output_delta_items_map_to_activity() {
         let command = json!({"threadId":"thread","turnId":"turn","item":{"type":"commandExecution","id":"cmd-1","command":"cargo test -p bloblex-storage","commandActions":[],"cwd":"D:/project","status":"inProgress"}});
-        assert!(matches!(map_notification("item/started", &command), Some(AgentEvent::ToolStarted { tool_call_id, title, raw, .. }) if tool_call_id == "cmd-1" && title == "cargo test -p bloblex-storage" && raw["cwd"] == "D:/project"));
+        assert!(matches!(map_notification("item/started", &command), Some(AgentEvent::ToolStarted { tool_call_id, title, raw, .. }) if tool_call_id == "cmd-1" && title == "Ran cargo test -p bloblex-storage" && raw["cwd"] == "D:/project"));
         let mcp = json!({"threadId":"thread","turnId":"turn","item":{"type":"mcpToolCall","id":"mcp-1","server":"bloblex","tool":"message_blob","arguments":{"blob":"Gogo"},"status":"completed","result":{"content":[{"type":"text","text":"Sent to Gogo."}]},"error":null}});
         assert!(matches!(map_notification("item/completed", &mcp), Some(AgentEvent::ToolCompleted { tool_call_id, raw }) if tool_call_id == "mcp-1" && raw["arguments"]["blob"] == "Gogo" && raw["result"]["content"][0]["text"] == "Sent to Gogo."));
         let delta = json!({"threadId":"thread","turnId":"turn","itemId":"cmd-1","delta":"first chunk"});

@@ -501,7 +501,7 @@ impl CodexAdapter {
                                 let _ = r.events.enqueue(AgentEvent::ContextExhausted);
                             } else {
                                 if let Some(kind) = recovery_hint_for_codex_error(&p["turn"]["error"]) {
-                                    let _ = r.events.enqueue(AgentEvent::RecoveryHint { kind, retry_after_secs: None });
+                                    let _ = r.events.enqueue(AgentEvent::RecoveryHint { kind, retry_after_secs: bloblex_agent_core::recovery::provider_retry_after(&p["turn"]["error"], chrono::Utc::now().timestamp()).map(|secs| secs.max(0) as u64) });
                                 }
                                 let _ = r.events.enqueue(AgentEvent::Error { message: p["turn"]["error"].to_string() });
                             }
@@ -843,12 +843,7 @@ fn resume_rejected_evidence(message: &str) -> bool {
 /// Only the string variants named by the generated app-server schema are used;
 /// free-text `message` values and object variants produce no hint.
 fn recovery_hint_for_codex_error(error: &Value) -> Option<RecoveryHintKind> {
-    match error["codexErrorInfo"].as_str() {
-        Some("unauthorized") => Some(RecoveryHintKind::AuthRequired),
-        Some("rateLimitExceeded") => Some(RecoveryHintKind::RateLimited),
-        Some("serverOverloaded") => Some(RecoveryHintKind::Overloaded),
-        _ => None,
-    }
+    bloblex_agent_core::recovery::provider_recovery(error)
 }
 
 fn context_exhausted_evidence(message: &str) -> bool {
@@ -1858,8 +1853,8 @@ mod tests {
         assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":"rateLimitExceeded"})), Some(RecoveryHintKind::RateLimited));
         assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":"serverOverloaded"})), Some(RecoveryHintKind::Overloaded));
         assert_eq!(recovery_hint_for_codex_error(&json!({"message":"fake failure"})), None);
-        assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":"usageLimitExceeded"})), None);
-        assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":{"httpConnectionFailed":{"httpStatusCode":500}}})), None);
+        assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":"usageLimitExceeded"})), Some(RecoveryHintKind::RateLimited));
+        assert_eq!(recovery_hint_for_codex_error(&json!({"codexErrorInfo":{"httpConnectionFailed":{"httpStatusCode":500}}})), Some(RecoveryHintKind::Overloaded));
     }
 
     #[test]

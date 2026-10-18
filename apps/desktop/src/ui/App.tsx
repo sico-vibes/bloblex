@@ -187,7 +187,7 @@ export function App() {
     if (key === BUSY_SEND_SETTING) { setBusyMode(busySendMode(value)); return }
     if (key === 'exec_gate.codex.steer') { setSteerRevision(v => v + 1); return }
     const experiment = EXPERIMENTS.find(({ name }) => key === `experimental.${name}`)
-    if (experiment) { changeExperiment(experiment.name, value === true); return }
+    if (experiment) { changeExperiment(experiment.name, typeof value === 'boolean' ? value : DEFAULT_EXPERIMENTS[experiment.name]); return }
     if (key === 'experimental.usageBar') setUsageBarEnabled(value === true)
     if (key === 'automations.paused') { setSchedulesPaused(value === true); return }
     if (key === 'power.keepAwake') { setKeepAwakeEnabled(value === true); return }

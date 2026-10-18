@@ -903,6 +903,17 @@ impl AcpAdapter {
     }
 }
 
+/// The terminal error for a failed `session/prompt`. When an `Error` event was
+/// queued for an active turn the event stream owns the turn
+/// (`TurnErrorReported`); when there was no active turn nothing was queued, so
+/// the daemon must finalize the turn itself (`Protocol`), as it did before
+/// recovery existed. Returning `TurnErrorReported` without a queued `Error`
+/// would leave the turn stuck in `working`.
+fn failed_prompt_terminal(had_active_turn: bool) -> AdapterError {
+    let message = "OpenCode prompt failed".to_owned();
+    if had_active_turn { AdapterError::TurnErrorReported(message) } else { AdapterError::Protocol(message) }
+}
+
 async fn emit_update(tx: &SessionEventSink, p: &Value, context_model: Option<String>) {
     let u = &p["update"];
     let kind = u["sessionUpdate"].as_str().unwrap_or("");
@@ -1205,7 +1216,8 @@ impl AgentAdapter for AcpAdapter {
         .await
         {
             Ok(result) => result,
-            Err(_) => {
+            Err(error) => {
+                let value = serde_json::from_str::<Value>(&error.to_string().replace("provider protocol error: ", "")).unwrap_or_else(|_| json!({"message":error.to_string()}));
                 c.process.active_turns.lock().await.remove(&provider_id);
                 let (was_cancelled, had_active_turn) = {
                     let _lifecycle = c.turn_lifecycle.lock().await;
@@ -1213,9 +1225,21 @@ impl AgentAdapter for AcpAdapter {
                 };
                 if was_cancelled { return Ok(()); }
                 if had_active_turn {
+                    // The hint and the terminal event share one ordered stream,
+                    // and the hint is only sent when an Error actually follows
+                    // it, so a cancelled turn never leaves a stale hint behind.
+                    if let Some(kind) = bloblex_agent_core::recovery::provider_recovery(&value) {
+                        let _ = c.events.send(AgentEvent::RecoveryHint { kind, retry_after_secs: bloblex_agent_core::recovery::provider_retry_after(&value, chrono::Utc::now().timestamp()).map(|secs| secs.max(0) as u64) }).await;
+                    }
                     Self::emit_turn_evidence(&c, &req.turn_id, &req.exec_options, None).await;
+                    // TurnErrorReported keeps Result failure for callers while
+                    // making that stream the daemon's only terminal owner.
+                    let _ = c.events.send(AgentEvent::Error { message: "OpenCode prompt failed".into() }).await;
+                    return Err(failed_prompt_terminal(true));
                 }
-                return Err(AdapterError::Protocol("OpenCode prompt failed".into()));
+                // No active turn: no Error was queued, so the event stream has
+                // no terminal owner and the daemon must finalize the turn.
+                return Err(failed_prompt_terminal(false));
             }
         };
         let was_cancelled = {
@@ -1240,6 +1264,9 @@ impl AgentAdapter for AcpAdapter {
         } else if stop.as_deref() == Some("end_turn") {
             let _ = c.events.send(AgentEvent::TurnCompleted).await;
         } else {
+            if let Some(kind) = bloblex_agent_core::recovery::provider_recovery(&result) {
+                let _ = c.events.send(AgentEvent::RecoveryHint { kind, retry_after_secs: bloblex_agent_core::recovery::provider_retry_after(&result, chrono::Utc::now().timestamp()).map(|secs| secs.max(0) as u64) }).await;
+            }
             let _ = c
                 .events
                 .send(AgentEvent::Error {
@@ -1376,6 +1403,22 @@ mod tests {
             emit_update(&sink, &json!({"update":{"sessionUpdate":"tool_call","toolCallId":"tool","kind":kind,"title":kind,"rawInput":input}}), None).await;
             assert!(matches!(rx.recv().await, Some(AgentEvent::ToolStarted { title, .. }) if title == expected), "{kind}");
         }
+    }
+
+    /// A failed prompt with no active turn queues no `Error` event, so the
+    /// adapter must not claim the stream owns the turn: it returns `Protocol`
+    /// and lets the daemon finalize it. With an active turn the queued `Error`
+    /// makes the stream the terminal owner, so it returns `TurnErrorReported`.
+    #[test]
+    fn a_failed_prompt_without_an_active_turn_is_a_protocol_error() {
+        assert!(
+            matches!(failed_prompt_terminal(false), AdapterError::Protocol(_)),
+            "no Error event was queued, so the daemon finalizes the turn"
+        );
+        assert!(
+            matches!(failed_prompt_terminal(true), AdapterError::TurnErrorReported(_)),
+            "the queued Error event owns the turn"
+        );
     }
 
     #[tokio::test]

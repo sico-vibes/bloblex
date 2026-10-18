@@ -94,7 +94,7 @@ export function buildConversationItems(session: Session): ConversationItem[] {
   const activities: Ordered[] = [
     ...(session.tools ?? []).filter((tool) => !HIDDEN_TOOL_KINDS.has(String(tool.kind ?? '').toLowerCase())).map((activity, index): Ordered => ({ kind: 'activity', id: `tool:${String(activity.id ?? `${activity.turnId ?? ''}:${index}`)}`, activity, activityKind: 'tool', ...orderOf(activity), tie: 10_000 + index, turnId: turnOf(activity) })),
     ...(session.files ?? []).map((activity, index): Ordered => ({ kind: 'activity', id: `file:${String(activity.id ?? activity.path ?? index)}`, activity, activityKind: 'file', ...orderOf(activity), tie: 20_000 + index, turnId: turnOf(activity) })),
-    ...(session.turns ?? []).filter((turn) => turn.state === 'error' || turn.state === 'failed').map((turn, index): Ordered => ({ kind: 'activity', id: `turn-error:${String(turn.id ?? index)}`, activity: turn, activityKind: 'turn', ...orderOf(turn), tie: 30_000 + index, turnId: typeof turn.id === 'string' ? turn.id : null })),
+    ...(session.turns ?? []).filter((turn) => !turn.recoveryHandled && (turn.state === 'error' || turn.state === 'failed')).map((turn, index): Ordered => ({ kind: 'activity', id: `turn-error:${String(turn.id ?? index)}`, activity: turn, activityKind: 'turn', ...orderOf(turn), tie: 30_000 + index, turnId: typeof turn.id === 'string' ? turn.id : null })),
   ]
   const ordered = messageItems.length > 0 && messageItems.every((item) => item.sequence !== null)
     ? [...messageItems].sort((left, right) => left.sequence! - right.sequence! || left.tie - right.tie)

@@ -298,3 +298,9 @@ export function friendlyErrorText(raw: FriendlyErrorInput): string {
   const friendly = friendlyError(raw)
   return friendly.detail ? `${friendly.title} ${friendly.detail}` : friendly.title
 }
+
+/** A durable usage-limit state; missing or invalid resets never promise a retry. */
+export function usageLimitLabel(reset: unknown): string {
+  const date = typeof reset === 'string' ? new Date(reset) : null
+  return date && Number.isFinite(date.getTime()) ? `Limited until ${date.toLocaleString()}` : 'Limited — try again later'
+}

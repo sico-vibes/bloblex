@@ -1,3 +1,4 @@
+import { usageLimitLabel } from './errorCopy'
 import type { BlobMood } from '../blob/BlobCanvas'
 import type { Runtime, Session } from '../types'
 
@@ -5,7 +6,6 @@ import type { Runtime, Session } from '../types'
  *  status line stays descriptive; the island bar keeps to these words. */
 export const COMPANION_COMPACT_MOOD_LABELS: Partial<Record<BlobMood, string>> = {
   sleeping: 'Sleeping',
-  rate_limited: 'Rate limited',
   error: 'Something failed',
   offline: 'Offline',
 }
@@ -39,6 +39,8 @@ export function deriveCompanionStatus(input: { connected: boolean; runtime?: Run
   if (!runtime || ['offline', 'disconnected'].includes((runtime.status ?? '').toLowerCase())) return { mood: 'offline', label: runtime ? 'Runtime offline' : 'No runtime selected' }
   if ((runtime.status ?? '').toLowerCase() === 'error') return { mood: 'error', label: 'Coding agent check failed' }
   if (input.permissionPending || session?.state === 'waiting_permission') return { mood: 'permission', label: 'Approval needed' }
+  if (session?.state === 'limited') return { mood: 'rate_limited', label: usageLimitLabel(session.limitedUntil) }
+  if (session?.state === 'retrying') return { mood: 'working', label: 'Retrying…' }
   if (session?.state === 'rate_limited') return { mood: 'rate_limited', label: 'Rate limited' }
   if (session?.state === 'sleeping') return { mood: 'sleeping', label: 'Sleeping' }
   if (session?.state === 'error' || session?.state === 'failed') return { mood: 'error', label: 'Needs attention' }

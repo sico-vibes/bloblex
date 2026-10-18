@@ -581,9 +581,9 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
       if (event.type === 'turn.error') {
         const turnId = typeof payload.turnId === 'string' ? payload.turnId : null
         const turns = (session.turns ?? []).map((turn) => turn.id === turnId
-          ? { ...turn, state: 'error', failureClass: payload.failureClass, detail: payload.detail }
+          ? { ...turn, state: 'error', failureClass: payload.failureClass, detail: payload.detail, recoveryHandled: payload.recoveryHandled }
           : turn)
-        return { ...session, state: stateForEvent(event.type) ?? session.state, turns }
+        return { ...session, state: typeof payload.state === 'string' ? payload.state : stateForEvent(event.type) ?? session.state, turns }
       }
       return { ...session, state: stateForEvent(event.type) ?? session.state }
     })

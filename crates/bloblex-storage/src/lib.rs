@@ -480,6 +480,19 @@ fn ensure_manager_introduced(c: &Connection) -> Result<(), StorageError> {
 /// Durable prompt queue schema. Additive and idempotent like the team schema,
 /// so it runs on every open after the versioned migrations.
 fn ensure_queue_schema(c: &Connection) -> Result<(), StorageError> {
+    // Additive migration, including already-versioned databases. Atomic and
+    // idempotent, like the existing queue/team migrations.
+    let tx = c.unchecked_transaction()?;
+    for (name, definition) in [
+        ("limited_until", "TEXT"),
+        ("continuation_pending", "INTEGER NOT NULL DEFAULT 0"),
+        ("recovery_count", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        if !tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name=?1)", [name], |r| r.get::<_, bool>(0))? {
+            tx.execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {name} {definition}"))?;
+        }
+    }
+    tx.commit()?;
     c.execute_batch("CREATE TABLE IF NOT EXISTS queued_prompts(
         id TEXT PRIMARY KEY NOT NULL,
         session_id TEXT NOT NULL,
@@ -1240,7 +1253,7 @@ fn migrate_approval_modes(c:&mut Connection,path:Option<&Path>,backup_done:bool)
 fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="permissions.default_mode" && !v.as_str().is_some_and(|s|["ask","auto"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="notifications.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-    if k=="experimental.autoRetry" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if matches!(k,"experimental.autoRetry" | "experimental.resumeAfterUsageLimits") && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="retry.maxWaitSecs" && !v.as_u64().is_some_and(|secs| secs<=86_400){return Err(StorageError::InvalidAgent)}
     if k=="automations.paused" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="automations.maxConcurrent" && !v.as_u64().is_some_and(|count| (1..=3).contains(&count)){return Err(StorageError::InvalidAgent)}
@@ -2515,8 +2528,8 @@ impl Storage {
     pub fn sessions(&self) -> Result<Vec<Value>, StorageError> { self.session_list(false) }
     pub fn session_list(&self, include_archived: bool) -> Result<Vec<Value>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json,json_extract(data,'$.link'),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual') FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
-        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"link":r.get::<_,Option<String>>(13)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"workspaceLabel":r.get::<_,String>(14)?})))?;
+        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json,json_extract(data,'$.link'),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),limited_until FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
+        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"link":r.get::<_,Option<String>>(13)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"workspaceLabel":r.get::<_,String>(14)?,"limitedUntil":r.get::<_,Option<String>>(15)?})))?;
         iter.collect::<Result<Vec<_>, _>>()
             .map_err(StorageError::from)
     }
@@ -2672,8 +2685,64 @@ impl Storage {
         Ok(())
     }
     // ── Durable prompt queue ───────────────────────────────────────────────
+    /// Elect exactly one recovery decision owner for a terminal turn.
+    pub fn watchdog_claim_turn(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.execute("UPDATE turns SET data=json_set(data,'$.retryDecision',json_object('decision','deciding')) WHERE id=?1 AND json_type(data,'$.retryDecision') IS NULL", [id])? == 1)
+    }
+    /// Keep the last reset as a watermark so an expired window cannot re-arm.
+    pub fn watchdog_limit(&self, id: &str, reset: Option<&str>) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE sessions SET state='limited',limited_until=CASE WHEN recovery_count<3 AND ?2 IS NOT NULL AND (?2 > COALESCE(json_extract(data,'$.lastLimitReset'),'')) THEN ?2 ELSE NULL END,continuation_pending=0 WHERE id=?1", params![id,reset])?;
+        Ok(())
+    }
+    pub fn watchdog_interrupted(&self, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE sessions SET continuation_pending=1 WHERE id=?1", [id])?;
+        Ok(())
+    }
+    pub fn watchdog_clear_pending(&self, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE sessions SET continuation_pending=0 WHERE id=?1", [id])?;
+        Ok(())
+    }
+    /// The sessions whose usage-limit window is due, for the one-second sweep.
+    /// A small read instead of the full session list on every tick; the caller
+    /// still re-checks the condition atomically in `watchdog_enqueue`.
+    pub fn watchdog_due_sessions(&self, now: &str) -> Result<Vec<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut s = c.prepare("SELECT id FROM sessions WHERE state='limited' AND limited_until IS NOT NULL AND limited_until<=?1 AND archived=0")?;
+        let rows = s.query_map([now], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows { out.push(row?); }
+        Ok(out)
+    }
+    pub fn watchdog_retry_idle(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.execute("UPDATE sessions SET state='idle' WHERE id=?1 AND state='retrying'", [id])? == 1)
+    }
+    pub fn watchdog_reset(&self, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE sessions SET limited_until=NULL,continuation_pending=0,recovery_count=0 WHERE id=?1", [id])?;
+        Ok(())
+    }
+    /// Atomically consume a pending recovery and create exactly one durable
+    /// continuation. Neither the original prompt nor a recap is copied here.
+    pub fn watchdog_enqueue(&self, id: &str, limited: bool, now: &str) -> Result<bool, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute("UPDATE sessions SET state='idle',continuation_pending=0,recovery_count=recovery_count+1,data=CASE WHEN ?2 THEN json_set(data,'$.lastLimitReset',limited_until) ELSE data END,limited_until=NULL WHERE id=?1 AND archived=0 AND recovery_count<3 AND json_extract(data,'$.link.kind') IS NOT 'automation' AND ((?2 AND state='limited' AND limited_until IS NOT NULL AND limited_until<=?3) OR (NOT ?2 AND continuation_pending=1 AND state NOT IN ('starting','working','cancelling','waiting_permission'))) AND NOT EXISTS(SELECT 1 FROM queued_prompts WHERE session_id=?1 AND kind='retry' AND status IN ('queued','sending'))", params![id,limited,now])?;
+        if changed == 0 { return Ok(false); }
+        tx.execute("UPDATE turns SET data=json_set(data,'$.recoveryHandled',json('true')) WHERE session_id=?1 AND json_extract(data,'$.watchdogInterrupted')=1", [id])?;
+        let count: i64 = tx.query_row("SELECT recovery_count FROM sessions WHERE id=?1", [id], |r| r.get(0))?;
+        let queue_id = Uuid::new_v4().to_string();
+        let params = json!({"text":"Continue where you left off.","attachments":[],"meta":{"kind":"auto_retry","retryOf":format!("watchdog:{id}"),"attempt":count}}).to_string();
+        tx.execute("INSERT INTO queued_prompts(id,session_id,position,params_json,kind,due_at,status,error,created_at,updated_at) VALUES(?1,?2,-1,?3,'retry',?4,'queued',NULL,?4,?4)", params![queue_id,id,params,now])?;
+        tx.commit()?;
+        Ok(true)
+    }
     /// Append one validated prompt to a session's durable queue. The caller
-    /// owns all user-facing validation; this only checks the session exists.
+    /// owns user-facing validation; storage checks that the session exists.
     pub fn queue_add(&self, session_id: &str, params: &Value, kind: &str, due_at: Option<&str>) -> Result<Value, StorageError> {
         if !["user", "send_later", "retry"].contains(&kind) { return Err(StorageError::InvalidAgent); }
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -3540,9 +3609,9 @@ impl Storage {
                 .collect::<Result<Vec<_>, _>>()?;
             rows
         };
-        tx.execute("UPDATE turns SET state='error',started_at=COALESCE(started_at,created_at),completed_at=?1,failure_class='other' WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
+        tx.execute("UPDATE turns SET state='error',data=json_set(data,'$.watchdogInterrupted',json('true')),started_at=COALESCE(started_at,created_at),completed_at=?1,failure_class='other' WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
         tx.execute("DELETE FROM active_turn_reservations WHERE turn_id IN (SELECT id FROM turns WHERE state IN ('error','cancelled','completed'))", [])?;
-        tx.execute("UPDATE sessions SET state='offline',updated_at=?1 WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
+        tx.execute("UPDATE sessions SET state='offline',continuation_pending=1,updated_at=?1 WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
         tx.execute("UPDATE permission_requests SET status='expired',data=json_set(data,'$.status','expired','$.resolution','daemon_restarted') WHERE status IN ('pending','resolving')", [])?;
         tx.execute("UPDATE queued_prompts SET status='failed',error='Interrupted by a restart. Check the conversation before sending again.',updated_at=?1 WHERE status='sending'", [&now])?;
         tx.commit()?;
@@ -4385,7 +4454,7 @@ impl Storage {
         let mut q=c.prepare(sql)?;let vals=q.query_map([include_archived],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
     }
     fn session_detail_locked(&self, c: &Connection, id: &str) -> Result<Value, StorageError> {
-        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
+        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
         let mut v: Value =
             serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
         let (context_used, context_size, context_model, context_estimated) = session_context_locked(c, id)?;
@@ -4393,7 +4462,7 @@ impl Storage {
         v["contextSize"] = json!(context_size);
         v["contextModel"] = json!(context_model);
         v["contextEstimated"] = json!(context_estimated);
-        let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
+        let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'recoveryHandled',json(CASE WHEN json_extract(t.data,'$.recoveryHandled')=1 THEN 'true' ELSE 'false' END),'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
         let msgs=query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at,'attachments',json_extract(data,'$.attachments'),'meta',json_extract(data,'$.meta'),'references',json_extract(data,'$.references'),'reactions',json(COALESCE((SELECT json_group_array(emoji) FROM (SELECT emoji FROM message_reactions mr WHERE mr.session_id=messages.session_id AND mr.message_id=messages.id ORDER BY CASE emoji WHEN '👍' THEN 0 WHEN '👎' THEN 1 WHEN '❤️' THEN 2 WHEN '😂' THEN 3 WHEN '🎉' THEN 4 ELSE 5 END)), '[]'))) FROM messages WHERE session_id=?1 ORDER BY sequence",id)?;
         v["turns"] = json!(turns);
         v["messages"] = json!(msgs);
@@ -4962,7 +5031,7 @@ fn valid_usage_tip_dismissals(value: &Value) -> bool {
 
 fn session_event_summary_locked(c: &Connection, id: &str) -> Result<Value, StorageError> {
     let json: Option<String> = c.query_row(
-        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
+        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
         [id],
         |r| r.get(0),
     ).optional()?;
@@ -7842,5 +7911,78 @@ mod fix39_activity_tests {
         assert_eq!(changes["fileCount"], 2);
         let single = tool_detail("fileChange", &json!({"changes":[{"path":"a.ts"}]}));
         assert!(single.get("fileCount").is_none(), "{single}");
+    }
+}
+
+#[cfg(test)]
+mod p8_watchdog_tests {
+    use super::*;
+    #[test]
+    fn p8_previous_database_migrates_and_recovery_is_claimed_once() {
+        let dir = std::env::temp_dir().join(format!("p8-v12-{}",Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("prior.db");
+        let db = Storage::open(&path).unwrap();
+        db.upsert_runtime(&json!({"id":"r","provider":"codex"})).unwrap();
+        db.create_session("s","r","codex",".","Saved chat").unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            for column in ["limited_until", "continuation_pending", "recovery_count"] {
+                c.execute_batch(&format!("ALTER TABLE sessions DROP COLUMN {column}")).unwrap();
+            }
+        }
+        drop(db);
+        let db = Storage::open(&path).unwrap();
+        assert!(db.set_setting("experimental.resumeAfterUsageLimits", &json!("yes")).is_err());
+        assert_eq!(db.session_detail("s").unwrap()["title"], "Saved chat");
+        db.watchdog_limit("s", Some("2026-10-18T12:00:00.000Z")).unwrap();
+        assert_eq!(db.session_detail("s").unwrap()["limitedUntil"], "2026-10-18T12:00:00.000Z");
+        assert_eq!(db.session_event_summary("s").unwrap()["state"], "limited");
+        assert_eq!(db.sessions().unwrap()[0]["limitedUntil"], "2026-10-18T12:00:00.000Z");
+        assert!(!db.watchdog_enqueue("s", true, "2026-10-18T11:00:00.000Z").unwrap());
+        assert!(db.watchdog_enqueue("s", true, "2026-10-18T12:00:01.000Z").unwrap());
+        assert!(!db.watchdog_enqueue("s", true, "2026-10-18T12:00:01.000Z").unwrap());
+        assert_eq!(db.queue_list("s").unwrap().len(), 1);
+        drop(db);
+        let db = Storage::open(&path).unwrap();
+        assert_eq!(db.queue_list("s").unwrap().len(),1,"recovery survives another restart");
+        drop(db);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn p8_restart_arms_bounded_continuation_without_changing_saved_context() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"r","provider":"codex"})).unwrap();
+        db.create_session("s","r","codex",".","Chat").unwrap();
+        db.set_session_provider_id("s","saved-provider",true).unwrap();
+        for _ in 0..3 {
+            db.update_session_state("s","working").unwrap();
+            db.recover_after_restart().unwrap();
+            assert!(db.watchdog_enqueue("s",false,"2026-10-18T12:00:01.000Z").unwrap());
+            db.queue_delete_retries("s").unwrap();
+        }
+        db.update_session_state("s","working").unwrap();
+        db.recover_after_restart().unwrap();
+        assert!(!db.watchdog_enqueue("s",false,"2026-10-18T12:00:01.000Z").unwrap());
+        assert_eq!(db.session_detail("s").unwrap()["providerSessionId"], "saved-provider");
+    }
+    /// F5: the one-second sweep must see only sessions whose window is due, not
+    /// every session. This is the small query that replaces the full list read.
+    #[test]
+    fn p8_sweep_only_sees_due_limited_sessions() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"r","provider":"codex"})).unwrap();
+        for id in ["due","future","unknown","idle","archived"] {
+            db.create_session(id,"r","codex",".","Chat").unwrap();
+        }
+        db.watchdog_limit("due", Some("2026-10-18T12:00:00.000Z")).unwrap();
+        db.watchdog_limit("future", Some("2026-10-18T13:00:00.000Z")).unwrap();
+        db.watchdog_limit("unknown", None).unwrap();
+        db.update_session_state("idle","ready").unwrap();
+        db.watchdog_limit("archived", Some("2026-10-18T12:00:00.000Z")).unwrap();
+        db.session_archive("archived", true).unwrap();
+        let due = db.watchdog_due_sessions("2026-10-18T12:00:01.000Z").unwrap();
+        assert_eq!(due, vec!["due".to_string()], "only a due, unarchived limited session is swept");
+        assert!(db.watchdog_due_sessions("2026-10-18T11:59:59.000Z").unwrap().is_empty(), "a window that has not opened is not swept");
     }
 }

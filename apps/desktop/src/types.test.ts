@@ -167,4 +167,11 @@ describe('daemon event reconciliation', () => {
     const inserted = applyEvent(changed, event('agent.changed', 6, { action: 'created', agentId: 'agent-b', runtimeId: 'rt-a', updatedAt: 't2', archived: false, sortOrder: 1 }))
     expect(inserted.agents?.map((agent) => agent.id)).toEqual(['agent-a', 'agent-b'])
   })
+
+  it('takes the limited state and the recovery flag from a turn.error payload', () => {
+    const initial: Snapshot = { ...base(), sessions: [{ id: 's-a', runtimeId: 'rt-a', state: 'working', turns: [{ id: 't-a', state: 'working' }] }] }
+    const next = applyEvent(initial, event('turn.error', 5, { sessionId: 's-a', turnId: 't-a', state: 'limited', failureClass: 'provider_error', recoveryHandled: true }))
+    expect(next.sessions?.[0].state).toBe('limited')
+    expect(next.sessions?.[0].turns?.[0]).toMatchObject({ state: 'error', recoveryHandled: true })
+  })
 })

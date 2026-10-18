@@ -1,11 +1,10 @@
-//! Safe automatic retry after overload and rate limits (Phase 3A).
+//! Durable usage-limit recovery, bounded transient retries and restart continuation.
 //!
-//! A failed turn that carried a structured `overloaded`/`rateLimited` recovery
-//! hint and an acknowledged prompt may schedule a single automatic retry. The
-//! retry is a new turn that sends the literal text `Please continue.` through
-//! the durable queue; it never resends the original prompt, so a turn whose
-//! delivery is unknown always declines. Everything here is off by default
-//! (`experimental.autoRetry`); with it off the daemon behaves exactly as before.
+//! Usage limits are a persisted state and resume once at a known future reset
+//! by default. Unknown/expired windows wait for the owner. Transient retries
+//! use the existing experimental switch and durable queue, with a single
+//! decision owner per turn and at most three continuations. No original prompt
+//! or recap is copied into recovery metadata or logs.
 
 use crate::{derr, AppState, DispatchError};
 use axum::http::StatusCode;
@@ -14,7 +13,7 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 
 /// How many automatic retries one overload chain may schedule.
-const OVERLOADED_MAX_ATTEMPTS: u32 = 5;
+const OVERLOADED_MAX_ATTEMPTS: u32 = 3;
 /// How many automatic retries one rate-limited chain may schedule.
 const RATE_LIMITED_MAX_ATTEMPTS: u32 = 2;
 /// First overload backoff; each attempt doubles it.
@@ -28,11 +27,6 @@ pub const DEFAULT_MAX_WAIT_SECS: i64 = 21_600;
 pub const MAX_MAX_WAIT_SECS: i64 = 86_400;
 /// A retry overdue by more than this after a restart is dropped.
 const RESTART_GRACE_SECS: i64 = 600;
-/// A quota snapshot older than this is refreshed once before deciding.
-const QUOTA_STALE_SECS: i64 = 600;
-/// Timeout for the one-off quota refresh.
-const QUOTA_REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HintKind {
     Overloaded,
@@ -181,7 +175,7 @@ pub fn decide(input: &RetryInput, mut jitter: impl FnMut() -> f64) -> Decision {
             if input.attempt == 0 || input.attempt > RATE_LIMITED_MAX_ATTEMPTS {
                 return Decision::Decline { reason: DeclineReason::MaxAttempts };
             }
-            let Some(reset) = input.quota_reset else {
+            let Some(reset) = input.quota_reset.filter(|reset| *reset > input.now) else {
                 return Decision::Decline { reason: DeclineReason::UnknownReset };
             };
             let extra = (unit(jitter()) * RATE_LIMIT_JITTER_SECS as f64).floor() as i64;
@@ -216,18 +210,12 @@ fn now_millis() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-fn minutes_at_least_one(seconds: i64) -> i64 {
-    ((seconds.max(0) + 30) / 60).max(1)
-}
 
 /// The single turn-ending hook. Called for every terminal turn error after the
 /// team/queue bookkeeping so a paused queue is already recorded.
 pub async fn after_failed_turn(st: &AppState, session_id: &str, turn_id: Option<&str>) {
     let Some(turn_id) = turn_id else { return; };
     let settings = st.db.settings().unwrap_or(Value::Null);
-    if settings["experimental.autoRetry"] != true {
-        return;
-    }
     let max_wait_secs = settings["retry.maxWaitSecs"]
         .as_i64()
         .unwrap_or(DEFAULT_MAX_WAIT_SECS)
@@ -237,6 +225,33 @@ pub async fn after_failed_turn(st: &AppState, session_id: &str, turn_id: Option<
         return; // Already decided for this turn.
     }
     let hint = HintKind::from_raw(data["hint"]["kind"].as_str().unwrap_or(""));
+    if hint == Some(HintKind::RateLimited) {
+        if !st.db.watchdog_claim_turn(turn_id).unwrap_or(false) { return; }
+        let seconds = data["hint"]["retryAfterSecs"].as_i64();
+        let reset = if let Some(seconds) = seconds {
+            // An explicit expired window must never fall back to a stale snapshot.
+            (seconds > 0 && seconds <= MAX_MAX_WAIT_SECS * 365).then(|| Utc::now() + Duration::seconds(seconds))
+        } else {
+            let provider = st.db.session_detail(session_id).ok().and_then(|row| row["provider"].as_str().map(str::to_owned));
+            match provider { Some(provider) => latest_blocked_reset(st, &provider).await, None => None }
+        };
+        let reset = reset.map(|at| at.to_rfc3339_opts(SecondsFormat::Millis, true));
+        let _ = st.db.watchdog_limit(session_id, reset.as_deref());
+        let row = st.db.session_event_summary(session_id).unwrap_or(Value::Null);
+        let reset = row["limitedUntil"].as_str();
+        let content = match reset {
+            Some(at) if settings["experimental.resumeAfterUsageLimits"] != false => format!("Limited until {at}. I'll pick up when the window opens."),
+            Some(at) => format!("Limited until {at}. Resume when you're ready."),
+            None => "Limited. The provider gave no new reset time. Please try again later.".to_owned(),
+        };
+        record_decision(st, turn_id, "limited", "usage_limit", &now_millis());
+        let _ = st.db.merge_turn_data(turn_id, &json!({"recoveryHandled":true}));
+        crate::team::note(st, session_id, &content, json!({"kind":"usage_limit","resetAt":reset})).await;
+        st.emit("session.changed", row).await;
+        return;
+    }
+    if settings["experimental.autoRetry"] != true { return; }
+    if !st.db.watchdog_claim_turn(turn_id).unwrap_or(false) { return; }
     let acknowledged = data["delivery"].as_str() == Some("acknowledged");
     let attempt = data["attempt"].as_u64().unwrap_or(0).saturating_add(1) as u32;
     let retry_of = data["retryOf"].as_str().map(str::to_owned).unwrap_or_else(|| turn_id.to_owned());
@@ -246,7 +261,7 @@ pub async fn after_failed_turn(st: &AppState, session_id: &str, turn_id: Option<
 
     let session = st.db.session_detail(session_id).ok();
     let session_available = session.as_ref().is_some_and(|row| {
-        row["archived"] != true && row["link"]["kind"] != "side"
+        row["archived"] != true && row["link"]["kind"] != "automation"
     });
     let provider = session.as_ref().and_then(|row| row["provider"].as_str().map(str::to_owned));
 
@@ -269,7 +284,7 @@ pub async fn after_failed_turn(st: &AppState, session_id: &str, turn_id: Option<
                 enabled: true,
                 hint,
                 retry_after_secs: data["hint"]["retryAfterSecs"].as_i64(),
-                acknowledged,
+                acknowledged: acknowledged || hint == Some(HintKind::Overloaded),
                 attempt,
                 now,
                 quota_reset,
@@ -281,12 +296,14 @@ pub async fn after_failed_turn(st: &AppState, session_id: &str, turn_id: Option<
 
     match decision {
         Decision::Decline { reason } => {
+            if reason == DeclineReason::MaxAttempts { let _ = st.db.watchdog_clear_pending(session_id); }
             record_decision(st, turn_id, "decline", reason.as_str(), &now_millis());
-            if retryable {
+            if retryable && reason != DeclineReason::MaxAttempts {
                 emit_decline(st, session_id, turn_id, reason).await;
             }
         }
         Decision::Retry { at, kind, attempt } => {
+            if !acknowledged { let _ = st.db.set_session_recap_pending(session_id, true); }
             if schedule(st, session_id, turn_id, &retry_of, kind, attempt, at).await.is_err() {
                 let reason = DeclineReason::SessionUnavailable;
                 record_decision(st, turn_id, "decline", reason.as_str(), &now_millis());
@@ -342,12 +359,13 @@ async fn schedule(
         .queue_add(session_id, &params, "retry", Some(&due_at))
         .map_err(|_| ())?;
     let item_id = item["id"].as_str().unwrap_or("").to_owned();
+    let _ = st.db.merge_turn_data(turn_id, &json!({"recoveryHandled":true}));
+    let _ = st.db.watchdog_clear_pending(session_id);
+    let _ = st.db.update_session_state(session_id, "retrying");
     let max_attempts = kind.max_attempts();
-    let wait = (at - Utc::now()).num_seconds();
     let content = match kind {
         RetryKind::Overloaded => format!(
-            "Provider is overloaded. Retrying automatically in about {} min (attempt {} of {}).",
-            minutes_at_least_one(wait),
+            "Retrying ({} of {})…",
             attempt,
             max_attempts
         ),
@@ -406,6 +424,9 @@ pub async fn cancel_pending(
     if removed.is_empty() {
         return false;
     }
+    if st.db.watchdog_retry_idle(session_id).unwrap_or(false) {
+        if let Ok(row) = st.db.session_event_summary(session_id) { st.emit("session.changed",row).await; }
+    }
     for item in &removed {
         if let Some(retry_of) = item["retryOf"].as_str() {
             record_decision(st, retry_of, "decline", reason.as_str(), &now_millis());
@@ -451,7 +472,12 @@ pub async fn reconcile_restart(st: &AppState) {
         // been turned off: the off state promises no notices and no events, so
         // drop it silently rather than waking the conversation.
         for session_id in st.db.queue_retry_sessions().unwrap_or_default() {
-            let _ = st.db.queue_delete_retries(&session_id);
+            let _ = st.db.watchdog_retry_idle(&session_id);
+            for item in st.db.queue_list(&session_id).unwrap_or_default() {
+                if item["kind"] == "retry" && !item["meta"]["retryOf"].as_str().is_some_and(|id| id.starts_with("watchdog:")) {
+                    if let Some(id) = item["id"].as_str() { let _ = st.db.queue_delete_by_id(id); }
+                }
+            }
         }
         return;
     }
@@ -460,6 +486,7 @@ pub async fn reconcile_restart(st: &AppState) {
     let stale = st.db.queue_stale_retries(&cutoff).unwrap_or_default();
     let mut touched: HashSet<String> = HashSet::new();
     for item in stale {
+        if item["retryOf"].as_str().is_some_and(|id| id.starts_with("watchdog:")) { continue; }
         let Some(id) = item["id"].as_str() else { continue; };
         let _ = st.db.queue_delete_by_id(id);
         let Some(session_id) = item["sessionId"].as_str() else { continue; };
@@ -476,42 +503,29 @@ pub async fn reconcile_restart(st: &AppState) {
         }
     }
     for session_id in touched {
+        if st.db.watchdog_retry_idle(&session_id).unwrap_or(false) {
+            if let Ok(row) = st.db.session_event_summary(&session_id) { st.emit("session.changed",row).await; }
+        }
         crate::queue::emit_changed(st, &session_id).await;
     }
 }
 
-/// The latest reset time among a provider's blocked quota windows. Refreshes a
-/// snapshot once when it is missing or older than ten minutes.
+/// The latest reset time among a provider's blocked quota windows. A stale
+/// snapshot is refreshed once; absence never launches a probe.
 async fn latest_blocked_reset(st: &AppState, provider: &str) -> Option<DateTime<Utc>> {
     let now = Utc::now();
-    let entry = st
+    let mut entry = st
         .db
         .quota_snapshots()
         .ok()
         .unwrap_or_default()
         .into_iter()
         .find(|entry| entry["provider"] == provider);
-    if snapshot_is_stale(entry.as_ref(), now) {
-        crate::refresh_provider_quota(st, provider, QUOTA_REFRESH_TIMEOUT).await;
-        let entry = st
-            .db
-            .quota_snapshots()
-            .ok()
-            .unwrap_or_default()
-            .into_iter()
-            .find(|entry| entry["provider"] == provider);
-        return blocked_reset(entry, now);
+    if entry.as_ref().and_then(|v| v["fetchedAt"].as_str()).and_then(|s| DateTime::parse_from_rfc3339(s).ok()).is_some_and(|at| (now-at.with_timezone(&Utc)).num_seconds()>600) {
+        crate::refresh_provider_quota(st, provider, std::time::Duration::from_secs(5)).await;
+        entry = st.db.quota_snapshots().unwrap_or_default().into_iter().find(|v| v["provider"] == provider);
     }
     blocked_reset(entry, now)
-}
-
-fn snapshot_is_stale(entry: Option<&Value>, now: DateTime<Utc>) -> bool {
-    let Some(fetched) = entry.and_then(|entry| entry["fetchedAt"].as_str()) else {
-        return true;
-    };
-    DateTime::parse_from_rfc3339(fetched)
-        .map(|fetched| now.signed_duration_since(fetched.with_timezone(&Utc)).num_seconds() > QUOTA_STALE_SECS)
-        .unwrap_or(true)
 }
 
 fn blocked_reset(entry: Option<Value>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -562,6 +576,12 @@ mod tests {
             quota_reset: None,
             max_wait_secs: DEFAULT_MAX_WAIT_SECS,
         }
+    }
+
+    #[test]
+    fn p8_expired_window_never_retries() {
+        let input = RetryInput { quota_reset: Some(at(-1)), ..base(Some(HintKind::RateLimited)) };
+        assert_eq!(decide(&input, fixed(0.0)), Decision::Decline { reason: DeclineReason::UnknownReset });
     }
 
     #[test]
@@ -657,5 +677,66 @@ mod tests {
         });
         assert_eq!(blocked_reset(Some(snapshot), now), Some(at(500)));
         assert_eq!(blocked_reset(None, now), None);
+    }
+}
+
+/// Record content-free recovery evidence before terminal handling. Structured
+/// adapter hints win over this fallback for process/transport failures.
+pub fn note_failure(st: &AppState, session_id: &str, turn: &str, class: &str, message: &str) {
+    if matches!(class,"permission_denied" | "unauthenticated" | "context" | "config_unsupported") {
+        record_decision(st,turn,"decline","permanent_failure",&now_millis());
+        return;
+    }
+    let lower = message.to_ascii_lowercase();
+    let crashed = class == "process_error" || message.starts_with("provider process unavailable:") || ["process exited", "app-server exited", "stream disconnected", "stream closed unexpectedly", "transport closed"].iter().any(|needle| lower.contains(needle));
+    if crashed {
+        let _ = st.db.watchdog_interrupted(session_id);
+        let _ = st.db.merge_turn_data(turn,&json!({"watchdogCrashed":true,"watchdogInterrupted":true}));
+    }
+    if st.db.turn_data(turn).ok().is_some_and(|data| data["hint"].is_object()) { return; }
+    let value = serde_json::from_str::<Value>(message).unwrap_or_else(|_| json!({"message":message}));
+    let hint = bloblex_agent_core::recovery::provider_recovery(&value).or_else(|| {
+        (matches!(class,"process_error" | "timeout") || message.starts_with("provider process unavailable:")).then_some(bloblex_agent_core::RecoveryHintKind::Overloaded)
+    });
+    if let Some(hint) = hint {
+        let seconds = bloblex_agent_core::recovery::provider_retry_after(&value, Utc::now().timestamp());
+        let _ = st.db.merge_turn_data(turn, &json!({"hint":{"kind":hint.as_str(),"retryAfterSecs":seconds}}));
+    }
+}
+
+/// Called under the activation gate. Persist the queue item with consumption of
+/// the restart marker, so simultaneous warm-up/RPC calls cannot duplicate it.
+pub async fn continue_on_activation(st: &AppState, sid: &str) {
+    if st.db.watchdog_enqueue(sid, false, &now_millis()).unwrap_or(false) {
+        if !st.db.session_had_provider_turns(sid).unwrap_or(false) {
+            let _ = st.db.set_session_recap_pending(sid,true);
+        }
+        crate::team::note(st, sid, "Picking up where it left off", json!({"kind":"watchdog_continuation"})).await;
+        crate::queue::emit_changed(st, sid).await;
+    }
+}
+
+pub async fn sweep(st: &AppState) {
+    if st.db.settings().unwrap_or(Value::Null)["experimental.resumeAfterUsageLimits"] == false { return; }
+    for id in st.db.watchdog_due_sessions(&now_millis()).unwrap_or_default() {
+        if crate::team::session_busy(st,&id).await { continue; }
+        let gate = crate::gate_for_session(st,&id).await;
+        let _guard = gate.lock().await;
+        if st.db.watchdog_enqueue(&id,true,&now_millis()).unwrap_or(false) {
+            crate::team::note(st,&id,"Picking up where it left off",json!({"kind":"watchdog_continuation"})).await;
+            if let Ok(summary) = st.db.session_event_summary(&id) { st.emit("session.changed",summary).await; }
+            crate::queue::emit_changed(st,&id).await;
+        }
+    }
+}
+
+pub async fn sweep_loop(st: AppState) {
+    let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = timer.tick() => sweep(&st).await,
+            _ = st.stopping.notified() => break,
+        }
     }
 }

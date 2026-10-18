@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Project, Session } from '../types'
-import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, isWaitingDelegation, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sideSessionsFor, sidebarSubtitle, splitMentions, splitReferences } from './teamSelectors'
+import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, isWaitingDelegation, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sessionIsLimited, sideSessionsFor, sidebarSubtitle, splitMentions, splitReferences } from './teamSelectors'
 
 const agent = (id: string, name: string, extra: Partial<Agent> = {}): Agent => ({ id, name, description: '', instructions: '', color: 'mint', runtimeId: 'rt', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', ...extra })
 const session = (id: string, extra: Partial<Session> = {}): Session => ({ id, runtimeId: 'rt', updatedAt: '2026-10-01T00:00:00Z', ...extra })
@@ -148,5 +148,15 @@ describe('conversationTree', () => {
     expect(isWaitingDelegation(undefined)).toBe(false)
     // A user message with no meta is not a notice.
     expect(isWaitingDelegation(messages({ kind: 'delegation', state: 'queued' }, 'user'))).toBe(false)
+  })
+})
+
+describe('sessionIsLimited (FIX39 P8)', () => {
+  it('is true for a limited session and false otherwise, so the sidebar shows the Limited label', () => {
+    expect(sessionIsLimited({ id: 's', runtimeId: 'r', state: 'limited' } as Session)).toBe(true)
+    expect(sessionIsLimited({ id: 's', runtimeId: 'r', state: 'rate_limited' } as Session)).toBe(true)
+    expect(sessionIsLimited({ id: 's', runtimeId: 'r', state: 'working' } as Session)).toBe(false)
+    expect(sessionIsLimited(null)).toBe(false)
+    expect(sessionIsLimited(undefined)).toBe(false)
   })
 })

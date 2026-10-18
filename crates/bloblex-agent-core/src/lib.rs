@@ -790,6 +790,10 @@ mod approval_tests {
 
 #[derive(Debug, Error)]
 pub enum AdapterError {
+    /// The adapter already emitted the ordered recovery hint and terminal
+    /// error. The event stream is the sole owner of finalizing this turn.
+    #[error("{0}")]
+    TurnErrorReported(String),
     #[error("unsupported capability: {0}")]
     Unsupported(String),
     #[error("provider protocol error: {0}")]
@@ -1384,3 +1388,5 @@ mod activity_tests {
         assert_eq!(tool_activity("NotebookRead", &json!({}), "NotebookRead").category, "read");
     }
 }
+
+pub mod recovery;

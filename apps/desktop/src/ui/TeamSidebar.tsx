@@ -11,7 +11,7 @@ import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
 import { RuntimeProblemMarker, runtimeProblem } from './RuntimeProblemMarker'
 import { shortTime } from './rosterSelectors'
-import { conversationPreview, groupAgentsByProject, isManager, mainSessionFor, managerOf, sessionIsBusy, sidebarSubtitle } from './teamSelectors'
+import { conversationPreview, groupAgentsByProject, isManager, mainSessionFor, managerOf, sessionIsBusy, sessionIsLimited, sidebarSubtitle } from './teamSelectors'
 import { friendlyErrorText } from './errorCopy'
 import { readCachedCatalogModels, useCatalogVersion } from './catalogCache'
 import { useEntityNoun } from './vocabulary'
@@ -307,7 +307,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     const approval = !!session && approvalSessionIds.has(session.id)
     const waiting = String(session?.state ?? '') === 'waiting_permission'
     const working = sessionIsBusy(session) && !waiting
-    const preview = !connected ? 'Offline' : (status.mood === 'offline' || status.mood === 'error') ? status.label : waiting ? 'Waiting for you' : working ? status.label : sidebarModel ? sidebarSubtitle(agent, runtime?.provider, readCachedCatalogModels(agent.runtimeId)) : conversationPreview(session) ?? (agent.description?.trim() || 'Say hi to get started')
+    const preview = !connected ? 'Offline' : (status.mood === 'offline' || status.mood === 'error' || sessionIsLimited(session) || session?.state === 'retrying') ? status.label : waiting ? 'Waiting for you' : working ? status.label : sidebarModel ? sidebarSubtitle(agent, runtime?.provider, readCachedCatalogModels(agent.runtimeId)) : conversationPreview(session) ?? (agent.description?.trim() || 'Say hi to get started')
     const runtimeIssue = runtimeProblem(runtime)
     return <button key={agent.id} type="button" role="treeitem" data-agent-id={agent.id} aria-current={selected ? 'true' : undefined} aria-selected={selected} aria-describedby={runtimeIssue ? `runtime-problem-${runtime!.id}-${agent.id}` : undefined}
       aria-label={`${agent.name}${agent.role ? `, ${agent.role}` : ''}${isManager(agent) ? ', Manager' : ''}${approval ? ', needs approval' : unread ? ', unread' : ''}`}

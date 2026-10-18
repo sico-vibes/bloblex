@@ -3,11 +3,12 @@ import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, shortcutRows, waitin
 import type { Session, Snapshot } from '../types'
 
 describe('experimental feature rules', () => {
-  it('keeps every experiment off by default with unique setting keys', () => {
+  it('defaults usage recovery on and keeps unique setting keys', () => {
     const count = EXPERIMENTS.length
     expect(count).toBeGreaterThanOrEqual(11)
     expect(new Set(EXPERIMENTS.map((e) => e.name)).size).toBe(count)
-    expect(Object.values(DEFAULT_EXPERIMENTS)).toEqual(Array(count).fill(false))
+    expect(Object.entries(DEFAULT_EXPERIMENTS).filter(([key]) => key !== 'resumeAfterUsageLimits').every(([, value]) => !value)).toBe(true)
+    expect(DEFAULT_EXPERIMENTS.resumeAfterUsageLimits).toBe(true)
   })
   it('attaches only a completed turn’s files under its last assistant reply', () => {
     const a = { id: 'a', role: 'assistant', turnId: 't' }

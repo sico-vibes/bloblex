@@ -614,7 +614,7 @@ async fn parse_line(
                 cost_is_cumulative: false,
             }}).await;
             if let Some(kind) = recovery_hint_for_claude_result(v) {
-                let _ = tx.send(AgentEvent::RecoveryHint { kind, retry_after_secs: None }).await;
+                let _ = tx.send(AgentEvent::RecoveryHint { kind, retry_after_secs: bloblex_agent_core::recovery::provider_retry_after(v, chrono::Utc::now().timestamp()).map(|secs| secs.max(0) as u64) }).await;
             }
             let _ = tx
                 .send(AgentEvent::Error {
@@ -712,11 +712,7 @@ async fn parse_line(
 /// status the CLI reports for the failed turn is used; free-text `errors[]`,
 /// `result` and stderr never produce a hint (see the Phase 1B evidence table).
 fn recovery_hint_for_claude_result(value: &Value) -> Option<RecoveryHintKind> {
-    match value["api_error_status"].as_u64() {
-        Some(401) => Some(RecoveryHintKind::AuthRequired),
-        Some(429) => Some(RecoveryHintKind::RateLimited),
-        _ => None,
-    }
+    bloblex_agent_core::recovery::provider_recovery(value)
 }
 
 fn resume_rejected_result(value: &Value) -> bool {
@@ -1451,7 +1447,7 @@ mod tests {
                 (401u64, Some(RecoveryHintKind::AuthRequired)),
                 (403, None),
                 (429, Some(RecoveryHintKind::RateLimited)),
-                (500, None),
+                (500, Some(RecoveryHintKind::Overloaded)),
             ] {
                 let (tx, mut rx) = tokio::sync::mpsc::channel(8);
                 let provider_id = Mutex::new(None);
@@ -1470,7 +1466,7 @@ mod tests {
                 }
                 assert_eq!(saw, expected, "api_error_status {status}");
             }
-            // Free text alone carries no structured status, so no hint is emitted.
+            // A specific terminal usage-limit phrase is also recovery evidence.
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
             let provider_id = Mutex::new(None);
             let requests = Mutex::new(HashMap::new());
@@ -1486,7 +1482,7 @@ mod tests {
                     None => panic!("event channel closed before the terminal error"),
                 }
             }
-            assert_eq!(saw, None);
+            assert_eq!(saw, Some(RecoveryHintKind::RateLimited));
         });
     }
 
@@ -1531,6 +1527,7 @@ mod tests {
             match rx.recv().await.unwrap(){AgentEvent::Error{message}=>assert_eq!(message,"Claude reported a turn error"),_=>panic!("generic provider error expected")}
             parse_line(&tx,&json!({"type":"result","is_error":true,"errors":["429 rate limit exceeded"]}),&id,&permissions,"s",&active,&context_window).await;
             match rx.recv().await.unwrap(){AgentEvent::UsageReport{report,..}=>assert_eq!(report.usage_status,"unreported"),_=>panic!("unreported usage expected")}
+            assert!(matches!(rx.recv().await,Some(AgentEvent::RecoveryHint {kind:RecoveryHintKind::RateLimited,retry_after_secs:None})));
             match rx.recv().await.unwrap(){AgentEvent::Error{message}=>assert_eq!(message,"429 rate limit exceeded"),_=>panic!("provider error detail expected")}
         });
     }
@@ -1581,5 +1578,25 @@ mod tests {
         parse_line(&tx, &json!({"type":"result","is_error":false,"usage":{"input_tokens":9200,"output_tokens":40},"modelUsage":{"claude-sonnet-5-5":{"contextWindow":200000},"claude-haiku-5-5":{"contextWindow":100000}}}), &provider_id, &requests, "session", &active_turn, &context).await;
         assert!(matches!(rx.recv().await, Some(AgentEvent::ContextUpdated { size:Some(200000), model:Some(ref model), estimated:false, .. }) if model == "claude-sonnet-5-5"));
         assert!(matches!(rx.recv().await, Some(AgentEvent::UsageReport { report, .. }) if report.model.is_none() && report.context_used == Some(230)));
+    }
+}
+
+#[cfg(test)]
+mod p8_recovery_tests {
+    use super::*;
+    #[tokio::test]
+    async fn p8_claude_terminal_error_keeps_the_provider_wait() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        parse_line(&tx, &json!({"type":"result","is_error":true,"api_error_status":429,"retry_after":120,"result":"usage limit reached"}),
+            &Mutex::new(None), &Mutex::new(HashMap::new()), "fixture", &Mutex::new(Some("turn".to_owned())), &Mutex::new(ClaudeContextWindow::default())).await;
+        while let Some(event) = rx.recv().await {
+            if let AgentEvent::RecoveryHint { kind, retry_after_secs } = event {
+                assert_eq!(kind,RecoveryHintKind::RateLimited);
+                assert_eq!(retry_after_secs,Some(120));
+                return;
+            }
+            if matches!(event,AgentEvent::Error { .. }) { panic!("terminal error arrived without recovery evidence"); }
+        }
+        panic!("missing recovery evidence");
     }
 }

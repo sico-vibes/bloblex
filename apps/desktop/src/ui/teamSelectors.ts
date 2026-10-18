@@ -353,3 +353,7 @@ export function draftSessionFor(agent: Agent): Session {
     messages: [],
   }
 }
+
+export function sessionIsLimited(session: Session | null | undefined) {
+  return session?.state === 'limited' || session?.state === 'rate_limited'
+}

@@ -158,7 +158,8 @@ fn adapter_failure_class(error: &bloblex_agent_core::AdapterError, permission_de
         bloblex_agent_core::AdapterError::Timeout => "timeout",
         bloblex_agent_core::AdapterError::Rejected(_)
         | bloblex_agent_core::AdapterError::Unsupported(_) => "config_unsupported",
-        bloblex_agent_core::AdapterError::Protocol(_) => "provider_error",
+        bloblex_agent_core::AdapterError::Protocol(_)
+        | bloblex_agent_core::AdapterError::TurnErrorReported(_) => "provider_error",
         bloblex_agent_core::AdapterError::ResumeRejected
         | bloblex_agent_core::AdapterError::ResumeFailed(_) => "other",
         bloblex_agent_core::AdapterError::Process(_)
@@ -2418,6 +2419,11 @@ async fn activate_session(st: &AppState, sid: &str, owner: Owner) -> Result<Valu
     let already_active = || derr("conflict", "session is already active", StatusCode::CONFLICT);
     let is_rpc = matches!(owner, Owner::Rpc);
     if st.sessions.lock().await.contains_key(sid) {
+        if !is_rpc && !matches!(owner, Owner::Turn(_)) && !team::session_busy(st,sid).await {
+            let gate = gate_for_session(st,sid).await;
+            let _guard = gate.lock().await;
+            retry::continue_on_activation(st,sid).await;
+        }
         return if is_rpc { Err(already_active()) } else { Ok(Value::Null) };
     }
     // A turn may activate a session that is already `starting`; the reservation
@@ -2437,14 +2443,17 @@ async fn activate_session(st: &AppState, sid: &str, owner: Owner) -> Result<Valu
     if st.sessions.lock().await.contains_key(sid) {
         return if is_rpc { Err(already_active()) } else { Ok(Value::Null) };
     }
-    resume_inner(st, sid, allow_states).await
+    let result = resume_inner(st, sid, allow_states).await;
+    if result.is_ok() && !matches!(owner, Owner::Turn(_)) {
+        retry::continue_on_activation(st, sid).await;
+    }
+    result
 }
 
 /// Failure class for a turn that never reached the provider because the coding
 /// agent could not be started. Context exhaustion keeps its own class; anything
-/// else the activation path reports is `provider_unavailable`, which is never
-/// auto-retried (`retry::after_failed_turn` only acts on overload/rate-limit
-/// hints).
+/// else the activation path reports is `provider_unavailable`. Only concrete
+/// process/transport evidence arms a transient retry.
 fn activation_failure_class(error: &DispatchError) -> &'static str {
     if error.1.message == failure_public_message("context") { "context" } else { "provider_unavailable" }
 }
@@ -2457,8 +2466,9 @@ async fn finish_activation_failure(st: &AppState, sid: &str, turn: &str, error: 
     let failure_class = activation_failure_class(error);
     let public_message = failure_public_message(failure_class);
     let detail = safe_provider_error_detail(&error.1.message);
+    retry::note_failure(st, sid, turn, failure_class, &error.1.message);
     finish_turn_failed(st, sid, turn, failure_class, public_message, detail.clone(), "error").await;
-    team::after_turn(st, sid, Some(turn.to_owned()), "turn.error", detail.or_else(|| Some(public_message.to_owned())));
+    after_provider_failure(st, sid, turn, detail.or_else(|| Some(public_message.to_owned())));
     retry::after_failed_turn(st, sid, Some(turn)).await;
 }
 
@@ -2938,7 +2948,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     }
     let session_before = st.db.session_detail(&sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     if session_before["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
-    if session_before["link"]["kind"] == "side" && origin != PromptOrigin::Team { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
+    if session_before["link"]["kind"] == "side" && !matches!(origin, PromptOrigin::Team | PromptOrigin::Queue) { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
     // A chosen skill or Manager command adds a hidden per-turn directive to the
     // provider prompt; the stored message keeps the text exactly as typed.
     let command_directive = commands::directive(st, &sid, &p["command"])?;
@@ -2961,6 +2971,9 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         if st.active_turns.lock().await.contains_key(&sid) { return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT)); }
         let row = st.db.session_detail(&sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
         let state = row["state"].as_str().unwrap_or("idle").to_owned();
+        if state == "limited" && origin != PromptOrigin::User {
+            return Err(derr("conflict", "this conversation is waiting for its usage limit", StatusCode::CONFLICT));
+        }
         if matches!(state.as_str(), "starting" | "working" | "cancelling" | "waiting_permission") {
             return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT));
         }
@@ -3031,6 +3044,9 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         // Only daemon-internal callers may attach allowlisted meta; a retry turn
         // records its chain in the turn's audit data.
         let allowed_meta = sanitize_prompt_meta(&p["meta"], origin);
+        if origin == PromptOrigin::User {
+            let _ = st.db.watchdog_reset(&sid);
+        }
         let retry_chain = allowed_meta.as_ref().filter(|meta| meta["kind"] == "auto_retry").and_then(|meta| {
             Some((meta["retryOf"].as_str()?.to_owned(), meta["attempt"].as_u64()?))
         });
@@ -3260,6 +3276,9 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         )
     };
     if let Err(e) = active.adapter.prompt(&active.handle, PromptRequest { attachments, turn_id: turn.clone(), text: prompt_text, exec_options }).await {
+        if matches!(e, bloblex_agent_core::AdapterError::TurnErrorReported(_)) {
+            return; // The ordered event stream owns this terminal transition.
+        }
         let permission_denied = st.denied_turns.lock().await.remove(&turn);
         let failure_class = adapter_failure_class(&e, permission_denied);
         let (detail, sign_in) = failure_detail_and_sign_in(&provider, failure_class, &e.to_string());
@@ -3277,8 +3296,9 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         let after_detail = detail.clone().or(Some(public_message.to_owned()));
         // Budget admission remains charged when usage is unknown; the
         // concurrency slot is released because this execution ended.
+        retry::note_failure(st, &sid, &turn, failure_class, &e.to_string());
         finish_turn_failed(st, &sid, &turn, failure_class, public_message, detail, "error").await;
-        team::after_turn(st, &sid, Some(turn.clone()), "turn.error", after_detail);
+        after_provider_failure(st, &sid, &turn, after_detail);
         retry::after_failed_turn(st, &sid, Some(&turn)).await;
     } else {
         note_prompt_delivered(st, &sid).await;
@@ -3423,12 +3443,41 @@ async fn finish_turn_failed(
     detail: Option<String>,
     session_state: &str,
 ) {
+    if st.db.turn_data(turn_id).unwrap_or(Value::Null)["watchdogCrashed"] == true {
+        let active = st.sessions.lock().await.remove(sid);
+        if let Some(active) = active { let _ = active.adapter.close_session(&active.handle).await; }
+    }
     let _ = st.db.update_turn_outcome(turn_id, "error", Some(failure_class));
     let _ = st.db.update_session_state(sid, session_state);
     st.active_turns.lock().await.remove(sid);
-    if let Ok(summary) = st.db.session_event_summary(sid) { st.emit("session.changed", summary).await; }
-    st.emit("turn.error", json!({"sessionId":sid,"turnId":turn_id,"message":public_message,"failureClass":failure_class,"detail":detail})).await;
     finish_turn_delivery(st, turn_id, true).await;
+    if failure_class == "timeout" {
+        let _ = st.db.watchdog_interrupted(sid);
+        retry::note_failure(st, sid, turn_id, failure_class, "");
+    }
+    retry::after_failed_turn(st, sid, Some(turn_id)).await;
+    let recovering = st.db.turn_data(turn_id).unwrap_or(Value::Null)["recoveryHandled"] == true;
+    let state = st.db.session_state(sid).ok().flatten().unwrap_or_else(|| session_state.to_owned());
+    if let Ok(summary) = st.db.session_event_summary(sid) { st.emit("session.changed", summary).await; }
+    st.emit("turn.error", json!({"sessionId":sid,"turnId":turn_id,"message":public_message,"failureClass":failure_class,"detail":detail,"state":state,"recoveryHandled":recovering})).await;
+}
+
+/// Intermediate recovery releases capacity and pauses the prompt queue, but
+/// does not tell a delegating bot that the task failed. Only the final outcome
+/// is relayed; the side conversation keeps its visible recovery notice.
+fn after_provider_failure(st: &AppState, sid: &str, turn: &str, detail: Option<String>) {
+    let recovering = st.db.turn_data(turn).unwrap_or(Value::Null)["recoveryHandled"] == true;
+    let automation = st.db.session_detail(sid).ok().is_some_and(|row| row["link"]["kind"] == "automation");
+    if recovering && !automation {
+        let state = st.clone();
+        let sid = sid.to_owned();
+        tokio::spawn(async move {
+            crate::queue::after_turn(&state,&sid,"turn.error").await;
+            team::drain_queued_deliveries(&state,Some(&sid)).await;
+        });
+    } else {
+        team::after_turn(st,sid,Some(turn.to_owned()),"turn.error",detail);
+    }
 }
 
 /// Records the provider-delivery fact for an ending turn. A turn that never
@@ -3586,7 +3635,7 @@ async fn forward_events_with_timeouts(
                     let public_message = "The provider stopped making progress before the turn completed.";
                     let after_detail = detail.clone().or(Some(public_message.to_owned()));
                     finish_turn_failed(&st, &sid, turn_id, "timeout", public_message, detail, if resumed_session { "idle" } else { "error" }).await;
-                    team::after_turn(&st, &sid, Some(turn_id.clone()), "turn.error", after_detail);
+                    after_provider_failure(&st, &sid, turn_id, after_detail);
                     retry::after_failed_turn(&st, &sid, Some(turn_id)).await;
                     watched_turn = None;
                     continue;
@@ -3853,6 +3902,7 @@ async fn forward_events_with_timeouts(
                 ("usage.updated", json!({"id":usage["id"],"runtimeId":runtime_id,"sessionId":sid,"turnId":turn_id,"provider":provider,"model":model,"timestamp":timestamp,"inputTokens":report.input_tokens,"outputTokens":report.output_tokens,"cacheReadTokens":report.cache_read_tokens,"cacheWriteTokens":report.cache_write_tokens,"reasoningTokens":report.reasoning_tokens,"source":"stream","usageStatus":report.usage_status,"contextUsed":report.context_used,"contextSize":report.context_size}))
             }
             AgentEvent::TurnCompleted => {
+                let _ = st.db.watchdog_reset(&sid);
                 if let Some(t) = turn.as_deref() { st.denied_turns.lock().await.remove(t); }
                 if let Some(t) = turn.as_deref() {
                     let _ = st.db.update_turn_state(t, "completed");
@@ -3888,6 +3938,7 @@ async fn forward_events_with_timeouts(
             }
             AgentEvent::ContextExhausted => {
                 if let Some(t) = turn.as_deref() {
+                    retry::note_failure(&st,&sid,t,"context","");
                     let _ = st.db.update_turn_outcome(t, "error", Some("context"));
                     finish_turn_delivery(&st, t, true).await;
                 }
@@ -3956,21 +4007,22 @@ async fn forward_events_with_timeouts(
                 // offer a sign-in path instead of a generic provider error.
                 let failure_class = if sign_in { "unauthenticated" } else { preliminary_class };
                 let message = if sign_in { "The coding agent's sign-in expired." } else { failure_public_message(failure_class) };
-                if let Some(t) = turn.as_deref() {
-                    let _ = st.db.update_turn_outcome(t, "error", Some(failure_class));
-                    finish_turn_delivery(&st, t, true).await;
-                }
                 if sign_in { mark_runtime_sign_in_failed(&st, &runtime_id).await; }
                 if sign_in { demote_provider_context_after_sign_in_failure(&st, &sid, true); }
-                let _ = st.db.update_session_state(&sid, "error");
-                st.active_turns.lock().await.remove(&sid);
-                if let Ok(summary) = st.db.session_event_summary(&sid) {
-                    st.emit("session.changed", summary).await;
+                if let Some(t) = turn.as_deref() {
+                    retry::note_failure(&st,&sid,t,failure_class,&provider_message);
+                    finish_turn_failed(&st,&sid,t,failure_class,message,detail.clone(),"error").await;
+                    after_provider_failure(&st,&sid,t,detail.or_else(|| Some(message.to_owned())));
+                } else {
+                    // An adapter error that arrives with no watched turn (for
+                    // example between turns) still marks the session and tells
+                    // the user, exactly as it did before recovery existed.
+                    let _ = st.db.update_session_state(&sid, "error");
+                    st.active_turns.lock().await.remove(&sid);
+                    if let Ok(summary) = st.db.session_event_summary(&sid) { st.emit("session.changed", summary).await; }
+                    st.emit("turn.error", json!({"sessionId":sid,"turnId":turn,"message":message,"failureClass":failure_class,"detail":detail})).await;
                 }
-                (
-                    "turn.error",
-                    json!({"sessionId":sid,"turnId":turn,"message":message,"failureClass":failure_class,"detail":detail}),
-                )
+                continue;
             }
             AgentEvent::ThinkingDelta { text } => {
                 let m = st
@@ -4013,6 +4065,7 @@ async fn forward_events_with_timeouts(
                 ("message.completed", json!({"sessionId":sid,"turnId":turn,"messageId":message["id"],"role":"plan","message":message}))
             }
             AgentEvent::SessionIdle => {
+                if st.db.session_state(&sid).ok().flatten().is_some_and(|state| matches!(state.as_str(), "limited" | "retrying")) { continue; }
                 let _ = st.db.update_session_state(&sid, "idle");
                 let session = st.db.session_event_summary(&sid).unwrap_or(Value::Null);
                 ("session.changed", session)
@@ -4202,6 +4255,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _ = st.db.automation_interrupt_running();
     // Drop automatic retries that missed their window while the daemon was down.
     retry::reconcile_restart(&st).await;
+    tokio::spawn(retry::sweep_loop(st.clone()));
     for id in recovered_sessions {
         if let Ok(session) = st.db.session_event_summary(&id) {
             st.emit("session.changed", session).await;
@@ -6282,6 +6336,51 @@ mod phase2a_tests {
         assert_eq!(turn["detail"], "429 rate limit exceeded; retry later");
     }
 
+    /// An adapter error that arrives while no turn is watched (for example
+    /// between turns) must still mark the session and emit one `turn.error`
+    /// with a null turn id. Regression guard for the recovery rewrite, which
+    /// dropped the no-turn case entirely.
+    #[tokio::test]
+    async fn provider_error_without_a_watched_turn_still_reports_once() {
+        let (st, mut events) = state();
+        let sid = "s-provider-error-no-turn";
+        st.db.create_session(sid, "rt-test", "claude", ".", "Provider error between turns").unwrap();
+        st.db.update_session_state(sid, "ready").unwrap();
+        // No active turn: the error arrives between turns.
+        let adapter = Arc::new(PolicyAdapter::default());
+        let handle = SessionHandle {
+            session_id: sid.into(),
+            provider_session_id: "native".into(),
+            capabilities: bloblex_agent_core::AgentCapabilities::default(),
+        };
+        let runtime = RuntimeSpec {
+            runtime_id: "rt-test".into(),
+            provider: "claude".into(),
+            executable: PathBuf::from("fake"),
+            args: vec![],
+            cwd: None,
+        };
+        st.sessions.lock().await.insert(
+            sid.into(),
+            ActiveSession { handle, runtime, adapter, launch_approval_mode: ApprovalMode::Ask },
+        );
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let task = tokio::spawn(forward_events(st.clone(), sid.into(), "claude".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::Error { message: "private provider detail".into() }).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event_type == "turn.error" { break event; }
+            }
+        }).await.expect("a no-turn error must still emit turn.error");
+        assert!(event.payload["turnId"].is_null(), "an error with no watched turn carries a null turn id");
+        assert_eq!(event.payload["failureClass"], "provider_error");
+        assert_eq!(event.payload["detail"], "private provider detail");
+        assert_eq!(st.db.session_state(sid).unwrap().as_deref(), Some("error"));
+    }
+
     /// A discovered runtime JSON payload for the storage/discovery round trips.
     fn discovered_runtime(id: &str, provider: &str, auth_state: &str) -> bloblex_runtime::DiscoveredRuntime {
         let protocol = if provider == "claude" { "claude_stream" } else { "codex_app_server" };
@@ -8157,6 +8256,188 @@ mod phase2a_tests {
     }
 
     #[tokio::test]
+    async fn p8_provider_limits_are_durable_with_the_right_reset() {
+        let (st, _) = state();
+        for (provider, error) in [
+            ("claude", json!({"api_error_status":429,"retry_after":120})),
+            ("codex", json!({"codexErrorInfo":"usageLimitExceeded","resetsAt":(Utc::now()+chrono::Duration::seconds(120)).timestamp()})),
+            ("opencode", json!({"code":429,"data":{"retryAfter":120}})),
+        ] {
+            st.db.create_session(provider,"rt-test",provider,".","Limited").unwrap();
+            st.db.create_turn(provider,provider).unwrap();
+            retry::note_failure(&st,provider,provider,"provider_error",&error.to_string());
+            finish_turn_failed(&st,provider,provider,"provider_error","Provider failed.",None,"error").await;
+            let row = st.db.session_detail(provider).unwrap();
+            assert_eq!(row["state"], "limited");
+            let reset = chrono::DateTime::parse_from_rfc3339(row["limitedUntil"].as_str().unwrap()).unwrap();
+            assert!((reset.with_timezone(&Utc)-Utc::now()).num_seconds() >= 118);
+            assert_eq!(row["turns"][0]["recoveryHandled"],true);
+            assert_eq!(row["messages"].as_array().unwrap().iter().filter(|m| m["meta"]["kind"] == "usage_limit").count(),1);
+            retry::after_failed_turn(&st,provider,Some(provider)).await;
+            assert_eq!(st.db.session_detail(provider).unwrap()["messages"].as_array().unwrap().len(),1);
+        }
+    }
+
+    #[tokio::test]
+    async fn p8_sweep_resumes_once_and_honours_the_toggle_and_unknown_windows() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st,&adapter);
+        let _tx = queue_session(&st,&adapter,"limited-sweep").await;
+        let reset = past_due_at(2);
+        st.db.watchdog_limit("limited-sweep",Some(&reset)).unwrap();
+        st.db.set_setting("experimental.resumeAfterUsageLimits",&json!(false)).unwrap();
+        retry::sweep(&st).await;
+        assert!(st.db.queue_list("limited-sweep").unwrap().is_empty());
+        st.db.set_setting("experimental.resumeAfterUsageLimits",&json!(true)).unwrap();
+        tokio::join!(retry::sweep(&st),retry::sweep(&st));
+        assert_eq!(st.db.queue_list("limited-sweep").unwrap().len(),1);
+        crate::queue::due_tick(&st).await;
+        assert!(wait_for(|| adapter.texts() == vec!["Continue where you left off."]).await);
+        // The provider repeats an old window; it stays Limited without a due date.
+        st.active_turns.lock().await.remove("limited-sweep");
+        st.db.watchdog_limit("limited-sweep",Some(&reset)).unwrap();
+        retry::sweep(&st).await;
+        assert!(st.db.session_detail("limited-sweep").unwrap()["limitedUntil"].is_null());
+        assert!(st.db.queue_list("limited-sweep").unwrap().is_empty());
+        st.db.watchdog_limit("limited-sweep",None).unwrap();
+        retry::sweep(&st).await;
+        assert!(st.db.queue_list("limited-sweep").unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn p8_permanent_refusals_win_over_a_transient_hint() {
+        let (st, _) = state();
+        st.db.set_setting("experimental.autoRetry",&json!(true)).unwrap();
+        for class in ["permission_denied","unauthenticated","context","config_unsupported"] {
+            st.db.create_session(class,"rt-test","codex",".","Refusal").unwrap();
+            seed_failed_turn(&st,class,class,None,None);
+            retry::note_failure(&st,class,class,class,"stream disconnected");
+            retry::after_failed_turn(&st,class,Some(class)).await;
+            assert!(st.db.queue_list(class).unwrap().is_empty());
+            assert_eq!(st.db.turn_data(class).unwrap()["retryDecision"]["reason"],"permanent_failure");
+        }
+    }
+
+    #[tokio::test]
+    async fn p8_provider_crash_drops_the_dead_handle_and_arms_activation_continuation() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st,&adapter);
+        let _tx = queue_session(&st,&adapter,"p8-crash").await;
+        mark_busy(&st,"p8-crash","p8-crash-turn").await;
+        st.db.append_message("p8-crash","p8-crash-turn","user","Finish the fixture task").unwrap();
+        retry::note_failure(&st,"p8-crash","p8-crash-turn","process_error","stream disconnected before completion");
+        finish_turn_failed(&st,"p8-crash","p8-crash-turn","process_error","The coding agent disconnected.",None,"error").await;
+        assert!(!st.sessions.lock().await.contains_key("p8-crash"));
+        retry::continue_on_activation(&st,"p8-crash").await;
+        assert_eq!(st.db.queue_list("p8-crash").unwrap().len(),1);
+        assert!(st.db.session_recap_pending("p8-crash").unwrap());
+    }
+
+    #[tokio::test]
+    async fn p8_intermediate_side_recovery_does_not_relay_a_false_failure() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st,&adapter);
+        let _origin = queue_session(&st,&adapter,"p8-origin").await;
+        let side = queue_session(&st,&adapter,"p8-side").await;
+        st.db.merge_session_data("p8-side",&json!({"link":{"kind":"side","originSessionId":"p8-origin"}})).unwrap();
+        mark_busy(&st,"p8-side","p8-side-turn").await;
+        side.send(AgentEvent::RecoveryHint {kind:bloblex_agent_core::RecoveryHintKind::RateLimited,retry_after_secs:Some(120)}).await.unwrap();
+        side.send(AgentEvent::Error {message:"usage limit reached".into()}).await.unwrap();
+        assert!(wait_for(|| st.db.session_state("p8-side").unwrap().as_deref()==Some("limited")).await);
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        assert!(st.db.session_detail("p8-origin").unwrap()["messages"].as_array().unwrap().is_empty());
+    }
+
+    /// Retry now skips only `automation`, so a side conversation is resumed by
+    /// the usage-limit sweep and its watchdog item is sent through the queue.
+    #[tokio::test]
+    async fn p8_side_session_watchdog_item_is_sent() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st,&adapter);
+        let _origin = queue_session(&st,&adapter,"p8-side-origin").await;
+        let _side = queue_session(&st,&adapter,"p8-side-watchdog").await;
+        st.db.merge_session_data("p8-side-watchdog",&json!({"link":{"kind":"side","originSessionId":"p8-side-origin"}})).unwrap();
+        st.db.watchdog_limit("p8-side-watchdog",Some(&past_due_at(2))).unwrap();
+        retry::sweep(&st).await;
+        assert_eq!(st.db.queue_list("p8-side-watchdog").unwrap().len(),1,"a side session's watchdog item is queued");
+        crate::queue::due_tick(&st).await;
+        assert!(wait_for(|| adapter.texts() == vec!["Continue where you left off."]).await,"the side session's watchdog item is sent");
+    }
+
+    /// A user still cannot queue a message to a side conversation; only the
+    /// recovery path may prompt it.
+    #[tokio::test]
+    async fn p8_a_user_cannot_queue_to_a_side_session() {
+        let (mut st, _) = state();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st,&adapter);
+        let _origin = queue_session(&st,&adapter,"p8-side-origin2").await;
+        let _side = queue_session(&st,&adapter,"p8-side-refuse").await;
+        st.db.merge_session_data("p8-side-refuse",&json!({"link":{"kind":"side","originSessionId":"p8-side-origin2"}})).unwrap();
+        let refused = crate::queue::add(&st,json!({"sessionId":"p8-side-refuse","text":"hello"})).await;
+        assert!(refused.is_err(),"queue::add still refuses a side conversation");
+        assert!(st.db.queue_list("p8-side-refuse").unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn p8_transient_failure_has_one_owner_and_a_three_retry_bound() {
+        let (mut st, _) = state();
+        st.db.set_setting("experimental.autoRetry",&json!(true)).unwrap();
+        let adapter = Arc::new(QueueAdapter::default());
+        install_queue_adapter(&mut st,&adapter);
+        let _tx = queue_session(&st,&adapter,"transient-p8").await;
+        for attempt in 0..=3 {
+            let turn = format!("transient-{attempt}");
+            st.db.create_turn(&turn,"transient-p8").unwrap();
+            st.db.merge_turn_data(&turn,&json!({"attempt":attempt,"retryOf":"transient-0"})).unwrap();
+            retry::note_failure(&st,"transient-p8",&turn,"process_error","provider process unavailable: fixture start failed");
+            tokio::join!(retry::after_failed_turn(&st,"transient-p8",Some(&turn)),retry::after_failed_turn(&st,"transient-p8",Some(&turn)));
+            let items = st.db.queue_list("transient-p8").unwrap();
+            assert_eq!(items.len(), if attempt<3 { 1 } else { 0 });
+            if let Some(item) = items.first() {
+                let due = chrono::DateTime::parse_from_rfc3339(item["dueAt"].as_str().unwrap()).unwrap();
+                assert!(due.with_timezone(&Utc)>Utc::now());
+                assert_eq!(item["meta"]["attempt"],attempt+1);
+            } else {
+                assert_eq!(st.db.turn_data(&turn).unwrap()["retryDecision"]["reason"],"max_attempts");
+            }
+            st.db.queue_delete_retries("transient-p8").unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn p8_killed_turn_continues_on_activation_with_recap_after_resume_failure() {
+        let (mut st, _) = state();
+        let project = std::env::temp_dir().join(format!("p8-restart-{}",Uuid::new_v4()));
+        std::fs::create_dir_all(&project).unwrap();
+        let runtime = json!({"id":"rt-test","provider":"codex","status":"online","executablePath":std::env::current_exe().unwrap(),"launchArgs":[]});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await=vec![runtime];
+        st.db.create_session("p8-killed","rt-test","codex",&project.to_string_lossy(),"Restart").unwrap();
+        st.db.set_session_provider_id("p8-killed","prior-provider",true).unwrap();
+        st.db.merge_session_data("p8-killed",&json!({"providerTurns":1})).unwrap();
+        st.db.append_message("p8-killed","old","user","Finish the fixture task").unwrap();
+        st.db.update_session_state("p8-killed","working").unwrap();
+        st.db.recover_after_restart().unwrap();
+        let adapter = Arc::new(PromptResumeAdapter {reject_resume:true,fail_resume:false,fail_new:false,resume_calls:Default::default(),new_calls:Default::default(),prompts:Default::default(),events:Default::default()});
+        st.adapters=Arc::new(Adapters {acp:Arc::new(AcpAdapter::default()),codex:adapter.clone(),claude:Arc::new(ClaudeAdapter::default())});
+        activate_session(&st,"p8-killed",Owner::Warm).await.unwrap();
+        assert_eq!(st.db.queue_list("p8-killed").unwrap().len(),1);
+        crate::queue::due_tick(&st).await;
+        assert!(wait_for(|| !adapter.prompts.lock().unwrap().is_empty()).await);
+        let prompt=adapter.prompts.lock().unwrap()[0].clone();
+        assert!(prompt.starts_with("Continue where you left off."));
+        assert!(prompt.contains("<bloblex_recap>"));
+        assert!(prompt.contains("Finish the fixture task"));
+        assert!(!st.db.session_detail("p8-killed").unwrap()["messages"].to_string().contains("<bloblex_recap>"));
+        std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[tokio::test]
     async fn disabled_automatic_retry_stays_silent() {
         let (mut st, mut events) = state();
         let adapter = Arc::new(QueueAdapter::default());
@@ -8208,7 +8489,7 @@ mod phase2a_tests {
 
     #[tokio::test]
     async fn retry_attempt_chain_advances_and_caps() {
-        let (st, _) = state();
+        let (st, mut events) = state();
         st.db.set_setting("experimental.autoRetry", &json!(true)).unwrap();
         let sid = "retry-attempt";
         st.db.create_session(sid, "rt-test", "codex", ".", "Retry").unwrap();
@@ -8218,15 +8499,20 @@ mod phase2a_tests {
         let item = st.db.queue_list(sid).unwrap().into_iter().find(|item| item["kind"] == "retry").unwrap();
         assert_eq!(item["meta"]["attempt"], 2);
         assert_eq!(st.db.turn_data("t-1").unwrap()["retryDecision"]["decision"], "retry");
-        // The fifth retry's failure has no sixth attempt.
+        // The third retry's failure has no fourth attempt.
         let sid2 = "retry-cap";
         st.db.create_session(sid2, "rt-test", "codex", ".", "Retry").unwrap();
         st.db.update_session_state(sid2, "idle").unwrap();
-        seed_failed_turn(&st, sid2, "t-5", Some("t-0"), Some(5));
-        retry::after_failed_turn(&st, sid2, Some("t-5")).await;
+        seed_failed_turn(&st, sid2, "t-3", Some("t-0"), Some(3));
+        retry::after_failed_turn(&st, sid2, Some("t-3")).await;
         assert!(st.db.queue_list(sid2).unwrap().iter().all(|item| item["kind"] != "retry"));
-        assert_eq!(st.db.turn_data("t-5").unwrap()["retryDecision"]["reason"], "max_attempts");
-        assert!(st.db.session_detail(sid2).unwrap()["messages"].as_array().unwrap().iter().any(|message| message["meta"]["status"] == "declined" && message["meta"]["reason"] == "max_attempts"));
+        assert_eq!(st.db.turn_data("t-3").unwrap()["retryDecision"]["reason"], "max_attempts");
+        // Exhaustion uses the one final error, not another decline notice.
+        finish_turn_failed(&st,sid2,"t-3","provider_error","The provider reported a turn error.",None,"error").await;
+        assert!(st.db.session_detail(sid2).unwrap()["messages"].as_array().unwrap().iter().all(|message| message["meta"]["status"] != "declined"));
+        let mut failures=0;
+        while let Ok(event)=events.try_recv() { if event.event_type == "turn.error" { failures+=1; } }
+        assert_eq!(failures,1);
     }
 
     #[tokio::test]
@@ -8240,6 +8526,7 @@ mod phase2a_tests {
         retry::after_failed_turn(&st, sid, Some("t-1")).await;
         assert_eq!(st.db.queue_list(sid).unwrap().len(), 1);
         assert_eq!(dispatch(&st, "turn.retry.cancel", json!({"sessionId":sid})).await.unwrap(), json!({"cancelled":true}));
+        assert_eq!(st.db.session_state(sid).unwrap().as_deref(),Some("idle"));
         assert!(st.db.queue_list(sid).unwrap().is_empty());
         assert_eq!(dispatch(&st, "turn.retry.cancel", json!({"sessionId":sid})).await.unwrap_err().1.code, "not_found");
         assert_eq!(st.db.turn_data("t-1").unwrap()["retryDecision"]["reason"], "cancelled");

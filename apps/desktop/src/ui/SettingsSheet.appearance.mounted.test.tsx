@@ -5,7 +5,7 @@ import { EMPTY_DISCOVERY_STATUS, useRuntimeDiscovery } from './runtimeDiscovery'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chooseOption, helpTipText, selectOptions, selectTrigger, selectValue } from './testSelect'
-import { EXPERIMENTS } from './experiments'
+import { DEFAULT_EXPERIMENTS, EXPERIMENTS } from './experiments'
 import { SettingsSheet } from './SettingsSheet'
 import { setThemeStyle } from '../blob/bitbots'
 
@@ -56,21 +56,22 @@ describe('General settings mounted controls', () => {
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'composer.busySendMode', value: 'steer' })
   })
 
-  it.each(EXPERIMENTS)('keeps $label off by default and saves its exact setting key', async ({ name, label }) => {
+  it.each(EXPERIMENTS)('starts $label at its default and saves its exact setting key', async ({ name, label }) => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     const onExperimentChange = vi.fn()
+    const initial = DEFAULT_EXPERIMENTS[name]
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
     await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" onExperimentChange={onExperimentChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const toggle = host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!
-    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(toggle.getAttribute('aria-checked')).toBe(String(initial))
     const row = toggle.closest('.settings-row')
     expect(row?.querySelector('.experimental-tag')?.textContent).toBe('Experimental')
     expect(helpTipText(row)?.length).toBeGreaterThan(20)
     await act(async () => { toggle.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
-    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: `experimental.${name}`, value: true })
-    expect(onExperimentChange).toHaveBeenCalledWith(name, true)
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: `experimental.${name}`, value: !initial })
+    expect(onExperimentChange).toHaveBeenCalledWith(name, !initial)
   })
 
   it('offers the usage bar as an explained, experimental switch that saves and reports the change', async () => {

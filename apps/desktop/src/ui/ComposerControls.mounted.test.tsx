@@ -119,6 +119,18 @@ describe('fast mode', () => {
     expect(host.querySelector('[role="menuitemradio"][data-value=""]')).toBeNull()
     expect(host.querySelector('[role="menuitemradio"][data-value="alpha"]')?.textContent).toContain('Alpha')
   })
+
+  it('opens the model and effort controls when the composer asks (the /model and /effort actions)', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? catalog : {})
+    const host = mount(<SessionExecutionControls session={session} agent={agent} onSessionUpdated={() => undefined} onError={() => undefined} />)
+    await flush()
+    await act(async () => { window.dispatchEvent(new CustomEvent('bloblex:exec-picker', { detail: 'model' })) })
+    expect(host.querySelector('.composer-menu.model-menu')).not.toBeNull()
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(host.querySelector('.composer-menu.model-menu')).toBeNull()
+    await act(async () => { window.dispatchEvent(new CustomEvent('bloblex:exec-picker', { detail: 'effort' })) })
+    expect(host.querySelector('.session-effort-popover')).not.toBeNull()
+  })
 })
 
 describe('composer attachments', () => {

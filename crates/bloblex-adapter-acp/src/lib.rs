@@ -576,6 +576,8 @@ impl AcpAdapter {
             let result = if can_load {
                 Self::request(&new, "session/load", json!({"sessionId":prior_id,"cwd":new.cwd.to_string_lossy(),"mcpServers":exec::acp_mcp_servers(&new.base_options.mcp_servers)})).await.map_err(|error| match error {
                     AdapterError::Protocol(message) if resume_rejected_evidence(&message) => AdapterError::ResumeRejected,
+                    AdapterError::Process(message) => AdapterError::ResumeFailed(message),
+                    AdapterError::Timeout => AdapterError::ResumeFailed("session/load timed out".into()),
                     other => other,
                 })
             } else {
@@ -583,7 +585,7 @@ impl AcpAdapter {
             };
             let (provider_id, result, resumed) = match result {
                 Ok(result) => (prior_id, result, true),
-                Err(AdapterError::ResumeRejected | AdapterError::Unsupported(_)) => {
+                Err(AdapterError::ResumeRejected | AdapterError::ResumeFailed(_) | AdapterError::Unsupported(_)) => {
                     let result = Self::request(&new, "session/new", json!({"cwd":new.cwd.to_string_lossy(),"mcpServers":exec::acp_mcp_servers(&new.base_options.mcp_servers)})).await?;
                     let id = result["sessionId"].as_str().ok_or_else(|| AdapterError::Protocol("session/new returned no sessionId".into()))?.to_owned();
                     (id, result, false)
@@ -1124,6 +1126,13 @@ impl AgentAdapter for AcpAdapter {
             .map_err(|error| match error {
                 AdapterError::Protocol(message) if resume_rejected_evidence(&message) => {
                     AdapterError::ResumeRejected
+                }
+                // A load that never came up (the agent failed to initialize or
+                // the call timed out) cannot be resumed either: report it so the
+                // caller can start a fresh session instead of failing the turn.
+                AdapterError::Process(message) => AdapterError::ResumeFailed(message),
+                AdapterError::Timeout => {
+                    AdapterError::ResumeFailed("session/load timed out".into())
                 }
                 other => other,
             })?;

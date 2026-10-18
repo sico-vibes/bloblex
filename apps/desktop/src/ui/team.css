@@ -20,7 +20,10 @@
 .team-row.dragging { opacity: .6; }
 .team-row-avatar { position: relative; flex: 0 0 auto; display: grid; place-items: center; }
 .leader-badge { position: absolute; right: 1px; bottom: 2px; width: 15px; height: 15px; display: grid; place-items: center; color: #fff; border: 2px solid var(--surface-sidebar); border-radius: 50%; background: linear-gradient(160deg, #ffad42, #f27a1a); box-shadow: 0 1px 2px #0000004d; }
-.team-row-name { min-width: 0; flex: 1; display: flex; align-items: center; gap: 6px; }
+.team-row-name { min-width: 0; flex: 1; display: flex; align-items: center; gap: 5px; }
+/* The runtime logo sits on the name's line: a flex box as tall as the mark, so
+   `align-items: center` puts its centre on the name's centre in both looks. */
+.team-row-name .runtime-mark-tip { display: inline-flex; align-items: center; align-self: center; margin-right: 0; line-height: 0; }
 .team-row .team-row-name strong { flex: 0 1 auto; }
 .team-row .team-row-name .role-chip { flex: 0 1000 auto; min-width: 28px; }
 .team-row.selected .leader-badge { border-color: var(--surface-selected); }
@@ -74,12 +77,14 @@
 .context-divider.lost::before, .context-divider.lost::after { background: var(--warning-line); }
 
 /* Side conversations. */
-/* The side conversation pill floats in the middle of the header, like a call bubble. */
+/* The side conversation pill floats in the middle of the header, like a call bubble.
+   Its z-index sits above the conversation frame's top fade (z-index 3) so the
+   badge's downward shadow is not cut off where the message list begins. */
 .chat-header { position: relative; }
 /* A bot-to-bot conversation sits a little lower, clear of the window's title bar. */
 .chat-header:has(.side-header) { height: 64px; padding-top: 10px; }
-.side-header { position: absolute; left: 50%; top: calc(50% + 5px); z-index: 2; max-width: min(560px, calc(100% - 260px)); transform: translate(-50%, -50%); }
-.side-header-pill { max-width: 100%; height: 34px; padding: 0 14px 0 7px; display: inline-flex; align-items: center; gap: 10px; color: var(--text-3); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--surface-raised); box-shadow: 0 6px 22px #0000004d; font-size: var(--fs-sm); }
+.side-header { position: absolute; left: 50%; top: calc(50% + 5px); z-index: 4; max-width: min(560px, calc(100% - 260px)); transform: translate(-50%, -50%); }
+.side-header-pill { max-width: 100%; height: 34px; padding: 0 14px 0 7px; display: inline-flex; align-items: center; gap: 10px; color: var(--text-3); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--surface-raised); box-shadow: 0 10px 24px -6px #00000059; font-size: var(--fs-sm); }
 .side-header-pair { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
 .side-header-pair b { color: color-mix(in srgb, var(--chip-accent, var(--text-1)) 72%, var(--text-1)); font-weight: 600; }
 .side-header-topic { min-width: 0; padding-left: 10px; overflow: hidden; color: var(--text-2); border-left: 1px solid var(--line-strong); text-overflow: ellipsis; white-space: nowrap; }

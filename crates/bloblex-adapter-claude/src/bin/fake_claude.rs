@@ -53,6 +53,13 @@ fn main() {
         emit(json!({"type":"result","subtype":"error_during_execution","duration_ms":0,"duration_api_ms":0,"is_error":true,"num_turns":0,"stop_reason":null,"session_id":session_id,"total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{},"permission_denials":[],"errors":["No conversation found with session ID: 00000000-0000-4000-8000-000000000000"],"result_index":0}));
         return;
     }
+    if args.iter().any(|arg| arg == "--fake-resume-no-init")
+        && args.iter().any(|arg| arg == "--resume")
+    {
+        // A stored session that never comes up: the process exits without ever
+        // emitting `system/init`, which the adapter reports as a failed resume.
+        return;
+    }
     emit(json!({"type":"system","subtype":"init","session_id":session_id,"model":model.clone().unwrap_or_else(||"init-only-echo".into())}));
     if args.iter().any(|arg| arg == "--fake-startup-generic-error") {
         emit(json!({"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0},"errors":["Provider request failed"]}));

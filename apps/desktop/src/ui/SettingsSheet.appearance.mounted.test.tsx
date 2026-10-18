@@ -4,7 +4,7 @@ import type { Runtime } from '../types'
 import { EMPTY_DISCOVERY_STATUS, useRuntimeDiscovery } from './runtimeDiscovery'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chooseOption, selectOptions, selectTrigger } from './testSelect'
+import { chooseOption, helpTipText, selectOptions, selectTrigger } from './testSelect'
 import { EXPERIMENTS } from './experiments'
 import { SettingsSheet } from './SettingsSheet'
 import { setThemeStyle } from '../blob/bitbots'
@@ -57,7 +57,7 @@ describe('General settings mounted controls', () => {
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     const row = toggle.closest('.settings-row')
     expect(row?.querySelector('.experimental-tag')?.textContent).toBe('Experimental')
-    expect(row?.querySelector('[role="tooltip"]')?.textContent?.length).toBeGreaterThan(20)
+    expect(helpTipText(row)?.length).toBeGreaterThan(20)
     await act(async () => { toggle.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: `experimental.${name}`, value: true })
     expect(onExperimentChange).toHaveBeenCalledWith(name, true)
@@ -73,7 +73,7 @@ describe('General settings mounted controls', () => {
     const group = [...host.querySelectorAll('.settings-group')].find((section) => section.querySelector('h3')?.textContent === 'Experimental')
     expect(group?.querySelector('.experimental-tag')?.textContent).toBe('Experimental')
     const usageBarRow = [...(group?.querySelectorAll('.settings-row') ?? [])].find((row) => row.querySelector('[aria-label="Usage bar"]'))
-    expect(usageBarRow?.querySelector('[role="tooltip"]')?.textContent).toContain('plan limits')
+    expect(helpTipText(usageBarRow)).toContain('plan limits')
     const toggle = usageBarRow?.querySelector<HTMLButtonElement>('[aria-label="Usage bar"]')
     expect(toggle?.getAttribute('aria-checked')).toBe('false')
     await act(async () => { toggle!.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
@@ -90,7 +90,7 @@ describe('General settings mounted controls', () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const toggle = host.querySelector<HTMLButtonElement>('[aria-label="Claude dynamic workflows"]')!
     expect(toggle.getAttribute('aria-checked')).toBe('false')
-    expect(toggle.closest('.settings-row')?.querySelector('[role="tooltip"]')?.textContent).toContain('session-local')
+    expect(helpTipText(toggle.closest('.settings-row'))).toContain('session-local')
     await act(async () => { toggle.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key:'claude.enableWorkflows', value:true })
     expect(changed).toHaveBeenCalledWith(true)
@@ -106,7 +106,7 @@ describe('General settings mounted controls', () => {
     const toggle = host.querySelector<HTMLButtonElement>('[aria-label="Usage tips"]')!
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     const row = toggle.closest('.settings-row')!
-    expect(row.querySelector('[role="tooltip"]')?.textContent).toContain('75%')
+    expect(helpTipText(row)).toContain('75%')
     await act(async () => { toggle.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'experimental.usageTips', value: true })
     expect(onUsageTipsChange).toHaveBeenCalledWith(true)

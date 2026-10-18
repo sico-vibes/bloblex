@@ -21,7 +21,7 @@ import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from '../exec
 import type { DaemonEvent, JsonRecord, Snapshot } from '../types'
 import { normalizeAnalytics } from '../ui/analyticsFormat'
 import type { SettingsPageName } from '../ui/settingsIndex'
-import type { UpdateCheckResult, UpdateInfo, UpdatePreferences, UpdateProgress, UpdatesState } from '../updatesContract'
+import type { UpdateCheckResult, UpdateInfo, UpdatePhaseState, UpdatePreferences, UpdateProgress, UpdatesState } from '../updatesContract'
 import { createRemoteTransport, type RemoteConnectionStatus, type RemoteTransport } from './remoteTransport'
 import type { RemoteDeviceApi } from './deviceApi'
 
@@ -258,6 +258,9 @@ export async function updatesGetState(): Promise<UpdatesState | null> { return n
 export async function updatesSetPreferences(preferences: UpdatePreferences): Promise<never> { void preferences; throw notAvailable() }
 export async function updatesCheck(): Promise<UpdateCheckResult> { return { status: 'error', checkedAt: '', error: 'unavailable' } }
 export async function updatesInstall(): Promise<void> { throw notAvailable() }
+// A phone never runs the desktop updater: no phase to report, no events to hear.
+export async function updatesPhase(): Promise<UpdatePhaseState | null> { return null }
+export async function listenForUpdateState(handler: (state: UpdatePhaseState) => void): Promise<UnlistenFn> { void handler; return () => undefined }
 export async function listenForUpdateAvailable(handler: (info: UpdateInfo) => void): Promise<UnlistenFn> {
   void handler
   return () => undefined

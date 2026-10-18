@@ -77,8 +77,7 @@ describe('composer preview RPC behavior', () => {
     } finally { unlisten() }
   })
 
-  it('has explicit preview-only runtime-error and fresh usage-tip presets', async () => {
-    const original = location.href
+  it('has explicit preview-only runtime-error and fresh usage-tip presets', async () => {    const original = location.href
     try {
       window.history.replaceState({}, '', '/?preset=opencode-runtime-error')
       const failed = await fetchSnapshot()
@@ -94,5 +93,23 @@ describe('composer preview RPC behavior', () => {
       const settings = await rpc<{ settings: Record<string, unknown> }>('settings.get')
       expect(settings.settings['experimental.usageTips']).toBe(true)
     } finally { window.history.replaceState({}, '', new URL(original).pathname + new URL(original).search) }
+  })
+
+  it('lists a bot\'s skills and accepts a skill or Manager command on session.prompt', async () => {
+    const listed = await rpc<{ skills: Array<{ name: string }> }>('skills.forAgent', { agentId: 'agent-codex' })
+    expect(listed.skills.some((skill) => skill.name === 'pdf')).toBe(true)
+    expect(listed.skills.some((skill) => skill.name === 'figma-to-react')).toBe(false)
+    await expect(rpc('skills.forAgent', {})).rejects.toThrow('agentId is required')
+
+    const created = await rpc<{ session: Session }>('session.new', { agentId: 'agent-codex', projectPath: 'C:\\fixture\\slash' })
+    await rpc('session.prompt', { sessionId: created.session.id, text: '/pdf', command: { kind: 'skill', name: 'pdf' } })
+    expect(created.session.messages?.at(-1)?.content).toBe('/pdf')
+    await expect(rpc('session.prompt', { sessionId: created.session.id, text: '/nope', command: { kind: 'skill', name: 'nope' } })).rejects.toThrow('invalid_argument')
+    await expect(rpc('session.prompt', { sessionId: created.session.id, text: '/figma-to-react', command: { kind: 'skill', name: 'figma-to-react' } })).rejects.toThrow('invalid_argument')
+    await expect(rpc('session.prompt', { sessionId: created.session.id, text: '/interview', command: { kind: 'manager', name: 'interview' } })).rejects.toThrow('invalid_argument')
+
+    const managerSession = await rpc<{ session: Session }>('session.new', { agentId: 'agent-manager', projectPath: 'C:/Bloblex/workspaces/agent-manager' })
+    await rpc('session.prompt', { sessionId: managerSession.session.id, text: '/interview', command: { kind: 'manager', name: 'interview' } })
+    expect(managerSession.session.messages?.at(-1)?.content).toBe('/interview')
   })
 })

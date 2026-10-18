@@ -9,7 +9,7 @@ import { BlobSettings } from './BlobSettings'
 import { resetHints } from './uiPrefs'
 import { setDetailsOpen } from './botPrefs'
 import { recordInstructionVersion } from './instructionHistory'
-import { chooseOption, selectOptions, selectTrigger } from './testSelect'
+import { chooseOption, selectOptions, selectTrigger, viewText } from './testSelect'
 
 const rpc = vi.hoisted(() => vi.fn())
 const openProjectFolder = vi.hoisted(() => vi.fn())
@@ -162,9 +162,9 @@ describe('B7 folder wording and recent folders', () => {
     const view = mount(<Harness />)
     await view.settle()
     expect(view.host.textContent).toContain('Team project')
-    expect(view.host.textContent).toContain('Which project this bot belongs to on the team.')
+    expect(viewText(view.host)).toContain('Which project this bot belongs to on the team.')
     expect(view.host.textContent).toContain('Working folder')
-    expect(view.host.textContent).toContain('Where this bot works when you start a conversation.')
+    expect(viewText(view.host)).toContain('Where this bot works when you start a conversation.')
     expect(selectTrigger(view.host, 'Team project')).not.toBeNull()
     expect(view.host.textContent).not.toContain('Default project')
   })

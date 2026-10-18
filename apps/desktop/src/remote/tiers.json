@@ -121,6 +121,13 @@
       "params": null
     },
     {
+      "method": "skills.forAgent",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists the shared skills switched on for one bot, which the composer needs to offer them; it carries no more than skills.list already does.",
+      "params": null
+    },
+    {
       "method": "automation.list",
       "class": "read",
       "minTier": "viewer",

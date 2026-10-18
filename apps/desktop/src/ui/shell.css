@@ -168,6 +168,22 @@
 .update-banner { margin: 10px 16px 0; padding: 8px 10px 8px 14px; display: flex; align-items: center; gap: 8px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-raised); }
 .update-banner p { margin: 0; flex: 1; min-width: 0; font-size: var(--fs-sm); }
 
+.update-badge { height: 26px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--surface-raised); font-size: var(--fs-xs); white-space: nowrap; cursor: default; }
+.update-badge.is-downloading { color: var(--text-1); }
+.update-badge-label { overflow: hidden; text-overflow: ellipsis; }
+.update-ring { flex: 0 0 auto; }
+.update-ring-track { fill: none; stroke: var(--line-strong); stroke-width: 2; }
+.update-ring-value { fill: none; stroke: var(--text-1); stroke-width: 2; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; transition: stroke-dashoffset 160ms ease; }
+.update-ring.is-indeterminate { animation: update-ring-spin 1.1s linear infinite; }
+@keyframes update-ring-spin { to { transform: rotate(360deg); } }
+.update-badge-button { height: 26px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.update-badge-button.quiet { padding: 0 10px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: transparent; font-size: var(--fs-xs); }
+.update-badge-button.quiet:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }
+@media (prefers-reduced-motion: reduce) {
+  .update-ring.is-indeterminate { animation: none; }
+  .update-ring-value { transition: none; }
+}
+
 /* ── Conversation ────────────────────────────────────────────────────── */
 .message-list { min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 .conversation-layout { width: min(820px, calc(100% - 24px)); min-height: 100%; margin: 0 auto; display: flex; align-items: stretch; gap: 10px; }

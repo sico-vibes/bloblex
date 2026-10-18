@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { chooseOption, openSelect, selectOptions, selectTrigger, selectValue } from './testSelect'
+import { chooseOption, openSelect, selectOptions, selectTrigger, selectValue, viewText } from './testSelect'
 import { act, useRef, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -95,7 +95,7 @@ describe('live execution card', () => {
     await disabled.settle()
     const model = disabled.host.querySelector('[data-capability="disabled"] .select-trigger') as HTMLButtonElement
     expect(model.disabled).toBe(true)
-    expect(disabled.host.textContent).toContain('No model flag')
+    expect(viewText(disabled.host)).toContain('No model flag')
     expect(selectNamed(disabled.host, 'Thinking')).toBeNull()
     disabled.unmount()
 
@@ -106,7 +106,7 @@ describe('live execution card', () => {
     const gated = mount(<Harness provider="codex" initial={draft({ model: 'alpha' })} sessionId={null} />)
     await gated.settle()
     expect((gated.host.querySelector('[data-capability="gated"] .select-trigger') as HTMLButtonElement).disabled).toBe(true)
-    expect(gated.host.textContent).toContain('Gate closed')
+    expect(viewText(gated.host)).toContain('Gate closed')
     expect(selectNamed(gated.host, 'Thinking')).toBeNull()
     gated.unmount()
 
@@ -115,7 +115,7 @@ describe('live execution card', () => {
     await unknown.settle()
     expect(unknown.host.querySelector('[data-capability="unknown"]')).not.toBeNull()
     expect(selectNamed(unknown.host, 'Thinking')).toBeNull()
-    expect(unknown.host.textContent).toContain('has not reported')
+    expect(viewText(unknown.host)).toContain('has not reported')
   })
 
   it('resets thinking and tier to the selected model and sends tier ids', async () => {
@@ -135,7 +135,7 @@ describe('live execution card', () => {
     expect(outcomes).toEqual(['Unknown', 'Applied', 'Unknown', 'Not applied'])
     const modelRow = view.host.querySelector('[data-outcome="Unknown"]')
     expect(modelRow?.textContent).not.toContain('Applied')
-    expect(view.host.textContent).toContain('Sent with the next message, including in existing conversations.')
+    expect(viewText(view.host)).toContain('Sent with the next message, including in existing conversations.')
   })
 
   it('hides the thinking control when the selected model has no model-specific effort evidence', async () => {
@@ -229,8 +229,8 @@ describe('live execution card', () => {
     rpc.mockImplementation(async (method: string) => method === 'runtime.models' ? { ...catalog, models: [] } : method === 'runtime.capabilities' ? caps({ thinking: { supported: true, enabled: true, scope: 'turn', evidence: 'none' } }) : null)
     const view = mount(<Harness provider="opencode" initial={draft()} sessionId={null} />)
     await view.settle()
-    expect(view.host.textContent).toContain('No models were reported for this agent.')
-    expect(view.host.textContent).toContain('Applies when the next conversation starts.')
+    expect(viewText(view.host)).toContain('No models were reported for this agent.')
+    expect(viewText(view.host)).toContain('Applies when the next conversation starts.')
     expect(selectNamed(view.host, 'Thinking')).toBeNull()
     await act(async () => { [...view.host.querySelectorAll('button')].find((button) => button.textContent === 'Refresh models')?.click() })
     expect(rpc).toHaveBeenCalledWith('runtime.models', { runtimeId: 'rt-1', refresh: true })

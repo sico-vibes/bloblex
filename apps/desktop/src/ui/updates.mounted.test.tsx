@@ -185,7 +185,7 @@ describe('updates settings', () => {
     expect(view.host.textContent).not.toContain('SECRET_DEV')
     expect(view.host.textContent).not.toContain('9.9.9')
     expect(selectTrigger(view.host, 'Update channel')!.disabled).toBe(true)
-    expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Check for updates automatically"]')!.disabled).toBe(true)
+    expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Download updates automatically"]')!.disabled).toBe(true)
     expect(view.host.querySelector<HTMLButtonElement>('[data-update-check]')!.disabled).toBe(true)
     expect(buttonNamed(view.host, 'Install and restart')).toBeUndefined()
     await act(async () => { view.host.querySelector<HTMLButtonElement>('[data-update-check]')!.click() })
@@ -194,26 +194,26 @@ describe('updates settings', () => {
 
   it('saves channel and automatic checks with exact arguments and keeps the previous value after a failure', async () => {
     const view = await openUpdates()
-    const toggle = view.host.querySelector<HTMLButtonElement>('[aria-label="Check for updates automatically"]')!
+    const toggle = view.host.querySelector<HTMLButtonElement>('[aria-label="Download updates automatically"]')!
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     await act(async () => { toggle.click() })
     await view.settle()
     expect(h.updatesSetPreferences).toHaveBeenCalledWith({ autoCheck: false })
     expect(h.updatesSetPreferences.mock.calls[0]?.[0]).toEqual({ autoCheck: false })
 
-    expect(view.host.querySelector('#update-channel-hint')?.textContent).toContain('pre-releases')
+    expect(document.getElementById('update-channel-hint')?.textContent).toContain('pre-releases')
     await chooseOption(view.host, 'Update channel', 'stable')
     await view.settle()
     expect(h.updatesSetPreferences).toHaveBeenCalledWith({ channel: 'stable' })
-    expect(view.host.querySelector('#update-channel-hint')?.textContent).toBe('Finished releases only.')
+    expect(document.getElementById('update-channel-hint')?.textContent).toBe('Finished releases only.')
 
     h.updatesSetPreferences.mockRejectedValueOnce({ code: 'network', message: 'ENOTFOUND SECRET_HOST' })
-    await act(async () => { view.host.querySelector<HTMLButtonElement>('[aria-label="Check for updates automatically"]')!.click() })
+    await act(async () => { view.host.querySelector<HTMLButtonElement>('[aria-label="Download updates automatically"]')!.click() })
     await view.settle()
     expect(view.host.querySelector('[data-update-status]')?.textContent).toBe(UPDATE_ERROR_MESSAGES.network)
     expect(view.host.textContent).not.toContain('SECRET_HOST')
     expect(selectValue(view.host, 'Update channel')).toBe('stable')
-    expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Check for updates automatically"]')!.getAttribute('aria-checked')).toBe('true')
+    expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Download updates automatically"]')!.getAttribute('aria-checked')).toBe('true')
   })
 
   it('confirms before restarting running or approval-waiting sessions, and Escape returns focus without installing', async () => {

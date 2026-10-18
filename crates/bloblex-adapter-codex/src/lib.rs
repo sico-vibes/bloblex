@@ -633,7 +633,7 @@ impl CodexAdapter {
             ).await;
             let (thread, fresh) = match resumed {
                 Ok(thread) => (thread, false),
-                Err(AdapterError::ResumeRejected) => {
+                Err(AdapterError::ResumeRejected | AdapterError::ResumeFailed(_)) => {
                     (Self::startup_call(&new, "thread/start", Self::start_params(&new.cwd, &new.base_options)).await?, true)
                 }
                 Err(error) => return Err(error),
@@ -716,6 +716,15 @@ impl CodexAdapter {
                 if method == "thread/resume" && resume_rejected_evidence(&message) =>
             {
                 Err(AdapterError::ResumeRejected)
+            }
+            // A resume that never came up (the app-server failed to initialize or
+            // the call timed out) cannot be resumed either: report it so the
+            // caller can start a fresh thread instead of failing the turn.
+            Err(AdapterError::Process(message)) if method == "thread/resume" => {
+                Err(AdapterError::ResumeFailed(message))
+            }
+            Err(AdapterError::Timeout) if method == "thread/resume" => {
+                Err(AdapterError::ResumeFailed("thread/resume timed out".into()))
             }
             other => other,
         }

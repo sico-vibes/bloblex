@@ -12,6 +12,7 @@ import { Tip } from './Tip'
 import { labelizeEffort, effortIconName, type EffortIconName } from './effortLabels'
 import { concreteModelForSelection } from './modelPreferences'
 import { organizeModels, presentedModelName } from './modelPresentation'
+import { EXECUTION_PICKER_EVENT } from './slashCommands'
 import { Skeleton } from './Skeleton'
 export { labelizeEffort } from './effortLabels'
 
@@ -222,6 +223,19 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
     window.addEventListener('blur', onWindowBlur)
     return () => { document.removeEventListener('pointerdown', onPointerDown, true); document.removeEventListener('keydown', onKeyDown, true); window.removeEventListener('blur', onWindowBlur) }
   }, [open])
+  // `/effort` in the composer asks the effort popover to open.
+  useEffect(() => {
+    const openFor = (event: Event) => {
+      if ((event as CustomEvent).detail !== 'effort' || disabled || lockedReason) return
+      clearSettle()
+      setMode('rest')
+      positionRef.current = restIndex
+      setPosition(restIndex)
+      setOpen(true)
+    }
+    window.addEventListener(EXECUTION_PICKER_EVENT, openFor)
+    return () => window.removeEventListener(EXECUTION_PICKER_EVENT, openFor)
+  }, [disabled, lockedReason, restIndex])
 
   const move = (next: number) => {
     const safe = Math.max(0, Math.min(Math.max(0, efforts.length - 1), next))
@@ -386,6 +400,12 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
     })
   }, [open, searchable])
   useEffect(() => { if (disabled) setOpen(false) }, [disabled])
+  // `/model` in the composer asks the model menu to open.
+  useEffect(() => {
+    const openFor = (event: Event) => { if ((event as CustomEvent).detail === 'model' && !disabled) setOpen(true) }
+    window.addEventListener(EXECUTION_PICKER_EVENT, openFor)
+    return () => window.removeEventListener(EXECUTION_PICKER_EVENT, openFor)
+  }, [disabled])
   const choose = (next: string) => { close(true); onSelect(next) }
   return <div ref={rootRef} className="composer-popover-anchor">
     <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''}`} title="Choose which model this conversation uses" aria-haspopup="menu" aria-expanded={open} aria-label={`Conversation model: ${ariaLabel}${fastOn ? ', fast mode on' : ''}`} disabled={disabled || (saving && !open)} onClick={() => setOpen((value) => !value)}>

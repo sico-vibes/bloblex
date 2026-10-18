@@ -1,13 +1,22 @@
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { useTooltip } from './useTooltip'
+import type { TipPlacement } from './tooltipPosition'
+import './tooltipPortal.css'
 
 /**
  * A small styled tooltip for any control, shown on hover and keyboard focus.
  * It works for controls that are unavailable too, which should use
  * `aria-disabled` rather than `disabled` so they stay focusable.
+ *
+ * The bubble renders in a portal on document.body and is clamped to the
+ * viewport, so a scrolling or overflow-hidden container never clips it.
  */
-export function Tip({ text, children, placement = 'top', className = '' }: { text: string; children: ReactNode; placement?: 'top' | 'bottom'; className?: string }) {
-  return <span className={`tip ${placement} ${className}`.trim()}>
+export function Tip({ text, children, placement = 'top', className = '' }: { text: string; children: ReactNode; placement?: TipPlacement; className?: string }) {
+  const id = useId()
+  const { anchor, bubble, point, open, bind } = useTooltip<HTMLSpanElement>(placement, [text])
+  return <span ref={anchor} className={`tip ${placement} ${className}`.trim()} {...bind}>
     {children}
-    <span className="tip-bubble" role="tooltip">{text}</span>
+    {createPortal(<span ref={bubble} id={id} className="tip-bubble tip-portal" role="tooltip" data-open={open ? 'true' : 'false'} style={point}>{text}</span>, document.body)}
   </span>
 }

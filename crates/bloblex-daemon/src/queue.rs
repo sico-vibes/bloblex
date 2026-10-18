@@ -103,6 +103,7 @@ fn allowlisted_params(p: &Value, text: &str, attachments: &[bloblex_agent_core::
         if !refs.is_empty() { params["conversationRefs"] = json!(refs); }
     }
     if p["replyTo"].is_object() { params["replyTo"] = p["replyTo"].clone(); }
+    if p["command"].is_object() { params["command"] = p["command"].clone(); }
     params
 }
 
@@ -112,6 +113,7 @@ fn prompt_params(session_id: &str, item: &Value) -> Value {
     if item["attachments"].as_array().is_some_and(|items| !items.is_empty()) { params["attachments"] = item["attachments"].clone(); }
     if item["conversationRefs"].as_array().is_some_and(|items| !items.is_empty()) { params["conversationRefs"] = item["conversationRefs"].clone(); }
     if item["replyTo"].is_object() { params["replyTo"] = item["replyTo"].clone(); }
+    if item["command"].is_object() { params["command"] = item["command"].clone(); }
     // Internal auto-retry items carry the daemon-generated meta the prompt path
     // validates against its allowlist. Plain/scheduled items have none.
     if item["meta"].is_object() { params["meta"] = item["meta"].clone(); }
@@ -144,6 +146,9 @@ pub async fn add(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN));
     }
     let attachments = validate_body(&session, &p)?;
+    // A command is validated before it is queued, so a bad one fails here
+    // rather than when the queue later tries to send it.
+    crate::commands::directive(st, session_id, &p["command"])?;
     let due_at = match p.get("dueAt") {
         None | Some(Value::Null) => None,
         Some(Value::String(raw)) => Some(validate_due_at(raw)?),

@@ -996,7 +996,11 @@ async fn static_file(State(state): State<WebState>, uri: Uri) -> Response {
     };
     match std::fs::read(file) {
         Ok(bytes) => {
-            let content_type = content_type_of(path);
+            // The type follows the file that was resolved, not the request path:
+            // `/` maps to `remote.html`, whose URL has no extension, and serving
+            // that as `application/octet-stream` with `nosniff` makes the
+            // browser download the page instead of opening it.
+            let content_type = content_type_of(&file.to_string_lossy());
             (StatusCode::OK, [(header::CONTENT_TYPE, content_type)], bytes).into_response()
         }
         Err(_) => not_found(),

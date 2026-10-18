@@ -73,6 +73,7 @@ async fn gateway_with_static_files() -> Gateway {
     .unwrap();
     std::fs::write(dir.join("remote.webmanifest"), "{\"name\":\"Bitbots Remote\"}").unwrap();
     std::fs::write(dir.join("remote-sw.js"), "self.addEventListener('install',()=>{})").unwrap();
+    std::fs::write(dir.join("assets/app.css"), "body{margin:0}").unwrap();
     std::fs::write(dir.join("assets/app-AbC123.js"), "console.log('remote')").unwrap();
     // A real file one directory up, so a traversal attempt has something to
     // leak if the manifest were not the only gate.
@@ -816,23 +817,38 @@ async fn an_empty_attachment_list_is_the_only_size_that_passes() {
 // ---------------------------------------------------------------------------
 // Static files
 
+/// The `content-type` a raw response carried, lowercased, or `None`.
+fn raw_content_type(response: &str) -> Option<String> {
+    response.lines()
+        .find(|line| line.to_ascii_lowercase().starts_with("content-type:"))
+        .map(|line| line.split_once(':').unwrap().1.trim().to_ascii_lowercase())
+}
+
 #[tokio::test]
 async fn static_files_come_from_the_manifest_and_nothing_else() {
     let gateway = gateway_with_static_files().await;
-    // The entry page is `remote.html`; both `/` and `/remote.html` serve it.
+    // The entry page is `remote.html`; both `/` and `/remote.html` serve it as
+    // HTML, so the browser renders it instead of downloading it.
     for path in ["/", "/remote.html"] {
         let entry = raw_get(gateway.port, path).await;
         assert!(entry.contains("200 OK"), "{path}: {entry}");
         assert!(entry.contains("remote entry"), "{path}: {entry}");
+        assert_eq!(raw_content_type(&entry).as_deref(), Some("text/html; charset=utf-8"), "{path}: {entry}");
     }
-    // Every listed file stays servable at its own path.
-    for path in ["/remote.webmanifest", "/remote-sw.js"] {
+    // Every listed file stays servable at its own path, with its own type.
+    for (path, expected) in [
+        ("/remote-sw.js", "text/javascript; charset=utf-8"),
+        ("/assets/app.css", "text/css; charset=utf-8"),
+        ("/remote.webmanifest", "application/manifest+json"),
+    ] {
         let file = raw_get(gateway.port, path).await;
         assert!(file.contains("200 OK"), "{path}: {file}");
+        assert_eq!(raw_content_type(&file).as_deref(), Some(expected), "{path}: {file}");
     }
     let asset = raw_get(gateway.port, "/assets/app-AbC123.js").await;
     assert!(asset.contains("200 OK"), "{asset}");
     assert!(asset.contains("console.log('remote')"), "{asset}");
+    assert_eq!(raw_content_type(&asset).as_deref(), Some("text/javascript; charset=utf-8"), "{asset}");
     let missing = raw_get(gateway.port, "/nope.js").await;
     assert!(missing.contains("404"), "{missing}");
 }

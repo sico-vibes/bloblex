@@ -571,6 +571,12 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   if (typeof method === 'string' && method.startsWith('skills.')) {
     const find = () => fixtureSkills.find((item) => item.name === params.name)
     if (method === 'skills.list') return { skills: fixtureSkills.map((item) => ({ ...item, disabledFor: [...(item.disabledFor as string[])] })) } as T
+    if (method === 'skills.forAgent') {
+      const agentId = typeof params.agentId === 'string' ? params.agentId : ''
+      if (!agentId) throw rpcError('invalid_argument', 'agentId is required')
+      const skills = fixtureSkills.filter((item) => item.enabled !== false && !(item.disabledFor as string[]).includes(agentId)).map((item) => ({ name: item.name, description: item.description, source: item.source }))
+      return { skills } as T
+    }
     if (method === 'skills.get') {
       const skill = find()
       if (!skill) throw rpcError('not_found', 'That skill is not in the pool.')
@@ -723,6 +729,19 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     // A minimal echo so the preview shows sent messages, # references and a reply.
     const session = sessions.find((item) => item.id === params.sessionId)
     if (!session) throw rpcError('not_found', 'session not found')
+    const command = params.command as Record<string, unknown> | null | undefined
+    if (command !== undefined && command !== null) {
+      const kind = String(command.kind ?? '')
+      const name = String(command.name ?? '')
+      const owner = agents.find((agent) => agent.id === session.agentId)
+      if (kind === 'skill') {
+        const skill = fixtureSkills.find((item) => item.name === name)
+        const off = !skill || skill.enabled === false || (skill.disabledFor as string[]).includes(String(session.agentId ?? ''))
+        if (off) throw rpcError('invalid_argument', `The skill "${name}" is not available to this bot.`)
+      } else if (kind === 'manager') {
+        if (owner?.systemRole !== 'manager') throw rpcError('invalid_argument', 'That command is only for the Manager.')
+      } else throw rpcError('invalid_argument', 'command.kind must be "skill" or "manager"')
+    }
     let replySnapshot: NonNullable<MessageMeta['replyTo']> | null = null
     if (params.replyTo !== undefined && params.replyTo !== null) {
       const replyTo = params.replyTo as Record<string, unknown>

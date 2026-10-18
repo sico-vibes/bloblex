@@ -669,6 +669,11 @@ pub enum AdapterError {
     ContextExhausted,
     #[error("provider rejected the stored session id")]
     ResumeRejected,
+    /// A stored provider session that never came up: the process exited or
+    /// errored before it initialized. Callers may recover by starting a fresh
+    /// provider session, exactly as for `ResumeRejected`.
+    #[error("provider resume did not initialize: {0}")]
+    ResumeFailed(String),
     #[error("provider rejected execution settings: {0}")]
     Rejected(String),
     #[error("provider process unavailable: {0}")]

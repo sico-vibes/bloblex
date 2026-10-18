@@ -456,6 +456,9 @@ button.compact-copy:active { transform: none; }
 .cset-title { min-width: 0; display: flex; align-items: center; gap: 3px; }
 .cset-title .help-tip-trigger { width: 18px; height: 18px; color: var(--c-dim-3); }
 .cset-title .help-tip-bubble { width: 220px; }
+/* The bubble now portals to the companion window's body, so the narrow width
+   for the small companion window is carried by the class instead. */
+.help-tip-bubble.cset-help-bubble { width: 220px; }
 .companion-copy { width: 20px; height: 20px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; color: var(--c-dim-3); border: 0; border-radius: 50%; background: transparent; opacity: 0; transition: opacity 120ms ease, color 120ms ease; }
 .chat-row:hover .companion-copy, .chat-row:focus-within .companion-copy, .companion-copy:focus-visible, .companion-copy.copied { opacity: 1; }
 .companion-copy:hover { color: var(--c-ink); }

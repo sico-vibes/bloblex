@@ -167,6 +167,18 @@ function Get-Sha256Hex([string]$Path) {
     return ([System.BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant()
 }
 
+# The updater feed can only be delivered when the bundle build is told to emit
+# the signed artifacts (`createUpdaterArtifacts`). Without it a release is a
+# manual-only install and the beta channel would keep pointing at the last one.
+function Test-UpdaterArtifactsEnabled([string]$Path) {
+    $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $bundle = $config.PSObject.Properties['bundle']
+    if ($null -eq $bundle) { return $false }
+    $flag = $bundle.Value.PSObject.Properties['createUpdaterArtifacts']
+    if ($null -eq $flag) { return $false }
+    return ($flag.Value -eq $true)
+}
+
 function Get-DefaultBundleDir([string]$RepoRoot) {
     $cargoTarget = $env:CARGO_TARGET_DIR
     if ([string]::IsNullOrWhiteSpace($cargoTarget)) {
@@ -258,6 +270,9 @@ $versionMessage = "Versions differ. Requested $Version. root package.json=$($ver
 $versionsMatch = ($versions.Root -ceq $Version) -and ($versions.Desktop -ceq $Version) -and
     ($versions.Tauri -ceq $Version) -and ($versions.Cargo -ceq $Version)
 Assert-OrWarn -Ok $versionsMatch -Message $versionMessage
+
+$tauriConfigPath = Join-Path $repoRoot 'apps\desktop\src-tauri\tauri.conf.json'
+Assert-OrWarn -Ok (Test-UpdaterArtifactsEnabled $tauriConfigPath) -Message 'bundle.createUpdaterArtifacts is not true in tauri.conf.json, so the release would not carry updater artifacts (a manual-only install).'
 
 $porcelain = & git -C $repoRoot status --porcelain
 if ($LASTEXITCODE -ne 0) { throw "git status failed with exit code $LASTEXITCODE." }

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  UPDATE_ERROR_MESSAGES, UPDATE_FAILED_MESSAGE, countInstallAffectedSessions, describeUpdateProgress, displayUpdateFailure,
-  formatByteCount, formatUpdateTimestamp, installImpactCopy, parseUpdateCheck, parseUpdateProgress, parseUpdatesState, safeUpdateFailureMessage,
-  updateErrorMessage,
+  UPDATE_ERROR_MESSAGES, UPDATE_FAILED_MESSAGE, countInstallAffectedSessions, describeUpdateProgress, describeUpdatePhase,
+  displayUpdateFailure, formatByteCount, formatUpdateTimestamp, installImpactCopy, parseUpdateCheck, parseUpdatePhaseState,
+  parseUpdateProgress, parseUpdatesState, safeUpdateFailureMessage, updateErrorMessage,
 } from './updatesContract'
 
 const secret = 'SECRET_RAW_STACK'
@@ -81,6 +81,30 @@ describe('updates normalisers', () => {
       phase: 'installing', downloadedBytes: 8, totalBytes: null,
     })
     expect(JSON.stringify(parseUpdateProgress({ phase: 'downloading', downloadedBytes: 1, totalBytes: null, token: secret }))).not.toContain(secret)
+  })
+
+  it('parses the pushed updater phase and drops anything unsafe', () => {
+    expect(parseUpdatePhaseState(null)).toBeNull()
+    expect(parseUpdatePhaseState([])).toBeNull()
+    expect(parseUpdatePhaseState({ phase: 'extracting' })).toBeNull()
+    expect(parseUpdatePhaseState({ phase: 'idle', token: secret })).toEqual({
+      phase: 'idle', version: null, downloadedBytes: null, totalBytes: null, message: null,
+    })
+    const downloading = parseUpdatePhaseState({
+      phase: 'downloading', version: ' 0.1.0-beta.32 ', downloadedBytes: 42, totalBytes: 100, message: secret,
+    })
+    expect(downloading).toEqual({
+      phase: 'downloading', version: '0.1.0-beta.32', downloadedBytes: 42, totalBytes: 100, message: secret,
+    })
+    expect(parseUpdatePhaseState({ phase: 'downloading', downloadedBytes: -3, totalBytes: 0 })).toEqual({
+      phase: 'downloading', version: null, downloadedBytes: null, totalBytes: null, message: null,
+    })
+    // The badge view only ever shows these fixed sentences, never the message field.
+    expect(describeUpdatePhase({ phase: 'error', version: '9.9.9', downloadedBytes: null, totalBytes: null, message: secret }).label).toBe(UPDATE_FAILED_MESSAGE)
+    expect(describeUpdatePhase({ phase: 'downloading', version: null, downloadedBytes: 42, totalBytes: 100, message: null })).toEqual({ label: 'Downloading update · 42%', percent: 42 })
+    expect(describeUpdatePhase({ phase: 'downloading', version: null, downloadedBytes: null, totalBytes: null, message: null })).toEqual({ label: 'Downloading update', percent: null })
+    expect(describeUpdatePhase({ phase: 'ready', version: '0.2.0', downloadedBytes: null, totalBytes: null, message: null }).label).toBe('Update 0.2.0 is ready.')
+    expect(describeUpdatePhase({ phase: 'idle', version: null, downloadedBytes: null, totalBytes: null, message: null }).label).toBe('')
   })
 
   it('describes bytes, percent, install impact, and timestamps', () => {

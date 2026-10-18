@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import type { Runtime } from '../types'
+import { placeTooltip } from './tooltipPosition'
 import { runtimeProbeDetail } from './runtimeDiscovery'
 import { friendlyError } from './errorCopy'
 
@@ -35,13 +36,9 @@ export function RuntimeProblemMarker({ runtime, onOpenSettings, inline = false, 
     const update = () => {
       const anchor = (inlineAnchorRef.current ?? buttonAnchorRef.current)?.getBoundingClientRect()
       const tooltip = tooltipRef.current?.getBoundingClientRect()
-      if (!anchor || !tooltip) return
-      const width = tooltip.width || Math.min(290, window.innerWidth - 32)
-      const height = tooltip.height || 80
-      const left = Math.max(12, Math.min(anchor.left + (anchor.width - width) / 2, window.innerWidth - width - 12))
-      const below = anchor.bottom + 7
-      const top = below + height <= window.innerHeight - 12 ? below : Math.max(12, anchor.top - height - 7)
-      setPosition({ left, top })
+      if (!anchor) return
+      const next = placeTooltip(anchor, { width: tooltip?.width || Math.min(290, window.innerWidth - 32), height: tooltip?.height || 80 }, 'bottom')
+      setPosition({ left: next.left, top: next.top })
     }
     update()
     window.addEventListener('resize', update)

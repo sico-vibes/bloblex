@@ -51,6 +51,7 @@ mod questions;
 mod proposals;
 mod knowledge;
 mod skills;
+mod commands;
 // Remote mode (P1): the gateway, its policy and its `remote.*` API.
 mod remote;
 
@@ -157,7 +158,8 @@ fn adapter_failure_class(error: &bloblex_agent_core::AdapterError, permission_de
         bloblex_agent_core::AdapterError::Rejected(_)
         | bloblex_agent_core::AdapterError::Unsupported(_) => "config_unsupported",
         bloblex_agent_core::AdapterError::Protocol(_) => "provider_error",
-        bloblex_agent_core::AdapterError::ResumeRejected => "other",
+        bloblex_agent_core::AdapterError::ResumeRejected
+        | bloblex_agent_core::AdapterError::ResumeFailed(_) => "other",
         bloblex_agent_core::AdapterError::Process(_)
         | bloblex_agent_core::AdapterError::Other(_) => "other",
     }
@@ -531,6 +533,25 @@ async fn clear_runtime_sign_in_failed_after_success(st: &AppState, runtime_id: &
     publish_runtime_value(st, runtime).await;
 }
 
+/// A sign-in failure means the CLI could not reach the provider. If the current
+/// provider context never completed a turn, the provider never saved it either,
+/// so it must not stay offered for `--resume`: dropping the pointer also resets
+/// `providerTurns`, so the next activation starts a fresh provider session
+/// silently instead of announcing a lost context.
+///
+/// `delivered` says whether the failing turn's prompt already reached the
+/// adapter. When it did, the count includes that prompt, so a context with one
+/// prompt never completed a turn; when it did not, only a context with no
+/// delivered prompt qualifies. A legacy row (no `providerTurns` key) reads as 0
+/// and keeps its pointer.
+fn demote_provider_context_after_sign_in_failure(st: &AppState, sid: &str, delivered: bool) {
+    let turns = st.db.session_provider_turns(sid).unwrap_or(0);
+    let never_completed_a_turn = if delivered { turns <= 1 } else { turns == 0 };
+    if never_completed_a_turn {
+        let _ = st.db.clear_session_provider_id(sid);
+    }
+}
+
 /// `runtime.auth.clear`: forget a sign-in failure and ask the CLI again. The
 /// marker is removed first so discovery's answer (not the stale marker) is what
 /// gets stored.
@@ -785,7 +806,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
         "memory.list" | "memory.get" | "memory.create" | "memory.update" | "memory.approve" | "memory.delete" | "memory.restore" => memory::rpc(st, method, &p).await,
-        "skills.list" | "skills.get" | "skills.scan" | "skills.import" | "skills.delete" | "skills.toggle" => skills::rpc(st, method, &p).await,
+        "skills.list" | "skills.get" | "skills.forAgent" | "skills.scan" | "skills.import" | "skills.delete" | "skills.toggle" => skills::rpc(st, method, &p).await,
         "backup.export" | "backup.preview" | "backup.import" => backup::rpc(st, method, &p).await,
         "exec.snapshot.get" => {
             let id=p["snapshotId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","snapshotId is required",StatusCode::BAD_REQUEST))?;
@@ -2042,7 +2063,14 @@ async fn resume_or_start_fresh(
         .await
     {
         Ok(handle) => Ok((handle, rx, false)),
-        Err(bloblex_agent_core::AdapterError::ResumeRejected) => {
+        Err(error @ (bloblex_agent_core::AdapterError::ResumeRejected
+            | bloblex_agent_core::AdapterError::ResumeFailed(_))) => {
+            let outcome_note = match error {
+                bloblex_agent_core::AdapterError::ResumeRejected => {
+                    "The saved provider session expired. A new provider session was started."
+                }
+                _ => "The saved provider session could not be restored. A new provider session was started.",
+            };
             st.db
                 .clear_session_provider_id(session_id)
                 .map_err(|error| bloblex_agent_core::AdapterError::Other(error.to_string()))?;
@@ -2058,7 +2086,7 @@ async fn resume_or_start_fresh(
                     "session.resume_rejected",
                     json!({
                         "sessionId": session_id,
-                        "outcomeNote": "The saved provider session expired. A new provider session was started."
+                        "outcomeNote": outcome_note
                     }),
                 )
                 .await;
@@ -2108,7 +2136,11 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
         (row, previous_state)
     };
     let can_resume_saved_provider = row["resumable"].as_bool().unwrap_or(false)
-        && row["providerSessionId"].as_str().is_some_and(|id| !id.is_empty());
+        && row["providerSessionId"].as_str().is_some_and(|id| !id.is_empty())
+        // A stale `resumable` flag is not enough: the current provider context
+        // must have had a delivered prompt, or the provider never saved it (a
+        // failed sign-in leaves a handle a resume can only fail on).
+        && st.db.session_had_provider_turns(&sid).unwrap_or(false);
     // A provider context that never received a prompt was never saved by the
     // provider, so replacing it loses nothing and is announced silently.
     let previous_had_turns = st.db.session_had_provider_turns(&sid).unwrap_or(false);
@@ -2735,6 +2767,7 @@ struct TurnDriver {
     attachments: Vec<PromptAttachment>,
     reply_snapshot: Option<Value>,
     references: Option<(String, Value)>,
+    command_directive: Option<String>,
     exec_options: ExecOptions,
     provider: String,
     desired_instruction_hash: Option<String>,
@@ -2768,6 +2801,9 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     let session_before = st.db.session_detail(&sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     if session_before["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
     if session_before["link"]["kind"] == "side" && origin != PromptOrigin::Team { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
+    // A chosen skill or Manager command adds a hidden per-turn directive to the
+    // provider prompt; the stored message keeps the text exactly as typed.
+    let command_directive = commands::directive(st, &sid, &p["command"])?;
     let reply_snapshot = prepare_reply_snapshot(st, &sid, &session_before, &p["replyTo"])?;
     // Side conversations the user tagged with # reach the blob as context; the
     // stored message keeps the text exactly as typed.
@@ -2927,7 +2963,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     // A send means this conversation is no longer just "warmed".
     st.warm_lru.lock().await.retain(|id| id != &sid);
     let state = st.clone();
-    let driver = TurnDriver { sid: sid.clone(), turn: turn.clone(), text, attachments, reply_snapshot, references, exec_options, provider, desired_instruction_hash };
+    let driver = TurnDriver { sid: sid.clone(), turn: turn.clone(), text, attachments, reply_snapshot, references, command_directive, exec_options, provider, desired_instruction_hash };
     tokio::spawn(async move { run_turn(state, driver).await; });
     Ok(json!({"turnId":turn,"accepted":true,"state":next_state}))
 }
@@ -2949,7 +2985,7 @@ async fn note_prompt_delivered(st: &AppState, sid: &str) {
 /// cancellation) exactly once.
 async fn run_turn(state: AppState, driver: TurnDriver) {
     let st = &state;
-    let TurnDriver { sid, turn, text, attachments, reply_snapshot, references, exec_options, provider, desired_instruction_hash } = driver;
+    let TurnDriver { sid, turn, text, attachments, reply_snapshot, references, command_directive, exec_options, provider, desired_instruction_hash } = driver;
     // 1. Activate the provider (resume a saved session, or start fresh).
     if let Err(error) = activate_session(st, &sid, Owner::Turn(turn.clone())).await {
         finish_activation_failure(st, &sid, &turn, &error).await;
@@ -3069,12 +3105,14 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         let manager_context = crate::knowledge::context_for_prompt(st, &sid);
         let reference_context = references.as_ref().map(|(extra, _)| extra.as_str()).unwrap_or("");
         let reply_context = reply_snapshot.as_ref().map(reply_prompt_context).unwrap_or_default();
+        let command_context = command_directive.as_deref().unwrap_or("");
         format!(
-            "{text}{handover}{manager}{memory}{skills}{reference_context}{reply_context}",
+            "{text}{handover}{manager}{memory}{skills}{reference_context}{reply_context}{command}",
             handover = handover_context.as_deref().unwrap_or(""),
             manager = manager_context.as_deref().unwrap_or(""),
             memory = memory_context.as_deref().unwrap_or(""),
-            skills = skills_context.as_deref().unwrap_or("")
+            skills = skills_context.as_deref().unwrap_or(""),
+            command = command_context
         )
     };
     if let Err(e) = active.adapter.prompt(&active.handle, PromptRequest { attachments, turn_id: turn.clone(), text: prompt_text, exec_options }).await {
@@ -3086,6 +3124,7 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         let failure_class = if sign_in { "unauthenticated" } else { failure_class };
         let public_message = if sign_in { "The coding agent's sign-in expired." } else { failure_public_message(failure_class) };
         if sign_in { mark_runtime_sign_in_failed(st, &active.runtime.runtime_id).await; }
+        if sign_in { demote_provider_context_after_sign_in_failure(st, &sid, false); }
         let gate = gate_for_session(st, &sid).await;
         let _guard = gate.lock().await;
         if !session_gate_is_current(st, &sid, &gate).await || session_is_deleted(st, &sid).await
@@ -3772,6 +3811,7 @@ async fn forward_events_with_timeouts(
                     finish_turn_delivery(&st, t, true).await;
                 }
                 if sign_in { mark_runtime_sign_in_failed(&st, &runtime_id).await; }
+                if sign_in { demote_provider_context_after_sign_in_failure(&st, &sid, true); }
                 let _ = st.db.update_session_state(&sid, "error");
                 st.active_turns.lock().await.remove(&sid);
                 if let Ok(summary) = st.db.session_event_summary(&sid) {
@@ -4217,6 +4257,7 @@ mod phase2a_tests {
     struct PromptResumeAdapter {
         reject_resume: bool,
         fail_resume: bool,
+        fail_new: bool,
         resume_calls: std::sync::atomic::AtomicUsize,
         new_calls: std::sync::atomic::AtomicUsize,
         prompts: StdMutex<Vec<String>>,
@@ -4227,6 +4268,7 @@ mod phase2a_tests {
         async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
         async fn new_session(&self, _: &RuntimeSpec, request: NewSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
             self.new_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail_new { return Err(bloblex_agent_core::AdapterError::Process("fixture fresh start failure".into())); }
             *self.events.lock().unwrap() = Some(events.clone());
             let _ = events.send(AgentEvent::SessionStarted { provider_session_id: "fresh-after-rejection".into() }).await;
             Ok(SessionHandle { session_id: request.session_id, provider_session_id: "fresh-after-rejection".into(), capabilities: bloblex_agent_core::AgentCapabilities { resume: true, ..Default::default() } })
@@ -4234,7 +4276,7 @@ mod phase2a_tests {
         async fn resume_session(&self, _: &RuntimeSpec, request: ResumeSessionRequest, events: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
             self.resume_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self.reject_resume { return Err(bloblex_agent_core::AdapterError::ResumeRejected); }
-            if self.fail_resume { return Err(bloblex_agent_core::AdapterError::Protocol("fixture resume failure".into())); }
+            if self.fail_resume { return Err(bloblex_agent_core::AdapterError::ResumeFailed("fixture resume did not initialize".into())); }
             *self.events.lock().unwrap() = Some(events.clone());
             let _ = events.send(AgentEvent::SessionStarted { provider_session_id: request.provider_session_id.clone() }).await;
             Ok(SessionHandle { session_id: request.session_id, provider_session_id: request.provider_session_id, capabilities: bloblex_agent_core::AgentCapabilities { resume: true, ..Default::default() } })
@@ -5080,6 +5122,9 @@ mod phase2a_tests {
             *st.runtimes.write().await = vec![runtime];
             st.db.create_session(sid, "rt-test", "codex", &project.to_string_lossy(), "Saved chat").unwrap();
             st.db.set_session_provider_id(sid, "saved-provider-id", true).unwrap();
+            // The saved context has had a delivered prompt, which is what makes
+            // its handle eligible for `--resume` at all.
+            st.db.merge_session_data(sid, &json!({"providerTurns":1})).unwrap();
             st.db.push_event("session.context.updated", &json!({"sessionId":sid,"contextUsed":420,"contextSize":1000})).unwrap();
             st.db.update_session_state(sid, "idle").unwrap();
             st.adapters = Arc::new(Adapters {
@@ -5095,6 +5140,7 @@ mod phase2a_tests {
         let adapter = Arc::new(PromptResumeAdapter {
             reject_resume: false,
             fail_resume: false,
+            fail_new: false,
             resume_calls: Default::default(),
             new_calls: Default::default(),
             prompts: StdMutex::new(Vec::new()),
@@ -5123,6 +5169,7 @@ mod phase2a_tests {
         let adapter = Arc::new(PromptResumeAdapter {
             reject_resume: true,
             fail_resume: false,
+            fail_new: false,
             resume_calls: Default::default(),
             new_calls: Default::default(),
             prompts: StdMutex::new(Vec::new()),
@@ -5150,6 +5197,7 @@ mod phase2a_tests {
         let adapter = Arc::new(PromptResumeAdapter {
             reject_resume: false,
             fail_resume: false,
+            fail_new: false,
             resume_calls: Default::default(),
             new_calls: Default::default(),
             prompts: StdMutex::new(Vec::new()),
@@ -5163,20 +5211,58 @@ mod phase2a_tests {
         assert_eq!(st.db.session_context("no-provider-handle").unwrap(), (None, None));
         std::fs::remove_dir_all(project).unwrap();
 
-        // A resume that fails is no longer a rejected send: the send is accepted,
-        // the message is stored, and the conversation reports a turn error.
+        // A resume that fails to initialize (the stored session belongs to an
+        // expired sign-in, or no longer exists) falls back to a fresh provider
+        // session: the send is accepted, the prompt is delivered there, the lost
+        // context is announced once, and the turn completes.
         let adapter = Arc::new(PromptResumeAdapter {
             reject_resume: false,
             fail_resume: true,
+            fail_new: false,
             resume_calls: Default::default(),
             new_calls: Default::default(),
             prompts: StdMutex::new(Vec::new()),
             events: StdMutex::new(None),
         });
-        let (st, project, mut events) = prepare(adapter.clone(), "failed-resume").await;
-        let result = dispatch(&st, "session.prompt", json!({"sessionId":"failed-resume","text":"reaches the transcript"})).await.unwrap();
+        let (st, project, mut events) = prepare(adapter.clone(), "uninitialized-resume").await;
+        st.db.merge_session_data("uninitialized-resume", &json!({"providerTurns":1})).unwrap();
+        let result = dispatch(&st, "session.prompt", json!({"sessionId":"uninitialized-resume","text":"continue after a failed resume"})).await.unwrap();
         assert_eq!(result["accepted"], true);
         assert_eq!(result["state"], "starting");
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event_type == "turn.completed" { break event; }
+                assert_ne!(event.event_type, "turn.error", "the fallback turn must not fail");
+            }
+        }).await.unwrap();
+        assert_eq!(completed.payload["sessionId"], "uninitialized-resume");
+        assert_eq!(adapter.resume_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the fallback starts a fresh provider session");
+        assert_eq!(*adapter.prompts.lock().unwrap(), ["continue after a failed resume"]);
+        let detail = st.db.session_detail("uninitialized-resume").unwrap();
+        assert_eq!(detail["providerSessionId"], "fresh-after-rejection");
+        assert_eq!(context_reset_notices(&st, "uninitialized-resume"), 1, "the lost context is announced exactly once");
+        let notice = detail["messages"].as_array().unwrap().iter()
+            .find(|message| message["role"] == "notice" && message["meta"]["kind"] == "context_reset").unwrap();
+        assert_eq!(notice["meta"]["contextLost"], true);
+        assert_eq!(notice["meta"]["reason"], "fresh_session");
+        assert_eq!(st.db.session_context("uninitialized-resume").unwrap(), (None, None));
+        std::fs::remove_dir_all(project).unwrap();
+
+        // Only when the fresh start fails too is the turn an error.
+        let adapter = Arc::new(PromptResumeAdapter {
+            reject_resume: false,
+            fail_resume: true,
+            fail_new: true,
+            resume_calls: Default::default(),
+            new_calls: Default::default(),
+            prompts: StdMutex::new(Vec::new()),
+            events: StdMutex::new(None),
+        });
+        let (st, project, mut events) = prepare(adapter.clone(), "uninitialized-then-failed").await;
+        let result = dispatch(&st, "session.prompt", json!({"sessionId":"uninitialized-then-failed","text":"still fails"})).await.unwrap();
+        assert_eq!(result["accepted"], true);
         let failed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
                 let event = events.recv().await.unwrap();
@@ -5186,9 +5272,8 @@ mod phase2a_tests {
         assert_eq!(failed.payload["failureClass"], "provider_unavailable");
         assert_eq!(failed.payload["message"], "The coding agent could not start.");
         assert!(adapter.prompts.lock().unwrap().is_empty(), "a failed activation never prompts");
-        assert_eq!(st.db.session_detail("failed-resume").unwrap()["state"], "error");
-        assert!(!st.active_turns.lock().await.contains_key("failed-resume"), "the reservation is released");
-        assert_eq!(st.db.session_detail("failed-resume").unwrap()["messages"].as_array().unwrap().iter().filter(|message| message["role"] == "user").count(), 1);
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(st.db.session_detail("uninitialized-then-failed").unwrap()["state"], "error");
         std::fs::remove_dir_all(project).unwrap();
     }
 
@@ -5684,8 +5769,95 @@ mod phase2a_tests {
         assert_eq!(context_reset_events(&st, "legacy-empty"), 0);
     }
 
+    /// A stored provider handle whose context never had a delivered prompt is
+    /// never offered for `--resume`: a stale `resumable` flag alone must not
+    /// send the turn into a resume that can only fail.
     #[tokio::test]
-    async fn daemon_generic_resume_error_preserves_saved_provider_pointer(){
+    async fn a_stored_provider_id_without_a_turn_is_not_resumed() {
+        let (mut st, _) = state();
+        online_rt_test(&mut st).await;
+        let adapter = Arc::new(SendAdapter::new(false, false));
+        install_send_adapter(&mut st, &adapter);
+        let sid = "never-prompted-provider";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Never prompted").unwrap();
+        st.db.set_session_provider_id(sid, "stored-but-unused", true).unwrap();
+        st.db.merge_session_data(sid, &json!({"providerTurns":0})).unwrap();
+        st.db.update_session_state(sid, "idle").unwrap();
+
+        warm_until_installed(&st, sid).await;
+        assert_eq!(adapter.resume_calls(), 0, "a context with no delivered prompt is never resumed");
+        assert_eq!(adapter.new_calls.load(std::sync::atomic::Ordering::SeqCst), 1, "it starts a fresh provider session");
+        assert_eq!(context_reset_notices(&st, sid), 0, "nothing was lost, so nothing is announced");
+        assert!(!st.db.session_detail(sid).unwrap()["resumable"].as_bool().unwrap(), "an unused handle is not left resumable");
+    }
+
+    /// A turn that fails on an expired CLI sign-in leaves the session's handle
+    /// alone only when the provider context already completed a turn.
+    #[tokio::test]
+    async fn a_sign_in_failure_drops_a_provider_context_that_never_completed_a_turn() {
+        let (st, mut events) = state();
+        let sid = "sign-in-first-turn";
+        st.db.create_session(sid, "rt-test", "claude", ".", "Sign-in").unwrap();
+        st.db.set_session_provider_id(sid, "provider-first-turn", true).unwrap();
+        st.db.merge_session_data(sid, &json!({"providerTurns":1})).unwrap();
+        st.db.create_turn("t-sign-in-first", sid).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.into(), "t-sign-in-first".into());
+        let adapter = Arc::new(PolicyAdapter::default());
+        let handle = SessionHandle { session_id: sid.into(), provider_session_id: "provider-first-turn".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "claude".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
+        st.sessions.lock().await.insert(sid.into(), ActiveSession { handle, runtime, adapter, launch_approval_mode: ApprovalMode::Ask });
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let task = tokio::spawn(forward_events(st.clone(), sid.into(), "claude".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::Error { message: "Failed to authenticate: OAuth session expired and could not be refreshed".into() }).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        let failed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event_type == "turn.error" { break event; }
+            }
+        }).await.unwrap();
+        assert_eq!(failed.payload["failureClass"], "unauthenticated");
+        let detail = st.db.session_detail(sid).unwrap();
+        assert_eq!(detail["providerSessionId"], Value::Null, "a handle the provider never saved is dropped");
+        assert_eq!(detail["resumable"], false);
+        assert_eq!(st.db.session_provider_turns(sid).unwrap(), 0);
+
+        // A context that already completed a turn keeps its handle: the sign-in
+        // failure is the runtime's, not the conversation's.
+        let (st, mut events) = state();
+        let sid = "sign-in-later-turn";
+        st.db.create_session(sid, "rt-test", "claude", ".", "Sign-in later").unwrap();
+        st.db.set_session_provider_id(sid, "provider-used", true).unwrap();
+        st.db.merge_session_data(sid, &json!({"providerTurns":2})).unwrap();
+        st.db.create_turn("t-sign-in-later", sid).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.into(), "t-sign-in-later".into());
+        st.sessions.lock().await.insert(sid.into(), ActiveSession {
+            handle: SessionHandle { session_id: sid.into(), provider_session_id: "provider-used".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() },
+            runtime: RuntimeSpec { runtime_id: "rt-test".into(), provider: "claude".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None },
+            adapter: Arc::new(PolicyAdapter::default()),
+            launch_approval_mode: ApprovalMode::Ask,
+        });
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let task = tokio::spawn(forward_events(st.clone(), sid.into(), "claude".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::Error { message: "Failed to authenticate: OAuth session expired and could not be refreshed".into() }).await.unwrap();
+        drop(tx);
+        task.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event_type == "turn.error" { break; }
+            }
+        }).await.unwrap();
+        let detail = st.db.session_detail(sid).unwrap();
+        assert_eq!(detail["providerSessionId"], "provider-used", "a used context keeps its handle");
+        assert_eq!(detail["resumable"], true);
+    }
+
+    #[tokio::test]
+    async fn daemon_generic_resume_error_preserves_saved_provider_pointer() {
         let(st,_events)=state();
         st.db.create_session("resume-generic","rt-test","codex",".","Resume test").unwrap();
         st.db.set_session_provider_id("resume-generic","saved-provider-session",true).unwrap();
@@ -9314,6 +9486,66 @@ mod phase2a_tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         panic!("timed out waiting for a prompt: {:?}", adapter.prompts.lock().unwrap());
+    }
+
+    // ── FIX37 G4: slash commands, skills and Manager commands ─────────────
+
+    #[tokio::test]
+    async fn a_chosen_skill_or_manager_command_is_a_hidden_per_turn_directive() {
+        let (mut st, _rx, data, _boss_id, worker_id) = proposal_state().await;
+        st.db.set_setting("exec_gate.codex.instructions", &json!(true)).unwrap();
+        let adapter = Arc::new(TeamAdapter::default());
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter.clone(), claude:Arc::new(ClaudeAdapter::default()) });
+
+        // One skill in the shared pool.
+        let source = data.join("src");
+        write_skill(&source.join("code-review"), "code-review", "Review a change.", &[]);
+        st.skills.set_roots(vec![("folder".to_owned(), source.clone())]);
+        dispatch(&st, "skills.import", json!({"path": source.join("code-review").to_string_lossy()})).await.unwrap();
+
+        // `skills.forAgent` lists the pool for one bot and requires an agentId.
+        let listed = dispatch(&st, "skills.forAgent", json!({"agentId":worker_id})).await.unwrap();
+        assert!(listed["skills"].as_array().unwrap().iter().any(|row| row["name"] == "code-review"), "{listed}");
+        assert_eq!(dispatch(&st, "skills.forAgent", json!({})).await.unwrap_err().1.code, "invalid_argument");
+
+        // An unknown skill, a bad kind and a Manager command sent to an ordinary
+        // bot are all refused with `invalid_argument`.
+        assert_eq!(dispatch(&st, "session.prompt", json!({"sessionId":"worker-main","text":"/nope","command":{"kind":"skill","name":"nope"}})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "session.prompt", json!({"sessionId":"worker-main","text":"x","command":{"kind":"weird","name":"x"}})).await.unwrap_err().1.code, "invalid_argument");
+        assert_eq!(dispatch(&st, "session.prompt", json!({"sessionId":"worker-main","text":"/interview","command":{"kind":"manager","name":"interview"}})).await.unwrap_err().1.code, "invalid_argument");
+
+        // A valid skill puts the directive in the provider prompt, while the
+        // stored message keeps the text exactly as typed.
+        let sent = dispatch(&st, "session.prompt", json!({"sessionId":"worker-main","text":"/code-review check the parser","command":{"kind":"skill","name":"code-review"}})).await.unwrap();
+        assert_eq!(sent["accepted"], true);
+        let prompts = wait_for_prompts(&adapter, |texts| texts.iter().any(|text| text.contains("<bloblex_command>"))).await;
+        let prompt = prompts.iter().find(|text| text.contains("<bloblex_command>")).unwrap();
+        assert!(prompt.starts_with("/code-review check the parser"), "{prompt}");
+        assert!(prompt.contains("Load the skill \"code-review\" with load_skill now"), "{prompt}");
+        let stored = st.db.session_detail("worker-main").unwrap()["messages"].as_array().cloned().unwrap();
+        assert!(stored.iter().any(|m| m["role"] == "user" && m["content"] == "/code-review check the parser"), "{stored:?}");
+        assert!(!serde_json::to_string(&stored).unwrap().contains("<bloblex_command>"), "the directive is never persisted");
+
+        // A per-bot opt-out refuses the skill for that bot's next message.
+        dispatch(&st, "skills.toggle", json!({"name":"code-review","enabled":false,"agentId":worker_id})).await.unwrap();
+        st.db.create_session_for_agent("worker-two", "rt-d2", "codex", ".", "Worker two", Some(&worker_id)).unwrap();
+        st.db.update_session_state("worker-two", "idle").unwrap();
+        let refused = dispatch(&st, "session.prompt", json!({"sessionId":"worker-two","text":"/code-review x","command":{"kind":"skill","name":"code-review"}})).await.unwrap_err();
+        assert_eq!(refused.1.code, "invalid_argument");
+        assert!(refused.1.message.contains("not available to this bot"), "{}", refused.1.message);
+
+        // The Manager's own commands carry their instruction, and remain
+        // Manager-only.
+        let status = crate::commands::directive(&st, "boss-main", &json!({"kind":"manager","name":"status"})).unwrap().unwrap();
+        assert!(status.contains("<bloblex_command>") && status.contains("Summarise the state of every project"), "{status}");
+        assert!(crate::commands::directive(&st, "boss-main", &json!({"kind":"manager","name":"nope"})).is_err());
+        assert!(crate::commands::directive(&st, "worker-two", &json!({"kind":"manager","name":"status"})).is_err());
+        dispatch(&st, "session.prompt", json!({"sessionId":"boss-main","text":"/interview","command":{"kind":"manager","name":"interview"}})).await.unwrap();
+        let prompts = wait_for_prompts(&adapter, |texts| texts.iter().any(|text| text.starts_with("/interview") && text.contains("<bloblex_command>"))).await;
+        let interview = prompts.iter().find(|text| text.starts_with("/interview")).unwrap();
+        assert!(interview.contains("personalisation interview"), "{interview}");
+
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[tokio::test]

@@ -16,7 +16,7 @@ import type { ReactNode } from 'react'
 /** A companion setting's title with its explanation behind a "?", like the main Settings rows. */
 export function CompanionSettingCopy({ label, hint, detail }: { label: ReactNode; hint?: ReactNode; detail?: ReactNode }) {
   return <span className="cset-copy">
-    <span className="cset-title"><strong>{label}</strong>{hint && <HelpTip text={hint} align="start" placement="bottom" />}</span>
+    <span className="cset-title"><strong>{label}</strong>{hint && <HelpTip text={hint} align="start" placement="bottom" bubbleClassName="cset-help-bubble" />}</span>
     {detail && <small>{detail}</small>}
   </span>
 }

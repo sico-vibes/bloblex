@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
+import { placeTooltip } from './tooltipPosition'
 import './providerBrand.css'
 
 const providerAssets = import.meta.glob('../assets/providers/*.{svg,png,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>
@@ -46,8 +47,9 @@ function RuntimeMarkTip({ provider, name, size }: { provider: string; name: stri
     const place = () => {
       const rect = root.current?.getBoundingClientRect()
       if (!rect) return
-      const halfWidth = Math.min((tooltip.current?.getBoundingClientRect().width ?? 160) / 2, Math.max(0, (window.innerWidth - 16) / 2))
-      setPoint({ left: Math.max(halfWidth + 8, Math.min(window.innerWidth - halfWidth - 8, rect.left + rect.width / 2)), top: Math.min(window.innerHeight - 28, rect.bottom + 7) })
+      const box = tooltip.current?.getBoundingClientRect()
+      const next = placeTooltip(rect, { width: box?.width || 160, height: box?.height || 28 }, 'bottom')
+      setPoint({ left: next.left, top: next.top })
     }
     place()
     window.addEventListener('resize', place)

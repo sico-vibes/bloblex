@@ -549,6 +549,32 @@ async fn resume_rejection_requires_the_observed_zero_turn_session_error_shape() 
 }
 
 #[tokio::test]
+async fn resume_that_never_initializes_is_reported_for_a_fresh_retry() {
+    let (root, private, audit_path) = paths();
+    let system_root = setup_test_acl(&root);
+    let adapter = ClaudeAdapter::with_test_acl_executable(private, system_root);
+    let rt = runtime(&audit_path, &["--fake-resume-no-init"]);
+    let (tx, _rx) = mpsc::channel(16);
+    let result = adapter
+        .resume_session(
+            &rt,
+            bloblex_agent_core::ResumeSessionRequest {
+                session_id: "resume-no-init".into(),
+                provider_session_id: "00000000-0000-4000-8000-000000000000".into(),
+                project_path: root.clone(),
+                exec_options: ExecOptions::default(),
+            },
+            tx,
+        )
+        .await;
+    assert!(
+        matches!(result, Err(bloblex_agent_core::AdapterError::ResumeFailed(_))),
+        "a resume that never initializes must be reported so the caller can start fresh"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn fake_provider_emits_prompt_accepted_once_per_prompt_and_not_without_a_stream_event() {
     let (root, private, audit_path) = paths();
     let system_root = setup_test_acl(&root);

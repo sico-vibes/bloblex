@@ -63,6 +63,7 @@ import { DictationButton } from './DictationButton'
 import { DictationIsland, type IslandPhase } from './DictationIsland'
 import { configureDictation, DEFAULT_SPEECH_MODEL_ID, normalizeEngineChoice, setDictationEnginePrefs, type DictationEngineInfo } from './dictation'
 import { UpdateAvailableBanner, useMainUpdateOffer } from './UpdateBanner'
+import { UpdateBadge } from './UpdateBadge'
 import { SettingsSheet, type SettingsPageId } from './SettingsSheet'
 import { ProfileMenu, readProfileName, saveProfileName, syncProfileName } from './ProfileMenu'
 import { emptyPins, readPins, toggleFavorite, writePins, type SidebarPins } from './sidebarPins'
@@ -111,6 +112,8 @@ import { quotaRows, quotaTone, resetIn, updatedAgo } from './quotaModel'
 import { QueueBanner } from './PromptQueue'
 import { AttachButton, AttachmentTray, MAX_COMPOSER_ATTACHMENTS, MessageAttachments, PermissionModeControl, prepareImageBytes, sessionApprovalMode, type ComposerAttachment } from './ComposerControls'
 import { ConversationOutline, outlineItemsFromMessages } from './ConversationOutline'
+import { SlashCommandChip, SlashMenu } from './SlashMenu'
+import { COMPANION_SLASH_ACTIONS, commandMessage, leadingCommand, requestExecutionPicker, slashItems, slashQuery, type SlashCommand, type SlashItem, type SlashSkill } from './slashCommands'
 import { SafeMarkdown } from './SafeMarkdown'
 import { parseUnifiedDiff } from './diffParser'
 import type { QuickSwitcherItem } from './quickSwitcherModel'
@@ -265,6 +268,10 @@ export function App() {
   const [rosterAnnouncement, setRosterAnnouncement] = useState('')
   const [archiveNotice, setArchiveNotice] = useState<string | null>(null)
   const [composer, setComposer] = useState('')
+  /** The `/command` being typed, the command picked for this message and this bot's skills. */
+  const [slash, setSlash] = useState<{ start: number; query: string; index: number } | null>(null)
+  const [slashCommand, setSlashCommand] = useState<SlashCommand | null>(null)
+  const [slashSkills, setSlashSkills] = useState<Array<{ name: string; description: string }>>([])
   const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null)
   const replyTargetRef = useRef<ReplyTarget | null>(null)
   replyTargetRef.current = replyTarget
@@ -394,6 +401,10 @@ export function App() {
   const rosterOrderRef = useRef<Agent[]>([])
   const selectionBooted = useRef(false)
   const handledArchiveRef = useRef<string | null>(null)
+  /** Every conversation's blob, kept so a removed id can still be traced to its owner. */
+  const sessionOwnersRef = useRef(new Map<string, string | null>())
+  /** Blobs whose conversation was just deleted or archived: do not auto-open a fresh one for them. */
+  const suppressedAutoCreate = useRef(new Set<string>())
   snapshotRef.current = snapshot
   selectedAgentIdRef.current = selectedAgentId
   selectedRuntimeIdRef.current = selectedRuntimeId
@@ -534,6 +545,8 @@ export function App() {
       ?? sessions.filter((session) => session.runtimeId === selectedRuntime?.id && !isSideSession(session)).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
       ?? null)
   detailsSessionIdRef.current = selectedSession?.id ?? null
+  // Remember every conversation's blob, so a removed id can still be traced to its owner.
+  for (const session of sessions) sessionOwnersRef.current.set(session.id, session.agentId ?? null)
   const sessionMessages = selectedSession?.messages ?? selectedSession?.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages : []) ?? selectedSession?.events ?? []
   const conversationItems = selectedSession ? buildConversationItems(selectedSession) : []
   const waitingCount = waitingBlobCount(snapshot, permissionClock)
@@ -579,10 +592,34 @@ export function App() {
 
   useEffect(() => {
     if (!seenLoaded.current) return
+    // Keep the read marker when a conversation merely leaves the list (archived, or
+    // deleted while Undo is pending): dropping it made a restored conversation pop
+    // an unread dot the person never earned. Only permanent deletions are forgotten.
+    const deleted = snapshot?.deletedSessionIds ?? []
+    if (!deleted.length) return
     setSeenSessions((current) => {
-      const next = Object.fromEntries(Object.entries(current).filter(([id]) => sessions.some((session) => session.id === id)))
+      const next = Object.fromEntries(Object.entries(current).filter(([id]) => !deleted.includes(id)))
       if (Object.keys(next).length !== Object.keys(current).length) return next
       return current
+    })
+  }, [snapshot?.deletedSessionIds])
+
+  // A conversation that comes back (Undo, or an archive reverted elsewhere) was already
+  // read: restoring it must not pop an unread dot for a timestamp it only gained while away.
+  const knownSessionIds = useRef(new Set<string>())
+  useEffect(() => {
+    if (!seenLoaded.current) return
+    const previousIds = knownSessionIds.current
+    const appeared = sessions.filter((session) => !previousIds.has(session.id))
+    knownSessionIds.current = new Set(sessions.map((session) => session.id))
+    if (!appeared.length) return
+    setSeenSessions((current) => {
+      let next = current
+      for (const session of appeared) {
+        if (current[session.id] === undefined) continue
+        next = markSeen(next, session.id, session.updatedAt ?? new Date().toISOString())
+      }
+      return next
     })
   }, [sessions])
 
@@ -666,6 +703,17 @@ export function App() {
   const companionRuntime = runtimes.find((runtime) => runtime.id === companionAgent?.runtimeId) ?? runtimes.find((runtime) => runtime.id === companionSession?.runtimeId) ?? selectedRuntime
   const companionStatus = deriveCompanionStatus({ connected: connection === 'connected', runtime: companionRuntime, session: companionSession, permissionPending: !!companionPermission, now })
   const previousCueMood = useRef<string | null>(null)
+  // The skills the composer offers: the pool's switch-on set for whoever the
+  // composer is talking to (the selected bot, or the companion's bot).
+  useEffect(() => {
+    const agentId = companion ? companionAgent?.id : activeSelectedAgent?.id
+    if (!agentId || connection !== 'connected') { setSlashSkills([]); return }
+    let active = true
+    void rpc<{ skills?: Array<{ name: string; description: string }> }>('skills.forAgent', { agentId })
+      .then((result) => { if (active) setSlashSkills(result.skills ?? []) })
+      .catch(() => { if (active) setSlashSkills([]) })
+    return () => { active = false }
+  }, [companion, companionAgent?.id, activeSelectedAgent?.id, connection])
   const previousPermissionCue = useRef<string | null>(null)
   // The bot's project name; a folder name only for a real project folder, never Bitbots' own per-bot workspace.
   const currentProjectName = conversationPlaceName(selectedSession, agents, projects)
@@ -869,8 +917,11 @@ export function App() {
     if (!activePermission?.sessionId) return
     if (focusedPermission.current === activePermission.id) return
     const target = sessions.find((item) => item.id === activePermission.sessionId)
-    if (!target) return
-    const owner = target.agentId ? (snapshot?.agents ?? []).find((agent) => agent.id === target.agentId && !agent.archived) : undefined
+    if (!target || target.archived) return
+    const ownerAgent = target.agentId ? (snapshot?.agents ?? []).find((agent) => agent.id === target.agentId) : undefined
+    // An archived blob's conversation never pulls focus; its approval stays in the sidebar.
+    if (target.agentId && ownerAgent?.archived) return
+    const owner = ownerAgent && !ownerAgent.archived ? ownerAgent : undefined
     // Focus has arrived once the approval's conversation is the one on screen.
     if (target.id === selectedSessionId && target.id === activeSessionId && (!owner || owner.id === selectedAgentId)) { focusedPermission.current = activePermission.id; return }
     if (owner && owner.id !== selectedAgentId) setSelectedAgentId(owner.id)
@@ -1095,32 +1146,42 @@ export function App() {
     let unlisten: (() => void) | undefined
     let cancelled = false
     void listenForActiveSession((sessionId) => {
-      const session = sessionId ? snapshotRef.current?.sessions?.find((item) => item.id === sessionId) : undefined
+      if (!sessionId) { setActiveSessionId(null); setSideSessionId(null); setSelectedSessionId(null); return }
+      const session = snapshotRef.current?.sessions?.find((item) => item.id === sessionId)
+      // A deleted or archived conversation must never be adopted: the id can arrive
+      // from the companion or the tray after this window has already moved on, and
+      // selecting it starts the two windows bouncing between each other.
+      if (!session || session.archived) return
       // Side conversations are a main-window view. The companion ignores them
       // entirely: if it adopted one, it would announce it back as active after
       // the main window closed it, and the side chat would reopen at once.
       if (companion && isSideSession(session)) return
-      setActiveSessionId(sessionId)
-      if (!sessionId) { setSideSessionId(null); setSelectedSessionId(null); return }
-      if (!session) { setSelectedSessionId(sessionId); return }
       // A side conversation opens over the current blob; it never switches the
       // selection to the teammate who owns it, so "Close chat" can return.
       if (isSideSession(session)) {
+        setActiveSessionId(sessionId)
         setSideSessionId((current) => {
           if (current !== session.id && !current) sideReturn.current = { agentId: selectedAgentIdRef.current, sessionId: null }
           return session.id
         })
         return
       }
-      // Any other conversation becoming active (from the companion or the tray) closes a side view.
-      setSideSessionId(null)
-      sideReturn.current = null
       if (session.agentId) {
         const owner = (snapshotRef.current?.agents ?? []).find((agent) => agent.id === session.agentId && !agent.archived)
-        if (owner) { setSelectedAgentId(owner.id); setSelectedRuntimeId(owner.runtimeId) }
+        // The blob was archived while its conversation id was in flight: ignore it.
+        if (!owner) return
+        setActiveSessionId(sessionId)
+        // Any other conversation becoming active (from the companion or the tray) closes a side view.
+        setSideSessionId(null)
+        sideReturn.current = null
+        setSelectedAgentId(owner.id)
+        setSelectedRuntimeId(owner.runtimeId)
         setSelectedSessionId(session.id)
         return
       }
+      setActiveSessionId(sessionId)
+      setSideSessionId(null)
+      sideReturn.current = null
       setSelectedSessionId(session.id)
       const current = (snapshotRef.current?.agents ?? []).find((agent) => agent.id === selectedAgentIdRef.current)
       if (current && current.runtimeId !== session.runtimeId) {
@@ -1134,13 +1195,16 @@ export function App() {
   useEffect(() => {
     if (!activeSelectedAgent && selectedSession && selectedSession.runtimeId !== selectedRuntimeId) setSelectedRuntimeId(selectedSession.runtimeId)
     if (selectedSession && selectedSession.id !== activeSessionId) {
+      const owner = selectedSession.agentId ? agents.find((agent) => agent.id === selectedSession.agentId) : undefined
+      // Never announce a conversation that no longer exists or whose blob was archived.
+      if (selectedSession.archived || (selectedSession.agentId && (!owner || owner.archived))) return
       setActiveSessionId(selectedSession.id)
       void setActiveSession(selectedSession.id)
     } else if (!selectedSession && selectedSessionId === null && activeSessionId !== null) {
       setActiveSessionId(null)
       void setActiveSession(null)
     }
-  }, [activeSelectedAgent, selectedSession, selectedRuntimeId, activeSessionId, selectedSessionId])
+  }, [activeSelectedAgent, selectedSession, selectedRuntimeId, activeSessionId, selectedSessionId, agents])
 
   // A bot with no conversation opens straight into one (its project is already
   // known), so the composer is there to type in. Nothing is said in it until
@@ -1149,11 +1213,16 @@ export function App() {
   useEffect(() => {
     if (companion || connection !== 'connected' || !activeSelectedAgent || selectedSession || sideSessionId || !runtimeUsable(selectedRuntime)) return
     if (autoCreatedFor.current.has(activeSelectedAgent.id)) return
+    // A blob whose conversation was just deleted or archived is not given a fresh one
+    // until the person selects it again.
+    if (suppressedAutoCreate.current.has(activeSelectedAgent.id)) return
+    // The selection is mid-reconcile (its conversation just left the snapshot): wait.
+    if (selectedSessionId && !sessions.some((session) => session.id === selectedSessionId)) return
     const agent = activeSelectedAgent
     autoCreatedFor.current.add(agent.id)
     // The same get-or-create a click on the bot uses; try again later if it could not run yet.
     void ensureConversation(agent).then((result) => { if (!result) autoCreatedFor.current.delete(agent.id) })
-  }, [companion, connection, activeSelectedAgent, selectedSession, sideSessionId, selectedRuntime])
+  }, [companion, connection, activeSelectedAgent, selectedSession, sideSessionId, selectedRuntime, selectedSessionId])
 
   // A conversation left without a single message is not kept: leaving it
   // removes it, so the list only holds conversations that happened.
@@ -1169,7 +1238,10 @@ export function App() {
     const left = sessionsRef.current.find((session) => session.id === previous)
     if (!left || !isEmptyConversation(left) || pendingSendsRef.current.some((item) => item.sessionId === previous)) return
     if ((snapshot?.queues?.[previous]?.items ?? []).length > 0) return
-    autoCreatedFor.current.delete(String(left.agentId ?? ''))
+    const ownerId = String(left.agentId ?? '')
+    autoCreatedFor.current.delete(ownerId)
+    // The empty conversation is gone for good: do not immediately auto-open another one.
+    if (ownerId) suppressedAutoCreate.current.add(ownerId)
     void rpc('session.delete.schedule', { sessionId: previous }).then(() => {
       setSnapshot((current) => current ? { ...current, sessions: (current.sessions ?? []).filter((session) => session.id !== previous) } : current)
     }).catch(() => undefined)
@@ -1185,10 +1257,21 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [warmSessionId])
 
+  // When the selected conversation disappears (deleted, or archived elsewhere),
+  // choose the next one exactly once: the same blob's next conversation, else the
+  // next visible blob's. Every other effect must leave that choice alone.
   useEffect(() => {
-    if (!snapshot || !selectedSessionId || sessions.some((session) => session.id === selectedSessionId)) return
-    setSelectedSessionId(selectedSession?.id ?? null)
-  }, [snapshot, sessions, selectedSessionId, selectedSession?.id])
+    if (!snapshot || !selectionBooted.current || !selectedSessionId) return
+    if (sessions.some((session) => session.id === selectedSessionId)) return
+    const ownerId = sessionOwnersRef.current.get(selectedSessionId) ?? null
+    if (ownerId) suppressedAutoCreate.current.add(ownerId)
+    const next = nextSelectionAfterRemoval(sessions, agents, ownerId)
+    if (!next) { setSelectedSessionId(null); return }
+    const owner = agents.find((agent) => agent.id === next.agentId)
+    if (owner) setSelectedRuntimeId(owner.runtimeId)
+    setSelectedAgentId(next.agentId)
+    setSelectedSessionId(next.sessionId)
+  }, [snapshot, sessions, agents, selectedSessionId])
 
   useEffect(() => {
     if (!snapshot || selectionBooted.current) return
@@ -1505,6 +1588,8 @@ export function App() {
     try {
       const result = await rpc<{ session?: Session }>('agent.conversation.create', { agentId: agent.id })
       if (!result.session?.id) return
+      suppressedAutoCreate.current.delete(agent.id)
+      autoCreatedFor.current.delete(agent.id)
       // A new conversation has nothing in it yet; saying so lets the empty rules apply at once.
       upsertSession({ ...result.session, messages: result.session.messages ?? [] })
       setSideSessionId(null)
@@ -1519,6 +1604,7 @@ export function App() {
     try { await rpc('session.rename', { sessionId: session.id, title }); await refresh() } catch (reason) { setError(messageOf(reason)) }
   }
   const selectConversation = (session: Session) => {
+    if (session.agentId) { suppressedAutoCreate.current.delete(session.agentId); autoCreatedFor.current.delete(session.agentId) }
     setSideSessionId(null)
     setSelectedSessionId(session.id)
     void setActiveSession(session.id)
@@ -1529,7 +1615,7 @@ export function App() {
       const result = await rpc<{ session?: Session }>('session.archive', { sessionId: session.id, archived: true })
       const saved = result.session
       setSnapshot((current) => current ? { ...current, sessions: (current.sessions ?? []).map((item) => item.id === session.id ? { ...item, ...(saved ?? {}), archived: true } : item) } : current)
-      if (selectedSessionId === session.id) setSelectedSessionId(null)
+      // The reconcile effect moves the selection once, from the now-archived id.
     } catch (reason) { setError(messageOf(reason)) }
   }
 
@@ -1574,6 +1660,33 @@ export function App() {
     setComposer(next)
     setMention(null)
     requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = mention.start + agent.name.length + 2; node.focus(); node.setSelectionRange(position, position) })
+  }
+  /** Runs an action chosen from the `/` menu. These never send a message. */
+  const runSlashAction = (action: SlashItem['action']) => {
+    if (!action) return
+    if (action === 'plan') void setPlanMode(!planOn)
+    else if (action === 'new') newSession()
+    else if (action === 'model' || action === 'effort') requestExecutionPicker(action)
+    else if (action === 'rename' && selectedSession) setTextPrompt({ title: 'Rename conversation', label: 'Conversation name', value: selectedSession.title?.trim() ?? '', confirmLabel: 'Rename', onSubmit: (title: string) => renameConversation(selectedSession, title) })
+    else if (action === 'export' && selectedSession) void exportConversation(false)
+  }
+  /** Picks a `/` menu row: actions run at once; a skill or Manager command attaches to the message. */
+  const pickSlash = (item: SlashItem) => {
+    const caret = composerRef.current?.selectionStart ?? composer.length
+    const token = slash
+    const withoutToken = token ? `${composer.slice(0, token.start)}${composer.slice(Math.min(caret, token.start + 1 + token.query.length))}` : composer
+    setSlash(null)
+    if (item.kind === 'action') {
+      setComposer(withoutToken)
+      // `/help` keeps the menu open as a list of every command.
+      if (item.action === 'help') { setSlash({ start: withoutToken.length, query: '', index: 0 }); return }
+      runSlashAction(item.action)
+      requestAnimationFrame(() => composerRef.current?.focus())
+      return
+    }
+    setSlashCommand({ kind: item.kind, name: item.name })
+    setComposer(withoutToken)
+    requestAnimationFrame(() => composerRef.current?.focus())
   }
   const renderText = (text: string) => <SafeMessageText text={text} />
   /** Team messages render as chips and cards instead of chat bubbles. */
@@ -1685,23 +1798,30 @@ export function App() {
   const sendPrompt = async (dueAt?: string) => {
     const text = composer.trim()
     const ready = attachments.filter((item) => item.status === 'ready' && item.path)
-    if ((!text && ready.length === 0) || attachments.some((item) => item.status === 'staging') || !selectedSession || !runtimeUsable(selectedRuntime)) return
+    // A picked or hand-typed leading `/command` travels as a `command` with the
+    // message stored exactly as typed.
+    const sentCommand = slashCommand ?? leadingCommand(text, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' })
+    const outbound = sentCommand && slashCommand ? commandMessage(sentCommand, text) : text
+    if ((!outbound && ready.length === 0) || attachments.some((item) => item.status === 'staging') || !selectedSession || !runtimeUsable(selectedRuntime)) return
     const sessionId = selectedSession.id
     // A live turn, a message still on its way, or a chosen time puts it in the daemon's durable queue.
     const queueIt = !!dueAt || ['working', 'starting', 'waiting_permission'].includes(selectedSession.state ?? '') || pendingSends.some((item) => item.sessionId === sessionId)
     const sentReplyTarget = replyTarget
     const sentRefs = conversationRefs
+    const sentChip = slashCommand
     const sentAttachmentIds = new Set(ready.map((item) => item.id))
-    const refs = sentRefs.filter((ref) => text.includes(`#${ref.title}`)).map((ref) => ref.id)
+    const refs = sentRefs.filter((ref) => outbound.includes(`#${ref.title}`)).map((ref) => ref.id)
     const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     setComposer('')
+    setSlash(null)
+    setSlashCommand(null)
     setConversationRefs([])
     setReplyTarget(null)
     setAttachments((current) => current.filter((item) => !sentAttachmentIds.has(item.id)))
-    if (!queueIt) setPendingSends((current) => [...current, { id: pendingId, sessionId, text, attachments: ready.length, at: Date.now() }])
+    if (!queueIt) setPendingSends((current) => [...current, { id: pendingId, sessionId, text: outbound, attachments: ready.length, at: Date.now() }])
     setError(null)
     try {
-      await rpc(queueIt ? 'session.queue.add' : 'session.prompt', { sessionId, text, ...(dueAt ? { dueAt } : {}), ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}) })
+      await rpc(queueIt ? 'session.queue.add' : 'session.prompt', { sessionId, text: outbound, ...(sentCommand ? { command: { kind: sentCommand.kind, name: sentCommand.name } } : {}), ...(dueAt ? { dueAt } : {}), ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}) })
       for (const item of ready) URL.revokeObjectURL(item.previewUrl)
       if (queueIt) void loadQueue(sessionId)
       await refresh()
@@ -1710,6 +1830,7 @@ export function App() {
       // Put the draft back where it was, unless something new has been typed since.
       if (!composerRef.current?.value.trim()) {
         setComposer(text)
+        setSlashCommand(sentChip)
         setConversationRefs(sentRefs)
         setReplyTarget(sentReplyTarget)
         setAttachments((current) => [...ready, ...current.filter((item) => !sentAttachmentIds.has(item.id))])
@@ -1742,7 +1863,7 @@ export function App() {
       })
     }
   }
-  useEffect(() => { clearAttachments(); replyTargetRef.current = null; setReplyTarget(null); messageMenuAnchor.current = null; setMessageMenu(null) }, [selectedSession?.id])
+  useEffect(() => { clearAttachments(); replyTargetRef.current = null; setReplyTarget(null); messageMenuAnchor.current = null; setMessageMenu(null); setSlash(null); setSlashCommand(null) }, [selectedSession?.id])
 
   const cancelTurn = async (session: Session | null = selectedSession) => {
     if (!session) return
@@ -1906,6 +2027,9 @@ export function App() {
 
   const selectAgent = (agent: Agent) => {
     const main = mainSessionFor(sessions, agent.id)
+    // A deliberate choice clears the "do not auto-open" mark left by a delete or archive.
+    suppressedAutoCreate.current.delete(agent.id)
+    autoCreatedFor.current.delete(agent.id)
     setSideSessionId(null)
     setAnalyticsOpen(false)
     setSchedulesOpen(false)
@@ -2045,7 +2169,8 @@ export function App() {
 
   const scheduleConversationDelete = async (session: Session) => {
     await rpc<{ deadline: number }>('session.delete.schedule', { sessionId: session.id })
-    setSelectedSessionId((current) => current === session.id ? null : current)
+    // The selection is not moved here: once the conversation leaves the snapshot the
+    // reconcile effect chooses the next one once, deterministically.
     await refresh()
   }
   const cancelConversationDelete = async (session: Session) => { await rpc('session.delete.cancel', { sessionId: session.id }); await refresh() }
@@ -2089,6 +2214,8 @@ export function App() {
     if (!target) return
     const owner = activeAgents(agents).find((item) => item.id === target.agentId)
     if (!owner) return
+    suppressedAutoCreate.current.delete(owner.id)
+    autoCreatedFor.current.delete(owner.id)
     if (owner.id !== activeSelectedAgent?.id) {
       setSelectedAgentId(owner.id)
       setSelectedRuntimeId(owner.runtimeId)
@@ -2101,11 +2228,11 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion onToggleReaction={(sessionId, messageId, emoji) => toggleMessageReaction(sessionId, messageId, emoji)} permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={(page) => void showMainSettings(companionSession?.id, page)} onSendPrompt={(sessionId, text) => {
+      <Companion onToggleReaction={(sessionId, messageId, emoji) => toggleMessageReaction(sessionId, messageId, emoji)} permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={(page) => void showMainSettings(companionSession?.id, page)} onSendPrompt={(sessionId, text, command) => {
         // A live turn queues the message in the daemon instead of failing with a conflict.
         const live = ['working', 'starting', 'waiting_permission'].includes(sessions.find((item) => item.id === sessionId)?.state ?? '')
-        return rpc(live ? 'session.queue.add' : 'session.prompt', { sessionId, text }).then(() => { if (live) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
-      }} queuedCount={companionSession ? snapshot?.queues?.[companionSession.id]?.items.length ?? 0 : 0} onLoadQueue={(sessionId) => void loadQueue(sessionId)} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} onSelectConversation={(chosen) => { setSideSessionId(null); setSelectedAgentId(String(chosen.agentId ?? '')); setSelectedSessionId(chosen.id); void setActiveSession(chosen.id) }} />
+        return rpc(live ? 'session.queue.add' : 'session.prompt', { sessionId, text, ...(command ? { command: { kind: command.kind, name: command.name } } : {}) }).then(() => { if (live) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
+      }} queuedCount={companionSession ? snapshot?.queues?.[companionSession.id]?.items.length ?? 0 : 0} onLoadQueue={(sessionId) => void loadQueue(sessionId)} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} onSelectConversation={(chosen) => { setSideSessionId(null); setSelectedAgentId(String(chosen.agentId ?? '')); setSelectedSessionId(chosen.id); void setActiveSession(chosen.id) }} slashSkills={slashSkills} />
     </>
   }
 
@@ -2170,6 +2297,7 @@ export function App() {
   const mentionCandidates = mention ? mentionMatches(agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden), mention.query) : []
   const blobSideSessions = activeSelectedAgent ? sideSessionsFor(sessions, activeSelectedAgent.id) : []
   const hashCandidates = hashRef ? conversationMatches(blobSideSessions, agents, hashRef.query) : []
+  const slashCandidates = slash ? slashItems(slash.query, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' }) : []
   const visibleSessions = sessions.filter((session) => session.archived !== true)
   const quickSwitcherItems: QuickSwitcherItem[] = [
     ...activeAgents(agents).map((agent) => ({ id: agent.id, kind: 'blob' as const, title: agent.name, subtitle: [agent.role?.trim(), agent.description].filter(Boolean).join(' · '), searchText: `${agent.name} ${agent.role ?? ''} ${agent.description}`, color: agentColorHex(agent.color) })),
@@ -2348,6 +2476,7 @@ export function App() {
                 : hasActiveBlobs ? <strong className="chat-title-text">{agentName}</strong> : null}
           </div>
           <div className="header-actions" hidden={!hasActiveBlobs && !selectedSession}>
+            <UpdateBadge />
             <ApprovalPill mode={headerMode} />
             {!sideSession && <button className="icon-button" title={conversationEmpty ? 'This conversation is already fresh' : 'Start a fresh conversation'} aria-label="New conversation" disabled={!canStartSession || conversationEmpty} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>}
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
@@ -2419,9 +2548,17 @@ export function App() {
             <div data-tour="composer" className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
               {replyTarget && <ReplyContextStrip target={replyTarget} onCancel={() => { replyTargetRef.current = null; setReplyTarget(null) }} />}
               <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
+              {slashCommand && <SlashCommandChip command={slashCommand} onRemove={() => setSlashCommand(null)} />}
+              {slash && slashCandidates.length > 0 && <SlashMenu items={slashCandidates} activeIndex={slash.index} onPick={pickSlash} onHover={(index) => setSlash((current) => current ? { ...current, index } : current)} />}
               {hashRef && !mention && <ConversationPicker sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent?.id} query={hashRef.query} activeIndex={hashRef.index} onPick={pickConversation} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
               {mention && <MentionPicker agents={agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden)} query={mention.query} activeIndex={mention.index} onPick={pickMention} onHover={(index) => setMention((current) => current ? { ...current, index } : current)} />}
-              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => { setComposer(event.target.value); const caret = event.target.selectionStart ?? event.target.value.length; const found = mentionQuery(event.target.value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = found ? null : hashQuery(event.target.value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={(event) => { if (!imagesSupported) return; const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/')); if (!files.length) return; event.preventDefault(); addAttachments(files) }} onKeyDown={(event) => {
+              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={(event) => { if (!imagesSupported) return; const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/')); if (!files.length) return; event.preventDefault(); addAttachments(files) }} onKeyDown={(event) => {
+                if (event.key === 'Backspace' && slashCommand && !composer) { event.preventDefault(); setSlashCommand(null); return }
+                if (slash && slashCandidates.length) {
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSlash({ ...slash, index: (slash.index + (event.key === 'ArrowDown' ? 1 : slashCandidates.length - 1)) % slashCandidates.length }); return }
+                  if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickSlash(slashCandidates[Math.min(slash.index, slashCandidates.length - 1)]); return }
+                  if (event.key === 'Escape') { event.preventDefault(); setSlash(null); return }
+                }
                 if (mention && mentionCandidates.length) {
                   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setMention({ ...mention, index: (mention.index + (event.key === 'ArrowDown' ? 1 : mentionCandidates.length - 1)) % mentionCandidates.length }); return }
                   if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickMention(mentionCandidates[Math.min(mention.index, mentionCandidates.length - 1)]); return }
@@ -2712,6 +2849,30 @@ function carryQueues(next: Snapshot, previous: Snapshot | null | undefined): Sna
   return { ...next, queues: { ...previous.queues, ...next.queues } }
 }
 
+/**
+ * The one selection to make after a conversation disappears: the same blob's
+ * next conversation, else the next visible blob's, else the first visible blob.
+ * A blob with no conversation at all is still returned, with a null session.
+ */
+function nextSelectionAfterRemoval(sessions: readonly Session[], agents: readonly Agent[], ownerId: string | null): { agentId: string; sessionId: string | null } | null {
+  const active = activeAgents(agents)
+  if (!active.length) return null
+  const owner = ownerId ? active.find((agent) => agent.id === ownerId) ?? null : null
+  if (owner) {
+    const same = mainSessionFor(sessions, owner.id)
+    if (same) return { agentId: owner.id, sessionId: same.id }
+  }
+  const start = owner ? active.findIndex((agent) => agent.id === owner.id) : -1
+  const ordered = start >= 0 ? [...active.slice(start + 1), ...active.slice(0, start + 1)] : active
+  for (const agent of ordered) {
+    if (owner && agent.id === owner.id) continue
+    const session = mainSessionFor(sessions, agent.id)
+    if (session) return { agentId: agent.id, sessionId: session.id }
+  }
+  const fallback = owner ?? ordered[0]
+  return fallback ? { agentId: fallback.id, sessionId: null } : null
+}
+
 function preserveDeletedSessions(snapshot: Snapshot, deletedIds: string[]): Snapshot {
   const deletedSessionIds = [...new Set([...(snapshot.deletedSessionIds ?? []), ...deletedIds])]
   if (!deletedSessionIds.length) return snapshot
@@ -2825,7 +2986,7 @@ function recordFrom(value: unknown): Record<string, unknown> { return value && t
 const COMPACT_HOLD_TO_DRAG_MS = 220
 const COMPACT_DRAG_SLOP_PX = 4
 
-function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void }) {
+function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction, slashSkills = [] }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string, command?: SlashCommand | null) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void; slashSkills?: SlashSkill[] }) {
   const sessionModelLock = session?.modelLock
   const nouns = useEntityNoun({ plural: true })
   const platform = usePlatform()
@@ -2842,6 +3003,8 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const [draft, setDraft] = useState('')
   const draftRef = useRef<HTMLTextAreaElement>(null)
   useAutosizeTextarea(draftRef, draft, 132)
+  const [slash, setSlash] = useState<{ start: number; query: string; index: number } | null>(null)
+  const [slashCommand, setSlashCommand] = useState<SlashCommand | null>(null)
   const [dictationPartial, setDictationPartial] = useState('')
   const [sending, setSending] = useState(false)
   const [confused, setConfused] = useState(false)
@@ -3217,19 +3380,40 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     if (!session || sending || !connected || !runtimeUsable(runtime) || session.state === 'waiting_permission') return
     const requested = draft.trim() || (droppedFile ? 'Please inspect this local file.' : '')
     if (!requested) return
-    const prompt = droppedFile && fileInfo ? `${requested}\n\nLocal file reference selected by the user: ${fileInfo.fileName} (${fileInfo.path}, ${formatBytes(fileInfo.sizeBytes)}). File contents were not read by Bitbots. The provider may only access this path if its own process permissions and working directory allow it.` : requested
+    const sentCommand = slashCommand ?? leadingCommand(requested, { skills: slashSkills, isManager: agent?.systemRole === 'manager' })
+    const body = sentCommand && slashCommand ? commandMessage(sentCommand, requested) : requested
+    const prompt = droppedFile && fileInfo ? `${body}\n\nLocal file reference selected by the user: ${fileInfo.fileName} (${fileInfo.path}, ${formatBytes(fileInfo.sizeBytes)}). File contents were not read by Bitbots. The provider may only access this path if its own process permissions and working directory allow it.` : body
     // The draft clears at once; the composer stays usable while the daemon confirms.
     const sentDraft = draft
     setSending(true)
     setDropError(null)
     setDraft('')
+    setSlash(null)
+    setSlashCommand(null)
     playCompanionCue('send')
-    try { await onSendPrompt(session.id, prompt); setDroppedFile(null); setFileInfo(null); setFileError(null) }
+    try { await onSendPrompt(session.id, prompt, sentCommand); setDroppedFile(null); setFileInfo(null); setFileError(null) }
     catch (reason) {
-      if (!draftRef.current?.value.trim()) setDraft(sentDraft)
+      if (!draftRef.current?.value.trim()) { setDraft(sentDraft); setSlashCommand(slashCommand) }
       if (fileInfo) setFileError(messageOf(reason)); else setDropError(messageOf(reason))
     }
     finally { setSending(false) }
+  }
+  const companionSlashCandidates = slash ? slashItems(slash.query, { skills: slashSkills, isManager: agent?.systemRole === 'manager', actions: COMPANION_SLASH_ACTIONS }) : []
+  const pickCompanionSlash = (item: SlashItem) => {
+    const caret = draftRef.current?.selectionStart ?? draft.length
+    const token = slash
+    const withoutToken = token ? `${draft.slice(0, token.start)}${draft.slice(Math.min(caret, token.start + 1 + token.query.length))}` : draft
+    setSlash(null)
+    if (item.kind === 'action') {
+      setDraft(withoutToken)
+      if (item.action === 'new') onNewSession(null)
+      else if (item.action === 'model' || item.action === 'effort') requestExecutionPicker(item.action)
+      requestAnimationFrame(() => draftRef.current?.focus())
+      return
+    }
+    setSlashCommand({ kind: item.kind, name: item.name })
+    setDraft(withoutToken)
+    requestAnimationFrame(() => draftRef.current?.focus())
   }
   useEffect(() => { if (session?.id) onLoadQueue?.(session.id) }, [session?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const cancelCompanionTurn = () => {
@@ -3536,7 +3720,17 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
               {usageTip && onDismissUsageTip && <UsageTip tip={usageTip} onDismiss={() => onDismissUsageTip(usageTip)} />}
               {queuedCount > 0 && <p className="companion-queue-note" role="status">{queuedCount} queued · sends when this turn ends</p>}
               <form className="chat-bar companion-chat-composer" data-companion-no-drag="" onSubmit={(event) => void sendCompanionPrompt(event)}>
-                <textarea ref={draftRef} className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} disabled={!connected || !runtimeUsable(runtime) || !session || session.state === 'waiting_permission'} rows={1} />
+                {slashCommand && <SlashCommandChip command={slashCommand} onRemove={() => setSlashCommand(null)} />}
+                {slash && companionSlashCandidates.length > 0 && <SlashMenu items={companionSlashCandidates} activeIndex={slash.index} onPick={pickCompanionSlash} onHover={(index) => setSlash((current) => current ? { ...current, index } : current)} />}
+                <textarea ref={draftRef} className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => { const value = event.target.value; setDraft(value); const caret = event.target.selectionStart ?? value.length; const found = slashQuery(value, caret); setSlash(found ? { ...found, index: 0 } : null) }} onKeyDown={(event) => {
+                  if (event.key === 'Backspace' && slashCommand && !draft) { event.preventDefault(); setSlashCommand(null); return }
+                  if (slash && companionSlashCandidates.length) {
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSlash({ ...slash, index: (slash.index + (event.key === 'ArrowDown' ? 1 : companionSlashCandidates.length - 1)) % companionSlashCandidates.length }); return }
+                    if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickCompanionSlash(companionSlashCandidates[Math.min(slash.index, companionSlashCandidates.length - 1)]); return }
+                    if (event.key === 'Escape') { event.preventDefault(); setSlash(null); return }
+                  }
+                  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() }
+                }} disabled={!connected || !runtimeUsable(runtime) || !session || session.state === 'waiting_permission'} rows={1} />
                 <div className="companion-composer-bar">
                 <div className="companion-composer-start">
                   <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !runtimeUsable(runtime) || !session || preparingFile}><Paperclip size={13} /></button>

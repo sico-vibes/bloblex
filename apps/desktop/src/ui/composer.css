@@ -257,3 +257,23 @@
 .send-later-custom input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .send-later-problem { margin: 0; color: var(--danger-ink); font-size: var(--fs-xs); }
 @media (prefers-reduced-motion: reduce) { .queue-actions { transition: none; } }
+
+/* Slash commands (FIX37 G4): a menu above the composer, never over its text. */
+.slash-menu { position: absolute; z-index: 40; left: 12px; bottom: calc(100% + 8px); width: min(360px, calc(100% - 24px)); max-height: min(360px, 52vh); overflow-y: auto; padding: 5px; display: grid; gap: 1px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-overlay); box-shadow: var(--shadow-pop); scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; animation: composer-menu-in 120ms ease-out both; }
+.slash-menu-group { padding: 6px 9px 3px; color: var(--text-3); font-size: var(--fs-2xs); font-weight: 500; }
+.slash-option { min-height: 38px; padding: 5px 8px; display: flex; align-items: center; gap: 9px; color: var(--text-1); border: 0; border-radius: 8px; background: transparent; font-size: var(--fs-sm); text-align: left; cursor: pointer; }
+.slash-option.active, .slash-option:hover { background: var(--surface-hover); }
+.slash-option:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.slash-option-icon { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border-radius: 7px; background: var(--surface-selected); }
+.slash-option-text { min-width: 0; flex: 1; display: grid; gap: 1px; }
+.slash-option-text strong { color: var(--text-1); font-weight: 500; }
+.slash-option-text small { overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.slash-option-kbd { flex: 0 0 auto; padding: 1px 6px; color: var(--text-3); border: 1px solid var(--line-strong); border-radius: 5px; font: 500 var(--fs-2xs)/1.5 var(--font-mono); }
+
+.slash-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.slash-chip { max-width: 100%; padding: 3px 5px 3px 8px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-selected); font-size: var(--fs-xs); }
+.slash-chip-tag { padding: 1px 5px; color: var(--text-2); border-radius: var(--radius-pill); background: var(--surface-selected-strong); font-size: var(--fs-2xs); font-weight: 500; }
+.slash-chip strong { min-width: 0; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.slash-chip-remove { width: 16px; height: 16px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.slash-chip-remove:hover { color: var(--text-1); background: var(--surface-hover); }
+@media (prefers-reduced-motion: reduce) { .slash-menu { animation: none; } }

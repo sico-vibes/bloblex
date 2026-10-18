@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { chooseOption, selectOptions, selectTrigger } from './testSelect'
+import { chooseOption, selectOptions, selectTrigger, viewText } from './testSelect'
 import { act, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -175,7 +175,7 @@ describe('settings modal', () => {
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('settings.set', { key: 'permissions.default_mode', value: 'auto' })
     expect(rpc.mock.calls.some((call) => call[1]?.value === 'bypass')).toBe(false)
-    expect(view.host.textContent).toContain('Bypass can only be turned on for a single bot')
+    expect(viewText(view.host)).toContain('Bypass can only be turned on for a single bot')
     const runtimeHead = view.host.querySelector<HTMLButtonElement>('.runtime-entry-head')!
     expect(runtimeHead.getAttribute('aria-expanded')).toBe('false')
     expect(runtimeHead.textContent).toContain('Codex')

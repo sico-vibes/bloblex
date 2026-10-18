@@ -42,3 +42,28 @@ export async function chooseOptionByLabel(root: ParentNode, label: string, text:
   if (!option) throw new Error(`Dropdown ${label} has no option labelled ${text}`)
   await act(async () => { option.click() })
 }
+
+/**
+ * The text of the "?" explanation inside `scope`. Tooltip bubbles render in a
+ * portal on document.body, so the trigger's `aria-describedby` is what links
+ * back to the bubble's text.
+ */
+export function helpTipBubble(scope: ParentNode | null | undefined) {
+  const trigger = scope?.querySelector('.help-tip-trigger') ?? scope?.querySelector('[aria-describedby]')
+  const id = trigger?.getAttribute('aria-describedby')
+  return id ? document.getElementById(id) : null
+}
+
+/** The text of the "?" explanation inside `scope` (its bubble portals to document.body). */
+export function helpTipText(scope: ParentNode | null | undefined) {
+  return helpTipBubble(scope)?.textContent ?? null
+}
+
+/**
+ * A mounted view's text plus its tooltip bubbles, which portal to
+ * document.body and so are not inside the host element.
+ */
+export function viewText(root: ParentNode) {
+  const bubbles = [...document.body.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent ?? '')
+  return [root.textContent ?? '', ...bubbles].join(' ')
+}

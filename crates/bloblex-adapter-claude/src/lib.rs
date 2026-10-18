@@ -942,7 +942,9 @@ impl ClaudeAdapter {
                 _ => {
                     let _ = conn.process_tree.terminate();
                     let _ = conn.child.lock().await.kill().await;
-                    return Err(AdapterError::Process("Claude resume did not initialize".into()));
+                    return Err(AdapterError::ResumeFailed(
+                        "Claude resume did not initialize".into(),
+                    ));
                 }
             }
         }

@@ -1,0 +1,36 @@
+/* Tooltip bubbles rendered in a portal on document.body.
+   A panel or dialog that hides its own overflow (`settings-sheet`, a scroller)
+   can no longer cut a tooltip off. Position comes from the trigger's rect via
+   `tooltipPosition.ts`; these rules only reset the anchored styles, so the
+   look of each bubble (surface, border, shadow) is unchanged. */
+
+.tip-bubble.tip-portal,
+.help-tip-bubble.tip-portal {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: auto;
+  bottom: auto;
+  z-index: 10000;
+  opacity: 0;
+  visibility: hidden;
+  transform: none;
+  transition: opacity 120ms ease, visibility 0s linear 120ms;
+}
+
+/* Never wider than the window (the companion window is small). The Tip bubble
+   keeps its 260 px cap; the HelpTip bubble keeps its own width. */
+.tip-bubble.tip-portal { max-width: min(260px, calc(100vw - 16px)); }
+.help-tip-bubble.tip-portal { max-width: calc(100vw - 16px); }
+
+.tip-bubble.tip-portal[data-open="true"],
+.help-tip-bubble.tip-portal[data-open="true"] {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tip-bubble.tip-portal,
+  .help-tip-bubble.tip-portal { transition: none; }
+}

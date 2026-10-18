@@ -2526,6 +2526,7 @@ pub fn run() {
             speech::dictation_state,
             speech::dictation_cloud_warm,
             updates::updates_get_state,
+            updates::updates_phase,
             updates::updates_set_preferences,
             updates::updates_check,
             updates::updates_install,

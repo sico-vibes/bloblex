@@ -7,8 +7,8 @@ import type { DaemonEvent, JsonRecord, Snapshot } from './types'
 import { normalizeAnalytics } from './ui/analyticsFormat'
 import { settingsPageFromEvent, type SettingsPageName } from './ui/settingsIndex'
 import {
-  knownUpdateError, parseUpdateCheck, parseUpdateInfo, parseUpdatePreferences, parseUpdateProgress, parseUpdatesState, safeUpdateFailureMessage, updateFailureCode,
-  type UpdateCheckResult, type UpdateInfo, type UpdatePreferences, type UpdateProgress, type UpdatesState,
+  knownUpdateError, parseUpdateCheck, parseUpdateInfo, parseUpdatePhaseState, parseUpdatePreferences, parseUpdateProgress, parseUpdatesState, safeUpdateFailureMessage, updateFailureCode,
+  type UpdateCheckResult, type UpdateInfo, type UpdatePhaseState, type UpdatePreferences, type UpdateProgress, type UpdatesState,
 } from './updatesContract'
 
 export { parseAutoResolved, parseBypassActive, parsePermissionsPolicy } from './approvalContract'
@@ -311,6 +311,19 @@ export async function listenForUpdateAvailable(handler: (info: UpdateInfo) => vo
     const info = parseUpdateInfo(event.payload)
     if (info) handler(info)
   })
+}
+
+export async function listenForUpdateState(handler: (state: UpdatePhaseState) => void): Promise<UnlistenFn> {
+  if (!inDesktop) return () => undefined
+  return listen('updates-state', (event) => {
+    const state = parseUpdatePhaseState(event.payload)
+    if (state) handler(state)
+  })
+}
+
+export async function updatesPhase(): Promise<UpdatePhaseState | null> {
+  if (!inDesktop) return null
+  try { return parseUpdatePhaseState(await invoke('updates_phase')) } catch { return null }
 }
 
 export async function listenForUpdateProgress(handler: (progress: UpdateProgress) => void): Promise<UnlistenFn> {

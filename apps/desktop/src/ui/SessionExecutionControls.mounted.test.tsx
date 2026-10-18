@@ -323,7 +323,7 @@ describe('session execution labels', () => {
     const effort = host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
     expect(effort.textContent).toBe('Effort')
     expect(effort.getAttribute('aria-disabled')).toBe('true')
-    expect(host.querySelector('.tip-bubble')?.textContent).toBe('Available after you pick a model')
+    expect(document.body.querySelector('.tip-bubble')?.textContent).toBe('Available after you pick a model')
   })
 
   it('shows each effort level with its icon and no sub-text', async () => {
@@ -369,7 +369,7 @@ describe('effort availability', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
     const trigger = host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
     expect(trigger.getAttribute('aria-disabled')).toBe('true')
-    expect(host.querySelector('.tip-bubble')?.textContent).toContain("OpenCode doesn't let Bitbots pick an effort level")
+    expect(document.body.querySelector('.tip-bubble')?.textContent).toContain("OpenCode doesn't let Bitbots pick an effort level")
     await act(async () => { trigger.click() })
     expect(host.querySelector('[role="dialog"]')).toBeNull()
   })

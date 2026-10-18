@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, Runtime } from '../types'
 import { PROVIDER_GUIDES } from './providerGuides'
+import { helpTipBubble, viewText } from './testSelect'
 
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => <div aria-label="Bitbots onboarding companion" /> }))
 const mocks = vi.hoisted(() => ({ rpc: vi.fn() }))
@@ -115,9 +116,9 @@ describe('FirstRunOnboarding', () => {
     const { host: mounted } = mount({ initialStep: 0, runtimes: [runtime] })
     act(() => button('Skip').click())
     const codex = mounted.querySelector<HTMLElement>('[data-provider="codex"]')
-    expect(codex?.textContent).toContain('Version check command not confirmed; see the official docs.')
-    expect(codex?.querySelector('.onboarding-version-note')).not.toBeNull()
-    expect(codex?.querySelector<HTMLAnchorElement>('.onboarding-doc-link')?.href).toBe(PROVIDER_GUIDES.codex.docsUrl)
+    expect(viewText(codex ?? document.body)).toContain('Version check command not confirmed; see the official docs.')
+    expect(helpTipBubble(codex)?.querySelector('.onboarding-version-note')).not.toBeNull()
+    expect(helpTipBubble(codex)?.querySelector<HTMLAnchorElement>('.onboarding-doc-link')?.href).toBe(PROVIDER_GUIDES.codex.docsUrl)
     expect(codex?.querySelector('[aria-label="Copy Codex version command"]')).toBeNull()
   })
 

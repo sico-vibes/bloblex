@@ -560,6 +560,20 @@ fn visible_rows(st: &AppState, agent_id: Option<&str>, provider: Option<&str>) -
     Ok(out)
 }
 
+/// The shared skills a bot may see: the global switch on, the per-bot opt-out
+/// cleared. Native de-duplication is skipped, so an explicit choice still works
+/// even when the coding agent already has the same skill.
+pub(crate) fn skills_for_agent(st: &AppState, agent_id: Option<&str>) -> Result<Vec<Value>, String> {
+    visible_rows(st, agent_id, None)
+}
+
+/// True when the shared skill `name` is switched on for `agent_id`.
+pub(crate) fn usable_for_agent(st: &AppState, agent_id: Option<&str>, name: &str) -> bool {
+    skills_for_agent(st, agent_id)
+        .map(|rows| rows.iter().any(|row| row["name"].as_str() == Some(name)))
+        .unwrap_or(false)
+}
+
 fn one_skill(st: &AppState, name: &str) -> Result<Value, String> {
     st.db.skills_get(name).map_err(|_| format!("No skill is called {name}."))
 }
@@ -713,6 +727,12 @@ pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, Dispat
                 row["nativeFor"] = json!(native);
                 row
             }).collect::<Vec<_>>();
+            Ok(json!({"skills": skills}))
+        }
+        "skills.forAgent" => {
+            let agent = p["agentId"].as_str().map(str::trim).filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
+            let rows = skills_for_agent(st, Some(agent)).map_err(|message| derr("internal", &message, StatusCode::INTERNAL_SERVER_ERROR))?;
+            let skills = rows.iter().map(|row| json!({"name": row["name"], "description": row["description"], "source": row["source"]})).collect::<Vec<_>>();
             Ok(json!({"skills": skills}))
         }
         "skills.get" => {

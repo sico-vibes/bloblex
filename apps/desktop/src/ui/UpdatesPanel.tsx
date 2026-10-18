@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { RowCopy } from './SettingsParts'
 import {
-  BETA_CHANNEL_EXPLANATION, CHECKING_UPDATES_MESSAGE, DEV_BUILD_UPDATES_MESSAGE, NO_STABLE_RELEASE_MESSAGE,
+  AUTO_DOWNLOAD_HINT, AUTO_DOWNLOAD_LABEL,
+  BETA_CHANNEL_EXPLANATION, CHECKING_UPDATES_MESSAGE, DEV_BUILD_UPDATES_MESSAGE, IDLE_UPDATE_PHASE, NO_STABLE_RELEASE_MESSAGE,
   STABLE_CHANNEL_EXPLANATION, UP_TO_DATE_MESSAGE, UPDATE_FAILED_MESSAGE,
-  countInstallAffectedSessions, describeUpdateProgress, displayUpdateFailure, formatUpdateTimestamp, installImpactCopy,
+  countInstallAffectedSessions, describeUpdatePhase, describeUpdateProgress, displayUpdateFailure, formatUpdateTimestamp, installImpactCopy,
   parseUpdateChannel, updateErrorMessage,
-  type UpdateChannel, type UpdateInfo, type UpdateProgress, type UpdatesState,
+  type UpdateChannel, type UpdateInfo, type UpdatePhaseState, type UpdateProgress, type UpdatesState,
 } from '../updatesContract'
-import { listenForUpdateProgress, updatesCheck, updatesGetState, updatesInstall, updatesSetPreferences } from '../tauri'
+import { listenForUpdateProgress, listenForUpdateState, updatesCheck, updatesGetState, updatesInstall, updatesPhase, updatesSetPreferences } from '../tauri'
 import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
 
@@ -27,6 +28,7 @@ export function UpdatesPanel({ sessions = [], permissions = [] }: {
   const [installing, setInstalling] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [phase, setPhase] = useState<UpdatePhaseState>(IDLE_UPDATE_PHASE)
   const installingRef = useRef(false)
   const reducedMotion = usePrefersReducedMotion()
 
@@ -80,6 +82,31 @@ export function UpdatesPanel({ sessions = [], permissions = [] }: {
       .catch(() => undefined)
     return () => { cancelled = true; unlisten?.() }
   }, [])
+
+  // The badge's background download/ready/error phases are mirrored here.
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    void (async () => {
+      try {
+        if (typeof updatesPhase === 'function') {
+          const initial = await updatesPhase()
+          if (!cancelled && initial) setPhase(initial)
+        }
+      } catch { /* the updater bridge may be absent */ }
+      try {
+        if (typeof listenForUpdateState === 'function') {
+          unlisten = await listenForUpdateState((next) => { if (!cancelled) setPhase(next) })
+        }
+      } catch { /* tests and preview can omit the listener */ }
+    })()
+    return () => { cancelled = true; unlisten?.() }
+  }, [])
+
+  useEffect(() => {
+    if (installing || phase.phase === 'idle' || phase.phase === 'checking' || phase.phase === 'installing') return
+    setStatusText(describeUpdatePhase(phase).label)
+  }, [phase, installing])
 
   const devBuild = state?.devBuild === true
   const controlsDisabled = devBuild || installing || saving || !loaded
@@ -194,8 +221,8 @@ export function UpdatesPanel({ sessions = [], permissions = [] }: {
         </span>
       </div>
       <div className="settings-row">
-        <RowCopy label="Check for updates automatically" hint="Looks in the background. You still choose when to install." />
-        <span className="settings-row-control"><button type="button" className={`toggle ${state?.autoCheck !== false ? 'on' : ''}`} role="switch" aria-label="Check for updates automatically" aria-checked={state?.autoCheck !== false} disabled={controlsDisabled || !state} onClick={() => void persist({ autoCheck: state?.autoCheck === false })}><i /></button></span>
+        <RowCopy label={AUTO_DOWNLOAD_LABEL} hint={AUTO_DOWNLOAD_HINT} />
+        <span className="settings-row-control"><button type="button" className={`toggle ${state?.autoCheck !== false ? 'on' : ''}`} role="switch" aria-label={AUTO_DOWNLOAD_LABEL} aria-checked={state?.autoCheck !== false} disabled={controlsDisabled || !state} onClick={() => void persist({ autoCheck: state?.autoCheck === false })}><i /></button></span>
       </div>
     </div>
     {confirming && <InstallConfirmDialog count={countInstallAffectedSessions(sessions, permissions)} onCancel={() => setConfirming(false)} onConfirm={() => void runInstall()} />}

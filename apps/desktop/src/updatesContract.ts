@@ -38,6 +38,19 @@ export interface UpdatePreferences {
   autoCheck?: boolean
 }
 
+export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
+
+/** The background updater phase pushed by native on the `updates-state` event. */
+export interface UpdatePhaseState {
+  phase: UpdatePhase
+  version: string | null
+  downloadedBytes: number | null
+  totalBytes: number | null
+  message: string | null
+}
+
+export const IDLE_UPDATE_PHASE: UpdatePhaseState = { phase: 'idle', version: null, downloadedBytes: null, totalBytes: null, message: null }
+
 export const UPDATE_FAILED_MESSAGE = 'Update failed'
 
 export const UPDATE_ERROR_MESSAGES: Record<UpdateErrorCode, string> = {
@@ -56,6 +69,12 @@ export const CHECKING_UPDATES_MESSAGE = 'Checking for updates.'
 
 export const STABLE_CHANNEL_EXPLANATION = 'Finished releases only.'
 export const BETA_CHANNEL_EXPLANATION = 'Includes pre-releases. Used by default until a finished release exists.'
+
+export const BADGE_DOWNLOADING_LABEL = 'Downloading update'
+export const BADGE_RESTART_LABEL = 'Restart to update'
+export const BADGE_FAILED_LABEL = UPDATE_FAILED_MESSAGE
+export const AUTO_DOWNLOAD_LABEL = 'Download updates automatically'
+export const AUTO_DOWNLOAD_HINT = 'Downloads new versions in the background. You still choose when to restart.'
 
 const RUNNING_SESSION_STATES = new Set(['starting', 'working', 'cancelling', 'waiting_permission', 'waiting_user'])
 
@@ -144,6 +163,33 @@ export function parseUpdateProgress(value: unknown): UpdateProgress | null {
   const downloaded = typeof value.downloadedBytes === 'number' && Number.isFinite(value.downloadedBytes) ? Math.max(0, value.downloadedBytes) : 0
   const total = typeof value.totalBytes === 'number' && Number.isFinite(value.totalBytes) && value.totalBytes > 0 ? value.totalBytes : null
   return { phase: value.phase, downloadedBytes: downloaded, totalBytes: total }
+}
+
+export function parseUpdatePhaseState(value: unknown): UpdatePhaseState | null {
+  if (!isRecord(value)) return null
+  if (!knownUpdatePhase(value.phase)) return null
+  return {
+    phase: value.phase,
+    version: typeof value.version === 'string' && value.version.trim() ? value.version.trim() : null,
+    downloadedBytes: typeof value.downloadedBytes === 'number' && Number.isFinite(value.downloadedBytes) && value.downloadedBytes >= 0 ? value.downloadedBytes : null,
+    totalBytes: typeof value.totalBytes === 'number' && Number.isFinite(value.totalBytes) && value.totalBytes > 0 ? value.totalBytes : null,
+    message: typeof value.message === 'string' && value.message.trim() ? value.message.trim() : null,
+  }
+}
+
+export function knownUpdatePhase(value: unknown): value is UpdatePhase {
+  return value === 'idle' || value === 'checking' || value === 'downloading' || value === 'ready' || value === 'installing' || value === 'error'
+}
+
+export function describeUpdatePhase(state: UpdatePhaseState): { label: string; percent: number | null } {
+  const percent = updatePercent(state.downloadedBytes ?? 0, state.totalBytes)
+  if (state.phase === 'downloading') {
+    return { label: percent == null ? BADGE_DOWNLOADING_LABEL : `${BADGE_DOWNLOADING_LABEL} · ${percent}%`, percent }
+  }
+  if (state.phase === 'ready') return { label: state.version ? `Update ${state.version} is ready.` : 'Update ready.', percent: 100 }
+  if (state.phase === 'error') return { label: UPDATE_FAILED_MESSAGE, percent: null }
+  if (state.phase === 'installing') return { label: INSTALLING_RESTART_MESSAGE, percent }
+  return { label: '', percent: null }
 }
 
 export function parseUpdatePreferences(value: unknown): UpdatePreferences {

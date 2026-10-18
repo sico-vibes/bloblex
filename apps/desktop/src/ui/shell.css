@@ -257,6 +257,8 @@
 @keyframes typing { 0%, 100% { transform: scale(0.6); } 50% { transform: scale(1.15); } }
 
 .composer-wrap { flex: 0 0 auto; width: min(800px, calc(100% - 40px)); margin: 0 auto; padding: 6px 0 14px; }
+.composer-send-mode { padding: 4px 12px; color: var(--text-2); font-size: var(--fs-xs); }
+.composer-send-reason { display: block; color: var(--text-3); margin-top: 3px; }
 .composer-execution-wrap { position: relative; flex: 0 0 auto; align-self: center; }
 .composer-execution-pill { max-width: 220px; height: 30px; padding: 0 8px; display: flex; align-items: center; gap: 6px; color: var(--text-2); border: 0; border-radius: var(--radius-pill); background: transparent; font-size: var(--fs-xs); }
 .composer-execution-pill:hover, .composer-execution-pill[aria-expanded="true"] { color: var(--text-1); background: var(--surface-hover); }

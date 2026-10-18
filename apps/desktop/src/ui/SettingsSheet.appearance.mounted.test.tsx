@@ -46,6 +46,16 @@ afterEach(() => { if (root) act(() => root.unmount()); host?.remove(); vi.unstub
 
 describe('General settings mounted controls', () => {
 
+  it('loads and saves the busy-send preference in General', async () => {
+    mocks.invoke.mockResolvedValue(false)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { 'composer.busySendMode': 'queue' } } : {})
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    expect(selectValue(host, 'When you send while a bot is working')).toBe('queue')
+    await chooseOption(host, 'When you send while a bot is working', 'steer')
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'composer.busySendMode', value: 'steer' })
+  })
+
   it.each(EXPERIMENTS)('keeps $label off by default and saves its exact setting key', async ({ name, label }) => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})

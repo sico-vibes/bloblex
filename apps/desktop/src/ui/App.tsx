@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, CornerDownRight, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Home, Info, LoaderCircle, MessageCircle, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
+import { Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Home, Info, LoaderCircle, MessageCircle, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
 import { COMPANION_CHAT_SIZE_LABELS, COMPANION_CHAT_SIZES, isCompanionChatSize, MAX_COMPANION_PEERS, type CompanionChatSize } from '../blob/companionLayout'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
@@ -41,9 +41,11 @@ import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { applySoundPrefs, saveSoundsEnabled, saveSoundVolume, soundPrefsFromSettings, subscribeSoundPrefs, SOUNDS_CHANGED_EVENT, SOUND_VOLUME_CHANGED_EVENT } from './soundPrefs'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
+import { busyDelivery, busySendMode, BUSY_SEND_SETTING, sendWithDelivery, steerRuntimeId, useSteerAvailable, type BusySendMode } from './busySend'
 import { fetchCached, invalidateCatalog } from './catalogCache'
 import { ConversationsPanel } from './ConversationsPanel'
 import { SessionRail } from './SessionRail'
+import { WorkingBotsPanel } from './WorkingBotsPanel'
 import { ChangeBanner } from './ChangeBanner'
 import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isEmptyConversation, isSideSession, isWaitingDelegation, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
@@ -143,6 +145,9 @@ export function App() {
   usageTipDismissalsRef.current = usageTipDismissals
   /** Experimental, off by default: each turn's commands, tools and edits as one expandable line. */
   const [activityDetails, setActivityDetails] = useState(false)
+  const [busyMode, setBusyMode] = useState<BusySendMode>('steer')
+  const [steerRevision, setSteerRevision] = useState(0)
+  const [deliveryNotice, setDeliveryNotice] = useState<string | null>(null)
   /** Companion preferences: chat height and the teammates kept on the island. */
   const [companionChatSize, setCompanionChatSize] = useState<CompanionChatSize>('medium')
   const [companionPinned, setCompanionPinned] = useState<string[]>([])
@@ -176,6 +181,8 @@ export function App() {
   /** True once the daemon has sent `appearance.style`, retiring the legacy bitbots switch. */
   const styleExplicit = useRef(false)
   const applyWindowSetting = useCallback((key: string, value: unknown) => {
+    if (key === BUSY_SEND_SETTING) { setBusyMode(busySendMode(value)); return }
+    if (key === 'exec_gate.codex.steer') { setSteerRevision(v => v + 1); return }
     const experiment = EXPERIMENTS.find(({ name }) => key === `experimental.${name}`)
     if (experiment) { changeExperiment(experiment.name, value === true); return }
     if (key === 'experimental.usageBar') setUsageBarEnabled(value === true)
@@ -480,7 +487,7 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model']) applyWindowSetting(key, values[key])
+      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model', BUSY_SEND_SETTING, 'exec_gate.codex.steer']) applyWindowSetting(key, values[key])
       setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }
@@ -667,7 +674,7 @@ export function App() {
     ...(snapshot?.permissions ?? []).filter((permission) => typeof permission.sessionId === 'string' && isPendingPermissionLive(permission, permissionClock)).map((permission) => permission.sessionId!),
   ].filter((id) => !(mainAttention && id === selectedSession?.id)))
   // Without the experimental activity setting only failed turns stay visible; the working indicator shows progress.
-  const groupedConversationItems = groupConversationActivity(activityDetails ? conversationItems : conversationItems.filter((item) => item.kind === 'message' || item.activityKind === 'turn'))
+  const groupedConversationItems = groupConversationActivity(activityDetails || sideSession ? conversationItems : conversationItems.filter((item) => item.kind === 'message' || item.activityKind === 'turn'))
   // A side conversation only shows its own requests, never the leader's.
   const activePermission = sideSessionId
     ? selectPendingPermission((snapshot?.permissions ?? []).filter((permission) => permission.sessionId === sideSessionId), sideSessionId, sideSessionId, permissionClock)
@@ -679,6 +686,8 @@ export function App() {
   // FIX39 item 18: a delegated conversation whose delivery is queued behind the
   // global limit says so, instead of looking like the bot's empty first-run screen.
   const waitingDelegation = isWaitingDelegation(sessionMessages)
+  const steerAvailable = useSteerAvailable(steerRuntimeId(selectedSession?.state, selectedSession?.runtimeId), connection === 'connected', `${selectedSession?.state}:${steerRevision}`)
+  useEffect(() => { setDeliveryNotice(null) }, [selectedSession?.id, selectedSession?.state])
   const agentName = sideSession ? sideAgent?.name ?? 'Teammate' : activeSelectedAgent?.name ?? (selectedRuntime ? labelize(selectedRuntime.provider) : 'No runtime selected')
   const outlineItems = outlineItemsFromMessages(
     groupedConversationItems.filter((item): item is ConversationItem & { kind: 'message' } => item.kind === 'message'),
@@ -708,6 +717,7 @@ export function App() {
   const companionSession = companionSessionRecord
   const companionAgent = agents.find((agent) => agent.id === companionSession?.agentId && !agent.archived) ?? activeSelectedAgent
   const companionRuntime = runtimes.find((runtime) => runtime.id === companionAgent?.runtimeId) ?? runtimes.find((runtime) => runtime.id === companionSession?.runtimeId) ?? selectedRuntime
+  const companionSteerAvailable = useSteerAvailable(companion ? steerRuntimeId(companionSession?.state, companionSession?.runtimeId) : undefined, companion && connection === 'connected', `${companionSession?.state}:${steerRevision}`)
   const companionStatus = deriveCompanionStatus({ connected: connection === 'connected', runtime: companionRuntime, session: companionSession, permissionPending: !!companionPermission, now })
   const previousCueMood = useRef<string | null>(null)
   // The skills the composer offers: the pool's switch-on set for whoever the
@@ -1790,7 +1800,7 @@ export function App() {
    * the reason shows inline. A second message while one is still on its way
    * goes to the queue, like a message sent during a turn.
    */
-  const sendPrompt = async (dueAt?: string) => {
+  const sendPrompt = async (dueAt?: string, opposite = false) => {
     const text = composer.trim()
     const ready = attachments.filter((item) => item.status === 'ready' && item.path)
     // A picked or hand-typed leading `/command` travels as a `command` with the
@@ -1808,8 +1818,14 @@ export function App() {
       target = created
     }
     const sessionId = target.id
-    // A live turn, a message still on its way, or a chosen time puts it in the daemon's durable queue.
-    const queueIt = !!dueAt || ['working', 'starting', 'waiting_permission'].includes(target.state ?? '') || pendingSends.some((item) => item.sessionId === sessionId)
+    // Only plain messages can steer. Scheduled messages and pending sends keep
+    // their durable ordering, and richer messages keep their context in Queue.
+    const delivery = busyDelivery(busyMode, opposite, target.state, steerAvailable, !!(ready.length || sentCommand || conversationRefs.length || replyTarget))
+    const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(target.state ?? '')
+    const method = dueAt || pendingSends.some((item) => item.sessionId === sessionId) ? 'session.queue.add'
+      : live ? delivery.mode === 'steer' ? 'session.steer' : 'session.queue.add' : 'session.prompt'
+    const queueIt = method === 'session.queue.add'
+    setDeliveryNotice(live && queueIt ? delivery.reason : null)
     const sentReplyTarget = replyTarget
     const sentRefs = conversationRefs
     const sentChip = slashCommand
@@ -1822,12 +1838,13 @@ export function App() {
     setConversationRefs([])
     setReplyTarget(null)
     setAttachments((current) => current.filter((item) => !sentAttachmentIds.has(item.id)))
-    if (!queueIt) setPendingSends((current) => [...current, { id: pendingId, sessionId, text: outbound, attachments: ready.length, at: Date.now() }])
+    if (method === 'session.prompt') setPendingSends((current) => [...current, { id: pendingId, sessionId, text: outbound, attachments: ready.length, at: Date.now() }])
     setError(null)
     try {
-      await rpc(queueIt ? 'session.queue.add' : 'session.prompt', { sessionId, text: outbound, ...(sentCommand ? { command: { kind: sentCommand.kind, name: sentCommand.name } } : {}), ...(dueAt ? { dueAt } : {}), ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}) })
+      const sent = await sendWithDelivery(method, { sessionId, text: outbound, ...(sentCommand ? { command: { kind: sentCommand.kind, name: sentCommand.name } } : {}), ...(dueAt ? { dueAt } : {}), ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}) })
       for (const item of ready) URL.revokeObjectURL(item.previewUrl)
-      if (queueIt) void loadQueue(sessionId)
+      if (sent.fallback) setDeliveryNotice('Queued because this turn could not accept steering. It sends after the turn ends.')
+      if (sent.queued) void loadQueue(sessionId)
       await refresh()
     } catch (reason) {
       setError(messageOf(reason))
@@ -2212,10 +2229,12 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion onToggleReaction={(sessionId, messageId, emoji) => toggleMessageReaction(sessionId, messageId, emoji)} permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={(page) => void showMainSettings(companionSession?.id, page)} onSendPrompt={(sessionId, text, command) => {
-        // A live turn queues the message in the daemon instead of failing with a conflict.
-        const live = ['working', 'starting', 'waiting_permission'].includes(sessions.find((item) => item.id === sessionId)?.state ?? '')
-        return rpc(live ? 'session.queue.add' : 'session.prompt', { sessionId, text, ...(command ? { command: { kind: command.kind, name: command.name } } : {}) }).then(() => { if (live) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
+      <Companion deliveryNotice={deliveryNotice} busyMode={busyMode} steerAvailable={companionSteerAvailable} onToggleReaction={(sessionId, messageId, emoji) => toggleMessageReaction(sessionId, messageId, emoji)} permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={(page) => void showMainSettings(companionSession?.id, page)} onSendPrompt={(sessionId, text, command, opposite = false, hasContext = false) => {
+        const state = sessions.find((item) => item.id === sessionId)?.state
+        const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(state ?? '')
+        const delivery = busyDelivery(busyMode, opposite, state, companionSteerAvailable, hasContext || !!command)
+        const method = live ? delivery.mode === 'steer' ? 'session.steer' : 'session.queue.add' : 'session.prompt'
+        return sendWithDelivery(method, { sessionId, text, ...(command ? { command: { kind: command.kind, name: command.name } } : {}) }).then(({ queued, fallback }) => { setDeliveryNotice(fallback ? 'Queued because this turn could not accept steering.' : live ? delivery.reason : null); if (queued) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
       }} queuedCount={companionSession ? snapshot?.queues?.[companionSession.id]?.items.length ?? 0 : 0} onLoadQueue={(sessionId) => void loadQueue(sessionId)} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} onSelectConversation={(chosen) => { setSideSessionId(null); setSelectedAgentId(String(chosen.agentId ?? '')); setSelectedSessionId(chosen.id); void setActiveSession(chosen.id) }} slashSkills={slashSkills} />
     </>
   }
@@ -2223,6 +2242,7 @@ export function App() {
   const selectedMood = deriveCompanionStatus({ connected: connection === 'connected', runtime: selectedRuntime, session: selectedSession, composing: !!composer.trim(), now }).mood
   const sessionBusy = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
   const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
+  const composerDelivery = busyDelivery(busyMode, false, selectedSession?.state, steerAvailable, !!(attachments.length || slashCommand || leadingCommand(composer, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' }) || conversationRefs.length || replyTarget))
   const promptQueue = selectedSession ? snapshot?.queues?.[selectedSession.id] : undefined
   const hasScheduledPrompt = !!promptQueue?.items.some((item) => item.kind === 'send_later')
   const [queueNowMs, setQueueNowMs] = useState(() => Date.now())
@@ -2232,26 +2252,6 @@ export function App() {
     const timer = window.setInterval(() => setQueueNowMs(Date.now()), 30_000)
     return () => window.clearInterval(timer)
   }, [hasScheduledPrompt])
-  // Steering is offered only when the daemon reports it supported and switched on for this runtime.
-  const [steerAvailable, setSteerAvailable] = useState(false)
-  useEffect(() => {
-    if (!selectedSession || connection !== 'connected' || String(selectedRuntime?.provider ?? '').toLowerCase() !== 'codex') { setSteerAvailable(false); return }
-    let active = true
-    void rpc<{ settings?: { steer?: { supported?: boolean; enabled?: boolean } } }>('runtime.capabilities', { runtimeId: selectedSession.runtimeId }).then((caps) => {
-      if (active) setSteerAvailable(caps.settings?.steer?.supported === true && caps.settings.steer.enabled === true)
-    }).catch(() => { if (active) setSteerAvailable(false) })
-    return () => { active = false }
-  }, [selectedSession?.id, selectedSession?.runtimeId, selectedRuntime?.provider, turnLive, connection]) // eslint-disable-line react-hooks/exhaustive-deps
-  const steerPrompt = async () => {
-    const text = composer.trim()
-    if (!text || !selectedSession || busy || !steerAvailable || !turnLive) return
-    try {
-      await doRpc('session.steer', { sessionId: selectedSession.id, text })
-      if (composerRef.current?.value.trim() === text) setComposer('')
-      void loadQueue(selectedSession.id)
-      await refresh()
-    } catch { /* The actionable error is shown inline. */ }
-  }
   const imagesSupported = ['claude', 'codex'].includes(String(selectedRuntime?.provider ?? '').toLowerCase())
   const sessionQuota = (snapshot?.quotas ?? []).find((item) => String(item.provider) === String(selectedRuntime?.provider ?? '').toLowerCase()) ?? null
   const selectedModelLock = selectedSession?.modelLock
@@ -2362,7 +2362,7 @@ export function App() {
   /** The onboarding's first bot: its look, colour, name, role, description and verified model. */
   /** Onboarding and the upgrade card both set up the Manager (or return the one that exists). */
   const createOnboardedBlob = async (onboardingDraft: AgentDraft) => {
-    const draft: AgentDraft = { ...onboardingDraft, approvalMode: 'ask' }
+    const draft: AgentDraft = onboardingDraft
     try {
       // Onboarding only offers models from a verified catalog, so the chosen model is sent.
       const params = createParams(draft, { model: true, thinking: false, serviceTier: false })
@@ -2483,7 +2483,7 @@ export function App() {
           <section ref={messageListRef} className="message-list" aria-label="Conversation" onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72 }}>
             <div className="conversation-layout">
               <div className="chat-column">
-              {groupedConversationItems.length === 0 && visiblePendingSends.length === 0 && !waitingDelegation ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} effectOverscanTop={118} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} label={activeSelectedAgent?.name ?? agentName} /><h2>{runtimeReady ? 'Ready when you are.' : 'This bot needs attention.'}</h2><p>{runtimeReady ? currentProjectName ? <>Ask {agentName} to explore <code>{currentProjectName}</code> or make a change.</> : <>Ask {agentName} a question or make a change.</> : selectedRuntime?.status === 'error' ? 'Open Settings → Coding agents. Update or repair this CLI, then choose Scan again.' : 'Open Settings → Coding agents and scan again before starting a conversation.'}</p></div> : groupedConversationItems.map((item, index) => {
+              {groupedConversationItems.length === 0 && visiblePendingSends.length === 0 && !waitingDelegation && !sideSession ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} effectOverscanTop={118} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} label={activeSelectedAgent?.name ?? agentName} /><h2>{runtimeReady ? 'Ready when you are.' : 'This bot needs attention.'}</h2><p>{runtimeReady ? currentProjectName ? <>Ask {agentName} to explore <code>{currentProjectName}</code> or make a change.</> : <>Ask {agentName} a question or make a change.</> : selectedRuntime?.status === 'error' ? 'Open Settings → Coding agents. Update or repair this CLI, then choose Scan again.' : 'Open Settings → Coding agents and scan again before starting a conversation.'}</p></div> : groupedConversationItems.map((item, index) => {
                 const team = item.kind === 'message' ? teamItem(item.value!, item.id) : null
                 const content = item.kind === 'activity-group'
                   ? <ActivitySummaryLine group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
@@ -2521,7 +2521,7 @@ export function App() {
               {!sideSession && lastTurnWasPlan && !latestPlanId && <div className="plan-ready-bar" role="status"><span>Plan mode is on. Approve the plan to let {agentName} start building.</span><button type="button" className="primary-button small" onClick={() => void approvePlan()}>Approve &amp; build</button></div>}
               {selectedSession.state === 'starting' && <div className="working-indicator starting" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>Starting {agentName}…</div>}
               {selectedSession.state === 'working' && <div className="working-indicator" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>{agentName} is working</div>}
-              {waitingDelegation && selectedSession.state !== 'working' && <div className="working-indicator waiting" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>Waiting for {sideAgent?.name ?? agentName} to finish another conversation…</div>}
+              {waitingDelegation && selectedSession.state !== 'working' && <div className="working-indicator waiting" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>Waiting for a free working slot for {sideAgent?.name ?? agentName}…</div>}
               </div>
             </div>
           </section>
@@ -2530,6 +2530,7 @@ export function App() {
             {usageTip && <UsageTip tip={usageTip} onDismiss={() => dismissUsageTip(usageTip)} onViewUsage={() => void showUsage()} />}
             {dictationPartial && <div className="dictation-partial" role="status" aria-label={`Listening: ${dictationPartial}`}><span className="dictation-partial-dot" aria-hidden="true" />{dictationPartial}</div>}
             {promptQueue && promptQueue.items.length > 0 && <QueueBanner items={promptQueue.items} paused={promptQueue.paused} sessionBusy={sessionBusy} nowMs={queueNowMs} disabled={connection !== 'connected'} onSendNow={sendQueuedNow} onDelete={deleteQueued} onUpdate={updateQueued} onReorder={reorderQueued} onResume={resumeQueue} onCancelRetry={cancelAutoRetry} />}
+            {sessionBusy && <div className="composer-send-mode" role="status">{composerDelivery.mode === 'steer' ? 'Steer · reaches this turn now' : 'Queue · sends after this turn'}<span> · Ctrl+Enter / ⌘+Enter sends the other way</span>{deliveryNotice && <span className="composer-send-reason">{deliveryNotice}</span>}</div>}
             <div data-tour="composer" className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
               {replyTarget && <ReplyContextStrip target={replyTarget} onCancel={() => { replyTargetRef.current = null; setReplyTarget(null) }} />}
               <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
@@ -2554,7 +2555,7 @@ export function App() {
                   if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickConversation(hashCandidates[Math.min(hashRef.index, hashCandidates.length - 1)]); return }
                   if (event.key === 'Escape') { event.preventDefault(); setHashRef(null); return }
                 }
-                if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt() }
+                if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt(undefined, event.ctrlKey || event.metaKey) }
               }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
               <div className="composer-control-strip" data-tour="controls">
                 <div className="composer-controls-start">
@@ -2566,9 +2567,8 @@ export function App() {
                   {selectedSession && activeSelectedAgent && <SessionExecutionControls session={selectedSession} agent={activeSelectedAgent} locked={activeSelectedAgent.locked === true} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onAgentUpdated={(updated) => mergeAgent(updated)} onError={(reason) => setError(messageOf(reason))} />}
                   <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} contextModel={selectedSession.contextModel} contextEstimated={selectedSession.contextEstimated} model={contextModel} isNewConversation={(selectedSession.messages ?? []).length === 0} quota={sessionQuota} onOpenUsage={() => void showUsage()} />
                   {platform.nativeSpeech && speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
-                  {turnLive && steerAvailable && !!composer.trim() && attachments.length === 0 && <button type="button" className="composer-icon-button steer-button" onClick={() => void steerPrompt()} disabled={busy || connection !== 'connected'} aria-label="Steer now" title="Steer: add this to the turn that is running now"><CornerDownRight size={16} aria-hidden="true" /></button>}
                   {turnLive && <button className="send-button cancel" onClick={() => void cancelTurn()} disabled={busy} aria-label="Cancel turn" title="Stop"><Square size={12} fill="currentColor" /></button>}
-                  <button className="send-button" onClick={() => void sendPrompt()} disabled={connection !== 'connected' || busy || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? 'Queue message' : 'Send message'} title={connection !== 'connected' ? 'Waiting for the connection' : sessionBusy ? 'Add to the queue. It sends when this turn ends.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : <ArrowUp size={17} />}</button>
+                  <button className="send-button" onClick={(event) => void sendPrompt(undefined, event.ctrlKey || event.metaKey)} disabled={connection !== 'connected' || busy || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer now' : 'Queue message' : 'Send message'} title={connection !== 'connected' ? 'Waiting for the connection' : sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer this turn now. Ctrl+Enter queues instead.' : 'Add to the queue. Ctrl+Enter sends the other way where supported.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : <ArrowUp size={17} />}</button>
                 </div>
               </div>
             </div>
@@ -2584,7 +2584,7 @@ export function App() {
           <h2>{agentName}</h2>
           <p>{selectedSession?.title?.trim() || (selectedRuntime ? [labelize(selectedRuntime.provider), selectedRuntime.version].filter(Boolean).join(' · ') : 'No coding agent selected')}</p>
         </section>
-        <SessionRail session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} onOpenRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
+        <SessionRail workingBots={<WorkingBotsPanel sessions={sessions} agents={agents} selectedId={sideSessionId} onOpen={openSideConversation} />} session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} onOpenRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
       </aside>
 
       {!companion && <ContextualHints enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet && !quickSwitcherOpen && !whatsNewOpen} />}
@@ -2972,7 +2972,7 @@ function recordFrom(value: unknown): Record<string, unknown> { return value && t
 const COMPACT_HOLD_TO_DRAG_MS = 220
 const COMPACT_DRAG_SLOP_PX = 4
 
-function Companion({ agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction, slashSkills = [] }: { agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string, command?: SlashCommand | null) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void; slashSkills?: SlashSkill[] }) {
+function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false, agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction, slashSkills = [] }: { deliveryNotice?: string | null; busyMode?: BusySendMode; steerAvailable?: boolean; agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string, command?: SlashCommand | null, opposite?: boolean, hasContext?: boolean) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void; slashSkills?: SlashSkill[] }) {
   const sessionModelLock = session?.modelLock
   const nouns = useEntityNoun({ plural: true })
   const platform = usePlatform()
@@ -3361,7 +3361,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     try { const path = await selectLocalFile(); if (path) void prepareLocalReference(path) }
     catch (reason) { setFileError(messageOf(reason)) }
   }
-  const sendCompanionPrompt = async (event: React.FormEvent) => {
+  const sendCompanionPrompt = async (event: React.FormEvent | React.KeyboardEvent, opposite = false) => {
     event.preventDefault()
     if (!session || sending || !connected || !runtimeUsable(runtime) || session.state === 'waiting_permission') return
     const requested = draft.trim() || (droppedFile ? 'Please inspect this local file.' : '')
@@ -3377,7 +3377,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
     setSlash(null)
     setSlashCommand(null)
     playCompanionCue('send')
-    try { await onSendPrompt(session.id, prompt, sentCommand); setDroppedFile(null); setFileInfo(null); setFileError(null) }
+    try { await onSendPrompt(session.id, prompt, sentCommand, opposite, !!droppedFile); setDroppedFile(null); setFileInfo(null); setFileError(null) }
     catch (reason) {
       if (!draftRef.current?.value.trim()) { setDraft(sentDraft); setSlashCommand(slashCommand) }
       if (fileInfo) setFileError(messageOf(reason)); else setDropError(messageOf(reason))
@@ -3598,6 +3598,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
   const shimmering = ['working', 'thinking', 'tool_activity', 'file_activity'].includes(displayMood)
   const sessionBusy = !!session && ['working', 'starting', 'waiting_permission'].includes(session.state ?? '')
   // While a turn is live the one button queues what is typed, or stops the turn when the box is empty.
+  const companionDelivery = busyDelivery(busyMode, false, session?.state, steerAvailable, !!(droppedFile || slashCommand || leadingCommand(draft, { skills: slashSkills, isManager: agent?.systemRole === 'manager' })))
   const queuesPrompt = sessionBusy && (!!draft.trim() || !!droppedFile)
   const stopsTurn = sessionBusy && !queuesPrompt
   const wash = displayMood === 'success' ? 'green' : displayMood === 'error' || displayMood === 'rate_limited' ? 'red' : null
@@ -3705,6 +3706,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
               {dictating && dictationIsland}
               {usageTip && onDismissUsageTip && <UsageTip tip={usageTip} onDismiss={() => onDismissUsageTip(usageTip)} />}
               {queuedCount > 0 && <p className="companion-queue-note" role="status">{queuedCount} queued · sends when this turn ends</p>}
+              {sessionBusy && <p className="companion-queue-note" role="status">{companionDelivery.mode === 'steer' ? 'Steer now' : 'Queue after this turn'} · Ctrl+Enter / ⌘+Enter sends the other way{deliveryNotice ? ` · ${deliveryNotice}` : ''}</p>}
               <form className="chat-bar companion-chat-composer" data-companion-no-drag="" onSubmit={(event) => void sendCompanionPrompt(event)}>
                 {slashCommand && <SlashCommandChip command={slashCommand} onRemove={() => setSlashCommand(null)} />}
                 {slash && companionSlashCandidates.length > 0 && <SlashMenu items={companionSlashCandidates} activeIndex={slash.index} onPick={pickCompanionSlash} onHover={(index) => setSlash((current) => current ? { ...current, index } : current)} />}
@@ -3715,7 +3717,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
                     if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickCompanionSlash(companionSlashCandidates[Math.min(slash.index, companionSlashCandidates.length - 1)]); return }
                     if (event.key === 'Escape') { event.preventDefault(); setSlash(null); return }
                   }
-                  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() }
+                  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendCompanionPrompt(event, event.ctrlKey || event.metaKey) }
                 }} disabled={!connected || !runtimeUsable(runtime) || !session || session.state === 'waiting_permission'} rows={1} />
                 <div className="companion-composer-bar">
                 <div className="companion-composer-start">
@@ -3725,7 +3727,7 @@ function Companion({ agent, agents, projects = [], sessions = [], quotas = [], o
                 <div className="companion-composer-end">
                 {session && <ContextWindowIndicator used={session.contextUsed} size={session.contextSize} contextModel={session.contextModel} contextEstimated={session.contextEstimated} model={contextModel} isNewConversation={(session.messages ?? []).length === 0} quota={contextQuota} />}
                 {platform.nativeSpeech && speechEnabled && <DictationButton owner="companion" modelId={speechModel} autoStart={dictateOnOpen} onAutoStarted={() => setDictateOnOpen(false)} onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} />}
-                <button className="send-btn" type={stopsTurn ? 'button' : 'submit'} disabled={!session || sending || !runtimeUsable(runtime) || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={stopsTurn ? cancelCompanionTurn : undefined} aria-label={queuesPrompt ? 'Queue message' : sessionBusy ? 'Cancel turn' : 'Send message'} title={queuesPrompt ? 'Add to the queue. It sends when this turn ends.' : undefined}>{sending ? <LoaderCircle size={13} className="spinning" /> : stopsTurn ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
+                <button className="send-btn" type={stopsTurn ? 'button' : 'submit'} disabled={!session || sending || !runtimeUsable(runtime) || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={stopsTurn ? cancelCompanionTurn : undefined} aria-label={queuesPrompt ? companionDelivery.mode === 'steer' ? 'Steer now' : 'Queue message' : sessionBusy ? 'Cancel turn' : 'Send message'} title={queuesPrompt ? companionDelivery.mode === 'steer' ? 'Steer this turn now' : 'Send after this turn' : undefined}>{sending ? <LoaderCircle size={13} className="spinning" /> : stopsTurn ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
                 </div>
                 </div>
               </form>

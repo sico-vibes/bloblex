@@ -25,6 +25,7 @@ export interface SettingsIndexEntry {
 }
 
 export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
+  { page: 'General', group: 'System', label: 'When you send while a bot is working', keywords: 'steer queue message enter keyboard busy send' },
   { page: 'General', group: 'System', label: 'Run setup again', keywords: 'welcome onboarding first run' },
   { page: 'General', group: 'System', label: 'Start with Windows', keywords: 'startup login autostart boot' },
   { page: 'General', group: 'System', label: 'Close to tray', keywords: 'minimise background quit exit' },

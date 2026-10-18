@@ -34,7 +34,7 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
   const [name, setName] = useState('')
   // The first bot is a full draft, so its look, colour, role and description are chosen here, not later.
   // Onboarding sets up the Manager: the one bot that runs the team.
-  const [draft, setDraft] = useState<AgentDraft>(() => ({ ...createDraft(runtimes, null), name: 'Manager', color: 'violet', approvalMode: 'ask' }))
+  const [draft, setDraft] = useState<AgentDraft>(() => ({ ...createDraft(runtimes, null), name: 'Manager', color: 'violet' }))
   const [models, setModels] = useState<CatalogModel[]>([])
   const [modelLoading, setModelLoading] = useState(false)
   const [modelError, setModelError] = useState<string | null>(null)
@@ -142,6 +142,7 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
           <label className="onboarding-field">Model{modelLoading
             ? <div className="onboarding-model-loading" role="status" aria-busy="true" aria-label="Loading models"><Skeleton variant="row" lines={1} /><span className="sr-only">Loading verified models…</span></div>
             : <Select ariaLabel="Model" variant="field" searchable={8} searchPlaceholder="Search models" placeholder="Choose a model" value={draft.model ?? ''} disabled={!!modelError || models.length === 0} onChange={(value) => setDraft({ ...draft, model: value || null })} options={models.map((model, index) => ({ value: model.id, label: model.displayName, ...(model.group && model.group !== models[index - 1]?.group ? { group: model.group } : {}) }))} />}</label>
+          <p>Starts with Full access on this device. Team changes still need your approval; automations use safe actions only.</p>
           {modelError && <p role="alert" className="onboarding-error">{modelError}</p>}
         </div>
       </div>

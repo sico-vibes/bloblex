@@ -44,6 +44,6 @@ describe('persistent Manager setup', () => {
     const ready = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Create Manager')!
     expect(ready.disabled).toBe(false)
     await act(async () => ready.click())
-    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: 'Manager', runtimeId: 'rt', approvalMode: 'ask' }))
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: 'Manager', runtimeId: 'rt', approvalMode: 'bypass' }))
   })
 })

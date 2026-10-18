@@ -857,7 +857,6 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if !fields["description"].is_string() { fields["description"] = json!(MANAGER_DESCRIPTION); }
             if !fields["instructions"].is_string() { fields["instructions"] = json!(MANAGER_INSTRUCTIONS); }
             fields["role"] = json!("Manager");
-            fields["approvalMode"] = json!("ask");
             fields["systemRole"] = json!("manager");
             let agent = agent_create_from_rpc(st, fields).await?;
             Ok(json!({"manager": agent, "created": true}))
@@ -1713,6 +1712,12 @@ async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) 
 /// approval) reuse this so a bot created outside `agent.create` goes through
 /// exactly the same path as the RPC.
 async fn agent_create_from_rpc(st: &AppState, mut fields: Value) -> Result<Value, DispatchError> {
+    // Owner-created bots start with Full access. This is an explicit value on
+    // the new row only; existing bots and unattended automation policy keep
+    // their current modes. Manager proposals supply their own restricted mode.
+    if let Some(object) = fields.as_object_mut() {
+        object.entry("approvalMode").or_insert_with(|| json!("bypass"));
+    }
     let runtime_id = fields["runtimeId"].as_str().ok_or_else(|| derr("invalid_argument", "runtimeId is required", StatusCode::BAD_REQUEST))?.to_owned();
     if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id.as_str()).cloned() {
         if let Ok(Some(served)) = catalog::get(st, &runtime, None, None, catalog::Mode::Fresh).await {
@@ -4848,7 +4853,7 @@ mod phase2a_tests {
         let manager = first["manager"].clone();
         assert_eq!((manager["name"].as_str(), manager["role"].as_str(), manager["systemRole"].as_str()), (Some("Manager"), Some("Manager"), Some("manager")));
         assert_eq!(manager["description"], "Runs your team: knows every project and bot, plans the work and asks before it acts.");
-        assert_eq!(manager["effectiveApprovalMode"], "ask");
+        assert_eq!(manager["effectiveApprovalMode"], "bypass");
         assert!(manager["projectId"].is_null());
         assert!(manager["instructions"].as_str().unwrap().chars().count() < 1200, "the manager persona stays short");
         // A second call returns the same bot and creates nothing, whatever it is asked for.
@@ -6151,12 +6156,30 @@ mod phase2a_tests {
     #[tokio::test]
     async fn approval_policy_rpc_defaults_and_rejects_global_bypass(){
         let(st,mut events)=state();let created=dispatch(&st,"agent.create",json!({"name":"Guarded","runtimeId":"rt-test"})).await.unwrap()["agent"].clone();let id=created["id"].as_str().unwrap();let _=events.recv().await.unwrap();
-        assert_eq!(created["approvalMode"],Value::Null);assert_eq!(created["effectiveApprovalMode"],"ask");
+        assert_eq!(created["approvalMode"],"bypass");assert_eq!(created["effectiveApprovalMode"],"bypass");
         assert_eq!(dispatch(&st,"settings.set",json!({"key":"permissions.default_mode","value":"bypass"})).await.unwrap_err().1.code,"invalid_argument");
         dispatch(&st,"settings.set",json!({"key":"permissions.default_mode","value":"auto"})).await.unwrap();assert_eq!(events.recv().await.unwrap().payload,json!({"key":"permissions.default_mode","mode":"auto"}));
-        let updated=dispatch(&st,"agent.update",json!({"agentId":id,"approvalMode":"bypass"})).await.unwrap()["agent"].clone();assert_eq!(updated["approvalMode"],"bypass");assert_eq!(updated["effectiveApprovalMode"],"bypass");assert_eq!(events.recv().await.unwrap().event_type,"agent.changed");
-        let policy=dispatch(&st,"permissions.policy.get",json!({})).await.unwrap();assert_eq!(policy["defaultMode"],"auto");assert_eq!(policy["perAgent"][0]["effectiveMode"],"bypass");
+        let updated=dispatch(&st,"agent.update",json!({"agentId":id,"approvalMode":"ask"})).await.unwrap()["agent"].clone();assert_eq!(updated["approvalMode"],"ask");assert_eq!(updated["effectiveApprovalMode"],"ask");assert_eq!(events.recv().await.unwrap().event_type,"agent.changed");
+        let policy=dispatch(&st,"permissions.policy.get",json!({})).await.unwrap();assert_eq!(policy["defaultMode"],"auto");assert_eq!(policy["perAgent"][0]["effectiveMode"],"ask");
         assert_eq!(dispatch(&st,"agent.create",json!({"name":"Bad","runtimeId":"rt-test","approvalMode":"dangerous"})).await.unwrap_err().1.code,"invalid_argument");
+    }
+    #[tokio::test]
+    async fn new_bot_full_access_default_preserves_existing_and_explicit_modes() {
+        let (st, _) = state();
+        let existing = st.db.agent_create(&json!({"name":"Existing", "runtimeId":"rt-test"})).unwrap().0;
+        for mode in ["ask", "auto", "bypass"] {
+            let created = dispatch(&st, "agent.create", json!({"name":format!("Explicit {mode}"), "runtimeId":"rt-test", "approvalMode":mode})).await.unwrap();
+            assert_eq!(created["agent"]["approvalMode"], mode);
+        }
+        let created = dispatch(&st, "agent.create", json!({"name":"New default", "runtimeId":"rt-test"})).await.unwrap();
+        assert_eq!(created["agent"]["approvalMode"], "bypass");
+        let inherited = dispatch(&st, "agent.create", json!({"name":"Chosen inheritance", "runtimeId":"rt-test", "approvalMode":null})).await.unwrap();
+        assert_eq!(inherited["agent"]["approvalMode"], Value::Null);
+        let manager = dispatch(&st, "manager.ensure", json!({"runtimeId":"rt-test"})).await.unwrap();
+        assert_eq!(manager["manager"]["approvalMode"], "bypass");
+        let unchanged = st.db.agent_get(existing["id"].as_str().unwrap()).unwrap();
+        assert_eq!(unchanged["approvalMode"], Value::Null);
+        assert_eq!(unchanged["effectiveApprovalMode"], "ask");
     }
     #[test]
     fn approval_mode_resolution_reloads_for_each_turn_and_keeps_per_agent_override(){

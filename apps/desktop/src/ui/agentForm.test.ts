@@ -11,8 +11,8 @@ function agent(partial: Partial<Agent> = {}): Agent {
 }
 
 describe('agent draft validation', () => {
-  it('creates a provider starter with Ask, its default swatch, and the matching runtime', () => {
-    expect(starterDraft({ id: 'rt-codex', provider: 'codex' })).toMatchObject({ name: 'Codex', runtimeId: 'rt-codex', color: 'blue', approvalMode: 'ask' })
+  it('creates a provider starter with Full access, its default swatch, and the matching runtime', () => {
+    expect(starterDraft({ id: 'rt-codex', provider: 'codex' })).toMatchObject({ name: 'Codex', runtimeId: 'rt-codex', color: 'blue', approvalMode: 'bypass' })
   })
   const baseline = draftFromAgent(agent())
 
@@ -63,7 +63,7 @@ describe('agent draft validation', () => {
     expect(updateParams('agent-claude', { ...baseline, color: 'coral' }, baseline)).toEqual({ agentId: 'agent-claude' })
     expect(updateParams('agent-claude', { ...baseline, defaultProject: '   ' }, baseline)).toEqual({ agentId: 'agent-claude', defaultProject: null })
     const created = createParams({ ...baseline, name: '  Pink sibling  ', color: '#F0A0C4' })
-    expect(created).toEqual({ name: 'Pink sibling', runtimeId: 'runtime-claude', description: 'Default', instructions: 'Be brief', color: 'pink', look: { shape: 'pebble', seed: 'claude' }, defaultProject: 'C:/work/site' })
+    expect(created).toEqual({ name: 'Pink sibling', runtimeId: 'runtime-claude', description: 'Default', instructions: 'Be brief', color: 'pink', look: { shape: 'pebble', seed: 'claude' }, defaultProject: 'C:/work/site', approvalMode: null })
     expect(created).not.toHaveProperty('model')
     expect(created).not.toHaveProperty('customEnv')
     const cancelled = baseline
@@ -75,7 +75,7 @@ describe('agent draft validation', () => {
     const source = agent()
     expect(duplicateParams(source, 'Copy of Claude')).toEqual({
       name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default', instructions: 'Be brief', color: '#f38c6f', look: { shape: 'pebble', seed: 'claude' },
-      model: 'gpt-test', thinking: 'high', serviceTier: 'flex', customArgs: ['--yes'], customEnv: { MODE: 'test' }, maxConcurrency: 2, defaultProject: 'C:/work/site',
+      model: 'gpt-test', thinking: 'high', serviceTier: 'flex', customArgs: ['--yes'], customEnv: { MODE: 'test' }, maxConcurrency: 2, defaultProject: 'C:/work/site', approvalMode: null,
     })
     expect(duplicateParams(source, 'Copy of Claude')).not.toHaveProperty('archived')
   })

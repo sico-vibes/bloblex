@@ -70,7 +70,8 @@ describe('approval mode UI', () => {
     expect(view.host.textContent).toContain('Ask first')
     expect(view.host.textContent).toContain('nothing changes until you approve each action')
     expect(view.host.textContent).toContain('safe actions go through, risky ones still ask')
-    expect(view.host.textContent).toContain('nothing asks; use only on a computer and project you trust')
+    expect(view.host.textContent).toContain('Full access')
+    expect(view.host.textContent).toContain('actions run without asking; automations still use safe actions only')
     const bypass = view.host.querySelector<HTMLButtonElement>('[role="radio"][data-mode="bypass"]')!
     expect(bypass.classList.contains('warning')).toBe(true)
     bypass.focus()

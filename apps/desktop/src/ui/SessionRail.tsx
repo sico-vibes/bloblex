@@ -88,7 +88,8 @@ export function fileChanges(session: Session | null): FileChange[] {
   return [...latest.values()].reverse()
 }
 
-export function SessionRail({ session, usage, appliedModel, onOpenFile, onRevealFile, onCopyPath, onDiff, onOpenFolder, runtimeFacts, onOpenRemote }: {
+export function SessionRail({ session, usage, appliedModel, onOpenFile, onRevealFile, onCopyPath, onDiff, onOpenFolder, runtimeFacts, onOpenRemote, workingBots }: {
+  workingBots?: ReactNode
   session: Session | null
   usage: readonly JsonRecord[]
   /** The model the coding agent last reported actually using, when known. */
@@ -108,7 +109,7 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
   const [remoteBusy, setRemoteBusy] = useState(false)
   const environment = useEnvironment(session?.id ?? null)
   const [showAllOutputs, setShowAllOutputs] = useState(false)
-  if (!session) return <div className="rail-empty">Open a conversation to see where it works and what it changed.</div>
+  if (!session) return <div className="session-rail">{workingBots}<div className="rail-empty">Open a conversation to see where it works and what it changed.</div></div>
   const projectPath = environment?.projectPath ?? session.projectPath ?? null
   const folderName = typeof session.workspaceLabel === 'string' && session.workspaceLabel ? session.workspaceLabel : projectPath?.split(/[\\/]/).filter(Boolean).pop() ?? null
   const used = num(session.contextUsed)
@@ -127,6 +128,7 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
   </span>
 
   return <div className="session-rail">
+    {workingBots}
     <Card id="environment" title="Environment" aside={runtimeFacts ? <HelpTip text={runtimeFacts} align="end" placement="bottom" /> : undefined}>
       <div className="rail-row"><Monitor size={13} aria-hidden="true" /><span className="rail-row-main">{environment?.host ?? 'This computer'}</span></div>
       {folderName && <div className="rail-row"><FolderOpen size={13} aria-hidden="true" /><span className="rail-row-main" title={projectPath ?? undefined}>{folderName}</span>{projectPath && platform.editor && <button type="button" className="rail-link" onClick={() => onOpenFolder(projectPath)}>Open</button>}</div>}

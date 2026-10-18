@@ -43,7 +43,7 @@ const NOTIFICATION_LEVEL_HELP: Record<'all' | 'input' | 'muted', string> = {
 const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; name: string; sentence: string; Icon: LucideIcon }> = [
   { value: 'ask', name: 'Ask first', sentence: 'nothing changes until you approve each action', Icon: Hand },
   { value: 'auto', name: 'Auto-approve', sentence: 'safe actions go through, risky ones still ask', Icon: ShieldCheck },
-  { value: 'bypass', name: 'Bypass', sentence: 'nothing asks; use only on a computer and project you trust', Icon: ShieldAlert },
+  { value: 'bypass', name: 'Full access', sentence: 'actions run without asking; automations still use safe actions only', Icon: ShieldAlert },
 ]
 
 export function BlobSettings({ draft, runtimes, projects = [], errors, execution, agentId, savedRuntimeId, sessionId, autoApprovals, sections, sessions, memoryEnabled, manager = false, locked = false, onOpenMemory, onOpenSkills, onDraftChange, onArchive, onExecutionGate }: {

@@ -89,7 +89,7 @@ export function BotWizard({ draft, errors, noun, ready, saving, providerName, on
       <div><dt>Description</dt><dd>{draft.description.trim() || 'None'}</dd></div>
       <div><dt>Brain</dt><dd>{providerName}{draft.model ? ` · ${draft.model}` : ' · default model'}{draft.thinking ? ` · ${labelize(draft.thinking)} effort` : ''}</dd></div>
       <div><dt>Instructions</dt><dd>{draft.instructions.trim() ? `${draft.instructions.trim().split(/\s+/).length} words` : 'None yet'}</dd></div>
-      <div><dt>Approvals</dt><dd>{draft.approvalMode === 'auto' ? 'Auto-approve' : draft.approvalMode === 'bypass' ? 'Bypass' : 'Ask first'}</dd></div>
+      <div><dt>Approvals</dt><dd>{draft.approvalMode === 'auto' ? 'Auto-approve' : draft.approvalMode === 'bypass' ? 'Full access' : 'Ask first'}</dd></div>
     </dl>}
 
     {blocker && <p className="bot-wizard-block" role="alert">{blocker}</p>}

@@ -100,11 +100,11 @@ export function createDraft(runtimes: readonly Runtime[], selectedRuntimeId: str
     ?? runtimes.find((runtime) => runtimeUsable(runtime))?.id
     ?? runtimes[0]?.id
     ?? ''
-  return { name: '', description: '', instructions: '', color: 'mint', look: { shape: 'circle', seed: `blob-${Math.floor(Math.random() * 0xffffffff).toString(36)}` }, runtimeId, defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: null, role: '', projectId: null, leader: false }
+  return { name: '', description: '', instructions: '', color: 'mint', look: { shape: 'circle', seed: `blob-${Math.floor(Math.random() * 0xffffffff).toString(36)}` }, runtimeId, defaultProject: null, model: null, thinking: null, serviceTier: null, approvalMode: 'bypass', role: '', projectId: null, leader: false }
 }
 
 export function starterDraft(runtime: Runtime): AgentDraft {
-  return { ...createDraft([runtime], runtime.id), name: providerDisplayNameForStarter(runtime.provider), color: starterColorFor(runtime.provider), approvalMode: 'ask' }
+  return { ...createDraft([runtime], runtime.id), name: providerDisplayNameForStarter(runtime.provider), color: starterColorFor(runtime.provider) }
 }
 
 function providerDisplayNameForStarter(provider: string) {
@@ -162,7 +162,7 @@ export function createParams(draft: AgentDraft, gate: ExecutionSendGate = CLOSED
   if (gate.model && nullableText(draft.model)) params.model = nullableText(draft.model)
   if (gate.thinking && nullableText(draft.thinking)) params.thinking = nullableText(draft.thinking)
   if (gate.serviceTier && nullableText(draft.serviceTier)) params.serviceTier = nullableText(draft.serviceTier)
-  if (draft.approvalMode) params.approvalMode = draft.approvalMode
+  params.approvalMode = draft.approvalMode
   if (draft.notificationLevel === 'input' || draft.notificationLevel === 'muted') params.notificationLevel = draft.notificationLevel
   return params
 }
@@ -182,7 +182,7 @@ export function duplicateParams(source: Agent, name: string): Record<string, unk
     customEnv: source.customEnv,
     maxConcurrency: source.maxConcurrency,
     defaultProject: source.defaultProject,
-    ...(source.approvalMode ? { approvalMode: source.approvalMode } : {}),
+    approvalMode: source.approvalMode ?? null,
   }
 }
 

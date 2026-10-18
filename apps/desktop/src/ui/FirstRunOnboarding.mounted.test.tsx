@@ -100,7 +100,7 @@ describe('FirstRunOnboarding', () => {
     input('Max', 'name')
     await act(async () => { button('Create Manager').click(); await Promise.resolve() })
     expect(saveName).toHaveBeenCalledWith('Sam')
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: 'runtime-codex', name: 'Max', model: 'gpt-6-luna', approvalMode: 'ask' }))
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: 'runtime-codex', name: 'Max', model: 'gpt-6-luna', approvalMode: 'bypass' }))
     // The first bot is customised here: the look editor sits beside the fields.
     expect(mounted.querySelector('.onboarding-bot-look')).not.toBeNull()
   })

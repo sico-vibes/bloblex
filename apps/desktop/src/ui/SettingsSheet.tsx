@@ -107,6 +107,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const Nouns = useEntityNoun({ plural: true, capital: true })
   const [page, setPage] = useState<SettingsPageId>(focusUpdates ? 'Updates' : initialPage)
   useEffect(() => { setPage(focusUpdates ? 'Updates' : initialPage) }, [initialPage, focusUpdates])
+  const [busyMode, setBusyMode] = useState<'steer' | 'queue'>('steer')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [profiles, setProfiles] = useState<Record<string, unknown>[]>([])
@@ -169,6 +170,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       ])
       const preferences = recordFrom(settingsResult)
       const settings = recordFrom(preferences.settings ?? preferences)
+      setBusyMode(settings['composer.busySendMode'] === 'queue' ? 'queue' : 'steer')
       if (typeof settings['companion.openAtStartup'] === 'boolean') setCompanionOpenAtStartup(settings['companion.openAtStartup'])
       if (typeof settings.closeToTray === 'boolean') setCloseToTrayValue(settings.closeToTray)
       const soundPrefs = soundPrefsFromSettings(settings)
@@ -516,6 +518,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
           {!loading && page === 'General' && <>
             <SettingsGroup title="System">
+              <SettingsRow label="When you send while a bot is working" hint="Steer reaches the running turn where supported; Queue waits for it to end. Ctrl+Enter (⌘+Enter on Mac) sends the other way; Shift+Enter adds a line.">
+                <Select ariaLabel="When you send while a bot is working" variant="muted" value={busyMode} disabled={saving} onChange={(value) => { const next = value === 'queue' ? 'queue' : 'steer'; void saveSetting('composer.busySendMode', next).then((failure) => { if (!failure) setBusyMode(next) }) }} options={[{ value: 'steer', label: 'Steer' }, { value: 'queue', label: 'Queue' }]} />
+              </SettingsRow>
               <SettingsRow label="Run setup again" hint="Review the welcome steps and coding agent sign-in status.">
                 <button type="button" className="secondary-button small" onClick={onRunSetup}>Run setup</button>
               </SettingsRow>
@@ -602,7 +607,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               {experiments.autoRetry && <SettingsRow label="Longest wait for a rate limit" hint="Automatic retry gives up when the limit resets later than this.">
                 <Select ariaLabel="Longest wait for a rate limit" variant="muted" value={String(retryMaxWaitSecs)} disabled={saving} onChange={(value) => { const next = Number(value); void saveSetting('retry.maxWaitSecs', next).then((failure) => { if (!failure) setRetryMaxWaitSecs(next) }) }} options={[{ value: '0', label: 'Do not wait' }, { value: '3600', label: '1 hour' }, { value: '21600', label: '6 hours' }, { value: '86400', label: '24 hours' }]} />
               </SettingsRow>}
-              <SettingsRow label={<span className="experimental-label">Steer a running Codex turn<span className="experimental-tag">Experimental</span></span>} hint={`Adds Steer beside Queue while a Codex ${noun} works, which adds your message to the turn that is running now. It uses Codex's turn/steer request and has not been verified against a live Codex turn. If the turn already ended, the message is queued instead. Claude Code and OpenCode only queue.`}>
+              <SettingsRow label={<span className="experimental-label">Steer a running Codex turn<span className="experimental-tag">Experimental</span></span>} hint="Enables steering for running Codex turns. Choose Steer or Queue in General. If the turn has ended, your message queues instead; other coding agents currently only queue.">
                 <button type="button" className={`toggle ${steerGate ? 'on' : ''}`} role="switch" aria-label="Steer a running Codex turn" aria-checked={steerGate} disabled={saving} onClick={() => { const next = !steerGate; void saveSetting('exec_gate.codex.steer', next).then((failure) => { if (!failure) setSteerGate(next) }) }}><i /></button>
               </SettingsRow>
             </SettingsGroup>

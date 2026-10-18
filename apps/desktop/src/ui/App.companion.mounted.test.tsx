@@ -396,6 +396,38 @@ describe('companion drag and usage labels', () => {
     expect(view.host.querySelector('.companion-queue-note')?.textContent).toBe('1 queued · sends when this turn ends')
   })
 
+  it('steers or queues from the companion with the preference and Ctrl+Enter', async () => {
+    const working = session({ ...claudeSession, state: 'working' })
+    configure(snapshot({ sessions: [working] }))
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'settings.get') return { settings: { 'composer.busySendMode': 'steer' } }
+      if (method === 'runtime.capabilities') return { settings: { steer: { supported: true, enabled: true } } }
+      if (method === 'session.steer' || method === 'session.queue.add') return {}
+      return base(method, params)
+    })
+    const view = startApp('?companion=1')
+    await view.settle()
+    await press(view.host, 'Open companion home')
+    await view.settle()
+    await press(view.host, 'Chat')
+    await view.settle()
+    const typeAndSend = async (text: string, ctrl: boolean) => {
+      const textarea = view.host.querySelector<HTMLTextAreaElement>('.companion-chat-composer textarea')!
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(textarea, text)
+        textarea.dispatchEvent(new Event('input', { bubbles: true }))
+        await settleMicrotasks()
+      })
+      await act(async () => { textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: ctrl, bubbles: true, cancelable: true })); await settleMicrotasks() })
+      await view.settle()
+    }
+    await typeAndSend('Steer this turn', false)
+    expect(h.rpc).toHaveBeenCalledWith('session.steer', { sessionId: 'session-claude', text: 'Steer this turn' })
+    await typeAndSend('Queue this one', true)
+    expect(h.rpc).toHaveBeenCalledWith('session.queue.add', { sessionId: 'session-claude', text: 'Queue this one' })
+  })
+
   it('denies an approval on Escape without collapsing the companion', async () => {
     configure(snapshot({
       sessions: [{ ...claudeSession, state: 'waiting_permission' }],

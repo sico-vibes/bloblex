@@ -314,7 +314,7 @@ describe('blob roster and editor', () => {
     await click(buttonNamed(view.host, 'Create Manager'))
     await view.settle()
     const create = h.rpc.mock.calls.find(([method]) => method === 'manager.ensure')
-    expect(create?.[1]).toMatchObject({ name: 'Codex', runtimeId: 'runtime-codex', color: 'violet', approvalMode: 'ask' })
+    expect(create?.[1]).toMatchObject({ name: 'Codex', runtimeId: 'runtime-codex', color: 'violet', approvalMode: 'bypass' })
   })
 
   it('keeps an existing session-only workspace in the shell instead of auto-opening onboarding', async () => {
@@ -478,7 +478,7 @@ describe('blob roster and editor', () => {
     const create = h.rpc.mock.calls.find((call) => call[0] === 'agent.create')
     expect(create?.[1]).toStrictEqual({
       name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default agent for Claude.', instructions: '', color: '#f38c6f',
-      look: { shape: 'circle', seed: 'agent-claude' }, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
+      look: { shape: 'circle', seed: 'agent-claude' }, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, approvalMode: null,
     })
     expect(create?.[1]).not.toHaveProperty('archived')
     expect(rows(view.host).some((row) => row.textContent?.includes('Copy of Claude'))).toBe(true)
@@ -495,7 +495,7 @@ describe('blob roster and editor', () => {
     const create = h.rpc.mock.calls.find((call) => call[0] === 'agent.create')
     expect(create?.[1]).toStrictEqual({
       name: 'Copy of Claude', runtimeId: 'runtime-claude', description: 'Default agent for Claude.', instructions: '', color: '#f38c6f',
-      look: { shape: 'cloud', seed: 'claude', traits: { 'sun.n': 0.2 } }, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null,
+      look: { shape: 'cloud', seed: 'claude', traits: { 'sun.n': 0.2 } }, model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, approvalMode: null,
     })
   })
 
@@ -1020,6 +1020,11 @@ describe('blob roster and editor', () => {
     await typeInto(view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea'), 'Also check the date format')
     expect(view.host.querySelector('[aria-label="Steer now"]')).toBeNull()
     expect(view.host.querySelector('[aria-label="Queue message"]')).not.toBeNull()
+    // F4: the constant pre-send reason line is gone; the explanation waits for a send that queued.
+    expect(view.host.querySelector('.composer-send-reason')).toBeNull()
+    await click(view.host.querySelector('[aria-label="Queue message"]'))
+    await view.settle()
+    expect(view.host.querySelector('.composer-send-reason')?.textContent).toContain('Steering is unavailable')
     view.unmount()
     // Gate on: Steer appears and calls session.steer, not session.prompt.
     enabled = true
@@ -1110,7 +1115,49 @@ describe('blob roster and editor', () => {
     // The queued conversation says it is waiting, with no empty first-run screen.
     expect(view.host.querySelector('.session-first-state')).toBeNull()
     const indicator = view.host.querySelector('.working-indicator.waiting')
-    expect(indicator?.textContent).toContain('Waiting for Codex to finish another conversation')
+    expect(indicator?.textContent).toContain('Waiting for a free working slot for Codex')
+  })
+
+  it.each(['steer', 'queue'] as const)('uses the %s preference and Ctrl+Enter sends the other way', async (mode) => {
+    const working = session({ id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', state: 'working', messages: [{ role: 'user', content: 'Work' }] })
+    configure(snapshot({ sessions: [working, ...sessions.filter(s => s.id !== working.id)] }))
+    h.getActiveSession.mockResolvedValue(working.id)
+    h.getActiveRuntime.mockResolvedValue(working.runtimeId)
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'settings.get') return { settings: { 'composer.busySendMode': mode } }
+      if (method === 'runtime.capabilities') return { settings: { steer: { supported: true, enabled: true } } }
+      if (method === 'session.steer' || method === 'session.queue.add') return {}
+      return base(method, params)
+    })
+    const view = startApp(); await view.settle()
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea')!
+    await typeInto(textarea, 'First follow-up')
+    await act(async () => { textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith(mode === 'steer' ? 'session.steer' : 'session.queue.add', { sessionId: working.id, text: 'First follow-up' })
+    await typeInto(textarea, 'Other way')
+    await act(async () => { textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })) })
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith(mode === 'steer' ? 'session.queue.add' : 'session.steer', { sessionId: working.id, text: 'Other way' })
+    expect(view.host.querySelector('.composer-send-mode')?.textContent).toContain('Ctrl')
+  }, 15_000)
+
+  it('shows live side-conversation activity and messages with Agent activity off', async () => {
+    const side = session({ id: 'live-side', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Research', state: 'working', link: { kind: 'side', peerAgentId: 'agent-claude' }, messages: [{ id: 'request', role: 'user', content: 'Investigate the bug', meta: { kind: 'blob_message', fromAgentId: 'agent-claude', fromName: 'Claude' } }], tools: [{ id: 'tool', kind: 'read', state: 'running', title: 'Read report', detail: { path: 'report.md' } }] })
+    configure(snapshot({ sessions: [...sessions, side] }))
+    const view = startApp(); await view.settle()
+    await click(view.host.querySelector('[aria-label="Toggle context pane"]'))
+    await click(view.host.querySelector('[data-task-id="live-side"]'))
+    expect(view.host.querySelector('.side-header')).not.toBeNull()
+    expect(view.host.querySelector('.conversation-log')?.textContent ?? view.host.textContent).toContain('Investigate the bug')
+    expect(view.host.querySelector('.activity-summary')).not.toBeNull()
+    await act(async () => emit({ type: 'tool.changed', sequence: 199, payload: { sessionId: side.id, tool: { id: 'new-tool', kind: 'read', state: 'running', title: 'Read notes', detail: { path: 'notes.md' } } } } as DaemonEvent))
+    await click(view.host.querySelector('.activity-summary-toggle'))
+    expect(view.host.querySelector('.activity-summary')?.textContent).toContain('Read notes.md')
+    await act(async () => emit({ type: 'message.delta', sequence: 200, payload: { sessionId: side.id, messageId: 'reply', role: 'assistant', delta: 'Found the cause' } } as DaemonEvent))
+    expect(view.host.querySelector('.side-target')?.textContent).toContain('Found the cause')
+    expect(view.host.querySelector('.working-indicator')?.textContent).toContain('Codex is working')
   })
 
   it('answers an inline question with the chosen option', async () => {

@@ -21,7 +21,7 @@ export function ManagerSetupCard({ runtimes, disabled, onCreate }: {
     if (busy || disabled || !selectedRuntimeId) return
     setBusy(true)
     try {
-      const draft: AgentDraft = { ...createDraft(runtimes, selectedRuntimeId), name: name.trim() || 'Manager', runtimeId: selectedRuntimeId, color: 'violet', approvalMode: 'ask' }
+      const draft: AgentDraft = { ...createDraft(runtimes, selectedRuntimeId), name: name.trim() || 'Manager', runtimeId: selectedRuntimeId, color: 'violet' }
       await onCreate(draft)
     } finally { setBusy(false) }
   }
@@ -30,7 +30,7 @@ export function ManagerSetupCard({ runtimes, disabled, onCreate }: {
       <span className="manager-setup-icon" aria-hidden="true"><BriefcaseBusiness size={14} /></span>
       <strong>Meet your Manager</strong>
     </header>
-    <p>One bot that knows every project and bot, plans the work with you, and asks before it creates anything.</p>
+    <p>One bot that knows every project and bot, plans the work with you, and asks before it creates anything. Starts with Full access on this device; team changes still need your approval.</p>
     {!selectedRuntimeId && <p role="status">No coding agent is ready yet.</p>}
     {!open
       ? <button type="button" className="primary-button small" disabled={disabled || !selectedRuntimeId} onClick={() => setOpen(true)}>Set it up</button>

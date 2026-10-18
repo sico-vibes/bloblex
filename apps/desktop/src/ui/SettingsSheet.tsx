@@ -29,6 +29,7 @@ import { setAccentColor, setThemeStyle, useAccentColor, useThemeStyle } from '..
 import { LookPicker } from './LookPicker'
 import { RowCopy, SettingsGroup, SettingsRow } from './SettingsParts'
 import { RemoteSettings } from './RemoteSettings'
+import { DiagnosticsDialog } from './DiagnosticsDialog'
 import { LookPreview } from './LookPreview'
 import { searchSettings, type SettingsIndexEntry } from './settingsIndex'
 import { AccentPicker } from './AccentPicker'
@@ -130,6 +131,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
   const [retryMaxWaitSecs, setRetryMaxWaitSecs] = useState(21600)
   const [profileAbout, setProfileAbout] = useState('')
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [sharedMemoryWrites, setSharedMemoryWrites] = useState(false)
   const [keepAwake, setKeepAwake] = useState(false)
   // FIX39 item 18: the only concurrency limit — "Bots working at once",
@@ -582,6 +584,11 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                 <button type="button" className={`toggle ${notificationsEnabled ? 'on' : ''}`} role="switch" aria-label={`Notify when a ${noun} finishes or needs approval`} aria-checked={notificationsEnabled} onClick={() => void setNotifications(!notificationsEnabled)} disabled={saving}><i /></button>
               </SettingsRow>
             </SettingsGroup>
+            <SettingsGroup title="Support">
+              <SettingsRow label="Export diagnostics" hint="One zip with the recent logs, versions and settings, with message text and secrets removed. You choose where it is saved; nothing is uploaded.">
+                <button type="button" className="secondary-button small" onClick={() => setDiagnosticsOpen(true)} disabled={saving}>Export diagnostics</button>
+              </SettingsRow>
+            </SettingsGroup>
           </>}
 
           {!loading && page === 'Experimental' && <>
@@ -773,6 +780,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
         </div>
       </section>
       {profileDeleteTarget && <ConfirmDialog title={`Remove ${profileDeleteTarget.name}?`} body="This removes the custom launcher profile from Bitbots. It does not uninstall the coding agent." confirmLabel="Remove" cancelLabel="Keep launcher" holdToConfirm successTitle="Launcher removed" successBody="The custom launcher profile was removed from Bitbots." onConfirm={async () => { await deleteProfile(profileDeleteTarget.id) }} onComplete={() => setProfileDeleteTarget(null)} onCancel={() => setProfileDeleteTarget(null)} />}
+      {diagnosticsOpen && <DiagnosticsDialog onClose={() => setDiagnosticsOpen(false)} />}
     </div>
 }
 

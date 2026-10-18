@@ -54,6 +54,7 @@ enum SelectedFilePurpose {
     Import,
     BackupExport,
     BackupImport,
+    DiagnosticsExport,
 }
 
 struct SelectedFilePath {
@@ -804,17 +805,162 @@ fn select_backup_import_path(app: AppHandle, state: State<'_, AppState>) -> Resu
     Ok(Some(remember_selected_path(&state, path, SelectedFilePurpose::BackupImport)?))
 }
 
+/// The Bitbots data folder the daemon uses: `%LOCALAPPDATA%\Bitbots` (or the
+/// parent of `BLOBLEX_DB_PATH` when a test or a portable install overrides it).
+fn bitbots_data_dir() -> Option<PathBuf> {
+    std::env::var_os("BLOBLEX_DB_PATH")
+        .map(PathBuf::from)
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(|local| PathBuf::from(local).join("Bitbots")))
+}
+
+/// FIX39 P12: the shell's own log file, beside the daemon's, under `logs/`.
+/// Only fixed messages and OS error text are written here, never user text,
+/// credentials, tokens or file contents.
+fn log_shell(level: &str, message: &str) {
+    let Some(dir) = bitbots_data_dir().map(|base| base.join("logs")) else { return };
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    // Pruning reads the folder and every file's metadata; do it once per day
+    // rather than on every line, so a burst of companion-resize lines does not
+    // stat the folder hundreds of times.
+    let day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let prune = match SHELL_LOG_DAY.lock() {
+        Ok(mut last) => should_prune_shell_logs(&mut last, &day),
+        Err(_) => false,
+    };
+    if prune {
+        prune_shell_logs(&dir);
+    }
+    let name = format!("desktop.{day}.log");
+    let line = format!(
+        "{} {level} {}\n",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        redact_log_line(message)
+    );
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join(name)) {
+        use std::io::Write;
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// The day whose log file was last pruned; the folder is pruned again when it
+/// changes, not on every line.
+static SHELL_LOG_DAY: Mutex<Option<String>> = Mutex::new(None);
+
+/// True when the day changed since the last prune (and records the new day).
+fn should_prune_shell_logs(last: &mut Option<String>, day: &str) -> bool {
+    let changed = last.as_deref() != Some(day);
+    *last = Some(day.to_string());
+    changed
+}
+
+/// A last guard for the shell's own lines, mirroring the daemon's redaction:
+/// every `Bearer` (not just the first), `key=value`, `key: value`, and the JSON
+/// form `"key":"value"` for the words that name credentials.
+fn redact_log_line(message: &str) -> String {
+    let mut out = message.to_string();
+    for marker in ["Bearer ", "bearer "] {
+        let mut from = 0;
+        while let Some(found) = out[from..].find(marker) {
+            let start = from + found + marker.len();
+            let end = out[start..].find([' ', '\n', ';', '"']).map(|offset| start + offset).unwrap_or(out.len());
+            if end <= start {
+                from = start;
+                continue;
+            }
+            out.replace_range(start..end, "[redacted]");
+            from = start + "[redacted]".len();
+        }
+    }
+    for key in ["token", "password", "secret", "capability", "credential", "authorization", "cookie", "api_key", "apikey"] {
+        let mut from = 0;
+        loop {
+            let Some(found) = out[from..].to_ascii_lowercase().find(key) else { break };
+            let key_start = from + found;
+            let mut cursor = key_start + key.len();
+            // A closing quote may sit between the key and the separator (JSON).
+            if out[cursor..].starts_with('"') {
+                cursor += 1;
+            }
+            let rest = &out[cursor..];
+            cursor += rest.len() - rest.trim_start().len();
+            match out[cursor..].chars().next() {
+                Some('=') | Some(':') => cursor += 1,
+                _ => {
+                    from = key_start + key.len();
+                    continue;
+                }
+            }
+            let after = &out[cursor..];
+            cursor += after.len() - after.trim_start().len();
+            // A quoted value is redacted up to its closing quote; a bare value
+            // ends at the first delimiter.
+            let close = out[cursor..].chars().next().filter(|character| *character == '"' || *character == '\'');
+            let (value_start, end) = match close {
+                Some(quote) => {
+                    let value_start = cursor + 1;
+                    (value_start, out[value_start..].find(quote).map(|offset| value_start + offset).unwrap_or(out.len()))
+                }
+                None => (cursor, out[cursor..].find([' ', '\n', ';', ',', '"', '}', ']']).map(|offset| cursor + offset).unwrap_or(out.len())),
+            };
+            if end <= value_start {
+                from = cursor;
+                continue;
+            }
+            out.replace_range(value_start..end, "[redacted]");
+            from = value_start + "[redacted]".len();
+        }
+    }
+    out
+}
+
+/// Keep the shell's own log files to about 20 MB, oldest first, matching the
+/// daemon's cap on the shared folder.
+fn prune_shell_logs(dir: &Path) {
+    const MAX: u64 = 20 * 1024 * 1024;
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let mut files: Vec<(String, u64)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("desktop.") || !name.ends_with(".log") {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            metadata.is_file().then_some((name, metadata.len()))
+        })
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut total: u64 = files.iter().map(|(_, size)| *size).sum();
+    for (name, size) in files.iter().skip(1) {
+        if total <= MAX {
+            break;
+        }
+        if fs::remove_file(dir.join(name)).is_ok() {
+            total = total.saturating_sub(*size);
+        }
+    }
+}
+
+/// Writes bytes to `path` through a sibling temp file and a rename, so a
+/// half-written file never replaces a good one.
+fn write_bytes_file(path: &Path, bytes: &[u8], what: &str) -> Result<(), String> {
+    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    fs::create_dir_all(&parent).map_err(|_| format!("The {what} folder could not be created."))?;
+    let temp = parent.join(format!(".{}.tmp", Uuid::new_v4()));
+    fs::write(&temp, bytes).map_err(|_| format!("The {what} could not be written."))?;
+    fs::rename(&temp, path).map_err(|error| {
+        let _ = fs::remove_file(&temp);
+        format!("The {what} could not be written: {error}")
+    })
+}
+
 /// Writes bytes to `path` through a sibling temp file and a rename, so a
 /// half-written backup never replaces a good one.
 fn write_backup_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
-    fs::create_dir_all(&parent).map_err(|_| "The backup folder could not be created.".to_string())?;
-    let temp = parent.join(format!(".{}.tmp", Uuid::new_v4()));
-    fs::write(&temp, bytes).map_err(|_| "The backup could not be written.".to_string())?;
-    fs::rename(&temp, path).map_err(|error| {
-        let _ = fs::remove_file(&temp);
-        format!("The backup could not be written: {error}")
-    })
+    write_bytes_file(path, bytes, "backup")
 }
 
 #[tauri::command]
@@ -852,6 +998,45 @@ async fn backup_import_preview(state: State<'_, AppState>, selection_token: Stri
     let document: Value = serde_json::from_slice(&bytes).map_err(|_| "This is not a Bitbots backup file.".to_string())?;
     let conn = connection(&state)?;
     rpc_call(&conn, "backup.preview", json!({ "document": document })).await
+}
+
+/// FIX39 P12: the save dialog for the diagnostics `.zip`; returns an opaque
+/// selection token. The renderer never supplies a path.
+#[tauri::command]
+fn select_diagnostics_export_path(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let suggested_name = format!("bitbots-diagnostics-{}.zip", chrono::Utc::now().format("%Y-%m-%d"));
+    let Some(selected) = app
+        .dialog()
+        .file()
+        .set_title("Save the diagnostics file")
+        .set_file_name(suggested_name)
+        .add_filter("Zip", &["zip"])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let path = selected.into_path().map_err(|_| "The selected file path is unavailable.".to_string())?;
+    Ok(Some(remember_selected_path(&state, path, SelectedFilePurpose::DiagnosticsExport)?))
+}
+
+/// Asks the daemon for the diagnostics zip and writes it to the chosen path.
+/// The zip is base64 over the loopback RPC; the renderer only sees a summary.
+#[tauri::command]
+async fn diagnostics_export_write(state: State<'_, AppState>, selection_token: String) -> Result<Value, String> {
+    let path = take_selected_path(&state, &selection_token, SelectedFilePurpose::DiagnosticsExport)?;
+    let conn = connection(&state)?;
+    let result = rpc_call(&conn, "diagnostics.export", json!({})).await?;
+    let encoded = result.get("base64").and_then(Value::as_str).ok_or_else(|| "The diagnostics file could not be created.".to_string())?;
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| "The diagnostics file could not be created.".to_string())?;
+    write_bytes_file(&path, &bytes, "diagnostics file")?;
+    log_shell("info", "diagnostics exported");
+    Ok(json!({
+        "path": path.to_string_lossy(),
+        "sizeBytes": bytes.len(),
+        "files": result.get("files").cloned().unwrap_or(Value::Null),
+    }))
 }
 
 const MAX_STAGED_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
@@ -1348,6 +1533,7 @@ fn set_companion_mode(
                 window.set_size(tauri::PhysicalSize::new(width as u32, height as u32))
             {
                 eprintln!("Bitbots companion resize: {error}");
+                log_shell("warn", &format!("companion resize failed: {error}"));
                 break;
             }
             let next_position = PhysicalPosition::new(
@@ -1357,6 +1543,7 @@ fn set_companion_mode(
             let next_position=clamp_companion_position(next_position,width,height,&work_areas,initial_center);
             if let Err(error) = window.set_position(next_position) {
                 eprintln!("Bitbots companion anchor: {error}");
+                log_shell("warn", &format!("companion anchor failed: {error}"));
                 break;
             }
             last_width = width;
@@ -2406,11 +2593,13 @@ pub fn run() {
         .manage(speech::SpeechState::default())
         .manage(power::PowerState::default())
         .setup(|app| {
+            log_shell("info", concat!("desktop started version ", env!("CARGO_PKG_VERSION")));
             let mut start_at_last_position = false;
             let mut hotkey_enabled = true;
             if let Some(state) = app.try_state::<AppState>() {
                 if let Err(error) = start_daemon(app.handle(), &state) {
                     eprintln!("Bitbots daemon startup: {error}");
+                    log_shell("warn", &format!("daemon startup failed: {error}"));
                 }
                 if let Ok(conn) = connection(&state) {
                     if let Ok(settings) =
@@ -2436,6 +2625,7 @@ pub fn run() {
                 let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
                 if let Err(error) = app.global_shortcut().register(shortcut) {
                     eprintln!("Bitbots companion shortcut unavailable: {error}");
+                    log_shell("warn", &format!("companion shortcut unavailable: {error}"));
                 }
             }
             // Ctrl+E is registered by the main window once it knows dictation is
@@ -2484,6 +2674,8 @@ pub fn run() {
             select_backup_import_path,
             backup_export_write,
             backup_import_preview,
+            select_diagnostics_export_path,
+            diagnostics_export_write,
             inspect_local_file,
             stage_prompt_attachment,
             open_in_editor,
@@ -2549,8 +2741,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod markdown_export_tests {
-    use super::{remember_selected_path, take_selected_path, write_backup_file, write_markdown_export, AppState, SelectedFilePurpose};
+    use super::{redact_log_line, remember_selected_path, should_prune_shell_logs, take_selected_path, write_backup_file, write_bytes_file, write_markdown_export, AppState, SelectedFilePurpose};
     use std::path::PathBuf;
+    use std::fs;
 
     #[test]
     fn export_rejects_a_path_not_selected_by_the_native_dialog() {
@@ -2598,6 +2791,56 @@ mod markdown_export_tests {
         let import = remember_selected_path(&state, PathBuf::from("C:/selected/restore.json"), SelectedFilePurpose::BackupImport).unwrap();
         assert_eq!(take_selected_path(&state, &import, SelectedFilePurpose::BackupImport).unwrap(), PathBuf::from("C:/selected/restore.json"));
         assert!(take_selected_path(&state, &import, SelectedFilePurpose::BackupImport).is_err());
+    }
+
+    #[test]
+    fn diagnostics_selection_purpose_is_separate_and_the_writer_is_atomic() {
+        let state = AppState::default();
+        let backup = remember_selected_path(&state, PathBuf::from("C:/selected/backup.json"), SelectedFilePurpose::BackupExport).unwrap();
+        assert!(take_selected_path(&state, &backup, SelectedFilePurpose::DiagnosticsExport).is_err());
+        let diagnostics = remember_selected_path(&state, PathBuf::from("C:/selected/diagnostics.zip"), SelectedFilePurpose::DiagnosticsExport).unwrap();
+        assert_ne!(diagnostics, "C:/selected/diagnostics.zip");
+        assert!(take_selected_path(&state, &diagnostics, SelectedFilePurpose::BackupExport).is_err());
+        assert!(take_selected_path(&state, &diagnostics, SelectedFilePurpose::DiagnosticsExport).is_err());
+
+        // The bytes land at the chosen path through a temp file and rename.
+        let dir = std::env::temp_dir().join(format!("bitbots-diagnostics-write-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("nested/diagnostics.zip");
+        write_bytes_file(&path, b"PK\x03\x04diagnostics", "diagnostics file").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"PK\x03\x04diagnostics");
+        let leftovers: Vec<_> = fs::read_dir(dir.join("nested")).unwrap().flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(leftovers, vec!["diagnostics.zip".to_string()]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_shell_log_line_drops_tokens_and_passwords() {
+        let line = redact_log_line("daemon startup failed: token=deadbeef password: swordfish Bearer abcdefghi");
+        assert!(!line.contains("deadbeef"), "{line}");
+        assert!(!line.contains("swordfish"), "{line}");
+        assert!(!line.contains("abcdefghi"), "{line}");
+        assert!(line.contains("daemon startup failed"), "{line}");
+    }
+
+    #[test]
+    fn the_shell_log_line_drops_every_bearer_and_json_shaped_secret() {
+        let line = redact_log_line(
+            r#"first Bearer abcdefghi second Bearer jklmnopqr {"cookie":"cookieval","authorization": "authval","api_key":"keyval"} Authorization: Bearervalue"#,
+        );
+        for secret in ["abcdefghi", "jklmnopqr", "cookieval", "authval", "keyval", "Bearervalue"] {
+            assert!(!line.contains(secret), "the shell redactor left {secret}: {line}");
+        }
+        assert!(line.contains("first"), "{line}");
+        assert!(line.contains("second"), "the first replacement must not stop the scan: {line}");
+    }
+
+    #[test]
+    fn the_shell_prunes_the_log_folder_only_when_the_day_changes() {
+        let mut last: Option<String> = None;
+        assert!(should_prune_shell_logs(&mut last, "2026-10-18"), "the first line of the process prunes");
+        assert!(!should_prune_shell_logs(&mut last, "2026-10-18"), "later lines on the same day do not");
+        assert!(should_prune_shell_logs(&mut last, "2026-10-19"), "a new day prunes once");
+        assert!(!should_prune_shell_logs(&mut last, "2026-10-19"));
     }
 
     #[test]

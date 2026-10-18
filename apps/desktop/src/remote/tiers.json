@@ -674,6 +674,20 @@
       "params": null
     },
     {
+      "method": "diagnostics.preview",
+      "class": "never",
+      "minTier": null,
+      "why": "The local log and settings listing is the owner's at the computer, not a paired device's.",
+      "params": null
+    },
+    {
+      "method": "diagnostics.export",
+      "class": "never",
+      "minTier": null,
+      "why": "A remote device must not pull the host's diagnostics zip off the computer.",
+      "params": null
+    },
+    {
       "method": "pricing.*",
       "class": "never",
       "minTier": null,

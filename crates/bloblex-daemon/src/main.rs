@@ -36,6 +36,7 @@ use std::sync::Mutex as StdMutex;
 use uuid::Uuid;
 
 mod catalog;
+mod diagnostics;
 mod mcp_bridge;
 mod model_presentation;
 mod team;
@@ -819,6 +820,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "memory.list" | "memory.get" | "memory.create" | "memory.update" | "memory.approve" | "memory.delete" | "memory.restore" => memory::rpc(st, method, &p).await,
         "skills.list" | "skills.get" | "skills.forAgent" | "skills.scan" | "skills.import" | "skills.delete" | "skills.toggle" => skills::rpc(st, method, &p).await,
         "backup.export" | "backup.preview" | "backup.import" => backup::rpc(st, method, &p).await,
+        "diagnostics.preview" | "diagnostics.export" => diagnostics::rpc(st, method, &p).await,
         "exec.snapshot.get" => {
             let id=p["snapshotId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","snapshotId is required",StatusCode::BAD_REQUEST))?;
             st.db.exec_snapshot_get(id).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?.ok_or_else(||derr("not_found","execution snapshot not found",StatusCode::NOT_FOUND))
@@ -1345,6 +1347,7 @@ fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
     if k == "conversations.autoTitle" && !value.is_boolean() { return Err(derr("invalid_argument", "conversations.autoTitle requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "appearance.style" && !value.as_str().is_some_and(|v| ["bitbots", "blobots"].contains(&v)) { return Err(derr("invalid_argument", "appearance.style must be bitbots or blobots", StatusCode::BAD_REQUEST)); }
     if k == "appearance.accent" && !value.as_str().is_some_and(|v| v.is_empty() || is_accent_hex(v)) { return Err(derr("invalid_argument", "appearance.accent must be empty or a #rrggbb hex colour", StatusCode::BAD_REQUEST)); }
+    if k == "diagnostics.logLevel" && !value.as_str().is_some_and(|v| ["info", "debug"].contains(&v)) { return Err(derr("invalid_argument", "diagnostics.logLevel must be info or debug", StatusCode::BAD_REQUEST)); }
     let mut stored = value.clone();
     if k == "appearance.accent" { stored = json!(value.as_str().unwrap_or("").to_ascii_lowercase()); }
     if k == "profile.about" {
@@ -4144,6 +4147,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let data_dir = db_path.parent().map(PathBuf::from);
     let db = Arc::new(Storage::open(db_path)?);
+    // FIX39 P12: the rolling log file. Level `info` unless the hidden
+    // `diagnostics.logLevel` setting says `debug` (or `RUST_LOG` overrides).
+    let log_level = db
+        .settings()
+        .ok()
+        .and_then(|settings| settings.get(diagnostics::LOG_LEVEL_SETTING).and_then(Value::as_str).map(str::to_owned))
+        .filter(|level| level == "debug")
+        .unwrap_or_else(|| "info".to_string());
+    let _log_guard = data_dir.as_deref().and_then(|dir| diagnostics::init_logging(dir, &log_level));
     let recovered_sessions = db.recover_after_restart()?;
     let token = new_capability();
     let (events, _) = broadcast::channel(1024);
@@ -4263,10 +4275,6 @@ async fn main() {
         eprintln!("official price table validation failed: {error}");
         std::process::exit(1);
     }
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
-        .init();
     if let Err(e) = run().await {
         eprintln!("bitbotsd failed: {e}");
         std::process::exit(1)
@@ -10540,6 +10548,233 @@ mod phase2a_tests {
         let result = import_of(&st, &preview, json!({})).await.unwrap();
         assert_eq!(result["imported"]["memory"], 0);
         assert_eq!(result["skipped"]["memory"], 1);
+    }
+}
+
+/// FIX39 P12: local diagnostics. The export test proves end to end that message
+/// text, command text, tokens and credentials never reach the log file or the
+/// zip; the static test proves no daemon log call site passes user text.
+#[cfg(test)]
+mod fix39_p12_tests {
+    use super::phase2a_tests::state;
+    use super::*;
+    use base64::Engine as _;
+    use std::io::Read as _;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bloblex-{tag}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn zip_entries(base64: &str) -> Vec<(String, String)> {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(base64).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut out = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_string();
+            let mut text = String::new();
+            entry.read_to_string(&mut text).unwrap();
+            out.push((name, text));
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn diagnostics_export_never_carries_text_tokens_or_credentials() {
+        let (st, _) = state();
+        let dir = temp_dir("diagnostics-export");
+        *st.team.data_dir.lock().unwrap() = Some(dir.clone());
+        let logs = diagnostics::log_dir(&dir);
+        std::fs::create_dir_all(&logs).unwrap();
+        // A log file as an older build could have left it: a secret-shaped
+        // token and a password must be gone on the way into the zip.
+        std::fs::write(
+            logs.join("daemon.2026-10-18.log"),
+            "INFO runtime discovery finished code=0\nWARN quota poll failed token=deadbeefcafe password: swordfish\n",
+        )
+        .unwrap();
+        std::fs::write(logs.join("desktop.2026-10-18.log"), "INFO desktop started\n").unwrap();
+
+        st.db
+            .push_event("message.completed", &json!({
+                "sessionId": "s-1",
+                "text": "PRIVATE MESSAGE TEXT",
+                "delta": "PRIVATE DELTA TEXT",
+                "command": "PRIVATE COMMAND TEXT",
+                "output": "PRIVATE COMMAND OUTPUT",
+                "recap": "PRIVATE RECAP TEXT",
+                "message": { "id": "m-1", "content": "PRIVATE NESTED MESSAGE" },
+            }))
+            .unwrap();
+        // The real shape of a `permission.requested` question, at
+        // `main.rs`'s QuestionRequested branch: the agent's question text, the
+        // option labels and their descriptions are all conversation content.
+        st.db
+            .push_event("permission.requested", &json!({
+                "id": "perm-1", "sessionId": "s-2", "runtimeId": "rt-1",
+                "kind": "question", "category": "question", "risk": "none", "status": "pending",
+                "title": "PRIVATE QUESTION TITLE",
+                "detail": "PRIVATE QUESTION DETAIL",
+                "questions": [{
+                    "question": "PRIVATE QUESTION TEXT",
+                    "header": "PRIVATE QUESTION HEADER",
+                    "options": [
+                        { "label": "PRIVATE OPTION LABEL", "description": "PRIVATE OPTION DESCRIPTION" }
+                    ]
+                }]
+            }))
+            .unwrap();
+        st.db
+            .set_setting("remote.native.account", &json!({"username": "owner", "hash": "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$PRIVATEHASHDIGEST"}))
+            .unwrap();
+        st.db.set_setting("profile.about", &json!("PRIVATE PROFILE ABOUT")).unwrap();
+        st.db.set_setting("internal.delete.workspaces.s-3", &json!({"deadline": 8000})).unwrap();
+
+        let export = dispatch(&st, "diagnostics.export", json!({})).await.unwrap();
+        let entries = zip_entries(export["base64"].as_str().unwrap());
+        let names: Vec<&str> = entries.iter().map(|(name, _)| name.as_str()).collect();
+        assert!(names.contains(&"README.txt"), "{names:?}");
+        assert!(names.contains(&"environment.json"), "{names:?}");
+        assert!(names.contains(&"settings.json"), "{names:?}");
+        assert!(names.contains(&"events.json"), "{names:?}");
+        assert!(names.iter().any(|name| name.starts_with("logs/")), "{names:?}");
+
+        let all = entries.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>().join("\n");
+        for forbidden in [
+            "PRIVATE MESSAGE TEXT",
+            "PRIVATE DELTA TEXT",
+            "PRIVATE COMMAND TEXT",
+            "PRIVATE COMMAND OUTPUT",
+            "PRIVATE RECAP TEXT",
+            "PRIVATE NESTED MESSAGE",
+            "PRIVATE QUESTION TITLE",
+            "PRIVATE QUESTION DETAIL",
+            "PRIVATE QUESTION TEXT",
+            "PRIVATE QUESTION HEADER",
+            "PRIVATE OPTION LABEL",
+            "PRIVATE OPTION DESCRIPTION",
+            "PRIVATE PROFILE ABOUT",
+            "PRIVATEHASHDIGEST",
+            "deadbeefcafe",
+            "swordfish",
+        ] {
+            assert!(!all.contains(forbidden), "the export carried {forbidden}:\n{all}");
+        }
+        // The useful parts survive: ids, error classes, the agent roster, the log line.
+        assert!(all.contains("s-1"));
+        assert!(all.contains("s-2"), "the question event's id survives");
+        assert!(all.contains("perm-1"), "the permission id survives");
+        assert!(all.contains("codex"));
+        assert!(all.contains("code=0"), "the log file is included: {all}");
+        assert!(all.contains("[redacted]"), "the log token is redacted, not dropped: {all}");
+        assert!(all.contains("[omitted]"), "the owner's free text is marked, not carried: {all}");
+
+        // The log file itself never held the redactable material either.
+        let on_disk = std::fs::read_to_string(logs.join("daemon.2026-10-18.log")).unwrap();
+        assert!(on_disk.contains("code=0"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn diagnostics_preview_lists_the_same_contents_before_saving() {
+        let (st, _) = state();
+        let dir = temp_dir("diagnostics-preview");
+        *st.team.data_dir.lock().unwrap() = Some(dir.clone());
+        std::fs::create_dir_all(diagnostics::log_dir(&dir)).unwrap();
+        let preview = dispatch(&st, "diagnostics.preview", json!({})).await.unwrap();
+        let files = preview["files"].as_array().unwrap();
+        let names: Vec<&str> = files.iter().filter_map(|file| file["name"].as_str()).collect();
+        assert!(names.contains(&"README.txt"), "{names:?}");
+        assert!(names.contains(&"events.json"), "{names:?}");
+        assert!(preview["fileName"].as_str().unwrap().starts_with("bitbots-diagnostics-"));
+        assert!(files.iter().all(|file| file["sizeBytes"].as_u64().is_some()));
+        // The preview carries no message text of its own.
+        assert!(!preview.to_string().contains("PRIVATE"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_hidden_log_level_setting_accepts_only_info_and_debug() {
+        let (st, _) = state();
+        assert!(dispatch(&st, "settings.set", json!({"key": "diagnostics.logLevel", "value": "trace"})).await.is_err());
+        dispatch(&st, "settings.set", json!({"key": "diagnostics.logLevel", "value": "debug"})).await.unwrap();
+        assert_eq!(st.db.settings().unwrap()["diagnostics.logLevel"], json!("debug"));
+    }
+
+    /// Every daemon and shell log call site must log a fixed message, never a
+    /// message or prompt, command text, or credential. The scan must actually
+    /// find sources and call sites, or a moved/renamed folder would make it pass
+    /// while checking nothing.
+    #[test]
+    fn every_log_call_site_is_a_fixed_message() {
+        let needles = [
+            concat!("tracing", "::"),
+            concat!("log_shell", "("),
+            concat!("warn", "!("),
+            concat!("error", "!("),
+            concat!("info", "!("),
+            concat!("debug", "!("),
+            concat!("trace", "!("),
+        ];
+        let forbidden = ["text", "prompt", "content", "message", "command", "secret", "token", "cookie", "password", "credential"];
+        let mut files_scanned = 0usize;
+        let mut tracing_calls = 0usize;
+        for root in ["../../crates/bloblex-daemon/src", "../../apps/desktop/src-tauri/src"] {
+            let files = source_files(std::path::Path::new(root));
+            assert!(!files.is_empty(), "no Rust sources were found under {root}: the scan would check nothing");
+            files_scanned += files.len();
+            let mut calls_in_root = 0usize;
+            for file in files {
+                let source = std::fs::read_to_string(&file).unwrap_or_default();
+                for needle in needles {
+                    let mut from = 0;
+                    while let Some(found) = source[from..].find(needle) {
+                        let start = from + found;
+                        // The definition of `log_shell` is not a call site.
+                        let line_start = source[..start].rfind('\n').map(|index| index + 1).unwrap_or(0);
+                        let before = source[line_start..start].trim_start();
+                        if before.starts_with("fn ") || before.starts_with("pub fn ") {
+                            from = start + needle.len();
+                            continue;
+                        }
+                        let end = source[start..].find(");").map(|offset| start + offset + 2).unwrap_or_else(|| (start + 400).min(source.len()));
+                        let call = source[start..end].to_ascii_lowercase();
+                        for word in forbidden {
+                            assert!(
+                                !call.contains(word),
+                                "{} logs a value that could carry user text ({word}): {}",
+                                file.display(),
+                                call.replace('\n', " ")
+                            );
+                        }
+                        if needle == concat!("tracing", "::") {
+                            tracing_calls += 1;
+                        }
+                        calls_in_root += 1;
+                        from = end;
+                    }
+                }
+            }
+            assert!(calls_in_root > 0, "no log call sites were found under {root}: the scan would check nothing");
+        }
+        assert!(files_scanned > 0, "no Rust sources were scanned");
+        assert!(tracing_calls > 0, "no `tracing::` call sites were found anywhere");
+    }
+
+    fn source_files(root: &std::path::Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let Ok(entries) = std::fs::read_dir(root) else { return out };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(source_files(&path));
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                out.push(path);
+            }
+        }
+        out
     }
 }
 

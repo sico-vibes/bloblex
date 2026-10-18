@@ -79,6 +79,7 @@ import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, waitingBlobCount, ty
 import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, type MessageSearchResult } from './ExperimentalFeatures'
 import { openSafeLink } from './openSafeLink'
 import { markWhatsNewSeen, readSeenVersion, releaseNotes, shouldShowWhatsNew, WhatsNewDialog } from './WhatsNew'
+import { DiagnosticsDialog } from './DiagnosticsDialog'
 import { appVersion } from '../appRelease'
 import { ConnectionBanner } from './ConnectionBanner'
 import { removeUndoToast, useUndoToasts, useUndoable } from './undo'
@@ -162,6 +163,8 @@ export function App() {
   // What's new opens once by itself when the app has moved to a newer version.
   const [whatsNewOpen, setWhatsNewOpen] = useState(() => !companion && shouldShowWhatsNew(readSeenVersion(), appVersion, releaseNotes()))
   useEffect(() => { if (!companion && (!readSeenVersion() || whatsNewOpen)) markWhatsNewSeen() }, [companion, whatsNewOpen])
+  // FIX39 P12: the Export diagnostics dialog, from the Help group.
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [messageSearchOpen, setMessageSearchOpen] = useState(false)
   const [messageMenu, setMessageMenu] = useState<MessageMenuTarget | null>(null)
   const messageMenuAnchor = useRef<HTMLElement | null>(null)
@@ -2303,6 +2306,7 @@ export function App() {
     { id: 'find-agents', kind: 'action', category: 'Settings', icon: 'agents', title: 'Find coding agents', subtitle: 'Scan for Claude Code, Codex and OpenCode', searchText: 'Find coding agents runtime scan claude codex opencode' },
     { id: 'toggle-details', kind: 'action', category: 'Settings', icon: 'details', title: 'Toggle details panel', subtitle: '', searchText: 'Toggle details panel inspector rail' },
     { id: 'whats-new', kind: 'action', category: 'Help', icon: 'whats-new', title: 'What’s new', subtitle: 'Release notes', searchText: 'What is new changelog release notes version' },
+    { id: 'export-diagnostics', kind: 'action', category: 'Help', icon: 'details', title: 'Export diagnostics', subtitle: 'Logs, versions and settings', searchText: 'Export diagnostics logs support report problem bug' },
     { id: 'take-tour', kind: 'action', category: 'Help', icon: 'tour', title: 'Take the tour', subtitle: 'Six quick stops', searchText: 'Take the tour guide onboarding help' },
     { id: 'shortcuts', kind: 'action', category: 'Help', icon: 'shortcuts', title: 'Keyboard shortcuts', subtitle: '', hint: 'Ctrl+/', searchText: 'Keyboard shortcuts keys hotkeys' },
   ]
@@ -2335,6 +2339,7 @@ export function App() {
       else if (item.id === 'remote-devices') { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }
       else if (item.id === 'take-tour') startTour()
       else if (item.id === 'shortcuts') setShortcutsOpen(true)
+      else if (item.id === 'export-diagnostics') { setQuickSwitcherOpen(false); setDiagnosticsOpen(true) }
     }
   }
   const launchWarnings = launchWarningsFor(launchChecks.filter((check) => check.id !== 'discovery'), runtimes)
@@ -2637,6 +2642,7 @@ export function App() {
       })()} />}
       {whatsNewOpen && !companion && <WhatsNewDialog onClose={() => setWhatsNewOpen(false)} onOpenLink={(url) => void openSafeLink(url)} />}
       {shortcutsOpen && experiments.shortcuts && <ShortcutSheet speechEnabled={speechEnabled} onClose={() => setShortcutsOpen(false)} />}
+      {diagnosticsOpen && !companion && <DiagnosticsDialog onClose={() => setDiagnosticsOpen(false)} />}
       <UndoToasts toasts={undoToasts} onRemove={removeUndoToast} onError={setError} />
       {revertTarget && <ConfirmDialog title={`Revert ${String(revertTarget.file.path)}?`} body="Only this turn’s saved change will be reversed. Later edits that conflict with it prevent the revert." confirmLabel="Revert change" cancelLabel="Keep it" tone="warning" onConfirm={async () => {
         try {

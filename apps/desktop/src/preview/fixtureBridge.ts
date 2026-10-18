@@ -1123,6 +1123,21 @@ export type BackupInclude = { memory?: boolean; skills?: boolean; automations?: 
 export type BackupStats = { bots: number; memory: number; skills: number; automations: number; settings: number }
 export async function selectBackupExportPath() { return 'preview-backup-export-token' }
 export async function selectBackupImportPath() { return 'preview-backup-import-token' }
+export type DiagnosticsPreview = { generatedAt: string; fileName: string; files: { name: string; sizeBytes: number }[] }
+export async function selectDiagnosticsExportPath() { return 'preview-diagnostics-token' }
+export async function writeDiagnosticsExport(_selectionToken: string): Promise<{ path: string; sizeBytes: number; files: { name: string; sizeBytes: number }[] }> {
+  return {
+    path: 'C:\\Users\\you\\Documents\\bitbots-diagnostics-2026-10-18.zip',
+    sizeBytes: 48_512,
+    files: [
+      { name: 'README.txt', sizeBytes: 900 },
+      { name: 'environment.json', sizeBytes: 640 },
+      { name: 'settings.json', sizeBytes: 1_240 },
+      { name: 'events.json', sizeBytes: 12_800 },
+      { name: 'logs/daemon.2026-10-18.log', sizeBytes: 33_932 },
+    ],
+  }
+}
 export async function writeBackupExport(_selectionToken: string, _include?: BackupInclude) {
   return { path: 'C:\\Users\\you\\Documents\\bitbots-backup-2026-10-17.bitbots-backup.json', stats: { bots: agents.length, memory: fixtureMemory.length, skills: fixtureSkills.length, automations: 1, settings: 9 } }
 }

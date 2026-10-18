@@ -117,6 +117,25 @@ export async function previewBackupImport(token: string) {
   }>('backup_import_preview', { selectionToken: token })
 }
 
+/** Preview of the diagnostics export: what the zip would contain. */
+export type DiagnosticsPreview = {
+  generatedAt: string
+  fileName: string
+  files: { name: string; sizeBytes: number }[]
+}
+
+/** Save dialog for the diagnostics `.zip`; returns an opaque selection token. */
+export async function selectDiagnosticsExportPath(): Promise<string | null> {
+  if (!inDesktop) return null
+  return invoke<string | null>('select_diagnostics_export_path')
+}
+
+/** Asks the daemon for the diagnostics zip and writes it to the chosen path. */
+export async function writeDiagnosticsExport(token: string): Promise<{ path: string; sizeBytes: number; files: { name: string; sizeBytes: number }[] }> {
+  if (!inDesktop) throw new Error('Diagnostics are available only in the desktop app.')
+  return invoke<{ path: string; sizeBytes: number; files: { name: string; sizeBytes: number }[] }>('diagnostics_export_write', { selectionToken: token })
+}
+
 export async function inspectLocalFile(path: string): Promise<{ path: string; fileName: string; sizeBytes: number }> {
   if (!inDesktop) throw new Error('Local file validation is available only in the desktop app.')
   return invoke<{ path: string; fileName: string; sizeBytes: number }>('inspect_local_file', { path })

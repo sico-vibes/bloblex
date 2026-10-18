@@ -36,6 +36,7 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'General', group: 'Companion', label: 'Sounds and volume', keywords: 'audio cues mute quiet' },
   { page: 'General', group: 'Companion', label: 'Focus mode', keywords: 'quiet peek interrupt concentrate' },
   { page: 'General', group: 'Companion', label: 'Reset companion position', keywords: 'move place edge corner screen' },
+  { page: 'General', group: 'Support', label: 'Export diagnostics', keywords: 'logs report problem support zip upload debug' },
   { page: 'Appearance', group: 'Look and colour', label: 'Look', keywords: 'bitbots blobots theme style robots blobs' },
   { page: 'Appearance', group: 'Look and colour', label: 'Accent colour', keywords: 'color highlight primary brand' },
   { page: 'Appearance', group: 'Display', label: 'Theme', keywords: 'dark light system mode' },

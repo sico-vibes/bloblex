@@ -215,8 +215,10 @@ export async function selectBlobExportPath(name: string): Promise<string | null>
 export async function selectBlobImportPath(): Promise<string | null> { return null }
 export async function selectBackupExportPath(): Promise<string | null> { return null }
 export async function selectBackupImportPath(): Promise<string | null> { return null }
+export async function selectDiagnosticsExportPath(): Promise<string | null> { return null }
 
 export async function stagePromptAttachment(bytes: Uint8Array): Promise<string> { void bytes; throw notAvailable() }
+export async function writeDiagnosticsExport(selectionToken: string): Promise<{ path: string; sizeBytes: number; files: { name: string; sizeBytes: number }[] }> { void selectionToken; throw notAvailable() }
 export async function writeMarkdownExport(selectionToken: string, text: string): Promise<void> { void selectionToken; void text; throw notAvailable() }
 export async function readBlobImport(selectionToken: string): Promise<string> { void selectionToken; throw notAvailable() }
 export async function writeBlobExport(selectionToken: string, text: string): Promise<void> { void selectionToken; void text; throw notAvailable() }
@@ -230,6 +232,13 @@ export type BackupInclude = {
 }
 
 export type BackupStats = { bots: number; memory: number; skills: number; automations: number; settings: number }
+
+/** Preview of the diagnostics export: what the zip would contain. */
+export type DiagnosticsPreview = {
+  generatedAt: string
+  fileName: string
+  files: { name: string; sizeBytes: number }[]
+}
 
 export async function writeBackupExport(token: string, include?: BackupInclude): Promise<{ path: string; stats: BackupStats }> {
   void token

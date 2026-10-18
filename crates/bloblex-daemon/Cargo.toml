@@ -40,8 +40,10 @@ zeroize.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
 tracing.workspace = true
+tracing-appender = "0.2"
 tracing-subscriber.workspace = true
 uuid.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tokio-tungstenite.workspace = true

@@ -178,3 +178,12 @@
 
 /* An expired or missing sign-in under a coding agent's row. */
 .runtime-sign-in { padding: 0 16px 12px 52px; }
+
+/* FIX39 P12: the Export diagnostics dialog. */
+.diagnostics-dialog { width: min(520px, calc(100% - 32px)); }
+.diagnostics-dialog header { display: flex; align-items: center; gap: 8px; }
+.diagnostics-loading { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--fs-sm); }
+.diagnostics-contents { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.diagnostics-contents li { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
+.diagnostics-contents small { color: var(--text-3); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.diagnostics-total { color: var(--text-3); font-size: var(--fs-xs); }

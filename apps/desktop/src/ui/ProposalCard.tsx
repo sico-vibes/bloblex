@@ -4,7 +4,7 @@
 import { useState } from 'react'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import type { BlobLook } from '../blob/look'
-import { BookOpen, Bot, FolderPlus, ListChecks, Pencil, ShieldCheck, UserCog } from 'lucide-react'
+import { BookOpen, Bot, FolderPlus, GitMerge, ListChecks, Pencil, ShieldCheck, UserCog } from 'lucide-react'
 import type { JsonRecord, PermissionRequest, Project } from '../types'
 import { openProjectFolder, rpc, setActiveRuntime, setActiveSession } from '../tauri'
 import { Select } from './Select'
@@ -21,6 +21,7 @@ const KIND_LABEL: Record<string, { title: string; Icon: typeof Bot }> = {
   playbook: { title: 'Update its playbook', Icon: BookOpen },
   profile: { title: 'Change something it knows about you', Icon: UserCog },
   permission: { title: 'Change a bot\'s permission', Icon: ShieldCheck },
+  merge: { title: 'Merge a task', Icon: GitMerge },
 }
 
 const text = (value: unknown) => typeof value === 'string' ? value : ''
@@ -78,6 +79,9 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
   const kind = String(proposal.kind)
   const updating = draft.action === 'update' && (kind === 'bot' || kind === 'project')
   const opening = kind === 'task' && draft.action === 'open'
+  // FIX39 P10: a merge card has no fields to edit; it offers merge, keep or discard.
+  const merging = kind === 'merge'
+  const mergeFiles = Array.isArray(draft.files) ? draft.files.map(text).filter(Boolean) : []
   const { title, Icon } = updating
     ? { title: kind === 'bot' ? 'Update a bot' : 'Update a project', Icon: Pencil }
     : opening ? { title: 'Open a conversation', Icon: ListChecks }
@@ -89,11 +93,11 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
   // daemon (id or trimmed, case-insensitive name), so the card never understates
   // where an approved task may write.
   const taskProject = kind === 'task' ? projectForDraft(projects, text(draft.project)) : undefined
-  const decide = async (decision: Decision) => {
+  const decide = async (decision: Decision, discard?: boolean) => {
     setBusy(true)
     try {
       const edits = decision === 'approve' ? proposalEdits(original, draft) : undefined
-      const result = await rpc<{ result?: { sessionId?: string; runtimeId?: string; action?: string } }>('proposal.decide', { id: proposal.id, decision, ...(edits ? { edits } : {}) })
+      const result = await rpc<{ result?: { sessionId?: string; runtimeId?: string; action?: string } }>('proposal.decide', { id: proposal.id, decision, ...(edits ? { edits } : {}), ...(discard ? { discard: true } : {}) })
       if (decision === 'approve' && opening && result.result?.action === 'open' && result.result.sessionId) {
         if (result.result.runtimeId) await setActiveRuntime(result.result.runtimeId)
         await setActiveSession(result.result.sessionId)
@@ -126,7 +130,7 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
     <header className="proposal-head">
       <span className="proposal-icon" aria-hidden="true"><Icon size={15} /></span>
       <div><small>{managerName} proposes</small><strong>{title}</strong></div>
-      {kind !== 'playbook' && !opening && <button type="button" className="ghost-button small" aria-pressed={editing} onClick={() => setEditing((value) => !value)}><Pencil size={12} aria-hidden="true" />{editing ? 'Done editing' : 'Edit'}</button>}
+      {kind !== 'playbook' && !opening && !merging && <button type="button" className="ghost-button small" aria-pressed={editing} onClick={() => setEditing((value) => !value)}><Pencil size={12} aria-hidden="true" />{editing ? 'Done editing' : 'Edit'}</button>}
     </header>
     <div className="proposal-body">
       {kind === 'project' && !updating && <>
@@ -211,11 +215,27 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
         </div>
         <p className="proposal-hint">Changes this bot's permission for all its conversations, from their next turn. Full access can never be set this way.</p>
       </>}
+      {merging && <>
+        <div className="proposal-row">
+          <div className="proposal-field"><span>Task</span><p className="proposal-value">{text(draft.taskTitle) || text(draft.botName) || 'A task'}</p></div>
+          {text(draft.botName) && <div className="proposal-field"><span>Bot</span><p className="proposal-value">{text(draft.botName)}</p></div>}
+        </div>
+        <div className="proposal-row">
+          <div className="proposal-field"><span>Branch</span><p className="proposal-value mono">{text(draft.branch)}</p></div>
+          <div className="proposal-field"><span>Merge into</span><p className="proposal-value mono">{text(draft.baseBranch)}</p></div>
+        </div>
+        <div className="proposal-field"><span>Changes</span><p className="proposal-value">{text(draft.diffSummary) || 'No summary'}</p></div>
+        {mergeFiles.length > 0 && <div className="proposal-field"><span>Files</span>
+          <ul className="proposal-value mono">{mergeFiles.map((file) => <li key={file}>{file}</li>)}</ul>
+        </div>}
+        <p className="proposal-hint">The task ran in its own copy of the project so it could not clash with other work. Merging brings its changes back and removes the copy.</p>
+      </>}
     </div>
     <footer className="proposal-actions">
       {needsFolder && <small className="proposal-hint">Choose where the new folder goes, then approve.</small>}
-      <button type="button" className="ghost-button small" disabled={busy} onClick={() => void decide('reject')}>Reject</button>
-      <button type="button" className="primary-button small" disabled={busy || needsFolder} onClick={() => void decide('approve')}>Approve</button>
+      {merging && <button type="button" className="ghost-button small" disabled={busy} onClick={() => void decide('reject', true)}>Discard</button>}
+      <button type="button" className="ghost-button small" disabled={busy} onClick={() => void decide('reject')}>{merging ? 'Keep branch' : 'Reject'}</button>
+      <button type="button" className="primary-button small" disabled={busy || needsFolder} onClick={() => void decide('approve')}>{merging ? 'Merge' : 'Approve'}</button>
     </footer>
   </section>
 }

@@ -12,7 +12,7 @@ use bloblex_agent_core::{ExecOptions, McpServerSpec};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Mutex as StdMutex,
 };
 use tokio::sync::Mutex;
@@ -154,6 +154,56 @@ fn workspace_dir_name(name: &str, agent_id: &str) -> String {
     let slug = slug.trim_matches('-');
     let id8: String = agent_id.chars().take(8).collect();
     if slug.is_empty() { format!("bot-{id8}") } else { format!("{slug}-{id8}") }
+}
+
+/// FIX39 P10: a read-only/research bot never gets a worktree. There is no field
+/// for "writes code", so the signal is the routing tag/role the Manager already
+/// uses: a bot tagged or roled as a researcher is treated as read-only.
+fn is_research_agent(agent: &Value) -> bool {
+    let role = agent["role"].as_str().unwrap_or("").to_lowercase();
+    if role.contains("research") || role.contains("read-only") || role.contains("reader") { return true; }
+    agent["tags"].as_array().map(|tags| tags.iter().filter_map(Value::as_str).any(|tag| {
+        let tag = tag.to_lowercase();
+        tag.starts_with("research") || tag == "read-only" || tag == "reader" || tag == "viewer"
+    })).unwrap_or(false)
+}
+
+/// Whether another conversation is working in the same repository right now —
+/// mid-turn, queued for a turn, or holding a session state that has not finished
+/// (`starting`, `working`, `waiting_permission`, `cancelling`). The last two
+/// matter because a delegation is created before it runs: when the global limit
+/// is full the first task is queued with no live turn yet, and a second task in
+/// the same repo must still not share its folder. Two repos match when their
+/// `git rev-parse --show-toplevel` folders are the same, so a task already in its
+/// own worktree does not count as a clash. The git calls run off the runtime.
+async fn repo_is_busy_elsewhere(st: &AppState, origin: &str, repo: &Path) -> bool {
+    let queued: Vec<String> = st.team.queued.lock().await.iter()
+        .filter(|(_, queue)| !queue.is_empty()).map(|(id, _)| id.clone()).collect();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for row in st.db.session_list(false).unwrap_or_default() {
+        let Some(id) = row["id"].as_str().filter(|id| *id != origin) else { continue };
+        let busy = session_busy(st, id).await || queued.iter().any(|queued| queued == id);
+        if !busy { continue; }
+        if let Some(path) = row["projectPath"].as_str().filter(|path| !path.is_empty()) { paths.push(PathBuf::from(path)); }
+    }
+    if paths.is_empty() { return false; }
+    let target = crate::worktree::normalize(repo);
+    tokio::task::spawn_blocking(move || paths.iter().any(|path| crate::worktree::repo_root(path).is_some_and(|other| crate::worktree::normalize(&other) == target)))
+        .await.unwrap_or(false)
+}
+
+/// FIX39 P10: give a code-writing delegation its own git worktree when its
+/// project is a git repo and another task is working there. Returns the record
+/// to store on the side conversation, or `None` to run in the shared folder
+/// (non-git project, research bot, no clash, or any git error).
+pub(crate) async fn prepare_worktree(st: &AppState, origin: &str, project_path: &Path, title: &str, target: &Value) -> Option<Value> {
+    if is_research_agent(target) { return None; }
+    let path = project_path.to_path_buf();
+    let repo = tokio::task::spawn_blocking(move || crate::worktree::repo_root(&path)).await.ok().flatten()?;
+    if !repo_is_busy_elsewhere(st, origin, &repo).await { return None; }
+    let (repo_for_create, topic) = (repo.clone(), title.to_owned());
+    let worktree = tokio::task::spawn_blocking(move || crate::worktree::create(&repo_for_create, &topic)).await.ok()?.ok()?;
+    Some(worktree.to_json())
 }
 
 /// Bitbots context appended to every blob session's system instructions.
@@ -490,7 +540,7 @@ pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> R
         }
         None => {
             let title = topic.unwrap_or_else(|| topic_from(&message));
-            let link = json!({"kind":"side","peerAgentId":from_id,"peerName":from_name,"originSessionId":session_id,"spawnedFromSessionId":session_id,"topic":title});
+            let mut link = json!({"kind":"side","peerAgentId":from_id,"peerName":from_name,"originSessionId":session_id,"spawnedFromSessionId":session_id,"topic":title});
             // FIX39 item 19.4: an approved task that names a project runs the
             // delegated conversation in that project's folder, so the `auto`
             // classifier can touch the files the task is about. Without it the
@@ -499,9 +549,24 @@ pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> R
             let project_path = args["projectPath"].as_str().map(str::trim).filter(|path| !path.is_empty())
                 .map(std::path::PathBuf::from).filter(|path| path.is_dir())
                 .unwrap_or_else(|| workspace_for(st, &target));
-            let created = new_session(st, json!({"agentId":target_id,"projectPath":project_path,"title":title,"link":link})).await
+            // FIX39 P10: when another task is already working in this git repo,
+            // run this one in its own worktree instead, so the two cannot clash.
+            let mut run_path = project_path;
+            if let Some(worktree) = prepare_worktree(st, session_id, &run_path, &title, &target).await {
+                if let Some(path) = worktree["path"].as_str() { run_path = PathBuf::from(path); }
+                link["worktree"] = worktree;
+            }
+            let created = new_session(st, json!({"agentId":target_id,"projectPath":run_path,"title":title,"link":link.clone()})).await
                 .map_err(|error| format!("Could not open a conversation with {target_name}: {}", error.1.message))?;
-            (created["id"].as_str().unwrap_or("").to_owned(), title)
+            let side = created["id"].as_str().unwrap_or("").to_owned();
+            if let Some(worktree) = link.get("worktree").filter(|worktree| worktree.is_object()) {
+                // The one visible trace of the isolation in the sub-conversation.
+                let repo_name = Path::new(worktree["repo"].as_str().unwrap_or("")).file_name().and_then(|name| name.to_str()).unwrap_or("the project");
+                let branch = worktree["branch"].as_str().unwrap_or("");
+                note(st, &side, &format!("Working in a separate copy of {repo_name} (branch {branch}) so other work there isn't disturbed; the changes will be offered for merge when the task is done."),
+                    json!({"kind":"worktree","direction":"isolated","branch":branch})).await;
+            }
+            (side, title)
         }
     };
     // FIX39 item 18: with no per-bot cap, a delivery starts unless the
@@ -728,6 +793,9 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
                 }
             }
         }
+        // FIX39 P10: a task that ran in its own worktree offers a merge when its
+        // turn finishes; a task with nothing to merge just cleans up.
+        crate::proposals::after_task_turn(&st, &session_id, &outcome).await;
         // Automation runs map the same turn outcome onto their run row.
         crate::automations::after_turn(&st, &session_id, &outcome).await;
         // The durable user queue drains before Team deliveries, so a queued
@@ -868,6 +936,10 @@ pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, D
 #[cfg(test)]
 #[path = "team_p7_tests.rs"]
 mod p7_tests;
+
+#[cfg(test)]
+#[path = "team_p10_tests.rs"]
+mod p10_tests;
 
 /// Stable Manager-only additions to the existing local, session-capability
 /// bridge. No daemon RPC or listener is added by this tool surface.

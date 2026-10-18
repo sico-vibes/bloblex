@@ -11,7 +11,7 @@ use crate::{agent_error, derr, AppState, DispatchError};
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// A proposal lives for 24 hours before it lapses.
@@ -373,6 +373,7 @@ pub(crate) fn describe(kind: &str, payload: &Value) -> String {
         "bot" => format!("create bot {}", payload["name"].as_str().unwrap_or("a bot")),
         "task" => format!("assign a task to {}", named(payload, "botName", "bot", "a bot")),
         "permission" => format!("set a conversation's permission to {}", payload["mode"].as_str().unwrap_or("a mode")),
+        "merge" => format!("merge {} into {}", payload["branch"].as_str().unwrap_or("a task branch"), payload["baseBranch"].as_str().unwrap_or("its branch")),
         "playbook" => "change the Manager's playbook".to_owned(),
         "profile" => match payload["op"].as_str().unwrap_or("set") {
             "forget" => format!("forget what the Manager knows ({})", payload["key"].as_str().unwrap_or("a preference")),
@@ -407,6 +408,7 @@ async fn apply(st: &AppState, session_id: &str, agent_id: Option<&str>, kind: &s
         "bot" => apply_bot(st, agent_id, payload).await,
         "task" => apply_task(st, session_id, payload).await,
         "permission" => apply_permission(st, agent_id, payload).await,
+        "merge" => apply_merge(st, session_id, payload).await,
         "playbook" => apply_playbook(st, payload),
         "profile" => apply_profile(st, payload),
         _ => Err(invalid("That proposal kind is not supported.".into())),
@@ -571,6 +573,151 @@ async fn apply_permission(st: &AppState, agent_id: Option<&str>, payload: &Value
     Ok((json!({"sessionId": conversation, "approvalMode": mode}), format!("set a conversation's permission to {mode}")))
 }
 
+/// FIX39 P10: validate a merge proposal. Only the daemon creates these, but a
+/// decision may carry owner edits, so every field is re-checked before git runs.
+fn validate_merge(args: &Value) -> Result<Value, String> {
+    let map = args.as_object().ok_or("the merge proposal must be an object.")?;
+    reject_unknown(map, &["action", "worktree", "repo", "branch", "baseBranch", "baseCommit", "conversation", "botName", "taskTitle", "files", "diffSummary"], "the merge proposal")?;
+    if map.get("action").is_some_and(|action| action != "merge") { return Err("Unsupported merge action.".into()); }
+    let worktree = required_str(map, "worktree", 1000)?;
+    let repo = required_str(map, "repo", 1000)?;
+    let branch = required_str(map, "branch", 200)?;
+    if !branch.starts_with("bitbots/") { return Err("That is not a Bitbots task branch.".into()); }
+    let base = required_str(map, "baseBranch", 200)?;
+    let base_commit = optional_str(map, "baseCommit", 100)?;
+    let conversation = optional_str(map, "conversation", 80)?;
+    let bot_name = optional_str(map, "botName", 80)?;
+    let task_title = optional_str(map, "taskTitle", 120)?;
+    let files = map.get("files").and_then(Value::as_array)
+        .map(|files| files.iter().filter_map(Value::as_str).take(50).map(str::to_owned).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let diff_summary = optional_str(map, "diffSummary", 200)?;
+    Ok(json!({"action":"merge","worktree":worktree,"repo":repo,"branch":branch,"baseBranch":base,"baseCommit":base_commit,"conversation":conversation,"botName":bot_name,"taskTitle":task_title,"files":files,"diffSummary":diff_summary}))
+}
+
+/// Finish with a task copy: drop the `worktree` record from the conversation's
+/// link so the same copy is not offered again, and point the conversation back at
+/// the project folder. The copy's own folder is gone, so a follow-up that resumes
+/// the same session must not be left aimed at a deleted folder.
+fn finish_worktree(st: &AppState, conversation: &str, repo: &Path) {
+    let Ok(row) = st.db.session_detail(conversation) else { return };
+    let mut link = row["link"].clone();
+    if let Some(object) = link.as_object_mut() { object.remove("worktree"); }
+    let _ = st.db.set_session_link(conversation, &link);
+    if repo.is_absolute() { let _ = st.db.set_session_project_path(conversation, &repo.to_string_lossy()); }
+}
+
+/// Remove a rejected task's copy and branch. Only reached when the owner chooses
+/// Discard on the merge card. Returns whether the copy is actually gone, so a
+/// locked folder is reported instead of swallowed.
+async fn discard_task_copy(payload: &Value) -> bool {
+    let repo = PathBuf::from(payload["repo"].as_str().unwrap_or(""));
+    let worktree = PathBuf::from(payload["worktree"].as_str().unwrap_or(""));
+    let branch = payload["branch"].as_str().unwrap_or("").to_owned();
+    if !(repo.is_absolute() && worktree.is_absolute() && branch.starts_with("bitbots/")) { return false; }
+    tokio::task::spawn_blocking(move || crate::worktree::discard(&repo, &worktree, &branch)).await.unwrap_or(false)
+}
+
+/// Apply an approved merge: commit the task copy, merge its branch into the main
+/// checkout (fast-forward or a merge commit, never forced), then remove the copy
+/// and branch. A dirty or mis-branched main checkout, or a conflict, leaves the
+/// proposal pending so the owner can fix it and approve again.
+async fn apply_merge(st: &AppState, session_id: &str, payload: &Value) -> Result<(Value, String), DispatchError> {
+    manager_of_session(st, session_id).map_err(invalid)?;
+    let payload = validate_merge(payload).map_err(invalid)?;
+    let repo = PathBuf::from(payload["repo"].as_str().unwrap_or(""));
+    let worktree = PathBuf::from(payload["worktree"].as_str().unwrap_or(""));
+    if !repo.is_absolute() || !worktree.is_absolute() { return Err(invalid("The merge needs full folder paths.".into())); }
+    let branch = payload["branch"].as_str().unwrap_or("").to_owned();
+    let base = payload["baseBranch"].as_str().unwrap_or("").to_owned();
+    // Audit F3: a task is multi-turn, so an approval can arrive mid-turn. Committing
+    // then would race the bot's edits and `worktree remove --force` would fail on a
+    // folder the CLI still holds open. Refuse and leave the card pending.
+    let conversation = payload["conversation"].as_str().filter(|id| !id.is_empty()).map(str::to_owned);
+    if let Some(conversation) = &conversation {
+        if crate::team::session_busy(st, conversation).await {
+            return Err(derr("conflict", "That task is still working. Approve again when it finishes.", StatusCode::CONFLICT));
+        }
+    }
+    // A fixed, content-free commit message: the branch slug, never the task text.
+    let message = format!("Bitbots task {}", branch.trim_start_matches("bitbots/"));
+    let (merge_repo, merge_worktree, merge_branch, merge_base) = (repo.clone(), worktree.clone(), branch.clone(), base.clone());
+    let how = tokio::task::spawn_blocking(move || {
+        crate::worktree::commit_all(&merge_worktree, &message)?;
+        crate::worktree::merge(&merge_repo, &merge_worktree, &merge_branch, &merge_base)
+    })
+    .await
+    .map_err(|_| derr("internal", "The merge could not be run.", StatusCode::INTERNAL_SERVER_ERROR))?
+    .map_err(|error| derr("conflict", &error, StatusCode::CONFLICT))?;
+    let (cleanup_repo, cleanup_worktree, cleanup_branch) = (repo.clone(), worktree.clone(), branch.clone());
+    let gone = tokio::task::spawn_blocking(move || crate::worktree::remove_after_merge(&cleanup_repo, &cleanup_worktree, &cleanup_branch)).await.unwrap_or(false);
+    let files = payload["files"].as_array().map(Vec::len).unwrap_or(0);
+    let mut summary = format!("merged {branch} into {base} ({how})");
+    if gone {
+        if let Some(conversation) = &conversation { finish_worktree(st, conversation, &repo); }
+    } else {
+        // Keep the record so the leftover copy and branch stay tracked; never claim
+        // a cleanup that did not happen.
+        summary.push_str(" · the separate copy could not be removed");
+    }
+    Ok((json!({"branch": branch, "repo": repo, "how": how, "files": files, "copyRemoved": gone}), summary))
+}
+
+/// FIX39 P10: run after every turn. When a side conversation that ran in its own
+/// worktree finishes, the Manager proposes merging it back. A copy with no
+/// changes is removed quietly instead.
+pub(crate) async fn after_task_turn(st: &AppState, session_id: &str, outcome: &str) {
+    if outcome != "turn.completed" { return; }
+    let Ok(row) = st.db.session_detail(session_id) else { return };
+    let link = row["link"].clone();
+    let Some(worktree) = link.get("worktree").filter(|worktree| worktree.is_object()) else { return };
+    let repo = PathBuf::from(worktree["repo"].as_str().unwrap_or(""));
+    let workdir = PathBuf::from(worktree["path"].as_str().unwrap_or(""));
+    let branch = worktree["branch"].as_str().unwrap_or("").to_owned();
+    let base = worktree["base"].as_str().unwrap_or("").to_owned();
+    let base_commit = worktree["baseCommit"].as_str().unwrap_or("").to_owned();
+    if !workdir.is_dir() {
+        // The copy is already gone (for example, removed by hand); just repoint the
+        // conversation so a follow-up does not resume in a deleted folder.
+        finish_worktree(st, session_id, &repo);
+        return;
+    }
+    let (inspect_dir, inspect_base) = (workdir.clone(), base_commit.clone());
+    let summary = match tokio::task::spawn_blocking(move || crate::worktree::inspect(&inspect_dir, &inspect_base)).await {
+        Ok(Ok(summary)) => summary,
+        _ => return,
+    };
+    if summary.files.is_empty() {
+        let (discard_repo, discard_worktree, discard_branch) = (repo.clone(), workdir.clone(), branch.clone());
+        let gone = tokio::task::spawn_blocking(move || crate::worktree::discard(&discard_repo, &discard_worktree, &discard_branch)).await.unwrap_or(false);
+        if gone {
+            finish_worktree(st, session_id, &repo);
+            crate::team::note(st, session_id, "Nothing was changed, so the separate copy was removed.", json!({"kind":"worktree","direction":"discarded"})).await;
+        } else {
+            // Keep the record: the copy is still there and must not be forgotten.
+            crate::team::note(st, session_id, "Nothing was changed, but the separate copy could not be removed.", json!({"kind":"worktree","direction":"discarded"})).await;
+        }
+        return;
+    }
+    // One offer per copy: a second completed turn does not stack another card.
+    let offered = st.db.proposals_pending().unwrap_or_default().iter()
+        .any(|proposal| proposal["kind"] == "merge" && proposal["payload"]["worktree"] == worktree["path"]);
+    if offered { return; }
+    let Some(origin) = link["originSessionId"].as_str().filter(|origin| st.db.session_exists(origin).unwrap_or(false)) else { return };
+    let Ok(manager) = manager_of_session(st, origin) else { return };
+    let bot_name = row["agentId"].as_str().and_then(|id| st.db.agent_get(id).ok())
+        .and_then(|agent| agent["name"].as_str().map(str::to_owned)).unwrap_or_else(|| "the bot".into());
+    let task_title = row["title"].as_str().unwrap_or("the task").to_owned();
+    let files: Vec<Value> = summary.files.iter().take(50).map(|file| json!(file)).collect();
+    let payload = json!({
+        "action":"merge","worktree":worktree["path"],"repo":worktree["repo"],"branch":branch,"baseBranch":base,"baseCommit":worktree["baseCommit"],
+        "conversation":session_id,"botName":bot_name,"taskTitle":task_title,"files":files,"diffSummary":summary.line(),
+    });
+    let title = format!("Merge \"{task_title}\" into {base}");
+    let detail = Some(format!("{} · branch {branch}", summary.line()));
+    let _ = create_proposal(st, origin, &manager, "merge", payload, title, detail).await;
+}
+
 async fn post_note(st: &AppState, session_id: &str, text: &str, id: &str, kind: &str, decision: &str) {
     crate::team::note(st, session_id, text, json!({"kind":"proposal","proposalId":id,"proposalKind":kind,"decision":decision})).await;
 }
@@ -593,10 +740,33 @@ pub async fn decide(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     }
     let decided_at = iso(Utc::now());
     if decision == "reject" {
+        // FIX39 P10 audit F3: discarding a copy the task is still editing would
+        // race the bot and leave an orphan folder. Refuse and leave the card
+        // pending; a plain reject (keep the branch) is always allowed.
+        let discarding = kind == "merge" && p["discard"].as_bool() == Some(true);
+        if discarding {
+            if let Some(conversation) = payload["conversation"].as_str().filter(|id| !id.is_empty()) {
+                if crate::team::session_busy(st, conversation).await {
+                    return Err(derr("conflict", "That task is still working. Reject again when it finishes.", StatusCode::CONFLICT));
+                }
+            }
+        }
         if !st.db.proposal_decide(id, "rejected", None, "reject", &decided_at).map_err(agent_error)? {
             return Err(derr("conflict", "That proposal has already been decided.", StatusCode::CONFLICT));
         }
-        post_note(st, &session_id, &format!("Rejected: {}", describe(&kind, &payload)), id, &kind, "rejected").await;
+        // FIX39 P10: a rejected merge keeps the task's copy by default; the owner
+        // may instead choose to discard the branch and its copy.
+        let mut note = format!("Rejected: {}", describe(&kind, &payload));
+        if discarding {
+            if discard_task_copy(&payload).await {
+                if let Some(conversation) = payload["conversation"].as_str().filter(|id| !id.is_empty()) {
+                    finish_worktree(st, conversation, &PathBuf::from(payload["repo"].as_str().unwrap_or("")));
+                }
+            } else {
+                note.push_str(" · the separate copy could not be removed");
+            }
+        }
+        post_note(st, &session_id, &note, id, &kind, "rejected").await;
         st.emit("permission.resolved", json!({"permissionId": id, "choice": "reject", "status": "rejected"})).await;
         st.emit("proposal.changed", json!({"id":id,"kind":kind,"sessionId":session_id,"status":"rejected","result":Value::Null,"decidedAt":decided_at})).await;
         return Ok(json!({"id": id, "decision": "rejected"}));

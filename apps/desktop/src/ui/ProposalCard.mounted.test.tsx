@@ -163,6 +163,45 @@ describe('P7 tool proposals', () => {
   })
 })
 
+// FIX39 P10: a finished task's worktree is offered as a merge card that shows
+// the branch, the files and a diff summary, and can be merged, kept or discarded.
+describe('merge card (P10)', () => {
+  const merge = () => proposal('merge', {
+    action: 'merge',
+    repo: 'C:\\Code\\Repo',
+    worktree: 'C:\\Code\\Repo-bitbots\\add-login',
+    branch: 'bitbots/add-login',
+    baseBranch: 'main',
+    taskTitle: 'Add login',
+    botName: 'Builder',
+    files: ['src/login.ts', 'src/login.test.ts'],
+    diffSummary: '2 files changed, +10 −3',
+  })
+
+  it('shows the branch, files and summary without an edit control', async () => {
+    await mount(merge())
+    expect(host!.textContent).toContain('Merge a task')
+    expect(host!.textContent).toContain('bitbots/add-login')
+    expect(host!.textContent).toContain('main')
+    expect(host!.textContent).toContain('2 files changed, +10 −3')
+    expect(host!.textContent).toContain('src/login.ts')
+    expect(host!.textContent).not.toContain('Edit')
+    await act(async () => { button('Merge').click() })
+    await flush()
+    expect(h.rpc).toHaveBeenCalledWith('proposal.decide', { id: 'prop-1', decision: 'approve' })
+  })
+
+  it('keeps the branch on reject and discards it on request', async () => {
+    await mount(merge())
+    await act(async () => { button('Keep branch').click() })
+    await flush()
+    expect(h.rpc).toHaveBeenCalledWith('proposal.decide', { id: 'prop-1', decision: 'reject' })
+    await act(async () => { button('Discard').click() })
+    await flush()
+    expect(h.rpc).toHaveBeenCalledWith('proposal.decide', { id: 'prop-1', decision: 'reject', discard: true })
+  })
+})
+
 it('opens only the conversation returned by an approved open proposal', async () => {
   h.rpc.mockResolvedValue({ result: { action: 'open', sessionId: 'approved-side', runtimeId: 'rt1' } })
   await mount(proposal('task', { action: 'open', conversation: 'side-1', title: 'Research' }))

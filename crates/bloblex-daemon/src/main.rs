@@ -53,6 +53,8 @@ mod proposals;
 mod knowledge;
 mod skills;
 mod commands;
+// FIX39 P10: linked git worktrees so parallel code tasks in one repo cannot clash.
+mod worktree;
 // Remote mode (P1): the gateway, its policy and its `remote.*` API.
 mod remote;
 
@@ -4690,7 +4692,7 @@ mod phase2a_tests {
     /// Answers every prompt with "handled: <first line>" and records the
     /// instructions each session launched with.
     #[derive(Default)]
-    struct TeamAdapter {
+    pub(crate) struct TeamAdapter {
         events: StdMutex<HashMap<String, tokio::sync::mpsc::Sender<AgentEvent>>>,
         instructions: StdMutex<HashMap<String, String>>,
         prompts: StdMutex<Vec<String>>,

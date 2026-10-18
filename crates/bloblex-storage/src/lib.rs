@@ -731,7 +731,7 @@ fn ensure_proposal_schema(c: &Connection) -> Result<(), StorageError> {
             id TEXT PRIMARY KEY NOT NULL,
             session_id TEXT NOT NULL,
             agent_id TEXT,
-            kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile','permission')),
+            kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile','permission','merge')),
             payload TEXT NOT NULL CHECK(json_valid(payload)),
             status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
             result TEXT CHECK(result IS NULL OR json_valid(result)),
@@ -741,11 +741,12 @@ fn ensure_proposal_schema(c: &Connection) -> Result<(), StorageError> {
         CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status, created_at);",
     )?;
     // FIX36 D3 widens the `kind` CHECK with `profile`; FIX39 P5 widens it again
-    // with `permission` (a Manager-proposed side-conversation mode). SQLite bakes
-    // a CHECK into the table definition, so an older database is rebuilt (rows
+    // with `permission` (a Manager-proposed side-conversation mode) and FIX39 P10
+    // with `merge` (a finished task's worktree offered for merge). SQLite bakes a
+    // CHECK into the table definition, so an older database is rebuilt (rows
     // copied verbatim) instead of silently refusing the new kind.
     let ddl: String = c.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='proposals'", [], |r| r.get(0))?;
-    if !ddl.contains("'profile'") || !ddl.contains("'permission'") {
+    if !ddl.contains("'profile'") || !ddl.contains("'permission'") || !ddl.contains("'merge'") {
         c.execute_batch(
             "BEGIN IMMEDIATE;
              ALTER TABLE proposals RENAME TO proposals_pre_profile;
@@ -753,7 +754,7 @@ fn ensure_proposal_schema(c: &Connection) -> Result<(), StorageError> {
                  id TEXT PRIMARY KEY NOT NULL,
                  session_id TEXT NOT NULL,
                  agent_id TEXT,
-                 kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile','permission')),
+                 kind TEXT NOT NULL CHECK(kind IN ('project','bot','task','playbook','profile','permission','merge')),
                  payload TEXT NOT NULL CHECK(json_valid(payload)),
                  status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
                  result TEXT CHECK(result IS NULL OR json_valid(result)),
@@ -1893,6 +1894,18 @@ impl Storage {
         if changed == 0 { return Err(StorageError::AgentNotFound); }
         Ok(())
     }
+    /// FIX39 P10: repoint a conversation at another folder. Used when a task's
+    /// separate worktree copy is merged or discarded, so a follow-up does not
+    /// resume a session whose working folder no longer exists.
+    pub fn set_session_project_path(&self, id: &str, project_path: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute(
+            "UPDATE sessions SET project_path=?2,updated_at=?3 WHERE id=?1",
+            params![id, project_path, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)],
+        )?;
+        if changed == 0 { return Err(StorageError::AgentNotFound); }
+        Ok(())
+    }
     /// The open side conversation in which `peer` talks to `agent`, if any.
     pub fn side_session(&self, agent_id: &str, peer_agent_id: &str) -> Result<Option<String>, StorageError> {
         self.side_session_for(agent_id, peer_agent_id, "")
@@ -2020,7 +2033,7 @@ impl Storage {
         let kind = record["kind"].as_str().ok_or(StorageError::InvalidAgent)?;
         let agent_id = record["agentId"].as_str();
         let payload = &record["payload"];
-        if !["project", "bot", "task", "playbook", "profile", "permission"].contains(&kind) { return Err(StorageError::InvalidAgent); }
+        if !["project", "bot", "task", "playbook", "profile", "permission", "merge"].contains(&kind) { return Err(StorageError::InvalidAgent); }
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
@@ -7335,8 +7348,14 @@ mod tests {
                 &json!({"id":"new-permission","sessionId":"s-prop","kind":"proposal","status":"pending"}),
                 "2026-01-02T00:00:00.000Z", "2026-12-31T00:00:00.000Z",
             ).unwrap();
+            // FIX39 P10 widens the CHECK again with `merge`; a rebuilt table takes it too.
+            db.insert_proposal(
+                &json!({"id":"new-merge","sessionId":"s-prop","agentId":Value::Null,"kind":"merge","payload":{"branch":"bitbots/x","baseBranch":"main"}}),
+                &json!({"id":"new-merge","sessionId":"s-prop","kind":"proposal","status":"pending"}),
+                "2026-01-03T00:00:00.000Z", "2026-12-31T00:00:00.000Z",
+            ).unwrap();
             let kinds = db.proposals_pending().unwrap().into_iter().filter_map(|p| p["kind"].as_str().map(str::to_owned)).collect::<Vec<_>>();
-            assert!(kinds.contains(&"task".to_owned()) && kinds.contains(&"permission".to_owned()), "{kinds:?}");
+            assert!(kinds.contains(&"task".to_owned()) && kinds.contains(&"permission".to_owned()) && kinds.contains(&"merge".to_owned()), "{kinds:?}");
         }
         let _ = fs::remove_dir_all(root.join("backups"));
         fs::remove_dir_all(root).unwrap();

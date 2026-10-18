@@ -1,5 +1,15 @@
 # Bitbots collaboration instructions
 
+# Amendment (18 October 2026, later): four-model pipeline for FIX39
+
+Owner directive for the FIX39 wave (the beta.33 review and the friend's test feedback), until the owner says otherwise. It replaces the FIX37 arrangement below where they differ.
+
+- **Research:** OpenCode `opencode-go/deepseek-v4.1-flash` (high) investigates every item and writes research reports with evidence (file:line), causes and proposed designs. It may ask Claude Haiku 5.5 for quick facts (`claude -p --model claude-haiku-5-5 --effort high "<question>"`). It changes no code.
+- **Implementation:** GPT Sol 6.1 at high effort through the Codex CLI (`codex exec -m gpt-6.1-sol -c model_reasoning_effort=high`), one worktree and Cargo target per package, from the audited research. It never runs `git commit`.
+- **Audit:** Claude Sonnet 5.5 (high) audits the research before implementation and every implementation diff before merge, and reports to the Director. Findings go back to Sol until the audit passes.
+- **Documentation:** Claude Haiku 5.5 (high) writes the docs (handoff, status, index, release notes, protocol updates) from the reports.
+- **Director (Claude):** only runs the lanes, checks they are working, relays the owner's decisions, merges, runs the gates, commits and releases. It writes no code, research, audits or docs itself.
+
 # Amendment (18 October 2026): DeepSeek lanes write all code for FIX37
 
 Owner directive, for the FIX37 wave (the beta.31 review) and until the owner says otherwise.

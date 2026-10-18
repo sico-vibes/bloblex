@@ -1,5 +1,7 @@
-/* The per-bot conversations column between the sidebar and the chat. */
-.conversations-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--line); background: var(--surface-panel); }
+/* The per-bot conversations column between the sidebar and the chat.
+   One set of tree numbers, shared by both looks: the Bitbots look only swaps the
+   stroke (colour, dotted, square corner) and the row border that insets it. */
+.conversations-panel { --convo-indent: 14px; --convo-row-edge: 0px; --convo-line: var(--line-strong); --convo-line-style: solid; --convo-radius: 6px; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--line); background: var(--surface-panel); }
 .app-shell:not(.convos-open) .conversations-panel { border-right-color: transparent; visibility: hidden; }
 .convo-head { height: 52px; flex: 0 0 auto; padding: 0 8px 0 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .convo-head strong { font-size: var(--fs-sm); font-weight: 600; }
@@ -13,7 +15,7 @@
 .convo-row:hover { background: var(--surface-hover); }
 .convo-row.active { background: var(--surface-selected); }
 .convo-twisty, .convo-twisty-space { width: 18px; height: 18px; flex: 0 0 18px; }
-.convo-twisty { padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.convo-twisty { position: relative; z-index: 1; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
 .convo-twisty svg { transition: transform 120ms ease; }
 .convo-twisty.open svg { transform: rotate(90deg); }
 .convo-twisty:hover { color: var(--text-1); }
@@ -33,14 +35,26 @@
 .convo-row.main:hover .convo-time, .convo-row.main:focus-within .convo-time { visibility: hidden; }
 .convo-row.main:hover .convo-open, .convo-row.main:focus-within .convo-open { padding-right: 82px; }
 
-/* Branches drawn like a file tree: a guide down from the parent's arrow and a
+/* Branches drawn like a file tree: one guide down from the parent's arrow and a
    rounded elbow into each child. --parent-depth is the parent row's depth. */
-.convo-children > .convo-item { position: relative; }
-.convo-children > .convo-item::before,
-.convo-children > .convo-item::after { position: absolute; left: calc(var(--parent-depth, 0) * 14px + 9px); content: ""; pointer-events: none; }
-.convo-children > .convo-item::before { top: 0; bottom: 0; border-left: 1px solid var(--line-strong); }
+.convo-children { --convo-guide-x: calc(var(--parent-depth, 0) * var(--convo-indent) + 9px); }
+.convo-children > .convo-item { position: relative; z-index: 0; }
+/* The guide runs the whole item and sits above a row's hover or selected
+   background, so the line is never broken over them. The last child hands over
+   to its elbow instead of carrying the line further down. */
+.convo-children > .convo-item::before { position: absolute; z-index: 1; top: 0; bottom: 0; left: var(--convo-guide-x); border-left: 1px var(--convo-line-style) var(--convo-line); content: ""; pointer-events: none; }
 .convo-children > .convo-item:last-child::before { display: none; }
-.convo-children > .convo-item::after { top: 0; width: 10px; height: 17px; border-left: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); border-bottom-left-radius: 6px; }
+/* The elbow hangs off the child row itself, from its top to its middle, so a
+   taller (two-line) row still meets the guide, and it runs one indent across to
+   the child's own guide column. `--convo-row-edge` is the row border that
+   insets the row's padding box in the Bitbots look. */
+.convo-children > .convo-item > .convo-row::before { position: absolute; z-index: 1; top: 0; bottom: 50%; left: calc(var(--convo-guide-x) - var(--convo-row-edge)); width: var(--convo-indent); border-left: 1px var(--convo-line-style) var(--convo-line); border-bottom: 1px var(--convo-line-style) var(--convo-line); border-bottom-left-radius: var(--convo-radius); content: ""; pointer-events: none; }
+/* A row with no arrow of its own has no guide column to meet, so the elbow runs
+   on to the row's first content: the avatars of a bot-to-bot conversation. */
+.convo-children > .convo-item > .convo-row:not(.branch)::before { width: calc(var(--convo-indent) + 11px); }
+/* A branch carries the guide on below its own row, from its arrow down to its
+   children's elbows, so branches nested deeper stay joined too. */
+.convo-row.branch::after { position: absolute; z-index: 0; top: 50%; bottom: 0; left: calc(var(--depth, 0) * var(--convo-indent) + 9px - var(--convo-row-edge)); border-left: 1px var(--convo-line-style) var(--convo-line); content: ""; pointer-events: none; }
 .convo-action { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
 .convo-action:hover:not(:disabled) { color: var(--text-1); background: var(--surface-selected-strong); }
 .convo-action.danger:hover:not(:disabled) { color: var(--danger-ink); }
@@ -48,9 +62,9 @@
 .convo-rename { min-width: 0; flex: 1; height: 28px; margin: 3px 4px 3px 0; padding: 0 8px; color: var(--text-1); border: 1px solid var(--line-focus); border-radius: var(--radius-sm); outline: none; background: var(--surface-input); font: inherit; font-size: var(--fs-sm); }
 .convo-open:focus-visible, .convo-twisty:focus-visible, .convo-action:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
-:root[data-bitbots="on"] .convo-row { border: 2px solid transparent; border-radius: 0; }
+:root[data-bitbots="on"] .conversations-panel { --convo-line: var(--bb-line-strong); --convo-line-style: dotted; --convo-radius: 0px; }
+:root[data-bitbots="on"] .convo-row { border: 2px solid transparent; border-radius: 0; --convo-row-edge: 2px; }
 :root[data-bitbots="on"] .convo-row.active { border: 2px dotted var(--bb-accent); background: var(--bb-selected); }
 :root[data-bitbots="on"] .convo-row:hover { background: var(--bb-hover); }
 :root[data-bitbots="on"] .convo-rename { border: 2px solid var(--bb-line-strong); border-radius: 0; }
-:root[data-bitbots="on"] .convo-children > .convo-item::before, :root[data-bitbots="on"] .convo-children > .convo-item::after { border-color: var(--bb-line-strong); border-style: dotted; border-bottom-left-radius: 0; }
 @media (prefers-reduced-motion: reduce) { .convo-twisty svg, .convo-actions { transition: none; } }

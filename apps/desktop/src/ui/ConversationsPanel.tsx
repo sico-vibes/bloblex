@@ -77,7 +77,7 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
     const title = node.kind === 'side' ? sideTitle(session, agents as Agent[]) : (session.title?.trim() || 'New chat')
     const open_ = () => node.kind === 'side' ? onOpenSide(session.id) : onSelect(session)
     return <li key={session.id} className="convo-item" role="treeitem" aria-level={depth + 1} aria-selected={active} aria-expanded={node.children.length ? open : undefined}>
-      <div className={`convo-row ${active ? 'active' : ''} ${node.kind}`} style={{ ['--depth' as string]: depth }}>
+      <div className={`convo-row ${active ? 'active' : ''} ${node.kind}${node.children.length > 0 ? ' branch' : ''}`} style={{ ['--depth' as string]: depth }}>
         {node.children.length > 0
           ? <button type="button" className={`convo-twisty ${open ? 'open' : ''}`} aria-label={open ? `Hide conversations under ${title}` : `Show ${node.children.length} conversation${node.children.length === 1 ? '' : 's'} under ${title}`} onClick={() => toggle(session.id)}><ChevronRight size={12} aria-hidden="true" /></button>
           : <span className="convo-twisty-space" aria-hidden="true" />}

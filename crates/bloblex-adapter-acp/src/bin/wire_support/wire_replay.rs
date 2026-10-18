@@ -24,6 +24,22 @@ pub const MASKED: &str = "<masked>";
 /// Placeholder for a masked absolute path.
 pub const MASKED_PATH: &str = "<masked-path>";
 
+/// Keys that identify the owner's machine or account instead of describing the
+/// protocol. Unlike [`VOLATILE_KEYS`], these are masked in **both** directions,
+/// so a recorded fixture never carries a hostname, account plan, quota reading
+/// or a private integration name.
+const PRIVATE_KEYS: &[&str] = &[
+    "serverName",
+    "hostname",
+    "hostName",
+    "machineName",
+    "machineId",
+    "installationId",
+    "planType",
+    "usedPercent",
+    "resetsAt",
+];
+
 /// Keys whose value is volatile for wire comparison and is masked in `in`
 /// messages on both the recorded and the received side.
 const VOLATILE_KEYS: &[&str] = &[
@@ -59,6 +75,19 @@ static RECORDER: OnceLock<Recorder> = OnceLock::new();
 
 /// Initialise recording from the environment. Call once at process start.
 pub fn init(provider: &str, cli_version: &str) {
+    init_inner(provider, cli_version, true)
+}
+
+/// Initialise a **live** capture recorded from a real CLI by the recorder
+/// binary. Same NDJSON format and masking as [`init`]; only the header's
+/// `synthesised` flag differs, so a replay test can tell a real capture from a
+/// fixture synthesised by a fake. Call once at process start.
+#[allow(dead_code)]
+pub fn init_live(provider: &str, cli_version: &str) {
+    init_inner(provider, cli_version, false)
+}
+
+fn init_inner(provider: &str, cli_version: &str, synthesised: bool) {
     let path = env::var_os("BLOBLEX_WIRE_RECORD").map(PathBuf::from);
     let scenario = env::var("BLOBLEX_WIRE_SCENARIO").unwrap_or_else(|_| "recorded".to_owned());
     let _ = RECORDER.set(Recorder {
@@ -71,7 +100,7 @@ pub fn init(provider: &str, cli_version: &str) {
             "provider": provider,
             "cliVersion": cli_version,
             "scenario": scenario,
-            "synthesised": true,
+            "synthesised": synthesised,
         }
     });
     if fs::write(&path, format!("{header}\n")).is_err() {
@@ -316,19 +345,38 @@ fn mask_for_compare(value: &mut Value) {
 }
 
 fn sanitize_inner(value: &mut Value, mask_keys: bool) {
+    sanitize_value(value, mask_keys, false);
+}
+
+/// `in_mcp` marks a subtree that describes an MCP server, so its `name` is
+/// masked too: it names the owner's own integrations, not the protocol.
+fn sanitize_value(value: &mut Value, mask_keys: bool, in_mcp: bool) {
     match value {
         Value::Object(map) => {
+            let mcp = in_mcp || map.contains_key("serverName");
             for (key, child) in map.iter_mut() {
+                if PRIVATE_KEYS.contains(&key.as_str()) {
+                    *child = Value::String(MASKED.to_owned());
+                    continue;
+                }
                 if mask_keys && VOLATILE_KEYS.contains(&key.as_str()) {
                     *child = Value::String(MASKED.to_owned());
                     continue;
                 }
-                sanitize_inner(child, mask_keys);
+                if mcp && key == "name" {
+                    *child = Value::String(MASKED.to_owned());
+                    continue;
+                }
+                sanitize_value(
+                    child,
+                    mask_keys,
+                    mcp || key == "mcp_servers" || key == "mcpTools",
+                );
             }
         }
         Value::Array(items) => {
             for item in items.iter_mut() {
-                sanitize_inner(item, mask_keys);
+                sanitize_value(item, mask_keys, in_mcp);
             }
         }
         Value::String(text) => {
@@ -336,6 +384,9 @@ fn sanitize_inner(value: &mut Value, mask_keys: bool) {
                 *text = MASKED.to_owned();
             } else if is_abs_path(text) {
                 *text = MASKED_PATH.to_owned();
+            } else if text.starts_with("mcp__") {
+                // Provider tool names embed the owner's MCP integration name.
+                *text = MASKED.to_owned();
             }
         }
         _ => {}

@@ -15,3 +15,9 @@ uuid.workspace = true
 [[bin]]
 name = "fake-acp-peer"
 path = "src/bin/fake_acp_peer.rs"
+
+[[bin]]
+name = "acp-cli-recorder"
+path = "src/bin/acp_cli_recorder.rs"
+test = false
+bench = false

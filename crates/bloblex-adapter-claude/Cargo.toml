@@ -22,3 +22,9 @@ name = "fake-icacls"
 path = "src/bin/fake_icacls.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "claude-cli-recorder"
+path = "src/bin/claude_cli_recorder.rs"
+test = false
+bench = false

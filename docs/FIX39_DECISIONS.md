@@ -130,3 +130,31 @@ The owner chose to fold the T3 research's P0 items into this release (`docs/FIX4
   - a usage limit is a reported skip with the reset time.
 - **Files:** new test files and fixture folders under `crates/bloblex-adapter-*/tests` and `crates/bloblex-daemon/tests`, a small recorder helper, and a `docs/` note added by the documentation lane. P11 touches no production code, except a test-only hook if one is truly needed.
 - **When:** now, in parallel with P6, because its files are separate.
+
+## P12: local diagnostics (owner, 18 October, evening)
+
+The background service logs only to stderr, which nobody keeps, and there is no way for a user to send a report. The owner approved adding:
+
+- **A rolling log file** for the daemon and the desktop shell, in the app's data folder under `logs/`:
+  - daily rotation, at most about 20 MB in total, oldest deleted;
+  - level `info` by default, with a hidden setting for `debug`.
+- **Redaction:** following the AGENTS.md privacy rules, logs never contain message or prompt text, recap text, command text, file contents, credentials, tokens, environment values, Tailscale status JSON or Remote cookies.
+  - A central redaction helper plus a test over every log call site that could carry user text.
+  - IDs, error classes, provider names, versions, timings and exit codes are allowed.
+- **"Export diagnostics"** in Settings › General (also in the profile menu's help group). It writes one `.zip` through the native save dialog, using the existing opaque-token pattern, with no webview-supplied path. The zip contains:
+  - the recent log files;
+  - the last N `app_events`, with any message text stripped;
+  - app version, OS version and CLI names and versions;
+  - settings with secrets removed;
+  - a `README.txt` saying what is inside.
+
+  A preview lists the contents before saving. Nothing is uploaded anywhere.
+- **Files:**
+  - new `crates/bloblex-daemon/src/diagnostics.rs`;
+  - `main.rs`, the tracing set-up and the RPC routing only;
+  - `crates/bloblex-daemon/Cargo.toml` (`tracing-appender`; a zip crate if not present);
+  - `apps/desktop/src-tauri/src/lib.rs`, the shell's own log file and the save dialog command only;
+  - `apps/desktop/src/remote/tiers.json` (`diagnostics.export` is `never` remote);
+  - UI: the Settings row, the profile menu item and the preview dialog;
+  - tests.
+- **When:** now. It touches only the tracing set-up and routing in `main.rs`, separate from P7 and P8's areas.

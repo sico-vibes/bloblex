@@ -125,7 +125,8 @@ The owner chose to fold the T3 research's P0 items into this release (`docs/FIX4
 - **Rules:**
   - never print or store credentials;
   - fixtures contain no personal paths or secrets;
-  - the tests use temporary data folders, never the owner's real `~/.claude`, `~/.codex` or Bitbots data;
+  - the CLIs use their normal installed sign-in, read-only, because live tests need it; nothing writes to CLI config or session files outside what a normal run creates;
+  - Bitbots' own data (database, settings, workspaces) always goes to temporary folders, never the owner's real Bitbots data;
   - a usage limit is a reported skip with the reset time.
 - **Files:** new test files and fixture folders under `crates/bloblex-adapter-*/tests` and `crates/bloblex-daemon/tests`, a small recorder helper, and a `docs/` note added by the documentation lane. P11 touches no production code, except a test-only hook if one is truly needed.
 - **When:** now, in parallel with P6, because its files are separate.

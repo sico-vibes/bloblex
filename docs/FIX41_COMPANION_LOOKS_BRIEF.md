@@ -1,6 +1,6 @@
 # FIX41 brief: the looks reach the companion and dictation windows
 
-**Owner decision (19 October 2026):** yes. Frost (`bitbots`), Pop and Dot should style the companion and dictation windows, as Legacy already does. This brief is for a later lane. It was not implemented in the session that recorded the decision.
+**Owner decision (19 October 2026):** yes. Frost (`bitbots`), Pop and Dot should style the companion and dictation windows, as Legacy already does. This brief is for a later lane. It is implemented on branch `claude/priceless-shamir-29e003`; see [FIX41_COMPANION_LOOKS_REPORT.md](FIX41_COMPANION_LOOKS_REPORT.md).
 
 ## Where things stand
 

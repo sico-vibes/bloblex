@@ -45,7 +45,7 @@ Rounded rectangular bill with 14 px compact and 22 px expanded corners, an opaqu
 
 Appearance may use system, dark or light surfaces. Light surfaces use the same semantic tokens with dark text. Type scale tokens may scale proportionally from a 13 px through 16 px body size.
 
-The companion keeps its dark token palette over transparency when the main window uses the light theme.
+For Legacy and Blobots, the companion keeps its dark token palette over transparency when the main window uses the light theme. Frost, Pop and Dot follow the user's resolved theme in the companion (FIX41).
 
 ## FIX39 visual rules (18 October 2026)
 
@@ -69,7 +69,7 @@ Rules from the owner's FIX40 request. The record of the wave is [docs/FIX40_REPO
 - Onboarding offers Bitbots and Blobots as large cards and the three More looks as a row.
 - Users already on `bitbots` get Frost. Nothing is migrated.
 - `data-bitbots="on"` is set for Legacy only. The pixel welcome, PixelScan, PixelClouds and the Doto and DM Mono stylesheet load only for Legacy.
-- Each look has its own file under `apps/desktop/src/ui/themes/` (`frost.css`, `pop.css`, `dot.css`), with every rule scoped to its look and kept out of the companion and dictation windows.
+- Each look has its own file under `apps/desktop/src/ui/themes/` (`frost.css`, `pop.css`, `dot.css`), with every rule scoped to its look. The main-window rules are kept out of the companion and dictation windows, and each look has a separate companion and dictation layer (FIX41, [below](#companion-and-dictation-windows-fix41)).
 
 ### Frost (Bitbots)
 
@@ -118,3 +118,16 @@ Rules from the owner's FIX40 request. The record of the wave is [docs/FIX40_REPO
 - Settings and onboarding show one static orb per look instead of a mini window: lake glass (Bitbots), matte stone (Blobots), pixel dither (Legacy), striped sticker (Pop) and dot matrix (Dot).
 - An orb has no window chrome, avatars, text or animation. It draws its own colours and does not read the app's tokens, so it looks the same in every look. About 72 px for the two large cards and about 52 px for the More looks cards.
 - No glow or halo on any orb.
+
+### Companion and dictation windows (FIX41)
+
+These rules extend the looks above to the companion and dictation windows. The record is [docs/FIX41_COMPANION_LOOKS_REPORT.md](docs/FIX41_COMPANION_LOOKS_REPORT.md).
+
+- Each look styles the overlay windows through its own layer.
+- Dark is each look's default. Light follows `data-surface-theme`.
+- Frost is a solid tint in the overlay windows, because those windows have no native blur.
+- Pop draws its 2 px lines and offset shadows with `box-shadow`, so no box grows.
+- Dot uses dotted lines.
+- Bot-coloured text on light is mixed toward ink (15% bot colour) to keep 4.5:1.
+- Legacy and Blobots keep the fixed dark palette in the overlay windows.
+- No size, layout or animation changes in the overlay windows.

@@ -5,12 +5,22 @@ import '../ui/styles.css'
 import '../ui/shell.css'
 import '../ui/companion.css'
 import { DictationIsland, type IslandPhase } from '../ui/DictationIsland'
+import { setThemeStyle } from '../blob/bitbots'
+import { isThemeStyle, type ThemeStyle } from '../ui/appearance'
 
 // Browser preview of the dictation island: a live loop that behaves like a real
 // session (the model warms up, words arrive, then it transcribes and finishes),
 // and every state side by side. ?state=<phase> shows one state only.
 
 const WORDS = 'Ask Fluffy to check which model Gogo is running and report back with the effort level too'.split(' ')
+
+const previewParams = new URLSearchParams(location.search)
+const requestedStyle = previewParams.get('style')
+const previewStyle: ThemeStyle = isThemeStyle(requestedStyle) ? requestedStyle : 'bitbots'
+setThemeStyle(previewStyle)
+document.documentElement.dataset.surfaceTheme = previewParams.get('theme') === 'light' ? 'light' : 'dark'
+document.documentElement.classList.remove('companion-surface', 'dictation-surface')
+document.documentElement.classList.add(previewParams.get('surface') === 'companion' ? 'companion-surface' : 'dictation-surface')
 
 function LiveIsland({ variant }: { variant: 'bubble' | 'companion' }) {
   const [tick, setTick] = useState(0)
@@ -51,8 +61,8 @@ function Preview() {
 
 const style = document.createElement('style')
 style.textContent = `
-  body { margin: 0; background: var(--bg-app, #0d0d0d); color: var(--text-1); font-family: var(--font-ui, system-ui); }
-  .dictation-preview { padding: 28px; display: grid; gap: 28px; }
+  body { margin: 0; background: #242424; color: var(--text-1); font-family: var(--font-ui, system-ui); }
+  .dictation-preview { min-height: 100vh; padding: 28px; display: grid; gap: 28px; background: var(--surface-app, #242424); color: var(--text-1, #f4f4f4); }
   .dictation-preview.single { min-height: 100vh; padding: 0; place-items: end center; }
   .dictation-preview h1 { margin: 0; font-size: 20px; } .dictation-preview h2 { margin: 0 0 12px; color: var(--text-2); font-size: 13px; font-weight: 600; }
   .dictation-preview-row, .dictation-preview-grid { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-end; }

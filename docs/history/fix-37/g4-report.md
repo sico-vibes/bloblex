@@ -9,7 +9,7 @@ Lane: OpenCode `opencode-go/deepseek-v4.1-flash` (high), worktree `C:\fx64`
 was run.
 
 Spec: [docs/history/fix-37/g4-slash-commands-spec.md](g4-slash-commands-spec.md).
-Read first: `AGENTS.md` headings, `DESIGN.md`,
+Read first: `AGENTS.md` headings, `docs/design/design-system.md`,
 [docs/history/fix-32/skills-spec.md](../fix-32/skills-spec.md) (the skills pool) and
 [docs/history/fix-36/d3-report.md](../fix-36/d3-report.md) (Manager knowledge).
 

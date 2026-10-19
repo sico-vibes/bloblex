@@ -6,7 +6,7 @@
 
 ## Purpose
 
-Bitbots is a local Windows control plane for the coding-agent CLIs Claude Code, Codex and OpenCode. A React interface and a companion window show the state of every bot. A separate local daemon owns the sessions, the permission decisions and the stored history. Each provider CLI keeps its own sign-in ([PRODUCT.md](../../PRODUCT.md)).
+Bitbots is a local Windows control plane for the coding-agent CLIs Claude Code, Codex and OpenCode. A React interface and a companion window show the state of every bot. A separate local daemon owns the sessions, the permission decisions and the stored history. Each provider CLI keeps its own sign-in ([docs/design/product.md](../design/product.md)).
 
 ## How it works
 

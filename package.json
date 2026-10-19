@@ -14,6 +14,12 @@
     "build:daemon": "cargo build -p bloblex-daemon --bin bitbotsd",
     "stage:daemon": "node scripts/stage-daemon.mjs",
     "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-windows.ps1",
-    "desktop:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bundle-windows.ps1"
+    "desktop:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bundle-windows.ps1",
+    "docs:build": "node scripts/docs-library.mjs build",
+    "docs:check": "node scripts/docs-library.mjs check",
+    "docs:serve": "node scripts/docs-library.mjs serve"
+  },
+  "devDependencies": {
+    "marked": "^18.1.1"
   }
 }

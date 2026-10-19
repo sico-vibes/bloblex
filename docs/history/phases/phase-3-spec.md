@@ -4,7 +4,7 @@
 > **Status:** historical
 > **Last updated:** 2026-10-15
 
-Original status line, kept as written: historical spec. Files listed in the Phase 3 inventory that are no longer in `apps/desktop/src/ui/` include `agentRoster.ts`, `AgentRoster.tsx`, `AgentContextMenu.tsx` and `BlobUsage.tsx`. The roster was replaced by `TeamSidebar` ([SESSION_HANDOFF.md](../../../SESSION_HANDOFF.md), 10 October 2026).
+Original status line, kept as written: historical spec. Files listed in the Phase 3 inventory that are no longer in `apps/desktop/src/ui/` include `agentRoster.ts`, `AgentRoster.tsx`, `AgentContextMenu.tsx` and `BlobUsage.tsx`. The roster was replaced by `TeamSidebar` ([docs/operations/session-handoff.md](../../operations/session-handoff.md), 10 October 2026).
 
 This is the implementation contract for Phase 3 of [docs/plans/e2e-plan-v2.md](../../plans/e2e-plan-v2.md). Phase 3 replaces the runtime-per-row sidebar with one row per blob, and adds the blob editor. It depends only on Phase 2a, as specified in [docs/history/phases/phase-2a-spec.md](phase-2a-spec.md). Execution fields may be displayed. They must not be described as working.
 
@@ -61,7 +61,7 @@ Reuse `.bot-row` ([apps/desktop/src/ui/shell.css](../../../apps/desktop/src/ui/s
 1. `BlobCanvas` at 42px, `color` set to the resolved agent hex (section 4), `mood` from `deriveCompanionStatus` for this agent's runtime and this agent's latest session, `label` set to the agent name. Face state already comes from that helper ([apps/desktop/src/ui/companionStatus.ts](../../../apps/desktop/src/ui/companionStatus.ts) lines 4–32). Pass `connected`, the runtime, and the latest session. Do not pass `composing` on a roster row.
 2. Name (`agent.name`, not the provider) and, when the latest session has `updatedAt`, the existing `shortTime` ([apps/desktop/src/ui/App.tsx](../../../apps/desktop/src/ui/App.tsx) lines 586–592). Omit `<time>` when there is no session.
 3. Preview line. Use `latestPreview` ([apps/desktop/src/ui/App.tsx](../../../apps/desktop/src/ui/App.tsx) lines 573–578) on the latest session whose `agentId` equals this agent. If none, and the daemon is connected, show the status label from `deriveCompanionStatus`. If the daemon is disconnected, show "Daemon disconnected". When search matched a session title and did not match the name, show that title as `Session: {title}` instead of the latest preview, so the hit is visible. If several titles match, use the matching session with the greatest `updatedAt`.
-4. A third line, new class `bot-row-meta`: the runtime label (`labelize(provider)`) and the status text, separated by a middle dot. Examples: "Claude · Online", "Codex · Runtime offline". The provider is this label, never the face colour ([docs/plans/e2e-plan-v2.md](../../plans/e2e-plan-v2.md) lines 180–181, [DESIGN.md](../../../DESIGN.md) lines 9 and 29). Keep the existing `.status-dot` as a supplement to the text, using `statusClass` ([apps/desktop/src/ui/App.tsx](../../../apps/desktop/src/ui/App.tsx) lines 1388–1392). Do not convey status by colour alone ([PRODUCT.md](../../../PRODUCT.md) line 38).
+4. A third line, new class `bot-row-meta`: the runtime label (`labelize(provider)`) and the status text, separated by a middle dot. Examples: "Claude · Online", "Codex · Runtime offline". The provider is this label, never the face colour ([docs/plans/e2e-plan-v2.md](../../plans/e2e-plan-v2.md) lines 180–181, [docs/design/design-system.md](../../design/design-system.md) lines 9 and 29). Keep the existing `.status-dot` as a supplement to the text, using `statusClass` ([apps/desktop/src/ui/App.tsx](../../../apps/desktop/src/ui/App.tsx) lines 1388–1392). Do not convey status by colour alone ([docs/design/product.md](../../design/product.md) line 38).
 
 Latest session means the session with `agentId === agent.id` and the greatest `updatedAt`, tie-broken by `id`. Do not pick a session merely because it shares `runtimeId`. Legacy sessions with `agentId` null are not this agent's latest session.
 
@@ -139,7 +139,7 @@ One draft is shared by Overview and Settings. The header holds Back, the agent n
 - Runtime: provider label, status dot, status text.
 - Model: the label "Model" and the value "CLI default" when `model` is null, otherwise the stored string, plus the sentence "Bitbots does not send a model until a later update." Do not call this the applied snapshot. Phase 2a stores no execution snapshot ([docs/history/phases/phase-2a-spec.md](phase-2a-spec.md) line 85).
 - Status: the `deriveCompanionStatus` label.
-- Quick usage: the label "Usage" and the value "Not available yet." Do not read `usage.summary`, do not show token counts, and do not show `$0` ([PRODUCT.md](../../../PRODUCT.md) line 32).
+- Quick usage: the label "Usage" and the value "Not available yet." Do not read `usage.summary`, do not show token counts, and do not show `$0` ([docs/design/product.md](../../design/product.md) line 32).
 - The 12-swatch grid from section 4, no shapes ([docs/plans/e2e-plan-v2.md](../../plans/e2e-plan-v2.md) line 164). Choosing a swatch updates the draft and marks it dirty. It does not save by itself. A swatch is a profile edit, and Phase 3 has one save path, so Overview and Settings cannot diverge.
 
 #### Sessions
@@ -228,7 +228,7 @@ On save failure, leave the draft dirty and do not change snapshot agents.
 
 ### Confirmed updates and `agent.changed`
 
-Do not write the draft into the snapshot before the RPC returns. The daemon is the source of truth ([PRODUCT.md](../../../PRODUCT.md) line 30).
+Do not write the draft into the snapshot before the RPC returns. The daemon is the source of truth ([docs/design/product.md](../../design/product.md) line 30).
 
 On success, merge the returned `Agent` into `snapshot.agents` immediately. Create mode then switches to edit mode for the new id, selects that agent, and marks the draft clean. Edit mode stays on the page and marks the draft clean from the returned agent. Archive closes the page and runs the selection fallback in section 5.
 
@@ -265,7 +265,7 @@ Phase 2a stores either one of 12 lowercase keys or a six-digit hex, and it leave
 | violet | `#BF9CFF` | 8.47:1 | 9.03:1 |
 | pink | `#F0A0C4` | 9.47:1 | 10.10:1 |
 
-[DESIGN.md](../../../DESIGN.md) line 13 describes the main background as a deep blue-gray and does not give a hex. The implemented Midnight surfaces are `--app: #070707` and `--panel: #111111` ([apps/desktop/src/ui/shell.css](../../../apps/desktop/src/ui/shell.css) lines 6–7). The sidebar element uses `--panel` (line 31). The conversation pane uses `--app` (line 95). A selected row uses `--raised: #2f2f2f` (lines 8 and 43), which is the lightest surface a roster face sits on. Companion faces sit on the capsule `#000` ([apps/desktop/src/ui/companion.css](../../../apps/desktop/src/ui/companion.css) line 22); the window behind the capsule is transparent (line 21).
+[docs/design/design-system.md](../../design/design-system.md) line 13 describes the main background as a deep blue-gray and does not give a hex. The implemented Midnight surfaces are `--app: #070707` and `--panel: #111111` ([apps/desktop/src/ui/shell.css](../../../apps/desktop/src/ui/shell.css) lines 6–7). The sidebar element uses `--panel` (line 31). The conversation pane uses `--app` (line 95). A selected row uses `--raised: #2f2f2f` (lines 8 and 43), which is the lightest surface a roster face sits on. Companion faces sit on the capsule `#000` ([apps/desktop/src/ui/companion.css](../../../apps/desktop/src/ui/companion.css) line 22); the window behind the capsule is transparent (line 21).
 
 Contrast uses WCAG 2 relative luminance. For each 8-bit channel `c`, `lin(c) = c/255/12.92` when `c/255 <= 0.04045`, otherwise `((c/255 + 0.055) / 1.055) ^ 2.4`. `L = 0.2126*lin(R) + 0.7152*lin(G) + 0.0722*lin(B)`. The ratio is `(Llighter + 0.05) / (Ldarker + 0.05)`.
 
@@ -280,7 +280,7 @@ These ratios are for the flat swatch. `BlobCanvas` paints that hex as `bodyColor
 | Stored provider hex | Swatch key | Why the default blob looks unchanged |
 |---|---|---|
 | `#F38C6F` | coral | Coral is defined as that hex |
-| `#82AAFF` | blue | Blue is defined as that hex. Codex is the blue in [DESIGN.md](../../../DESIGN.md) line 9. Do not map Codex to sky |
+| `#82AAFF` | blue | Blue is defined as that hex. Codex is the blue in [docs/design/design-system.md](../../design/design-system.md) line 9. Do not map Codex to sky |
 | `#BF9CFF` | violet | Violet is defined as that hex |
 | `#89D6B3` | mint | Mint is defined as that hex, and it is the schema default |
 
@@ -420,7 +420,7 @@ Blob page:
 - The custom hex field's label is "Custom colour".
 - Description counter is tied to the textarea with `aria-describedby`.
 - Disabled execution controls use the HTML `disabled` attribute and the visible reason "Available in a later update." in an element referenced by `aria-describedby`. The reason is not only a tooltip.
-- Status on a row includes the text, not only `.status-dot` ([PRODUCT.md](../../../PRODUCT.md) line 38).
+- Status on a row includes the text, not only `.status-dot` ([docs/design/product.md](../../design/product.md) line 38).
 
 Reduced motion: do not add a motion path. `BlobCanvas` already sets `engine.reducedMotion` from `prefers-reduced-motion` ([apps/desktop/src/blob/BlobCanvas.tsx](../../../apps/desktop/src/blob/BlobCanvas.tsx) lines 130–151) and skips the idle loop when motion is reduced (lines 163–165). The global stylesheet already collapses animations ([apps/desktop/src/ui/styles.css](../../../apps/desktop/src/ui/styles.css) lines 253–255). Roster faces, the 96px preview, and companion faces all go through `BlobCanvas`, so they follow that flag. Do not bypass it for the editor preview.
 
@@ -469,7 +469,7 @@ Modify:
 | `apps/desktop/src/types.ts` | Only if Phase 2a has not added `Agent`, `Snapshot.agents`, `Session.agentId`, and the `agent.changed` branch. Add those exactly as [docs/history/phases/phase-2a-spec.md](phase-2a-spec.md) lines 173–178. No extra fields |
 | `apps/desktop/src/preview/fixtureBridge.ts` | Fixture agents, `agentId`s, and in-memory `agent.*` / `session.new` |
 | `apps/desktop/src/preview/main.tsx` | Character sheet palette uses the 12 keys |
-| `SESSION_HANDOFF.md` | Implementer records what landed and the smoke database path. This spec does not edit that file |
+| `docs/operations/session-handoff.md` | Implementer records what landed and the smoke database path. This spec does not edit that file |
 
 Do not modify Rust, Tauri commands, or `providerColor`'s four hexes.
 
@@ -582,7 +582,7 @@ The live inspection database is `%LOCALAPPDATA%\Bloblex\bloblex.db`, or `%TEMP%\
 11. Archive "Pink sibling". Confirm the copy in section 2. The row disappears. Restart is next, so do not restore it; there is no restore control.
 12. Quit Bitbots from the header menu. The inspection app, if it was running, is still running.
 13. Start `npm run desktop:dev` again in the same session so `BLOBLEX_DB_PATH` is unchanged. The edited name, the pink (or lemon) colour, the description, and the archived row's absence all survive. The archived blob's session is not offered as a new-session target.
-14. Record the temp database path, the git revision, and a pass/fail line per step in `SESSION_HANDOFF.md`. Delete the temp database only after that note exists. Do not copy it over the live database.
+14. Record the temp database path, the git revision, and a pass/fail line per step in `docs/operations/session-handoff.md`. Delete the temp database only after that note exists. Do not copy it over the live database.
 
 ## 10. Risks, open questions, and out of scope
 

@@ -15,7 +15,7 @@ You have no chat history. Everything you need is here, in the repository, and in
 - Work only inside `D:\fx40t`. Do not touch `D:\Basem's\Coding\Blolblex` or `D:\fx40c`.
 - Another lane (Characters) is working in parallel on bot art. Do NOT edit these files, which belong to it: `apps/desktop/src/blob/**` except `blob/bitbots.ts` and `blob/bitbots.test.ts` (those two are yours), `ui/LookEditor.tsx`, `ui/BotEditor.tsx`, `ui/blobShare.ts`, `preview/main.tsx`, the `valid_look` function and its test in `crates/bloblex-storage/src/lib.rs`, `crates/bloblex-daemon/src/proposals.rs`, `crates/bloblex-daemon/src/team.rs`.
 - In `crates/bloblex-storage/src/lib.rs` you may edit only `validate_setting_value` (around line 1268) and settings tests.
-- Follow `DESIGN.md` and `PRODUCT.md` where they do not conflict with this brief; this brief wins where they do. Keep comments sparse and in the style of the surrounding code. British-neutral plain English in UI copy, sentence case, no exclamation marks.
+- Follow `docs/design/design-system.md` and `docs/design/product.md` where they do not conflict with this brief; this brief wins where they do. Keep comments sparse and in the style of the surrounding code. British-neutral plain English in UI copy, sentence case, no exclamation marks.
 - No new Tauri plugins, no new capabilities, no CSP changes, no runtime network fetches (fonts must be bundled).
 
 ## Background (facts from a code map)
@@ -90,7 +90,7 @@ Target: the "Frost" direction in `design-reference/redesignPreview.tsx` + `redes
    - Friendly / display: `outfit` Outfit, `nunito` Nunito, `space-grotesk` Space Grotesk, `bricolage-grotesque` Bricolage Grotesque
    - Mono: `jetbrains-mono` JetBrains Mono, `geist-mono` Geist Mono, `fira-code` Fira Code, `ibm-plex-mono` IBM Plex Mono, `dm-mono` DM Mono, `space-mono` Space Mono
    - Pixel: `doto` Doto, `silkscreen` Silkscreen, `pixelify-sans` Pixelify Sans, `vt323` VT323, `press-start-2p` Press Start 2P, `jersey-10` Jersey 10
-   If one package does not exist on npm, drop it and say so in the report. Add each font's licence line to `THIRD_PARTY_NOTICES.md`.
+   If one package does not exist on npm, drop it and say so in the report. Add each font's licence line to `docs/legal/third-party-notices.md`.
 2. New `ui/fonts.ts`: the catalogue (id, label, category, CSS family, lazy `load()` that dynamically imports only that font's CSS), `applyFonts(uiId, monoId)` that loads and then sets `--font-ui` / `--font-mono` inline on `<html>` (empty id = the look's default), and per-look defaults: `bitbots` Inter + system mono; `blobots` system (today's stack); `legacy` as today (DM Mono / Doto, already handled by bitbots.css); `pop` and `dot` system for now. Store `bitbots.font` / `bitbots.monoFont` in localStorage like the accent. Only the chosen fonts may be fetched; nothing else may be added to the main bundle (also move `LookPreview.tsx`'s static Doto / DM Mono imports to lazy loading).
 3. Pixel fonts can be chosen for the UI font; keep the minimum rendered size at 11px.
 

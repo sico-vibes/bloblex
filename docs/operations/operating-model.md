@@ -15,7 +15,7 @@
 ## 2. Lanes and ownership
 
 - Heavy non-UI coding (Rust daemon, adapters, storage, speech crate, `src-tauri` native code, schema, non-visual TypeScript, backend tests) goes to OpenCode `opencode-go/deepseek-v4.1-flash` at high effort. (AGENTS.md, 12 Oct amendment, "Lanes", line 7.)
-- UI and UX work (components, styles, copy, motion, island or companion, settings screens) is done by the Director (Claude), following `DESIGN.md` and `PRODUCT.md`. (Line 7.)
+- UI and UX work (components, styles, copy, motion, island or companion, settings screens) is done by the Director (Claude), following `docs/design/design-system.md` and `docs/design/product.md`. (Line 7.)
 - The Director reviews every OpenCode diff and commits after gates. (Line 7; line 24.)
 - The OpenCode lane never runs `git commit` and does not grade its own work. Backend diffs also get a read-only second opinion from a different lane, `impl-b`, via `scripts/run-cursor-delegate.ps1`. (Line 7.)
 - Codex `impl` remains available when the owner assigns it. (Line 7.)

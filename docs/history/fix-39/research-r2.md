@@ -37,7 +37,7 @@ Make the composer controls write to the bot when the selection is a draft, and p
 - `apps/desktop/src/ui/SessionExecutionControls.tsx` (`save` `:76-96`, `requestEffort` `:98-102`, `setFast` `:110-122`): same branch. On a draft, `agent.update { agentId, model }` / `{ agentId, thinking }` / `{ agentId, serviceTier }`. The model-change confirmation dialog (`:149`) should say it changes the bot (and that an open conversation may restart its provider context).
 - `apps/desktop/src/ui/App.tsx`: pass a target instead of a raw session, or let the controls import `isDraftSession` and read `agent.id`. Stop passing a draft id to `runtime.models`/`runtime.capabilities` (`SessionExecutionControls.tsx:50,57`): omit `sessionId` when it is a draft.
 - Effective state comes back through the existing `agent.changed` event into the snapshot, so no extra refresh is needed.
-- UI stays within `DESIGN.md`; no new icons.
+- UI stays within `docs/design/design-system.md`; no new icons.
 
 Tests:
 - Unit (UI): `composerTarget` for draft vs real session.
@@ -83,7 +83,7 @@ Normalize at the adapter boundary and present in groups; keep the raw text behin
   - `activityTitle` (`:34-46`) prefers `detail.label`/`detail.target` (verb + target) and uses `detail.command` only if nothing else exists (then show the command head, not the whole string).
   - Group the steps of one turn by category inside `ActivitySummaryLine` (`:107-118`): subheadings "Commands", "Files read", "Searches", "Edits", "Other"; the collapsed line stays "Ran N commands · used N tools".
   - Keep the raw command/input in `StepDetail` (`:65-89`) exactly as today, so the command text is "available on demand".
-- No star/sparkle icons (`DESIGN.md`); reuse the existing `Terminal`/`FileText`/`Globe`/`Wrench` icons (`:56-63`).
+- No star/sparkle icons (`docs/design/design-system.md`); reuse the existing `Terminal`/`FileText`/`Globe`/`Wrench` icons (`:56-63`).
 
 Tests:
 - Rust unit: `tool_activity` for Claude `Bash`/`Glob`/`Grep`/`Read`/`Edit`, Codex `commandExecution`/`webSearch`, ACP `read`/`execute`; `tool_detail` gains `pattern`/`filePath`/`label` and keeps merging start+completion (`crates/bloblex-storage/src/lib.rs:6485`).

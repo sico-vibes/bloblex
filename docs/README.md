@@ -9,36 +9,40 @@ Where a document and the code disagree, the code wins. For rules, [AGENTS.md](..
 ## Start here
 
 - **AI agents and the delivery process:** read [AGENTS.md](../AGENTS.md) first, then [operations/operating-model.md](operations/operating-model.md) (a summary of AGENTS.md dated 14 October 2026, not updated for the 16 to 19 October amendments; AGENTS.md wins), [operations/implementation-status.md](operations/implementation-status.md) (open gaps), and [operations/release-checklist.md](operations/release-checklist.md) (release state).
-- **New contributors:** [README.md](../README.md), then [reference/architecture.md](reference/architecture.md), [guides/windows-development.md](guides/windows-development.md), [PRODUCT.md](../PRODUCT.md), [DESIGN.md](../DESIGN.md), [ipc-contract.md](ipc-contract.md) and [reference/runtime-capabilities.md](reference/runtime-capabilities.md).
+- **New contributors:** [README.md](../README.md), then [reference/architecture.md](reference/architecture.md), [guides/windows-development.md](guides/windows-development.md), [product.md](design/product.md), [design-system.md](design/design-system.md), [ipc-contract.md](ipc-contract.md) and [reference/runtime-capabilities.md](reference/runtime-capabilities.md).
 - **Plan and roadmap:** [plans/e2e-plan-v2.md](plans/e2e-plan-v2.md) is the plan. [plans/improvement-plan.md](plans/improvement-plan.md) is the roadmap that AGENTS.md names.
-- **Release state:** [SESSION_HANDOFF.md](../SESSION_HANDOFF.md) is the dated handoff. The current release is `v0.1.0-beta.35` ([release notes](releases/0.1.0-beta.35.md)). Beta.32 and later update themselves ([operations/updater.md](operations/updater.md)).
+- **Release state:** [session-handoff.md](operations/session-handoff.md) is the dated handoff. The current release is `v0.1.0-beta.35` ([release notes](releases/0.1.0-beta.35.md)). Beta.32 and later update themselves ([operations/updater.md](operations/updater.md)).
+- **Reading the documentation offline:** open [DOCUMENTATION.html](DOCUMENTATION.html), one self-contained file at the top of `docs/` with the guides, the reference and every project document. Rebuild and check it with `node scripts/docs-library.mjs build` and `node scripts/docs-library.mjs check`.
 - **Writing or editing a document:** [STYLE.md](STYLE.md).
 
 ## Folder map
 
 ```text
-AGENTS.md, README.md, DESIGN.md, PRODUCT.md, SESSION_HANDOFF.md   root files (kept)
+AGENTS.md, README.md, Cargo.toml, Cargo.lock, package.json, package-lock.json, .gitignore   root (kept)
 docs/
+  DOCUMENTATION.html        the generated offline library (open this)
   README.md                 this index
   STYLE.md                  documentation style guide
   ipc-contract.md           daemon IPC contract (kept)
   reference/                how the system works: contracts, capabilities, modes, analytics
   guides/                   runbooks: Windows development, live checks, native smoke
-  design/                   design rules beyond DESIGN.md, polish waves
+  design/                   design system, product, polish waves, archive/ (two old images)
   plans/                    the current plan and roadmap
-  operations/               process, release, updater, implementation status
+  operations/               process, release, updater, implementation status, session handoff
   audits/                   documentation and coverage audits
+  legal/                    third-party notices
   remote/                   Remote mode (kept: referenced by code)
   evidence/                 dated evidence records (kept: referenced by code and records)
   releases/                 release notes (kept: read by the app at build time)
   fixtures/, qa-schema/     test data (kept, byte-identical)
   history/                  dated records: fix-NN waves, improvement phases, phase specs, director log
+  library/                  library source (content, assets), catalogue and snapshots
   library/audits/           the documentation lane's inventory, progress and review records
 ```
 
 ## Naming and status
 
-- Files are lower-case kebab-case, except the root files, this index and `STYLE.md`. FIX wave records are `history/fix-NN/<topic>-<kind>.md`.
+- Files are lower-case kebab-case, except `AGENTS.md`, `README.md`, this index and `STYLE.md`. FIX wave records are `history/fix-NN/<topic>-<kind>.md`.
 - Every document has a front block: what it is, its status and the date of its last change. Superseded records name their successor.
 - Protected paths keep their place. See [STYLE.md](STYLE.md#protected-paths).
 
@@ -51,11 +55,7 @@ These stay at the repository root. `AGENTS.md` is the owner directive and wins o
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
 | [Bitbots collaboration instructions](../AGENTS.md) | Owner directive: how Bitbots is built and delivered, with the dated amendments, newest first. | owner directive; wins on any conflict | 2026-10-19 |
-| [Bitbots](../README.md) | The front page of the repository: what Bitbots is, how to build and test it, and where the documentation starts. | current. The release figures in this file were last set at v0.1.0-beta.34; Cargo.toml and package.json already show v0.1.0-beta.35. | 2026-10-19 |
-| [Bitbots Design System](../DESIGN.md) | The visual design rules for Bitbots: the scene, tokens, layout, controls, companion, and the FIX39 and FIX40 rules. Read it before changing the UI. | current | 2026-10-19 |
-| [Bitbots Product](../PRODUCT.md) | The product purpose, users, brand personality, anti-references and design principles for Bitbots. | current | 2026-10-15 |
-| [Bitbots session handoff](../SESSION_HANDOFF.md) | The session handoff: dated sections, newest first, with the current release and the open items. | historical handoff with dated sections; the current release is v0.1.0-beta.35 | 2026-10-19 |
-| [Third-party notices](../THIRD_PARTY_NOTICES.md) | Licences and attributions for bundled and adapted third-party material. | current | 2026-10-19 |
+| [Bitbots](../README.md) | The front page of the repository: what Bitbots is, how to build and test it, and where the documentation starts. | current. The release figures in this file are set at v0.1.0-beta.35. | 2026-10-19 |
 
 ## Style
 
@@ -65,14 +65,22 @@ The documentation style guide.
 | --- | --- | --- | --- |
 | [Documentation style guide](STYLE.md) | the rules for writing and maintaining Bitbots documents: tone, layout, naming, links and how to mark what is verified. | current. Applies to every document written from October 2026 on. Historical records were brought under the front block but keep their own body layout (see [Historical records](#historical-records)). | 2026-10-19 |
 
+## Legal
+
+Licences and attributions.
+
+| Document | What it is | Status | Last updated |
+| --- | --- | --- | --- |
+| [Third-party notices](legal/third-party-notices.md) | the licences and attributions for third-party code, fonts and models that Bitbots bundles or adapts. | current | 2026-10-19 |
+
 ## Reference
 
 How the system works and the contracts it keeps.
 
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
-| [Architecture](reference/architecture.md) | how Bitbots is put together: the desktop shell, the local daemon, the provider adapters, storage and the Remote gateway, and where to start reading each part. | current; new in the documentation library pass of 19 October 2026. The claims were checked against the tree at `17bc277` on that date; line numbers may move. | 2026-10-19 |
 | [Approval modes contract: ask, auto-approve and bypass](reference/approval-modes.md) | The contract for the three permission modes (ask, auto and bypass): who decides, the safety rails and the RPC shape. | current; the budget clauses are historical (AGENTS.md, 12 October 2026 amendment) | 2026-10-15 |
+| [Architecture](reference/architecture.md) | how Bitbots is put together: the desktop shell, the local daemon, the provider adapters, storage and the Remote gateway, and where to start reading each part. | current; new in the documentation library pass of 19 October 2026. The claims were checked against the tree at `17bc277` on that date; line numbers may move. | 2026-10-19 |
 | [Phase 5 contract: cost and usage analytics (daemon RPC + UI)](reference/phase-5-analytics-contract.md) | The contract for cost and usage analytics: the daemon RPC, the UI and the definitions. | superseded in part; the monetary, estimate and subscription sections are retired (AGENTS.md, 12 October 2026 amendment) | 2026-10-14 |
 | [Runtime capabilities of the installed CLIs](reference/runtime-capabilities.md) | The installed CLI capabilities Bitbots relies on, with the evidence for each: Claude Code, Codex and OpenCode. | current evidence record; the OpenCode 2.0.28 observations of 14 October 2026 are labelled in the OpenCode section | 2026-10-15 |
 | [Bitbots daemon IPC contract (v1)](ipc-contract.md) | The daemon IPC contract (v1): methods, events, and the rules for the capability and the local listeners. | current | 2026-10-18 |
@@ -89,11 +97,14 @@ Task-oriented runbooks.
 
 ## Design
 
-Design rules beyond DESIGN.md, and the polish waves.
+The design system, the product brief, the polish waves and the archive of two old images.
 
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
+| [Archived design images](design/archive/README.md) | the two images kept from earlier work when the repository root was tidied. Nothing in the app or in the documentation refers to them. | historical; archived on 19 October 2026 by the owner's root tidy-up. | 2026-10-19 |
 | [Bitbots theme spec: the pixel re-skin (CSS only)](design/bitbots-theme-spec.md) | The pixel re-skin theme spec for the experimental Bitbots theme (CSS only), 13 October 2026. | historical; superseded in part by [themes-spec.md](history/fix-40/themes-spec.md) (the Frost look became Bitbots) | 2026-10-13 |
+| [Bitbots Design System](design/design-system.md) | The visual design rules for Bitbots: the scene, tokens, layout, controls, companion, and the FIX39 and FIX40 rules. Read it before changing the UI. | current | 2026-10-19 |
+| [Bitbots Product](design/product.md) | The product purpose, users, brand personality, anti-references and design principles for Bitbots. | current | 2026-10-15 |
 | [UI/UX polish wave (15 October 2026, unreleased)](design/ui-polish-wave.md) | The UI and UX polish waves of 15 October 2026, recorded as they were shipped, unreleased. | historical | 2026-10-15 |
 
 ## Plans
@@ -115,6 +126,7 @@ Process, release and status records.
 | [Native smoke test results (Phase 2a + Phase 3)](operations/native-smoke-results.md) | Results of the native smoke test run on 2 October 2026 against an isolated database. | historical; a record of 2 October 2026 | 2026-10-15 |
 | [Operating model: a dated summary of the rules (14 October 2026)](operations/operating-model.md) | A summary, dated 14 October 2026, of the rules in AGENTS.md. AGENTS.md wins on any conflict. The amendments of 16 to 19 October 2026 are not all reflected here. | current; a dated summary (14 October 2026), not updated for the 16 to 19 October amendments | 2026-10-19 |
 | [Release checklist](operations/release-checklist.md) | The checklist for each Bitbots release: gates, publishing, digests, clean-up and open release items. | current | 2026-10-19 |
+| [Bitbots session handoff](operations/session-handoff.md) | The session handoff: dated sections, newest first, with the current release and the open items. | historical handoff with dated sections; the current release is v0.1.0-beta.35 | 2026-10-19 |
 | [Auto-update and release contract](operations/updater.md) | The auto-update contract: decisions, channels, app behaviour, commands and the release process. | current | 2026-10-15 |
 
 ## Audits
@@ -134,7 +146,7 @@ Remote mode design, protocol and threat model. These paths are referenced by cod
 | --- | --- | --- | --- |
 | [Draft amendment for AGENTS.md: Remote mode (for owner approval)](remote/AGENTS_AMENDMENT_DRAFT.md) | The draft amendment to AGENTS.md for Remote mode, as first written for owner approval. | historical; accepted into AGENTS.md (17 October 2026 amendment) | 2026-10-17 |
 | [Remote mode: architecture](remote/ARCHITECTURE.md) | The architecture of Remote mode over Tailscale. | current (Tailscale method); later amendments are in AGENTS.md | 2026-10-16 |
-| [Remote mode: phases](remote/PHASES.md) | The phases of the Remote mode work. | historical plan; see the status of each phase in SESSION_HANDOFF.md | 2026-10-16 |
+| [Remote mode: phases](remote/PHASES.md) | The phases of the Remote mode work. | historical plan; see the status of each phase in docs/operations/session-handoff.md | 2026-10-16 |
 | [Bitbots remote protocol (v1)](remote/PROTOCOL.md) | The Remote mode protocol (v1): requests, events and the rules for each. | current; the design for the wire contract. Its own line "Design, not implemented" is out of date: the daemon contains the gateway (crates/bloblex-daemon/src/remote/). | 2026-10-19 |
 | [Remote mode: product specification](remote/REMOTE_MODE.md) | The product specification for Remote mode. | current | 2026-10-16 |
 | [Remote mode: independent review (FIX24)](remote/REVIEW_NOTES.md) | The independent review of the Remote mode design (FIX24). | historical record | 2026-10-16 |
@@ -178,7 +190,7 @@ One note per release. The app reads these files at build time, so they keep thei
 | [Bloblex 0.1.0-beta.16](releases/0.1.0-beta.16.md) | Release notes for 0.1.0-beta.16. | release note (protected path) | 2026-10-11 |
 | [Bloblex 0.1.0-beta.17](releases/0.1.0-beta.17.md) | Release notes for 0.1.0-beta.17. | release note (protected path) | 2026-10-11 |
 | [Bloblex 0.1.0-beta.18](releases/0.1.0-beta.18.md) | Release notes for 0.1.0-beta.18. | release note (protected path) | 2026-10-12 |
-| [Bloblex 0.1.0-beta.19](releases/0.1.0-beta.19.md) | Release notes for 0.1.0-beta.19. | release note (protected path) | 2026-10-13 |
+| [Bloblex 0.1.0-beta.19](releases/0.1.0-beta.19.md) | Release notes for 0.1.0-beta.19. | release note (protected path) | 2026-10-19 |
 | [Bloblex 0.1.0-beta.2](releases/0.1.0-beta.2.md) | Release notes for 0.1.0-beta.2. | release note (protected path) | 2026-10-02 |
 | [Bloblex 0.1.0-beta.20](releases/0.1.0-beta.20.md) | Release notes for 0.1.0-beta.20. | release note (protected path) | 2026-10-13 |
 | [Bloblex 0.1.0-beta.21](releases/0.1.0-beta.21.md) | Release notes for 0.1.0-beta.21. | release note (protected path) | 2026-10-13 |
@@ -598,12 +610,13 @@ The documentation lane keeps its inventory, progress log and review log here.
 
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
+| [Documentation library work log](library/audits/library-progress.md) | the running log of the library build lane (branch `docs-library`, worktree `D:\fx50`), kept so a successor can resume after an interruption. | complete for this brief; the checks and the report are recorded below. | 2026-10-19 |
 | [Documentation inventory](library/audits/inventory.md) | the inventory of every tracked Markdown file, taken before any move (phase 1), with the old-to-new path map (phase 2). Lane work record; the library index lists it under library work records. | working record, written by the documentation lane (branch `docs-library`, worktree `D:\fx50`). | 2026-10-19 |
-| [Documentation library work log](library/audits/progress.md) | the running log of the documentation lane (branch `docs-library`, worktree `D:\fx50`). Written so that a successor can resume after an interruption. | in progress (phase 4, review with Codex Luna). | 2026-10-19 |
-| [docs/library/audits/review-1-reply.md](library/audits/review-1-reply.md) |  |  |  |
-| [Review request 1: the documentation library](library/audits/review-1-request.md) |  |  |  |
-| [docs/library/audits/review-2-reply.md](library/audits/review-2-reply.md) |  |  |  |
-| [Review request 2: the documentation library, after round 1](library/audits/review-2-request.md) |  |  |  |
-| [docs/library/audits/review-3-reply.md](library/audits/review-3-reply.md) |  |  |  |
-| [Review request 3: the documentation library, after round 2](library/audits/review-3-request.md) |  |  |  |
-| [Review log: Codex Luna](library/audits/review-log.md) | the record of each review round with Codex Luna (`gpt-6-luna`, high, read-only): Luna's points, the answer for each, and what changed. | in progress; rounds 1 and 2 answered, round 3 pending. | 2026-10-19 |
+| [Documentation library work log](library/audits/progress.md) | the running log of the documentation lane (branch `docs-library`, worktree `D:\fx50`). Written so that a successor can resume after an interruption. | complete for this brief. Four phases are done; the owner decisions listed under "Open for the owner" are not. | 2026-10-19 |
+| [docs/library/audits/review-1-reply.md](library/audits/review-1-reply.md) |  |  | 2026-10-19 |
+| [Review request 1: the documentation library](library/audits/review-1-request.md) |  |  | 2026-10-19 |
+| [docs/library/audits/review-2-reply.md](library/audits/review-2-reply.md) |  |  | 2026-10-19 |
+| [Review request 2: the documentation library, after round 1](library/audits/review-2-request.md) |  |  | 2026-10-19 |
+| [docs/library/audits/review-3-reply.md](library/audits/review-3-reply.md) |  |  | 2026-10-19 |
+| [Review request 3: the documentation library, after round 2](library/audits/review-3-request.md) |  |  | 2026-10-19 |
+| [Review log: Codex Luna](library/audits/review-log.md) | the record of each review round with Codex Luna (`gpt-6-luna`, high, read-only): Luna's points, the answer for each, and what changed. | complete; three rounds, no must-fix point left open. | 2026-10-19 |

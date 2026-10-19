@@ -16,7 +16,7 @@ You are an **implementer**: GPT Sol 6.1 at high effort, working in your own git 
 ## Rules
 - **Never run `git commit`.**
 - Edit only the files your package lists. If you truly need another file, keep the change minimal and say so in your report. Another package may be editing it.
-- Do not edit `DESIGN.md`, `PRODUCT.md`, `THIRD_PARTY_NOTICES.md` or any `docs/` file except your report. The documentation lane handles docs.
+- Do not edit `docs/design/design-system.md`, `docs/design/product.md`, `docs/legal/third-party-notices.md` or any `docs/` file except your report. The documentation lane handles docs.
 - Every new daemon method or event needs a row in `apps/desktop/src/remote/tiers.json`; the parity test fails without one. New write methods are `never` remote.
 - Security rules in `AGENTS.md` stand. Never log credentials, conversation text, or summary or recap text.
 - Write tests first where you fix a bug, and make sure they fail on today's code.

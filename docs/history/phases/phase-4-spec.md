@@ -4,7 +4,7 @@
 > **Status:** historical
 > **Last updated:** 2026-10-15
 
-Original status line, kept as written: historical spec. The roster, session tree and project chooser it describes were replaced by `TeamSidebar` (`apps/desktop/src/ui/TeamSidebar.tsx`; [SESSION_HANDOFF.md](../../../SESSION_HANDOFF.md), 10 October 2026). The UI files named as code spans here (`AgentRoster.tsx`, `AgentContextMenu.tsx`, `SessionTree.tsx`, `ProjectChooser.tsx`) are no longer in `apps/desktop/src/ui/`. Former links to them were converted to plain code spans.
+Original status line, kept as written: historical spec. The roster, session tree and project chooser it describes were replaced by `TeamSidebar` (`apps/desktop/src/ui/TeamSidebar.tsx`; [docs/operations/session-handoff.md](../../operations/session-handoff.md), 10 October 2026). The UI files named as code spans here (`AgentRoster.tsx`, `AgentContextMenu.tsx`, `SessionTree.tsx`, `ProjectChooser.tsx`) are no longer in `apps/desktop/src/ui/`. Former links to them were converted to plain code spans.
 
 This is the implementation contract for Phase 4 of [docs/plans/e2e-plan-v2.md](../../plans/e2e-plan-v2.md). Phase 4 adds an expandable project and session tree under each blob row in the sidebar. It depends on Phase 2a and on the Phase 3 roster. It does not depend on Phase 2b. Line citations are the committed tree this spec was written against. Re-open a cited line before treating it as current if a later edit moves it.
 
@@ -43,7 +43,7 @@ Explicitly deferred. Do not build these in Phase 4:
 
 The Phase 4 gate ([docs/plans/e2e-plan-v2.md](../../plans/e2e-plan-v2.md) line 200) means one blob can show several sessions in one project and sessions in more than one project; choosing a row selects that session; Resume and Cancel on a session row's menu call the existing `session.resume` and `session.cancel`; keyboard covers arrows, Enter, and the context menu. It does not mean a new daemon method.
 
-Depth stops at the session. [PRODUCT.md](../../../PRODUCT.md) line 22 lists nested navigation trees among anti-references. This tree is the one planned grouping under the existing rail, two levels deep, on the Midnight roster. It is not a second app navigation system.
+Depth stops at the session. [docs/design/product.md](../../design/product.md) line 22 lists nested navigation trees among anti-references. This tree is the one planned grouping under the existing rail, two levels deep, on the Midnight roster. It is not a second app navigation system.
 
 ## 2. Data derivation
 
@@ -78,7 +78,7 @@ Worked keys:
 | `//server/share/site` | `\\server\share\site` |
 | `  ` or missing | `null` |
 
-Case-folding is a product choice for Bitbots on Windows ([PRODUCT.md](../../../PRODUCT.md) line 9 names the Windows audience; it does not define path keys). NTFS lookups are case-insensitive, and the daemon will have stored whatever string the picker or an older client sent. Two different folders that differ only by case on a case-sensitive volume would share a row. That risk is accepted. A `.` or `..` segment stays in the key, so `C:\work\site\.` and `C:\work\site\..\site` are different projects from `C:\work\site`. `C:` and `C:\` are different keys (`c:` and `c:\`). The stored string sent back to `session.new` keeps its original casing, slashes, and trailing slash.
+Case-folding is a product choice for Bitbots on Windows ([docs/design/product.md](../../design/product.md) line 9 names the Windows audience; it does not define path keys). NTFS lookups are case-insensitive, and the daemon will have stored whatever string the picker or an older client sent. Two different folders that differ only by case on a case-sensitive volume would share a row. That risk is accepted. A `.` or `..` segment stays in the key, so `C:\work\site\.` and `C:\work\site\..\site` are different projects from `C:\work\site`. `C:` and `C:\` are different keys (`c:` and `c:\`). The stored string sent back to `session.new` keeps its original casing, slashes, and trailing slash.
 
 ### Projects
 
@@ -121,7 +121,7 @@ Keep the blob and its tree. `deriveCompanionStatus` already labels the blob row 
 
 ### Status dot
 
-Add `sessionDotClass(state?: string)` next to `runtimeDotClass` ([apps/desktop/src/ui/rosterSelectors.ts](../../../apps/desktop/src/ui/rosterSelectors.ts) lines 119–126). Compare the lowercased state. Return one of the four classes already painted by `.status-dot` ([apps/desktop/src/ui/shell.css](../../../apps/desktop/src/ui/shell.css) lines 70–74). The visible word is `labelize(state, 'Idle')` ([apps/desktop/src/types.ts](../../../apps/desktop/src/types.ts) lines 104–107). The dot is not the only signal ([PRODUCT.md](../../../PRODUCT.md) line 38).
+Add `sessionDotClass(state?: string)` next to `runtimeDotClass` ([apps/desktop/src/ui/rosterSelectors.ts](../../../apps/desktop/src/ui/rosterSelectors.ts) lines 119–126). Compare the lowercased state. Return one of the four classes already painted by `.status-dot` ([apps/desktop/src/ui/shell.css](../../../apps/desktop/src/ui/shell.css) lines 70–74). The visible word is `labelize(state, 'Idle')` ([apps/desktop/src/types.ts](../../../apps/desktop/src/types.ts) lines 104–107). The dot is not the only signal ([docs/design/product.md](../../design/product.md) line 38).
 
 | Lowercased state | Class | `labelize` word |
 |---|---|---|
@@ -152,7 +152,7 @@ No virtualisation library and no new dependency. The rail is a vertical scroller
 
 The aside keeps the brand row, the roster, and the footer ([apps/desktop/src/ui/App.tsx](../../../apps/desktop/src/ui/App.tsx) lines 719–734). Search stays outside the tree (`apps/desktop/src/ui/AgentRoster.tsx` lines 75–76). The list element is `<nav class="bot-list runtime-list" aria-label="Blobs" role="tree">`. Runtime headings stay non-focusable `.roster-group-label` elements ([apps/desktop/src/ui/shell.css](../../../apps/desktop/src/ui/shell.css) line 50) and stay outside the treeitem set. They render only when the visible blobs span more than one `runtimeId`, which is the current rule (`apps/desktop/src/ui/AgentRoster.tsx` lines 30 and 77–80).
 
-The sidebar column is 272px ([apps/desktop/src/ui/shell.css](../../../apps/desktop/src/ui/shell.css) lines 27–28). There is no new breakpoint and no sidebar resize. [DESIGN.md](../../../DESIGN.md) line 25's practical minimum still uses this rail. Rows use `min-width: 0` and single-line ellipsis, the same treatment as `.bot-row-top strong` ([apps/desktop/src/ui/shell.css](../../../apps/desktop/src/ui/shell.css) line 46).
+The sidebar column is 272px ([apps/desktop/src/ui/shell.css](../../../apps/desktop/src/ui/shell.css) lines 27–28). There is no new breakpoint and no sidebar resize. [docs/design/design-system.md](../../design/design-system.md) line 25's practical minimum still uses this rail. Rows use `min-width: 0` and single-line ellipsis, the same treatment as `.bot-row-top strong` ([apps/desktop/src/ui/shell.css](../../../apps/desktop/src/ui/shell.css) line 46).
 
 ### Blob row
 
@@ -521,7 +521,7 @@ Those scripts delegate to `apps/desktop` ([package.json](../../../package.json) 
 
 ## 10. Native smoke additions
 
-Run the Phase 3 checklist in [docs/history/phases/phase-3-spec.md](phase-3-spec.md) section 9 first, on an isolated database, before treating Phase 4 as ready to smoke. Do not edit that section. Phase 4 adds the following steps in the same session, with the same `$env:BLOBLEX_DB_PATH` under `$env:TEMP`, the same refusal to open the live database or its `-wal` and `-shm` sidecars, and the same record in `SESSION_HANDOFF.md`. The isolation rules are Phase 3 steps 1–5 and the quit/relaunch rules are steps 12–14 of that section. This list does not replace Phase 7.
+Run the Phase 3 checklist in [docs/history/phases/phase-3-spec.md](phase-3-spec.md) section 9 first, on an isolated database, before treating Phase 4 as ready to smoke. Do not edit that section. Phase 4 adds the following steps in the same session, with the same `$env:BLOBLEX_DB_PATH` under `$env:TEMP`, the same refusal to open the live database or its `-wal` and `-shm` sidecars, and the same record in `docs/operations/session-handoff.md`. The isolation rules are Phase 3 steps 1–5 and the quit/relaunch rules are steps 12–14 of that section. This list does not replace Phase 7.
 
 1. On the fresh smoke database, expand the default Claude blob. The face stays fully visible at the left of the row and the chevron sits at the right edge. Collapse it. The face does not shift between the two states.
 2. Start two sessions for that blob in one folder, and a third session in a different folder, using the project "+" for the second session in the first folder and "Choose folder..." for the other folder. The tree shows one project with two sessions and a second project. The session that is on screen has the selected background. The header `<select>` shows the same session.
@@ -530,7 +530,7 @@ Run the Phase 3 checklist in [docs/history/phases/phase-3-spec.md](phase-3-spec.
 5. Arrow Right on a collapsed blob expands it. Arrow Down moves to a project. Enter on a session selects it. Shift+F10 on that session opens a menu that contains Resume conversation and Cancel turn. Escape returns focus to the session row.
 6. A fresh smoke database has no "Other sessions" row. Legacy null-`agentId` placement is covered by the unit tests. Do not hand-edit the smoke database to insert one.
 7. Change the companion's blob with a pill. The companion name and the chat follow that blob's latest session. Select a non-latest session in the main window's tree. The companion overview title becomes that session's title.
-8. Record pass or fail per step, the temp database path, and `git rev-parse HEAD`, in `SESSION_HANDOFF.md`. Delete the temp database only after that note exists.
+8. Record pass or fail per step, the temp database path, and `git rev-parse HEAD`, in `docs/operations/session-handoff.md`. Delete the temp database only after that note exists.
 
 ## 11. Risks, open questions, and out of scope
 

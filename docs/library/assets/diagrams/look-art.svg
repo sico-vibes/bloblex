@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" class="diagram-svg" role="img" aria-label="How the app look and a bot's art style resolve to a renderer">
+  <style>
+    .c { fill: var(--dg-card, #23262f); stroke: var(--dg-line, #343743); stroke-width: 1; }
+    .k { fill: var(--dg-accent-soft, #8d86f622); stroke: var(--dg-accent, #8d86f6); stroke-width: 1; }
+    .h { fill: var(--dg-ink, #f4f5f7); font: 600 12.5px Inter, "Segoe UI", sans-serif; }
+    .t { fill: var(--dg-ink, #f4f5f7); font: 500 11.5px Inter, "Segoe UI", sans-serif; }
+    .m { fill: var(--dg-muted, #9aa0ad); font: 400 11px Inter, "Segoe UI", sans-serif; }
+    .a { stroke: var(--dg-accent, #8d86f6); stroke-width: 1.5; fill: none; }
+    .b { stroke: var(--dg-line-strong, #4a4e5c); stroke-width: 1.2; fill: none; }
+  </style>
+  <text x="18" y="24" class="h">1 · The app look</text>
+  <rect x="18" y="38" width="196" height="56" rx="10" class="k"/>
+  <text x="32" y="61" class="h">appearance.style</text>
+  <text x="32" y="79" class="m">saved per device</text>
+  <text x="232" y="58" class="t">→ documentElement.dataset.style</text>
+  <text x="232" y="76" class="m">bitbots · blobots · legacy · pop · dot</text>
+  <path d="M214 66 H226" class="a"/>
+
+  <rect x="18" y="108" width="186" height="54" rx="9" class="c"/>
+  <text x="32" y="130" class="t">Bitbots (Frost)</text>
+  <text x="32" y="148" class="m">frost.css · wallpaper · glass</text>
+  <rect x="216" y="108" width="140" height="54" rx="9" class="c"/>
+  <text x="230" y="130" class="t">Blobots</text>
+  <text x="230" y="148" class="m">bitbotsUi.css</text>
+  <rect x="368" y="108" width="140" height="54" rx="9" class="c"/>
+  <text x="382" y="130" class="t">Legacy</text>
+  <text x="382" y="148" class="m">bitbots.css · pixels</text>
+  <rect x="18" y="174" width="186" height="54" rx="9" class="c"/>
+  <text x="32" y="196" class="t">Pop</text>
+  <text x="32" y="214" class="m">pop.css · cream · outline</text>
+  <rect x="216" y="174" width="140" height="54" rx="9" class="c"/>
+  <text x="230" y="196" class="t">Dot</text>
+  <text x="230" y="214" class="m">dot.css · monochrome</text>
+  <rect x="368" y="174" width="140" height="54" rx="9" class="c"/>
+  <text x="382" y="196" class="t">Tokens</text>
+  <text x="382" y="214" class="m">theme.css defaults</text>
+  <path d="M300 94 V108 M300 94 L111 94 V108 M300 94 L438 94 V108" class="b"/>
+
+  <text x="540" y="24" class="h">2 · The bot's art</text>
+  <rect x="540" y="38" width="196" height="56" rx="10" class="k"/>
+  <text x="554" y="61" class="h">look.art</text>
+  <text x="554" y="79" class="m">chosen per bot, or absent</text>
+  <path d="M736 66 H760" class="a"/>
+  <text x="768" y="58" class="t">resolveArt()</text>
+  <text x="768" y="76" class="m">explicit art wins, else the look decides</text>
+
+  <rect x="540" y="112" width="196" height="138" rx="10" class="c"/>
+  <text x="554" y="134" class="t">Default art for a look</text>
+  <text x="554" y="155" class="m">Bitbots → Flat robot</text>
+  <text x="554" y="173" class="m">Blobots → Glossy blob</text>
+  <text x="554" y="191" class="m">Legacy → 3D robot</text>
+  <text x="554" y="209" class="m">Pop → Pop robot</text>
+  <text x="554" y="227" class="m">Dot → Dot robot</text>
+
+  <rect x="768" y="106" width="214" height="144" rx="10" class="c"/>
+  <text x="782" y="128" class="t">Six art styles</text>
+  <text x="782" y="149" class="m">robot · 3D robot</text>
+  <text x="782" y="167" class="m">robot-flat · Flat robot</text>
+  <text x="782" y="185" class="m">robot-pop · Pop robot</text>
+  <text x="782" y="203" class="m">robot-dot · Dot robot</text>
+  <text x="782" y="221" class="m">blob · Glossy blob (8 shapes)</text>
+  <text x="782" y="239" class="m">painted · Hand-painted (12 shapes)</text>
+
+  <path d="M736 160 H768" class="a"/>
+  <path d="M875 250 V282" class="a"/>
+  <text x="884" y="270" class="m">BlobCanvas</text>
+
+  <rect x="540" y="282" width="442" height="96" rx="10" class="c"/>
+  <text x="554" y="305" class="h">Renderers</text>
+  <text x="554" y="325" class="m">BitbotCanvas → canvas blob engine for robot and blob arts</text>
+  <text x="554" y="343" class="m">FlatRobot, PopRobot, DotRobot and PaintedBlob → inline SVG and CSS</text>
+  <text x="554" y="361" class="m">Art mood: idle, thinking, typing, waiting, happy, error, sleeping, offline</text>
+
+  <rect x="18" y="250" width="490" height="128" rx="10" class="c"/>
+  <text x="34" y="274" class="h">What changes at runtime</text>
+  <text x="34" y="294" class="m">data-style scopes every look rule; the look stylesheet loads on demand.</text>
+  <text x="34" y="312" class="m">data-theme is dark or light; data-wallpaper and data-glass apply to Frost.</text>
+  <text x="34" y="330" class="m">The companion and dictation windows use their own look layer and keep dark</text>
+  <text x="34" y="348" class="m">unless the look follows the resolved theme. Reduced motion stops every art.</text>
+  <text x="34" y="366" class="m">A look never changes a bot's art; an explicit art overrides the look's default.</text>
+</svg>

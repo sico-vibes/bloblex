@@ -7,7 +7,7 @@ import { friendlyDictationError, type DictationEngineInfo } from './dictation'
 // microphone while listening, then keep moving to show what is happening:
 // breathing while the model loads, a travelling wave while transcribing, flat
 // dots when nothing was heard. Layout and wave motion adapted from Kaze's
-// island (MIT, github.com/fayazara/Kaze); see THIRD_PARTY_NOTICES.md.
+// island (MIT, github.com/fayazara/Kaze); see docs/legal/third-party-notices.md.
 
 export type IslandPhase = 'listening' | 'processing' | 'done' | 'silent' | 'error'
 type WaveMode = 'live' | 'loading' | 'transcribing' | 'silent'

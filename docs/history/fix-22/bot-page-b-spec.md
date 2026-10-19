@@ -5,7 +5,7 @@
 > **Last updated:** 2026-10-15
 
 Written 15 October 2026. Completes the bot-editor items of the approved polish plan
-(B3, B7, B8, B9, B10, plus the data for B11). Read `DESIGN.md`. Use
+(B3, B7, B8, B9, B10, plus the data for B11). Read `docs/design/design-system.md`. Use
 `entityNoun`/`useEntityNoun` (`ui/vocabulary.ts`). The editor is `ui/BlobPage.tsx`
 (page chrome, rail and save bar already exist in `ui/BotPageChrome.tsx`) and
 `ui/BlobSettings.tsx` (the field groups, each an `EditGroup` with an `id`). Draft model and

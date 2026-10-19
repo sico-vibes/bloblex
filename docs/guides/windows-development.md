@@ -49,7 +49,7 @@ cargo check -p bloblex-desktop --lib
 
 Backend tests use their own target and a fresh `BLOBLEX_DB_PATH`; the default database is `%LOCALAPPDATA%\Bitbots\bloblex.db`. Coordinate shared sidecar staging with the desktop lane. The revised `scripts/stage-daemon.mjs` resolves Cargo's actual target directory through `cargo metadata`, including `CARGO_TARGET_DIR`, and checks that both binaries exist before copying either. `BLOBLEX_STAGE_DESTINATION` allows staging regression tests into a private directory; a real Tauri build must point at the staged files it will bundle.
 
-The 1 October checkpoint below (55 frontend tests, one isolated `desktop:dev` launch, and the rebuild-while-live hash check) is historical. Current phase status, test commands, and the still-open native pass are in [SESSION_HANDOFF.md](../../SESSION_HANDOFF.md) and [docs/operations/implementation-status.md](../operations/implementation-status.md).
+The 1 October checkpoint below (55 frontend tests, one isolated `desktop:dev` launch, and the rebuild-while-live hash check) is historical. Current phase status, test commands, and the still-open native pass are in [docs/operations/session-handoff.md](../operations/session-handoff.md) and [docs/operations/implementation-status.md](../operations/implementation-status.md).
 
 ## Running-executable lock repair, 1 October
 

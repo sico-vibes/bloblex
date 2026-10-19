@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" class="diagram-svg" role="img" aria-label="Release pipeline from gates to the in-app updater">
+  <style>
+    .c { fill: var(--dg-card, #23262f); stroke: var(--dg-line, #343743); stroke-width: 1; }
+    .k { fill: var(--dg-accent-soft, #8d86f622); stroke: var(--dg-accent, #8d86f6); stroke-width: 1; }
+    .h { fill: var(--dg-ink, #f4f5f7); font: 600 12.5px Inter, "Segoe UI", sans-serif; }
+    .t { fill: var(--dg-ink, #f4f5f7); font: 500 11.5px Inter, "Segoe UI", sans-serif; }
+    .m { fill: var(--dg-muted, #9aa0ad); font: 400 11px Inter, "Segoe UI", sans-serif; }
+    .a { stroke: var(--dg-accent, #8d86f6); stroke-width: 1.5; fill: none; }
+    .b { stroke: var(--dg-line-strong, #4a4e5c); stroke-width: 1.2; fill: none; }
+    .n { fill: var(--dg-accent, #8d86f6); }
+    .num { fill: var(--dg-paper, #14151a); font: 600 10px Inter, "Segoe UI", sans-serif; }
+  </style>
+  <g>
+    <circle cx="34" cy="48" r="11" class="n"/><text x="34" y="52" text-anchor="middle" class="num">1</text>
+    <rect x="16" y="68" width="144" height="92" rx="10" class="c"/>
+    <text x="30" y="91" class="h">Gates</text>
+    <text x="30" y="110" class="m">npm run typecheck</text>
+    <text x="30" y="127" class="m">npm test</text>
+    <text x="30" y="144" class="m">browser preview</text>
+  </g>
+  <g>
+    <circle cx="196" cy="48" r="11" class="n"/><text x="196" y="52" text-anchor="middle" class="num">2</text>
+    <rect x="178" y="68" width="144" height="92" rx="10" class="c"/>
+    <text x="192" y="91" class="h">Build</text>
+    <text x="192" y="110" class="m">cargo build daemon</text>
+    <text x="192" y="127" class="m">stage the sidecar</text>
+    <text x="192" y="144" class="m">tauri build (NSIS)</text>
+  </g>
+  <g>
+    <circle cx="358" cy="48" r="11" class="n"/><text x="358" y="52" text-anchor="middle" class="num">3</text>
+    <rect x="340" y="68" width="144" height="92" rx="10" class="c"/>
+    <text x="354" y="91" class="h">Sign and notes</text>
+    <text x="354" y="110" class="m">updater key signs</text>
+    <text x="354" y="127" class="m">latest.json is built</text>
+    <text x="354" y="144" class="m">notes from docs/releases</text>
+  </g>
+  <g>
+    <circle cx="520" cy="48" r="11" class="n"/><text x="520" y="52" text-anchor="middle" class="num">4</text>
+    <rect x="502" y="68" width="144" height="92" rx="10" class="c"/>
+    <text x="516" y="91" class="h">Publish</text>
+    <text x="516" y="110" class="m">GitHub release</text>
+    <text x="516" y="127" class="m">installer, .sig, manifest</text>
+    <text x="516" y="144" class="m">beta: channel-beta</text>
+  </g>
+  <g>
+    <circle cx="682" cy="48" r="11" class="n"/><text x="682" y="52" text-anchor="middle" class="num">5</text>
+    <rect x="664" y="68" width="144" height="92" rx="10" class="c"/>
+    <text x="678" y="91" class="h">Check</text>
+    <text x="678" y="110" class="m">asset digests match</text>
+    <text x="678" y="127" class="m">release entry recorded</text>
+    <text x="678" y="144" class="m">build files cleaned</text>
+  </g>
+  <g>
+    <circle cx="844" cy="48" r="11" class="n"/><text x="844" y="52" text-anchor="middle" class="num">6</text>
+    <rect x="826" y="68" width="158" height="92" rx="10" class="k"/>
+    <text x="840" y="91" class="h">In-app updater</text>
+    <text x="840" y="110" class="m">checks 15 s after start,</text>
+    <text x="840" y="127" class="m">then every 6 hours</text>
+    <text x="840" y="144" class="m">passive install, relaunch</text>
+  </g>
+  <path d="M160 114 H178" class="a"/><path d="M322 114 H340" class="a"/><path d="M484 114 H502" class="a"/><path d="M646 114 H664" class="a"/><path d="M808 114 H826" class="a"/>
+
+  <rect x="16" y="192" width="486" height="70" rx="10" class="c"/>
+  <text x="32" y="216" class="h">Before the tag</text>
+  <text x="32" y="235" class="m">A clean tree on main, one version in package.json, tauri.conf.json and Cargo,</text>
+  <text x="32" y="251" class="m">a tag that does not exist yet, and gh authenticated.</text>
+
+  <rect x="522" y="192" width="462" height="70" rx="10" class="c"/>
+  <text x="538" y="216" class="h">Secrets stay outside the repository</text>
+  <text x="538" y="235" class="m">The updater private key and password come from outside the checkout and</text>
+  <text x="538" y="251" class="m">are never printed, committed or logged. The public key is in tauri.conf.json.</text>
+
+  <rect x="16" y="282" width="968" height="58" rx="10" class="c"/>
+  <text x="32" y="306" class="h">What the user experiences</text>
+  <text x="32" y="321" class="m">The badge shows an available update; installing warns when a turn is running and requires confirmation.</text>
+  <text x="32" y="336" class="m">A downgrade is never offered, and a missing stable release is reported as "no stable release yet", not an error.</text>
+</svg>

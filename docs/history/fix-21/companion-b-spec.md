@@ -6,7 +6,7 @@
 
 Written 15 October 2026. Completes the companion items of the approved polish plan
 (`C:\Users\Sico Vibes\.claude\plans\resilient-wobbling-cookie.md`, items C7 to C10, C12, C13).
-Read `DESIGN.md`. Use `entityNoun`/`useEntityNoun` (`ui/vocabulary.ts`) for "bot"/"blob".
+Read `docs/design/design-system.md`. Use `entityNoun`/`useEntityNoun` (`ui/vocabulary.ts`) for "bot"/"blob".
 Reuse what exists: `ui/CompanionAttention.tsx` (badge, queue), `ui/StatusDot.tsx`,
 `ui/uiPrefs.ts` (`useHintSeen`), `ui/soundPrefs.ts`, `ui/ConnectionBanner.tsx`, `ui/Skeleton.tsx`,
 `blob/soundCues.ts` (`playCompanionCue`). The companion is the `Companion` function in

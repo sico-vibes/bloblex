@@ -12,7 +12,7 @@ or configuration file was changed. The only file added is `docs/remote/PROTOCOL.
 `<!-- TIER-TABLE -->` line is left in place for the Director to fill from FIX18's
 `renderTierTableMarkdown()`.
 
-Sources read before writing: `DESIGN.md`, `docs/ipc-contract.md`,
+Sources read before writing: `docs/design/design-system.md`, `docs/ipc-contract.md`,
 `crates/bloblex-daemon/src/main.rs` (`/v1/rpc` and `/v1/events`, `events.replay`,
 `ws_client` handshake and `afterSequence`, `replay.gap`, `events.replay.complete`,
 `broadcast::channel(1024)`, `main_rpc` auth and error mapping, attachment limits and

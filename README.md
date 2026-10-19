@@ -1,18 +1,22 @@
 # Bitbots
 
 > **What this is:** The front page of the repository: what Bitbots is, how to build and test it, and where the documentation starts.
-> **Status:** current. The release figures in this file were last set at v0.1.0-beta.34; Cargo.toml and package.json already show v0.1.0-beta.35.
+> **Status:** current. The release figures in this file are set at v0.1.0-beta.35.
 > **Last updated:** 2026-10-19
 
 Bitbots (formerly Bloblex)
 
 Local Windows desktop control plane for Claude Code, Codex, and OpenCode. A React/Tauri shell and a companion window share state from the `bitbotsd` daemon. Each provider CLI keeps its own login.
 
-**Status: `v0.1.0-beta.34`** (the version in `Cargo.toml` and `package.json`), published as an NSIS installer that is not Authenticode-signed but is signed for the updater (new key) and offered on the beta update channel; beta.32 and later update themselves; older versions install by hand once. Full native acceptance and a clean-machine install remain open ([docs/operations/release-checklist.md](docs/operations/release-checklist.md)). Release notes: [docs/releases/0.1.0-beta.34.md](docs/releases/0.1.0-beta.34.md). History and dated records: [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and [docs/operations/implementation-status.md](docs/operations/implementation-status.md). The hub for every document is [docs/README.md](docs/README.md).
+**Status: `v0.1.0-beta.35`** (the version in `Cargo.toml` and `package.json`), published as an NSIS installer that is not Authenticode-signed but is signed for the updater (new key) and offered on the beta update channel; beta.32 and later update themselves; older versions install by hand once. Full native acceptance and a clean-machine install remain open ([docs/operations/release-checklist.md](docs/operations/release-checklist.md)). Release notes: [docs/releases/0.1.0-beta.35.md](docs/releases/0.1.0-beta.35.md). History and dated records: [docs/operations/session-handoff.md](docs/operations/session-handoff.md) and [docs/operations/implementation-status.md](docs/operations/implementation-status.md). The hub for every document is [docs/README.md](docs/README.md).
+
+## Documentation
+
+Open [docs/DOCUMENTATION.html](docs/DOCUMENTATION.html) in a browser for the full documentation (guides, how it works, and every project document). Design rules: [docs/design/design-system.md](docs/design/design-system.md). Third-party licences: [docs/legal/third-party-notices.md](docs/legal/third-party-notices.md).
 
 ## Continue this project
 
-Start with [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and [docs/operations/implementation-status.md](docs/operations/implementation-status.md). The plan remains [docs/plans/e2e-plan-v2.md](docs/plans/e2e-plan-v2.md).
+Start with [docs/operations/session-handoff.md](docs/operations/session-handoff.md) and [docs/operations/implementation-status.md](docs/operations/implementation-status.md). The plan remains [docs/plans/e2e-plan-v2.md](docs/plans/e2e-plan-v2.md).
 
 ## Local development
 
@@ -71,4 +75,4 @@ This is the local NSIS path (`bundle.targets` is `nsis` only in `apps/desktop/sr
 - [IPC contract](docs/ipc-contract.md)
 - [Phase 5 analytics contract](docs/reference/phase-5-analytics-contract.md)
 - [Approval modes](docs/reference/approval-modes.md)
-- [Product](PRODUCT.md) and [design](DESIGN.md)
+- [Product](docs/design/product.md) and [design](docs/design/design-system.md)

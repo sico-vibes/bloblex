@@ -13,7 +13,7 @@ const WORDS: Record<BotStatus, string> = {
 }
 
 /**
- * A status mark. DESIGN.md says dots only when something is happening, so
+ * A status mark. docs/design/design-system.md says dots only when something is happening, so
  * `idle` renders nothing unless `showIdle` is set. The shape differs per state
  * and a text label is always present, so colour never carries the meaning alone.
  */

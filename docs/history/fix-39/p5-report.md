@@ -221,7 +221,7 @@ its schema then rewound to the old definition, then reopened through
 
 - **Visual items.** The lock badge, the read-only editor banner and the side
   header pill were not looked at in a browser; both looks and both themes need
-  the Director's screenshots (DESIGN.md visual rules).
+  the Director's screenshots (docs/design/design-system.md visual rules).
 - **The read-only editor is not airtight.** The `disabled` fieldset disables the
   native inputs, but `LookEditor`'s canvas-based controls are not native form
   controls and stay clickable; the daemon refuses the save either way. I did not

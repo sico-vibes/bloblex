@@ -97,7 +97,7 @@ Write these as plain words in the sentence ("not verified in a native window"). 
 ## Files and naming
 
 - Lowercase kebab-case for every file under `docs/` except `docs/README.md` and `docs/STYLE.md`.
-- Root files keep their upper-case names (`AGENTS.md`, `README.md`, `DESIGN.md`, `PRODUCT.md`, `SESSION_HANDOFF.md`, `THIRD_PARTY_NOTICES.md`).
+- Root files keep their upper-case names (`AGENTS.md`, `README.md`, `docs/design/design-system.md`, `docs/design/product.md`, `docs/operations/session-handoff.md`, `docs/legal/third-party-notices.md`).
 - Folders by purpose: `reference/`, `guides/`, `design/`, `plans/`, `operations/`, `audits/`, `history/` (FIX waves in `history/fix-NN/`), `evidence/`, `releases/`, `remote/`, `library/` (the lane's work logs).
 - A FIX wave file is `history/fix-NN/<topic>-<kind>.md`, for example `history/fix-39/p1-report.md`. The kind is one of `spec`, `brief`, `report`, `audit`, `research`, `decisions` or `follow-up`.
 

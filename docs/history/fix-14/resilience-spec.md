@@ -5,7 +5,7 @@
 > **Last updated:** 2026-10-15
 
 Written 15 October 2026. Owner directive: implement the UI/UX recommendations.
-Read `DESIGN.md` first (quiet, monochrome, say each thing once; colour only for
+Read `docs/design/design-system.md` first (quiet, monochrome, say each thing once; colour only for
 status that needs attention). Use `entityNoun`/`useEntityNoun` (`ui/vocabulary.ts`)
 for "bot"/"blob", never a literal. Do not move or restyle the role chip in the
 sidebar row. Files owned by other lanes: `ui/SessionExecutionControls.tsx`,

@@ -25,11 +25,11 @@ You are the documentation lane (AGENTS.md, the 18 October, later, amendment). Wr
    - Installation: beta.32 and beta.33 update themselves; older versions install by hand.
 
    Follow the style of `docs/releases/0.1.0-beta.33.md`.
-2. **`SESSION_HANDOFF.md`:** a new top section, "Beta.33 review FIX39 (18 October 2026)". Follow the style of the beta.33 section: state, the four-model pipeline, a table of packages with commits and reports, gates (leave TODO), not verified, owner to-dos. Update the "current release" line to beta.34.
+2. **`docs/operations/session-handoff.md`:** a new top section, "Beta.33 review FIX39 (18 October 2026)". Follow the style of the beta.33 section: state, the four-model pipeline, a table of packages with commits and reports, gates (leave TODO), not verified, owner to-dos. Update the "current release" line to beta.34.
 3. **`docs/operations/implementation-status.md`:** an 18 October FIX39 entry, plus the status line.
 4. **`docs/README.md`:** index every new FIX39 and FIX40 doc (specs, research, decisions, reports and audits) in the table's style.
 5. **`docs/ipc-contract.md`:** document every new daemon method or event the packages added. Examples: `agent.lock.set`, `session.permissions.set`, `skills.forAgent`, `diagnostics.export`, the watchdog and limited events, merge proposals, and the Manager tool set's methods, if any are daemon methods. Take the exact names and shapes from the reports and the code (grep `crates/bloblex-daemon/src`).
-6. **`DESIGN.md`:** record the visual rules the audit left to the docs lane:
+6. **`docs/design/design-system.md`:** record the visual rules the audit left to the docs lane:
    - the eight symmetric shapes (item 4);
    - the Manager's Grok-style star badge, and that no other sparkle or star icons are allowed (item 8);
    - the model line under a bot's name (item 12);

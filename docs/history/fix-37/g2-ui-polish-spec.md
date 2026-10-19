@@ -4,7 +4,7 @@
 > **Status:** historical
 > **Last updated:** 2026-10-18
 
-Lane: OpenCode `deepseek-v4.1-flash` (high), its own worktree. The owner has asked the lanes to do UI work in this wave. **Never run `git commit`.** Keep context small: grep, then read only the ranges you need. Read the section headings of `AGENTS.md`, then `DESIGN.md`. Work only in `apps/desktop/src/ui/**` styles and the tooltip components named below; do not touch `App.tsx` beyond what item 3 strictly needs. Both looks (classic and Bitbots, `:root[data-bitbots="on"]`) and both themes must stay right.
+Lane: OpenCode `deepseek-v4.1-flash` (high), its own worktree. The owner has asked the lanes to do UI work in this wave. **Never run `git commit`.** Keep context small: grep, then read only the ranges you need. Read the section headings of `AGENTS.md`, then `docs/design/design-system.md`. Work only in `apps/desktop/src/ui/**` styles and the tooltip components named below; do not touch `App.tsx` beyond what item 3 strictly needs. Both looks (classic and Bitbots, `:root[data-bitbots="on"]`) and both themes must stay right.
 
 ## 1. Sidebar bot rows: provider logo alignment and spacing
 

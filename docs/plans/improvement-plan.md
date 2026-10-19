@@ -4,7 +4,7 @@
 > **Status:** current; the roadmap named by AGENTS.md (12 October 2026 amendment)
 > **Last updated:** 2026-10-15
 
-Status: approved by the owner, 12 October 2026. **Phases 1-7 are implemented and shipped in `v0.1.0-beta.19` ([releases/0.1.0-beta.19.md](../releases/0.1.0-beta.19.md)) and verified only with fake peers and unit tests (replay fixtures are synthesised, not real captures).** The "local `main`, not pushed" wording in `SESSION_HANDOFF.md` is from before that release. See `SESSION_HANDOFF.md` for branches, gates, gaps and next steps. Baseline `17591b9` (beta.18). Supersedes the QA draft, kept as [docs/history/improvement/plan-v1-qa-draft.md](../history/improvement/plan-v1-qa-draft.md).
+Status: approved by the owner, 12 October 2026. **Phases 1-7 are implemented and shipped in `v0.1.0-beta.19` ([releases/0.1.0-beta.19.md](../releases/0.1.0-beta.19.md)) and verified only with fake peers and unit tests (replay fixtures are synthesised, not real captures).** The "local `main`, not pushed" wording in `docs/operations/session-handoff.md` is from before that release. See `docs/operations/session-handoff.md` for branches, gates, gaps and next steps. Baseline `17591b9` (beta.18). Supersedes the QA draft, kept as [docs/history/improvement/plan-v1-qa-draft.md](../history/improvement/plan-v1-qa-draft.md).
 
 ## Context
 
@@ -26,7 +26,7 @@ Account-pool proxy (credential custody), workflows (QuickJS fan-out), browser-au
 
 ## Execution model (owner directive: delegation pipeline)
 
-**Lanes.** Heavy non-UI coding goes to OpenCode Go `opencode-go/deepseek-v4.1-flash` at high effort. Anything that touches UI or UX is done by me (Claude, the Director), following `DESIGN.md`/`PRODUCT.md` and the existing blob/island language.
+**Lanes.** Heavy non-UI coding goes to OpenCode Go `opencode-go/deepseek-v4.1-flash` at high effort. Anything that touches UI or UX is done by me (Claude, the Director), following `docs/design/design-system.md`/`docs/design/product.md` and the existing blob/island language.
 
 | Lane | Owns | Does not touch |
 |---|---|---|
@@ -110,7 +110,7 @@ Account-pool proxy (credential custody), workflows (QuickJS fan-out), browser-au
 
 ## Verification
 
-- Per phase: `cargo test --workspace` (offline, excluding desktop), desktop typecheck + Vitest + web build, native desktop lib check, NSIS bundle (the existing gates in `SESSION_HANDOFF.md`).
+- Per phase: `cargo test --workspace` (offline, excluding desktop), desktop typecheck + Vitest + web build, native desktop lib check, NSIS bundle (the existing gates in `docs/operations/session-handoff.md`).
 - New deterministic tests per phase as listed (DST next-run, coalesce/overlap, bypass clamp, recursion, FTS/rails, retry decision table incl. `delivery`, queue drain/startup settle, replay wire diffs, JWT parse/redaction/fallback for cloud dictation).
 - Live (isolated database, never the user's data): kill provider mid-turn → divider; quota exhaustion → retry; scheduled run fires and coalesces after sleep; keep-awake via `powercfg /requests`; memory catalog lands in the prompt on all three CLIs; one real dictation pass, local and cloud.
 

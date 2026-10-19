@@ -94,7 +94,7 @@ Confirmed: `lib.rs:1933-1964` (380 ms timer then `set_position`), invoked at `li
 Page union and list `SettingsSheet.tsx:44-57`; group `560-584`; index entries `settingsIndex.ts:49-50`. Existing tests that encode the old location and must change: `SettingsSheet.appearance.mounted.test.tsx:73-74` (finds a group titled "Experimental") and `platform.browser.mounted.test.tsx:65` (expects the word on a page). Index entries should also be added for every `EXPERIMENTS` row so settings search finds them. Move the whole group including "Longest wait for a rate limit" and the Steer toggle.
 
 ### 12. Model under the bot's name — Confirmed
-`TeamSidebar.tsx:223,294`, helpers `presentedModelName`/`labelizeEffort`, catalog `readCached`. Fine as an experiment toggle. Rules to implement: status ("Working…", "Waiting for you", offline) wins while busy; idle shows `Model · Effort`; no explicit model shows "Default model"; use the bot-level setting (consistent with item 16). Pure helper `sidebarSubtitle` with unit tests. The `DESIGN.md:9` amendment goes to the documentation lane, not the implementer.
+`TeamSidebar.tsx:223,294`, helpers `presentedModelName`/`labelizeEffort`, catalog `readCached`. Fine as an experiment toggle. Rules to implement: status ("Working…", "Waiting for you", offline) wins while busy; idle shows `Model · Effort`; no explicit model shows "Default model"; use the bot-level setting (consistent with item 16). Pure helper `sidebarSubtitle` with unit tests. The `docs/design/design-system.md:9` amendment goes to the documentation lane, not the implementer.
 
 ### 13. Lock a bot — Partly right, design is wrong
 Menu (`TeamSidebar.tsx:143-174`) and badge slot (`284-287`) are right. The storage choice is not. R1 proposes a device-local `localStorage` list and guards only UI call sites. The owner says "a locked bot's settings cannot be changed at all". These paths do not go through the UI and would ignore a UI-only lock:
@@ -219,7 +219,7 @@ The real flaw is what happens next: Bitbots starts the new session **empty**. Yo
 
 ## Implementation packages
 
-Rules for all packages: the implementer never runs `git commit`; the Director runs the gates after each merge (`cargo fmt --check`, clippy `-D warnings`, `cargo test`, `npm run typecheck`, tests, build). **No implementer edits `DESIGN.md`, `PRODUCT.md`, `THIRD_PARTY_NOTICES.md` or any `docs/` file**; the documentation lane (Haiku) records the `DESIGN.md` changes for items 4, 8, 12, 13 afterwards. Every new daemon method or event must get a row in `apps/desktop/src/remote/tiers.json` (parity test); new write methods are `never` remote.
+Rules for all packages: the implementer never runs `git commit`; the Director runs the gates after each merge (`cargo fmt --check`, clippy `-D warnings`, `cargo test`, `npm run typecheck`, tests, build). **No implementer edits `docs/design/design-system.md`, `docs/design/product.md`, `docs/legal/third-party-notices.md` or any `docs/` file**; the documentation lane (Haiku) records the `docs/design/design-system.md` changes for items 4, 8, 12, 13 afterwards. Every new daemon method or event must get a row in `apps/desktop/src/remote/tiers.json` (parity test); new write methods are `never` remote.
 
 Hot files are `crates/bloblex-daemon/src/main.rs`, `team.rs`, `proposals.rs`, `crates/bloblex-storage/src/lib.rs`, and `apps/desktop/src/ui/App.tsx`, `TeamSidebar.tsx`, `SessionExecutionControls.tsx`, `teamSelectors.ts`. They are assigned to exactly one package per wave.
 

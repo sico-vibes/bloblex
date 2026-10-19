@@ -82,8 +82,8 @@ name Blobots is FIX10's work.
 
 **Root documents**
 - `README.md`, `AGENTS.md` (title only; amendment/history sections keep their
-  wording), `DESIGN.md`, `PRODUCT.md`, `SESSION_HANDOFF.md`,
-  `THIRD_PARTY_NOTICES.md`
+  wording), `docs/design/design-system.md`, `docs/design/product.md`, `docs/operations/session-handoff.md`,
+  `docs/legal/third-party-notices.md`
 
 **`docs/`**
 - `docs/reference/approval-modes.md`, `docs/history/director-log.md`, `docs/plans/e2e-plan-v2.md`,

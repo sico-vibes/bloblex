@@ -10,7 +10,7 @@ Product is Bitbots; the characters are "bots" in Bitbots and "blobs" in Blobots
 landing that wording, so use the helper for any new noun and never hard-code
 "blob" or "bot").
 
-Read `DESIGN.md` first. Rules that matter here: say each thing once; monochrome
+Read `docs/design/design-system.md` first. Rules that matter here: say each thing once; monochrome
 chrome (colour only for status that needs attention); only the tokens in
 `theme.css`; type scale 11 to 22 px; the **role chip stays on the right of a bot's
 name in the sidebar row, do not move or restyle it**.
@@ -60,7 +60,7 @@ the companion window follow the same three keys. Invalid values from the daemon 
 ignored. Add the keys to the fixture bridge (`preview/fixtureBridge.ts`).
 Unit tests for every function (defaults, cache, invalid input, listener firing).
 
-## Part B: polish items (small UI, follow DESIGN.md)
+## Part B: polish items (small UI, follow docs/design/design-system.md)
 
 Each item has an acceptance line; add or update a mounted test per item where one
 fits. Do not restyle anything not listed.

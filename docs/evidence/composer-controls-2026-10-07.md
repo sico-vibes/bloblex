@@ -48,4 +48,4 @@ The source is committed as `146db44`, versioned in `4aa48f4`, pushed to `main`, 
 
 ## Reference artifacts
 
-The reference components are recorded with their commit provenance and MIT notices in [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md). Browser artifacts are in the local, untracked `output/playwright/composer-20261007/` directory.
+The reference components are recorded with their commit provenance and MIT notices in [docs/legal/third-party-notices.md](../legal/third-party-notices.md). Browser artifacts are in the local, untracked `output/playwright/composer-20261007/` directory.

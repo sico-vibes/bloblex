@@ -4,7 +4,7 @@
 > **Status:** historical
 > **Last updated:** 2026-10-15
 
-Written 15 October 2026. Mechanical companion polish. Read `DESIGN.md`. Use
+Written 15 October 2026. Mechanical companion polish. Read `docs/design/design-system.md`. Use
 `entityNoun`/`useEntityNoun` (`ui/vocabulary.ts`) for "bot"/"blob". The companion component
 is in `apps/desktop/src/ui/App.tsx` (search for `companion-root`), with
 `ui/CompanionTeam.tsx`, `ui/companion.css`, `ui/companionStatus.ts`.

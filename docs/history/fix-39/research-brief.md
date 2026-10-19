@@ -11,7 +11,7 @@ Your items are listed in your launch prompt. For each item, write a section with
 1. **What the owner sees** (one or two lines, from the feedback).
 2. **Evidence:** the code paths involved, with `file:line`, and what they do today. Read the code; do not guess. Where a cause can be proven (a test you can reason through, a log, a CLI's real output), prove it.
 3. **Cause(s):** every cause you find, not just the first plausible one.
-4. **Proposed design:** what to change, where, and how to test it (unit, mounted, end-to-end). Name the files. Keep UI work in line with `DESIGN.md`. No sparkle/star icons except the Manager's star badge (item 8).
+4. **Proposed design:** what to change, where, and how to test it (unit, mounted, end-to-end). Name the files. Keep UI work in line with `docs/design/design-system.md`. No sparkle/star icons except the Manager's star badge (item 8).
 5. **Size:** S / M / L, and dependencies on other items.
 6. **Questions for the owner**, only where a real product decision is needed (keep them few and concrete, with a recommended answer).
 

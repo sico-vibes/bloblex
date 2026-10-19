@@ -17,7 +17,7 @@ Current as of 8 October 2026. Release source commit `2d3f16d`; manual-only [v0.1
 - `apps/desktop/src-tauri/src/speech.rs`: a warm decode worker with idle teardown, Tauri commands (`dictation_start/stop/cancel/state`, `speech_models`, `speech_model_status`, `speech_model_download`) and a `bloblex-dictation` event stream.
 - Renderer: `ui/dictation.ts`, `ui/DictationButton.tsx`, main and companion composer integration with a live provisional transcript, a Ctrl+E global shortcut, on-first-use model download with progress, and a Settings → Speech model manager.
 
-The intent and the pinned model metadata follow the MIT-licensed reference project [stablyai/orca](https://github.com/stablyai/orca); the implementation is independent Rust. Attribution is in `THIRD_PARTY_NOTICES.md`.
+The intent and the pinned model metadata follow the MIT-licensed reference project [stablyai/orca](https://github.com/stablyai/orca); the implementation is independent Rust. Attribution is in `docs/legal/third-party-notices.md`.
 
 ## Verification
 

@@ -4,7 +4,7 @@
 > **Status:** historical
 > **Last updated:** 2026-10-18
 
-Lane: OpenCode `deepseek-v4.1-flash` (high), its own worktree. All code in this wave is yours. **Never run `git commit`.** Keep context small. Read `DESIGN.md` first.
+Lane: OpenCode `deepseek-v4.1-flash` (high), its own worktree. All code in this wave is yours. **Never run `git commit`.** Keep context small. Read `docs/design/design-system.md` first.
 
 ## Bug
 In the Conversations column, a bot-to-bot (side) conversation hangs under its parent with explorer-style tree lines (FIX34). In the **classic (primary) look** the line from the parent to the child is broken: the vertical guide and the elbow don't meet (gaps, a dashed-looking vertical, the elbow sitting apart from the child row's avatars). In the **Bitbots look** it looks right. Use the Bitbots look's geometry as the reference.

@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" class="diagram-svg" role="img" aria-label="A conversation turn from prompt to adapter to CLI and back as events">
+  <style>
+    .c { fill: var(--dg-card, #23262f); stroke: var(--dg-line, #343743); stroke-width: 1; }
+    .h { fill: var(--dg-ink, #f4f5f7); font: 600 12.5px Inter, "Segoe UI", sans-serif; }
+    .t { fill: var(--dg-ink, #f4f5f7); font: 500 11.5px Inter, "Segoe UI", sans-serif; }
+    .m { fill: var(--dg-muted, #9aa0ad); font: 400 11px Inter, "Segoe UI", sans-serif; }
+    .a { stroke: var(--dg-accent, #8d86f6); stroke-width: 1.5; fill: none; }
+    .b { stroke: var(--dg-line-strong, #4a4e5c); stroke-width: 1.2; fill: none; }
+    .n { fill: var(--dg-accent, #8d86f6); }
+    .num { fill: var(--dg-paper, #14151a); font: 600 10px Inter, "Segoe UI", sans-serif; }
+  </style>
+  <g>
+    <circle cx="38" cy="56" r="11" class="n"/><text x="38" y="60" text-anchor="middle" class="num">1</text>
+    <rect x="18" y="76" width="150" height="74" rx="10" class="c"/>
+    <text x="32" y="99" class="h">You send a prompt</text>
+    <text x="32" y="117" class="m">composer → turn.create</text>
+    <text x="32" y="133" class="m">session id and turn id</text>
+  </g>
+  <g>
+    <circle cx="206" cy="56" r="11" class="n"/><text x="206" y="60" text-anchor="middle" class="num">2</text>
+    <rect x="186" y="76" width="150" height="74" rx="10" class="c"/>
+    <text x="200" y="99" class="h">Daemon queues</text>
+    <text x="200" y="117" class="m">concurrency limit</text>
+    <text x="200" y="133" class="m">busy send: steer or queue</text>
+  </g>
+  <g>
+    <circle cx="374" cy="56" r="11" class="n"/><text x="374" y="60" text-anchor="middle" class="num">3</text>
+    <rect x="354" y="76" width="150" height="74" rx="10" class="c"/>
+    <text x="368" y="99" class="h">Adapter starts</text>
+    <text x="368" y="117" class="m">resolved executable</text>
+    <text x="368" y="133" class="m">model · effort · mode</text>
+  </g>
+  <g>
+    <circle cx="542" cy="56" r="11" class="n"/><text x="542" y="60" text-anchor="middle" class="num">4</text>
+    <rect x="522" y="76" width="150" height="74" rx="10" class="c"/>
+    <text x="536" y="99" class="h">CLI runs the turn</text>
+    <text x="536" y="117" class="m">streams or JSON-RPC</text>
+    <text x="536" y="133" class="m">tools, edits, commands</text>
+  </g>
+  <g>
+    <circle cx="710" cy="56" r="11" class="n"/><text x="710" y="60" text-anchor="middle" class="num">5</text>
+    <rect x="690" y="76" width="150" height="74" rx="10" class="c"/>
+    <text x="704" y="99" class="h">Events persist</text>
+    <text x="704" y="117" class="m">message.delta · tool.*</text>
+    <text x="704" y="133" class="m">file.changed · usage</text>
+  </g>
+  <g>
+    <circle cx="878" cy="56" r="11" class="n"/><text x="878" y="60" text-anchor="middle" class="num">6</text>
+    <rect x="858" y="76" width="124" height="74" rx="10" class="c"/>
+    <text x="872" y="99" class="h">UI renders</text>
+    <text x="872" y="117" class="m">stream merged</text>
+    <text x="872" y="133" class="m">turn.completed</text>
+  </g>
+  <path d="M168 113 H186" class="a"/><path d="M336 113 H354" class="a"/><path d="M504 113 H522" class="a"/><path d="M672 113 H690" class="a"/><path d="M840 113 H858" class="a"/>
+  <path d="M542 150 V188 H378" class="b"/>
+  <path d="M374 188 L382 183 M374 188 L382 193" class="b"/>
+  <text x="452" y="182" class="m">turn.progress, reminders, watchdog</text>
+
+  <rect x="18" y="214" width="300" height="60" rx="10" class="c"/>
+  <text x="32" y="237" class="h">Working state</text>
+  <text x="32" y="255" class="m">thinking · typing · waiting for approval</text>
+  <text x="32" y="270" class="m">Limited · failed · completed</text>
+  <rect x="342" y="214" width="300" height="60" rx="10" class="c"/>
+  <text x="356" y="237" class="h">Recovery</text>
+  <text x="356" y="255" class="m">transient failure: up to three retries</text>
+  <text x="356" y="270" class="m">rate limit: wait for the window</text>
+  <rect x="666" y="214" width="316" height="60" rx="10" class="c"/>
+  <text x="680" y="237" class="h">Finished</text>
+  <text x="680" y="255" class="m">messages, tools and files stay in the session</text>
+  <text x="680" y="270" class="m">usage recorded against the bot and model</text>
+  <path d="M792 150 V214" class="b"/>
+  <path d="M168 150 V214" class="b"/>
+  <path d="M492 150 V214" class="b"/>
+  <rect x="18" y="300" width="964" height="44" rx="10" class="c"/>
+  <text x="34" y="327" class="m">The daemon owns the turn. The provider CLI is a child process; closing the app ends running turns, and the next launch resumes where the provider allows it.</text>
+</svg>

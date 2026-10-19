@@ -5,7 +5,7 @@
 > **Last updated:** 2026-10-15
 
 Written 15 October 2026. Owner directive: implement the UI/UX recommendations.
-Read `DESIGN.md` first. Use `entityNoun`/`useEntityNoun` (`ui/vocabulary.ts`) for
+Read `docs/design/design-system.md` first. Use `entityNoun`/`useEntityNoun` (`ui/vocabulary.ts`) for
 "bot"/"blob". **The role chip stays on the right of a bot's name in the sidebar row;
 do not move or restyle it.** Files owned by other lanes: `ui/errorCopy.ts`,
 `ui/undo.ts`, `ui/ProfileMenu.tsx`, `ui/SessionExecutionControls.tsx`,

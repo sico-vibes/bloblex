@@ -3,7 +3,7 @@
 // Adapted from blobatar (https://github.com/Alain00/blobatar, packages/blobatar
 // src/shape.ts, src/styles/shapes.ts, src/styles/compose.ts and
 // src/styles/blob.ts at a7fd546), MIT License, Copyright (c) 2026 Alain. See
-// THIRD_PARTY_NOTICES.md. Eye trait keys retain stored tuning; body geometry
+// docs/legal/third-party-notices.md. Eye trait keys retain stored tuning; body geometry
 // is now fixed and symmetric. The outlines are sampled into
 // point lists instead of SVG path strings, because the Bitbots engine draws on
 // a canvas and morphs the outline (the mailbox state) point by point.

@@ -8,7 +8,7 @@ Original status line, kept as written: plan with dated checkpoints (the status s
 
 ## Status (5 October 2026)
 
-The current 6 October uncommitted follow-up extends the conversation flow with lazy resume, provider title/context events, a persisted per-session model/effort lock, a keyboard-accessible message outline, and hold-to-confirm deletion. Claude's structured stream does not report a provider title; no title is inferred from prompts or transcripts. Individually reported context usage or window size is shown as available, and a percentage appears only when both values are known. Affected Rust crates passed together; desktop typecheck, mounted/full Vitest and production build passed. Native and live-provider verification of these additions remains open. See [SESSION_HANDOFF.md](../../SESSION_HANDOFF.md).
+The current 6 October uncommitted follow-up extends the conversation flow with lazy resume, provider title/context events, a persisted per-session model/effort lock, a keyboard-accessible message outline, and hold-to-confirm deletion. Claude's structured stream does not report a provider title; no title is inferred from prompts or transcripts. Individually reported context usage or window size is shown as available, and a percentage appears only when both values are known. Affected Rust crates passed together; desktop typecheck, mounted/full Vitest and production build passed. Native and live-provider verification of these additions remains open. See [docs/operations/session-handoff.md](../operations/session-handoff.md).
 
 Evidence is the merge commit on this branch's history. "Implemented" means the code and its unit or fake-process tests are on main. It does not mean a live provider session or a native window pass of the current tree. The only recorded native smoke is the isolated-database run of the Phase 3 tree (`5138c8e`, revision `e770db8`); it does not cover Phases 4, 2b, 5, or 6. Phase 7 is still pending.
 
@@ -274,8 +274,8 @@ This phase depends on Phase 2a and the intervening native smoke gate; it does no
 - Each phase ships with:
   - unit and mounted tests;
   - fixture-preview pages (extend [apps/desktop/src/preview/fixtureBridge.ts](../../apps/desktop/src/preview/fixtureBridge.ts));
-  - an updated [SESSION_HANDOFF.md](../../SESSION_HANDOFF.md).
-- Store this plan as `docs/plans/e2e-plan-v2.md` and link it from `SESSION_HANDOFF.md` and `AGENTS.md`.
+  - an updated [docs/operations/session-handoff.md](../operations/session-handoff.md).
+- Store this plan as `docs/plans/e2e-plan-v2.md` and link it from `docs/operations/session-handoff.md` and `AGENTS.md`.
 
 ## Suggested order
 

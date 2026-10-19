@@ -1,5 +1,7 @@
 # Bitbots collaboration instructions
 
+**Every agent, whatever the model: before working in this repository, read `.claude/skills/bitbots-development/SKILL.md` and the reference it points to for your task. Before you report a task done, update that skill with anything the task taught (a fix and its root cause, a changed design rule, a new pattern, a changed tool or gate), as its "Keep this skill current" section describes. If your sandbox is read-only, put the proposed update in your report.**
+
 # Amendment (19 October 2026): FIX40 pipeline
 
 Owner directive for the FIX40 wave (the owner's request to replace the primary look with Frost, add Pop and Dot, and give each bot an art style and each look an orb), until the owner says otherwise. It replaces the FIX39 four-model arrangement for this wave.
@@ -60,7 +62,7 @@ Owner directive, accepted as drafted in [docs/remote/AGENTS_AMENDMENT_DRAFT.md](
 
 Owner directive; this amends the 12 October lanes below where they differ.
 
-- **UI/UX** (components, styles, copy, motion, island/companion, settings screens, onboarding, UI tests) is done by the Director (Claude), following `DESIGN.md` and `PRODUCT.md`.
+- **UI/UX** (components, styles, copy, motion, island/companion, settings screens, onboarding, UI tests) is done by the Director (Claude), following `docs/design/design-system.md` and `docs/design/product.md`.
 - **Everything backend that does not touch UI** (Rust daemon, adapters, storage, speech, `src-tauri` native code, schema, non-visual TypeScript, backend tests) is done by OpenCode `opencode-go/deepseek-v4.1-flash` at high effort, one git worktree per package, from a written spec. The lane never runs `git commit`.
 - **No third lane.** The `impl-b` (Cursor) second opinion is not used: the Director's review of every backend diff plus the full gates, run on the merged result in the main checkout, stand in for it. Codex `impl` is not used unless the owner assigns it again.
 
@@ -68,7 +70,7 @@ Owner directive; this amends the 12 October lanes below where they differ.
 
 Owner directive; this amends the section below where they differ. The roadmap is [docs/plans/improvement-plan.md](docs/plans/improvement-plan.md).
 
-- **Lanes.** Heavy non-UI coding (Rust daemon, adapters, storage, speech crate, `src-tauri` native code, schema, non-visual TypeScript, backend tests) goes to OpenCode `opencode-go/deepseek-v4.1-flash` at high effort. Anything that touches UI or UX (components, styles, copy, motion, island/companion, settings screens) is done by the Director (Claude), who follows `DESIGN.md` and `PRODUCT.md`. The Director therefore may write UI/UX production code; it still reviews every OpenCode diff and commits after gates. The OpenCode lane never runs `git commit` and does not grade its own work: backend diffs also get a read-only second opinion from a different lane (`impl-b` via `scripts/run-cursor-delegate.ps1`). Codex `impl` remains available when the owner assigns it.
+- **Lanes.** Heavy non-UI coding (Rust daemon, adapters, storage, speech crate, `src-tauri` native code, schema, non-visual TypeScript, backend tests) goes to OpenCode `opencode-go/deepseek-v4.1-flash` at high effort. Anything that touches UI or UX (components, styles, copy, motion, island/companion, settings screens) is done by the Director (Claude), who follows `docs/design/design-system.md` and `docs/design/product.md`. The Director therefore may write UI/UX production code; it still reviews every OpenCode diff and commits after gates. The OpenCode lane never runs `git commit` and does not grade its own work: backend diffs also get a read-only second opinion from a different lane (`impl-b` via `scripts/run-cursor-delegate.ps1`). Codex `impl` remains available when the owner assigns it.
 - **Dictation exception (approved by the owner, 12 October 2026).** Cloud dictation may read the Codex CLI's `auth.json` read-only to call ChatGPT transcription. It is opt-in with explicit consent, the on-device engine stays the default and automatic fallback, the token, audio and transcripts are never persisted or logged, and the exception covers dictation only. All other "no copied provider authentication" rules stand.
 - **Budgets are retired.** `budget.*` returns `unsupported` (`crates/bloblex-daemon/src/main.rs`); do not claim budget enforcement. Unattended work (automations) must bring its own caps: runtime limit, concurrency limit, global pause, and a permission mode that is never bypass.
 
@@ -105,9 +107,9 @@ This section supersedes the older **Resume** and **User's current working arrang
 
 The user explicitly resumed work after the 20:37 stop. Finish the UI first: the main shell should follow a chat-style layout while keeping Bloblex's plan (agents, sessions, usage, permissions, companion). Companion blobs must match the island's animation and face language on a circle, and the same face is used in the chat. Backend expansion stays paused. The older "coordinator must not touch code" arrangement applied to the Luna lanes; this resume is direct UI work unless the user says otherwise.
 
-Status at 22:30: the character engine, companion island and chat-style main shell are implemented and pass typecheck/tests/build; native-window verification and per-blob model/effort/speed (needs daemon support) remain. See the top section of `SESSION_HANDOFF.md`.
+Status at 22:30: the character engine, companion island and chat-style main shell are implemented and pass typecheck/tests/build; native-window verification and per-blob model/effort/speed (needs daemon support) remain. See the top section of `docs/operations/session-handoff.md`.
 
-Read `SESSION_HANDOFF.md` and `docs/operations/implementation-status.md` before resuming work. They describe an unfinished implementation; passing old checks is not current acceptance.
+Read `docs/operations/session-handoff.md` and `docs/operations/implementation-status.md` before resuming work. They describe an unfinished implementation; passing old checks is not current acceptance.
 
 ## User's current working arrangement (superseded by Delegation pipeline above)
 

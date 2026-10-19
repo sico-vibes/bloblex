@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 470" class="diagram-svg" role="img" aria-label="Bitbots process architecture: desktop shell, local daemon, adapters and coding-agent CLIs">
+  <style>
+    .p { fill: var(--dg-panel, #1b1d24); stroke: var(--dg-line, #343743); stroke-width: 1; }
+    .c { fill: var(--dg-card, #23262f); stroke: var(--dg-line, #343743); stroke-width: 1; }
+    .h { fill: var(--dg-ink, #f4f5f7); font: 600 13px Inter, "Segoe UI", sans-serif; }
+    .t { fill: var(--dg-ink, #f4f5f7); font: 500 12px Inter, "Segoe UI", sans-serif; }
+    .m { fill: var(--dg-muted, #9aa0ad); font: 400 11px Inter, "Segoe UI", sans-serif; }
+    .l { fill: var(--dg-muted, #9aa0ad); font: 400 11px Inter, "Segoe UI", sans-serif; letter-spacing: .08em; text-transform: uppercase; }
+    .a { stroke: var(--dg-accent, #8d86f6); stroke-width: 1.5; fill: none; }
+    .b { stroke: var(--dg-line-strong, #4a4e5c); stroke-width: 1.2; fill: none; }
+    .dot { fill: var(--dg-accent, #8d86f6); }
+    .chip { fill: var(--dg-accent-soft, #8d86f622); stroke: var(--dg-accent, #8d86f6); stroke-width: 1; }
+  </style>
+  <rect x="16" y="16" width="366" height="438" rx="14" class="p"/>
+  <text x="34" y="42" class="l">Desktop shell · Tauri</text>
+  <rect x="34" y="56" width="330" height="62" rx="10" class="c"/>
+  <text x="48" y="80" class="h">Main window</text>
+  <text x="48" y="99" class="m">React: bots, conversations, settings, approvals</text>
+  <rect x="34" y="128" width="158" height="54" rx="10" class="c"/>
+  <text x="48" y="150" class="h">Companion</text>
+  <text x="48" y="168" class="m">floating window</text>
+  <rect x="206" y="128" width="158" height="54" rx="10" class="c"/>
+  <text x="220" y="150" class="h">Dictation</text>
+  <text x="220" y="168" class="m">island window</text>
+  <rect x="34" y="194" width="330" height="54" rx="10" class="c"/>
+  <text x="48" y="216" class="h">Native bridge</text>
+  <text x="48" y="234" class="m">src/tauri.ts · transport/ · Tauri commands</text>
+  <rect x="34" y="260" width="330" height="90" rx="10" class="c"/>
+  <text x="48" y="282" class="h">Native windows and system</text>
+  <text x="48" y="301" class="m">tray · file dialogs · notifications · updater</text>
+  <text x="48" y="319" class="m">speech · power · single instance</text>
+  <rect x="34" y="364" width="330" height="70" rx="10" class="c"/>
+  <text x="48" y="386" class="h">Browser preview</text>
+  <text x="48" y="405" class="m">fixtures replace the bridge</text>
+  <text x="48" y="421" class="m">no daemon, no real sessions</text>
+
+  <rect x="418" y="16" width="314" height="438" rx="14" class="p"/>
+  <text x="436" y="42" class="l">Local daemon · bitbotsd</text>
+  <rect x="436" y="56" width="278" height="52" rx="10" class="c"/>
+  <text x="450" y="78" class="h">POST /v1/rpc</text>
+  <text x="450" y="96" class="m">requests, capability checked</text>
+  <rect x="436" y="118" width="278" height="52" rx="10" class="c"/>
+  <text x="450" y="140" class="h">GET /v1/events</text>
+  <text x="450" y="158" class="m">one ordered event stream</text>
+  <rect x="436" y="184" width="278" height="44" rx="10" class="c"/>
+  <text x="450" y="211" class="t">dispatch() · sessions and turns</text>
+  <rect x="436" y="238" width="134" height="58" rx="10" class="c"/>
+  <text x="450" y="260" class="h">Approvals</text>
+  <text x="450" y="278" class="m">ask · auto · bypass</text>
+  <rect x="580" y="238" width="134" height="58" rx="10" class="c"/>
+  <text x="594" y="260" class="h">Usage</text>
+  <text x="594" y="278" class="m">tokens and limits</text>
+  <rect x="436" y="306" width="278" height="54" rx="10" class="c"/>
+  <text x="450" y="328" class="h">SQLite storage</text>
+  <text x="450" y="346" class="m">sessions · messages · migrations · backups</text>
+  <rect x="436" y="370" width="278" height="64" rx="10" class="c"/>
+  <text x="450" y="392" class="h">Remote gateway (off by default)</text>
+  <text x="450" y="410" class="m">Tailscale loopback · Native HTTPS</text>
+  <text x="450" y="426" class="m">shared tiers.json policy</text>
+
+  <rect x="766" y="16" width="218" height="186" rx="14" class="p"/>
+  <text x="784" y="42" class="l">Provider adapters</text>
+  <rect x="784" y="56" width="182" height="38" rx="9" class="c"/>
+  <text x="796" y="80" class="t">Claude adapter</text>
+  <rect x="784" y="102" width="182" height="38" rx="9" class="c"/>
+  <text x="796" y="126" class="t">Codex adapter</text>
+  <rect x="784" y="148" width="182" height="38" rx="9" class="c"/>
+  <text x="796" y="172" class="t">ACP · OpenCode</text>
+
+  <rect x="766" y="218" width="218" height="236" rx="14" class="p"/>
+  <text x="784" y="244" class="l">Coding-agent CLIs</text>
+  <rect x="784" y="258" width="182" height="52" rx="9" class="c"/>
+  <text x="796" y="280" class="t">Claude Code</text>
+  <text x="796" y="298" class="m">print / stream-json</text>
+  <rect x="784" y="320" width="182" height="52" rx="9" class="c"/>
+  <text x="796" y="342" class="t">Codex</text>
+  <text x="796" y="360" class="m">app-server JSON-RPC</text>
+  <rect x="784" y="382" width="182" height="52" rx="9" class="c"/>
+  <text x="796" y="404" class="t">OpenCode</text>
+  <text x="796" y="422" class="m">ACP over stdio</text>
+
+  <path d="M364 130 H400 V82 H436" class="a"/>
+  <path d="M436 144 H400 V300 H364" class="b"/>
+  <circle cx="400" cy="82" r="3" class="dot"/>
+  <circle cx="400" cy="300" r="3" class="dot"/>
+  <text x="372" y="74" class="m">loopback HTTP</text>
+  <text x="368" y="322" class="m">events</text>
+  <path d="M714 211 H746 V76 H766" class="a"/>
+  <path d="M766 211 H746 V285 H714" class="b"/>
+  <text x="718" y="66" class="m">spawn</text>
+  <path d="M875 202 V218" class="b"/>
+  <path d="M875 314 V320" class="b"/>
+  <path d="M875 372 V382" class="b"/>
+  <text x="884" y="214" class="m">stdio</text>
+  <rect x="826" y="8" width="0" height="0" class="chip"/>
+</svg>

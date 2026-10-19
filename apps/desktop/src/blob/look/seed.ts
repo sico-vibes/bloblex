@@ -2,7 +2,7 @@
 //
 // Adapted from blobatar (https://github.com/Alain00/blobatar, packages/blobatar
 // src/hash.ts and src/traits.ts at a7fd546), MIT License, Copyright (c) 2026
-// Alain. See THIRD_PARTY_NOTICES.md.
+// Alain. See docs/legal/third-party-notices.md.
 
 const SEP = 0xff
 const utf8 = new TextEncoder()

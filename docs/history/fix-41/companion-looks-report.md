@@ -6,7 +6,7 @@
 
 Original status line, kept as written: implemented on branch `claude/priceless-shamir-29e003`. Not released. Committed on that branch; not merged to `main`. Evidence is unit and mounted tests, the gates listed below and the Director's browser-preview audit. The real transparent native window is unverified.
 
-Brief: [docs/history/fix-41/companion-looks-brief.md](companion-looks-brief.md). Earlier wave: [docs/history/fix-40/report.md](../fix-40/report.md). Design rules: [DESIGN.md](../../../DESIGN.md#companion-and-dictation-windows-fix41).
+Brief: [docs/history/fix-41/companion-looks-brief.md](companion-looks-brief.md). Earlier wave: [docs/history/fix-40/report.md](../fix-40/report.md). Design rules: [docs/design/design-system.md](../../design/design-system.md#companion-and-dictation-windows-fix41).
 
 ## What the owner asked for
 

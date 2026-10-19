@@ -68,6 +68,6 @@ Do not take a suggestion that would make the Manager feel restricted. Prefer des
 2. **Findings per question:** T3's design and ours, side by side, with evidence.
 3. **Recommendations table:** columns are #, Recommendation, Problem it fixes (cite owner items or the friend's failures), T3 evidence, Fits the owner's vision? (yes, partly or no, and why), Effort (S/M/L), Priority (P0/P1/P2), Bitbots files affected. Order it by priority. P0 means the things without which users will leave, like the friend did.
 4. **What not to copy from T3,** and why: anything that conflicts with the bots model.
-5. **Licence note:** what we may reuse from MIT code and what attribution `THIRD_PARTY_NOTICES.md` would need.
+5. **Licence note:** what we may reuse from MIT code and what attribution `docs/legal/third-party-notices.md` would need.
 
 Keep your context small: grep, then read only the ranges you need.

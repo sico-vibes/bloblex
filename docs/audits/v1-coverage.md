@@ -49,7 +49,7 @@ Current priority: UI behavior and polish. The user has rejected the running comp
 
 Remote runtimes (phase 11) and an inference gateway are explicitly outside v1. The optional gateway assessment does not alter the authorized plan.
 
-For the current work-package checklist and safe resume instructions, read [docs/operations/implementation-status.md](../operations/implementation-status.md) and [SESSION_HANDOFF.md](../../SESSION_HANDOFF.md). The three authorized Luna lanes have delivered their present UI/source-check checkpoint; final native and broader backend acceptance remains open.
+For the current work-package checklist and safe resume instructions, read [docs/operations/implementation-status.md](../operations/implementation-status.md) and [docs/operations/session-handoff.md](../operations/session-handoff.md). The three authorized Luna lanes have delivered their present UI/source-check checkpoint; final native and broader backend acceptance remains open.
 
 ## Current runnable snapshot
 

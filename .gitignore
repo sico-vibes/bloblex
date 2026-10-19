@@ -11,5 +11,6 @@ target/
 /.local/
 apps/desktop/src-tauri/binaries/bitbots-hook-*.exe
 
-# Local Claude Code session config
-/.claude/
+# Local Claude Code session config (the project skills are shared)
+/.claude/*
+!/.claude/skills/

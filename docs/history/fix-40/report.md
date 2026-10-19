@@ -6,7 +6,7 @@
 
 Original status line, kept as written: landed on `main` at `e4cf5b3` (19 October 2026). Not tagged or released; the last release is still `v0.1.0-beta.34`. Evidence is unit and mounted tests, the Director's browser-preview checks and the gates listed below. No native-window check, live provider session or installer test is recorded for this wave.
 
-Specs: [docs/history/fix-40/themes-spec.md](themes-spec.md) (round 1, looks and fonts), [docs/history/fix-40/characters-spec.md](characters-spec.md) (round 1, bot art), [docs/history/fix-40/round2-spec.md](round2-spec.md) (Pop and Dot), [docs/history/fix-40/orbs-spec.md](orbs-spec.md) (look orbs). Design rules: [DESIGN.md](../../../DESIGN.md#fix40-looks-and-bot-art-19-october-2026). Pipeline: [AGENTS.md](../../../AGENTS.md), 19 October amendment.
+Specs: [docs/history/fix-40/themes-spec.md](themes-spec.md) (round 1, looks and fonts), [docs/history/fix-40/characters-spec.md](characters-spec.md) (round 1, bot art), [docs/history/fix-40/round2-spec.md](round2-spec.md) (Pop and Dot), [docs/history/fix-40/orbs-spec.md](orbs-spec.md) (look orbs). Design rules: [docs/design/design-system.md](../../design/design-system.md#fix40-looks-and-bot-art-19-october-2026). Pipeline: [AGENTS.md](../../../AGENTS.md), 19 October amendment.
 
 ## What the owner asked for
 
@@ -155,7 +155,7 @@ No other gate run is recorded for this wave.
 2. Done. `SafeMarkdown.tsx` has one `SafeLink` component, used by `SafeMarkdown` and `SafeMarkdownInline`. Every click (with or without modifiers) and every `auxclick` has its default prevented. A primary click or a middle click calls the safe opener; a middle `mousedown` is prevented, and links are not draggable. `target="_blank"` is kept, because every activation is prevented. `openSafeLink.ts` no longer falls back to `window.open` when the native opener fails in the desktop app; `window.open` remains only for the browser preview (`isNative()` false). New mounted tests cover middle click, right `auxclick`, Ctrl+click and Cmd+click in both renderers, and a new `openSafeLink.test.ts` covers the removed fallback. Gates: typecheck clean; Vitest 179 files, 1,347 tests passed. Not checked in the native window.
 3. Decided, then built in FIX41. On 19 October 2026 the owner decided that Frost, Pop and Dot should style the companion and dictation windows. The brief is `docs/history/fix-41/companion-looks-brief.md`. It was implemented in FIX41 on branch `claude/priceless-shamir-29e003`; see [docs/history/fix-41/companion-looks-report.md](../fix-41/companion-looks-report.md).
 4. The remote web app still defaults to the robot art.
-5. The FIX39 "eight bot shapes" rule now applies to the glossy blob only (noted in DESIGN.md).
+5. The FIX39 "eight bot shapes" rule now applies to the glossy blob only (noted in docs/design/design-system.md).
 6. The four FIX40 spec files (`docs/history/fix-40/themes-spec.md`, `docs/history/fix-40/characters-spec.md`, `docs/history/fix-40/round2-spec.md`, `docs/history/fix-40/orbs-spec.md`) are untracked in the working tree and need committing with this report.
 7. The lane worktrees (`D:\fx40t`, `D:\fx40c`, `D:\fx40p`, `D:\fx40d`, `D:\fx40o`) and their branches should be removed after the next release, as AGENTS.md (14 October amendment) requires.
 

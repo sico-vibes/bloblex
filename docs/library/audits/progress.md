@@ -55,3 +55,10 @@
 - Remote threat-model release gate (`docs/remote/THREAT_MODEL.md`, sections 8 and 11) is still owed for a non-beta release (AGENTS.md, 17 October 2026).
 - Pre-existing dangling mentions listed in the inventory.
 - Lane work files are kept in `docs/library/audits/`. Delete or move them when the owner no longer needs the review record.
+
+## Owner task: root tidy-up (19 October 2026)
+
+- Moved with `git mv`: `DESIGN.md` to `docs/design/design-system.md`; `PRODUCT.md` to `docs/design/product.md`; `SESSION_HANDOFF.md` to `docs/operations/session-handoff.md`; `THIRD_PARTY_NOTICES.md` to `docs/legal/third-party-notices.md`; `bitbots.png` to `assets/icon/bitbots.png`; `Bloblex_UI_Concept.png` to `docs/design/archive/bloblex-ui-concept.png`; `docs/qa-frontend.png` to `docs/design/archive/qa-frontend.png`.
+- Root now holds only `.gitignore`, `AGENTS.md`, `Cargo.lock`, `Cargo.toml`, `README.md`, `package-lock.json`, `package.json` (tracked).
+- References updated by script in Markdown (links and plain mentions), the project skill, `docs/library/content/`, `docs/library/README.md` and the four code comments. Not touched: `docs/library/sources`, `index.html`, `catalog.json`, `docs/library/audits` (lane records; one link repaired), `fixtureBridge.ts`, `scripts/docs-library.mjs` (reads the library's own copy `docs/library/assets/bitbots.png`).
+- Added `docs/design/archive/README.md`; added a Documentation section to `README.md` linking `docs/DOCUMENTATION.html` (not yet built).

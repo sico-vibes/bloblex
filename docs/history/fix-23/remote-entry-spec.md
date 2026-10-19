@@ -5,7 +5,7 @@
 > **Last updated:** 2026-10-15
 
 Written 15 October 2026. Completes the Remote mock deliverables from the approved plan: the
-sidebar chip, the profile-menu entry and a Remote pointer in the tour. Read `DESIGN.md`,
+sidebar chip, the profile-menu entry and a Remote pointer in the tour. Read `docs/design/design-system.md`,
 `docs/remote/UX_FLOWS.md` (section 1.7) and `apps/desktop/src/remote/remoteContract.ts`.
 Another lane edits the companion and another the bot editor; keep your edits inside the
 files named here and small insertions in `ui/App.tsx`. Never commit; leave the diff and write

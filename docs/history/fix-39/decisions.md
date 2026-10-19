@@ -39,7 +39,7 @@ Answers to the questions in `docs/history/fix-39/research-audit.md`, plus the de
 
 ## Visual rules for every UI package
 
-- Follow `DESIGN.md`.
+- Follow `docs/design/design-system.md`.
 - No sparkle or star icons (`Sparkles`, `Sparkle`, `Wand2`, `WandSparkles`, ✦ ✧ ✨) except the Manager's star badge (item 8).
 - Both looks (classic and Bitbots) and both themes.
 

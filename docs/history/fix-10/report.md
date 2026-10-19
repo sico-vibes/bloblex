@@ -173,7 +173,7 @@ Written by the Director on top of the lane's logic layer. Web preview only; no r
 - **Accent.** `ui/accent.css` applies `--user-accent*` to the Blobots look; Bitbots
   reads it through `--bb-accent`. Neutral (no accent) keeps both monochrome.
 - **Logo.** `assets/icon/*` and `apps/desktop/src/assets/bloblex-128.png` were
-  regenerated from `bitbots.png` (file names are kept; they are identifiers).
+  regenerated from `assets/icon/bitbots.png` (file names are kept; they are identifiers).
 - **Product name.** FIX9 renamed user-visible text; `productName` is now "Bitbots".
   Crate, package, bundle-identifier, data-directory, env and storage-key names were
   deliberately kept (see docs/history/fix-09/rename-report.md).

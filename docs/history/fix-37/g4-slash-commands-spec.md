@@ -4,7 +4,7 @@
 > **Status:** historical
 > **Last updated:** 2026-10-18
 
-Lane: OpenCode `deepseek-v4.1-flash` (high), its own worktree. The owner has asked the lanes to do UI work in this wave. **Never run `git commit`.** Keep context small. Read the section headings of `AGENTS.md`, then `DESIGN.md`, `docs/history/fix-32/skills-spec.md` (skills pool) and `docs/history/fix-36/d3-report.md` (Manager knowledge). Another lane is changing selection logic in `App.tsx` at the same time: keep your `App.tsx` changes small and in the composer area; put the menu in its own component file.
+Lane: OpenCode `deepseek-v4.1-flash` (high), its own worktree. The owner has asked the lanes to do UI work in this wave. **Never run `git commit`.** Keep context small. Read the section headings of `AGENTS.md`, then `docs/design/design-system.md`, `docs/history/fix-32/skills-spec.md` (skills pool) and `docs/history/fix-36/d3-report.md` (Manager knowledge). Another lane is changing selection logic in `App.tsx` at the same time: keep your `App.tsx` changes small and in the composer area; put the menu in its own component file.
 
 ## What the owner wants
 

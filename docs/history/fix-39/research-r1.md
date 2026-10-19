@@ -6,9 +6,9 @@
 
 Research lane: OpenCode `opencode-go/deepseek-v4.1-flash` (high). No code changed; this file is the only artefact. No `git commit` run.
 
-Sources read: `apps/desktop/src/ui/*`, `apps/desktop/src/blob/look/*`, `apps/desktop/src-tauri/src/snap.rs`, `apps/desktop/src-tauri/src/lib.rs`, `DESIGN.md`. Line numbers are from the working tree at the time of writing.
+Sources read: `apps/desktop/src/ui/*`, `apps/desktop/src/blob/look/*`, `apps/desktop/src-tauri/src/snap.rs`, `apps/desktop/src-tauri/src/lib.rs`, `docs/design/design-system.md`. Line numbers are from the working tree at the time of writing.
 
-Cross-cutting note: `DESIGN.md:9` states the sidebar row "shows the blob and one line (what it is doing now, else its latest conversation)". Items 4, 8, 12 and 13 each add a second thing to a blob row or change a silhouette, so they require a matching `DESIGN.md` edit. Item 12 in particular contradicts "Say each thing once" — it puts the model in the sidebar while the header/details also show it. That is the owner's explicit choice, but `DESIGN.md` must be amended or the next review will flag it.
+Cross-cutting note: `docs/design/design-system.md:9` states the sidebar row "shows the blob and one line (what it is doing now, else its latest conversation)". Items 4, 8, 12 and 13 each add a second thing to a blob row or change a silhouette, so they require a matching `docs/design/design-system.md` edit. Item 12 in particular contradicts "Say each thing once" — it puts the model in the sidebar while the header/details also show it. That is the owner's explicit choice, but `docs/design/design-system.md` must be amended or the next review will flag it.
 
 ---
 
@@ -46,7 +46,7 @@ Cross-cutting note: `DESIGN.md:9` states the sidebar row "shows the blob and one
 `{defaultThinking && efforts.length > 0 && !visibleLabel.startsWith('Model default') && <span className="session-effort-default-label">Model default · {labelizeEffort(defaultThinking, provider)}</span>}`
 The popover heading is `App.tsx`-external (kept in this file) at lines 326-331. The trigger label logic is at lines 316-321; the model-is-first lock case (`MODEL_FIRST_REASON`) sets `triggerLabel = 'Effort'`.
 
-**Cause.** The popover heading always appends the model-default hint when the model declares a default effort and the user has not shown the default itself. It is shown regardless of the currently highlighted position, so at Max it still reads "Model default · Medium" — duplicated information, contradicting `DESIGN.md:9`.
+**Cause.** The popover heading always appends the model-default hint when the model declares a default effort and the user has not shown the default itself. It is shown regardless of the currently highlighted position, so at Max it still reads "Model default · Medium" — duplicated information, contradicting `docs/design/design-system.md:9`.
 
 **Proposed design.** Delete the `<span className="session-effort-default-label">…</span>` element at `SessionExecutionControls.tsx:330` (and the now-unused `.session-effort-default-label` CSS if present). The default is already surfaced in the trigger (`Model default` label at line 317) and in the recovery/unavailable blocks (lines 340-341), so nothing is lost. Keep `defaultThinking` for those paths.
 
@@ -106,8 +106,8 @@ Whichever is chosen, the shortcut stays Ctrl+K.
 - **Symmetry.** For every shape, remove seed-driven tilt (`body.rot`) and the organic spline; use supershape/superellipse bodies with a fixed 0 rotation. `pebble` = a symmetrical rounded blob (two mirrored radii), `squircle` = a rounded square (fixed `body.n`), keeping the existing `capsule/cloud/droplet/hexagon/triangle` geometry minus rotation. Keep `forms.ts` parameters but pin `rot` and, for `pebble`, mirror the radii.
 - **Eyes.** Add a "vertical pill" eye preset (tall `eye.rx`, `eye.ratio`, small `n`) applied as the default face fit for every silhouette, replacing per-shape seeds where they diverge (`MASCOT_LOOK` already is that shape, `index.ts:35-43`).
 - **Shuffle.** Change `shuffleLook` to never touch `shape` (drop the `anyShape` parameter, or keep it but always pass `false` from the UI); update `LookEditor.tsx:78-79` so both buttons keep the shape; randomise only seed (face/proportions) and, for "Surprise me", also the colour. In Bitbots mode, make `randomBot()` take the current shape and only pick colours: `bot.ts:117-124` and `BOT_SHAPES` should be passed the existing shape. Update the button titles accordingly.
-- **Copy/credit.** The blobatar credit line (`LookEditor.tsx:103`) and `THIRD_PARTY_NOTICES.md` must be updated if the geometry is re-derived; if the shapes stay blobatar-derived with new parameters, keep the credit.
-- `DESIGN.md` needs a shapes line under Character.
+- **Copy/credit.** The blobatar credit line (`LookEditor.tsx:103`) and `docs/legal/third-party-notices.md` must be updated if the geometry is re-derived; if the shapes stay blobatar-derived with new parameters, keep the credit.
+- `docs/design/design-system.md` needs a shapes line under Character.
 
 **Tests.** `apps/desktop/src/blob/look/look.test.ts` and `forms` tests: add symmetry assertions (outline points mirror across the vertical axis within tolerance; every shape has `rot === 0`), a shuffle invariant test (`shuffleLook` output has the same `shape`), a migration test (`normalizeLook({shape:'cat'})` → expected new shape), and a `randomBot(currentShape)` test. Mounted: `LookEditor.mounted.test.tsx` — click Surprise me, assert the selected shape tile does not change. Preview: `apps/desktop/src/preview/main.tsx:30-31` renders a shape gallery from `BLOB_SHAPES`; update it for the new list.
 
@@ -115,7 +115,7 @@ Whichever is chosen, the shortcut stays Ctrl+K.
 
 **Questions for the owner.**
 - Keep or drop Sun and Cat? **Recommended:** drop both from the chooser (they are the least symmetric); migrate stored `sun`→Circle and `cat`→Pebble.
-- Should the blobatar credit stay, or is a from-scratch symmetric set wanted (which changes `THIRD_PARTY_NOTICES.md`)? **Recommended:** keep blobatar geometry but pin it symmetric, keeping the existing credit.
+- Should the blobatar credit stay, or is a from-scratch symmetric set wanted (which changes `docs/legal/third-party-notices.md`)? **Recommended:** keep blobatar geometry but pin it symmetric, keeping the existing credit.
 
 ---
 
@@ -130,7 +130,7 @@ Whichever is chosen, the shortcut stays Ctrl+K.
 ```
 `.pill-button` has **no rule anywhere**: `grep -rn "\.pill-button" apps/desktop/src` → 0 matches; the only uses are these two. So both buttons render with the browser's default button appearance. The banner itself is styled at `apps/desktop/src/ui/shell.css:168-169` (`border`, `background: var(--surface-raised)`, `p { flex:1 }`); Bitbots theme refines it at `bitbots.css:706`. Rendered from `App.tsx:2446`.
 
-**Cause.** A typo/leftover class name with no stylesheet rule. The app's real button classes are `.primary-button`, `.secondary-button`, `.ghost-button`, `.icon-button` (`DESIGN.md:36`).
+**Cause.** A typo/leftover class name with no stylesheet rule. The app's real button classes are `.primary-button`, `.secondary-button`, `.ghost-button`, `.icon-button` (`docs/design/design-system.md:36`).
 
 **Proposed design.** In `UpdateBanner.tsx`, replace `pill-button` with the system classes: View → `className="primary-button small"`, Later → `className="ghost-button small"` (or `secondary-button small`). No new CSS needed. Optionally add `.update-banner { flex-shrink:0 }` to buttons so the sentence `p` keeps its flex but the buttons don't wrap. Remove the dead `.pill-button` name.
 
@@ -210,7 +210,7 @@ CSS `.leader-badge` at `apps/desktop/src/ui/team.css:22` is already an orange ci
 
 **Cause.** The badge uses `BriefcaseBusiness`; the owner wants a star. No CSS change is needed — only the icon.
 
-**Proposed design.** Swap `BriefcaseBusiness` for `Star` from `lucide-react` (filled: `<Star size={9} fill="currentColor" strokeWidth={0}/>` to read as a solid white star on orange). Keep `aria-hidden` and the `title="Manager"`. Remove the now-unused `BriefcaseBusiness` import from `TeamSidebar.tsx:4` if nothing else uses it (check `SettingsSheet.tsx:51` still imports its own). Add a `DESIGN.md` line: a star badge is allowed only for the Manager.
+**Proposed design.** Swap `BriefcaseBusiness` for `Star` from `lucide-react` (filled: `<Star size={9} fill="currentColor" strokeWidth={0}/>` to read as a solid white star on orange). Keep `aria-hidden` and the `title="Manager"`. Remove the now-unused `BriefcaseBusiness` import from `TeamSidebar.tsx:4` if nothing else uses it (check `SettingsSheet.tsx:51` still imports its own). Add a `docs/design/design-system.md` line: a star badge is allowed only for the Manager.
 
 **Tests.** `apps/desktop/src/ui/App.agent.mounted.test.tsx:781-785` asserts `.leader-badge` presence/absence for leader vs Manager — unaffected (class unchanged). Add an assertion that the badge contains an `svg` (the star) if a test wants the icon shape; otherwise an aria-label check.
 
@@ -230,7 +230,7 @@ CSS `.leader-badge` at `apps/desktop/src/ui/team.css:22` is already an orange ci
 .settings-group-head { min-height:28px; margin:0 0 8px; padding:0 4px; display:flex; … }
 .settings-group-head h3 { margin:0; color:var(--text-3); font-size:var(--fs-xs); font-weight:500; }
 ```
-Only a 22px gap separates groups; there is no `border`/rule. Group headings are rendered by `SettingsGroup` (used e.g. `SettingsSheet.tsx:513, 527, 553, 560, 586, 591, 600, 608, 625, 632, 667, 704, 710, 718, 748`). "Both looks" = dark and light appearances (`DESIGN.md:46`), or possibly the two appearance styles (default and Bitbots) — both should get the rule.
+Only a 22px gap separates groups; there is no `border`/rule. Group headings are rendered by `SettingsGroup` (used e.g. `SettingsSheet.tsx:513, 527, 553, 560, 586, 591, 600, 608, 625, 632, 667, 704, 710, 718, 748`). "Both looks" = dark and light appearances (`docs/design/design-system.md:46`), or possibly the two appearance styles (default and Bitbots) — both should get the rule.
 
 **Cause.** No separator was ever styled between `.settings-group` blocks; the grey heading is the only cue.
 
@@ -239,7 +239,7 @@ Only a 22px gap separates groups; there is no `border`/rule. Group headings are 
 .settings-group { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
 .settings-group:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 ```
-Use the semantic `--line` token so the light theme and Bitbots theme inherit it (`DESIGN.md:16` requires tokens only). Check Bitbots overrides (`bitbots.css:198-220` target `.settings-group-head h3`) do not fight the new border; add a `:root[data-bitbots="on"] .settings-group { border-top-color: var(--bb-line); }` if needed. Also apply to `botWizard.css:25` (`.bot-wizard-body .settings-group:first-child`) which relies on the same component.
+Use the semantic `--line` token so the light theme and Bitbots theme inherit it (`docs/design/design-system.md:16` requires tokens only). Check Bitbots overrides (`bitbots.css:198-220` target `.settings-group-head h3`) do not fight the new border; add a `:root[data-bitbots="on"] .settings-group { border-top-color: var(--bb-line); }` if needed. Also apply to `botWizard.css:25` (`.bot-wizard-body .settings-group:first-child`) which relies on the same component.
 
 **Tests.** CSS-only; add a mounted assertion that adjacent `.settings-group` elements carry a top border if any test inspects computed style (unlikely). Prefer a preview/screenshot check for both themes and both appearance styles.
 
@@ -264,7 +264,7 @@ Use the semantic `--line` token so the light theme and Bitbots theme inherit it 
 **Proposed design.**
 - Remove the snap call: delete `schedule_companion_snap` and its invocation at `lib.rs:2082` (keep `persist_companion_position`). Then `snap_generation`/`snap_resize_flag` locals (lines 2076-2077) and the `snap` module import become unused; remove `snap.rs` (and its tests) plus the now-unused JS mirror `blob/companionSnap.ts` and `companionSnap.test.ts`, or leave the JS mirror only if another consumer appears (it has none).
 - Keep the launch clamp so the companion still appears on-screen. Confirm `companion_saved_compact_spot` only clamps the start position, not mid-drag.
-- `DESIGN.md`/`docs` mention for companions: state free drag retained position (the existing position persistence already covers this).
+- `docs/design/design-system.md`/`docs` mention for companions: state free drag retained position (the existing position persistence already covers this).
 
 **Tests.** Rust: the `snap.rs` tests disappear with the module; keep a test that a `Moved` event only persists position and does not move the window (harder to unit-test; at minimum compile-check). JS: remove `companionSnap.test.ts`. Manual/preview: drag the companion and confirm it stays where released and does not lurch.
 
@@ -320,7 +320,7 @@ Use the semantic `--line` token so the light theme and Bitbots theme inherit it 
 - Thread it to `TeamSidebar` as a prop (mirror `runtimeLogos` in `App.tsx:2399`).
 - In `renderRow`, when on, replace the second line's text with `${presentedModelName(provider, model)} · ${labelizeEffort(agent.thinking, provider)}` (fallback "Default model" / omit effort when `agent.thinking` is null). Keep the waiting/working/offline status text taking precedence (lines 221-223) so a busy bot still reads as busy — or decide the owner's preference (see question).
 - Resolve the display name cheaply: add one `useCachedRpc('runtime.models', { runtimeId })` per row is wasteful; instead read `readCached('runtime.models', { runtimeId })` (`catalogCache.ts:69`) synchronously in a small helper and fall back to the raw id. The boot warm-up already caches per-runtime lists (`catalogCache.ts:1-6`), so no extra request is needed in the common case.
-- `DESIGN.md:9` must be amended for this experimental mode.
+- `docs/design/design-system.md:9` must be amended for this experimental mode.
 
 **Tests.** Add a pure helper `sidebarSubtitle(agent, provider, catalog)` in `teamSelectors.ts` and unit-test it (with/without catalog, no model, no effort). Mounted: a `TeamSidebar`/`App` test that the toggle swaps the line and that a busy bot still shows status.
 
@@ -346,9 +346,9 @@ Use the semantic `--line` token so the light theme and Bitbots theme inherit it 
 **Proposed design.**
 - Storage: add `ui/botLock.ts` with the `sidebarPins.ts` pattern — `bloblex.botLocks.v1` = `{ v:1, locked: string[] }`, with `readLocks()`, `isLocked(agentId)`, `toggleLock(agentId)`, `subscribe`/`useBotLock(agentId)` via `useSyncExternalStore` (mirror `botPrefs.ts:27-37`). Keep it device-local so no daemon/schema change is needed; the alternative (an `agent.locked` field) is a daemon change and a bigger blast radius (recommend against for FIX39).
 - Menu: add `{ label: locked ? 'Unlock bot' : 'Lock bot', icon: <Lock size={15}/> or <LockOpen/>, onSelect: () => actions.onToggleLock(agent) }` to `blobMenu` (after Duplicate / near Hide); the Manager's own menu (line 148-154) can include it too or be excluded (see question). Add `onToggleLock` to `TeamSidebarActions`.
-- Badge: in the avatar span, `{locked && <span className="lock-badge" title="Locked" aria-hidden="true"><Lock size={9}/></span>}`. Style `.lock-badge` in `team.css` next to `.leader-badge` (`team.css:22`) — same 15px circle, but a neutral/monochrome fill (not the orange reserved for the Manager) to satisfy `DESIGN.md:11`. If both badges could appear (Manager locked), offset one so they don't overlap.
+- Badge: in the avatar span, `{locked && <span className="lock-badge" title="Locked" aria-hidden="true"><Lock size={9}/></span>}`. Style `.lock-badge` in `team.css` next to `.leader-badge` (`team.css:22`) — same 15px circle, but a neutral/monochrome fill (not the orange reserved for the Manager) to satisfy `docs/design/design-system.md:11`. If both badges could appear (Manager locked), offset one so they don't overlap.
 - Enforcement: when `locked`, disable/hide in the menu: Rename, Edit, Archive, Delete conversation, Hide/Show, Move to; and make the blob editor open read-only (a banner "This bot is locked. Unlock it from the sidebar to change its settings" and disabled inputs) in `BlobSettings.tsx`/`BlobPage.tsx`. Also block per-bot composer changes (item 16) while locked. Guard the RPC call sites (`App.tsx:1512, 2092, 2122`) with an `isLocked(agent.id)` check and a clear error so a stale UI cannot write.
-- `DESIGN.md`: document the lock badge.
+- `docs/design/design-system.md`: document the lock badge.
 
 **Tests.** Unit-test `botLock.ts` (toggle, persistence, parse fallback). Mounted: `TeamSidebar.keyboard.mounted.test.tsx` / `App.agent.mounted.test.tsx` — lock from the menu shows the badge, disables Rename/Edit, and unlock reverses. Editor: `BlobSettings.*.mounted.test.tsx` — read-only when locked.
 
@@ -409,9 +409,9 @@ export function tokenValue(value: unknown): string {
 Grouped so different packages touch mostly different files. If packages are run in parallel, note the shared files called out; `TeamSidebar.tsx` is claimed by three packages, and `App.tsx` by several (different regions) — sequence those or keep them in one lane.
 
 - **P1 — Sidebar search (item 3).** Files: `apps/desktop/src/ui/App.tsx` (remove the `Search` icon at 2384, pass `onOpenSearch`), `apps/desktop/src/ui/TeamSidebar.tsx` (300-303), `ui/team.css`/`shell.css` (`.sidebar-search`), tests `QuickSwitcher.mounted.test.tsx`, `useQuickSwitcherShortcut.mounted.test.tsx`, `TeamSidebar.keyboard.mounted.test.tsx`.
-- **P2 — Sidebar preview and model line (items 15, 12).** Files: `ui/teamSelectors.ts` (40-53 + new `sidebarSubtitle`), `ui/experiments.ts` (new flag), `ui/TeamSidebar.tsx` (223, 294), `ui/catalogCache.ts` read helper, `App.tsx` (prop), `DESIGN.md:9`, tests `teamSelectors.test.ts`, a `TeamSidebar` mounted test.
+- **P2 — Sidebar preview and model line (items 15, 12).** Files: `ui/teamSelectors.ts` (40-53 + new `sidebarSubtitle`), `ui/experiments.ts` (new flag), `ui/TeamSidebar.tsx` (223, 294), `ui/catalogCache.ts` read helper, `App.tsx` (prop), `docs/design/design-system.md:9`, tests `teamSelectors.test.ts`, a `TeamSidebar` mounted test.
 - **P3 — Manager card and badge (items 7, 8).** Files: `ui/ManagerSetupCard.tsx` (remove dismissal; don't hide on empty runtimes), `App.tsx` (894-906 onboarding wait-for-snapshot; 2399 gate), `ui/TeamSidebar.tsx` (286 badge icon only), `ui/team.css` (`.lock-badge` shared with P5), `ui/managerSetup.css`, tests `App.agent.mounted.test.tsx`, new `ManagerSetupCard.mounted.test.tsx`.
-- **P4 — Bot shapes (item 4).** Files: `blob/look/forms.ts` (13, 208-274), `blob/look/index.ts` (26-29, 48-69, 96-98, 127-130), `blob/look/bot.ts` (10, 117-124), `ui/LookEditor.tsx` (76-80, 103, 113-144), `blob/look/look.test.ts`, `blob/companionSnap.ts` left alone, `preview/main.tsx` (30-31), `THIRD_PARTY_NOTICES.md`, `DESIGN.md`. No overlap with P1-P3.
+- **P4 — Bot shapes (item 4).** Files: `blob/look/forms.ts` (13, 208-274), `blob/look/index.ts` (26-29, 48-69, 96-98, 127-130), `blob/look/bot.ts` (10, 117-124), `ui/LookEditor.tsx` (76-80, 103, 113-144), `blob/look/look.test.ts`, `blob/companionSnap.ts` left alone, `preview/main.tsx` (30-31), `docs/legal/third-party-notices.md`, `docs/design/design-system.md`. No overlap with P1-P3.
 - **P5 — Settings Experimental tab and dividers (items 9, 11, and the item-12 toggle, item-13 lock storage wiring).** Files: `ui/SettingsSheet.tsx` (44-57, 512-600), `ui/settings.css` (26-28), `ui/settingsIndex.ts` (5, 8, 49-50 + new `EXPERIMENTS` entries), `ui/settingsIndex.test.ts`, `ui/botWizard.css` (25), `ui/experiments.ts`. `SettingsSheet.tsx` only.
 - **P6 — Bot lock (item 13).** Files: new `ui/botLock.ts`, `ui/TeamSidebar.tsx` (menu 143-174, avatar 284-287), `ui/team.css` (`.lock-badge`), `App.tsx` (actions + guards at 1512/2092/2122), `ui/BlobSettings.tsx` / `ui/BlobPage.tsx` (read-only), tests `TeamSidebar.keyboard.mounted.test.tsx`, `BotSettings` mounted tests. Shares `TeamSidebar.tsx` with P2/P3 and `team.css` with P3.
 - **P7 — Usage dialog and unknown (items 1, 14).** Files: `ui/App.tsx` (2920-2956), `ui/usagePresentation.ts` (4), `ui/usagePresentation.test.ts` (8,11), `ui/styles.css` (60-75), `ui/bitbots.css` (544-548, 594-595). `App.tsx` different region from P1-P3.

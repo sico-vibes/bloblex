@@ -4,7 +4,7 @@
 > **Status:** historical
 > **Last updated:** 2026-10-18
 
-Lane: OpenCode `deepseek-v4.1-flash` (high), its own worktree. All code in this wave is yours (AGENTS.md, 18 October amendment). **Never run `git commit`.** Keep context small. Read the section headings of `AGENTS.md`, then `docs/history/fix-37/g3-report.md` (the last selection fix) and the FIX34 A3/A4 notes in `SESSION_HANDOFF.md` (empty chats are not saved).
+Lane: OpenCode `deepseek-v4.1-flash` (high), its own worktree. All code in this wave is yours (AGENTS.md, 18 October amendment). **Never run `git commit`.** Keep context small. Read the section headings of `AGENTS.md`, then `docs/history/fix-37/g3-report.md` (the last selection fix) and the FIX34 A3/A4 notes in `docs/operations/session-handoff.md` (empty chats are not saved).
 
 ## What the owner sees (beta.32)
 

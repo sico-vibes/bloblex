@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 430" class="diagram-svg" role="img" aria-label="Approval flow: provider request, daemon policy, owner decision and audit">
+  <style>
+    .c { fill: var(--dg-card, #23262f); stroke: var(--dg-line, #343743); stroke-width: 1; }
+    .w { fill: var(--dg-warn-soft, #f5bd5c1a); stroke: var(--dg-warn, #f5bd5c); stroke-width: 1; }
+    .g { fill: var(--dg-ok-soft, #5ccf9c1a); stroke: var(--dg-ok, #5ccf9c); stroke-width: 1; }
+    .h { fill: var(--dg-ink, #f4f5f7); font: 600 12.5px Inter, "Segoe UI", sans-serif; }
+    .t { fill: var(--dg-ink, #f4f5f7); font: 500 11.5px Inter, "Segoe UI", sans-serif; }
+    .m { fill: var(--dg-muted, #9aa0ad); font: 400 11px Inter, "Segoe UI", sans-serif; }
+    .a { stroke: var(--dg-accent, #8d86f6); stroke-width: 1.5; fill: none; }
+    .b { stroke: var(--dg-line-strong, #4a4e5c); stroke-width: 1.2; fill: none; }
+    .d { stroke: var(--dg-line-strong, #4a4e5c); stroke-width: 1.2; fill: none; stroke-dasharray: 4 4; }
+    .l { fill: var(--dg-muted, #9aa0ad); font: 400 10.5px Inter, "Segoe UI", sans-serif; }
+  </style>
+  <rect x="18" y="24" width="234" height="86" rx="10" class="c"/>
+  <text x="34" y="49" class="h">Provider asks to act</text>
+  <text x="34" y="68" class="m">shell command, edit, network call,</text>
+  <text x="34" y="84" class="m">MCP tool, or a provider permission</text>
+  <text x="34" y="100" class="m">request over its own protocol</text>
+
+  <rect x="282" y="24" width="220" height="86" rx="10" class="c"/>
+  <text x="298" y="49" class="h">Adapter normalises</text>
+  <text x="298" y="68" class="m">category, title, detail, choices</text>
+  <text x="298" y="84" class="m">risk stays unknown unless known</text>
+  <text x="298" y="100" class="m">timeout recorded with the request</text>
+
+  <rect x="532" y="14" width="220" height="106" rx="10" class="w"/>
+  <text x="548" y="38" class="h">Daemon policy decides</text>
+  <text x="548" y="57" class="m">effective mode = bot override,</text>
+  <text x="548" y="73" class="m">else permissions.default_mode</text>
+  <text x="548" y="92" class="m">ask · auto (LOW-RISK only) ·</text>
+  <text x="548" y="108" class="m">bypass (per bot only)</text>
+
+  <rect x="782" y="24" width="200" height="86" rx="10" class="c"/>
+  <text x="798" y="49" class="h">Owner decides</text>
+  <text x="798" y="68" class="m">approval card in the window,</text>
+  <text x="798" y="84" class="m">the companion or a remote device</text>
+  <text x="798" y="100" class="m">with chat tier or higher</text>
+
+  <path d="M252 67 H282" class="a"/><path d="M502 67 H532" class="a"/><path d="M752 67 H782" class="a"/>
+  <path d="M642 120 V166" class="a"/>
+  <text x="650" y="146" class="l">decision</text>
+
+  <rect x="532" y="166" width="220" height="74" rx="10" class="g"/>
+  <text x="548" y="190" class="h">Answer the provider</text>
+  <text x="548" y="209" class="m">allow once · allow for this session</text>
+  <text x="548" y="225" class="m">deny · cancel the turn</text>
+
+  <rect x="782" y="166" width="200" height="74" rx="10" class="c"/>
+  <text x="798" y="190" class="h">Audit</text>
+  <text x="798" y="209" class="m">permission.resolved</text>
+  <text x="798" y="225" class="m">resolved_by and timestamp</text>
+
+  <rect x="282" y="166" width="220" height="74" rx="10" class="c"/>
+  <text x="298" y="190" class="h">Automatic paths</text>
+  <text x="298" y="209" class="m">permission.auto_resolved</text>
+  <text x="298" y="225" class="m">permission.bypass_active</text>
+
+  <path d="M752 203 H782" class="b"/><path d="M532 203 H502" class="b"/>
+  <path d="M282 203 H252" class="b"/>
+  <text x="505" y="193" class="l">recorded</text>
+
+  <rect x="18" y="270" width="964" height="64" rx="10" class="c"/>
+  <text x="34" y="294" class="h">The rails that never move</text>
+  <text x="34" y="313" class="m">The global default is ask or auto, never bypass. Ask is the default. Every automatic decision is recorded. Pause all agents, cancel and the tray controls override any mode.</text>
+  <text x="34" y="328" class="m">A bypass bot is marked in the sidebar, the header, the companion and its page. The classifier fails closed: anything it cannot classify is asked.</text>
+
+  <rect x="18" y="352" width="964" height="58" rx="10" class="c"/>
+  <text x="34" y="376" class="h">Where the modes live</text>
+  <text x="34" y="395" class="m">permission modes: settings permissions.default_mode (ask or auto) and each bot's approvalMode (ask, auto, bypass, or null to inherit).</text>
+</svg>

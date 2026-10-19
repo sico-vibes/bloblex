@@ -29,6 +29,12 @@ export async function stagePromptAttachment(bytes: Uint8Array): Promise<string> 
   return invoke<string>('stage_prompt_attachment', bytes)
 }
 
+/** Reads PNG bytes from the native clipboard after a user paste gesture. */
+export async function readClipboardImage(): Promise<Uint8Array> {
+  if (!inDesktop) throw new Error('Clipboard images are available only in the desktop app.')
+  return new Uint8Array(await invoke<ArrayBuffer>('clipboard_image'))
+}
+
 export async function openProjectFolder(): Promise<string | null> {
   if (!inDesktop) return null
   return invoke<string | null>('select_project_folder')
@@ -169,6 +175,18 @@ export type RuntimeTerminalResult = { launched: boolean; terminal: 'wt' | 'power
 export async function runtimeTerminal(provider: RuntimeTerminalProvider, action: RuntimeTerminalAction): Promise<RuntimeTerminalResult> {
   if (!inDesktop) throw new Error('Sign-in terminals are available only in the desktop app.')
   return invoke<RuntimeTerminalResult>('runtime_terminal', { provider, action })
+}
+
+export type HarnessUpdateResult = { provider: string; version: string }
+
+export async function harnessLatestVersion(provider: string): Promise<string> {
+  if (!inDesktop) throw new Error('Harness updates are available only in the desktop app.')
+  return invoke<string>('harness_latest_version', { provider })
+}
+
+export async function harnessUpdate(provider: string, currentVersion: string): Promise<HarnessUpdateResult> {
+  if (!inDesktop) throw new Error('Harness updates are available only in the desktop app.')
+  return invoke<HarnessUpdateResult>('harness_update', { provider, currentVersion })
 }
 
 export async function showMainWindow(sessionId?: string | null): Promise<void> {

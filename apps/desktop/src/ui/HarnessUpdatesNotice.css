@@ -1,0 +1,79 @@
+.harness-updates-group .harness-updates-note {
+  margin: 0;
+  padding: 10px 12px 8px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.harness-update-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 7px 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.harness-update-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.harness-update-copy strong {
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.harness-update-copy small {
+  color: var(--text-3);
+  font: 10px/1.4 var(--font-mono, 'DM Mono', monospace);
+}
+
+.harness-update-row .secondary-button {
+  min-width: 64px;
+}
+
+.harness-update-row.has-error {
+  grid-template-rows: auto auto;
+}
+
+.harness-update-error,
+.harness-update-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--danger, #d67878);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.harness-update-error {
+  grid-column: 2 / -1;
+  padding: 0 0 5px;
+}
+
+.harness-update-success {
+  margin: 0;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--text-2);
+}
+
+.harness-update-success svg {
+  flex: 0 0 auto;
+  color: var(--success, #74b89b);
+}
+
+@media (max-width: 430px) {
+  .harness-update-row {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .harness-update-row > button {
+    grid-column: 2;
+    justify-self: start;
+  }
+}

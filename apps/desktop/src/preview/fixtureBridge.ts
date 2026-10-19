@@ -117,7 +117,9 @@ let sessions: Session[] = [
     messages: [
       { id: 'm1', role: 'user', content: 'Can you make the invoice parser tests pass?', createdAt: minutesAgo(9) },
       { id: 'm2', role: 'assistant', content: 'Sure. I found two failing cases in **tests/invoice.test.ts**: the currency field is parsed before the locale is known, and totals use floats.\n\nI will switch totals to integer minor units and parse the locale first.', createdAt: minutesAgo(8) },
-      { id: 'm3', role: 'assistant', content: 'Patched `parseInvoice` and the fixture loader. Running the suite now.', createdAt: minutesAgo(3) },
+      { id: 'm3', role: 'assistant', content: fixturePreset() === 'message-links'
+        ? 'Here are the projects I found:\n\n| Project | Stars | Licence | What it gives you |\n| --- | ---: | --- | --- |\n| [dicebear/dicebear](https://github.com/dicebear/dicebear) | 9.9k | MIT | 61 styles for avatars and characters |\n| [Alain00/blobatar](https://github.com/Alain00/blobatar) | 1.5k | MIT | Parametric blob illustrations |\n\nMore details: https://github.com/hardbeat920/monocode.'
+        : 'Patched `parseInvoice` and the fixture loader. Running the suite now.', createdAt: minutesAgo(3) },
     ],
     tools: [{ id: 't1', title: 'npm test', kind: 'command', state: 'running', command: 'npm test -- invoice', sequence: 4 }],
   },
@@ -271,7 +273,9 @@ function currentSnapshot(): Snapshot {
     runtimes,
     agents: search.has('empty') ? [] : agents.map((agent) => ({ ...agent, customArgs: [...agent.customArgs], customEnv: { ...agent.customEnv } })),
     sessions: sessions.filter((session) => !session.archived).map((session) => ({ ...session })),
-    permissions: search.has('approval')
+    permissions: fixturePreset() === 'message-links'
+      ? []
+      : search.has('approval')
       ? [{ id: 'perm-1', sessionId: 'session-codex', runtimeId: 'runtime-codex', status: 'pending', title: 'Run shell command', command: 'npm test -- invoice', choices: ['allow_once', 'allow_session', 'deny'] }]
       : [...(fixtureProposalPending ? [teamProposal] : []), ...(sessions.some((session) => session.id === teamMainId && session.state === 'waiting_permission') ? [teamQuestion] : [])],
     projects: projects.map((project) => ({ ...project })),
@@ -1106,6 +1110,11 @@ export async function stagePromptAttachment(bytes: Uint8Array) {
   stagedAttachmentSerial += 1
   return `C:/preview/attachments/staged-${stagedAttachmentSerial}.png`
 }
+export async function readClipboardImage() {
+  const response = await fetch('/src/assets/bloblex-128.png')
+  if (!response.ok) throw new Error('The preview image is unavailable.')
+  return new Uint8Array(await response.arrayBuffer())
+}
 export async function selectMarkdownExportPath() { return 'preview-markdown-token' }
 export async function writeMarkdownExport(_selectionToken: string, _text: string) {}
 export async function selectBlobExportPath(_name: string) { return 'preview-blob-export-token' }
@@ -1161,6 +1170,16 @@ export async function revealInExplorer() {}
 export async function resolveProjectFile(path: string) { return path }
 // The preview opens no window; the shape is what the sign-in sheet expects.
 export async function runtimeTerminal(_provider: string, _action: string) { return { launched: true, terminal: 'wt' as const } }
+const harnessPreviewVersions: Record<string, string> = { claude: '2.1.303', codex: '0.159.3', opencode: '1.18.34' }
+export async function harnessLatestVersion(provider: string) {
+  if (!fixturePreset()?.startsWith('harness-update')) throw new Error('No preview update is available.')
+  return harnessPreviewVersions[provider] ?? ''
+}
+export async function harnessUpdate(provider: string) {
+  if (!fixturePreset()?.startsWith('harness-update')) throw new Error('Harness updates are unavailable in this preview.')
+  if (fixturePreset() === 'harness-update-progress') await new Promise((resolve) => setTimeout(resolve, 30_000))
+  return { provider, version: harnessPreviewVersions[provider] ?? '2.1.303' }
+}
 export async function showMainWindow() {}
 export async function showMainSettings(_sessionId?: string | null, _page?: string) {}
 export async function setActiveSession() {}

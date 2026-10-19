@@ -218,6 +218,8 @@ export async function selectBackupImportPath(): Promise<string | null> { return 
 export async function selectDiagnosticsExportPath(): Promise<string | null> { return null }
 
 export async function stagePromptAttachment(bytes: Uint8Array): Promise<string> { void bytes; throw notAvailable() }
+/** The host's clipboard is not the device's; a paste gesture reads only local content. */
+export async function readClipboardImage(): Promise<Uint8Array> { throw notAvailable() }
 export async function writeDiagnosticsExport(selectionToken: string): Promise<{ path: string; sizeBytes: number; files: { name: string; sizeBytes: number }[] }> { void selectionToken; throw notAvailable() }
 export async function writeMarkdownExport(selectionToken: string, text: string): Promise<void> { void selectionToken; void text; throw notAvailable() }
 export async function readBlobImport(selectionToken: string): Promise<string> { void selectionToken; throw notAvailable() }
@@ -257,6 +259,11 @@ export type RuntimeTerminalAction = 'login' | 'install'
 export type RuntimeTerminalResult = { launched: boolean; terminal: 'wt' | 'powershell' }
 /** Sign-in terminals run on the host, never on a device. */
 export async function runtimeTerminal(provider: RuntimeTerminalProvider, action: RuntimeTerminalAction): Promise<never> { void provider; void action; throw notAvailable() }
+
+export type HarnessUpdateResult = { provider: string; version: string }
+/** Coding-agent CLI updates install on the host, never on a device. */
+export async function harnessLatestVersion(provider: string): Promise<string> { void provider; throw notAvailable() }
+export async function harnessUpdate(provider: string, currentVersion: string): Promise<HarnessUpdateResult> { void provider; void currentVersion; throw notAvailable() }
 
 // ---------------------------------------------------------------------------
 // Updates belong to the host install, not to a device.

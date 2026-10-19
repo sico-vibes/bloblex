@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Home, Info, LoaderCircle, MessageCircle, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
 import { COMPANION_CHAT_SIZE_LABELS, COMPANION_CHAT_SIZES, isCompanionChatSize, MAX_COMPANION_PEERS, type CompanionChatSize } from '../blob/companionLayout'
@@ -114,12 +114,12 @@ import { AttachButton, AttachmentTray, MAX_COMPOSER_ATTACHMENTS, MessageAttachme
 import { ConversationOutline, outlineItemsFromMessages } from './ConversationOutline'
 import { SlashCommandChip, SlashMenu } from './SlashMenu'
 import { COMPANION_SLASH_ACTIONS, commandMessage, leadingCommand, requestExecutionPicker, slashItems, slashQuery, type SlashCommand, type SlashItem, type SlashSkill } from './slashCommands'
-import { SafeMarkdown } from './SafeMarkdown'
+import { SafeMarkdown, SafeMarkdownInline } from './SafeMarkdown'
 import { parseUnifiedDiff } from './diffParser'
 import type { QuickSwitcherItem } from './quickSwitcherModel'
 import { entityNoun, useEntityNoun } from './vocabulary'
 import { themeStyle } from '../blob/bitbots'
-import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeBlobExport, writeMarkdownExport, currentCompanionMonitor } from '../tauri'
+import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, readClipboardImage, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeBlobExport, writeMarkdownExport, currentCompanionMonitor } from '../tauri'
 
 type AppliedModelState = { sessionId: string; model: string | null; hasSnapshot: boolean; loading: boolean }
 type MessageMenuTarget = { x: number; y: number; sessionId: string; messageId: string; text: string; latest: boolean; references: NonNullable<ChatMessage['references']>; attachments: Array<{ name: string; path: string }>; replyTo: ReplyTarget | null }
@@ -285,6 +285,8 @@ export function App() {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const attachmentsRef = useRef<ComposerAttachment[]>([])
   attachmentsRef.current = attachments
+  const [clipboardReadPending, setClipboardReadPending] = useState(false)
+  const clipboardReadGeneration = useRef(0)
   const [composerDropActive, setComposerDropActive] = useState(false)
   const [dictationPartial, setDictationPartial] = useState('')
   const composerTypingRef = useRef(false)
@@ -558,6 +560,8 @@ export function App() {
       ?? sessions.find((session) => session.id === activeSessionId && (!selectedRuntime || session.runtimeId === selectedRuntime.id))
       ?? sessions.filter((session) => session.runtimeId === selectedRuntime?.id && !isSideSession(session)).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
       ?? null)
+  const selectedSessionIdRef = useRef<string | null>(selectedSession?.id ?? null)
+  selectedSessionIdRef.current = selectedSession?.id ?? null
   detailsSessionIdRef.current = selectedSession?.id ?? null
   // Remember every conversation's blob, so a removed id can still be traced to its owner.
   for (const session of sessions) sessionOwnersRef.current.set(session.id, session.agentId ?? null)
@@ -1292,9 +1296,12 @@ export function App() {
     if (!agent) return
     setSelectedAgentId(agent.id)
     setSelectedRuntimeId(agent.runtimeId)
+    const linkPreviewSession = previewMode && new URLSearchParams(location.search).get('preset') === 'message-links'
+      ? (snapshot.sessions ?? []).find((session) => session.id === 'session-codex')
+      : undefined
     const storedSession = (snapshot.sessions ?? []).find((session) => session.id === activeSessionIdRef.current)
     const storedOk = !!storedSession && (storedSession.agentId === agent.id || ((storedSession.agentId == null) && storedSession.runtimeId === agent.runtimeId))
-    const nextSession = storedOk ? storedSession : agentSessions(snapshot.sessions ?? [], agent.id)[0]
+    const nextSession = linkPreviewSession ?? (storedOk ? storedSession : agentSessions(snapshot.sessions ?? [], agent.id)[0])
     setSelectedSessionId(nextSession?.id ?? null)
   }, [snapshot])
 
@@ -1810,7 +1817,7 @@ export function App() {
     // message stored exactly as typed.
     const sentCommand = slashCommand ?? leadingCommand(text, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' })
     const outbound = sentCommand && slashCommand ? commandMessage(sentCommand, text) : text
-    if ((!outbound && ready.length === 0) || attachments.some((item) => item.status === 'staging') || !selectedSession || !runtimeUsable(selectedRuntime)) return
+    if ((!outbound && ready.length === 0) || clipboardReadPending || attachments.some((item) => item.status === 'staging') || !selectedSession || !runtimeUsable(selectedRuntime)) return
     // The first message of a locally drafted conversation is what creates it: the
     // daemon stores the row then (and titles it from this text).
     let target = selectedSession
@@ -1887,7 +1894,52 @@ export function App() {
       })
     }
   }
-  useEffect(() => { clearAttachments(); replyTargetRef.current = null; setReplyTarget(null); messageMenuAnchor.current = null; setMessageMenu(null); setSlash(null); setSlashCommand(null) }, [selectedSession?.id])
+  const handleComposerPaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    if (!imagesSupported) return
+    const directFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'))
+    const itemFiles = Array.from(event.clipboardData.items ?? [])
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+    const files = directFiles.length ? directFiles : itemFiles
+    if (files.length) {
+      event.preventDefault()
+      addAttachments(files)
+      return
+    }
+    // Text pastes belong to the textarea. WebViews often report screenshot
+    // pastes as an empty event, so read the image from the native clipboard.
+    if (event.clipboardData.getData?.('text/plain')) return
+    event.preventDefault()
+    const generation = ++clipboardReadGeneration.current
+    const sessionId = selectedSessionIdRef.current
+    setClipboardReadPending(true)
+    void readClipboardImage()
+      .then((bytes) => {
+        if (generation !== clipboardReadGeneration.current || selectedSessionIdRef.current !== sessionId) return
+        const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        addAttachments([new File([bytes], `Pasted image ${stamp}.png`, { type: 'image/png' })])
+      })
+      .catch((reason) => {
+        if (generation !== clipboardReadGeneration.current || selectedSessionIdRef.current !== sessionId) return
+        const message = messageOf(reason)
+        if (message !== 'The clipboard does not contain a readable image.') setError(message)
+      })
+      .finally(() => {
+        if (generation === clipboardReadGeneration.current) setClipboardReadPending(false)
+      })
+  }
+  useEffect(() => {
+    clipboardReadGeneration.current += 1
+    setClipboardReadPending(false)
+    clearAttachments()
+    replyTargetRef.current = null
+    setReplyTarget(null)
+    messageMenuAnchor.current = null
+    setMessageMenu(null)
+    setSlash(null)
+    setSlashCommand(null)
+  }, [selectedSession?.id])
 
   const cancelTurn = async (session: Session | null = selectedSession) => {
     if (!session) return
@@ -2539,11 +2591,12 @@ export function App() {
             <div data-tour="composer" className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
               {replyTarget && <ReplyContextStrip target={replyTarget} onCancel={() => { replyTargetRef.current = null; setReplyTarget(null) }} />}
               <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
+              {clipboardReadPending && <p className="clipboard-paste-status" role="status">Preparing pasted image…</p>}
               {slashCommand && <SlashCommandChip command={slashCommand} onRemove={() => setSlashCommand(null)} />}
               {slash && slashCandidates.length > 0 && <SlashMenu items={slashCandidates} activeIndex={slash.index} onPick={pickSlash} onHover={(index) => setSlash((current) => current ? { ...current, index } : current)} />}
               {hashRef && !mention && <ConversationPicker sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent?.id} query={hashRef.query} activeIndex={hashRef.index} onPick={pickConversation} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
               {mention && <MentionPicker agents={agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden)} query={mention.query} activeIndex={mention.index} onPick={pickMention} onHover={(index) => setMention((current) => current ? { ...current, index } : current)} />}
-              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={(event) => { if (!imagesSupported) return; const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/')); if (!files.length) return; event.preventDefault(); addAttachments(files) }} onKeyDown={(event) => {
+              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={handleComposerPaste} onKeyDown={(event) => {
                 if (event.key === 'Backspace' && slashCommand && !composer) { event.preventDefault(); setSlashCommand(null); return }
                 if (slash && slashCandidates.length) {
                   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSlash({ ...slash, index: (slash.index + (event.key === 'ArrowDown' ? 1 : slashCandidates.length - 1)) % slashCandidates.length }); return }
@@ -2573,7 +2626,7 @@ export function App() {
                   <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} contextModel={selectedSession.contextModel} contextEstimated={selectedSession.contextEstimated} model={contextModel} isNewConversation={(selectedSession.messages ?? []).length === 0} quota={sessionQuota} onOpenUsage={() => void showUsage()} />
                   {platform.nativeSpeech && speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
                   {turnLive && <button className="send-button cancel" onClick={() => void cancelTurn()} disabled={busy} aria-label="Cancel turn" title="Stop"><Square size={12} fill="currentColor" /></button>}
-                  <button className="send-button" onClick={(event) => void sendPrompt(undefined, event.ctrlKey || event.metaKey)} disabled={connection !== 'connected' || busy || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer now' : 'Queue message' : 'Send message'} title={connection !== 'connected' ? 'Waiting for the connection' : sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer this turn now. Ctrl+Enter queues instead.' : 'Add to the queue. Ctrl+Enter sends the other way where supported.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : <ArrowUp size={17} />}</button>
+                  <button className="send-button" onClick={(event) => void sendPrompt(undefined, event.ctrlKey || event.metaKey)} disabled={connection !== 'connected' || busy || clipboardReadPending || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer now' : 'Queue message' : 'Send message'} title={clipboardReadPending ? 'Preparing the pasted image' : connection !== 'connected' ? 'Waiting for the connection' : sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer this turn now. Ctrl+Enter queues instead.' : 'Add to the queue. Ctrl+Enter sends the other way where supported.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : <ArrowUp size={17} />}</button>
                 </div>
               </div>
             </div>
@@ -2741,7 +2794,7 @@ function UserMessageText({ text, agents, references, onOpenReference }: { text: 
     ? <span key={index} className="mention" style={{ ['--mention' as string]: agentColorHex(segment.agent.color) }} title={`@${segment.agent.name}`}>
         <BlobCanvas decorative color={agentColorHex(segment.agent.color)} size={18} mood="idle" look={agentLook(segment.agent)} label={segment.agent.name} />{segment.agent.name}
       </span>
-    : <span key={index}>{segment.text}</span>)}</p>
+    : <span key={index}><SafeMarkdownInline text={segment.text} onOpenLink={(url) => void openSafeLink(url)} /></span>)}</p>
 }
 
 function MessageItem({ id, message, accent, agentName, showAvatar, mood, agents = [], onOpenReference, sourceSessionId, sourceMessages = [], onJumpToMessage, onContextMenu, onToggleReaction }: { id: string; message: Record<string, unknown>; accent: string; agentName: string; showAvatar: boolean; mood: BlobMood; agents?: readonly Agent[]; onOpenReference?: (sessionId: string) => void; sourceSessionId: string; sourceMessages?: Array<Record<string, unknown>>; onJumpToMessage: (sessionId: string, messageId: string) => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onToggleReaction?: (emoji: string) => void }) {
@@ -2804,6 +2857,7 @@ function storageFlag(key: string) {
 }
 
 function readStoredAgentId() {
+  if (previewMode && new URLSearchParams(location.search).get('preset') === 'message-links') return 'agent-codex'
   try { return localStorage.getItem('bloblex.selectedAgentId') } catch { return null }
 }
 

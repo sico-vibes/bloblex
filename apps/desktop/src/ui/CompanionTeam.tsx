@@ -14,6 +14,8 @@ import { buildConversationItems } from './conversation'
 import { MessageActions, MessageReactionBadges, ReplyContextStrip } from './MessageActions'
 import { conversationPreview, groupAgentsByProject, mainSessionFor, sessionIsBusy, sideSessionsFor, sideTitle, splitMentions } from './teamSelectors'
 import { useEntityNoun } from './vocabulary'
+import { SafeMarkdown, SafeMarkdownInline } from './SafeMarkdown'
+import { openSafeLink } from './openSafeLink'
 
 export type BlobState = 'waiting' | 'working' | 'offline' | 'idle'
 
@@ -249,7 +251,7 @@ export function teamLine(agent: Agent | null, agents: readonly Agent[], sessions
 export function CompanionMentionText({ text, agents }: { text: string; agents: readonly Agent[] }) {
   return <>{splitMentions(text, agents).map((segment, index) => segment.agent
     ? <span key={index} className="companion-mention" style={{ ['--mention' as string]: agentColorHex(segment.agent.color) }}><Face agent={segment.agent} size={14} />{segment.agent.name}</span>
-    : <span key={index}>{segment.text}</span>)}</>
+    : <span key={index}><SafeMarkdownInline text={segment.text} onOpenLink={(url) => void openSafeLink(url)} /></span>)}</>
 }
 
 function plain(text: string) {
@@ -318,7 +320,7 @@ export function CompanionChatItem({ message, agents, onOpenSide, onOpenAgent, on
   if (role === 'user' && meta?.kind === 'blob_message') {
     // In a conversation between two bots, the asking bot's message reads as theirs, not as yours.
     const from = agents.find((agent) => agent.id === meta.fromAgentId)
-    return <div className="chat-row peer-message"><div className="companion-peer-author">{from && <Face agent={from} size={14} />}<b style={from ? { color: agentColorHex(from.color) } : undefined}>{meta.fromName ?? from?.name ?? 'Teammate'}</b></div><div className="reply message-bubble">{plain(text)}</div></div>
+    return <div className="chat-row peer-message"><div className="companion-peer-author">{from && <Face agent={from} size={14} />}<b style={from ? { color: agentColorHex(from.color) } : undefined}>{meta.fromName ?? from?.name ?? 'Teammate'}</b></div><div className="reply message-bubble"><SafeMarkdown text={text} onOpenLink={(url) => void openSafeLink(url)} /></div></div>
   }
   if ((role === 'notice' || role === 'user') && meta?.kind === 'auto_retry') {
     return <div className="companion-context-divider" role="status"><span>{role === 'user' ? 'Continuing automatically' : plain(text)}</span></div>
@@ -333,8 +335,8 @@ export function CompanionChatItem({ message, agents, onOpenSide, onOpenAgent, on
   const reactions = Array.isArray(message.reactions) ? message.reactions as string[] : []
   const actions = (copyText: string) => <MessageActions compact text={copyText} time={clockOf(message.createdAt)} reactions={reactions} onToggleReaction={onToggleReaction && messageId ? (emoji) => onToggleReaction(messageId, emoji) : undefined} onError={() => undefined} />
   if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}{actions(text)}<div className="bubble"><CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div></div>
-  const replyText = plain(text)
-  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply message-bubble">{replyText}<MessageReactionBadges reactions={message.reactions} /></div>{actions(replyText)}</div> : null
+  const replyText = text.trim()
+  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply message-bubble"><SafeMarkdown text={replyText} onOpenLink={(url) => void openSafeLink(url)} /><MessageReactionBadges reactions={message.reactions} /></div>{actions(replyText)}</div> : null
 }
 
 /** Side conversations the focused blob took part in, newest first. */

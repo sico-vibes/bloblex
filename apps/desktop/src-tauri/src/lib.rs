@@ -26,6 +26,8 @@ use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 mod updates;
+mod harness_updates;
+mod clipboard;
 mod speech;
 mod power;
 mod migrate;
@@ -2688,6 +2690,9 @@ pub fn run() {
             set_active_runtime,
             get_active_runtime,
             runtime_terminal,
+            harness_updates::harness_latest_version,
+            harness_updates::harness_update,
+            clipboard::clipboard_image,
             toggle_companion,
             companion_visible,
             set_companion_mode,

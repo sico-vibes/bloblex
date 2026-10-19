@@ -12,8 +12,9 @@ import { SettingsSheet } from '../ui/SettingsSheet'
 import { draftFromAgent, executionFromAgent } from '../ui/agentForm'
 import type { Agent, Runtime, Session, Snapshot } from '../types'
 
+const updateNoticePreview = new URLSearchParams(location.search).get('preset')?.startsWith('harness-update') === true
 const runtimes: Runtime[] = [
-  { id: 'runtime-claude', provider: 'claude', version: '2.1.286', authState: 'authenticated', status: 'online' },
+  { id: 'runtime-claude', provider: 'claude', version: updateNoticePreview ? '2.1.302' : '2.1.286', authState: 'authenticated', status: 'online' },
   { id: 'runtime-codex', provider: 'codex', version: '0.159.3', authState: 'authenticated', status: 'online' },
   { id: 'runtime-opencode', provider: 'opencode', version: '1.18.34', authState: 'authenticated', gatewayAuthStates: { opencode: 'authenticated', 'opencode-go': 'authenticated' }, status: 'online' },
 ]

@@ -7,13 +7,13 @@ type MarkdownBlock = { kind: 'paragraph' | 'heading' | 'quote' | 'code' | 'list'
 function safeHttpUrl(value: string) {
   try {
     const url = new URL(value)
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null
+    return (url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password ? url.href : null
   } catch { return null }
 }
 
 export function tokenizeInlineMarkdown(text: string): InlineToken[] {
   const tokens: InlineToken[] = []
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|(?<![\p{L}\p{N}_])_[^_\n]+_(?![\p{L}\p{N}_])|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))/giu
+  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|(?<![\p{L}\p{N}_])_[^_\n]+_(?![\p{L}\p{N}_])|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<>"']+)/giu
   let cursor = 0
   for (const match of text.matchAll(pattern)) {
     const index = match.index ?? 0
@@ -22,7 +22,12 @@ export function tokenizeInlineMarkdown(text: string): InlineToken[] {
     if (value.startsWith('`')) tokens.push({ kind: 'code', text: value.slice(1, -1) })
     else if (value.startsWith('**') || value.startsWith('__')) tokens.push({ kind: 'strong', text: value.slice(2, -2) })
     else if (value.startsWith('*') || value.startsWith('_')) tokens.push({ kind: 'em', text: value.slice(1, -1) })
-    else {
+    else if (/^https?:\/\//i.test(value)) {
+      const { url, suffix } = trimBareUrlPunctuation(value)
+      const safeUrl = safeHttpUrl(url)
+      tokens.push(safeUrl ? { kind: 'link', text: url, url: safeUrl } : { kind: 'text', text: url })
+      if (suffix) tokens.push({ kind: 'text', text: suffix })
+    } else {
       const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(value)
       const url = link ? safeHttpUrl(link[2]!) : null
       tokens.push(url ? { kind: 'link', text: link![1]!, url } : { kind: 'text', text: value })
@@ -31,6 +36,19 @@ export function tokenizeInlineMarkdown(text: string): InlineToken[] {
   }
   if (cursor < text.length) tokens.push({ kind: 'text', text: text.slice(cursor) })
   return tokens.length ? tokens : [{ kind: 'text', text }]
+}
+
+function trimBareUrlPunctuation(value: string) {
+  let end = value.length
+  while (end > 0 && /[.,!?;:]/.test(value[end - 1]!)) end -= 1
+  for (const [opening, closing] of [['(', ')'], ['[', ']'], ['{', '}']]) {
+    while (value.slice(0, end).endsWith(closing) && countCharacter(value.slice(0, end), closing) > countCharacter(value.slice(0, end), opening)) end -= 1
+  }
+  return { url: value.slice(0, end), suffix: value.slice(end) }
+}
+
+function countCharacter(value: string, character: string) {
+  return value.split(character).length - 1
 }
 
 function isTableSeparator(line: string) {
@@ -106,7 +124,7 @@ export function SafeMarkdown({ text, onOpenLink }: { text: string; onOpenLink: (
     if (token.kind === 'code') return <code key={key}>{token.text}</code>
     if (token.kind === 'strong') return <strong key={key}>{token.text}</strong>
     if (token.kind === 'em') return <em key={key}>{token.text}</em>
-    if (token.kind === 'link') return <button key={key} type="button" className="markdown-link" onClick={() => token.url && onOpenLink(token.url)}>{token.text}</button>
+    if (token.kind === 'link') return <a key={key} className="markdown-link" href={token.url} target="_blank" rel="noopener noreferrer" onClick={(event) => { event.preventDefault(); if (token.url) onOpenLink(token.url) }}>{token.text}</a>
     return <span key={key}>{token.text}</span>
   })
   return <div className="safe-markdown">{parseMarkdownBlocks(text).map((block, index) => {
@@ -125,4 +143,15 @@ export function SafeMarkdown({ text, onOpenLink }: { text: string; onOpenLink: (
     }
     return <p key={key}>{inline(block.text ?? '', key)}</p>
   })}</div>
+}
+
+/** Inline-only Markdown for mixed text such as a chat message with @mentions. */
+export function SafeMarkdownInline({ text, onOpenLink }: { text: string; onOpenLink: (url: string) => void }) {
+  return <>{tokenizeInlineMarkdown(text).map((token, index) => {
+    if (token.kind === 'code') return <code key={index}>{token.text}</code>
+    if (token.kind === 'strong') return <strong key={index}>{token.text}</strong>
+    if (token.kind === 'em') return <em key={index}>{token.text}</em>
+    if (token.kind === 'link') return <a key={index} className="markdown-link" href={token.url} target="_blank" rel="noopener noreferrer" onClick={(event) => { event.preventDefault(); if (token.url) onOpenLink(token.url) }}>{token.text}</a>
+    return <span key={index}>{token.text}</span>
+  })}</>
 }

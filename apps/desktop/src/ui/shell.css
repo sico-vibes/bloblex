@@ -221,7 +221,7 @@
 .safe-markdown li.nested { margin-left: 17px; list-style-type: circle; }
 .safe-markdown blockquote { margin: 7px 0 10px; padding-left: 11px; color: var(--text-2); border-left: 1px solid var(--line-strong); }
 .safe-markdown blockquote p { margin: 2px 0; }
-.markdown-link { padding: 0; color: var(--text-1); border: 0; border-bottom: 1px solid var(--line-strong); background: transparent; font-size: inherit; text-align: left; }
+.markdown-link { padding: 0; color: var(--text-1); border: 0; border-bottom: 1px solid var(--line-strong); background: transparent; font-size: inherit; text-align: left; text-decoration: none; text-underline-offset: 2px; cursor: pointer; }
 .markdown-link:hover { color: var(--text-2); }
 .markdown-table-scroll { max-width: 100%; margin: 8px 0; overflow-x: auto; }
 .safe-markdown table { border-collapse: collapse; font-size: var(--fs-sm); }

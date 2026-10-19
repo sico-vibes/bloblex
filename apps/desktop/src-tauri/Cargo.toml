@@ -9,6 +9,7 @@ build = "build.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+arboard = "3.7"
 base64.workspace = true
 chrono.workspace = true
 bloblex-speech = { path = "../../../crates/bloblex-speech", features = ["native"] }

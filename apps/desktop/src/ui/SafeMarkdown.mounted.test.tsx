@@ -23,7 +23,7 @@ describe('SafeMarkdown mounted', () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
     const onOpenLink = vi.fn()
     act(() => root.render(<SafeMarkdown text="[web](https://example.invalid) [bad](javascript:alert(1))" onOpenLink={onOpenLink} />))
-    const links = [...host.querySelectorAll<HTMLButtonElement>('button.markdown-link')]
+    const links = [...host.querySelectorAll<HTMLAnchorElement>('a.markdown-link')]
     expect(links).toHaveLength(1)
     act(() => links[0]!.click())
     expect(onOpenLink).toHaveBeenCalledExactlyOnceWith('https://example.invalid/')

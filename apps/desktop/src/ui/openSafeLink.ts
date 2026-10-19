@@ -1,10 +1,18 @@
 // Opens an http(s) link in the system browser; anything else stays inert.
-import { invokeNative } from '../transport/nativeBridge'
+import { invokeNative, isNative } from '../transport/nativeBridge'
 
 export async function openSafeLink(url: string) {
+  let parsed: URL
+  try { parsed = new URL(url) } catch { return }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password) return
+  if (!isNative()) {
+    window.open(parsed.href, '_blank', 'noopener,noreferrer')
+    return
+  }
   try {
-    const parsed = new URL(url)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return
     await invokeNative('plugin:opener|open_url', { url: parsed.href })
-  } catch { /* An unavailable opener leaves the link inert. */ }
+  } catch {
+    // Keep links usable if the native opener is unavailable in a development build.
+    window.open(parsed.href, '_blank', 'noopener,noreferrer')
+  }
 }

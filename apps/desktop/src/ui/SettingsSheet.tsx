@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone, BriefcaseBusiness, FlaskConical } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
 import { usePlatform } from '../transport/platform'
-import type { Agent, Snapshot } from '../types'
+import type { Agent, Runtime, Snapshot } from '../types'
 import { labelize } from '../types'
 import { effectiveApprovalMode, parseGlobalMode, type PermissionsPolicy } from '../approvalContract'
 import { companionMonitorOptions, currentCompanionMonitor, inDesktop, permissionsPolicyGet, previewMode, rpc, setCloseToTray, setCompanionMonitor, setCompanionVisibility } from '../tauri'
@@ -30,6 +30,7 @@ import { LookPicker } from './LookPicker'
 import { RowCopy, SettingsGroup, SettingsRow } from './SettingsParts'
 import { RemoteSettings } from './RemoteSettings'
 import { DiagnosticsDialog } from './DiagnosticsDialog'
+import { HarnessUpdatesNotice } from './HarnessUpdatesNotice'
 import { LookPreview } from './LookPreview'
 import { searchSettings, type SettingsIndexEntry } from './settingsIndex'
 import { AccentPicker } from './AccentPicker'
@@ -64,6 +65,7 @@ const PREVIEW_SPEECH_MODELS: SpeechModelRow[] = [
   { id: 'parakeet-tdt-0.6b-v2-int8', label: 'Parakeet TDT v2', description: 'English only. Faster than v3 with similar accuracy. Punctuation and capitalization.', language: 'en', streaming: false, recommended: false, sizeBytes: 661_000_000 },
   { id: 'zipformer-streaming-en-20m', label: 'Zipformer Streaming EN', description: 'English only. Lightweight 20M-param model with low-latency real-time partials.', language: 'en', streaming: true, recommended: false, sizeBytes: 128_000_000 },
 ]
+const EMPTY_RUNTIMES: Runtime[] = []
 
 export function providerDisplayName(provider: string | undefined) {
   return providerBrand(provider ?? '').name || labelize(provider, 'Coding agent')
@@ -480,7 +482,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     await load()
   }
 
-  const runtimes = snapshot?.runtimes ?? []
+  const runtimes = snapshot?.runtimes ?? EMPTY_RUNTIMES
   const agents = (snapshot?.agents ?? []).filter((agent) => !agent.archived)
   const orphanAgents = agents.filter((agent) => !runtimes.some((runtime) => runtime.id === agent.runtimeId))
   const modeFor = (agent: Agent) => policy?.perAgent.find((row) => row.agentId === agent.id)?.effectiveMode ?? effectiveApprovalMode(agent) ?? defaultMode
@@ -689,6 +691,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
                 <div className="runtime-entry-body">{orphanAgents.map((agent) => <BlobLink key={agent.id} agent={agent} mode={modeFor(agent)} onOpen={() => onOpenAgent(agent.id)} />)}</div>
               </div>}
             </SettingsGroup>
+            <HarnessUpdatesNotice runtimes={runtimes} onRefresh={onRefresh} />
             <SettingsGroup title="Custom launchers">
               {profiles.map((profile, index) => <div className="settings-row" key={String(profile.id ?? index)}>
                 <span className="settings-row-copy"><strong>{String(profile.name ?? profile.provider ?? 'Launcher')}</strong><small className="mono">{String(profile.executablePath ?? 'Executable unavailable')}</small></span>

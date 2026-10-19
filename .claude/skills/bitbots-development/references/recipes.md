@@ -21,7 +21,7 @@ Last reviewed: 2026-10-19. Each recipe lists every place that must change togeth
 4. Default bot art: `defaultArtForStyle` in `apps/desktop/src/blob/art/art.ts`. Default fonts: `FONT_DEFAULTS` in `apps/desktop/src/ui/fonts.ts`.
 5. Look orb: `apps/desktop/src/ui/LookOrb.tsx` + `lookOrb.css` (orbs are theme-independent).
 6. Launch greeting rules in `apps/desktop/src/ui/LaunchIntro.tsx` if the look needs special handling.
-7. Tests: `ui/appearance.test.ts`, `ui/appearance.mounted.test.ts`, `blob/bitbots.test.ts`, `ui/SettingsSheet.appearance.mounted.test.tsx`, `ui/FirstRunOnboarding.mounted.test.tsx`, and the static-import guard `ui/themeBuild.test.ts` once FIX42 (`fix42-theme-prod`) is merged (add the new stylesheet to its list).
+7. Tests: `ui/appearance.test.ts`, `ui/appearance.mounted.test.ts`, `blob/bitbots.test.ts`, `ui/SettingsSheet.appearance.mounted.test.tsx`, `ui/FirstRunOnboarding.mounted.test.tsx`, and the static-import guard `ui/themeBuild.test.ts` (add the new stylesheet to its list).
 8. Check every screen in the preview in dark and light, and the production build (`npm run build`) or installed app.
 
 ## Add a bot art, or a hand-painted shape

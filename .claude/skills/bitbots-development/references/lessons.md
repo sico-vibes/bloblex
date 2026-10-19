@@ -27,7 +27,7 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 ## 2026-10-19 · Looks · Frost and Pop never applied in the installed app (FIX42)
 - **Symptom:** beta.35 installed: Settings showed Bitbots and a wallpaper selected, the window stayed plain dark; the browser preview looked right.
 - **Root cause:** `loadStyle` in `apps/desktop/src/blob/bitbots.ts` picked the look stylesheet with a nested ternary of three CSS-only `import()` calls. Vite's production build turned it into one `__vitePreload(..., __vite__mapDeps([7]))` whose dependency list was only the last branch (`dot.css`), so Frost and Pop loaded Dot's CSS. Proven over the WebView2 debugging port (loaded sheets: `index`, `inter`, `dot`) and in the built JS. The dev server does not rewrite preloads, so the preview hid it.
-- **Fix:** all look stylesheets are static imports in `apps/desktop/src/main.tsx`; `src/ui/themeBuild.test.ts` forbids dynamic imports of look CSS (branch `fix42-theme-prod`, `098831e`).
+- **Fix:** all look stylesheets are static imports in `apps/desktop/src/main.tsx`; `src/ui/themeBuild.test.ts` forbids dynamic imports of look CSS (`098831e`, merged in `c119f93`, shipped in v0.1.0-beta.36).
 - **Avoid:** never put several `import()` calls in one conditional expression; give each its own arrow function (as `ui/fonts.ts` does). Check bundling-sensitive changes in `npm run build` output or the installed app, not only the preview.
 
 ## 2026-10-19 · Process · A lane's root cause can be wrong while its fix works

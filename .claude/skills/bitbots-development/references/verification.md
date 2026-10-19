@@ -22,6 +22,8 @@ cargo test -p bloblex-desktop --lib
 - Run the Vitest suite on a quiet machine. When lanes or cargo builds run at the same time, mounted tests time out in large numbers (57 and 100 false failures were seen); re-run the failing files alone, or use `npx vitest run --maxWorkers=4`, before believing a failure.
 - When filtering output in PowerShell, `Select-String` is case-insensitive: a pattern for `FAILED` also matches test names containing "failed" and can push the summary line out of view. Use `-CaseSensitive`.
 - The desktop crate cannot build from a path containing an apostrophe (the main checkout `D:\Basem's\...`): the Windows resource compiler mangles the icon path. Use a worktree or clone at `D:\fxNN`.
+- In a fresh worktree or clone, run `npm run build` in `apps/desktop` before `cargo test -p bloblex-desktop`: `tauri::generate_context!()` fails with "The `frontendDist` configuration is set to `../dist` but this path doesn't exist". Afterwards revert the line-ending churn in `apps/desktop/src-tauri/gen/schemas/` (`git checkout --`), or the release script refuses the unclean checkout (beta.36).
+- From the root, run `npm test` (or `npx vitest` inside `apps/desktop`), never a bare `npx vitest run` at the root: it collects the test files of every worktree under `.claude/worktrees` and reports thousands of false failures (beta.36: 4,079 failed files).
 - The Codex sandbox cannot let Vite write its temp config through a `node_modules` junction (`EPERM`): add `--configLoader runner` to `vite build` and `vitest run` there, or run the gate yourself.
 
 ## The browser preview

@@ -2,12 +2,16 @@ import { useId, useState, type KeyboardEvent } from 'react'
 import { Dices, RotateCcw, Shuffle } from 'lucide-react'
 import { invokeNative } from '../transport/nativeBridge'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
-import { useBitbots } from '../blob/bitbots'
+import { useThemeStyle } from '../blob/bitbots'
 import { BotEditor } from './BotEditor'
 import {
   BLOB_SHAPES, SHAPE_LABELS, controlsFor, randomBot, resolveBot, shuffleLook, traitPosition, withTrait,
   type BlobLook, type BlobShape, type LookControl,
 } from '../blob/look'
+import {
+  ART_LABELS, BLOB_ARTS, PAINTED_LABELS, PAINTED_SHAPES, ROBOT_ARTS, defaultArtForStyle, resolveArt, resolvePaint,
+  type BotArt, type PaintedShape,
+} from '../blob/art/art'
 import { inDesktop } from '../tauri'
 import { SwatchGrid } from './SwatchGrid'
 import { AGENT_SWATCHES, swatchForColor } from './agentColor'
@@ -36,9 +40,14 @@ function openCredit() {
   void invokeNative('plugin:opener|open_url', { url: CREDIT_URL }).catch(() => undefined)
 }
 
+function nextColor(color: string) {
+  const choices = AGENT_SWATCHES.filter((swatch) => swatch.key !== swatchForColor(color))
+  return choices[Math.floor(Math.random() * choices.length)].key
+}
+
 /**
- * The blob's look: a live stage that previews moods, then shape, fine-tuning
- * and colour. Every change is a draft until the page is saved.
+ * A bot's look: an art style, a live stage that previews moods, and the
+ * controls the chosen art reads. Every change is a draft until the page saves.
  */
 export function LookEditor({ look, color, colorHex, name, locked = false, onLookChange, onColorChange }: {
   look: BlobLook
@@ -52,19 +61,22 @@ export function LookEditor({ look, color, colorHex, name, locked = false, onLook
   onColorChange: (color: string) => void
 }) {
   const [tab, setTab] = useState<LookTab>('style')
-  const bitbots = useBitbots()
   const [mood, setMood] = useState<BlobMood>('idle')
+  const style = useThemeStyle() as string
+  const art = resolveArt(look, style)
   const tabsId = useId()
-  const visibleKeys = new Set(controlsFor(look.shape).flatMap((group) => group.controls.flatMap(keysOf)))
-  const pinned = Object.keys(look.traits ?? {}).filter((key) => visibleKeys.has(key)).length
+
+  const chooseArt = (next: BotArt | undefined) => {
+    if (next) { onLookChange({ ...look, art: next }); return }
+    const { art: _art, ...rest } = look
+    onLookChange(rest)
+  }
+
   const surprise = () => {
-    if (bitbots) {
-      onLookChange({ ...look, bot: randomBot(resolveBot(look, colorHex).shape) })
-      return
-    }
-    const choices = AGENT_SWATCHES.filter((swatch) => swatch.key !== swatchForColor(color))
-    const nextColor = choices[Math.floor(Math.random() * choices.length)].key
-    onLookChange(shuffleLook(look), nextColor)
+    if (art === 'robot') { onLookChange({ ...look, bot: randomBot(resolveBot(look, colorHex).shape) }); return }
+    if (art === 'painted') { onLookChange(shuffleLook(look), nextColor(color)); return }
+    if (art === 'blob') { onLookChange(shuffleLook(look), nextColor(color)); return }
+    onLookChange(look, nextColor(color))
   }
 
   const onTabKey = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -86,42 +98,145 @@ export function LookEditor({ look, color, colorHex, name, locked = false, onLook
         {PREVIEW_MOODS.map((item) => <button key={item.mood} type="button" role="radio" aria-checked={mood === item.mood} disabled={locked} className={mood === item.mood ? 'active' : undefined} onClick={() => setMood(item.mood)}>{item.label}</button>)}
       </div>
       <div className="look-stage-actions">
-        {bitbots
-          ? <button type="button" className="ghost-button small" disabled={locked} onClick={surprise} title="New colours, same outline"><Dices size={13} />Surprise me</button>
-          : <>
-            <button type="button" className="ghost-button small" disabled={locked} onClick={() => onLookChange(shuffleLook(look))} title="New eyes, same shape"><Shuffle size={13} />Shuffle</button>
-            <button type="button" className="ghost-button small" disabled={locked} onClick={surprise} title="New eyes and colour, same shape"><Dices size={13} />Surprise me</button>
-          </>}
+        {(art === 'blob' || art === 'painted') && <button type="button" className="ghost-button small" disabled={locked} onClick={() => onLookChange(shuffleLook(look))} title={art === 'painted' ? 'New shape, same colour' : 'New eyes, same shape'}><Shuffle size={13} />{art === 'painted' ? 'New shape' : 'Shuffle'}</button>}
+        <button type="button" className="ghost-button small" disabled={locked} onClick={surprise} title={art === 'painted' ? 'New shape and colour' : 'New colour'}><Dices size={13} />Surprise me</button>
       </div>
     </div>
 
-    {bitbots ? <div className="look-panel"><BotEditor look={look} color={color} colorHex={colorHex} locked={locked} onLookChange={onLookChange} onColorChange={onColorChange} /></div> : <div className="look-panel">
-      <div className="look-tabs" role="tablist" aria-label="Look">
-        {TABS.map((item, index) => <button
-          key={item.id}
-          id={`${tabsId}-${item.id}`}
-          type="button"
-          role="tab"
-          aria-selected={tab === item.id}
-          aria-controls={`${tabsId}-${item.id}-panel`}
-          tabIndex={tab === item.id ? 0 : -1}
-          disabled={locked}
-          className={tab === item.id ? 'active' : undefined}
-          onClick={() => setTab(item.id)}
-          onKeyDown={(event) => onTabKey(event, index)}
-        >{item.label}{item.id === 'tune' && pinned > 0 && <span className="look-tab-count" aria-label={`${pinned} adjusted`}>{pinned}</span>}</button>)}
-      </div>
+    <div className="look-panel">
+      <StyleControl art={look.art} style={style} look={look} colorHex={colorHex} locked={locked} onChange={chooseArt} />
 
-      <div className="look-tab-panel" role="tabpanel" id={`${tabsId}-${tab}-panel`} aria-labelledby={`${tabsId}-${tab}`}>
-        {tab === 'style' && <>
-          <ShapeGrid look={look} colorHex={colorHex} locked={locked} onChange={(shape) => onLookChange({ ...look, shape })} />
-          <p className="look-credit">Shapes adapted from <button type="button" className="link-button" onClick={openCredit}>blobatar</button> by Alain · MIT</p>
-          <div className="look-colour"><span className="look-section-label">Colour</span><SwatchGrid value={color} onChange={onColorChange} disabled={locked} /></div>
-        </>}
-        {tab === 'tune' && <TuneControls look={look} locked={locked} onChange={onLookChange} />}
-      </div>
+      {art === 'robot'
+        ? <BotEditor look={look} color={color} colorHex={colorHex} locked={locked} onLookChange={onLookChange} onColorChange={onColorChange} />
+        : art === 'painted'
+          ? <PaintPanel look={look} color={color} colorHex={colorHex} locked={locked} onLookChange={onLookChange} onColorChange={onColorChange} />
+          : art === 'blob'
+            ? <div>
+              <div className="look-tabs" role="tablist" aria-label="Look">
+                {TABS.map((item, index) => <button
+                  key={item.id}
+                  id={`${tabsId}-${item.id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === item.id}
+                  aria-controls={`${tabsId}-${item.id}-panel`}
+                  tabIndex={tab === item.id ? 0 : -1}
+                  disabled={locked}
+                  className={tab === item.id ? 'active' : undefined}
+                  onClick={() => setTab(item.id)}
+                  onKeyDown={(event) => onTabKey(event, index)}
+                >{item.label}{item.id === 'tune' && pinnedCount(look) > 0 && <span className="look-tab-count" aria-label={`${pinnedCount(look)} adjusted`}>{pinnedCount(look)}</span>}</button>)}
+              </div>
 
-    </div>}
+              <div className="look-tab-panel" role="tabpanel" id={`${tabsId}-${tab}-panel`} aria-labelledby={`${tabsId}-${tab}`}>
+                {tab === 'style' && <>
+                  <ShapeGrid look={look} colorHex={colorHex} locked={locked} onChange={(shape) => onLookChange({ ...look, shape })} />
+                  <p className="look-credit">Shapes adapted from <button type="button" className="link-button" onClick={openCredit}>blobatar</button> by Alain · MIT</p>
+                  <div className="look-colour"><span className="look-section-label">Colour</span><SwatchGrid value={color} onChange={onColorChange} disabled={locked} /></div>
+                </>}
+                {tab === 'tune' && <TuneControls look={look} locked={locked} onChange={onLookChange} />}
+              </div>
+            </div>
+            : <ColourPanel color={color} locked={locked} onColorChange={onColorChange} />}
+    </div>
+  </div>
+}
+
+function pinnedCount(look: BlobLook) {
+  const visibleKeys = new Set(controlsFor(look.shape).flatMap((group) => group.controls.flatMap(keysOf)))
+  return Object.keys(look.traits ?? {}).filter((key) => visibleKeys.has(key)).length
+}
+
+function StyleControl({ art, style, look, colorHex, locked, onChange }: {
+  art: BotArt | undefined
+  style: string
+  look: BlobLook
+  colorHex: string
+  locked: boolean
+  onChange: (art: BotArt | undefined) => void
+}) {
+  const option = (id: BotArt | undefined, label: string) => {
+    const selected = id ? art === id : !art
+    return <button
+      key={id ?? 'auto'}
+      type="button"
+      role="radio"
+      data-style-option={id ?? 'auto'}
+      aria-checked={selected}
+      tabIndex={selected ? 0 : -1}
+      disabled={locked}
+      className={`look-style-option${selected ? ' selected' : ''}`}
+      onClick={() => onChange(id)}
+    >
+      <BlobCanvas decorative color={colorHex} size={40} art={id ?? defaultArtForStyle(style)} look={look} label={label} />
+      <span>{label}</span>
+    </button>
+  }
+  return <div className="look-style" role="radiogroup" aria-label="Style">
+    {option(undefined, 'Automatic')}
+    <div className="look-style-group">
+      <span className="look-style-heading">Robots</span>
+      <div className="look-style-grid">{ROBOT_ARTS.map((id) => option(id, ART_LABELS[id]))}</div>
+    </div>
+    <div className="look-style-group">
+      <span className="look-style-heading">Blobs</span>
+      <div className="look-style-grid">{BLOB_ARTS.map((id) => option(id, ART_LABELS[id]))}</div>
+    </div>
+  </div>
+}
+
+function PaintPanel({ look, color, colorHex, locked, onLookChange, onColorChange }: {
+  look: BlobLook
+  color: string
+  colorHex: string
+  locked: boolean
+  onLookChange: (look: BlobLook, color?: string) => void
+  onColorChange: (color: string) => void
+}) {
+  const paint = resolvePaint(look)
+  return <div className="look-tab-panel">
+    <PaintGrid look={look} paint={paint} colorHex={colorHex} locked={locked} onChange={(shape) => onLookChange({ ...look, art: 'painted', paint: shape })} />
+    <div className="look-colour"><span className="look-section-label">Colour</span><SwatchGrid value={color} onChange={onColorChange} disabled={locked} /></div>
+  </div>
+}
+
+function PaintGrid({ look, paint, colorHex, locked, onChange }: { look: BlobLook; paint: PaintedShape; colorHex: string; locked: boolean; onChange: (shape: PaintedShape) => void }) {
+  const move = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const columns = 4
+    const delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowDown' ? columns : event.key === 'ArrowUp' ? -columns : 0
+    if (!delta) return
+    event.preventDefault()
+    const next = PAINTED_SHAPES[(index + delta + PAINTED_SHAPES.length) % PAINTED_SHAPES.length]
+    onChange(next)
+    const grid = event.currentTarget.parentElement
+    window.requestAnimationFrame(() => grid?.querySelector<HTMLButtonElement>(`[data-paint="${next}"]`)?.focus())
+  }
+  return <div className="look-shapes" role="radiogroup" aria-label="Painted shape">
+    {PAINTED_SHAPES.map((shape, index) => {
+      const selected = paint === shape
+      return <button
+        key={shape}
+        type="button"
+        role="radio"
+        data-paint={shape}
+        aria-checked={selected}
+        tabIndex={selected ? 0 : -1}
+        disabled={locked}
+        className={`look-shape${selected ? ' selected' : ''}`}
+        onClick={() => onChange(shape)}
+        onKeyDown={(event) => move(event, index)}
+      >
+        <BlobCanvas decorative color={colorHex} size={46} art="painted" look={{ ...look, art: 'painted', paint: shape }} label={PAINTED_LABELS[shape]} />
+        <span>{PAINTED_LABELS[shape]}</span>
+      </button>
+    })}
+  </div>
+}
+
+function ColourPanel({ color, locked, onColorChange }: { color: string; locked: boolean; onColorChange: (color: string) => void }) {
+  return <div className="look-colour">
+    <span className="look-section-label">Colour</span>
+    <SwatchGrid value={color} onChange={onColorChange} disabled={locked} />
   </div>
 }
 
@@ -152,7 +267,7 @@ function ShapeGrid({ look, colorHex, locked = false, onChange }: { look: BlobLoo
         onClick={() => onChange(shape)}
         onKeyDown={(event) => move(event, index)}
       >
-        <BlobCanvas decorative color={colorHex} size={46} look={{ ...look, shape }} label={SHAPE_LABELS[shape]} />
+        <BlobCanvas decorative color={colorHex} size={46} art="blob" look={{ ...look, shape }} label={SHAPE_LABELS[shape]} />
         <span>{SHAPE_LABELS[shape]}</span>
       </button>
     })}

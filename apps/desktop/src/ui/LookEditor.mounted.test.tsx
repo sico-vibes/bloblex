@@ -7,7 +7,7 @@ import { setBitbotsEnabled } from '../blob/bitbots'
 import { LookEditor } from './LookEditor'
 
 vi.mock('../blob/BlobCanvas', () => ({
-  BlobCanvas: ({ look, mood, label }: { look?: BlobLook; mood?: string; label?: string }) => <span data-shape={look?.shape} data-mood={mood ?? 'idle'} data-label={label} />,
+  BlobCanvas: ({ look, mood, label, art }: { look?: BlobLook; mood?: string; label?: string; art?: string }) => <span data-shape={look?.shape} data-art={art ?? look?.art} data-mood={mood ?? 'idle'} data-label={label} />,
 }))
 
 const mounted: Array<{ root: Root; host: HTMLDivElement }> = []
@@ -125,15 +125,58 @@ describe('look editor', () => {
   })
 
   it.each([undefined, 'hexagon'] as const)('keeps the inferred or explicit robot outline (%s) on Surprise me', (outline) => {
-    setBitbotsEnabled(true)
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
-    const { host, render, onLookChange } = mount({ shape: 'squircle', seed: 'a', ...(outline ? { bot: { shape: outline } } : {}) })
+    const { host, render, onLookChange } = mount({ shape: 'squircle', seed: 'a', art: 'robot', ...(outline ? { bot: { shape: outline } } : {}) })
     click([...host.querySelectorAll('button')].find((button) => button.textContent?.includes('Surprise me')))
     const next = onLookChange.mock.lastCall?.[0] as BlobLook
     expect(next.shape).toBe('squircle')
+    expect(next.art).toBe('robot')
     expect(next.bot?.shape).toBe(outline ?? 'square')
     act(() => render(next))
     expect(host.querySelector('.bot-shape[aria-checked="true"]')?.getAttribute('data-bot-shape')).toBe(outline ?? 'square')
+  })
+
+  it('sets and clears the art style from the Style control', () => {
+    const explicit = mount({ shape: 'circle', seed: 'a', art: 'painted', paint: 'ufo' })
+    const styleOptions = [...explicit.host.querySelectorAll('[data-style-option]')]
+    expect(styleOptions).toHaveLength(7)
+    expect(explicit.host.querySelector('[data-style-option="painted"][aria-checked="true"]')).toBeTruthy()
+    click(explicit.host.querySelector('[data-style-option="robot-pop"]'))
+    expect(explicit.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'robot-pop', paint: 'ufo' })
+    click(explicit.host.querySelector('[data-style-option="auto"]'))
+    expect(explicit.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', paint: 'ufo' })
+
+    const automatic = mount({ shape: 'circle', seed: 'a' })
+    expect(automatic.host.querySelector('[data-style-option="auto"][aria-checked="true"]')).toBeTruthy()
+    click(automatic.host.querySelector('[data-style-option="robot-dot"]'))
+    expect(automatic.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'robot-dot' })
+  })
+
+  it('shows the twelve painted bodies and writes the chosen one', () => {
+    const { host, onLookChange } = mount({ shape: 'circle', seed: 'a', art: 'painted' })
+    const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Painted shape"] [role="radio"]')]
+    expect(radios).toHaveLength(12)
+    expect(radios.map((radio) => radio.getAttribute('data-paint'))).toEqual(['classic', 'cube', 'star', 'flower', 'pear', 'peanut', 'ghost', 'bunny', 'kitty', 'ufo', 'boxbot', 'tile'])
+    expect(host.querySelector('[data-paint="classic"][aria-checked="true"]')).toBeTruthy()
+    click(radios[9])
+    expect(onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'painted', paint: 'ufo' })
+  })
+
+  it('shows only colour for a flat robot', () => {
+    const { host } = mount({ shape: 'circle', seed: 'a', art: 'robot-flat' })
+    expect(host.querySelector('[aria-label="Bot shape"]')).toBeNull()
+    expect(host.querySelector('[aria-label="Painted shape"]')).toBeNull()
+    expect(host.querySelectorAll('.swatch').length).toBeGreaterThan(0)
+  })
+
+  it('makes the Style control and painted grid inert while the bot is locked', () => {
+    const { host, onLookChange } = mount({ shape: 'circle', seed: 'a', art: 'painted' }, true)
+    expect([...host.querySelectorAll<HTMLButtonElement>('.look-style-option')]).toHaveLength(7)
+    expect([...host.querySelectorAll<HTMLButtonElement>('.look-style-option')].every((button) => button.disabled)).toBe(true)
+    expect([...host.querySelectorAll<HTMLButtonElement>('[aria-label="Painted shape"] [role="radio"]')].every((button) => button.disabled)).toBe(true)
+    click(host.querySelector('.look-style-option'))
+    click(host.querySelector('[data-paint="ufo"]'))
+    expect(onLookChange).not.toHaveBeenCalled()
   })
 
   it('shuffles the face, keeps the shape, and credits the shape source', () => {

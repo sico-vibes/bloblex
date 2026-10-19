@@ -155,6 +155,28 @@ describe('blob looks', () => {
     expect(sameLook({ shape: 'pebble', seed: 'a', traits: { x: 0.1, y: 0.2 } }, { shape: 'pebble', seed: 'a', traits: { y: 0.2, x: 0.1 } })).toBe(true)
   })
 
+  it('stores an art style and painted body, dropping unknown values', () => {
+    expect(normalizeLook({ shape: 'circle', art: 'painted', paint: 'ufo' })).toEqual({ shape: 'circle', art: 'painted', paint: 'ufo' })
+    expect(normalizeLook({ shape: 'circle', art: 'glossy' })).toEqual({ shape: 'circle' })
+    expect(normalizeLook({ shape: 'circle', paint: 'cat' })).toEqual({ shape: 'circle' })
+    expect(agentLook({ id: 'a', look: { shape: 'pebble', art: 'robot-pop', paint: 'kitty' } })).toMatchObject({ shape: 'pebble', seed: 'a', art: 'robot-pop', paint: 'kitty' })
+    expect(draftLook({ look: { shape: 'cloud', seed: 'mine', art: 'blob' } }, 'agent-2')).toEqual({ shape: 'cloud', seed: 'mine', art: 'blob' })
+  })
+
+  it('compares by art and reshuffles paint only when the art is painted', () => {
+    expect(sameLook({ shape: 'circle', art: 'painted', paint: 'ufo' }, { shape: 'circle', art: 'painted', paint: 'ufo' })).toBe(true)
+    expect(sameLook({ shape: 'circle', art: 'painted' }, { shape: 'circle', art: 'blob' })).toBe(false)
+    const painted: BlobLook = { shape: 'circle', seed: 'a', art: 'painted', paint: 'ufo', bot: { shape: 'hexagon' } }
+    const next = shuffleLook(painted, () => 0.5)
+    expect(next.shape).toBe('circle')
+    expect(next.art).toBe('painted')
+    expect(next.paint).toBeTruthy()
+    expect(next.paint).not.toBe('ufo')
+    expect(next.bot).toEqual(painted.bot)
+    const blob: BlobLook = { shape: 'circle', seed: 'a', art: 'blob' }
+    expect(shuffleLook(blob, () => 0.5).paint).toBeUndefined()
+  })
+
   it('shuffles only the eyes and retains the silhouette and alternate robot style', () => {
     for (const shape of BLOB_SHAPES) {
       const look: BlobLook = { shape, seed: 'a', traits: { 'eye.rx': 0.2 }, bot: { shape: 'hexagon', shell: '#112233' } }

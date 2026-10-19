@@ -291,9 +291,9 @@ describe('locked bot editor (FIX39 item 13)', () => {
     expect(body.disabled).toBe(true)
     expect(body.getAttribute('aria-label')).toBe('Locked bot settings')
     const look = view.host.querySelector('#bot-section-look')!
-    const shapes = [...look.querySelectorAll<HTMLButtonElement>('.look-shape, .bot-shape')]
-    expect(shapes.length).toBeGreaterThan(0)
-    expect(shapes.every((button) => button.disabled)).toBe(true)
+    const styles = [...look.querySelectorAll<HTMLButtonElement>('.look-style-option')]
+    expect(styles.length).toBeGreaterThan(0)
+    expect(styles.every((button) => button.disabled)).toBe(true)
     const moods = [...look.querySelectorAll<HTMLButtonElement>('.look-moods button')]
     expect(moods.length).toBeGreaterThan(0)
     expect(moods.every((button) => button.disabled)).toBe(true)
@@ -308,6 +308,6 @@ describe('locked bot editor (FIX39 item 13)', () => {
     const body = view.host.querySelector<HTMLFieldSetElement>('fieldset.blob-settings-body')!
     expect(body.disabled).toBe(false)
     const look = view.host.querySelector('#bot-section-look')!
-    expect([...look.querySelectorAll<HTMLButtonElement>('.look-shape, .bot-shape')].some((button) => !button.disabled)).toBe(true)
+    expect([...look.querySelectorAll<HTMLButtonElement>('.look-style-option, .look-shape, .bot-shape, .swatch')].some((button) => !button.disabled)).toBe(true)
   })
 })

@@ -25,7 +25,7 @@ function mount(node: React.ReactNode) {
 describe('BlobCanvas in Bitbots mode', () => {
   it('draws a robot with the antenna off and speed one, in the outline the look asks for', () => {
     setBitbotsEnabled(true)
-    const element = mount(<BlobCanvas color="#2b49a3" size={60} mood="thinking" label="Vex" look={{ shape: 'circle', seed: 's', bot: { shape: 'hexagon' } }} />)
+    const element = mount(<BlobCanvas color="#2b49a3" size={60} mood="thinking" label="Vex" art="robot" look={{ shape: 'circle', seed: 's', bot: { shape: 'hexagon' } }} />)
     const frame = element.querySelector('.bitbot-frame')!
     expect(frame.getAttribute('data-bitbot-shape')).toBe('hexagon')
     expect(frame.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Vex, thinking')
@@ -40,11 +40,18 @@ describe('BlobCanvas in Bitbots mode', () => {
     expect(element.querySelector('canvas.blob-canvas')).not.toBeNull()
   })
 
+  it('draws the 3D robot for an explicit robot art, whatever the app look', () => {
+    setBitbotsEnabled(false)
+    const element = mount(<BlobCanvas color="#2b49a3" size={60} art="robot" label="Vex" />)
+    expect(element.querySelector('.bitbot-frame')).toBeTruthy()
+    expect(element.querySelector('canvas.blob-canvas')).toBeNull()
+  })
+
   it('welcomes with a spin and then reports the greeting done', () => {
     vi.useFakeTimers()
     setBitbotsEnabled(true)
     const done = vi.fn()
-    const element = mount(<BlobCanvas color="#2b49a3" size={60} greeting onGreetingComplete={done} />)
+    const element = mount(<BlobCanvas color="#2b49a3" size={60} art="robot" greeting onGreetingComplete={done} />)
     const robot = element.querySelector<HTMLElement>('[role="img"]')!
     const clicked = vi.fn()
     robot.addEventListener('click', clicked)
@@ -59,7 +66,7 @@ describe('BlobCanvas in Bitbots mode', () => {
     vi.useFakeTimers()
     setBitbotsEnabled(true)
     const start = vi.fn(), recover = vi.fn()
-    const element = mount(<BlobCanvas color="#2b49a3" size={60} onDizzy={start} onDizzyRecovery={recover} />)
+    const element = mount(<BlobCanvas color="#2b49a3" size={60} art="robot" onDizzy={start} onDizzyRecovery={recover} />)
     const frame = element.querySelector('.bitbot-frame')!
     for (let index = 0; index < 3; index++) act(() => { frame.dispatchEvent(new Event('pointerdown', { bubbles: true })) })
     expect(start).toHaveBeenCalledOnce()

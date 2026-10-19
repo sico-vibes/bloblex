@@ -1094,7 +1094,10 @@ export function App() {
     const media = window.matchMedia('(prefers-color-scheme: light)')
     const change = () => {
       const root = document.documentElement
-      if (!companion && root.dataset.themeChoice === 'system') applyAppearance(root, 'system', (root.dataset.textSize as TextSizeChoice) || 'default')
+      if (root.dataset.themeChoice === 'system') {
+        if (companion) root.dataset.surfaceTheme = media.matches ? 'light' : 'dark'
+        else applyAppearance(root, 'system', (root.dataset.textSize as TextSizeChoice) || 'default')
+      }
     }
     media.addEventListener('change', change)
     return () => media.removeEventListener('change', change)

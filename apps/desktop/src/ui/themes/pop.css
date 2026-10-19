@@ -407,3 +407,93 @@
   :root[data-style="pop"]:not(.companion-surface):not(.dictation-surface) .secondary-button,
   :root[data-style="pop"]:not(.companion-surface):not(.dictation-surface) .ghost-button { transition: none; }
 }
+
+/* ── Pop companion and dictation surfaces ────────────────────────────── */
+:root[data-style="pop"].companion-surface,
+:root[data-style="pop"].dictation-surface {
+  --surface-app: #1c1a17; --surface-sidebar: #282520; --surface-panel: #282520;
+  --surface-raised: #312d27; --surface-overlay: #312d27; --surface-input: #3a352e;
+  --surface-hover: #494237; --surface-selected: #494237; --surface-selected-strong: #51493d;
+  --text-1: #f7efe2; --text-2: #c8bdac; --text-3: #b8ad9b; --text-inverse: #1d1b18;
+  --line: #f2e8d8; --line-strong: #f2e8d8; --accent: var(--user-accent, #f2694a);
+  --blue: #9fc5f6; --bubble-user: #494237; --status-working: #f6cf5c;
+  --status-success: #8fdcb6; --status-danger: #f59a8c; --status-info: #9fc5f6;
+  --status-violet: #c9b8f2; --font-ui: "DM Sans Variable", "DM Sans", sans-serif;
+  --font-display: "Bricolage Grotesque Variable", sans-serif; --font-mono: "Cascadia Mono", Consolas, monospace;
+  --companion-surface-card: var(--surface-raised); --companion-surface-flat: var(--surface-app);
+  --companion-surface-tab: var(--surface-selected); --companion-text-bright: var(--text-1);
+  --companion-text-muted: var(--text-2); --c-font: var(--font-ui);
+  --companion-alpha-04: color-mix(in srgb, var(--text-1) 4%, transparent);
+  --companion-alpha-05: color-mix(in srgb, var(--text-1) 8%, transparent);
+  --companion-alpha-06: color-mix(in srgb, var(--text-1) 9%, transparent);
+  --companion-alpha-07: color-mix(in srgb, var(--text-1) 9%, transparent);
+  --companion-alpha-09: color-mix(in srgb, var(--text-1) 12%, transparent);
+  --companion-alpha-10: color-mix(in srgb, var(--text-1) 13%, transparent);
+  --companion-alpha-12: color-mix(in srgb, var(--text-1) 15%, transparent);
+  --companion-alpha-18: color-mix(in srgb, var(--text-1) 22%, transparent);
+  color-scheme: dark; color: var(--text-1);
+}
+:root[data-style="pop"].companion-surface[data-surface-theme="light"],
+:root[data-style="pop"].dictation-surface[data-surface-theme="light"] {
+  --surface-app: #fbf6ec; --surface-sidebar: #fbf6ec; --surface-panel: #fbf6ec;
+  --surface-raised: #fffdf8; --surface-overlay: #fffdf8; --surface-input: #f3eadb;
+  --surface-hover: #f6cf5c; --surface-selected: #efe5cf; --surface-selected-strong: #e6d8bc;
+  --text-1: #1d1b18; --text-2: #5a5348; --text-3: #565047; --text-inverse: #fbf6ec;
+  --line: #1d1b18; --line-strong: #1d1b18; --accent: var(--user-accent, #f2694a);
+  --blue: #9fc5f6; --bubble-user: #f3eadb; --status-working: #805700;
+  --status-success: #26744f; --status-danger: #a83222; --status-info: #315f9c;
+  --status-violet: #7658a6; --font-ui: "DM Sans Variable", "DM Sans", sans-serif;
+  --font-display: "Bricolage Grotesque Variable", sans-serif; --font-mono: "Cascadia Mono", Consolas, monospace;
+  --companion-surface-card: var(--surface-raised); --companion-surface-flat: var(--surface-app);
+  --companion-surface-tab: var(--surface-selected); --companion-text-bright: var(--text-1);
+  --companion-text-muted: var(--text-2); --c-font: var(--font-ui);
+  --companion-text-tags: var(--text-2); --companion-text-activity: var(--text-1); --companion-text-settings: var(--text-1);
+  --companion-shimmer-edge: var(--text-1); --companion-shimmer-center: var(--text-1);
+  --companion-status-alert: #805700; --companion-status-error: #a83222; --companion-status-success: #26744f;
+  --companion-wash-red: rgba(168, 50, 34, .18); --companion-wash-green: rgba(38, 116, 79, .16);
+  --companion-wash-pink: rgba(168, 50, 34, .16); --companion-wash-amber: rgba(128, 87, 0, .16);
+  --companion-wash-cyan: rgba(49, 95, 156, .14); --companion-wash-drop: rgba(38, 116, 79, .1);
+  --companion-white: var(--text-1); --companion-black: #000;
+  --companion-alpha-04: color-mix(in srgb, var(--text-1) 4%, transparent);
+  --companion-alpha-05: color-mix(in srgb, var(--text-1) 8%, transparent);
+  --companion-alpha-06: color-mix(in srgb, var(--text-1) 9%, transparent);
+  --companion-alpha-07: color-mix(in srgb, var(--text-1) 9%, transparent);
+  --companion-alpha-08: color-mix(in srgb, var(--text-1) 10%, transparent);
+  --companion-alpha-09: color-mix(in srgb, var(--text-1) 12%, transparent);
+  --companion-alpha-10: color-mix(in srgb, var(--text-1) 13%, transparent);
+  --companion-alpha-12: color-mix(in srgb, var(--text-1) 15%, transparent);
+  --companion-alpha-13: color-mix(in srgb, var(--text-1) 17%, transparent);
+  --companion-alpha-15: color-mix(in srgb, var(--text-1) 20%, transparent);
+  --companion-alpha-18: color-mix(in srgb, var(--text-1) 22%, transparent);
+  --companion-bot-text-color-share: 15%;
+  color-scheme: light; color: var(--text-1);
+}
+:root[data-style="pop"].companion-surface[data-surface-theme="light"] .peer { --peer-text: color-mix(in srgb, var(--peer) var(--companion-bot-text-color-share), var(--text-1)); color: var(--peer-text); }
+:root[data-style="pop"].companion-surface[data-surface-theme="light"] .peer-copy b { color: var(--peer-text); }
+:root[data-style="pop"].companion-surface[data-surface-theme="light"] .peer-copy b.shimmer { --companion-shimmer-edge: var(--peer-text); --companion-shimmer-center: var(--peer-text); }
+:root[data-style="pop"].companion-surface[data-surface-theme="light"] .cset-chip { color: color-mix(in srgb, var(--chip) var(--companion-bot-text-color-share), var(--text-1)); }
+:root[data-style="pop"].companion-surface[data-surface-theme="light"] .pill:hover .lbl,
+:root[data-style="pop"].companion-surface[data-surface-theme="light"] .pill.on .lbl { color: color-mix(in srgb, var(--pill) var(--companion-bot-text-color-share), var(--text-1)); }
+:root[data-style="pop"].companion-surface[data-surface-theme="light"] .companion-mention { color: color-mix(in srgb, var(--mention) var(--companion-bot-text-color-share), var(--text-1)); }
+:root[data-style="pop"].companion-surface[data-surface-theme="light"] .companion-team-chip b { color: color-mix(in srgb, var(--chip-accent) var(--companion-bot-text-color-share), var(--text-1)); }
+:root[data-style="pop"].companion-surface[data-surface-theme="dark"] .companion-mention { color: color-mix(in srgb, var(--mention) 70%, var(--c-ink)); }
+:root[data-style="pop"].companion-surface .companion-capsule { background: var(--surface-app); box-shadow: inset 0 0 0 2px var(--text-1), 4px 4px 0 var(--text-1); }
+:root[data-style="pop"].companion-surface .companion-listening,
+:root[data-style="pop"].companion-surface .island-card { background: var(--surface-raised); box-shadow: inset 0 0 0 1px var(--text-1), 3px 3px 0 var(--text-1); }
+:root[data-style="pop"].companion-surface .island-card { border-color: var(--text-1); }
+:root[data-style="pop"].companion-surface .island-card .title,
+:root[data-style="pop"].companion-surface .who-row .n { font-family: var(--font-display); }
+:root[data-style="pop"].companion-surface .island-header .tab { color: var(--text-2); }
+:root[data-style="pop"].companion-surface .island-header .tab.on { color: #1d1b18; background: #f6cf5c; box-shadow: inset 0 0 0 1px var(--text-1); }
+:root[data-style="pop"].companion-surface .btn.primary { color: var(--user-accent-ink, #1d1b18); background: var(--accent); box-shadow: inset 0 0 0 1px var(--text-1); }
+:root[data-style="pop"].companion-surface .btn.secondary { box-shadow: inset 0 0 0 1px var(--text-1); }
+:root[data-style="pop"].companion-surface .dictation-island,
+:root[data-style="pop"].dictation-surface .dictation-island { color: var(--text-1); border-color: var(--text-1); background: var(--surface-panel); box-shadow: inset 0 0 0 1px var(--text-1), 3px 3px 0 var(--text-1); }
+:root[data-style="pop"].companion-surface .dictation-island-time,
+:root[data-style="pop"].companion-surface .dictation-island-text,
+:root[data-style="pop"].dictation-surface .dictation-island-time,
+:root[data-style="pop"].dictation-surface .dictation-island-text { color: var(--text-1); }
+:root[data-style="pop"].companion-surface .dictation-island-note,
+:root[data-style="pop"].dictation-surface .dictation-island-note { color: var(--text-2); }
+:root[data-style="pop"].companion-surface .dictation-island-wave i,
+:root[data-style="pop"].dictation-surface .dictation-island-wave i { background: var(--text-1); }

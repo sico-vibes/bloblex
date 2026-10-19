@@ -78,6 +78,8 @@ export function applyTextSize(root: HTMLElement, textSize: TextSizeChoice) {
 
 export function applySurfaceAppearance(root: HTMLElement, theme: ThemeChoice, textSize: TextSizeChoice, companion: boolean) {
   if (companion) {
+    root.dataset.themeChoice = theme
+    root.dataset.surfaceTheme = appearanceAttributes(theme, textSize).theme
     applyTextSize(root, textSize)
     return
   }

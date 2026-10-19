@@ -27,9 +27,11 @@
           const textSize = ['small', 'default', 'large', 'larger'].includes(settings.textSize) ? settings.textSize : 'default'
           const overlay = companion || dictation
           const resolved = overlay ? 'dark' : theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme
+          const surfaceTheme = theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme
           document.documentElement.dataset.theme = resolved
+          if (overlay) document.documentElement.dataset.surfaceTheme = surfaceTheme
           document.documentElement.dataset.textSize = textSize
-          document.documentElement.dataset.themeChoice = overlay ? 'dark' : theme
+          document.documentElement.dataset.themeChoice = theme
         } catch { document.documentElement.dataset.theme = 'dark' }
       })()
     </script>

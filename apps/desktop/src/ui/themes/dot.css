@@ -373,3 +373,85 @@
   :root[data-style="dot"]:not(.companion-surface):not(.dictation-surface) .working-indicator i,
   :root[data-style="dot"]:not(.companion-surface):not(.dictation-surface) .working-indicator .dot { animation: none; }
 }
+
+/* ── Dot companion and dictation surfaces ───────────────────────────── */
+:root[data-style="dot"].companion-surface,
+:root[data-style="dot"].dictation-surface {
+  --surface-app: #0e0e0e; --surface-sidebar: #0e0e0e; --surface-panel: #0e0e0e;
+  --surface-raised: #161616; --surface-overlay: #161616; --surface-input: #1e1e1e;
+  --surface-hover: #1a1a1a; --surface-selected: #272727; --surface-selected-strong: #303030;
+  --text-1: #f2f2f2; --text-2: #c2c2c2; --text-3: #b8b8b8; --text-inverse: #0e0e0e;
+  --line: #777; --line-strong: #999; --accent: var(--user-accent, #ff4b2b);
+  --blue: var(--accent); --bubble-user: #292929; --status-working: #ffb020;
+  --status-danger: #ff4b2b; --status-danger-text: #ff8a75; --status-success: #54d68d;
+  --status-info: #83b4ff; --font-ui: "Geist", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono", Consolas, monospace; --font-display: "Doto", "Geist Mono", monospace;
+  --companion-surface-card: var(--surface-raised); --companion-surface-flat: var(--surface-app);
+  --companion-surface-tab: var(--surface-selected); --companion-text-bright: var(--text-1);
+  --companion-text-muted: var(--text-2); --c-font: var(--font-ui); --c-mono: var(--font-mono);
+  --companion-alpha-04: color-mix(in srgb, var(--text-1) 4%, transparent);
+  --companion-alpha-05: color-mix(in srgb, var(--text-1) 8%, transparent);
+  --companion-alpha-06: color-mix(in srgb, var(--text-1) 9%, transparent);
+  --companion-alpha-07: color-mix(in srgb, var(--text-1) 9%, transparent);
+  --companion-alpha-09: color-mix(in srgb, var(--text-1) 12%, transparent);
+  --companion-alpha-10: color-mix(in srgb, var(--text-1) 13%, transparent);
+  --companion-alpha-12: color-mix(in srgb, var(--text-1) 15%, transparent);
+  --companion-alpha-18: color-mix(in srgb, var(--text-1) 22%, transparent);
+  color-scheme: dark; color: var(--text-1);
+}
+:root[data-style="dot"].companion-surface[data-surface-theme="light"],
+:root[data-style="dot"].dictation-surface[data-surface-theme="light"] {
+  --surface-app: #ececea; --surface-sidebar: #ececea; --surface-panel: #ececea;
+  --surface-raised: #fff; --surface-overlay: #fff; --surface-input: #f2f2f0;
+  --surface-hover: #e3e3e0; --surface-selected: #dededb; --surface-selected-strong: #d4d4d0;
+  --text-1: #111; --text-2: #555; --text-3: #606060; --text-inverse: #fff;
+  --line: #777; --line-strong: #888; --status-working: #795000; --bubble-user: #dededb;
+  --status-danger: #b8321b; --status-success: #17613f; --status-info: #2454a4;
+  --companion-text-bright: var(--text-1); --companion-text-muted: var(--text-2);
+  --companion-text-tags: var(--text-2); --companion-text-activity: var(--text-1); --companion-text-settings: var(--text-1);
+  --companion-shimmer-edge: var(--text-1); --companion-shimmer-center: var(--text-1);
+  --companion-status-alert: #795000; --companion-status-error: #b8321b; --companion-status-success: #17613f;
+  --companion-wash-red: rgba(184, 50, 27, .18); --companion-wash-green: rgba(23, 97, 63, .16);
+  --companion-wash-pink: rgba(184, 50, 27, .16); --companion-wash-amber: rgba(121, 80, 0, .16);
+  --companion-wash-cyan: rgba(36, 84, 164, .14); --companion-wash-drop: rgba(23, 97, 63, .1);
+  --companion-white: var(--text-1); --companion-black: #000;
+  --companion-alpha-04: color-mix(in srgb, var(--text-1) 4%, transparent);
+  --companion-alpha-05: color-mix(in srgb, var(--text-1) 8%, transparent);
+  --companion-alpha-06: color-mix(in srgb, var(--text-1) 9%, transparent);
+  --companion-alpha-07: color-mix(in srgb, var(--text-1) 9%, transparent);
+  --companion-alpha-08: color-mix(in srgb, var(--text-1) 10%, transparent);
+  --companion-alpha-09: color-mix(in srgb, var(--text-1) 12%, transparent);
+  --companion-alpha-10: color-mix(in srgb, var(--text-1) 13%, transparent);
+  --companion-alpha-12: color-mix(in srgb, var(--text-1) 15%, transparent);
+  --companion-alpha-13: color-mix(in srgb, var(--text-1) 17%, transparent);
+  --companion-alpha-15: color-mix(in srgb, var(--text-1) 20%, transparent);
+  --companion-alpha-18: color-mix(in srgb, var(--text-1) 22%, transparent);
+  --companion-bot-text-color-share: 15%;
+  color-scheme: light;
+}
+:root[data-style="dot"].companion-surface .companion-capsule { background: var(--surface-app); outline: 1px dotted var(--text-1); outline-offset: -1px; }
+:root[data-style="dot"].companion-surface .companion-listening,
+:root[data-style="dot"].companion-surface .island-card { background: var(--surface-raised); border: 1px dotted var(--line-strong); }
+:root[data-style="dot"].companion-surface .island-card .title,
+:root[data-style="dot"].companion-surface .who-row .n { font-family: var(--font-display); }
+:root[data-style="dot"].companion-surface .island-header .tab { color: var(--text-2); }
+:root[data-style="dot"].companion-surface .island-header .tab.on { color: var(--text-inverse); background: var(--text-1); }
+:root[data-style="dot"].companion-surface[data-surface-theme="light"] .peer { --peer-text: color-mix(in srgb, var(--peer) var(--companion-bot-text-color-share), var(--text-1)); color: var(--peer-text); }
+:root[data-style="dot"].companion-surface[data-surface-theme="light"] .peer-copy b { color: var(--peer-text); }
+:root[data-style="dot"].companion-surface[data-surface-theme="light"] .peer-copy b.shimmer { --companion-shimmer-edge: var(--peer-text); --companion-shimmer-center: var(--peer-text); }
+:root[data-style="dot"].companion-surface[data-surface-theme="light"] .cset-chip { color: color-mix(in srgb, var(--chip) var(--companion-bot-text-color-share), var(--text-1)); }
+:root[data-style="dot"].companion-surface[data-surface-theme="light"] .pill:hover .lbl,
+:root[data-style="dot"].companion-surface[data-surface-theme="light"] .pill.on .lbl { color: color-mix(in srgb, var(--pill) var(--companion-bot-text-color-share), var(--text-1)); }
+:root[data-style="dot"].companion-surface[data-surface-theme="light"] .companion-mention { color: color-mix(in srgb, var(--mention) var(--companion-bot-text-color-share), var(--text-1)); }
+:root[data-style="dot"].companion-surface[data-surface-theme="light"] .companion-team-chip b { color: color-mix(in srgb, var(--chip-accent) var(--companion-bot-text-color-share), var(--text-1)); }
+:root[data-style="dot"].companion-surface .btn.primary { color: var(--user-accent-ink, #0e0e0e); background: var(--accent); }
+:root[data-style="dot"].companion-surface .dictation-island,
+:root[data-style="dot"].dictation-surface .dictation-island { color: var(--text-1); border: 1px dotted var(--line-strong); background: var(--surface-panel); box-shadow: none; }
+:root[data-style="dot"].companion-surface .dictation-island-time,
+:root[data-style="dot"].companion-surface .dictation-island-text,
+:root[data-style="dot"].dictation-surface .dictation-island-time,
+:root[data-style="dot"].dictation-surface .dictation-island-text { color: var(--text-1); }
+:root[data-style="dot"].companion-surface .dictation-island-note,
+:root[data-style="dot"].dictation-surface .dictation-island-note { color: var(--text-2); }
+:root[data-style="dot"].companion-surface .dictation-island-wave i,
+:root[data-style="dot"].dictation-surface .dictation-island-wave i { background: var(--text-1); }

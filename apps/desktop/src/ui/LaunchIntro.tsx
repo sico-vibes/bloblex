@@ -9,7 +9,8 @@ import { type LaunchCheck } from './launchChecks'
 import { friendlyError } from './errorCopy'
 import { ProviderLogo } from './providerBrand'
 import { PixelClouds } from './PixelClouds'
-import { useLegacyPixel } from '../blob/bitbots'
+import { useLegacyPixel, useThemeStyle } from '../blob/bitbots'
+import { resolveArt } from '../blob/art/art'
 
 /** The working mascot's canvas size; the greeting is scaled so the body matches it. */
 const STAGE_SIZE = 150
@@ -32,6 +33,9 @@ export function LaunchIntro({ checks, runtimes, agent = null, onComplete, onRetr
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const [phase, setPhase] = useState<Phase>('scanning')
   const bitbots = useLegacyPixel()
+  const style = useThemeStyle()
+  const look = agent ? agentLook(agent) : null
+  const greetingArt = resolveArt(look, style)
   const color = agent ? agentColorHex(agent.color) : '#b7a7f4'
   useEffect(() => { onCompleteRef.current = onComplete }, [onComplete])
 
@@ -86,7 +90,9 @@ export function LaunchIntro({ checks, runtimes, agent = null, onComplete, onRetr
     <section className="launch-intro-content">
       {!reducedMotion && <div className="launch-blob-stage">
         {phase === 'greeting'
-          ? bitbots ? <BitbotWelcome color={color} look={agent ? agentLook(agent) : null} onDone={greetingDone} /> : <LaunchGreeting color={color} onDone={greetingDone} />
+          ? bitbots ? <BitbotWelcome color={color} look={look} onDone={greetingDone} /> : greetingArt !== 'blob'
+            ? <BlobCanvas color={color} size={STAGE_SIZE} mood="idle" look={look} label={agent?.name ?? 'Bitbots'} greeting onGreetingComplete={greetingDone} />
+            : <LaunchGreeting color={color} onDone={greetingDone} />
           : <BlobCanvas color={color} size={STAGE_SIZE} mood={serviceDown ? 'error' : phase === 'ready' ? 'idle' : 'working'} label={agent?.name ?? 'Bitbots'} />}
       </div>}
       {bitbots && !reducedMotion && phase === 'scanning' && !serviceDown && <PixelScan />}

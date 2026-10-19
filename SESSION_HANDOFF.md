@@ -1,12 +1,12 @@
 # Bitbots session handoff
 
-> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.34` ([docs/releases/0.1.0-beta.34.md](docs/releases/0.1.0-beta.34.md)), released and tagged at `5b6ee88` (installer SHA-256 `dc2834b3153474070cca0abdb72cd12466a6f8be09e30cd11bc2fad272a0cf4d`). The previous release is `v0.1.0-beta.33` ([docs/releases/0.1.0-beta.33.md](docs/releases/0.1.0-beta.33.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
+> Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.35` ([docs/releases/0.1.0-beta.35.md](docs/releases/0.1.0-beta.35.md)), published and tagged at `71475d4` (installer SHA-256 `eb9378c7d797136dbf918b794240aaba414b0f82bc3f52fcf6ea96664bb0cd56`). The previous release is `v0.1.0-beta.34` ([docs/releases/0.1.0-beta.34.md](docs/releases/0.1.0-beta.34.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
 
-Current as of 19 October 2026 (FIX40 on `main`, not released). The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+Current as of 19 October 2026 (FIX40, its follow-ups and FIX41 released as `v0.1.0-beta.35`). The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
 
 ## FIX40 looks and bot art (19 October 2026)
 
-**State.** On `main` at `e4cf5b3`, not tagged or released. The last release is still `v0.1.0-beta.34`. Full record: [docs/FIX40_REPORT.md](docs/FIX40_REPORT.md). Design rules: [DESIGN.md](DESIGN.md#fix40-looks-and-bot-art-19-october-2026). Pipeline: [AGENTS.md](AGENTS.md) (19 October amendment).
+**State.** Released as `v0.1.0-beta.35` (tag at `71475d4`), which includes the follow-ups and FIX41 made after `e4cf5b3`. The previous release is `v0.1.0-beta.34`. Full record: [docs/FIX40_REPORT.md](docs/FIX40_REPORT.md). Design rules: [DESIGN.md](DESIGN.md#fix40-looks-and-bot-art-19-october-2026). Pipeline: [AGENTS.md](AGENTS.md) (19 October amendment).
 
 **What changed.** Five looks: Bitbots (the Frost look: translucent panels over a wallpaper, with Solid, Balanced and Clear glass), Blobots (unchanged), and Legacy, Pop and Dot under "More looks". The old pixel look is Legacy. Users already on `bitbots` now see Frost. There are 24 bundled fonts, loaded lazily. Each bot picks one of six art styles, and hand-painted blobs have twelve shapes. Settings > Appearance is rebuilt, with one orb per look, and the launch greeting shows each bot in its art.
 

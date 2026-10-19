@@ -217,7 +217,7 @@ async function walk(directory) {
 async function discover() {
   const tracked = execFileSync(
     'git',
-    ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+    ['ls-files', '--cached', '-z'],
     { cwd: root, encoding: 'utf8' },
   ).split('\0');
   const files = tracked.filter((source) => /\.md$/i.test(source));

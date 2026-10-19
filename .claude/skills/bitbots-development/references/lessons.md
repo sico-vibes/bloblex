@@ -2,6 +2,17 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-19 · Process · A piped gate hid a failure before a push
+- **Symptom:** the Director ran `git merge ... && node scripts/docs-library.mjs check 2>&1 | tail -1 && ... && git push`; the check failed, but `main` was pushed anyway (`917f730`).
+- **Root cause:** in a pipe, the exit status is the last command's (`tail`, which succeeds), so `&&` never saw the failure.
+- **Avoid:** never pipe a gate through `tail`, `head` or `Select-Object` in a chain that ends in `git push`, a release or a merge. Run each gate on its own and check its exit code (`$LASTEXITCODE` in PowerShell, `$?` or `set -o pipefail` in bash) before the next step.
+
+## 2026-10-19 · Docs · Library discovery must use tracked files only
+- **Symptom:** the owner's local scratch file `output/task-a/REPORT.md` made `node scripts/docs-library.mjs check` fail with "Document inventory has changed; rebuild the library."
+- **Root cause:** discovery ran `git ls-files --cached --others --exclude-standard`, so any untracked Markdown file anywhere in the checkout became a library document. The catalogue had been built without it.
+- **Fix:** discovery now runs `git ls-files --cached -z` and still walks `docs/library/content/` separately for the hand-written pages. Untracked scratch files are ignored.
+- **Avoid:** a documentation inventory is a tracked set plus explicit generated content, never `git ls-files --others`. When adding a source root, add it deliberately and test with an untracked Markdown file present.
+
 ## 2026-10-19 · Docs · Library hashes must ignore line endings
 - **Symptom:** on a checkout with `core.autocrlf=true`, `node scripts/docs-library.mjs check` reported every text asset and snapshot stale: `scripts/docs-library.mjs`, `docs/library/assets/...`, `docs/library/content/...`.
 - **Root cause:** `build` wrote hashes from the LF source files it read; `check` hashed the raw CRLF bytes produced by git checkout. Markdown snapshots had the same mismatch.

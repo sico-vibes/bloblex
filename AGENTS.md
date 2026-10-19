@@ -1,5 +1,18 @@
 # Bitbots collaboration instructions
 
+# Amendment (19 October 2026): FIX40 pipeline
+
+Owner directive for the FIX40 wave (the owner's request to replace the primary look with Frost, add Pop and Dot, and give each bot an art style and each look an orb), until the owner says otherwise. It replaces the FIX39 four-model arrangement for this wave.
+
+- **Mapping:** Claude Haiku 5.5 maps the codebase for the briefs.
+- **Briefs and review:** the Director (Claude) writes one brief per lane, reviews every diff, checks every screen in the browser preview, sends work back until it is right, merges, runs the gates and commits.
+- **Implementation:** Codex `gpt-6-luna` (high) and OpenCode `opencode-go/deepseek-v4.1-flash` (high) implement from the briefs, one git worktree per lane, each with its own Cargo target. Several lanes may run at once with files kept apart where possible.
+- **Lanes never run `git commit`.** The Director commits after gates. The Director writes no code itself; it resolves merge conflicts as part of merging.
+- **Documentation:** Claude Haiku 5.5 writes the documentation (report, design rules, handoff, status) from the briefs, the diffs and the gate results.
+- **Working notes:**
+  - Build the desktop crate from a short path without an apostrophe (for example a worktree under `D:\fxN`). The Windows resource compiler fails on the main checkout path `D:\Basem's\...`.
+  - The Codex sandbox has no network access and cannot write Vite's temp files through a `node_modules` junction. The Director installs dependencies and runs the full gates itself.
+
 # Amendment (18 October 2026, later): four-model pipeline for FIX39
 
 Owner directive for the FIX39 wave (the beta.33 review and the friend's test feedback), until the owner says otherwise. It replaces the FIX37 arrangement below where they differ.

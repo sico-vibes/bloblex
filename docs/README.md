@@ -153,6 +153,18 @@ Owner feedback, decisions, research, briefs, reports and audits for the beta.33 
 | [FIX39_P12_REPORT.md](FIX39_P12_REPORT.md) · [FIX39_P12_AUDIT.md](FIX39_P12_AUDIT.md) | P12: rolling redacted logs and Export diagnostics. | implemented in `543f422`; audit PASS WITH FIXES, fixed; in beta.34 | 18 Oct 2026: added with the wave |
 | [FIX39_P13_REPORT.md](FIX39_P13_REPORT.md) · [FIX39_P13_AUDIT.md](FIX39_P13_AUDIT.md) | P13: Claude permission change mid-conversation, and the steer gate per provider capability. | implemented in `8409827`; audit PASS (two optional nits); in beta.34 | 18 Oct 2026: added with the wave |
 
+### FIX40 looks and bot art (19 October 2026)
+
+The owner's request to replace the primary look with Frost, add Pop and Dot, and give each bot an art style and each look an orb. The wave is on `main` at `e4cf5b3` and not released. The record is [FIX40_REPORT.md](FIX40_REPORT.md); design rules are in [DESIGN.md](../DESIGN.md#fix40-looks-and-bot-art-19-october-2026).
+
+| Document | Purpose | Status | Last verified |
+| --- | --- | --- | --- |
+| [FIX40_REPORT.md](FIX40_REPORT.md) | What the owner asked for, what landed, the pipeline, review rounds, environment findings, gates, follow-ups and commits. | current; on `main`, not released | 19 Oct 2026: added with the wave |
+| [FIX40_THEMES_SPEC.md](FIX40_THEMES_SPEC.md) | Round 1 brief for the looks, Frost, wallpapers, fonts and the Appearance page (Codex lane). | historical brief; Solid glass values changed in review (see the report) | 19 Oct 2026: added with the wave |
+| [FIX40_CHARACTERS_SPEC.md](FIX40_CHARACTERS_SPEC.md) | Round 1 brief for the bot art styles, hand-painted blobs and the bot editor (OpenCode lane). | historical brief | 19 Oct 2026: added with the wave |
+| [FIX40_ROUND2_SPEC.md](FIX40_ROUND2_SPEC.md) | Round 2 brief for the Pop and Dot looks across the app, and the launch greeting (Pop was reassigned to Codex). | historical brief | 19 Oct 2026: added with the wave |
+| [FIX40_ORBS_SPEC.md](FIX40_ORBS_SPEC.md) | Brief for the look orbs on the Appearance cards and onboarding (Codex lane). | historical brief | 19 Oct 2026: added with the wave |
+
 ## Runbooks
 
 | Document | Purpose | Status | Last verified |

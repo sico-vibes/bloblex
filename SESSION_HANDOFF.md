@@ -2,7 +2,21 @@
 
 > Status: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.34` ([docs/releases/0.1.0-beta.34.md](docs/releases/0.1.0-beta.34.md)), released and tagged at `5b6ee88` (installer SHA-256 `dc2834b3153474070cca0abdb72cd12466a6f8be09e30cd11bc2fad272a0cf4d`). The previous release is `v0.1.0-beta.33` ([docs/releases/0.1.0-beta.33.md](docs/releases/0.1.0-beta.33.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](docs/README.md).
 
-Current as of 17 October 2026. The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+Current as of 19 October 2026 (FIX40 on `main`, not released). The plan is [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Phase status, later work and evidence commits are in [docs/implementation-status.md](docs/implementation-status.md).
+
+## FIX40 looks and bot art (19 October 2026)
+
+**State.** On `main` at `e4cf5b3`, not tagged or released. The last release is still `v0.1.0-beta.34`. Full record: [docs/FIX40_REPORT.md](docs/FIX40_REPORT.md). Design rules: [DESIGN.md](DESIGN.md#fix40-looks-and-bot-art-19-october-2026). Pipeline: [AGENTS.md](AGENTS.md) (19 October amendment).
+
+**What changed.** Five looks: Bitbots (the Frost look: translucent panels over a wallpaper, with Solid, Balanced and Clear glass), Blobots (unchanged), and Legacy, Pop and Dot under "More looks". The old pixel look is Legacy. Users already on `bitbots` now see Frost. There are 24 bundled fonts, loaded lazily. Each bot picks one of six art styles, and hand-painted blobs have twelve shapes. Settings > Appearance is rebuilt, with one orb per look, and the launch greeting shows each bot in its art.
+
+**Gates on `e4cf5b3`.** Typecheck clean. Vitest 1,341 tests in 178 files passed. `vite build` passed. `cargo test`: bloblex-daemon 456, bloblex-storage 119, bloblex-desktop library 63 passed. The desktop crate must be built from a short path, not the apostrophe path.
+
+**Not verified.** Native windows (browser preview and unit tests only), real provider sessions with the new bot arts, the Frost contrast figures the Themes brief asked for, and any release or update.
+
+**Glass values.** Solid is .93 tint with a 24 px blur, not the .84 and 18 px of the Themes brief. The Director changed it in review round 1: at .84 the bright band of the Lake wallpaper showed through all three panels as a light stripe, and the owner asked for a solid default.
+
+**Follow-ups.** Pop's "no extra options" line needs left padding. Markdown links open through a plain `target="_blank"` anchor, so middle-click and Ctrl+click skip the safe-opener path, and the webview fallback should go. The companion and dictation windows keep dark styling in every look, and the remote web app still defaults to the robot art. The four FIX40 specs are untracked in the working tree and need committing. The lane worktrees (`D:\fx40t`, `D:\fx40c`, `D:\fx40p`, `D:\fx40d`, `D:\fx40o`) are removed after the next release.
 
 ## Beta.33 review FIX39 (18 October 2026)
 

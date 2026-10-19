@@ -32,21 +32,17 @@ function readAccent(): string {
 
 let style = readStyle()
 let accent = readAccent()
-let styleLoads = new Map<string, Promise<unknown>>()
+let legacyFontLoad: Promise<unknown> | undefined
 let customWallpaperUrl = ''
 const listeners = new Set<() => void>()
 
-function loadStyle(next: ThemeStyle) {
-  if (next === 'blobots') return
-  const current = styleLoads.get(next)
-  if (current) return current
-  const load = next === 'legacy'
-    ? Promise.all([import('@fontsource/doto/latin-700.css'), import('@fontsource/doto/latin-900.css'), import('@fontsource/dm-mono/latin-400.css'), import('@fontsource/dm-mono/latin-500.css'), import('../ui/bitbots.css')])
-    : next === 'bitbots' ? import('../ui/themes/frost.css')
-      : next === 'pop' ? import('../ui/themes/pop.css') : import('../ui/themes/dot.css')
-  const tracked = load.catch(() => { styleLoads.delete(next) })
-  styleLoads.set(next, tracked)
-  return tracked
+function loadLegacyFonts() {
+  if (legacyFontLoad) return legacyFontLoad
+  legacyFontLoad = Promise.all([
+    import('@fontsource/doto/latin-700.css'), import('@fontsource/doto/latin-900.css'),
+    import('@fontsource/dm-mono/latin-400.css'), import('@fontsource/dm-mono/latin-500.css'),
+  ]).catch(() => { legacyFontLoad = undefined })
+  return legacyFontLoad
 }
 
 function applyAccent(root: HTMLElement) {
@@ -71,7 +67,7 @@ function applyDocument() {
   const root = document.documentElement
   root.dataset.style = style
   if (style === 'legacy') root.dataset.bitbots = 'on'; else delete root.dataset.bitbots
-  void loadStyle(style)
+  if (style === 'legacy') void loadLegacyFonts()
   root.dataset.wallpaper = readWallpaper()
   root.dataset.glass = readGlass()
   applyAccent(root)

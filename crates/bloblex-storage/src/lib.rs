@@ -1277,7 +1277,10 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="skills.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots","legacy","pop","dot"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.wallpaper" && !v.as_str().is_some_and(|s| ["lake","dusk","bloom","sand","custom"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.glass" && !v.as_str().is_some_and(|s| ["solid","balanced","clear"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if matches!(k,"appearance.font" | "appearance.monoFont") && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()<=40 && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c==b'-'))){return Err(StorageError::InvalidAgent)}
     if k=="appearance.accent" && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()==7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit()))){return Err(StorageError::InvalidAgent)}
     if k=="appearance.density" && !v.as_str().is_some_and(|s| ["compact","default","roomy"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="hints.seen" && !valid_hints_seen(v){return Err(StorageError::InvalidAgent)}
@@ -5354,11 +5357,16 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
     Ok(())
 }
 /// A blob look: one of the silhouette names, an optional seed and up to 48
-/// pinned trait positions in [0, 1]. Kept small so it travels in every snapshot.
+/// pinned trait positions in [0, 1], plus an optional art style and painted
+/// body. Kept small so it travels in every snapshot.
 fn valid_look(look: &Value) -> bool {
     const SHAPES: [&str; 13] = ["circle","pebble","squircle","round","organic","boxy","capsule","cloud","droplet","hexagon","sun","triangle","cat"];
+    const ARTS: [&str; 6] = ["robot","robot-flat","robot-pop","robot-dot","blob","painted"];
+    const PAINTS: [&str; 12] = ["classic","cube","star","flower","pear","peanut","ghost","bunny","kitty","ufo","boxbot","tile"];
     let Some(object) = look.as_object() else { return false };
-    if object.keys().any(|key| !["shape","seed","traits","bot"].contains(&key.as_str())) { return false; }
+    if object.keys().any(|key| !["shape","seed","traits","bot","art","paint"].contains(&key.as_str())) { return false; }
+    if object.get("art").is_some_and(|art| !art.is_null() && !art.as_str().is_some_and(|art| ARTS.contains(&art))) { return false; }
+    if object.get("paint").is_some_and(|paint| !paint.is_null() && !paint.as_str().is_some_and(|paint| PAINTS.contains(&paint))) { return false; }
     // Bitbots theme styling: a robot outline and three colours, all optional.
     if let Some(bot) = object.get("bot").filter(|bot| !bot.is_null()) {
         let Some(bot) = bot.as_object() else { return false };
@@ -5678,6 +5686,14 @@ mod pricing_override_removal_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn appearance_values_validate() {
+        for style in ["bitbots", "blobots", "legacy", "pop", "dot"] { assert!(validate_setting_value("appearance.style", &json!(style)).is_ok()); }
+        for wallpaper in ["lake", "dusk", "bloom", "sand", "custom"] { assert!(validate_setting_value("appearance.wallpaper", &json!(wallpaper)).is_ok()); }
+        for glass in ["solid", "balanced", "clear"] { assert!(validate_setting_value("appearance.glass", &json!(glass)).is_ok()); }
+        for key in ["appearance.font", "appearance.monoFont"] { for font in ["", "space-grotesk", "jersey-10"] { assert!(validate_setting_value(key, &json!(font)).is_ok()); } }
+        for (key, value) in [("appearance.style", json!("unknown")), ("appearance.wallpaper", json!("nope")), ("appearance.glass", json!("opaque")), ("appearance.font", json!("Font Name")), ("appearance.monoFont", json!("_bad")), ("appearance.font", json!("x".repeat(41)))] { assert!(validate_setting_value(key, &value).is_err(), "{key}: {value}"); }
+    }
     fn remove_session_controls_migration(c: &Connection) {
         c.execute_batch("DROP TABLE IF EXISTS message_reactions; DROP INDEX IF EXISTS idx_messages_session_id_id; ALTER TABLE sessions DROP COLUMN model_lock_json; DROP TABLE IF EXISTS quota_snapshots; DELETE FROM schema_migrations WHERE version IN (6,7,8,9,10,11,12); PRAGMA user_version=5; ALTER TABLE sessions DROP COLUMN archived; ALTER TABLE sessions DROP COLUMN title_override; ALTER TABLE agents DROP COLUMN outfit; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
     }
@@ -7936,6 +7952,21 @@ mod fix39_activity_tests {
             assert!(valid_look(&json!({"shape":shape,"seed":"stable"})), "{shape}");
         }
         assert!(!valid_look(&json!({"shape":"unknown"})));
+    }
+
+    #[test]
+    fn valid_look_accepts_only_known_art_and_paint() {
+        for art in ["robot", "robot-flat", "robot-pop", "robot-dot", "blob", "painted"] {
+            assert!(valid_look(&json!({"shape":"circle","art":art})), "{art}");
+        }
+        for paint in ["classic", "cube", "star", "flower", "pear", "peanut", "ghost", "bunny", "kitty", "ufo", "boxbot", "tile"] {
+            assert!(valid_look(&json!({"shape":"circle","paint":paint})), "{paint}");
+        }
+        assert!(valid_look(&json!({"shape":"circle","art":null,"paint":null})));
+        assert!(valid_look(&json!({"shape":"circle","art":"robot-flat","paint":"ufo","bot":{"shape":"square"}})));
+        assert!(!valid_look(&json!({"shape":"circle","art":"glossy"})));
+        assert!(!valid_look(&json!({"shape":"circle","paint":"round"})));
+        assert!(!valid_look(&json!({"shape":"circle","art":"robot","extra":true})));
     }
 
     #[test]

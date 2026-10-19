@@ -6,7 +6,13 @@ import { DizzyRecoveryDeadline, GreetingLifecycle } from './motion'
 import { playCompanionCue, unlockCompanionAudioFromGesture } from './soundCues'
 import type { BlobLook } from './look'
 import { BitbotCanvas } from './BitbotCanvas'
-import { useBitbots } from './bitbots'
+import { useThemeStyle } from './bitbots'
+import { resolveArt, type BotArt } from './art/art'
+import { FlatRobot } from './art/FlatRobot'
+import { PopRobot } from './art/PopRobot'
+import { DotRobot } from './art/DotRobot'
+import { PaintedBlob } from './art/PaintedBlob'
+import './art/art.css'
 import type { ThemeStyle } from '../ui/appearance'
 
 export type { BlobMood } from './characterState'
@@ -34,6 +40,8 @@ export interface BlobCanvasProps {
   soundCues?: boolean
   /** Draw in this look whatever the document is wearing (onboarding and the look preview). */
   style?: ThemeStyle
+  /** Force an art style, overriding the look and the app look (pickers and previews). */
+  art?: BotArt
   onGreetingComplete?: () => void
   onDizzy?: () => void
   onDizzyRecovery?: () => void
@@ -334,11 +342,18 @@ function ClassicBlobCanvas({ color, size = 52, mood = 'idle', className = '', la
 }
 
 /**
- * Bitbots character. In Bitbots mode every surface draws the pixel robot;
- * otherwise the classic blob engine does. Both take the same props.
+ * A bot's face. The art comes from the look, else the app look, and every
+ * renderer takes the same props so one face language covers every surface.
  */
 export function BlobCanvas(props: BlobCanvasProps) {
-  const documentBitbots = useBitbots()
-  const bitbots = props.style ? props.style === 'bitbots' : documentBitbots
-  return bitbots ? <BitbotCanvas {...props} /> : <ClassicBlobCanvas {...props} />
+  const documentStyle = useThemeStyle() as string
+  const style = props.style ? String(props.style) : documentStyle
+  switch (props.art ?? resolveArt(props.look, style)) {
+    case 'robot': return <BitbotCanvas {...props} />
+    case 'blob': return <ClassicBlobCanvas {...props} />
+    case 'robot-flat': return <FlatRobot {...props} />
+    case 'robot-pop': return <PopRobot {...props} />
+    case 'robot-dot': return <DotRobot {...props} />
+    default: return <PaintedBlob {...props} />
+  }
 }

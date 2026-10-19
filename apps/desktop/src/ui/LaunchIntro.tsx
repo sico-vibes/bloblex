@@ -9,7 +9,7 @@ import { type LaunchCheck } from './launchChecks'
 import { friendlyError } from './errorCopy'
 import { ProviderLogo } from './providerBrand'
 import { PixelClouds } from './PixelClouds'
-import { useBitbots } from '../blob/bitbots'
+import { useLegacyPixel } from '../blob/bitbots'
 
 /** The working mascot's canvas size; the greeting is scaled so the body matches it. */
 const STAGE_SIZE = 150
@@ -31,7 +31,7 @@ export function LaunchIntro({ checks, runtimes, agent = null, onComplete, onRetr
   const finished = checks.length > 0 && checks.every((check) => check.state !== 'running')
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const [phase, setPhase] = useState<Phase>('scanning')
-  const bitbots = useBitbots()
+  const bitbots = useLegacyPixel()
   const color = agent ? agentColorHex(agent.color) : '#b7a7f4'
   useEffect(() => { onCompleteRef.current = onComplete }, [onComplete])
 

@@ -27,6 +27,15 @@ describe('blob share format', () => {
     expect(() => parseSharedBlob(JSON.stringify({ ...base, look: { shape: 'star' } }))).toThrow(/look is not valid/)
   })
 
+  it('keeps the art style and painted body on export and import', () => {
+    const agent = { id: 'agent-1', name: 'Helper', description: '', instructions: '', color: '#aabbcc', look: { shape: 'pebble', seed: 'x', art: 'painted', paint: 'ufo' }, model: null, thinking: null, serviceTier: null } as never
+    const value = JSON.parse(serializeBlob(agent, 'codex'))
+    expect(value.look).toEqual({ shape: 'pebble', seed: 'x', art: 'painted', paint: 'ufo' })
+    expect(parseSharedBlob(JSON.stringify(value)).look).toEqual(value.look)
+    const bad = { ...base, look: { shape: 'circle', art: 'glossy', paint: 'cat' } }
+    expect(parseSharedBlob(JSON.stringify(bad)).look).toEqual({ shape: 'circle' })
+  })
+
   it('rejects wrong versions, malformed colours, and oversized content', () => {
     expect(() => parseSharedBlob(JSON.stringify({ ...base, format: 'bloblex.blob.v2' }))).toThrow(/unsupported format version/)
     expect(() => parseSharedBlob(JSON.stringify({ ...base, colour: 'red' }))).toThrow(/#RRGGBB/)

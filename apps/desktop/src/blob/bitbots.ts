@@ -1,5 +1,5 @@
 // Theme style and user accent: the in-window mirror of the daemon's
-// `appearance.style` / `appearance.accent` settings. The character renderer and
+// `appearance.style` / appearance settings. The character renderer and
 // the document theme read from here. The last values are cached so the first
 // paint already matches (no flash of the wrong look).
 
@@ -12,6 +12,8 @@ const STYLE_KEY = 'bitbots.style'
 /** The pre-style key; read once for migration, never written. */
 const LEGACY_KEY = 'bloblex.bitbots'
 const ACCENT_KEY = 'bitbots.accent'
+const WALLPAPER_KEY = 'bitbots.wallpaper'
+const GLASS_KEY = 'bitbots.glass'
 
 function readStyle(): ThemeStyle {
   try {
@@ -30,19 +32,21 @@ function readAccent(): string {
 
 let style = readStyle()
 let accent = readAccent()
-let themeLoad: Promise<unknown> | null = null
+let styleLoads = new Map<string, Promise<unknown>>()
+let customWallpaperUrl = ''
 const listeners = new Set<() => void>()
 
-/** The theme's stylesheet and fonts are only fetched once Bitbots is the style. */
-function loadTheme() {
-  themeLoad ??= Promise.all([
-    import('@fontsource/doto/latin-700.css'),
-    import('@fontsource/doto/latin-900.css'),
-    import('@fontsource/dm-mono/latin-400.css'),
-    import('@fontsource/dm-mono/latin-500.css'),
-    import('../ui/bitbots.css'),
-  ]).catch(() => { themeLoad = null })
-  return themeLoad
+function loadStyle(next: ThemeStyle) {
+  if (next === 'blobots') return
+  const current = styleLoads.get(next)
+  if (current) return current
+  const load = next === 'legacy'
+    ? Promise.all([import('@fontsource/doto/latin-700.css'), import('@fontsource/doto/latin-900.css'), import('@fontsource/dm-mono/latin-400.css'), import('@fontsource/dm-mono/latin-500.css'), import('../ui/bitbots.css')])
+    : next === 'bitbots' ? import('../ui/themes/frost.css')
+      : next === 'pop' ? import('../ui/themes/pop.css') : import('../ui/themes/dot.css')
+  const tracked = load.catch(() => { styleLoads.delete(next) })
+  styleLoads.set(next, tracked)
+  return tracked
 }
 
 function applyAccent(root: HTMLElement) {
@@ -66,7 +70,10 @@ function applyDocument() {
   if (typeof document === 'undefined') return
   const root = document.documentElement
   root.dataset.style = style
-  if (style === 'bitbots') { root.dataset.bitbots = 'on'; void loadTheme() } else delete root.dataset.bitbots
+  if (style === 'legacy') root.dataset.bitbots = 'on'; else delete root.dataset.bitbots
+  void loadStyle(style)
+  root.dataset.wallpaper = readWallpaper()
+  root.dataset.glass = readGlass()
   applyAccent(root)
 }
 
@@ -100,8 +107,9 @@ if (typeof window !== 'undefined') {
   })
 }
 
-/** True while Bitbots (the pixel-robot theme) is the current style. */
-export function bitbotsEnabled() { return style === 'bitbots' }
+export function legacyPixelEnabled() { return style === 'legacy' }
+/** @deprecated Use legacyPixelEnabled. */
+export function bitbotsEnabled() { return style === 'legacy' }
 
 export function setBitbotsEnabled(next: boolean) { setThemeStyle(next ? 'bitbots' : 'blobots') }
 
@@ -125,9 +133,33 @@ export function useThemeStyle(): ThemeStyle {
   return useSyncExternalStore(subscribe, themeStyle, () => 'bitbots')
 }
 
-/** Re-renders when the mode flips. Always false outside the browser/desktop shell. */
+/** Re-renders when the legacy pixel style flips.
+ * @deprecated Use useLegacyPixel.
+ */
 export function useBitbots(): boolean {
-  return useSyncExternalStore(subscribe, bitbotsEnabled, () => false)
+  return useLegacyPixel()
+}
+
+export function useLegacyPixel(): boolean { return useSyncExternalStore(subscribe, legacyPixelEnabled, () => false) }
+
+function readWallpaper(): string {
+  try { const value = localStorage.getItem(WALLPAPER_KEY); return ['lake', 'dusk', 'bloom', 'sand', 'custom'].includes(value ?? '') ? value! : 'lake' } catch { return 'lake' }
+}
+function readGlass(): string {
+  try { const value = localStorage.getItem(GLASS_KEY); return ['solid', 'balanced', 'clear'].includes(value ?? '') ? value! : 'solid' } catch { return 'solid' }
+}
+export function setWallpaper(value: 'lake' | 'dusk' | 'bloom' | 'sand' | 'custom') {
+  try { localStorage.setItem(WALLPAPER_KEY, value) } catch { /* The cache only avoids a flash. */ }
+  if (typeof document !== 'undefined') document.documentElement.dataset.wallpaper = value
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('bitbots-wallpaper-changed'))
+  for (const listener of listeners) listener()
+}
+export function setCustomWallpaperUrl(url: string) { customWallpaperUrl = url; if (typeof window !== 'undefined') window.dispatchEvent(new Event('bitbots-wallpaper-changed')) }
+export function getCustomWallpaperUrl() { return customWallpaperUrl }
+export function setGlass(value: 'solid' | 'balanced' | 'clear') {
+  try { localStorage.setItem(GLASS_KEY, value) } catch { /* The cache only avoids a flash. */ }
+  if (typeof document !== 'undefined') document.documentElement.dataset.glass = value
+  for (const listener of listeners) listener()
 }
 
 /** Re-renders when the accent changes. */

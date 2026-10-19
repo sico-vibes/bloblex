@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LaunchIntro } from './LaunchIntro'
-import { setBitbotsEnabled } from '../blob/bitbots'
+import { setThemeStyle } from '../blob/bitbots'
 import type { LaunchCheck } from './launchChecks'
 
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: { size: number }) => <canvas className="blob-canvas" width={props.size} height={props.size} /> }))
@@ -18,9 +18,16 @@ function mount(checks: LaunchCheck[], serviceDown = false) {
 }
 afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null })
 // These cases exercise the classic launch greeting; Blobots is the style under test.
-beforeEach(() => { setBitbotsEnabled(false) })
+beforeEach(() => { setThemeStyle('blobots') })
 
 describe('LaunchIntro', () => {
+  it('uses pixel welcome details only for Legacy', () => {
+    setThemeStyle('legacy')
+    const { host: mounted } = mount([{ id: 'service', label: 'Connecting', state: 'running', detail: 'Checking' }])
+    expect(mounted.querySelector('.launch-pixel-scan')).not.toBeNull()
+    act(() => setThemeStyle('bitbots'))
+    expect(mounted.querySelector('.launch-pixel-scan')).toBeNull()
+  })
   it('shows ordered checks and permits warning states to complete', () => {
     const { host: mounted } = mount([
       { id: 'service', label: 'Connecting to the Bitbots service', state: 'ok', detail: 'Connected' },

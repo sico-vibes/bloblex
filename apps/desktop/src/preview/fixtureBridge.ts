@@ -370,8 +370,15 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().has('usage-bar')) fixtureSettings['experimental.usageBar'] = true
     if (flags().has('logos')) fixtureSettings['experimental.runtimeLogos'] = true
     if (flags().get('style')) fixtureSettings['appearance.style'] = flags().get('style')
+    if (flags().get('style') && ['bitbots','blobots','legacy','pop','dot'].includes(String(flags().get('style')))) localStorage.setItem('bitbots.style', String(flags().get('style')))
+    if (['system','dark','light'].includes(String(flags().get('theme')))) { fixtureSettings['appearance.theme'] = flags().get('theme'); try { const saved = JSON.parse(localStorage.getItem('bloblex.appearance') ?? '{}'); localStorage.setItem('bloblex.appearance', JSON.stringify({ ...saved, theme: flags().get('theme') })) } catch {} }
     if (flags().get('accent')) fixtureSettings['appearance.accent'] = flags().get('accent')
     if (flags().get('density')) fixtureSettings['appearance.density'] = flags().get('density')
+    for (const key of ['wallpaper','glass','font','monoFont']) { const value = flags().get(key); if (value) fixtureSettings[`appearance.${key}`] = value }
+    if (flags().get('wallpaper')) localStorage.setItem('bitbots.wallpaper', String(flags().get('wallpaper')))
+    if (flags().get('glass')) localStorage.setItem('bitbots.glass', String(flags().get('glass')))
+    if (flags().get('font')) localStorage.setItem('bitbots.font', String(flags().get('font')))
+    if (flags().get('monoFont')) localStorage.setItem('bitbots.monoFont', String(flags().get('monoFont')))
     if (flags().has('seen-hints')) fixtureSettings['hints.seen'] = ['companion.drag']
     if (flags().has('tour')) fixtureSettings['onboarding.tour'] = { version: 1, done: false, step: 2 }
     if (flags().get('chat')) fixtureSettings['companion.chatSize'] = flags().get('chat')
@@ -1115,6 +1122,10 @@ export async function readClipboardImage() {
   if (!response.ok) throw new Error('The preview image is unavailable.')
   return new Uint8Array(await response.arrayBuffer())
 }
+export async function selectWallpaperImage() { return null }
+export async function importWallpaper() {}
+export async function readWallpaper() { return new Uint8Array() }
+export async function clearWallpaper() {}
 export async function selectMarkdownExportPath() { return 'preview-markdown-token' }
 export async function writeMarkdownExport(_selectionToken: string, _text: string) {}
 export async function selectBlobExportPath(_name: string) { return 'preview-blob-export-token' }

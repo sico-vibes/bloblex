@@ -37,9 +37,10 @@ describe('FirstRunOnboarding', () => {
   it('starts on the look step: Bitbots is tagged Primary, Blobots Alternative, and Continue waits for a choice', async () => {
     const { host: mounted } = mount({ runtimes: [runtime] })
     const cards = [...mounted.querySelectorAll<HTMLElement>('.look-card')]
-    expect(cards.map((card) => card.dataset.look)).toEqual(['bitbots', 'blobots'])
+    expect(cards.map((card) => card.dataset.look)).toEqual(['bitbots', 'blobots', 'legacy', 'pop', 'dot'])
     expect(cards[0].textContent).toContain('Primary')
     expect(cards[1].textContent).toContain('Alternative')
+    expect(cards.slice(2).every((card) => card.textContent?.includes('More'))).toBe(true)
     expect(button('Continue').disabled).toBe(true)
     expect(mounted.querySelector('.look-preview')?.getAttribute('data-open')).toBe('false')
     await act(async () => { cards[1].click(); await Promise.resolve() })

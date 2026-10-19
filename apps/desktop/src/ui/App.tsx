@@ -3,8 +3,10 @@ import { Activity, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, C
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
 import { COMPANION_CHAT_SIZE_LABELS, COMPANION_CHAT_SIZES, isCompanionChatSize, MAX_COMPANION_PEERS, type CompanionChatSize } from '../blob/companionLayout'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
-import { setAccentColor, setBitbotsEnabled, setThemeStyle } from '../blob/bitbots'
+import { setAccentColor, setBitbotsEnabled, setThemeStyle, themeStyle } from '../blob/bitbots'
 import { PixelClouds } from './PixelClouds'
+import { AppWallpaper } from './AppWallpaper'
+import { applyFonts } from './fonts'
 import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, setCompanionSoundVolume, unlockCompanionAudioFromGesture } from '../blob/soundCues'
 import { playDictationCue } from './dictationSound'
 import { CompanionFsm, type CompanionMode } from '../blob/companionFsm'
@@ -118,14 +120,16 @@ import { SafeMarkdown, SafeMarkdownInline } from './SafeMarkdown'
 import { parseUnifiedDiff } from './diffParser'
 import type { QuickSwitcherItem } from './quickSwitcherModel'
 import { entityNoun, useEntityNoun } from './vocabulary'
-import { themeStyle } from '../blob/bitbots'
 import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, readClipboardImage, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeBlobExport, writeMarkdownExport, currentCompanionMonitor } from '../tauri'
 
 type AppliedModelState = { sessionId: string; model: string | null; hasSnapshot: boolean; loading: boolean }
 type MessageMenuTarget = { x: number; y: number; sessionId: string; messageId: string; text: string; latest: boolean; references: NonNullable<ChatMessage['references']>; attachments: Array<{ name: string; path: string }>; replyTo: ReplyTarget | null }
 
+function cachedFont(key: string) { try { return localStorage.getItem(key) ?? '' } catch { return '' } }
+
 export function App() {
   const companion = new URLSearchParams(location.search).has('companion')
+  useEffect(() => { void applyFonts(cachedFont('bitbots.font'), cachedFont('bitbots.monoFont'), themeStyle()) }, [])
   const noun = useEntityNoun()
   const nouns = useEntityNoun({ plural: true })
   const Noun = useEntityNoun({ capital: true })
@@ -206,9 +210,22 @@ export function App() {
     else if (key === 'speech.enabled') setSpeechEnabled(value !== false)
     else if (key === 'speech.model') setSpeechModel(typeof value === 'string' && value ? value : DEFAULT_SPEECH_MODEL_ID)
     else if (key === 'experimental.runtimeLogos') setRuntimeLogos(value === true)
-    else if (key === 'appearance.style') { if (isThemeStyle(value)) { styleExplicit.current = true; setThemeStyle(value) } }
+    else if (key === 'appearance.style') { if (isThemeStyle(value)) { styleExplicit.current = true; setThemeStyle(value); void applyFonts(cachedFont('bitbots.font'), cachedFont('bitbots.monoFont'), value) } }
     else if (key === 'appearance.accent') setAccentColor(normalizeAccent(value))
+    else if (key === 'appearance.wallpaper') { try { localStorage.setItem('bitbots.wallpaper', typeof value === 'string' ? value : 'lake') } catch {} document.documentElement.dataset.wallpaper = typeof value === 'string' ? value : 'lake'; window.dispatchEvent(new Event('bitbots-wallpaper-changed')) }
+    else if (key === 'appearance.glass') { try { localStorage.setItem('bitbots.glass', typeof value === 'string' ? value : 'solid') } catch {} document.documentElement.dataset.glass = typeof value === 'string' ? value : 'solid' }
+    else if (key === 'appearance.font' || key === 'appearance.monoFont') { try { localStorage.setItem(key === 'appearance.font' ? 'bitbots.font' : 'bitbots.monoFont', typeof value === 'string' ? value : '') } catch {}; void applyFonts(cachedFont('bitbots.font'), cachedFont('bitbots.monoFont'), themeStyle()) }
     else if (key === 'appearance.density') hydrateDensity(value)
+    else if (key === 'appearance.theme' || key === 'appearance.textSize') {
+      try {
+        const saved = JSON.parse(localStorage.getItem('bloblex.appearance') || '{}') as { theme?: ThemeChoice; textSize?: TextSizeChoice }
+        if (key === 'appearance.theme') saved.theme = value === 'dark' || value === 'light' ? value : 'system'
+        else saved.textSize = ['small','default','large','larger'].includes(String(value)) ? value as TextSizeChoice : 'default'
+        localStorage.setItem('bloblex.appearance', JSON.stringify(saved))
+        if (!companion) applyAppearance(document.documentElement, saved.theme ?? 'system', saved.textSize ?? 'default')
+        else applySurfaceAppearance(document.documentElement, saved.theme ?? 'system', saved.textSize ?? 'default', true)
+      } catch { /* Settings remain persisted by the daemon. */ }
+    }
     else if (key === 'hints.seen') hydrateHints(value)
     else if (key === 'onboarding.tour') hydrateTour(value)
     // Legacy fallback: only while the daemon has never sent `appearance.style`.
@@ -492,7 +509,7 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model', BUSY_SEND_SETTING, 'exec_gate.codex.steer']) applyWindowSetting(key, values[key])
+      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'appearance.wallpaper', 'appearance.glass', 'appearance.font', 'appearance.monoFont', 'appearance.theme', 'appearance.textSize', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model', BUSY_SEND_SETTING, 'exec_gate.codex.steer']) applyWindowSetting(key, values[key])
       setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }
@@ -2354,7 +2371,7 @@ export function App() {
     { id: 'usage', kind: 'action', category: 'Go to', icon: 'usage', title: 'Usage', subtitle: 'Plan limits and tokens', searchText: 'Usage limits quota tokens' },
     { id: 'remote-devices', kind: 'action', category: 'Go to', icon: 'remote', title: 'Remote devices', subtitle: 'Reach your bots from a phone', searchText: 'Remote devices phone tablet browser pair mobile settings' },
     { id: 'settings', kind: 'action', category: 'Settings', icon: 'settings', title: 'Settings', subtitle: '', searchText: 'Settings preferences' },
-    { id: 'change-look', kind: 'action', category: 'Settings', icon: 'look', title: 'Change look', subtitle: 'Bitbots or Blobots, colours', searchText: 'Change look appearance theme style bitbots blobots accent colour' },
+    { id: 'change-look', kind: 'action', category: 'Settings', icon: 'look', title: 'Change look', subtitle: 'Bitbots, Blobots and more looks, wallpaper, fonts', searchText: 'Change look appearance theme style bitbots blobots accent legacy pop dot frost wallpaper glass font colour' },
     { id: 'find-agents', kind: 'action', category: 'Settings', icon: 'agents', title: 'Find coding agents', subtitle: 'Scan for Claude Code, Codex and OpenCode', searchText: 'Find coding agents runtime scan claude codex opencode' },
     { id: 'toggle-details', kind: 'action', category: 'Settings', icon: 'details', title: 'Toggle details panel', subtitle: '', searchText: 'Toggle details panel inspector rail' },
     { id: 'whats-new', kind: 'action', category: 'Help', icon: 'whats-new', title: 'What’s new', subtitle: 'Release notes', searchText: 'What is new changelog release notes version' },
@@ -2436,6 +2453,8 @@ export function App() {
   if (launchVisible && !companion) return <LaunchIntro checks={launchChecks} runtimes={runtimes} agent={activeSelectedAgent} serviceDown={launchServiceDown} onRetry={retryLaunch} onContinueOffline={() => { setConnection('disconnected'); finishLaunch() }} onComplete={finishLaunch} />
   if (onboardingVisible && !companion) return <FirstRunOnboarding runtimes={runtimes} scanning={discoveryStatus.scanning} error={error} onScan={() => void refreshRuntimes()} onCreate={createOnboardedBlob} onFinish={finishOnboarding} onSaveName={saveProfileName} />
   return (
+    <>
+    {!companion && <AppWallpaper />}
     <main className={`app-shell ${detailsVisible ? 'inspector-open' : ''} ${convosOpen && activeSelectedAgent && !schedulesOpen ? 'convos-open' : ''} ${reducedLaunchFade ? 'reduced-launch-fade' : ''}`} style={{ ...(accent ? { '--agent-accent': accent } : {}), ...(reducedLaunchFade ? { '--launch-fade-duration': '180ms' } : {}) } as React.CSSProperties}>
       <aside className="sidebar" aria-label="Agents">
         <div className="sidebar-top">
@@ -2714,6 +2733,7 @@ export function App() {
       {projectDelete && <ConfirmDialog title={`Delete ${projectDelete.name}?`} body={`The project is removed from Bitbots. Its ${nouns} move to Unassigned and the folder on disk is not touched.`} confirmLabel="Delete project" cancelLabel="Keep it" tone="danger" onConfirm={() => { const project = projectDelete; setProjectDelete(null); const memberIds = agents.filter((agent) => agent.projectId === project.id).map((agent) => agent.id); if (experiments.undo) void removeProject(project, memberIds); else void projectAction('project.delete', { projectId: project.id }) }} onCancel={() => setProjectDelete(null)} />}
       {pendingBlobImport && <ImportBlobDialog blob={pendingBlobImport} runtimes={runtimes} onCancel={() => { setPendingBlobImport(null); restoreCreateFocus() }} onCreate={(runtimeId) => createImportedBlob(pendingBlobImport, runtimeId)} />}
     </main>
+    </>
   )
 }
 

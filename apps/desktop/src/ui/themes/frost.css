@@ -1,0 +1,141 @@
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) {
+  --surface-app: transparent;
+  --surface-sidebar: rgb(22 23 28 / var(--glass-tint));
+  --surface-panel: rgb(22 23 28 / var(--glass-tint));
+  --surface-raised: rgb(255 255 255 / .05);
+  --surface-overlay: rgb(22 23 28 / var(--glass-tint));
+  --surface-input: rgb(255 255 255 / .07);
+  --surface-hover: rgb(255 255 255 / .07);
+  --surface-selected: rgb(255 255 255 / .10);
+  --surface-selected-strong: rgb(255 255 255 / .12);
+  --text-1: #f4f5f7;
+  --text-2: rgb(236 238 243 / .70);
+  --text-3: rgb(236 238 243 / .46);
+  --line: rgb(255 255 255 / .07);
+  --line-strong: rgb(255 255 255 / .10);
+  --radius-sm: 9px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 12px;
+  --shadow-pop: 0 10px 30px rgb(0 0 0 / .22);
+  --shadow-card: none;
+  --shadow-panel: none;
+  --accent: var(--user-accent, #8d86f6);
+  --blue: var(--user-accent, #8d86f6);
+  --bubble-user: var(--user-accent-soft, rgb(141 134 246 / .30));
+  --status-working: #f5bd5c;
+  --status-success: #5ccf9c;
+  --status-danger: #f2788a;
+  --status-info: #7fb2f5;
+  --status-violet: #b9a0f5;
+  --glass-tint: .93;
+  --glass-blur: 24px;
+  --font-ui: Inter, "Segoe UI", system-ui, sans-serif;
+  color: var(--text-1);
+  background: transparent;
+  font-size: max(11px, 1em);
+}
+:root[data-style="bitbots"][data-glass="solid"]:not(.companion-surface):not(.dictation-surface) { --glass-tint: .93; --glass-blur: 24px; }
+:root[data-style="bitbots"][data-glass="balanced"]:not(.companion-surface):not(.dictation-surface) { --glass-tint: .58; --glass-blur: 10px; }
+:root[data-style="bitbots"][data-glass="clear"]:not(.companion-surface):not(.dictation-surface) { --glass-tint: .36; --glass-blur: 6px; }
+:root[data-style="bitbots"][data-theme="light"]:not(.companion-surface):not(.dictation-surface) {
+  --surface-sidebar: rgb(250 250 252 / min(1, calc(var(--glass-tint) + .08)));
+  --surface-panel: rgb(250 250 252 / min(1, calc(var(--glass-tint) + .08)));
+  --surface-overlay: rgb(250 250 252 / min(1, calc(var(--glass-tint) + .08)));
+  --surface-raised: rgb(255 255 255 / .6);
+  --surface-input: rgb(20 22 30 / .045);
+  --surface-hover: rgb(20 22 30 / .05);
+  --surface-selected: rgb(255 255 255 / .85);
+  --surface-selected-strong: #fff;
+  --text-1: #15161c;
+  --text-2: rgb(21 22 28 / .66);
+  --text-3: rgb(21 22 28 / .46);
+  --line: rgb(21 22 28 / .07);
+  --line-strong: rgb(21 22 28 / .10);
+  --accent: var(--user-accent, #6a5cf5);
+  --blue: var(--user-accent, #6a5cf5);
+  --bubble-user: var(--user-accent, #6a5cf5);
+  --status-working: #b97800;
+  --status-success: #14875f;
+  --status-danger: #d23a52;
+  --status-info: #2f6bd6;
+  --status-violet: #7f4fd6;
+  --shadow-pop: 0 10px 30px rgb(40 40 60 / .14);
+}
+
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .app-shell { position: relative; z-index: 1; gap: 10px; padding: 10px; background: transparent; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .sidebar,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .conversations-panel,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .session-rail,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .conversation-pane,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .context-pane,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .settings-sheet {
+  background: var(--surface-panel);
+  backdrop-filter: blur(var(--glass-blur)) saturate(125%);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+}
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .menu-surface,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) [role="menu"],
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) [role="dialog"],
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) [role="listbox"],
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) [role="tooltip"],
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .tip-bubble,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .tip-portal,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .runtime-mark-tooltip-portal,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .runtime-problem-tooltip,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .conversation-outline-preview,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .context-window-popover,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .session-effort-popover,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .usage-popover,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .usage-flyout,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .swatch-custom-popover,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .mention-picker,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .composer-menu,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .slash-menu,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .team-menu,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .side-menu,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .runtime-context-menu,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .tag-editor,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .quick-switcher,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .coach-card,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .tour-invite {
+  background: var(--surface-overlay);
+  backdrop-filter: blur(var(--glass-blur)) saturate(125%);
+  box-shadow: var(--shadow-pop);
+  border-radius: 16px;
+}
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) button,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) input,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) textarea,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .toggle,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .switch { border-radius: 12px; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .toggle i,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .switch i { border-radius: 8px; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .accent-swatch,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .bot-swatch,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .swatch-chip,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .swatch-custom-preview { border-radius: 8px; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .primary-button { background: var(--user-accent, #8d86f6); color: var(--user-accent-ink, #fff); }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .density-control button.active { background: var(--surface-selected); border: 1px solid var(--line-strong); color: var(--text-1); }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .composer-box:not(:focus-within) { box-shadow: none; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .analytics-orb::before { box-shadow:none; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .analytics-switch button[aria-pressed="true"]:not(:focus-visible) { box-shadow:none; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .question-card,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .side-header-pill,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .leader-badge,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .lock-badge,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .look-slider input[type="range"]:not(:focus-visible)::-webkit-slider-thumb { box-shadow:none; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .bot-swatch:not([aria-checked="true"]):not(:focus-visible),
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .bot-swatch[aria-checked="true"]:not(:focus-visible),
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .accent-swatch:not(:focus-visible) { box-shadow:none; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .swatch-custom-preview { box-shadow:none; border:1px solid var(--line-strong); }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .swatch-custom-button.has-colour .swatch-chip svg { filter:none; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .session-effort-fill,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .session-effort-knob { box-shadow: none; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .swatch-custom-popover { box-shadow: var(--shadow-pop); }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .coach-card,
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .tour-invite { box-shadow: var(--shadow-pop); }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .message-row.user .message-bubble .mention { color: inherit; }
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .app-wallpaper { position: fixed; inset: 0; z-index: 0; pointer-events: none; background-size: cover; background-position: center; }
+:root[data-style="bitbots"][data-theme="light"]:not(.companion-surface):not(.dictation-surface) .primary-button { background: var(--user-accent, #6a5cf5); color: var(--user-accent-ink, #fff); }

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { useBitbots } from '../blob/bitbots'
+import { useLegacyPixel } from '../blob/bitbots'
 
 const CELL = 4
 const COLS = 160
@@ -20,7 +20,7 @@ function noise(x: number, y: number) {
  * never takes the pointer.
  */
 export function PixelClouds({ className = '' }: { className?: string }) {
-  const bitbots = useBitbots()
+  const bitbots = useLegacyPixel()
   const canvas = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const element = canvas.current

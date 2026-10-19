@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { appearanceAttributes, accentTokens, contrastRatio, isThemeStyle, normalizeAccent, THEME_STYLES } from './appearance'
+import { appearanceAttributes, accentTokens, contrastRatio, isThemeStyle, normalizeAccent, THEME_LOOKS, THEME_STYLES } from './appearance'
 
 const themeCss = readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
+const frostCss = readFileSync(new URL('./themes/frost.css', import.meta.url), 'utf8')
+const densityCss = readFileSync(new URL('./density.css', import.meta.url), 'utf8')
 
 function declarations(selector: string) {
   const start = themeCss.indexOf(`${selector} {`)
@@ -46,6 +48,16 @@ function composite(color: string, under: string) {
 }
 
 describe('appearance token selection', () => {
+  it('keeps a visible focus ring on controls in Frost', () => {
+    expect(frostCss).not.toMatch(/\.app-shell\s+\*\s*\{[^}]*box-shadow\s*:\s*none/)
+    expect(themeCss).toContain(':focus-visible { outline: none; box-shadow: var(--focus-ring); }')
+    expect(densityCss).toContain('.density-control button:focus-visible { outline: none; box-shadow: var(--focus-ring); }')
+  })
+  it('preserves visible focus rings in Frost and avoids a blanket shadow reset', () => {
+    expect(frostCss).not.toMatch(/\.app-shell\s+\*\s*\{[^}]*box-shadow\s*:\s*none/)
+    expect(themeCss).toContain('--focus-ring: 0 0 0 2px')
+    expect(densityCss).toContain('.density-control button:focus-visible { outline: none; box-shadow: var(--focus-ring); }')
+  })
   it('resolves explicit themes and preserves text size', () => {
     expect(appearanceAttributes('light', 'larger')).toEqual({ theme: 'light', textSize: 'larger' })
     expect(appearanceAttributes('dark', 'small')).toEqual({ theme: 'dark', textSize: 'small' })
@@ -103,13 +115,19 @@ describe('user accent colours', () => {
     expect(normalizeAccent(undefined)).toBe('')
   })
 
-  it('recognizes exactly the two looks', () => {
-    expect(THEME_STYLES).toEqual(['bitbots', 'blobots'])
-    expect(isThemeStyle('bitbots')).toBe(true)
-    expect(isThemeStyle('blobots')).toBe(true)
+  it('recognizes all five looks', () => {
+    expect(THEME_STYLES).toEqual(['bitbots', 'blobots', 'legacy', 'pop', 'dot'])
+    for (const look of THEME_STYLES) expect(isThemeStyle(look)).toBe(true)
     expect(isThemeStyle('Blobots')).toBe(false)
     expect(isThemeStyle('')).toBe(false)
     expect(isThemeStyle(undefined)).toBe(false)
+    expect(THEME_LOOKS.map((look) => look.id)).toEqual(THEME_STYLES)
+    expect(THEME_LOOKS[0]?.description).toBe('Frosted glass over a wallpaper you choose.')
+  })
+
+  it('keeps Frost body text above AA on solid glass over Lake and Dusk extremes', () => {
+    for (const background of ['#232932','#3b3a3c','#15161d','#3b3532']) expect(contrastRatio('#f4f5f7', background)).toBeGreaterThanOrEqual(4.5)
+    for (const background of ['#eef1f5','#fafafa','#e7e7eb','#faf7f5']) expect(contrastRatio('#15161c', background)).toBeGreaterThanOrEqual(4.5)
   })
 
   it('computes WCAG contrast for known pairs', () => {

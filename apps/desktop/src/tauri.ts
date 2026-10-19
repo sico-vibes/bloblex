@@ -34,6 +34,20 @@ export async function readClipboardImage(): Promise<Uint8Array> {
   if (!inDesktop) throw new Error('Clipboard images are available only in the desktop app.')
   return new Uint8Array(await invoke<ArrayBuffer>('clipboard_image'))
 }
+export async function selectWallpaperImage(): Promise<string | null> {
+  if (!inDesktop) return null
+  return invoke<string | null>('select_wallpaper_image')
+}
+export async function importWallpaper(token: string): Promise<void> {
+  if (!inDesktop) return
+  await invoke('import_wallpaper', { selectionToken: token })
+}
+export async function readWallpaper(): Promise<Uint8Array> {
+  if (!inDesktop) return new Uint8Array()
+  const bytes = await invoke<ArrayBuffer>('read_wallpaper')
+  return new Uint8Array(bytes)
+}
+export async function clearWallpaper(): Promise<void> { if (inDesktop) await invoke('clear_wallpaper') }
 
 export async function openProjectFolder(): Promise<string | null> {
   if (!inDesktop) return null

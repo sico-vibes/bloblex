@@ -6,7 +6,7 @@ import { THEME_LOOKS } from './appearance'
 import { AccentPicker } from './AccentPicker'
 import { useAccentColor, setAccentColor } from '../blob/bitbots'
 import { SettingsGroup, SettingsRow } from './SettingsParts'
-import { BlobCanvas } from '../blob/BlobCanvas'
+import { LookOrb } from './LookOrb'
 import { applyAppearance, type ThemeChoice, type TextSizeChoice } from './appearance'
 import { SegmentedControl } from './SegmentedControl'
 import { setDensity as updateDensity, useDensity } from './uiPrefs'
@@ -66,14 +66,8 @@ export function AppearancePage() {
   const pickGlass = async (id: typeof GLASS[number]) => { await save('appearance.glass', id); writeCache('bitbots.glass', id); setGlassValue(id); setGlass(id) }
   const pickFont = async (mono: boolean, id: string) => { await save(mono ? 'appearance.monoFont' : 'appearance.font', id); writeCache(mono ? 'bitbots.monoFont' : 'bitbots.font', id); if (mono) setMonoFont(id); else setUiFont(id); void applyFonts(mono ? uiFont : id, mono ? id : monoFont, style) }
   const lookCard = (look: typeof THEME_LOOKS[number], small = false) => <button key={look.id} type="button" data-selected={style === look.id} onClick={() => void pickLook(look.id)}>
-    <span className={`look-window ${small ? 'compact' : ''}`} data-look={look.id} aria-hidden="true" style={look.id === 'bitbots' ? { backgroundImage: `url("${lakeImage}")` } : undefined}>
-      <span className="look-window-title"><i /><i /><i /><b>{look.label}</b></span>
-      <span className="look-window-body">
-        <span className="look-window-sidebar">{['Atlas','Nova'].map((name, index) => <span className="look-window-agent" key={name}><BlobCanvas style={look.id} color={index ? '#83a8bd' : '#b7a7f4'} size={small ? 11 : 15} mini decorative mood="idle" label={`${look.label} ${name}`} /><i>{name}</i></span>)}</span>
-        <span className="look-window-chat"><i className="look-window-user">Can you help?</i><i className="look-window-reply"><BlobCanvas style={look.id} color="#d58a72" size={small ? 12 : 16} mini decorative mood="idle" label={`${look.label} bot`} /><span>Yes, I’m looking now.</span></i></span>
-      </span>
-    </span>
-    <strong>{look.label}</strong><small>{look.description}</small>
+    <LookOrb look={look.id} size={small ? 44 : 72} />
+    <span className="appearance-look-copy"><strong>{look.label}</strong><small>{look.description}</small></span>
   </button>
   const fontDefaultLabel = (mono: boolean) => {
     const selectedDefault = FONT_DEFAULTS[style][mono ? 'mono' : 'ui']

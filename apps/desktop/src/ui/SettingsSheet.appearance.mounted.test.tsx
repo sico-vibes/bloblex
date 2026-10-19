@@ -58,6 +58,8 @@ describe('General settings mounted controls', () => {
     await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Appearance" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect([...host.querySelectorAll('.appearance-primary-grid button strong,.appearance-more-grid button strong')].map((button) => button.textContent)).toEqual(['Bitbots','Blobots','Legacy','Pop','Dot'])
+    expect([...host.querySelectorAll<SVGElement>('.appearance-page .look-orb')].map((orb) => orb.dataset.look)).toEqual(['bitbots', 'blobots', 'legacy', 'pop', 'dot'])
+    expect(host.querySelector('.appearance-page .look-window')).toBeNull()
     await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-primary-grid button,.appearance-more-grid button')].find((button) => button.textContent?.includes('Pop'))?.click(); await Promise.resolve() })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.style', value: 'pop' })
     expect(host.textContent).toContain('This look has no extra options yet.')

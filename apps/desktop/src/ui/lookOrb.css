@@ -1,0 +1,7 @@
+.look-orb { display:block; flex:0 0 auto; overflow:visible; shape-rendering:geometricPrecision; }
+.look-orb[data-look="legacy"], .look-orb-legacy-pixels { shape-rendering:crispEdges; image-rendering:pixelated; }
+.look-orb-pop-base { fill:#fbf6ec; }
+.look-orb[data-look="pop"] { filter:drop-shadow(3px 3px 0 #1d1b18); }
+.look-orb-dot-unlit { fill:#333; }
+.look-orb-dot-lit { fill:#f2f2f2; }
+.look-orb-dot-red { fill:#ff4b2b; }

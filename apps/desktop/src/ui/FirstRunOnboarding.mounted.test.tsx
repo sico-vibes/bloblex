@@ -38,6 +38,8 @@ describe('FirstRunOnboarding', () => {
     const { host: mounted } = mount({ runtimes: [runtime] })
     const cards = [...mounted.querySelectorAll<HTMLElement>('.look-card')]
     expect(cards.map((card) => card.dataset.look)).toEqual(['bitbots', 'blobots', 'legacy', 'pop', 'dot'])
+    expect([...mounted.querySelectorAll<SVGElement>('.look-card .look-orb')].map((orb) => orb.dataset.look)).toEqual(['bitbots', 'blobots', 'legacy', 'pop', 'dot'])
+    expect(mounted.querySelector('.look-card .blob-canvas-frame')).toBeNull()
     expect(cards[0].textContent).toContain('Primary')
     expect(cards[1].textContent).toContain('Alternative')
     expect(cards.slice(2).every((card) => card.textContent?.includes('More'))).toBe(true)

@@ -5,8 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LaunchIntro } from './LaunchIntro'
 import { setThemeStyle } from '../blob/bitbots'
 import type { LaunchCheck } from './launchChecks'
+import type { BlobCanvasProps } from '../blob/BlobCanvas'
 
-vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: { size: number }) => <canvas className="blob-canvas" width={props.size} height={props.size} /> }))
+const canvasMock = vi.hoisted(() => ({ latest: null as null | Record<string, unknown> }))
+vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: BlobCanvasProps) => {
+  canvasMock.latest = props as unknown as Record<string, unknown>
+  return <canvas className="blob-canvas" data-greeting={props.greeting ? 'true' : undefined} data-look-art={props.look?.art ?? undefined} width={props.size} height={props.size} />
+} }))
 let root: Root | null = null
 let host: HTMLDivElement | null = null
 function mount(checks: LaunchCheck[], serviceDown = false) {
@@ -35,6 +40,17 @@ describe('LaunchIntro', () => {
     ])
     expect(mounted.querySelectorAll('.launch-checklist li')).toHaveLength(2)
     expect(mounted.textContent).toContain('No coding agents found')
+  })
+
+  it('uses the active look art for its greeting and completes through the canvas callback', () => {
+    setThemeStyle('dot')
+    const { host: mounted, complete } = mount([{ id: 'service', label: 'Connecting', state: 'ok', detail: 'Connected' }])
+    const canvas = mounted.querySelector<HTMLCanvasElement>('.launch-blob-stage canvas.blob-canvas')
+    expect(canvas?.dataset.greeting).toBe('true')
+    expect(canvasMock.latest?.greeting).toBe(true)
+    expect(canvasMock.latest?.look).toBeNull()
+    act(() => (canvasMock.latest?.onGreetingComplete as (() => void) | undefined)?.())
+    expect(complete).toHaveBeenCalledOnce()
   })
 
   it('offers retry and continue offline when the service is unavailable', () => {

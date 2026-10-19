@@ -958,7 +958,7 @@ fn manager_tool_schemas() -> Vec<Value> {
         "blob":{"type":"string","description":"Exact bot id or name."},
         "name":{"type":"string","maxLength":40}, "description":{"type":"string","maxLength":255},
         "role":{"type":"string","maxLength":40}, "instructions":{"type":"string","maxLength":4000},
-        "look":{"type":["object","null"],"description":"Bitbots look: shape, optional seed, traits and bot outline/colors, as returned by read_blob."},
+        "look":{"type":["object","null"],"description":"Bot look: shape, optional seed, traits, optional art (robot, robot-flat, robot-pop, robot-dot, blob, painted), optional paint (classic, cube, star, flower, pear, peanut, ghost, bunny, kitty, ufo, boxbot, tile) and bot outline/colors, as returned by read_blob."},
         "model":{"type":["string","null"]}, "thinking":{"type":["string","null"],"description":"Effort id, or null for model default."},
         "approvalMode":{"type":"string","enum":["ask","auto"]},
         "tags":{"type":"array","maxItems":8,"items":{"type":"string","minLength":1,"maxLength":24}}

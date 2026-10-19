@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BlobCanvas } from './BlobCanvas'
 import { setBitbotsEnabled } from './bitbots'
+import type { BotArt } from './art/art'
 import * as soundCues from './soundCues'
 import * as lookPaint from './look/paint'
 
@@ -29,6 +30,9 @@ function makeCanvasContext() {
     beginPath: vi.fn(), arc: vi.fn(), arcTo: vi.fn(), ellipse: vi.fn(), fill: vi.fn(), stroke: vi.fn(), clip: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(),
     roundRect: vi.fn(), quadraticCurveTo: vi.fn(), bezierCurveTo: vi.fn(), closePath: vi.fn(), fillText: vi.fn(),
     setLineDash: vi.fn(), fillRect: vi.fn(),
+    createImageData: vi.fn((width: number, height: number) => ({ data: new Uint8ClampedArray(Math.max(1, (width | 0) * (height | 0) * 4)), width, height })),
+    putImageData: vi.fn(), getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(4), width: 1, height: 1 })),
+    drawImage: vi.fn(), createPattern: vi.fn(() => null), measureText: vi.fn(() => ({ width: 0 })),
   }
 }
 
@@ -303,6 +307,43 @@ describe('BlobCanvas mounted lifecycle', () => {
     expect(canvas.getAttribute('aria-label')).toBe('Agent, offline')
     view.rerender(<BlobCanvas color="#e67f72" label="Agent" mood="error" fileStage="ready" />)
     expect(canvas.getAttribute('aria-label')).toBe('Agent, error')
+    view.unmount()
+  })
+})
+
+describe('BlobCanvas art dispatch', () => {
+  it('picks the renderer for every art, and an explicit art overrides the look', () => {
+    const cases: Array<[BotArt, string]> = [
+      ['blob', 'canvas.blob-canvas'],
+      ['robot-flat', '[data-art="robot-flat"]'],
+      ['robot-pop', '[data-art="robot-pop"]'],
+      ['robot-dot', '[data-art="robot-dot"]'],
+      ['painted', '[data-art="painted"]'],
+    ]
+    for (const [art, selector] of cases) {
+      const view = mount(<BlobCanvas color="#e67f72" size={40} art={art} look={{ shape: 'circle', art: 'blob' }} />)
+      expect(view.host.querySelector(selector), art).toBeTruthy()
+      view.unmount()
+    }
+  })
+
+  it('follows the app look when the look names no art', () => {
+    const expectations: Array<[string, string]> = [
+      ['bitbots', '[data-art="robot-flat"]'],
+      ['pop', '[data-art="robot-pop"]'],
+      ['dot', '[data-art="robot-dot"]'],
+      ['blobots', 'canvas.blob-canvas'],
+    ]
+    for (const [style, selector] of expectations) {
+      const view = mount(<BlobCanvas color="#e67f72" size={40} style={style as never} />)
+      expect(view.host.querySelector(selector), style).toBeTruthy()
+      view.unmount()
+    }
+  })
+
+  it('resolves a look art over the app look', () => {
+    const view = mount(<BlobCanvas color="#e67f72" size={40} style="bitbots" look={{ shape: 'circle', art: 'painted' }} />)
+    expect(view.host.querySelector('[data-art="painted"]')).toBeTruthy()
     view.unmount()
   })
 })

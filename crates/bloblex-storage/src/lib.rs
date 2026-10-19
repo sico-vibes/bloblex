@@ -5357,11 +5357,16 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
     Ok(())
 }
 /// A blob look: one of the silhouette names, an optional seed and up to 48
-/// pinned trait positions in [0, 1]. Kept small so it travels in every snapshot.
+/// pinned trait positions in [0, 1], plus an optional art style and painted
+/// body. Kept small so it travels in every snapshot.
 fn valid_look(look: &Value) -> bool {
     const SHAPES: [&str; 13] = ["circle","pebble","squircle","round","organic","boxy","capsule","cloud","droplet","hexagon","sun","triangle","cat"];
+    const ARTS: [&str; 6] = ["robot","robot-flat","robot-pop","robot-dot","blob","painted"];
+    const PAINTS: [&str; 12] = ["classic","cube","star","flower","pear","peanut","ghost","bunny","kitty","ufo","boxbot","tile"];
     let Some(object) = look.as_object() else { return false };
-    if object.keys().any(|key| !["shape","seed","traits","bot"].contains(&key.as_str())) { return false; }
+    if object.keys().any(|key| !["shape","seed","traits","bot","art","paint"].contains(&key.as_str())) { return false; }
+    if object.get("art").is_some_and(|art| !art.is_null() && !art.as_str().is_some_and(|art| ARTS.contains(&art))) { return false; }
+    if object.get("paint").is_some_and(|paint| !paint.is_null() && !paint.as_str().is_some_and(|paint| PAINTS.contains(&paint))) { return false; }
     // Bitbots theme styling: a robot outline and three colours, all optional.
     if let Some(bot) = object.get("bot").filter(|bot| !bot.is_null()) {
         let Some(bot) = bot.as_object() else { return false };
@@ -7947,6 +7952,21 @@ mod fix39_activity_tests {
             assert!(valid_look(&json!({"shape":shape,"seed":"stable"})), "{shape}");
         }
         assert!(!valid_look(&json!({"shape":"unknown"})));
+    }
+
+    #[test]
+    fn valid_look_accepts_only_known_art_and_paint() {
+        for art in ["robot", "robot-flat", "robot-pop", "robot-dot", "blob", "painted"] {
+            assert!(valid_look(&json!({"shape":"circle","art":art})), "{art}");
+        }
+        for paint in ["classic", "cube", "star", "flower", "pear", "peanut", "ghost", "bunny", "kitty", "ufo", "boxbot", "tile"] {
+            assert!(valid_look(&json!({"shape":"circle","paint":paint})), "{paint}");
+        }
+        assert!(valid_look(&json!({"shape":"circle","art":null,"paint":null})));
+        assert!(valid_look(&json!({"shape":"circle","art":"robot-flat","paint":"ufo","bot":{"shape":"square"}})));
+        assert!(!valid_look(&json!({"shape":"circle","art":"glossy"})));
+        assert!(!valid_look(&json!({"shape":"circle","paint":"round"})));
+        assert!(!valid_look(&json!({"shape":"circle","art":"robot","extra":true})));
     }
 
     #[test]

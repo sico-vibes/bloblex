@@ -8,11 +8,16 @@
 import { BLOB_SHAPES, layoutForm, type BlobShape, type FormLayout } from './forms'
 import { traits, type TraitOverrides } from './seed'
 import { normalizeBot, type BotStyle } from './bot'
+import {
+  PAINTED_SHAPES, isBotArt, isPaintedShape, resolvePaint,
+  type BotArt, type PaintedShape,
+} from '../art/art'
 
 export * from './bot'
 
 export { BLOB_SHAPES, type BlobShape, type FormLayout, type FormEye } from './forms'
 export type { TraitOverrides } from './seed'
+export type { BotArt, PaintedShape } from '../art/art'
 
 export interface BlobLook {
   shape: BlobShape
@@ -21,6 +26,10 @@ export interface BlobLook {
   traits?: TraitOverrides
   /** The robot's outline and colours, read only while Bitbots mode is on. */
   bot?: BotStyle
+  /** The art style. Omitted, the bot follows the app look. */
+  art?: BotArt
+  /** The hand-painted body. Omitted, it is derived from the blob shape. */
+  paint?: PaintedShape
 }
 
 export const SHAPE_LABELS: Record<BlobShape, string> = {
@@ -68,13 +77,22 @@ export function normalizeLook(raw: unknown): BlobLook | null {
   }
   const bot = normalizeBot(value.bot)
   if (bot) look.bot = bot
+  if (isBotArt(value.art)) look.art = value.art
+  if (isPaintedShape(value.paint)) look.paint = value.paint
   return look
 }
 
 /** The look an agent wears: its stored look, else a round blob seeded by its id. */
 export function agentLook(agent: { id?: string | null; look?: unknown } | null | undefined): BlobLook {
   const stored = normalizeLook(agent?.look)
-  return { shape: stored?.shape ?? 'circle', seed: stored?.seed || agent?.id || 'blob', traits: stored?.traits, ...(stored?.bot ? { bot: stored.bot } : {}) }
+  return {
+    shape: stored?.shape ?? 'circle',
+    seed: stored?.seed || agent?.id || 'blob',
+    traits: stored?.traits,
+    ...(stored?.bot ? { bot: stored.bot } : {}),
+    ...(stored?.art ? { art: stored.art } : {}),
+    ...(stored?.paint ? { paint: stored.paint } : {}),
+  }
 }
 
 /** The look the editor previews: the draft's look, else the default for this blob id. */
@@ -88,7 +106,7 @@ export function sameLook(a: BlobLook | null | undefined, b: BlobLook | null | un
 
 function lookKey(look: BlobLook) {
   const pinned = Object.entries(look.traits ?? {}).sort(([a], [b]) => a.localeCompare(b))
-  return JSON.stringify([look.shape, look.seed ?? '', pinned, look.bot ?? null])
+  return JSON.stringify([look.shape, look.seed ?? '', pinned, look.bot ?? null, look.art ?? null, look.paint ?? null])
 }
 
 const cache = new Map<string, FormLayout>()
@@ -117,12 +135,18 @@ export function withTrait(look: BlobLook, keys: string | readonly string[], posi
   return { ...look, traits: next }
 }
 
-/** A fresh face, retaining the silhouette and alternate robot styling. */
+/** A fresh face, retaining the silhouette, art and alternate robot styling. */
 export function shuffleLook(look: BlobLook, random: () => number = Math.random): BlobLook {
   let seed = `blob-${Math.floor(random() * 0xffffffff).toString(36)}`
   if (seed === look.seed) seed += '-next'
   const { traits: _traits, ...rest } = look
-  return { ...rest, seed }
+  const next: BlobLook = { ...rest, seed }
+  if (look.art === 'painted') {
+    const current = look.paint ?? resolvePaint(look)
+    const choices = PAINTED_SHAPES.filter((shape) => shape !== current)
+    next.paint = choices[Math.min(choices.length - 1, Math.floor(random() * choices.length))] ?? current
+  }
+  return next
 }
 
 export interface LookControl {

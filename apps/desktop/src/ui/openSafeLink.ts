@@ -1,4 +1,4 @@
-// Opens an http(s) link in the system browser; anything else stays inert.
+// Opens an http(s) link in the system browser; browser preview uses window.open and native failures stay inert.
 import { invokeNative, isNative } from '../transport/nativeBridge'
 
 export async function openSafeLink(url: string) {
@@ -12,7 +12,6 @@ export async function openSafeLink(url: string) {
   try {
     await invokeNative('plugin:opener|open_url', { url: parsed.href })
   } catch {
-    // Keep links usable if the native opener is unavailable in a development build.
-    window.open(parsed.href, '_blank', 'noopener,noreferrer')
+    // Do not open links inside the desktop webview if the native opener is unavailable.
   }
 }

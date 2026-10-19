@@ -118,13 +118,34 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   return <div className="message-code"><div className="message-code-header"><span>{language || 'Code'}</span><button type="button" onClick={() => void copy()} aria-label="Copy code"><Copy size={13} />{copied ? 'Copied' : 'Copy'}</button></div><pre><code>{code}</code></pre></div>
 }
 
+function SafeLink({ url, text, onOpenLink }: { url: string; text: string; onOpenLink: (url: string) => void }) {
+  return <a
+    className="markdown-link"
+    href={url}
+    target="_blank"
+    rel="noopener noreferrer"
+    draggable={false}
+    onClick={(event) => {
+      event.preventDefault()
+      if (event.button === 0) onOpenLink(url)
+    }}
+    onAuxClick={(event) => {
+      event.preventDefault()
+      if (event.button === 1) onOpenLink(url)
+    }}
+    onMouseDown={(event) => {
+      if (event.button === 1) event.preventDefault()
+    }}
+  >{text}</a>
+}
+
 export function SafeMarkdown({ text, onOpenLink }: { text: string; onOpenLink: (url: string) => void }) {
   const inline = (value: string, keyPrefix: string) => tokenizeInlineMarkdown(value).map((token, index) => {
     const key = `${keyPrefix}-${index}`
     if (token.kind === 'code') return <code key={key}>{token.text}</code>
     if (token.kind === 'strong') return <strong key={key}>{token.text}</strong>
     if (token.kind === 'em') return <em key={key}>{token.text}</em>
-    if (token.kind === 'link') return <a key={key} className="markdown-link" href={token.url} target="_blank" rel="noopener noreferrer" onClick={(event) => { event.preventDefault(); if (token.url) onOpenLink(token.url) }}>{token.text}</a>
+    if (token.kind === 'link') return <SafeLink key={key} url={token.url!} text={token.text} onOpenLink={onOpenLink} />
     return <span key={key}>{token.text}</span>
   })
   return <div className="safe-markdown">{parseMarkdownBlocks(text).map((block, index) => {
@@ -151,7 +172,7 @@ export function SafeMarkdownInline({ text, onOpenLink }: { text: string; onOpenL
     if (token.kind === 'code') return <code key={index}>{token.text}</code>
     if (token.kind === 'strong') return <strong key={index}>{token.text}</strong>
     if (token.kind === 'em') return <em key={index}>{token.text}</em>
-    if (token.kind === 'link') return <a key={index} className="markdown-link" href={token.url} target="_blank" rel="noopener noreferrer" onClick={(event) => { event.preventDefault(); if (token.url) onOpenLink(token.url) }}>{token.text}</a>
+    if (token.kind === 'link') return <SafeLink key={index} url={token.url!} text={token.text} onOpenLink={onOpenLink} />
     return <span key={index}>{token.text}</span>
   })}</>
 }

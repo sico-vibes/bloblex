@@ -2,6 +2,12 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-19 · Docs · Library hashes must ignore line endings
+- **Symptom:** on a checkout with `core.autocrlf=true`, `node scripts/docs-library.mjs check` reported every text asset and snapshot stale: `scripts/docs-library.mjs`, `docs/library/assets/...`, `docs/library/content/...`.
+- **Root cause:** `build` wrote hashes from the LF source files it read; `check` hashed the raw CRLF bytes produced by git checkout. Markdown snapshots had the same mismatch.
+- **Fix:** `hashSource()` in `scripts/docs-library.mjs` normalises CRLF to LF for `.md`, `.css`, `.js`, `.mjs`, `.svg`, `.json` and `.html` before SHA-256; PNG stays byte-for-byte. Build, asset hashes and snapshot comparison all use it.
+- **Avoid:** normalise before hashing, never hash raw working-tree bytes for text. Prove with a CRLF round-trip on one Markdown file, one CSS file and the script, then convert back to LF.
+
 ## 2026-10-19 · Docs · Library guides must stay user-facing
 - **Symptom:** the first library build mixed developer material into the guides: `package.json`/`Cargo.toml` version notes, `settings.set`/`appearance.style` keys, `path:line` citations and "daemon"/"adapter"/"IPC" terms; the five-minute path also repeated a stale README version note.
 - **Rule (owner review):** guides (`docs/library/content/guides/*.md`, plus `overview.md` and `glossary.md`) are for people using Bitbots. Remove code citations, file names, RPC/settings keys and internal terms unless the user must type or see them. Say the fact in user terms and link to the matching reference page for developer detail. Do not mention documentation discrepancies in guides.

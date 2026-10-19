@@ -121,6 +121,29 @@ export function insideRoot(candidate, base = root) {
   );
 }
 
+const TEXT_EXTENSIONS = new Set([
+  '.md',
+  '.css',
+  '.js',
+  '.mjs',
+  '.svg',
+  '.json',
+  '.html',
+]);
+
+export function normalizeLineEndings(value) {
+  return String(value).replaceAll('\r\n', '\n');
+}
+
+/** Hash text sources on LF; binary files stay byte-for-byte. */
+export function hashSource(source, value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value), 'utf8');
+  const normalized = TEXT_EXTENSIONS.has(path.extname(source).toLowerCase())
+    ? normalizeLineEndings(bytes.toString('utf8'))
+    : bytes;
+  return createHash('sha256').update(normalized).digest('hex');
+}
+
 export function routeFor(source) {
   if (source.startsWith('docs/library/content/')) {
     return source.slice('docs/library/content/'.length).replace(/\.md$/i, '');
@@ -592,7 +615,7 @@ export async function build() {
         markdown,
         original,
         text: plainText(markdown),
-        sha256: createHash('sha256').update(original).digest('hex'),
+        sha256: hashSource(source, original),
         ...classify(source, id),
       };
     }),
@@ -638,9 +661,7 @@ export async function build() {
     assets: await Promise.all(
       (await viewerSources()).map(async (source) => ({
         source,
-        sha256: createHash('sha256')
-          .update(await readFile(path.join(root, source)))
-          .digest('hex'),
+        sha256: hashSource(source, await readFile(path.join(root, source))),
       })),
     ),
     documents: ordered.map(({ id, source, title, section, status, sha256, headings }) => ({
@@ -677,17 +698,17 @@ export async function check() {
   }
   for (const asset of manifest.assets || []) {
     const current = await readFile(path.join(root, asset.source));
-    if (createHash('sha256').update(current).digest('hex') !== asset.sha256) {
+    if (hashSource(asset.source, current) !== asset.sha256) {
       errors.push(`Stale viewer asset: ${asset.source}`);
     }
   }
   for (const doc of manifest.documents) {
     const current = await readFile(path.join(root, doc.source));
-    if (createHash('sha256').update(current).digest('hex') !== doc.sha256) {
+    if (hashSource(doc.source, current) !== doc.sha256) {
       errors.push(`Stale source: ${doc.source}`);
     }
     const snapshot = await readFile(path.join(library, 'sources', doc.source), 'utf8');
-    if (snapshot !== current.toString('utf8').replaceAll('\r\n', '\n')) {
+    if (normalizeLineEndings(snapshot) !== normalizeLineEndings(current.toString('utf8'))) {
       errors.push(`Stale snapshot: ${doc.source}`);
     }
   }

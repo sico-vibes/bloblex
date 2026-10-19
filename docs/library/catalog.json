@@ -1,12 +1,12 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "ae2e6cb",
+  "revision": "2f15ec9",
   "documentCount": 293,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
-      "sha256": "1c206c40e52486bd90059869a4464893bcb34274010b3c5d39afca1deb96732d"
+      "sha256": "fa729e6c463e295dff1e412372b9225811a9d1131e98bbff3395d1177e224841"
     },
     {
       "source": "docs/library/assets/bitbots.png",
@@ -108,7 +108,7 @@
       "title": "The five-minute path",
       "section": "Quickstart",
       "status": "Guide",
-      "sha256": "fa6d055f4b8e6276ba6ad1748133b581bb85a2a5ef6e09c83f35d3e9b02dfcc0",
+      "sha256": "b84926f0a7e8bd91b28942911d668e5c12a4c46de8b9f426a6816469fec0d1c8",
       "headings": [
         {
           "id": "before-you-start",
@@ -163,7 +163,7 @@
       "title": "What Bitbots is",
       "section": "Quickstart",
       "status": "Guide",
-      "sha256": "62c900d58999690428d0b92a56de98e1b01388c16b778f525a61cfb9a6259b13",
+      "sha256": "1d6870cbbdb7ccb1bcec3d24fd7a1a2fc437811e9bd3323ab0d33c80ca2050b0",
       "headings": [
         {
           "id": "the-pieces",
@@ -203,7 +203,7 @@
       "title": "Glossary",
       "section": "Quickstart",
       "status": "Guide",
-      "sha256": "77ac6e6515012ccb4904d5e1aa594a18aa29af1cf18e8bba95e5a2438badc65f",
+      "sha256": "bf54b07e0f9134c95a585a84ce2ca595b936ddd70dd8a9b11dd1258173a777a9",
       "headings": []
     },
     {
@@ -212,7 +212,7 @@
       "title": "Looks and appearance",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "54209ca9364b91ca44b9b32f18ea4be39eda758aec4297559bf62f1f4b3507be",
+      "sha256": "9f32f897901b69f827aceae929e2afba810c66fc8f0ae053718d84a5f44b5730",
       "headings": [
         {
           "id": "before-you-start",
@@ -287,7 +287,7 @@
       "title": "Bots",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "f3b1c942ad477ba59d55a103f78ff8fd2026baed500989f80378b08a255384cc",
+      "sha256": "9810b6e210b32201c565fb1e080d925316abc552aaab3869f5ba137d377db6ad",
       "headings": [
         {
           "id": "before-you-start",
@@ -352,7 +352,7 @@
       "title": "Conversations and approvals",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "0e5b0964d04888438bbe3828f72b7382e106de67a0e258a85f933bf8ab42e29a",
+      "sha256": "cbd29c319444f97946bfa1d1447c1101dd26243eabd88e899908219863308fe4",
       "headings": [
         {
           "id": "before-you-start",
@@ -422,7 +422,7 @@
       "title": "Team and Manager",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "07c8d45db942e042f2a34a5b42b4dd24982a11006191e0bd9969a9ed5066d6e7",
+      "sha256": "cd7a0e66afd566713e78aedb4347b36c65068333ed19f8dfcb131e8afa4607f2",
       "headings": [
         {
           "id": "before-you-start",
@@ -472,7 +472,7 @@
       "title": "Companion and dictation",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "5011d5010271359a5939802d572f5967abfc175c1fe3d91f7909d1338dc02baf",
+      "sha256": "36db071cdc164c201b22c3d3f2f4d3dc55afac0dbf7f1f63530e78b7af024127",
       "headings": [
         {
           "id": "before-you-start",
@@ -552,7 +552,7 @@
       "title": "Automations, memory and skills",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "8c06a8ccf728727e3d62cf734fd76430f038cbd5b6cc7f28a56e47c46daf4a9f",
+      "sha256": "e527e2d7530a5d84f1d8d6d3086431a3167add0e2902890745cadba974412d75",
       "headings": [
         {
           "id": "before-you-start",
@@ -632,7 +632,7 @@
       "title": "Remote access",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "974564cf95a0b2d29b6bd36a68b745909ca30fd907bf39aef308bf34a750df94",
+      "sha256": "9accd46520605faa4fcb641213736fcb22bcd197f9e2886e85c592b8627fde65",
       "headings": [
         {
           "id": "before-you-start",
@@ -677,7 +677,7 @@
       "title": "Backup, updates and troubleshooting",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "bf7c137ef5f87e74b441235018a114549c918c4a20c8c88ac60877857955e595",
+      "sha256": "3d8cf7202f4f36bb16367298840b4bc2181b8f91ff22deb1af08872f168c4db4",
       "headings": [
         {
           "id": "before-you-start",
@@ -752,7 +752,7 @@
       "title": "Architecture",
       "section": "Architecture & internals",
       "status": "Reference",
-      "sha256": "b2c3ffd303bf1157e37234bdc9360e652a0451ecc47c87a27efa3e4f5117c568",
+      "sha256": "60e1aad9eb76b52425f18c99789ad9eb19cefb36c80fb4042e157275a5b94f5f",
       "headings": [
         {
           "id": "purpose",
@@ -817,7 +817,7 @@
       "title": "Daemon and storage",
       "section": "Architecture & internals",
       "status": "Reference",
-      "sha256": "a75704795ce16f34d748229821e9b4cce73ddde0c8ad4403ca6671aa8ce20bdb",
+      "sha256": "763200dd401cd69ce1e744f0d6beb748985d9ebca99b395ce23c9258f4ce0af4",
       "headings": [
         {
           "id": "purpose",
@@ -897,7 +897,7 @@
       "title": "IPC and events",
       "section": "Architecture & internals",
       "status": "Reference",
-      "sha256": "f944b9d1f0caad3bcf951a625795efa9fa4418d49eac5849d39dfe80502ee7e6",
+      "sha256": "c2e3cc7c34ef9e86f801809c2afc1c7cf60081ff7dfa30c64d7c4ad7de354017",
       "headings": [
         {
           "id": "purpose",
@@ -952,7 +952,7 @@
       "title": "Runtimes and adapters",
       "section": "Architecture & internals",
       "status": "Reference",
-      "sha256": "470d0dbe813d673419ff5915c34f389f1a1ddae575b496aee3ec7da5e11f3192",
+      "sha256": "d3f1a0cafb86d6e31d8469a69dd84e0e013b6c99c4f78e6bd23e2c474afa0f40",
       "headings": [
         {
           "id": "purpose",
@@ -1002,7 +1002,7 @@
       "title": "Sessions and turns",
       "section": "Architecture & internals",
       "status": "Reference",
-      "sha256": "b8d45660531e9966c43ee9e7237e8d9355ca57b78a19f9f3788dcd66942f0951",
+      "sha256": "ac6dca16cfd4d325eca5472600641bb249539c51e277629731c25746330eeb35",
       "headings": [
         {
           "id": "purpose",
@@ -1112,7 +1112,7 @@
       "title": "Approvals and permissions",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "7609d93b9de5e3a99c2454638958022ce5759cc3bc4bc8be988890fd5d6d8b44",
+      "sha256": "dac33b773178df49483e403b0104b0ef958dd2b1c73911b659b12e62091e8f74",
       "headings": [
         {
           "id": "purpose",
@@ -1167,7 +1167,7 @@
       "title": "Settings",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "748f454f2e3e770da18a209f3c5bfe5e4def3cd92d591eafe06a0bba73d46ccf",
+      "sha256": "3da2b14bd18953836ea9a8a840189a1db71cfa02aaa4e1baaef65d6081e1e1ef",
       "headings": [
         {
           "id": "purpose",
@@ -1247,7 +1247,7 @@
       "title": "Theme system",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "061f59438f31e712fc1b4428207a25a759de5618fa34f5f8c65af6f9e9873cd6",
+      "sha256": "75f6037d94d94a433aa3bf996c76f9401740a99334f68d67fad07208e4a42421",
       "headings": [
         {
           "id": "purpose",
@@ -1317,7 +1317,7 @@
       "title": "Bot art system",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "fd8898128a43ec78b33bfae370f8c5ae78bf8d44d855bd752fa174d04752eab9",
+      "sha256": "1204591ffc23608360ecbd45340ce280762d7841adc0d0f0601f790c656fbad6",
       "headings": [
         {
           "id": "purpose",
@@ -1372,7 +1372,7 @@
       "title": "Remote gateway",
       "section": "Remote, release & delivery",
       "status": "Reference",
-      "sha256": "385ab2aadeb1bd3967a08c17ff75ec48f665c571c2acb9d1c0ee762307f803a1",
+      "sha256": "c8bdf80e1e073731b13f7fa4fe93442ec4b515eb52c5dbfd834f52a7abb2b658",
       "headings": [
         {
           "id": "purpose",
@@ -1457,7 +1457,7 @@
       "title": "Release and updates",
       "section": "Remote, release & delivery",
       "status": "Reference",
-      "sha256": "aca550640da4d6238a42f7f157da3bacb18b9c01e1ab7f5f498673f6497c590b",
+      "sha256": "000486a1e51355473b9ef4273167de8e75e044f607f23f750e8053601309dc9f",
       "headings": [
         {
           "id": "purpose",
@@ -1522,7 +1522,7 @@
       "title": "Development and testing",
       "section": "Remote, release & delivery",
       "status": "Reference",
-      "sha256": "7fcaf3dbc9ade5ec1e0d1e7456f85e58288a6f5e4a94c8c7ff5dfbdb1b497e78",
+      "sha256": "417a5e4f5acb98d78e50b9ae437aa3548f865e2b4a77b0a4fc122ae9cc65de09",
       "headings": [
         {
           "id": "purpose",
@@ -1582,7 +1582,7 @@
       "title": "Approval modes contract: ask, auto-approve and bypass",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "70287f05c727999a2230654c36e65743510228fcf28fcd5b58424f9f6423fa96",
+      "sha256": "81fce7f57cccff74f55d075d0e7b3c2789797a53b2094a7ecc845ff3ad890e83",
       "headings": [
         {
           "id": "modes",
@@ -1622,7 +1622,7 @@
       "title": "Architecture",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "87636e6e1704b4b319e45d0dae05f2c7c2ecac944e4c912b2ef130e4b51e837b",
+      "sha256": "d09e5ae259c8e2181ae278d954395f1e0172ab5d6a9f611813ac238381b60d58",
       "headings": [
         {
           "id": "purpose",
@@ -1652,7 +1652,7 @@
       "title": "Bitbots",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "81e81c29ce2c0aeb481f5097d8e22080c457d48970a672d84e44b86d08114f61",
+      "sha256": "b626e0d1101762c8be19373c42a62ba6d8f054af89dcff409924b4565a9a2c1d",
       "headings": [
         {
           "id": "documentation",
@@ -1687,7 +1687,7 @@
       "title": "Bitbots collaboration instructions",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "4f8d0621567bfaf6c543b33106c2a94eb3055cb6a5e5b84e01a247315d3d45b9",
+      "sha256": "18dbe08e33603dd0b4c3c1c3c956871d8226031f806a335897056895c660a73e",
       "headings": [
         {
           "id": "resume-1-october-2026-evening-superseded-by-delegation-pipeline-above",
@@ -1717,7 +1717,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "54f18a59353fa853dce2d4610017a0739ffcda5deb04ea710028624ede3a50ec",
+      "sha256": "ddeb6ae022d50d922109e5ea0395b65d4b652e5bdf2a792743f84c525fffb732",
       "headings": [
         {
           "id": "update-commands",
@@ -1812,7 +1812,7 @@
       "title": "Bitbots documentation",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "4bcab457f19ff8e69a0e0eb70128cc2d13bdd220c0b7ca74809268c74da4e9cd",
+      "sha256": "9e5f671d7313a89f9c2e675fe3b0797ac8668eee749ab1690765eedfaa01a3ef",
       "headings": [
         {
           "id": "start-here",
@@ -2122,7 +2122,7 @@
       "title": "Documentation style guide",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "08ab7e648bcd74f0eb8cef9880ca4d1a1211e0d07d16592e2b0b39474ffe0c86",
+      "sha256": "08754330410f760c5ff8172e8637cd5d76871faa13e3187d5da3f6e8572c61bb",
       "headings": [
         {
           "id": "tone",
@@ -2187,7 +2187,7 @@
       "title": "Live CLI checks (Phase 2b entry gate)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "9822846cb44035a00c09ed71a7ae94cc4331970c9ebc304bfab9891fe94f4d89",
+      "sha256": "41a35d6ab4cc0c2b8986a2dcdf0b32d7ebdd843a6f5590c0b07fe553a3bdcd4d",
       "headings": []
     },
     {
@@ -2196,7 +2196,7 @@
       "title": "Native smoke tooling",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "c599703828b56a461b113fdc587f3b323a7c1e09f7a75db296cf3b6b07fd0236",
+      "sha256": "471ffc273dfd2a3adac7af6188e321f3789014ca7a0acbbffe9fa5aed40261a0",
       "headings": []
     },
     {
@@ -2205,7 +2205,7 @@
       "title": "Phase 5 contract: cost and usage analytics (daemon RPC + UI)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "26f70ddd1bb742b033b9ce98fdb72182a3e85a1d9546047c86d057e70f4e6f70",
+      "sha256": "e7009f872212481ce6b62269b378548c250e3047d87aebb8895efa7eebbbd885",
       "headings": [
         {
           "id": "definitions",
@@ -2245,7 +2245,7 @@
       "title": "Runtime capabilities of the installed CLIs",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "aa20503976b01976eabd38cd4e5ea01099556c13bc76ffc4271721fc486c2374",
+      "sha256": "7dff9002aef2e920909451b95c910584ceb80c3f9ac6c410dca79b9594db6b21",
       "headings": [
         {
           "id": "shared-provider-processes",
@@ -2380,7 +2380,7 @@
       "title": "Windows desktop development",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "ac1e4555573035229b816b24c3fad4bf85cda5bea9ca36ea828e58c57fa1fd63",
+      "sha256": "c3d908d8db2984571e74eb113d930a90504b1868351e9e0f74faf03a9e8ce97d",
       "headings": [
         {
           "id": "run-locally",
@@ -2415,7 +2415,7 @@
       "title": "Archived design images",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "44008e9b06e9fee4b17815acf8057ccee84e2b46a8d40736746797557c492465",
+      "sha256": "f806cd7cc58d51d9e7f438029f845be56241a8fc99596ddb18025916a1af41e1",
       "headings": []
     },
     {
@@ -2424,7 +2424,7 @@
       "title": "Bitbots Design System",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "8450193670bfaf711ce47a61452b2ddf1e1b64aaf49ece7b5350dd5936006fff",
+      "sha256": "dfd2569b454b0073228a7c647863a305a4453c431c2e0eeaf419fd2431e5d760",
       "headings": [
         {
           "id": "scene-and-register",
@@ -2519,7 +2519,7 @@
       "title": "Bitbots Product",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "196c746bce34f72976e30bea3d6cd2488df55afcb81a746ed19f966c751d6dfa",
+      "sha256": "3b86400d63dc897358f1a5ea456775924a2f38a58c6579dca8786b2fd2ded3e3",
       "headings": [
         {
           "id": "register",
@@ -2564,7 +2564,7 @@
       "title": "Bitbots theme spec: the pixel re-skin (CSS only)",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "7956aa5b717555e916adcd97e2e7dcd533ac88ff934d83d053e237df624a1ed5",
+      "sha256": "051063481a9e156c1e8756d186d65de868339c60a5acb2bc3208a1234ff66cbc",
       "headings": [
         {
           "id": "what-this-is",
@@ -2624,7 +2624,7 @@
       "title": "UI/UX polish wave (15 October 2026, unreleased)",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "eeb170ac0cbb74f6972dd05000faa8521bf8cb8e15140a944b0c0c9e56dc5b7b",
+      "sha256": "89c00358d8d02346e0d258a5623e311e311b10634ad30bd596f0cb730e281aa6",
       "headings": [
         {
           "id": "what-changed",
@@ -2659,7 +2659,7 @@
       "title": "Auto-update and release contract",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "4bdb501497af15c9e1dda23f333e9d45512fcb0e8207b99718cd99005176f717",
+      "sha256": "046c4b39284360692f49d4870b9dfb41d800ca679e84ef18fc67b78335146945",
       "headings": [
         {
           "id": "decisions",
@@ -2694,7 +2694,7 @@
       "title": "Bitbots session handoff",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "9adb57bf048494950f10acc507d451edc173697523b96544584a3e269451d44c",
+      "sha256": "16393fedf3e3a97b63e0c1cba3990f9202a7b1e99c7d319517c9ee19a71b03a8",
       "headings": [
         {
           "id": "fix40-looks-and-bot-art-19-october-2026",
@@ -2919,7 +2919,7 @@
       "title": "Implementation status",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "2559a862ecf4592e10580dfdb01294f37f72493bbe389cee58a31aab49e6a250",
+      "sha256": "4156c82f082079e819629d2d72b78bb98847c42a58f122ee090d08ef3095d25a",
       "headings": [
         {
           "id": "recovered-claude-scope-released-in-beta6",
@@ -2954,7 +2954,7 @@
       "title": "Native smoke test results (Phase 2a + Phase 3)",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "3da282a8512e33c7a3e67f44549c8ea3ca059e5e256df46b31e1f68348342c50",
+      "sha256": "706914485c4119621e259f63fa3853a29bd993af0cbe0e3ee5a672d266439bc6",
       "headings": [
         {
           "id": "part-a-phase-2a-migration-against-a-real-v1-database",
@@ -2984,7 +2984,7 @@
       "title": "Operating model: a dated summary of the rules (14 October 2026)",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "57de89cda59ad5f02466e14585c7b8d8eba456e18dfdd4fc3cacb7e035685e91",
+      "sha256": "0299e357050e7b4a9c0e7aba4d51695ab27b9e92082d6b71c76023217a61acaa",
       "headings": [
         {
           "id": "1-which-agentsmd-text-is-in-force",
@@ -3034,7 +3034,7 @@
       "title": "Release checklist",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "e009f3f21356ba54aac1a20ae82a5410246e2dc4f268f0ac223b94ddfdf29dcb",
+      "sha256": "b97178338b5b143ed5970fd4527fb32346b82da2348c1cad899da94b3416d873",
       "headings": [
         {
           "id": "release-command",
@@ -3104,7 +3104,7 @@
       "title": "Third-party notices",
       "section": "Legal",
       "status": "Legal notice",
-      "sha256": "4cca8f7d5ffcc614a293b6f6b90c5e0556c607c4b8432cfb1c7df7664abd364e",
+      "sha256": "85470429314fc0697c5cc428402bf406681377c0e06b2c1acfee2f621aafa58b",
       "headings": [
         {
           "id": "bundled-fonts",
@@ -3174,7 +3174,7 @@
       "title": "Bitbots E2E plan: configurable blobs, sessions tree, token analytics, provider quota, release",
       "section": "Plans & briefs",
       "status": "Plan",
-      "sha256": "8e678ecb827a8f6743f0374129fe7d226e63d7bda3871fea4decf0fa89596e93",
+      "sha256": "8f452ae299b8a736c0c2e3c7771f8f30d77ad9e957d06ec5e519a1afb1aa082f",
       "headings": [
         {
           "id": "status-5-october-2026",
@@ -3264,7 +3264,7 @@
       "title": "Bitbots improvement plan v2: a BB-informed, companion-style roadmap",
       "section": "Plans & briefs",
       "status": "Plan",
-      "sha256": "9876f90430ca6eaf7a74a3ea142096331cca69957371e4b166d685a924ee668e",
+      "sha256": "eae45ae35decbab6f8a5b12080f01a4d5f762ec1cddbde92e7584d1f18a40723",
       "headings": [
         {
           "id": "context",
@@ -3359,7 +3359,7 @@
       "title": "Bitbots improvement plan: CLI connectivity, reasoning effort, and dictation",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "61e5ce65cfc3e8325462cdff34344f73ad19ab67ce96bab4717a05342f5b79f3",
+      "sha256": "02d1580e659123349523491d277bb6012ccc5ed1bab56d0256495dbd34b7f17f",
       "headings": [
         {
           "id": "1-where-we-are-today-findings",
@@ -3444,7 +3444,7 @@
       "title": "Director log",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "ecafc870fb7dc01cc6ac8a3d1ea1a82df9f15e254ae63c49993626a2de219ae1",
+      "sha256": "bdbb187aaaa98797a2e693cc60796ee995e76410e666d09e9ac0ba4936b89b77",
       "headings": [
         {
           "id": "2026-10-02---task-2-phase-15-capability-spike",
@@ -3519,7 +3519,7 @@
       "title": "Fix 1A continuation: finish the dictation work (previous run stopped early)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "5a791db8fd3d62f2bef872cc1ff1a70ea66d281fc6bc527e56a0e574f5ddf5d0",
+      "sha256": "8b2a23a8c2c948cb72cd1a0b522c53cf92c632e8d4d3371fad9ee170a5d8c4a6",
       "headings": [
         {
           "id": "what-is-established-do-not-re-run-the-probe",
@@ -3544,7 +3544,7 @@
       "title": "Fix 1A spec: why ChatGPT dictation says \"verification required\" (diagnose, then fix what is ours)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "7fb342b09f4e0332bd8df7fa5f4ae7d6db10dd86ef0ac6582bf70d6f4a144641",
+      "sha256": "5ccda3a7085daee04a26bc46585646e0988543da305bd484366dc49c89d75f6e",
       "headings": [
         {
           "id": "symptom-owner-report",
@@ -3594,7 +3594,7 @@
       "title": "Fix 1B spec: OpenCode effort levels for DeepSeek (and every OpenCode model that has variants)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "8b7b2d97d5ffb77a59f7a1b9fa2d3937be6c418ad8266ee6dbdc470d7358523e",
+      "sha256": "8bacf9bfc1cb4d16fc7fc2961ef8c3f60cba93ee6f54e1c9bb9f8ed6a3ceac23",
       "headings": [
         {
           "id": "symptom-owner-report",
@@ -3639,7 +3639,7 @@
       "title": "Fix 1C continuation: finish the team/leader work (previous run stopped early)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "ed054b5ef264975ee4523ebd542496558246116b40153c5a12cdd902838ed529",
+      "sha256": "ca77e175a5535b3f766ece835c7526cd5fe2d9a98e765e914b1ac3190845f9a6",
       "headings": [
         {
           "id": "hard-rules-for-this-run",
@@ -3659,7 +3659,7 @@
       "title": "Fix 1C spec: leader-only blob creation over the Bitbots MCP bridge, workflows default on, one reaction per message",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "b620f63bb55d2855b78178f91f58f3a5042245e978341c2fb5e3707551af66b0",
+      "sha256": "b2c4ef09a082d60f9b9d141ab7e178154ac6a2c3417980efebcb6bb8b5b3c12e",
       "headings": [
         {
           "id": "rules",
@@ -3704,7 +3704,7 @@
       "title": "Fix 2 spec: cloud dictation's TLS stack",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "4ecceeeda595ff851fc0adf3582a6d4840b920b0536705c669ef97102bd20ce0",
+      "sha256": "66e591448eb600e5e000ae9039256109e8c387c368b2368f3a74da6b80e6c492",
       "headings": [
         {
           "id": "problem",
@@ -3749,7 +3749,7 @@
       "title": "FIX10 report: theme style (Bitbots / Blobots) and user accent, logic layer",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "e94b6b3157a2a88516c065d400e174d96068bdeeaca47b0a2e21799ce1dbb400",
+      "sha256": "c5534823c5f30cba071afb14b0145fe53ac082f0f0b1008f968e960630a8935b",
       "headings": [
         {
           "id": "final-api-as-built",
@@ -3809,7 +3809,7 @@
       "title": "FIX10: theme style (Bitbots / Blobots) and user accent colour, logic layer",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "8756ee96b69d70dd0727366f49f8df38539bc3ca9fd5168bbf95db8b6fa5f072",
+      "sha256": "9eba012414eb5e7a06eb8c0dc958000f1ec52ff52e8732d1fe4f95d85fcccafc",
       "headings": [
         {
           "id": "1-settings",
@@ -3849,7 +3849,7 @@
       "title": "FIX11 report: Bitbots installed identity (installer, executables, data directory)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "7a9cba61c15161b75c0fff541021b0c3deddeab94b11e09b3400317cca457398",
+      "sha256": "04b11ca945801a539cb87103fb11f135a84b3929b2411c556e7b8e546621424c",
       "headings": [
         {
           "id": "1-what-changed",
@@ -3914,7 +3914,7 @@
       "title": "FIX11: Bitbots installed identity (installer, executables, data directory)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "61630d786833bdc88e26d857d1660408a7a60730353b9f638b3c7d82ed638e05",
+      "sha256": "6c7ed306f56a68502c83039d4a82e8feeda849fd8ee112849121e54578329e27",
       "headings": [
         {
           "id": "1-what-changes",
@@ -3944,7 +3944,7 @@
       "title": "FIX12 report — the characters are \"bots\" in Bitbots and \"blobs\" in Blobots",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6d2ad06f136d5f9e6703761e47373e099d85e854a0fa66da26934f6d8589f186",
+      "sha256": "9db1010f1885f3f4e08978f882b9e65eb1015d74d86a946b0375001aad665836",
       "headings": [
         {
           "id": "what-the-wording-follows",
@@ -3989,7 +3989,7 @@
       "title": "FIX12: the characters are \"bots\" in Bitbots and \"blobs\" in Blobots",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "d42fd175afda796116f5419d442019e5a79249fb5ae770c042b4cd8be0971485",
+      "sha256": "08f4db2c9f4e856788e52b89e0b761500810027428810517001b8481a70a37f9",
       "headings": [
         {
           "id": "1-scope",
@@ -4024,7 +4024,7 @@
       "title": "FIX13 report: UI preferences plumbing + polish batch",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "01cdfb5b7322345d8d6805069628f18051cccafaf0efdd1c830e70c02e177384",
+      "sha256": "7c0d353177c45adb82291ba9d264736903758bd1be7ea6889d92246127ccb727",
       "headings": [
         {
           "id": "part-a-preferences-plumbing-final-api",
@@ -4059,7 +4059,7 @@
       "title": "FIX13: UI preferences plumbing, then a batch of small polish items",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "2caad4f80a7ec27cd3602f33ebc5bbf2fcfe369c173f9cc6d46a6b24e578f447",
+      "sha256": "a9b9f69c767ac3d7f6dcb6e9bfb7c77486f28bb68c4ba8f6f3e8fe12324c4f29",
       "headings": [
         {
           "id": "part-a-preferences-plumbing-logic-no-visuals",
@@ -4084,7 +4084,7 @@
       "title": "FIX14 report: plain-language errors, connection resilience, first-scan recovery, undo",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "e4fe3f0219eeb50dbd3c5dc27b81703f23b7966a15abd8f6db2af924460c76cf",
+      "sha256": "c90870dc3736b5b432e59810f09eb98f10882c3c57bcf356af6048e790b1e23c",
       "headings": [
         {
           "id": "numbered-sections",
@@ -4109,7 +4109,7 @@
       "title": "FIX14: plain-language errors, connection resilience, first-scan recovery, undo",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "02ae79e17e86cea31babdf4164e2a5afec42d8399a10df06b40536b5af0c2822",
+      "sha256": "84e33db5ab82c54c1368bb8dcc78b92b0945545840ed85b71e76d20b302ab5d2",
       "headings": [
         {
           "id": "1-plain-language-error-copy",
@@ -4144,7 +4144,7 @@
       "title": "FIX15 report: conversation interactions, roster interactions, density, skeletons",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "46d076787bc9a3b2acddeb58e245af5527599ce2f558932425c204714cd65f7d",
+      "sha256": "5aed456a868374ad9f09db086761721de1a46b5141a809bfe6169520416bfa1d",
       "headings": [
         {
           "id": "1-message-actions-uimessageactionstsx-done",
@@ -4189,7 +4189,7 @@
       "title": "FIX15: conversation interactions, roster interactions, density, skeletons",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "5e0ae62810c0e65003ab14770a3fe655378678e193faf9b648235ce8bb9cf3d0",
+      "sha256": "12517edd2da74883fe7f4acdb42a12a63233edb951ff3fe888ad17723b085c72",
       "headings": [
         {
           "id": "1-message-actions-messageactionstsx",
@@ -4234,7 +4234,7 @@
       "title": "FIX16 report: a transport and platform seam",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "769dc74cd3e3b129ac59ea8b7128dc5bceda8b2f523c08ca09dc9781f74c6023",
+      "sha256": "946c25d8ebd50e4dfb25dd572b01ef75f3186d2599a6837783f3d40b54e4a84d",
       "headings": [
         {
           "id": "final-api",
@@ -4294,7 +4294,7 @@
       "title": "FIX16: a transport and platform seam so the UI can run outside Tauri",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "9a63c44b55c3d0c2a170b3d9eae93b49615b4d6b31291b8119a1a69ca0b250d4",
+      "sha256": "4ef72cce8f737e9739cb4811b74b797d9751cc435813f9b738ddad7c2f5abfd9",
       "headings": [
         {
           "id": "1-platform-capabilities",
@@ -4329,7 +4329,7 @@
       "title": "FIX17 report: the Remote mode simulator for the web preview",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "78fae023b247628144f1e5f84a39a603ccbb2e88b63739730f36af7e2e769ff1",
+      "sha256": "175d1219e0db0477e3b2c899b09ee29d5ac1a1609d4cf850d5f82970dc42b674",
       "headings": [
         {
           "id": "what-shipped",
@@ -4379,7 +4379,7 @@
       "title": "FIX17: the Remote mode simulator for the web preview",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "7d3285375f45f723f0734386a9a98affbfdc8139bb0a4cd3035b60a230292dfa",
+      "sha256": "a367d8dd8dc7c1b6bc57aff3caf610ad2996950025cba1301192d25067907686",
       "headings": [
         {
           "id": "1-appsdesktopsrcpreviewremotefixturets",
@@ -4409,7 +4409,7 @@
       "title": "FIX18 report: remote method tiers",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "40406c32b190df9c8a740d0ecc82882060bc108a8a9f5496aef64074c5acf864",
+      "sha256": "d2d438df55eb1f76aab00bc91ea4dec54f39fa178e73d7c3001466a30f9355e4",
       "headings": [
         {
           "id": "files",
@@ -4449,7 +4449,7 @@
       "title": "FIX18: which daemon methods a remote device may call (executable spec)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "5323119e7635c95aaa05e2117a165aa749687ba466484ff1b16f68746db1dce7",
+      "sha256": "41a8e163e6a89281fb91da23c9c3180f713505738cb1477d96a8194fc01c7ce2",
       "headings": [
         {
           "id": "1-appsdesktopsrcremoteremotetiersts",
@@ -4489,7 +4489,7 @@
       "title": "FIX19 report: docs/remote/PROTOCOL.md",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "7f0dd2100984cbd9e3fbb7747c062a421df9f7e35ecce38fc66315f7d63424f6",
+      "sha256": "612976aaea9a7dd52d55fade836558f5061bd74b56ad8fb4891221083c1705ef",
       "headings": [
         {
           "id": "unsure-about-five-lines",
@@ -4504,7 +4504,7 @@
       "title": "FIX19: write docs/remote/PROTOCOL.md (draft for the Director)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "d598913a2d6af8d45c8532a1b3d89ff01347d7cf2aededab0859b9ee95aadee1",
+      "sha256": "4d25d9ccd73c23f3eb2fb1d9117a565dbce651ce2fc79359b6415eed96654d03",
       "headings": [
         {
           "id": "target-document",
@@ -4524,7 +4524,7 @@
       "title": "FIX2: Codex threads keep stale team instructions",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "b4cca6ab48b1e9e81080aa6b20b4453aefbaf42341b528f1d40e3143aebd98f0",
+      "sha256": "95ce6b3add66578016f6162237526767f4b48414c5e91234516c0c9b15aff1aa",
       "headings": [
         {
           "id": "1-symptom",
@@ -4584,7 +4584,7 @@
       "title": "FIX20 report: companion keyboard access, offline banner, mood labels",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "0bc600d37e1c65c5463c259d8fb287485a2ab50bf7f2538d04bfa286fe411180",
+      "sha256": "31b6e05d4787358cab44ed4deef72b0fa6ef81d2118913d29e4218fe8014d4ce",
       "headings": [
         {
           "id": "1-focus-and-keyboard-c5-done",
@@ -4614,7 +4614,7 @@
       "title": "FIX20: companion keyboard access, offline banner, mood labels",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "525be302cef2c324d8430c303bff23bf1f1b4237da8b4e27b5608f59492474a5",
+      "sha256": "bf4b1f71fcbf549e6a357e69f6e74b1fc531f01e557496f04b2492fa1b8c4655",
       "headings": [
         {
           "id": "1-focus-and-keyboard-c5",
@@ -4644,7 +4644,7 @@
       "title": "FIX21 report: companion, second batch (peek, focus mode, snap, activity, chat, drop, presence)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "42a2b351554fead867289ca227dc1057d77f5f733b0342295fc8a85764a3ef1d",
+      "sha256": "3cd256c85289f75c3e5ab85b138bdfcb0f41267085fedb8d40549aabcaf19475",
       "headings": [
         {
           "id": "1-completion-peek-and-focus-mode-c7-done",
@@ -4689,7 +4689,7 @@
       "title": "FIX21: companion, second batch (peek, focus mode, snap, activity, chat, drop, presence)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "a19ffa10887cdb2725b97bd30b98f29ef1153a014ba0c9748e50b5ffcb399262",
+      "sha256": "b0d43b2f34c049b5e571f51e018bd438b2eed141a44f2f9024c065ffd569dac3",
       "headings": [
         {
           "id": "c7-completion-peek-and-focus-mode",
@@ -4734,7 +4734,7 @@
       "title": "FIX22 report — bot page, second batch",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "e41977fe9f60e191ee4c5effbb0984cb7b8b875611ac03867b679e137d73dd82",
+      "sha256": "bd457c2ff9334ee0c1e6fa0ca7320c83baabc34f8704accb42c8c4e52e6e8239",
       "headings": [
         {
           "id": "what-was-done",
@@ -4764,7 +4764,7 @@
       "title": "FIX22: bot page, second batch (instructions, folders, permissions, memory, details, templates)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "f718dcd5d1c738be4aea3913f70819a8ec4af405aac5367b72669f388e5a997b",
+      "sha256": "51ff02ab953d0bf3ab8eb0ef26233ba84ea35baac57f79085cab23fdca5eae90",
       "headings": [
         {
           "id": "b3-instructions-editor",
@@ -4809,7 +4809,7 @@
       "title": "FIX23 report: Remote entry points on the desktop",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "d0905b6655a50fb4d018b08efba626720bf15d3ce3004fcb187f6d930db58696",
+      "sha256": "92badcfd4dde887bf2246f32f9b172c857b1590bf69999e1e5a65269f014c82d",
       "headings": [
         {
           "id": "1-sidebar-chip-done",
@@ -4849,7 +4849,7 @@
       "title": "FIX23: Remote entry points on the desktop (sidebar chip, profile menu, tour step)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "bc93199f7a7116834113987f03a11bb369c1cdb52d573c9580c8086259b39707",
+      "sha256": "34acf582ef65d33902e64d86e1fb626c82c5d25f3aaea34d8ca662277d85a6de",
       "headings": [
         {
           "id": "1-sidebar-chip",
@@ -4889,7 +4889,7 @@
       "title": "FIX24: independent review of the Remote design, and the sequence diagrams",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6ae31283be945bbb899562b0e4684f6f98a7f2b67ab4cc5918ca58b53e8be3e1",
+      "sha256": "dcb128d9a91cc15a5c64571ae88d63e99e014e2bf2863ad22538947406d7567c",
       "headings": [
         {
           "id": "output-1-docsremotereviewnotesmd",
@@ -4914,7 +4914,7 @@
       "title": "FIX25 report: harden the remote policy code",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "23a5657af2819079d1733f5042a98d00ed2ea40ee32b50e461e512f0a3b0425a",
+      "sha256": "4147d96175e88ead150efec68ea0952faaaa69e0a85f54c957e170f339bfa35c",
       "headings": [
         {
           "id": "1-honest-enforcement-header",
@@ -4974,7 +4974,7 @@
       "title": "FIX25: harden the remote policy code after the independent review",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "629e310367b873cf8cb9c17b71cae1f0cc564647005376fb80e22c580d95b63b",
+      "sha256": "f8dacdd64ebe82af253630eca9ab24cb114eb9c744f88e4a1cfb868d7c791e46",
       "headings": [
         {
           "id": "1-be-honest-about-enforcement",
@@ -5029,7 +5029,7 @@
       "title": "FIX27 (WP3) report: many conversations per bot, auto-titles, stable bot-to-bot tree",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "aa21c045c0ed8be80388203a5c9c16e55a993707ed5aa1532e739c6475901bac",
+      "sha256": "b621962b0db2bb0de697a1cf60039583da158babbb191dade20aff84dae9fe93",
       "headings": [
         {
           "id": "what-changed-by-file-and-function",
@@ -5089,7 +5089,7 @@
       "title": "FIX27 (WP3): many conversations per bot, auto-titles, and a stable bot-to-bot tree",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "17a053014a96e0bf857b89e6bb1cf8c62b231a1672f4aab5dedb97939cb4c720",
+      "sha256": "86103646f37725100d44099b204aaa23168e1794538358be9dafe612b8642ef8",
       "headings": [
         {
           "id": "why",
@@ -5149,7 +5149,7 @@
       "title": "FIX28 part 1 (WP1): a model catalog cache that never makes the user wait",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "fa35223ecd37028bb1256cfddd58b03eeb1a5f0968550d4ef226512282ce7101",
+      "sha256": "489e1f4ee102be3b847f94a37fa83e568ec1291c1fe623cf26e7a424560b244a",
       "headings": [
         {
           "id": "why",
@@ -5234,7 +5234,7 @@
       "title": "FIX28 part 1 (WP1): model catalog cache — implementation report",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "27b0dc4f7db08c9d6df1beaeec655542840aae927d34d7f15ca8d8791f44f4d9",
+      "sha256": "f46a021bc93be97db6b7dffa759f3dcb3ad052ffaf64685a378d376a83a83309",
       "headings": [
         {
           "id": "what-changed",
@@ -5319,7 +5319,7 @@
       "title": "FIX28 part 2 (WP2): sending never blocks, and conversations warm up early",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "9451beb92077c8c49b9c77a02377247a48b34bcb4a06752f13e193f70067277f",
+      "sha256": "56be4805f42d4f497aa3dced9f41b1804ef6b476630daa67b05f606cbbb5429d",
       "headings": [
         {
           "id": "why",
@@ -5389,7 +5389,7 @@
       "title": "FIX28 part 2 (WP2): sending never blocks, and conversations warm up early — implementation report",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "bbecec2cb437de4b780c62875fc1d62dfe46fd86bfa929736c9797c51199f663",
+      "sha256": "a2958b39a8a8bcfb30f6cbf5136b26b0de3fef76af602a0cd1febd5e93c48717",
       "headings": [
         {
           "id": "what-changed-filefunction",
@@ -5454,7 +5454,7 @@
       "title": "FIX29 (WP6a): one remote policy for Rust and TypeScript",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6467cd2260b659ba33202b63dbde7b590a8064422ea79a24a22d4a6aa88a034c",
+      "sha256": "55eb4b23fdd5d1c9e5f36cc2811f555a34efdc2e6a5217109672c0cc2034cde3",
       "headings": [
         {
           "id": "goal",
@@ -5509,7 +5509,7 @@
       "title": "FIX29 (WP6a): one remote policy for Rust and TypeScript — implementation report",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "28e1bf1cef992e8833905cdb07b48a2e4be84496044793fffde86176644ac98e",
+      "sha256": "edbf55a84d3a30a8ba13c07afdd2aa0c0d2bccf8aacca6f90c6e251b672ced88",
       "headings": [
         {
           "id": "1-what-changed",
@@ -5559,7 +5559,7 @@
       "title": "FIX29 (WP6b): the remote gateway in bitbotsd over Tailscale",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "74331e549a9fbe6d7555fb61668d0dece94ea3629fc68ad4564cfb6fdc332e97",
+      "sha256": "d09a30a5185af63ec9e89e1fa7951997c443794231e706ed8c218024b83f6752",
       "headings": [
         {
           "id": "hard-rules-a-violation-fails-review",
@@ -5619,7 +5619,7 @@
       "title": "FIX29 (WP6c-1) report: the desktop crate builds before the remote app exists",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "fe6680f09f1d74eccf0d6f633fef9c74c50165eb3b43e7f4413398b5e1e551e3",
+      "sha256": "3a2a3e98b6ab162ced0ac0e07bd814d04aed9df51d0c3f55dc28c082c72bbd55",
       "headings": [
         {
           "id": "1-the-change",
@@ -5689,7 +5689,7 @@
       "title": "FIX29 (WP6c-1): the desktop crate builds before the remote app exists",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "933ee5d839c898616f7cb2268b10b63d96e4597cfc91249121ccb61dd2693081",
+      "sha256": "40d8b99a470b98d59edbe00cbac707a19b9b0705428387d11ca2a44624bebd95",
       "headings": [
         {
           "id": "problem",
@@ -5719,7 +5719,7 @@
       "title": "FIX29 (WP6c) report: the remote PWA build, transport and service worker",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "84fa104e5f9efb8d7b148b6b3a40637e3557b58ab77e8bae293372f1a4317312",
+      "sha256": "4b98a7678ebebe138b0362d69e2ed12ed94c194c22af1aa2731d6e7a7c8d533a",
       "headings": [
         {
           "id": "1-files",
@@ -5794,7 +5794,7 @@
       "title": "FIX29 (WP6c): the remote PWA build, transport and service worker",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6f7a4b93b1af23f10369fb359448951abb345762faba4e0c1fdd52c8341cd7f4",
+      "sha256": "65afeffa09a4720fecdb18ab8a3484f3f6db8fcd4f8041f16a7342174cda37e2",
       "headings": [
         {
           "id": "1-build-appsdesktopviteremoteconfigts",
@@ -5839,7 +5839,7 @@
       "title": "FIX29 (WP6d): align the remote UI contract, hook and simulator with the Tailscale design",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "8c495b568a0eeed5a4d1d58589c4a7f6fcc75729193eb1cdf1788773fe5af3f7",
+      "sha256": "57e775ff777fc21f927548a8057419b6a562f6dab2e7042d7e8fe16f56b91729",
       "headings": [
         {
           "id": "changes",
@@ -5864,7 +5864,7 @@
       "title": "FIX29 WP6b — the remote gateway in bitbotsd over Tailscale",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "2d7d57e4ba79d9e3f3d9b680f3310e12f3ea14c2da5ea32a453a061833b4b061",
+      "sha256": "14e56d14d0bd6d67af4f368a88bd9ba5405d944b439d4db5052cb9e0b990b3f3",
       "headings": [
         {
           "id": "files",
@@ -5929,7 +5929,7 @@
       "title": "FIX29 WP6d report — the remote UI contract, hook and simulator on the Tailscale design",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "f4bf72b6bf0a805bdbee93b68b14f4a6530c5340472ac07a26e8a49437478200",
+      "sha256": "a03b4e20876660e6bf82d57f5cffe4791de459f84ac5ec6b85af538d5e2f51fd",
       "headings": [
         {
           "id": "1-types-remotecontractts",
@@ -5979,7 +5979,7 @@
       "title": "FIX3: OpenCode 2 does not accept acp --cwd",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "dbc27dea13d0ac8ab99e17d926a9613fb2f836cf1af86c8efb05575ed3125ff1",
+      "sha256": "d360d8432bbdf7e06b460033b94ee0ff4f67ad6ec3420a749d6614857579afa0",
       "headings": [
         {
           "id": "1-symptom",
@@ -6019,7 +6019,7 @@
       "title": "FIX31 (WP5) — back up and restore bots, memory, skills, automations and settings",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "75686fa073b4fe1afb517dee68f8491ea72ac77986da79c977b3233c88492984",
+      "sha256": "e9cba07d03122a09bbecc2652fd7b741ab2cbe1af70bb2335d47b572ad4c2d4c",
       "headings": [
         {
           "id": "what-changed",
@@ -6109,7 +6109,7 @@
       "title": "FIX31 (WP5): back up and restore bots, memory, skills, automations and settings",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "327b0bfdf0e41b42c024fa18635876d0db6da49ffe9b7187fb25e83181d4c1bb",
+      "sha256": "1277ec41cec9ae800978bddadc29b92afcac30a16967e210227e8c1b42838b44",
       "headings": [
         {
           "id": "owner-decisions",
@@ -6179,7 +6179,7 @@
       "title": "FIX32 (WP4) — one shared pool of skills for every bot",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "5918ef3e094496a13ba4ca9c58be4db01724b7f8c9c3c9f1e15ab34e8f05ab98",
+      "sha256": "4843ec925f04c32216df873789a9e7b284d9238a37e269e8b513b8a10b87910d",
       "headings": [
         {
           "id": "what-changed",
@@ -6249,7 +6249,7 @@
       "title": "FIX32 (WP4): one shared pool of skills for every bot",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "229ec6a300d1be7f4fdff8dae1511410851dda2f1e57ad64de25d958c0810d72",
+      "sha256": "9e6902566dfdb1728a684514450d33f67d34353e74c1542f38d8e7478e51ee51",
       "headings": [
         {
           "id": "why",
@@ -6304,7 +6304,7 @@
       "title": "FIX33 (WP7) report — small backend items from the owner review",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "5d8fb9e5342edee7b8bd50f76309ad0db1ee70a806472cc5bdab8dfa07ce364d",
+      "sha256": "7ca59bcaea051179440ce35d54cbeb8da254839f71c78bffe92f42519c2053ef",
       "headings": [
         {
           "id": "1-runtimecapabilities-tolerates-a-bot-on-another-runtime",
@@ -6344,7 +6344,7 @@
       "title": "FIX33 (WP7): small backend items from the owner review",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "907f93326c0ab7c9dad94dcf87029835f1e2737343026008549e58d575cfbe98",
+      "sha256": "b4e4026fbf5d248c3ef05c41f1468dd998708cbaf653f939bd9ecf5e4b1191eb",
       "headings": [
         {
           "id": "1-runtimecapabilities-no-longer-rejects-a-bot-moving-to-another-runtime",
@@ -6384,7 +6384,7 @@
       "title": "FIX34 A1 report — the remote web app loads",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "abd8afb7e690b79afd57bbf3914170d1b7eceae61c9a5ba1b880caeaf4fa7d3e",
+      "sha256": "a16a46c2647443b4a8145fd351506de9d0b20bdcc23ea95f1e4e0dc6e57e512c",
       "headings": [
         {
           "id": "change",
@@ -6414,7 +6414,7 @@
       "title": "FIX34 A1: the remote web app loads (\"Bitbots Remote is not installed\")",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "399c4f8f05b75401bd343c8399db8c21b0d39581251dd135cd0439d94a8e4b60",
+      "sha256": "80b913a7968ec65f6ff4c863015336796c509b06bfb2f8913826d21d4b5cbc4f",
       "headings": [
         {
           "id": "problem-found-by-the-director",
@@ -6444,7 +6444,7 @@
       "title": "FIX34 A2: \"Started a fresh session\" must not repeat in existing conversations",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6c47026fc9c5a08c4064ccec5c5a8fab8b7de42fc0a5cb18b1274946b894eabf",
+      "sha256": "35990c6ae9fd03439331acd48e3720cfccc1792150cd91987a12e0fc34e58761",
       "headings": [
         {
           "id": "problem-found-by-the-director",
@@ -6479,7 +6479,7 @@
       "title": "FIX34 A2: fresh-session notice on existing conversations",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "4faa52195fb6c956e8b2e4c35c2a3035ae36f73b9557f5e966c6b653a594107d",
+      "sha256": "d7f73a16d2def339418ac577805e4e0c36089afde37d9e9dfc72122702e8d263",
       "headings": [
         {
           "id": "problem",
@@ -6559,7 +6559,7 @@
       "title": "FIX34 A5 — an expired CLI sign-in is detected, flagged and fixable from the app",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "227d6d36be718f93eb36a4799825b9ec3fc8304170d6bef6746a622cb92ecac9",
+      "sha256": "56c0f5c62ca6c7fb40f53f12c2e26bd3b6402a44816e43ee999bbd63bfe28fec",
       "headings": [
         {
           "id": "part-1-daemon-cratesbloblex-daemonsrcmainrs",
@@ -6659,7 +6659,7 @@
       "title": "FIX34 A5 follow-up: terminal launch quoting",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "89bf0187d8456e6559ec0b3b99b6cbc02fcc6c21aa7767f8db2fd1429d7a8012",
+      "sha256": "be0a98d2db73b5d5c38c91304ed04f6fe19dc499a0459b1ad0225e7c482013fb",
       "headings": []
     },
     {
@@ -6668,7 +6668,7 @@
       "title": "FIX34 A5: expired CLI sign-in is detected, flagged and fixable from the app",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "872d9eb8048444169aa4754eea9799f68ad11aae16af4f94afb195152f4b963f",
+      "sha256": "737354e3233bf689fcdc5b73f203cfa38160a9c43cc87c5111c196da1ac469c1",
       "headings": [
         {
           "id": "problem-found-by-the-director",
@@ -6703,7 +6703,7 @@
       "title": "FIX35 C1 — Native Remote: a TLS listener on the public port with password sign-in",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "b2026903d15834d3bb80f8e8acbfc35be03c02b7c86cdff37069a760736762be",
+      "sha256": "d321f99ff1fbde85a4f620fd7d334fe19995d48136f8be07546bd720d9e35214",
       "headings": [
         {
           "id": "what-was-built",
@@ -6758,7 +6758,7 @@
       "title": "FIX35 C1: Native Remote — a TLS listener on the public port with password sign-in",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "50614c71e570f1734dcfac6f691a9f873f2e0f0c79244b23d4be81705899b589",
+      "sha256": "20a44d085f4d6d3f47a184fa85115c7c5e74a82751f1255ad5c5dc770c3490ea",
       "headings": [
         {
           "id": "goal",
@@ -6823,7 +6823,7 @@
       "title": "FIX35 C2 — Native Remote connectivity: UPnP mapping, firewall, external IP, CGNAT, self-test",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "045f5597d2d244d1114887b7bb45f2771981ce3aed910a59e05608cd8e5fcc7b",
+      "sha256": "1e90753db7abe77c0d802a52813d4caa3723ba63b5c43d4d49418fa52ee39760",
       "headings": [
         {
           "id": "what-was-built",
@@ -6948,7 +6948,7 @@
       "title": "FIX35 C2: finish up",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "66965e2ed9f1ba0a871f040f4e53056e33a04b17fced3a11619328d8e6e16525",
+      "sha256": "14b9c30ae1bc49b94fa73532a3c7258eab7cf19eea5fc29587bd48563ffe9dcb",
       "headings": []
     },
     {
@@ -6957,7 +6957,7 @@
       "title": "FIX35 C2: Native Remote connectivity — UPnP, firewall, CGNAT, external IP, self-test",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "bdba14d7505fd532b6a067717be1ff0b88246652847bdf875ef30ee188dd9bae",
+      "sha256": "e11e05499a6abd3eed1db15417d67d4f8f3a94adb329bf17939b2240622e0650",
       "headings": [
         {
           "id": "goal",
@@ -7012,7 +7012,7 @@
       "title": "FIX35 follow-up: a signed-out phone learns the method",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6233682a432a8de883770cfc440e1badbc7f2de958ed3d66e81c7808657e86c1",
+      "sha256": "211e62c87547b69378dc0b68864cda3e3309bfc6e47d4ffce436fe16707be597",
       "headings": [
         {
           "id": "gates",
@@ -7027,7 +7027,7 @@
       "title": "FIX35 follow-up: firewall rule name and the phone's sign-in call",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "b1ef2fabc89343430baf698172d9b9ce32bd64da227c7eddefbae5e264847cee",
+      "sha256": "0b93f0d928aa7ead8b3b152c3923f64ee7e7e10b3b19bfa59cb3daae8c42e1fc",
       "headings": [
         {
           "id": "1-firewall-rule-name-review-finding",
@@ -7052,7 +7052,7 @@
       "title": "FIX35 follow-up: no console flashes, one UAC prompt",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "103944be0a0029523ee74a90fccb5fed9b8c5d6c5d0649dd123b6fa8ed7808b0",
+      "sha256": "73eb95446909824c06e7270b65d265eab089c0b70965b244b25efb114ab28c7c",
       "headings": [
         {
           "id": "gates",
@@ -7067,7 +7067,7 @@
       "title": "FIX35 follow-up: tests must not bind all interfaces",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "b174f2f3c16a73ab8ee038e95c1b24d62a73a27a907d5e17543810fcded366fc",
+      "sha256": "60ccf85bb929b0b2ea9fd227759a328bfa3da72d734eb45f948c700bf1c0bdcf",
       "headings": [
         {
           "id": "change",
@@ -7087,7 +7087,7 @@
       "title": "FIX36 D1 — the Manager (lane report)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "ea54960c0d9bce2ad188a76d6991128b75f39feb6b0ceb4b1d076207b6c2198a",
+      "sha256": "658e945faff80c8eedc8c3a5519e382e3786dbd177b6c18e0536d6b3a7c7f2ec",
       "headings": [
         {
           "id": "what-changed",
@@ -7137,7 +7137,7 @@
       "title": "FIX36 D1 follow-up: old databases must still migrate",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "3d2a860f8478869b473d7561402451d6c56bcb4a53f6d28c238765e53fbe8f14",
+      "sha256": "bd6ce135330cd9579270f0ea17f3453870b1157eb799062b96033e8a46e2f7ed",
       "headings": []
     },
     {
@@ -7146,7 +7146,7 @@
       "title": "FIX36 D1: the Manager — a permanent, global bot that replaces the team leader",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "7b2419ed4bf8a5dc83a7980751f8ac11d63073640f960a998363083d7b6f2df3",
+      "sha256": "0e78f8c221006cbc6151bd20e9da59c0d899e00396b3c7551a9ae48871ddb0db",
       "headings": [
         {
           "id": "owner-decisions",
@@ -7186,7 +7186,7 @@
       "title": "FIX36 D2 — the Manager proposes, the owner approves (lane report)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "efd9688e6932afe49bb61909eac42c01127a473c7f315d71aea231020a6a7dd3",
+      "sha256": "404b04d8949061116afdabcb2fa12cb42544862b3db864c7f8890318d6a915b1",
       "headings": [
         {
           "id": "1-storage-cratesbloblex-storagesrclibrs",
@@ -7241,7 +7241,7 @@
       "title": "FIX36 D2: the Manager proposes, the owner approves — projects, bots, tasks, and questions",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "e12ac8dfb056a8d1b8dc44c509ea11d717278d5e76094d009f4d1ee89ae67e13",
+      "sha256": "99de83e78e1f702b6d5e311e6e72166e4e7aa635b2576723a2af16ec1af90b0e",
       "headings": [
         {
           "id": "owner-decision",
@@ -7286,7 +7286,7 @@
       "title": "FIX36 D3 — what the Manager knows outlives its model (lane report)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "05fc511ca13b086ffd281ea569402b07f6a2df1e6c6c0889c6cad33d8363d9ef",
+      "sha256": "815b459b5260de6ad8679a18689f1a585bbb49c4bfb3088e5bfdab47e710fdc3",
       "headings": [
         {
           "id": "1-profile-structured-facts-about-the-user",
@@ -7341,7 +7341,7 @@
       "title": "FIX36 D3: what the Manager knows outlives its model — profile, playbook, handover",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "1d06f3cf0f8f25986ccf92d9477ac4e102a079d0a0bcdf72509e15e712f166e7",
+      "sha256": "f74aef8c516d82a39492960990cb3f7a3241c9e56b9d4d3e97587c6abf31459e",
       "headings": [
         {
           "id": "1-profile-structured-facts-about-the-user",
@@ -7396,7 +7396,7 @@
       "title": "FIX37 G1 report: the Remote page downloads; a Claude resume that never initializes",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "8ed8e6945fa1d2a9ab520d5cb9bafc5f220be4d3a216603c2a205acbd5826fd8",
+      "sha256": "1617b251d9bf4e186c5afbbba21b86057e72a7e0d7d9f86945009c5bf5845489",
       "headings": [
         {
           "id": "1-the-remote-web-app-downloads-as-a-file",
@@ -7426,7 +7426,7 @@
       "title": "FIX37 G1: the phone page downloads instead of opening; Claude fails after signing in again",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "22db8b0e5e21085a4152e6f12de4df5ce17c6abf3fc8d72c4bd64444139f2874",
+      "sha256": "45a2aaf83a63c5693e8cb94346fe0ffb818d5b6668e33913a47f8810461b51b5",
       "headings": [
         {
           "id": "1-the-remote-web-app-downloads-as-a-file-both-tailscale-and-direct",
@@ -7451,7 +7451,7 @@
       "title": "FIX37 G2 — sidebar logos, clipped tooltips, clipped badge shadow",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "32b1e486508167e6dd4a37fafca445dd70bfdea5e6d4877db97c18377dd966f3",
+      "sha256": "08dbb52af26760602fb1fe7a89b602f88938e654e90c5fc2721acac578d8ad98",
       "headings": [
         {
           "id": "1-sidebar-bot-rows-provider-logo-alignment-and-spacing",
@@ -7481,7 +7481,7 @@
       "title": "FIX37 G2: sidebar logos, clipped tooltips, clipped badge shadow",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "5dff117a0d5afb28c2177e162c5bda20496dbcdc07b08229b3d229216963faea",
+      "sha256": "9a26e38eb59e69f6221ededb35f168f238a6a658b8eaf510292416ee416f1072",
       "headings": [
         {
           "id": "1-sidebar-bot-rows-provider-logo-alignment-and-spacing",
@@ -7511,7 +7511,7 @@
       "title": "FIX37 G3 — selection after a delete or archive",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6fc01f40bfc23649442f37c2ba4c5c9b8812c3571c5d98392f6727e2a6a466bf",
+      "sha256": "6a0fe20a4bd7e0fc4fb6c966114b8c179a46bfafc299f537bf43bcb70c0b476d",
       "headings": [
         {
           "id": "symptom",
@@ -7551,7 +7551,7 @@
       "title": "FIX37 G3: the app jumps between bots by itself after a delete or archive",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "ce39c4c877bbb51822b0dfe6c4e44000c5869328e88ce580ceb721b9fd908ba3",
+      "sha256": "8dd31738eeacfe87e9eab1b9ec093430c2e4ff30cd773a0ca0ebb6fc88853659",
       "headings": [
         {
           "id": "the-bug",
@@ -7586,7 +7586,7 @@
       "title": "FIX37 G4 — slash commands in the composer (lane report)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "493f8b0dac4e902dac4be091ac72877ea8bc6f6b3aabe075de33e0a70ecffef4",
+      "sha256": "93634f59d7e5058b8d9605b247cc89c053bddc9666075511a7acc67fb9a8105b",
       "headings": [
         {
           "id": "1-daemon",
@@ -7636,7 +7636,7 @@
       "title": "FIX37 G4: slash commands in the composer (skills, actions, Manager commands)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "79b9d34d20bc90c682ecd8f5003fa660fef14c53577d36fcc786a4904d5ee7dc",
+      "sha256": "00a5b948f98d349bec45c90d4b3270c95c6d0b8ef4931e66062baba3b21486da",
       "headings": [
         {
           "id": "what-the-owner-wants",
@@ -7666,7 +7666,7 @@
       "title": "FIX37 G5 — automatic updates with a \"Downloading\" / \"Restart to update\" badge",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "2d70170c75023336350410ccd4d22056e9c97c6fd672b89ee73d56048ee1daff",
+      "sha256": "3921475844c99a21463d8df0a054120344fdf4bd47b8f75efb81f8458214e270",
       "headings": [
         {
           "id": "what-the-app-now-does",
@@ -7721,7 +7721,7 @@
       "title": "FIX37 G5: automatic updates with a \"Downloading\" / \"Restart to update\" badge",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "c4fc467352735d7eaaa3c4fdfe9909a29a3ddc763d0e36e42c545e710e0111fe",
+      "sha256": "fae3efe6ac00065d150deddc741732dcf4c6e068ca71657447b13d23f90f0a82",
       "headings": [
         {
           "id": "what-exists",
@@ -7751,7 +7751,7 @@
       "title": "FIX37 G6 report: browser preview parity with the update exports",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "78cf7c11923e6235be2c18ab1f2cbf98967b6ef1704e2e94be31090b545ffbfb",
+      "sha256": "8212d710eb5ecff3101c65f057637406b39161ade9baf1c67acdd979900e9c5d",
       "headings": [
         {
           "id": "bug",
@@ -7781,7 +7781,7 @@
       "title": "FIX37 G6: the browser preview breaks on the new update exports",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "91066b9fd89165e643f49364900a1bf2e0e3af7c46694db6bdd529520335e001",
+      "sha256": "7f4e242fab3b284f98bcd76d433d9e0ae06aa3a958c1d5c61c9d43a6e56090c4",
       "headings": [
         {
           "id": "bug",
@@ -7806,7 +7806,7 @@
       "title": "FIX38 H1 — Remote pairing never completes (Tailscale and Direct)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "0967719cbc34aef284d990f4313d865313e3a5eb1f9bdf79dc35e2af29d1fbde",
+      "sha256": "03a35ed41790f3262d70cd8d02160774b0329dd12b6e1c2d4bc2721c3f621cd5",
       "headings": [
         {
           "id": "causes-found",
@@ -7871,7 +7871,7 @@
       "title": "FIX38 H1: Remote pairing never completes (Tailscale and Direct) — dig deep",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "8a1aab3f5579dd3390d5a7771a48095b88b1bb7abb7f6ed4892ef71d79c3686f",
+      "sha256": "7c47b96c1fb654e381e5b72f00853549a7df8e606951ba4033518878f0ef578a",
       "headings": [
         {
           "id": "what-the-owner-sees-beta32-installed",
@@ -7906,7 +7906,7 @@
       "title": "FIX38 H2 — clicking a bot with no conversation",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "e215a3804e47ed9b4b7a0c367f9a17e99759c9d6b988c8c438e0910074f95061",
+      "sha256": "b63b21c22e2f347abad413a9cf98f51921d7568c6031badc75fd43365a8e44fb",
       "headings": [
         {
           "id": "symptom",
@@ -7946,7 +7946,7 @@
       "title": "FIX38 H2: clicking a bot with no conversation flashes, jumps to another bot, and saves a conversation named after the bot — dig deep",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "4c808aa232c75052136a7a42e558979eb2bfb633532c49ff3e22295c6bb14e05",
+      "sha256": "a2b71fbc035c11024483f33ce5dac2ec5211854abb1f79ed4002e0ad138a5a57",
       "headings": [
         {
           "id": "what-the-owner-sees-beta32",
@@ -7981,7 +7981,7 @@
       "title": "FIX38 H3 — broken branch lines in the Conversations column (classic look)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "634e6a70f83ac48439e9086d4ca57878f2ac26a8d48848e75152d312d17568fd",
+      "sha256": "cb4f72769611f221461ac41836dbbcae6361aabbe7a7fa3f32ef75257159804b",
       "headings": [
         {
           "id": "what-was-wrong",
@@ -8016,7 +8016,7 @@
       "title": "FIX38 H3: broken branch lines in the Conversations column (classic look)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "5f22b377a4f2e5afa040415d2bcf728d3ecd54891aa0f78092b4aace055a48a4",
+      "sha256": "9f263d0c080f4a68b201048e5f8dbfcf6c73703397003fd632b307e7c15631ab",
       "headings": [
         {
           "id": "bug",
@@ -8041,7 +8041,7 @@
       "title": "FIX39 Director checks (browser preview)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "a19416a99de9a0838b3b89fadf31a4ee678a661a952a31e64cc399550caa813a",
+      "sha256": "e8146ca932ab82e88bf0f0a83c32036f2d2e534efe2f2b3eef3c661258f9cc43",
       "headings": []
     },
     {
@@ -8050,7 +8050,7 @@
       "title": "FIX39 documentation brief (Claude Haiku 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "80b9a25b2a7feb581191a6e8ad0d97ce35e3efcb9b19455a0e5de2e58eb55efc",
+      "sha256": "19afa6c18c24489650a6f6444714f40162a8c9d013dfd37392b4758db2b9ea19",
       "headings": [
         {
           "id": "sources",
@@ -8075,7 +8075,7 @@
       "title": "FIX39 implementation audit brief (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "01ab67ee159e4835e7796ed1eee3db0ec566f7ed1c2924e07343561fbfdddac4",
+      "sha256": "0c68194ee27d93e46d70a15aebcd6b0c7b8b75f59d5253679179519d9602fc7b",
       "headings": []
     },
     {
@@ -8084,7 +8084,7 @@
       "title": "FIX39 implementation brief (GPT Sol 6.1)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "8932fcf41140ca745964d7d39339d22b4bcd91e0691b62b4020edc0d145a0898",
+      "sha256": "b025aa407cbbc8dec762630ab9bae899e918dc51e5b11e317b50775f51d8d5f6",
       "headings": [
         {
           "id": "read-first",
@@ -8114,7 +8114,7 @@
       "title": "FIX39 owner decisions (18 October 2026)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "4926db9a2357036d5886586974749e48478077c0ea68f0416a4716100a980035",
+      "sha256": "34496efb544601563a46a3be8f8cbb17880c305f19c91635c6c47e59a38dc18c",
       "headings": [
         {
           "id": "the-owners-answers",
@@ -8174,7 +8174,7 @@
       "title": "FIX39 owner feedback (18 October 2026, after beta.33)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "a9c6d02fc4ebb85d3b66c3bf77c0d8eefd801ee5e417768b3199edd0361310d0",
+      "sha256": "164f18ddbf4f77f8ff9130c86ffcfb89e3f2466782fdea5c0f3931b84d28291a",
       "headings": [
         {
           "id": "ui-and-ux",
@@ -8199,7 +8199,7 @@
       "title": "FIX39 P1 audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "e6cea293773772b604b5b5d90a814fb314f8429e006b8dfa4d4ea63a239fcc6e",
+      "sha256": "ded7105aa69a84d6f52ccdb411fe5ce111dab87a1804f5172b1b76c6645f79c8",
       "headings": [
         {
           "id": "item-check",
@@ -8234,7 +8234,7 @@
       "title": "FIX39 P1 implementation report",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "a7e58a06a2b14206417167ae3993d3b04d2b8216ca2b3ec866acb0d577eed043",
+      "sha256": "c725d09c7199b8f578547cd25e958f11f40a1a56080225dd5c6624ab355822bc",
       "headings": [
         {
           "id": "changes-and-evidence",
@@ -8284,7 +8284,7 @@
       "title": "FIX39 P10 audit — worktrees for parallel code tasks",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "12b85b47dbb7204a50e8fe3deb891e9c168aaf8618d0a502c789111829279408",
+      "sha256": "6e157327caeee453e3c81e30dd454d3877b7741ac71a548af3988dacaf39b9df",
       "headings": [
         {
           "id": "verdict-pass-with-fixes",
@@ -8349,7 +8349,7 @@
       "title": "FIX39 P10 report — worktrees for parallel code tasks",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "a77c8d9c46794834f35081f3cf94f578267a951fa209d14570c4cd98cdb9231b",
+      "sha256": "afd41d22674060924cacb1ca1be56c037c35e39011d90cca064873beae2e494f",
       "headings": [
         {
           "id": "changes-by-item",
@@ -8469,7 +8469,7 @@
       "title": "FIX39 P11 audit — reliability tests against the real CLIs",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "0f02aa5d8c86fa1d799a252b551e2d2093acfc9925ac64c5caa70ce54c839176",
+      "sha256": "5b7b83eeeb6e277ef5a1553552a6774610eb27ff4275788ea1c4e2227fa22cc4",
       "headings": [
         {
           "id": "verdict-fail-goes-back-to-sol-the-structure-is-sound-but-three-decisionrule-breaches-need-fixes-and-a-re-record",
@@ -8539,7 +8539,7 @@
       "title": "FIX39 P11 report — reliability tests against the real CLIs",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "4a0ffce133f425385e1fca1704342ffe04926caf743d32b36b4c749b2bdf9ea5",
+      "sha256": "608cffb3d86f4b484e9b65e54ad3092e71b75e6794e3940f55148f79f1aa64ec",
       "headings": [
         {
           "id": "what-was-built",
@@ -8629,7 +8629,7 @@
       "title": "FIX39 P12 audit — local diagnostics",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "ffd9663a260c6b0c25915445d00c25c95bce40575304e768c9b30e555b7f2fa7",
+      "sha256": "fc0086f9ff302b41297d5d03faa5460b0eeed0bcfabd0be8d790559c04936439",
       "headings": [
         {
           "id": "verdict-pass-with-fixes",
@@ -8719,7 +8719,7 @@
       "title": "FIX39 P12 report — local diagnostics",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "5d09825d7c8670b275e2045c17eac3bd6e1cd42a8dc939e33305ee16ebd581c8",
+      "sha256": "7dec4380ee5692d3a44c53d7bfcf6afb547ade9cf856de9cf28438138f45ef13",
       "headings": [
         {
           "id": "what-changed",
@@ -8869,7 +8869,7 @@
       "title": "FIX39 P13 audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "d9c9324dd55f8dfcd762c267b4fce728d5305d71e95f6cdb3d2b37e4a54d75ac",
+      "sha256": "574159f516aa15bccbc1a0b9806f471fe818483537ba2ddde4455939ed8f3f68",
       "headings": [
         {
           "id": "1-items-done-as-specified",
@@ -8914,7 +8914,7 @@
       "title": "FIX39 P13 report — fixes found by the real-CLI tests",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "4e250ea61e85de7b5949964b439135ac8008a35443272af0d41b38425feb7dc7",
+      "sha256": "5d4d8ac4dd669704e409a9a73fcf6d38d4185cb81f1a4f7b3dba020c8190b446",
       "headings": [
         {
           "id": "fix-1-claude-a-conversations-permission-change-mid-session-now-works",
@@ -8979,7 +8979,7 @@
       "title": "FIX39 P2 audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "820a2f769c9289316968ef8ffcd6c3ea363de0fee37c8bf5f38232b190e82600",
+      "sha256": "8856aaf7cb2f2e6a5007e38d67225d582fc25808ec6f92bd0a0eef4058bd6cab",
       "headings": [
         {
           "id": "items",
@@ -9034,7 +9034,7 @@
       "title": "FIX39 P2 implementation report",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "9e2edffe0810bb842d49cba7254917e86a6d95cef2c35b76c1c271b619af827b",
+      "sha256": "0aca9aa9a08f99f683909782a2abeea762ee569ffe52c51211f1d014119a836b",
       "headings": [
         {
           "id": "item-17-readable-activity",
@@ -9124,7 +9124,7 @@
       "title": "FIX39 P3 audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "416c8e92da40fdb2c0d3ced5696f5970a9665eae58b4a63a9fff1107c2d63741",
+      "sha256": "7b132f3cdd33153a36e66e15554962d14b0d5feef9248bbffea6d2ee9da89d23",
       "headings": [
         {
           "id": "1-items-done-as-specified",
@@ -9179,7 +9179,7 @@
       "title": "FIX39 P3 report — Remote and native shell (items 23, 24, 10)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "1c841a455e27d8e6c64e91432222208e71e7f10bfc1b2b79d70f87ad0783f8e3",
+      "sha256": "299ecb5e96c0df1ddd8364e34dd0b3bb9466f8e5aa3e7f0119c072f5a6311174",
       "headings": [
         {
           "id": "step-1-remote-error-passthrough-and-the-error-message-sweep-item-23",
@@ -9279,7 +9279,7 @@
       "title": "FIX39 P4 audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "3c0ef692d026547b746287429505cec2f65c6a712f3d413f5cea5221a2802661",
+      "sha256": "d6cffb815855da45f2de4c3747aaf22ece067baf6c626795e5c4d61c7e3d17ee",
       "headings": [
         {
           "id": "checklist-against-the-package",
@@ -9319,7 +9319,7 @@
       "title": "FIX39 P4 implementation report",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "7f6b17beb6dc245101c01d80379e1b431ddbc6814272fa73b171cd469858ab5e",
+      "sha256": "5b5b43681ea84c2cc810f2f79653214556cf4ce574174917e4335b1744ac2c94",
       "headings": [
         {
           "id": "item-4-changes-and-evidence",
@@ -9379,7 +9379,7 @@
       "title": "FIX39 P5 — per-bot settings, permissions, lock, Experimental tab",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "11aaffdde9760d1195fcad5709ffb23859f5b0a006268b4737f2482bc2b8e8b3",
+      "sha256": "7ff4b8f8d12db3950fafcade699600fdb2163c1e19efcc9ac045746bb23e1869",
       "headings": [
         {
           "id": "1-what-changed-item-by-item",
@@ -9494,7 +9494,7 @@
       "title": "FIX39 P5 audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "7a8a86dc204bef4a0065ae61bfc83c3f5cb7e03dd9ee7af0a58b763a4c20df09",
+      "sha256": "8c4f06572e1eccecdaece054551229518a6c38dfa057902f6ad371898e3db1e5",
       "headings": [
         {
           "id": "verdict-pass-with-fixes",
@@ -9554,7 +9554,7 @@
       "title": "FIX39 P6 audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6b73e15f55b6a73987684c3d814402b6db167aa319ab98018c4b7c2456c87a96",
+      "sha256": "f9cd3e1bea8813d27be947b098208b8419acbedb607f91f21db6ed6f87ac275e",
       "headings": [
         {
           "id": "what-checks-out",
@@ -9614,7 +9614,7 @@
       "title": "FIX39 P7 implementation audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "2b4fc0ba0db5dd150732dc3097d9adbbc84dce69bbca5c58bfb7de34edd4712f",
+      "sha256": "2f6e7af8b8a00a1b12ec5c2b57239506f3a48b344f9ad53822b437ca8a7656fa",
       "headings": [
         {
           "id": "blocker",
@@ -9689,7 +9689,7 @@
       "title": "FIX39 P7 implementation report",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "8c1014a22ee4609450d9feaa3205c664bf82128e5b8eb874e61e1341f5b41955",
+      "sha256": "9f798ee62ef97b9e57fe39e9fdfc970eabbad4159956e706146156a80a5ba2bc",
       "headings": [
         {
           "id": "scope-and-design",
@@ -9789,7 +9789,7 @@
       "title": "FIX39 P8 implementation audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "3dead6c6fc8691f2dbcd405aa5799b690faadb7f19ff52cb33aa7973f62991d1",
+      "sha256": "d29e4da32207f326b0ab903f0bc763b982931ee4ab9ec1089e99361e552141c9",
       "headings": [
         {
           "id": "item-check-against-docshistoryfix-39decisionsmd-p8",
@@ -9864,7 +9864,7 @@
       "title": "FIX39 P9 audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "13f13c7463b034a072eb6bb99c93bd84faa1ecd769ffe1394cb1fd09aef3af57",
+      "sha256": "9fb71388c64e0a7f59336b9a4c941bb173f6adbcec9c910c53f8ce006b5bc08e",
       "headings": [
         {
           "id": "what-i-checked-item-by-item",
@@ -9934,7 +9934,7 @@
       "title": "FIX39 P9 implementation report",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "d22f646d61b210f285f85f3d395f877747cd878d2613c9bb64ab6a0450eee35d",
+      "sha256": "41ceaba2baea64c88a753659f33374f49170dd2e36ecdb92d61716a7743ea0f1",
       "headings": [
         {
           "id": "recommendation-11-and-working-bots",
@@ -9989,7 +9989,7 @@
       "title": "FIX39 package P6 — orchestration: parallel conversations, context recovery, tags",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "2ddf74e64a38d0b9b3e13d870d6bf7ba851f1850c658891c8dcce1ac52c4177e",
+      "sha256": "825525c57d9e025163a804b149eb8346783e231bf3edb965d4b3b2bf2906297c",
       "headings": [
         {
           "id": "1-what-changed-item-by-item",
@@ -10094,7 +10094,7 @@
       "title": "FIX39 package P8 — watchdog (T3 recommendations 3 and 4)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "7e50972eece9c173990095f08184be3288e67179264b8282a09241a2b4aaa796",
+      "sha256": "08bcdb39ed6b23d7e352603dd09b4a713d11aa9d67db08ae200ebd0add98a6bc",
       "headings": [
         {
           "id": "0-takeover-note",
@@ -10204,7 +10204,7 @@
       "title": "FIX39 research — lane R1 (UI and UX, items 1–15)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6acb280fcc9f85eecf91bc7f69e034c35d2f2c4d39d1267383ca41b80f3c364d",
+      "sha256": "8853ee5052c6eb8c96b451ddc9b87c2ede879f999c985b421a3c8d74724f5a78",
       "headings": [
         {
           "id": "item-1-usage-dialog-too-much-text-move-reported-by-each-cli-account-beside-the-heading-with-an-info-tooltip",
@@ -10294,7 +10294,7 @@
       "title": "FIX39 research — lane R3",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "ed4af6de82fb3877bb31d107e891479edc2670cbae498a4a4e51220f5bc1dc01",
+      "sha256": "768eeef348a3c5ff711a76ee40ca6fb007d5e3f1f9d6957d6494a3a90ace2c2b",
       "headings": [
         {
           "id": "item-21-the-manager-as-orchestrator-projects-and-tags",
@@ -10459,7 +10459,7 @@
       "title": "FIX39 research audit (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "5cd23ab21e8abe6adf003c903ba679cffa1dc9bf45af6a3312e97d2d8c62a3e0",
+      "sha256": "1de5daa284fda9b285f2e7a946159cea3d7db4c410b642f45a3891c9c87ce179",
       "headings": [
         {
           "id": "verdict-table",
@@ -10659,7 +10659,7 @@
       "title": "FIX39 research audit brief (Claude Sonnet 5.5)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "4f0eeb5152aafb924f5ae34f465d15325d318d74de621f59ad53ec9168cbd348",
+      "sha256": "bc1a5d3ffb2be89a48ca5a95e1abd5aae11d07d41e35893a5963f9435deb9ff0",
       "headings": [
         {
           "id": "audit-every-item",
@@ -10679,7 +10679,7 @@
       "title": "FIX39 research brief (DeepSeek lanes)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "ad44ffb76cb6740427112e61d3d41e76dc188301126e9c5fcb12ac67be3eb6b0",
+      "sha256": "026d8ec5c0ce575a1924b1333e5f12d3da968a688a80add0308bc23bd69e8787",
       "headings": []
     },
     {
@@ -10688,7 +10688,7 @@
       "title": "FIX39 research R2 — items 16–20",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "088ff49c69d256b6f2408c99d6d8af463bfb19814207428a221593de679be28c",
+      "sha256": "368cb060a57cb02fd77ab09c80aca6d434614c310d074ee8fc863a95db3cfe80",
       "headings": [
         {
           "id": "16-composer-settings-are-per-bot-not-per-conversation",
@@ -10883,7 +10883,7 @@
       "title": "FIX4: bring cargo clippy back to clean (queued, run after beta.24)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "91c90f26fe82f3ae99862ee11d310e371a7fedfbe81786e5f3e0a9945a3a2ee6",
+      "sha256": "b689318e4380829026d873e4a2825a581e33e7f1fa03bd26d4d2d0a117c01a0f",
       "headings": [
         {
           "id": "1-why",
@@ -10923,7 +10923,7 @@
       "title": "FIX40 Characters lane: bot art styles (light robots, hand-painted blobs) and the bot editor",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "24e1716b1f88f09a3b8d9dd5e91c0d709c3ee1b64709a6825b9002683671eaa0",
+      "sha256": "fd281fffb08476727782c1c682d3c4af2043f9d9afd41508a1599999bc0485f4",
       "headings": [
         {
           "id": "rules",
@@ -10988,7 +10988,7 @@
       "title": "FIX40 report: Bitbots looks, bot art and look orbs",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "93d5d4cb184d785f75e05e01ddcaed1f45a10d06f108c698887033b05b69030a",
+      "sha256": "6129ea1360386511f2513884c7f04120e070755548a82e10e0943e69a2cdd40e",
       "headings": [
         {
           "id": "what-the-owner-asked-for",
@@ -11098,7 +11098,7 @@
       "title": "FIX40 research — how T3 Code runs its agents, and what Bitbots should take from it",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "729356e3ed84154e187925e78d2f4d0272cf45a691d36638acd4aaedc926c832",
+      "sha256": "f093d4c35104b4683f8001f4ba634a7bd28a7a0c927711acf1f84eff8659d7e1",
       "headings": [
         {
           "id": "1-short-summary-why-t3-feels-robust",
@@ -11173,7 +11173,7 @@
       "title": "FIX40 research brief: how T3 Code runs its agents, and what Bitbots should take from it",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "e035d4e98d71e31981cf11747ec0864a30850a9467335a6cb75ab7d6465ab409",
+      "sha256": "d226d105a7d1d95872924dcfb8a67fddc84ee3b009b4e537f77b43c226c5ee83",
       "headings": [
         {
           "id": "source-to-study",
@@ -11203,7 +11203,7 @@
       "title": "FIX40 round 2: the Pop and Dot looks across the whole app",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "8c08a40f780c9456cc187479003ded45c7c8be56e22afdf0574e46193817daeb",
+      "sha256": "a7b9873ea9736bdb4bebeefcd0ade1a43192135b533498e169d348ab45a32ea7",
       "headings": [
         {
           "id": "rules-for-both-lanes",
@@ -11243,7 +11243,7 @@
       "title": "FIX40 Themes lane: Frost becomes Bitbots, new looks, fonts, wallpapers, Appearance page",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "e29b203f0812642464470cffc767b152c03c9598ed5ff3c035dadb28534e3acd",
+      "sha256": "d0fe752ca088f5162dcb9c56e96d2b0aaa8ac848da9688abcf8e2c37a4ac6555",
       "headings": [
         {
           "id": "rules",
@@ -11313,7 +11313,7 @@
       "title": "FIX40: look orbs instead of mini screenshots",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "823383159958060e1f8ed8b20efb85b4aa7fc0e7fd03283055ba49fa53782196",
+      "sha256": "db0b08ee15f7bf907d7f2d1b328db2c0f9ef8c2bb40c324e19504b37bc2fcead",
       "headings": [
         {
           "id": "what-the-owner-wants",
@@ -11343,7 +11343,7 @@
       "title": "FIX41 brief: the looks reach the companion and dictation windows",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "e1618fffc2011ecd27d715ea5dea82438a3b7a538593746af8c5907100083609",
+      "sha256": "ffbdf1b1b7cf7b46981c584c51e169ccf5ca1d924121eec4e08848dea907d58b",
       "headings": [
         {
           "id": "where-things-stand",
@@ -11373,7 +11373,7 @@
       "title": "FIX41 leftovers brief (Codex lane)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "ee15c5dc7df30d898208b0c11df35fa15e2d495a8043aa478f724c3c35707911",
+      "sha256": "094b0d850fc404352ae7dbb45f862a6c9393f5c70d8093241c3592a90d398248",
       "headings": [
         {
           "id": "1-no-extra-options-line-padding",
@@ -11403,7 +11403,7 @@
       "title": "FIX41 report: looks on the companion and dictation windows",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "7258ccadb1592dd9a55c1b92b9a5e988edf6ec925ea9ce761d1e958343ae3433",
+      "sha256": "404695f4ecd62eb9e6eeee5b0d2950ccfeda3b0df79131e212f24d57c24a4e6a",
       "headings": [
         {
           "id": "what-the-owner-asked-for",
@@ -11458,7 +11458,7 @@
       "title": "FIX5: OpenCode 2 per-model effort levels and a validated catalog",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "12ae12448b96e6474c06e70bffe729dde213a5df90e2cb649aef1d5739c33091",
+      "sha256": "97bb42876de2a40786d181cfdf233b1fa1bd896c41de129054af9292a24b10be",
       "headings": [
         {
           "id": "1-symptoms-owner-on-beta24-with-opencode-2028",
@@ -11503,7 +11503,7 @@
       "title": "FIX6: OpenCode turns fail when the blob's instructions change",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "02444f1168adb628fe8916826cf50539107241f3a92f4a4684d072302881d5cd",
+      "sha256": "02677fdf3b8839cdc7bce15475c90d3baa968cb48d488dec757674aa3e8b0f37",
       "headings": [
         {
           "id": "1-symptom-owner-beta25-opencode-2028",
@@ -11543,7 +11543,7 @@
       "title": "FIX7: OpenCode usage and sign-in status with OpenCode 1 and 2",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "630697a9d899e5fe7ca199064fbd42ec5bceaa8538486cbdd5d0c2f95cb82914",
+      "sha256": "38bbf4205db40114aa6140d2f3bfe1d7f65b2b7411a5e1a55e0ab89481b82cd0",
       "headings": [
         {
           "id": "1-symptoms-owner-beta26-opencode-2028",
@@ -11593,7 +11593,7 @@
       "title": "FIX8: delegation chips appear below the reply that follows them",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "1fd1e1022044520af681d10712c51edbb9585b83fe4f9d5770e1c9a62ff2dace",
+      "sha256": "115f4092c07aa1a45fd34b537df754300322d7176bb648d4177853e584100ae6",
       "headings": [
         {
           "id": "1-symptom-owner",
@@ -11633,7 +11633,7 @@
       "title": "FIX9 rename report: Bloblex to Bitbots",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "007fc0d33dff52b4ee591716e7d7f4f5b57fb78d7b618ff7120040c05a9f56ea",
+      "sha256": "b235de343840a295b30555efb7df15a7e21a0c24e86295c68a9158bea94b993d",
       "headings": [
         {
           "id": "summary",
@@ -11678,7 +11678,7 @@
       "title": "FIX9: rename the product from Bloblex to Bitbots",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "fb358ade59161c7cf151a287ce640ec4ee88731357de3cc698780075ab909a93",
+      "sha256": "2c41a2c008991f5c610e823d9f0631571ad821a8bb65c31d516ba66ffc0ce460",
       "headings": [
         {
           "id": "1-what-changes-user-visible-and-documentary",
@@ -11713,7 +11713,7 @@
       "title": "Phase 1A spec: one turn-end path, honest timeouts, delivery facts",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "52cbb39d31f1f9c99c28cd489b4138289a2de6d203ae95a610196dc419c1e6ad",
+      "sha256": "840e54595e3e2d487c9b20f228703e8002cf09fe3948bbb326499a5c481fc941",
       "headings": [
         {
           "id": "rules",
@@ -11768,7 +11768,7 @@
       "title": "Phase 1B spec: typed recovery hints and honest context-change notices",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "49fc8262f11a29b69f12caec71585084e899b35d239a25463afb5e1c8d55f35f",
+      "sha256": "c31ed3bf79f27cf214967b1d557ba5b5dc0971d72b4a44a7815ca22ab9658dad",
       "headings": [
         {
           "id": "rules",
@@ -11813,7 +11813,7 @@
       "title": "Phase 2a implementation spec: agent identity, storage and RPCs",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6d6c79209c55945d87c18598079593b4c25889d82bfc3ec5c1eeae04de164442",
+      "sha256": "b7b511122724ad454a3e1d4ece38c727e7baef4231360a3d47831416c4571011",
       "headings": [
         {
           "id": "existing-code-and-boundaries",
@@ -11888,7 +11888,7 @@
       "title": "Phase 2A spec: durable prompt queue and \"send later\" (backend)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "81a4e147d6b1371e2720253d4c5d4a31a348548b58c125be87b965ca9731e421",
+      "sha256": "67235cb61735a65a2981581d0ea8e760979bc35ce1225e38a027fe0946d8f9e1",
       "headings": [
         {
           "id": "rules",
@@ -11938,7 +11938,7 @@
       "title": "Phase 2B spec: steer a live Codex turn (backend, gated off by default)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "798f9afb0e74f76476175a9490e64eb822d2218ce44878bfa21e4de46345a10d",
+      "sha256": "77cdc2b18166c377bdbcce2944935cbf156fe35e7f8335b80102a563d1512f27",
       "headings": [
         {
           "id": "rules",
@@ -12003,7 +12003,7 @@
       "title": "Phase 2b specification: execution options per blob",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "c54bc7243395ed88705ec19f22cfa751f5768642f2fdfa10b462e26493801f55",
+      "sha256": "9f3c0353454322ec91f9a5b9553c785f433b8f44e340a30fb909aa969e722eca",
       "headings": [
         {
           "id": "1-scope-gates-and-honest-capability-reporting",
@@ -12098,7 +12098,7 @@
       "title": "Phase 3 implementation spec: blob roster and editor",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "a219ead0e2af058acb8c2994a1b431eff09671c64eee255ce54ff9fe474c61d8",
+      "sha256": "3dfb319ba04dbfe79a54040bc82e0fd7feadf095425d52dfd6b5848d32dbaa83",
       "headings": [
         {
           "id": "1-scope-and-non-scope",
@@ -12298,7 +12298,7 @@
       "title": "Phase 3A spec: safe automatic retry after overload and rate limits (backend)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "a91204bd5d93bb8381af0f52e73af3a45363c456601f737f2b1eb869b21f7dfe",
+      "sha256": "7bc162ea0e5e1f44dca921e4278fdf23765bd3e24973dcc9c2e8bff85298b151",
       "headings": [
         {
           "id": "rules",
@@ -12353,7 +12353,7 @@
       "title": "Phase 3B spec: recorded-wire replay tests per CLI version (test infrastructure)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "3b1353e97503a54a4722a3e128c605a093f15e6f7ed4d73e64440c5a43482be0",
+      "sha256": "d1e0a0e2921a87ed83aef36964aba563a82259bc115e9b233a92f895f9707e37",
       "headings": [
         {
           "id": "rules",
@@ -12383,7 +12383,7 @@
       "title": "Phase 4 implementation spec: per-blob project and session tree",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "d8c524fb2293bd942db829d478df25f72253faa9b08fee7e35dd639fcbceb9e7",
+      "sha256": "1a2ec159308033e340410558555e4a95a2f6b8d26a094ef19146649412ab28eb",
       "headings": [
         {
           "id": "1-scope-and-non-scope",
@@ -12583,7 +12583,7 @@
       "title": "Phase 4A spec: scheduled automations for blobs (backend)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "51236da1490b73d7f4dc9ac33c2c8224774eff601bcfbb734ff8118b2d69ffcc",
+      "sha256": "5032ef20e7ddeeb6af51281f7c67f62df32c783cfbad1733a2256fad49a23b82",
       "headings": [
         {
           "id": "rules",
@@ -12633,7 +12633,7 @@
       "title": "Phase 4B spec: keep the computer awake while Bitbots has work (native)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "5c1dd32cf5858fbac1c1d8439f63ef2f62a3476733cc59460286f886a5703f1b",
+      "sha256": "b8f0a6445142732353695e46d0ae0dc3ac8f9bf6b3191fdd194f762caf87a217",
       "headings": [
         {
           "id": "rules",
@@ -12668,7 +12668,7 @@
       "title": "Phase 5A spec: memory and \"about you\" (backend)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "21a54ea877c8d557099477609f257d80613a8f3880c4f6330c0314d3df3209a0",
+      "sha256": "137d742783dc9f1452dcc98d9d02087d2c5962cd5cb90f6bba1b5e4f5496237a",
       "headings": [
         {
           "id": "rules",
@@ -12728,7 +12728,7 @@
       "title": "Phase 6A spec: ask-the-user tool for OpenCode, hand-off draft and notification level (backend)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "52007691cfe0199325d91c217073b2147a116b6b05f3f30fb665d628c513a8a8",
+      "sha256": "0f0d38ef5201927e4a81ce2821c5204a75ea1eca091c437e19835545ebeb7d1d",
       "headings": [
         {
           "id": "rules",
@@ -12778,7 +12778,7 @@
       "title": "Phase 7 spec: opt-in cloud dictation through the Codex login (backend and native)",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "6e60adbb3c268b8cf289a6bb2249d92141026e0e014722b28baa41aa5a50c08b",
+      "sha256": "94889fad444e5e21a01f207bf37518843a208735143ef8a19529f5585b50c38c",
       "headings": [
         {
           "id": "owner-decision-this-is-an-explicit-scoped-exception-to-no-copied-provider-authentication",
@@ -12833,7 +12833,7 @@
       "title": "Bitbots 0.1.0-beta.29",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "d4d13d85d538ec5e28bed315891b49af6b6e9c6dbfffcfc8312fcbe0dafb39cf",
+      "sha256": "a322d702bf3fd7f0eef29fcfa2f5542bdbf39764168e3c97aff116dc9c07c734",
       "headings": [
         {
           "id": "upgrading-from-bloblex",
@@ -12868,7 +12868,7 @@
       "title": "Bitbots 0.1.0-beta.30",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "7a0ea15484c06578a9befbf7c1e55ef79b0bae8428992f4bcb5a170b0b5c6047",
+      "sha256": "b87193547270395b72acedd63638b80ee09a97b7e4b50f72598e6313f0d0c3a9",
       "headings": [
         {
           "id": "new",
@@ -12903,7 +12903,7 @@
       "title": "Bitbots 0.1.0-beta.31",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "36457dc666205a7eff82398837a23ce2a628d0eabc7bcdba5e619984a0b0ef36",
+      "sha256": "7a0d2ac033c1c7b1ebdbfaf9a4743efaa9b01878c2813c8f5e80ea25e38c8c12",
       "headings": [
         {
           "id": "new",
@@ -12943,7 +12943,7 @@
       "title": "Bitbots 0.1.0-beta.32",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "8a3d64344aa163828b786f9c739569a4df5f6627b1004e839f98fabb90c3455c",
+      "sha256": "baa99ed1680c459e46a327c3864c2223224ff614f6f270c99369a350ab498e11",
       "headings": [
         {
           "id": "new",
@@ -12973,7 +12973,7 @@
       "title": "Bitbots 0.1.0-beta.33",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "6dac2e785fb89ada41fde73e72368881c73433e05c02b2545adbea52c8ab71f3",
+      "sha256": "f1ae5a1ce6f88d1c5551ad1c5b4a2aa6cb7971b26f5cc3978731134a126feb50",
       "headings": [
         {
           "id": "fixed",
@@ -13003,7 +13003,7 @@
       "title": "Bitbots 0.1.0-beta.34",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "0b2b684756dc0208e75e63cbc0179430a1da64e14df227d97d51085f9f5492b8",
+      "sha256": "13188dbf222cbc7c509a7dd1120959f0e56f5cea648a384f874ef87acac7a5d4",
       "headings": [
         {
           "id": "new",
@@ -13038,7 +13038,7 @@
       "title": "Bitbots 0.1.0-beta.35",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "fd3f9bf6f646bfe2bfc8c8bc46bba0cba6509f1bded7cb4f6d87c3ab4da72cda",
+      "sha256": "e2b1dd7d356530f3899a2c4a8e610fc49c0c61930e6541a598e7850e5942d6ef",
       "headings": [
         {
           "id": "new",
@@ -13073,7 +13073,7 @@
       "title": "Bloblex 0.1.0-beta.1",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "6523f24d3fd9815fd0869ef35c2ad719e716aedd9a3d94e02d7f30f4e3fced7c",
+      "sha256": "7198c178bfdeb2c6c52b067d96a4154e9d188960010c142e2d7861f9e95ae327",
       "headings": [
         {
           "id": "features",
@@ -13093,7 +13093,7 @@
       "title": "Bloblex 0.1.0-beta.10",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "6f09ba17a5ab60dab411d04c43720d3b362eaa89292517cd5f19570cf1ce6a18",
+      "sha256": "7602ebd5f8c753d5a6d018aafebb3cb884526f7a062b1fdeb17abd54deeaad0d",
       "headings": [
         {
           "id": "changes",
@@ -13118,7 +13118,7 @@
       "title": "Bloblex 0.1.0-beta.11",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "132e5f9f9bbbf83dfeedf84c85a136a0c586997d031a693711d570f0078567ab",
+      "sha256": "446a86ca15ccd941f0afd8b221b1598377246d87a9d83361032911d498cd50d1",
       "headings": [
         {
           "id": "changes",
@@ -13143,7 +13143,7 @@
       "title": "Bloblex 0.1.0-beta.12",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "04a219a69225de4a566544456a8d328385675e52a7bb40c769ddd1423dd7701b",
+      "sha256": "70f87651d7f939275f73e55b147f80a800926ea627046729de998a56285ffa9d",
       "headings": [
         {
           "id": "changes",
@@ -13168,7 +13168,7 @@
       "title": "Bloblex 0.1.0-beta.13",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "730ae327ba98826df410787b4dd830bcc77b5544e4e84269349080e7a7ec4c29",
+      "sha256": "8a9cc4fd326017d01da84bddd2bfc291bea79bfcacb4ca96c5a6041bfaaac98a",
       "headings": [
         {
           "id": "changes",
@@ -13228,7 +13228,7 @@
       "title": "Bloblex 0.1.0-beta.14",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "58b42ad699b4c496c974b97ff75da7b1fa7a2ed96f3409f5f45509e1aa5a2e0c",
+      "sha256": "3ff2d0b0e9dbe50f776450f0efadefa2b50c95ba16e0fe2e666eb05c54d951d1",
       "headings": [
         {
           "id": "changes",
@@ -13263,7 +13263,7 @@
       "title": "Bloblex 0.1.0-beta.15",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "40c49ff307178c50554971e46aa1c65ab06ab0e184fdc878dbc8c2f5af919454",
+      "sha256": "3db5be9ea2667348f42af1e2c896dc95721bd59cfc371a04c8008090a19f53bb",
       "headings": [
         {
           "id": "changes",
@@ -13308,7 +13308,7 @@
       "title": "Bloblex 0.1.0-beta.16",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "3358b938fd965600ae10937fd1e75228721f096affd89084fc50e8385b09af08",
+      "sha256": "6e4acc7d3947acaa8e597d71a6a35b6bc868c74f055fc221913ce76903ce4da2",
       "headings": [
         {
           "id": "changes",
@@ -13333,7 +13333,7 @@
       "title": "Bloblex 0.1.0-beta.17",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "ace9f2c24d4cdbe081bbb39449cbff7d37d4b481c33797d6bfa9df1fec62a2d9",
+      "sha256": "457da532ff029b562dd549496a860542832cd103c495231e69cb3ad68d21a71a",
       "headings": [
         {
           "id": "changes",
@@ -13358,7 +13358,7 @@
       "title": "Bloblex 0.1.0-beta.18",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "a1597c8849ee6dee1d301019537eb99bab627d0cec57234eef04ccbe6f663bb4",
+      "sha256": "6cbb369d5a78871a48192dbd2eea588e3a1b0aa8a179670c7db20c9b4550a239",
       "headings": [
         {
           "id": "changes",
@@ -13383,7 +13383,7 @@
       "title": "Bloblex 0.1.0-beta.19",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "4b882896d1bb56bb0eede379783b033f24137625f46c1281c7d492d7dc3143d7",
+      "sha256": "d3649310f2f46d984d56e19e6da96a4c2dfff1d43da26a85a868dd156aabcfb3",
       "headings": [
         {
           "id": "changes",
@@ -13413,7 +13413,7 @@
       "title": "Bloblex 0.1.0-beta.2",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "e94452d8bac8717717a4120d4c424f14fc27a3225eca80c055d52f57fa44cc85",
+      "sha256": "8d2f1223ad5d7ea0605fbe3e1016a75f7e737fb3f8323f117fb40e2ade14d644",
       "headings": [
         {
           "id": "changes",
@@ -13433,7 +13433,7 @@
       "title": "Bloblex 0.1.0-beta.20",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "e7b718d650e304f18197f7e7cdf3778ca379085d3c548701645d1d41bddfd9a5",
+      "sha256": "62eff5dfa95b127ea02f7c516a76007837485fd2d5bf7a23ae5535a7b1cd156e",
       "headings": [
         {
           "id": "new",
@@ -13473,7 +13473,7 @@
       "title": "Bloblex 0.1.0-beta.21",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "feb061f93fb1f36a00941097f223e725c793417aabf93d9da44f0089b9fb3c6d",
+      "sha256": "5b8fb57ee7618f1660ccbf903fef3695065bf95955cf86d8aef0fc5a0a2af1a6",
       "headings": [
         {
           "id": "changed",
@@ -13503,7 +13503,7 @@
       "title": "Bloblex 0.1.0-beta.22",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "4b7a4a6ece73bd09e5156192a95d014426d02be707b9f1c91e96a312b6a6ee5d",
+      "sha256": "079f09bf0bdf618a65f590274925444251e2cc74549c3eb5d26802641bc8fa36",
       "headings": [
         {
           "id": "changed",
@@ -13528,7 +13528,7 @@
       "title": "Bloblex 0.1.0-beta.23",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "235050986646e06e09a7e24bb2ddb6e311d30cc43610de75b6fc788ddf835deb",
+      "sha256": "42b37bbb3c9f908796b1321b726b60e03079e394fe6028a8ab7251e67023f1a8",
       "headings": [
         {
           "id": "fixed",
@@ -13558,7 +13558,7 @@
       "title": "Bloblex 0.1.0-beta.24",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "b62a086ab96b46b13c689c83102948f1d0f04c44e802f0b2b84eccc4791efb72",
+      "sha256": "b7e9acc26b80358148714d01b92ff4b2831d811e14bcb9f7cbaa31a6279f3423",
       "headings": [
         {
           "id": "fixed",
@@ -13588,7 +13588,7 @@
       "title": "Bloblex 0.1.0-beta.25",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "a00a3e13d5437c3a3b0d74fbb8871fa36be5d7ebd5107c2d576ea801ad3a3170",
+      "sha256": "d9f219e2e2e07d983d87a8eaafab79fe9fbacb278cd1a9236877e94f00a85ca1",
       "headings": [
         {
           "id": "fixed",
@@ -13618,7 +13618,7 @@
       "title": "Bloblex 0.1.0-beta.26",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "b7f14be3f078cf72f5274852062b5ac4c16e248f34c3f50f18184bf84ed696d0",
+      "sha256": "01de59a57a3ad487042591666f920e7d112cca1c0721e8978ebffe8f45059ee2",
       "headings": [
         {
           "id": "fixed",
@@ -13643,7 +13643,7 @@
       "title": "Bloblex 0.1.0-beta.27",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "54beae48b151fb77761d6e0df8bfa2b7fb873667b4d4148e5c5a54b09c2ab320",
+      "sha256": "517e6dd7eedd1254682576c5851a95ad1a6507e71e361db98574a945bee09687",
       "headings": [
         {
           "id": "fixed",
@@ -13673,7 +13673,7 @@
       "title": "Bloblex 0.1.0-beta.28",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "6efaf2e494954c152e4e48861a0abfb7e99dc4c6171981e45e54cdedf1d0d6e0",
+      "sha256": "aac6097dc9fc6ddc357f774be1a1a745861c748eeed7cbbe09c085c57c2468b5",
       "headings": [
         {
           "id": "fixed",
@@ -13703,7 +13703,7 @@
       "title": "Bloblex 0.1.0-beta.3",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "30286d7118c1670ea1254d0bd1b624ba32000f3cdcb83aa257630a4f874d71c1",
+      "sha256": "4a9a643a07ca97972b6ce7e67351291ac475dec84fe8bde69b8871aa48c1cd48",
       "headings": [
         {
           "id": "changes",
@@ -13723,7 +13723,7 @@
       "title": "Bloblex 0.1.0-beta.4",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "711cf993e40693ccc92b6751777242998ca2925e7cff03ffa4741d51d7953d28",
+      "sha256": "0c74491e1fa0873ab237b812266e78dafb3a34ff0114bf01b70071748e5f0805",
       "headings": [
         {
           "id": "changes",
@@ -13743,7 +13743,7 @@
       "title": "Bloblex 0.1.0-beta.5",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "0978cbf558a689dd6ba01bffe15b2e9ee1852db5991e94d0866313baaf88f1a5",
+      "sha256": "4079930244167c94fa2d1126f7757ed2175ff13935bf4db711690c1c8c6c692f",
       "headings": [
         {
           "id": "changes",
@@ -13763,7 +13763,7 @@
       "title": "Bloblex 0.1.0-beta.6",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "e9cd5771074ba175e651a14521cf8105741b4842bae4740bd75e177a298bdcd6",
+      "sha256": "897e640caf398f8b0233aa9679d7e959390e76d88eeb6c0d764faa6ae59e3e56",
       "headings": [
         {
           "id": "changes",
@@ -13783,7 +13783,7 @@
       "title": "Bloblex 0.1.0-beta.7",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "56c66f307b9f71f3e35f1678ea7ac31c261d3cd0642c60cf2dbf8272123931b1",
+      "sha256": "9bdf81a0c34388eb6cc85c80b3ef23c457d7c89ec46768c014d190f94dd28ae4",
       "headings": [
         {
           "id": "changes",
@@ -13808,7 +13808,7 @@
       "title": "Bloblex 0.1.0-beta.8",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "57f7e55b169190e9641f22c31785d11ab1614669725dd4f5a8e6611a672b2554",
+      "sha256": "01957c94c60095e219b060613ef772ff0b9d34abe5bc68705757525dca52c179",
       "headings": [
         {
           "id": "changes",
@@ -13833,7 +13833,7 @@
       "title": "Bloblex 0.1.0-beta.9",
       "section": "Release notes",
       "status": "Release note",
-      "sha256": "1359edc2ba1504f9676ece0acfaea1a70711acf9b978e4199054cf448391715c",
+      "sha256": "494f250b659a03c8559db1f22e7d2b581bfcb996035405f12fa1eab7daeb3f63",
       "headings": [
         {
           "id": "changes",
@@ -13858,7 +13858,7 @@
       "title": "Bitbots remote protocol (v1)",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "6c130fc622da4bea3354e108428f4e242dbbca393fe774a902cb04c352bcb433",
+      "sha256": "0ac04bc40369df29e11ad553bc00922689bb24375021095ad3479510a4d561e5",
       "headings": [
         {
           "id": "1-scope-and-non-goals",
@@ -13973,7 +13973,7 @@
       "title": "Draft amendment for AGENTS.md: Remote mode (for owner approval)",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "53435a823d13e9c47a64df4c73311ba682d350c73e4b0736f54919e19dc86c8a",
+      "sha256": "60a249b49d733b9c9c2577170ccbd25006433d877906ef4e6f671072683ad674",
       "headings": [
         {
           "id": "why-an-amendment-is-needed",
@@ -13998,7 +13998,7 @@
       "title": "Remote mode: architecture",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "6e34b5b9e9b5ceaa74af8981f2d0b80982955a8d1fb05adb89e261138fd38221",
+      "sha256": "47176ad1d56c8d9a92179e160af2f18603d7279dd216720bb4481f0f67b4177c",
       "headings": [
         {
           "id": "1-starting-point-what-exists-today",
@@ -14063,7 +14063,7 @@
       "title": "Remote mode: independent review (FIX24)",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "4a0761fa97685f30eb74663be451767e056dadc56b815f5c0f00aaf0a70fa884",
+      "sha256": "dac9fdb1e190a97f9e7d0debd7f5bfe5968411ca4ddb0b7b3f51fe20997ecc96",
       "headings": [
         {
           "id": "1-contradictions",
@@ -14108,7 +14108,7 @@
       "title": "Remote mode: phases",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "ebf6e61b7752d51762a467949c81d361fbd8f523a7b0a814d03e9aa2cc8b92a6",
+      "sha256": "6d6e56e32500b4fe12acac9641c984c94e307abff11d2b419852ef16859d9201",
       "headings": [
         {
           "id": "p0-deliverables-this-repository",
@@ -14143,7 +14143,7 @@
       "title": "Remote mode: product specification",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "01146b28b7a09103dc602f71d661af5757abc9eb7b6fd43026f5db0216f01cdd",
+      "sha256": "b253aebe7079999d9da22c9c7774bb6ff53e6ed998610f08a571d3a0279ca855",
       "headings": [
         {
           "id": "1-what-it-is",
@@ -14203,7 +14203,7 @@
       "title": "Remote mode: sequence diagrams",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "258b94c65617adb791fc1eaedd5338c6351bad7bda17441c6e46b06c26ab96a7",
+      "sha256": "673c90f964024b2b6a1880c85b49276234ca8dc91030122d57b7120798d27340",
       "headings": [
         {
           "id": "a-pairing-with-a-one-time-code-and-owner-approval",
@@ -14248,7 +14248,7 @@
       "title": "Remote mode: threat model",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "b64147fb501d8e42fc2048975e9c08cfc08e8a788827a89dae9923fccf30fc96",
+      "sha256": "da81561dac9ecd2e996abf5d5874faa803397caafe2f3ea01ec0d565c41f1a62",
       "headings": [
         {
           "id": "1-the-core-fact",
@@ -14343,7 +14343,7 @@
       "title": "Remote mode: UX flows",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "fa0950213d423ead9265c45e587017434083136122218eb3bd0b2802464a8e30",
+      "sha256": "5d67ea65234f59b4b2c40e1fb2128934a6f77a57abc12b3575b9289f66be6941",
       "headings": [
         {
           "id": "1-host-side-settings-remote",
@@ -14438,7 +14438,7 @@
       "title": "Cloud dictation diagnosis: \"verification required\" (Fix 1A)",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "9c080046ab4c481e7e731207c7822d22e0bfb586c7a0ca07de354f5692596274",
+      "sha256": "3fe6bcb2b579a3f4c31042696f7b5e7b386f476d115d39a63456e440690eeec1",
       "headings": [
         {
           "id": "symptom",
@@ -14488,7 +14488,7 @@
       "title": "Cloud dictation: the TLS backend fix (14 October 2026)",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "474355657ee85bcc4274203e4a83c4782d26f46708d0c7dc9a3d071f1a719bee",
+      "sha256": "b7fef9ad7b4ed66d9a68daf695c0fbaeb8e40ef5b67ee61c0d0679f6422d4c03",
       "headings": [
         {
           "id": "what-changed",
@@ -14528,7 +14528,7 @@
       "title": "Cloud dictation: what the Cloudflare challenge actually keys on (14 October 2026)",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "18f20da2ecbbd88559a73b24ad85a95f46f7b8ad1261e058f594183d9c5e2edf",
+      "sha256": "6fe5445ee412cf8b18a3f9c9dd85ec14165b5ecfcc6153a83292aa4559d8ef9b",
       "headings": [
         {
           "id": "question",
@@ -14583,7 +14583,7 @@
       "title": "Codex turn/steer evidence inventory (Phase 2B, 12 October 2026)",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "48a77e43f7b47ae521d2cf7f37175fb8615bebda7307c491ac885afca890e87d",
+      "sha256": "32300a48edc773bbfa2fcb4a2ace6bc92786c63c3cea193700d08ac77f0582eb",
       "headings": [
         {
           "id": "schema-source",
@@ -14613,7 +14613,7 @@
       "title": "Composer controls — 7 October 2026",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "83d6ecf2d83e9ada4602ff3d359f11ce06668df7c5986edacf4454b15fb48b66",
+      "sha256": "396459bf5b756bbbe077ca7fa1c0d26168b9ece0b4c89d01b91097afc4cacea0",
       "headings": [
         {
           "id": "scope",
@@ -14653,7 +14653,7 @@
       "title": "Evidence: Bitbots pixel theme (CSS only) — 2026-10-13",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "c4464584889753c10e74aced9874892cc7144fae0e6ef7c99e922fddfe5fe0e2",
+      "sha256": "43860c485ebfeaff02eef3047964f7c61d1dd1517bf22fe4792338679472fd5d",
       "headings": [
         {
           "id": "deliverable",
@@ -14678,7 +14678,7 @@
       "title": "Floating dictation bubble (beta.12)",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "329d9de0d75eca5e5fceef2286db9a15d685b608d15f18f76ee6175b7b39e821",
+      "sha256": "179711f8205aade4b69dd7f74873d61c17b65f4344e9df257f948353ea7d68ef",
       "headings": [
         {
           "id": "what-shipped",
@@ -14703,7 +14703,7 @@
       "title": "Installed runtime capabilities for Phase 2b",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "c79392f4563226866c3abcd299e62d5170d1c64075e0c34ff142d5e8d9c0174e",
+      "sha256": "9a24ab04012257b2653ca3cf1ca4e013660da3e3e49031032b353762325b7da3",
       "headings": [
         {
           "id": "how-to-read-this",
@@ -14758,7 +14758,7 @@
       "title": "On-device dictation (beta.11)",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "f4f0293e62d83071428a6cdde689720417fe76a1cc721a16d6bb76ede6409481",
+      "sha256": "e42a94b1ef67b116c4e1e96622edb0df912693274ef959052150cab58deb7311",
       "headings": [
         {
           "id": "what-shipped",
@@ -14783,7 +14783,7 @@
       "title": "OpenCode effort evidence, 2026-10-13",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "5403bf378a2ff76ecf150d4eb6acf88347a3c0dee5910cca520011bca6013528",
+      "sha256": "2fb8c6d097b6c293dad65542ef8a7aa7e43c09fc4fff05be6547003f4538ae75",
       "headings": [
         {
           "id": "1-opencode-models---verbose",
@@ -14813,7 +14813,7 @@
       "title": "Recovery-hint evidence inventory (Phase 1B, 12 October 2026)",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "64299a27da70153245de3764f0148f94f08887b66bf7ef0ee329c41231b50023",
+      "sha256": "9b31552039f73d2c2d628ef4ac2579786a461aaabdbdf583585087cf4a53bd48",
       "headings": [
         {
           "id": "table",
@@ -14833,7 +14833,7 @@
       "title": "Runtime capabilities (Phase 1.5)",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "20065c1deb8023d51afd2e68bc212a2981ba44e093a71cdebad73a259f9702af",
+      "sha256": "3a59e42ab4b977b33c44b1d7a22f55bcabda6555853b4f44899cdbff3444768a",
       "headings": [
         {
           "id": "how-to-read-this",
@@ -14993,7 +14993,7 @@
       "title": "Wire fixtures and replay (Phase 3B)",
       "section": "Evidence",
       "status": "Evidence",
-      "sha256": "87ee9eaababe235f2cdbb90329509b7bbd3d9e78973f283dfab13fbb72cddf1c",
+      "sha256": "187aa64124c86b8858617804f3b99cd30f933ecb63d2f42fdefa4474e845b364",
       "headings": [
         {
           "id": "format",
@@ -15033,7 +15033,7 @@
       "title": "Documentation audit (14 October 2026)",
       "section": "Audits & inventory",
       "status": "Audit",
-      "sha256": "1a996d5b3bd70ab895b3e5266d9583288b80ed619faf883a2318ddd1f7418f38",
+      "sha256": "7e35f1ede81f2f15bcf8392aff1a4cf082bc80a37d65c372e67b3a5108d65970",
       "headings": [
         {
           "id": "1-per-file-audit",
@@ -15078,7 +15078,7 @@
       "title": "Documentation inventory",
       "section": "Audits & inventory",
       "status": "Lane record",
-      "sha256": "31cadbd9e9ebb8628a2a38364970f2eb70314a3f62c4889e8e1ab7f1fe780d2e",
+      "sha256": "26a4c83129e0eef7ed51841ae9561d2b9cbc48d42cf0a81aa1239e0530690276",
       "headings": [
         {
           "id": "conventions-used",
@@ -15113,7 +15113,7 @@
       "title": "Documentation library work log",
       "section": "Audits & inventory",
       "status": "Lane record",
-      "sha256": "5640687d4b53195e3f8971e62cf8555c5688da0ba3153d734c43e31f6bc0be74",
+      "sha256": "4e630d17d11383187da34d47b01c37ff02e1a26dd2472a6cb8e21c7cf3038ce0",
       "headings": [
         {
           "id": "rules-in-force",
@@ -15173,7 +15173,7 @@
       "title": "Documentation library work log",
       "section": "Audits & inventory",
       "status": "Lane record",
-      "sha256": "8cf10d1d763b0f42f95e8ab406a133343270b81ac5364bbe8dfebfcde578ed34",
+      "sha256": "12306c13c2735f511ac3e17db1991e0636591fafac3928495f6315554a1dba76",
       "headings": [
         {
           "id": "rules-in-force",
@@ -15223,7 +15223,7 @@
       "title": "review 1 reply",
       "section": "Audits & inventory",
       "status": "Lane record",
-      "sha256": "476a9a4c66bd701feed7081fac0a363e725318a930bfff3a3ae52202f7665d73",
+      "sha256": "493b9fb3feeaae254432e23a308b7c25a05c46ad1b0e93b201785e45555fbc14",
       "headings": [
         {
           "id": "structure",
@@ -15268,7 +15268,7 @@
       "title": "review 2 reply",
       "section": "Audits & inventory",
       "status": "Lane record",
-      "sha256": "2fd9e52f2caf9b65c92847d2cc7ca23b6e950a39571060e9f488010fdce68218",
+      "sha256": "89f552947b826d47428fc8ec39910fc0db2994e35f739931e6e4a2a161ef1aeb",
       "headings": []
     },
     {
@@ -15277,7 +15277,7 @@
       "title": "review 3 reply",
       "section": "Audits & inventory",
       "status": "Lane record",
-      "sha256": "9edc98cd2bcdede293c650c079dec3a27b26401425e59ded333ec1083f507ee2",
+      "sha256": "6b810144813094b1982e56c0693f9406e3f00fd14d500b850d9092a50ec6d75f",
       "headings": []
     },
     {
@@ -15286,7 +15286,7 @@
       "title": "Review log: Codex Luna",
       "section": "Audits & inventory",
       "status": "Lane record",
-      "sha256": "ad63f70df2364b2ec649b5830044b023ea4df9ef7e59a3f07e3c194eee343e76",
+      "sha256": "59bb02ec0c1e5ee426e6a0654ea633498321cedc86bbf908a024c40d0a12b134",
       "headings": [
         {
           "id": "round-1",
@@ -15311,7 +15311,7 @@
       "title": "Review request 1: the documentation library",
       "section": "Audits & inventory",
       "status": "Lane record",
-      "sha256": "d68b59b9c0ae60c8f3313ed83db78802c9f3d6d566c41d94bfab02636cd7f758",
+      "sha256": "0b89114fc6b68bc9fb64147873b915a2dfb31c75428968b38937d39075bb0f0c",
       "headings": [
         {
           "id": "what-was-done",
@@ -15341,7 +15341,7 @@
       "title": "Review request 2: the documentation library, after round 1",
       "section": "Audits & inventory",
       "status": "Lane record",
-      "sha256": "069a9068823ea230c7e58203d5e02680a31a0df1212512c15830e53a95284ba7",
+      "sha256": "2963d511014cefc2503c8c2b514ddffe3d7e893f4681e109ebf2b3d35cdeb120",
       "headings": [
         {
           "id": "changes-to-check",
@@ -15366,7 +15366,7 @@
       "title": "Review request 3: the documentation library, after round 2",
       "section": "Audits & inventory",
       "status": "Lane record",
-      "sha256": "d003a51b090907b33c9099847c3e8a36528008615d39588b2e6e229efe442702",
+      "sha256": "a1634a7839836fe8a13d821014412e32866923e35d3dfceda45a4eaf77b5165f",
       "headings": []
     },
     {
@@ -15375,7 +15375,7 @@
       "title": "V1 coverage audit",
       "section": "Audits & inventory",
       "status": "Audit",
-      "sha256": "5520d69e85395fbb39971406c3d0566034d428fbb2bbde3f178889204362ebd9",
+      "sha256": "0f3e2944f1a80101e3a4053fc28af5b3f72c764133340e427d9a5fa5fcb2046f",
       "headings": [
         {
           "id": "section-35-acceptance-criteria",
@@ -15400,7 +15400,7 @@
       "title": "Bitbots documentation library",
       "section": "Library guide",
       "status": "Library guide",
-      "sha256": "31d8e087d7348809ce307207cb88168ff3f2acc8693060b6686494ec215f02ba",
+      "sha256": "4d8f4f6a9358267121858d705acc5ca265ba3ad71861be9c09d96bbabcefa764",
       "headings": [
         {
           "id": "rebuild",

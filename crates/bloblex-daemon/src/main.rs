@@ -1295,7 +1295,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 return Err(derr("invalid_argument", "Remote settings change only through Settings › Remote.", StatusCode::BAD_REQUEST));
             }
             let value = validate_setting(k, &p["value"])?;
-            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions"||k=="concurrency.botsAtOnce";
+            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="appearance.wallpaper"||k=="appearance.glass"||k=="appearance.font"||k=="appearance.monoFont"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions"||k=="concurrency.botsAtOnce";
             let events=st.db.set_setting(k, &value).map_err(|e| {
                 derr(
                     if validation_key{"invalid_argument"}else{"internal"},
@@ -1348,7 +1348,10 @@ fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
     if k == "memory.sharedAgentWrites" && !value.is_boolean() { return Err(derr("invalid_argument", "memory.sharedAgentWrites requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "skills.enabled" && !value.is_boolean() { return Err(derr("invalid_argument", "skills.enabled requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "conversations.autoTitle" && !value.is_boolean() { return Err(derr("invalid_argument", "conversations.autoTitle requires a JSON boolean", StatusCode::BAD_REQUEST)); }
-    if k == "appearance.style" && !value.as_str().is_some_and(|v| ["bitbots", "blobots"].contains(&v)) { return Err(derr("invalid_argument", "appearance.style must be bitbots or blobots", StatusCode::BAD_REQUEST)); }
+    if k == "appearance.style" && !value.as_str().is_some_and(|v| ["bitbots", "blobots", "legacy", "pop", "dot"].contains(&v)) { return Err(derr("invalid_argument", "appearance.style must be bitbots, blobots, legacy, pop or dot", StatusCode::BAD_REQUEST)); }
+    if k == "appearance.wallpaper" && !value.as_str().is_some_and(|v| ["lake", "dusk", "bloom", "sand", "custom"].contains(&v)) { return Err(derr("invalid_argument", "appearance.wallpaper must be lake, dusk, bloom, sand or custom", StatusCode::BAD_REQUEST)); }
+    if k == "appearance.glass" && !value.as_str().is_some_and(|v| ["solid", "balanced", "clear"].contains(&v)) { return Err(derr("invalid_argument", "appearance.glass must be solid, balanced or clear", StatusCode::BAD_REQUEST)); }
+    if matches!(k, "appearance.font" | "appearance.monoFont") && !value.as_str().is_some_and(|v| v.is_empty() || (v.len() <= 40 && v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))) { return Err(derr("invalid_argument", "appearance.font and appearance.monoFont must be empty or lowercase letters, digits and hyphens (maximum 40 characters)", StatusCode::BAD_REQUEST)); }
     if k == "appearance.accent" && !value.as_str().is_some_and(|v| v.is_empty() || is_accent_hex(v)) { return Err(derr("invalid_argument", "appearance.accent must be empty or a #rrggbb hex colour", StatusCode::BAD_REQUEST)); }
     if k == "diagnostics.logLevel" && !value.as_str().is_some_and(|v| ["info", "debug"].contains(&v)) { return Err(derr("invalid_argument", "diagnostics.logLevel must be info or debug", StatusCode::BAD_REQUEST)); }
     let mut stored = value.clone();
@@ -8743,6 +8746,13 @@ mod phase2a_tests {
         assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":"blue"})).await.unwrap_err().1.code, "invalid_argument");
         assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":"#12345"})).await.unwrap_err().1.code, "invalid_argument");
         assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":"#12345g"})).await.unwrap_err().1.code, "invalid_argument");
+        for style in ["bitbots", "blobots", "legacy", "pop", "dot"] { dispatch(&st, "settings.set", json!({"key":"appearance.style","value":style})).await.unwrap(); }
+        for (key, value) in [("appearance.wallpaper", "lake"), ("appearance.wallpaper", "dusk"), ("appearance.wallpaper", "bloom"), ("appearance.wallpaper", "sand"), ("appearance.wallpaper", "custom"), ("appearance.glass", "solid"), ("appearance.glass", "balanced"), ("appearance.glass", "clear"), ("appearance.font", ""), ("appearance.font", "space-grotesk"), ("appearance.monoFont", "jetbrains-mono")] {
+            dispatch(&st, "settings.set", json!({"key":key,"value":value})).await.unwrap();
+        }
+        for (key, value) in [("appearance.wallpaper", "unknown"), ("appearance.glass", "opaque"), ("appearance.font", "A Font"), ("appearance.monoFont", "font_name")] {
+            assert_eq!(dispatch(&st, "settings.set", json!({"key":key,"value":value})).await.unwrap_err().1.code, "invalid_argument");
+        }
 
         dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"bitbots"})).await.unwrap();
         let style = events.recv().await.unwrap();

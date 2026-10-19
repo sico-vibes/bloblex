@@ -14,7 +14,16 @@
         if (dictation) document.documentElement.classList.add('dictation-surface')
         try {
           const settings = JSON.parse(localStorage.getItem('bloblex.appearance') || '{}')
-          const theme = ['system', 'dark', 'light'].includes(settings.theme) ? settings.theme : 'system'
+          const storedStyle = localStorage.getItem('bitbots.style')
+          const style = ['bitbots', 'blobots', 'legacy', 'pop', 'dot'].includes(storedStyle) ? storedStyle : 'bitbots'
+          document.documentElement.dataset.style = style
+          if (style === 'legacy') document.documentElement.dataset.bitbots = 'on'
+          const glass = localStorage.getItem('bitbots.glass')
+          document.documentElement.dataset.glass = ['solid', 'balanced', 'clear'].includes(glass) ? glass : 'solid'
+          const wallpaper = localStorage.getItem('bitbots.wallpaper')
+          document.documentElement.dataset.wallpaper = ['lake', 'dusk', 'bloom', 'sand', 'custom'].includes(wallpaper) ? wallpaper : 'lake'
+          const queryTheme = params.get('theme')
+          const theme = ['system', 'dark', 'light'].includes(queryTheme) ? queryTheme : ['system', 'dark', 'light'].includes(settings.theme) ? settings.theme : 'system'
           const textSize = ['small', 'default', 'large', 'larger'].includes(settings.textSize) ? settings.textSize : 'default'
           const overlay = companion || dictation
           const resolved = overlay ? 'dark' : theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme

@@ -5,6 +5,13 @@
 
 /* ── Look cards ────────────────────────────────────────────────────────── */
 .look-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.look-picker-wrap { width: 100%; }
+.more-looks-label { margin: 14px 0 8px; color: var(--text-3); font-size: var(--fs-xs); }
+.look-picker.more-looks { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.look-card.small { padding: 10px 8px; gap: 3px; }
+.look-card.small .look-avatar { height: 34px; }
+.look-card.small .look-tag { display: none; }
+.look-picker-wrap.compact .look-card { padding: 26px 10px 10px; }
 .look-card {
   position: relative; min-width: 0; padding: 30px 16px 16px; display: grid; justify-items: center; gap: 6px; text-align: center;
   color: var(--text-1); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--surface-raised); cursor: pointer;
@@ -77,17 +84,22 @@
 .sp-composer { height: 36px; padding: 0 5px 0 12px; display: flex; align-items: center; justify-content: space-between; color: var(--text-3); border: 1px solid var(--line-strong); background: var(--surface-input); }
 .sp-send { width: 26px; height: 26px; display: grid; place-items: center; color: var(--sp-accent-ink); background: var(--sp-accent); }
 
-/* Bitbots window: square, dotted, hard shadow, pixel type. */
-:root:root .sp-window[data-look="bitbots"] { border: 2px dotted var(--line-strong); border-radius: 0; box-shadow: 4px 4px 0 var(--bb-shadow-colour, #000); background-image: radial-gradient(var(--line) 1px, transparent 1.2px); background-size: 6px 6px; }
-:root:root .sp-window[data-look="bitbots"] .sp-titlebar span,
-:root:root .sp-window[data-look="bitbots"] .sp-label { font-family: "Doto", "DM Mono", ui-monospace, monospace; font-weight: 700; letter-spacing: .08em; }
-:root:root .sp-window[data-look="bitbots"] * { border-radius: 0; font-family: "DM Mono", ui-monospace, Menlo, monospace; }
-:root:root .sp-window[data-look="bitbots"] .sp-titlebar span,
-:root:root .sp-window[data-look="bitbots"] .sp-label { font-family: "Doto", "DM Mono", ui-monospace, monospace; }
-:root:root .sp-window[data-look="bitbots"] .sp-bubble,
-:root:root .sp-window[data-look="bitbots"] .sp-composer { border: 2px solid var(--line-strong); }
-:root:root .sp-window[data-look="bitbots"] .sp-bubble.user { border-color: var(--line); }
-:root:root .sp-window[data-look="bitbots"] .sp-dots b { animation-timing-function: steps(2, end); }
+/* Frost stays flat; Legacy keeps the original pixel treatment. */
+:root:root .sp-window[data-look="bitbots"] { border: 1px solid rgb(255 255 255 / .16); border-radius: 16px; background: rgb(22 23 28 / .84); backdrop-filter: blur(12px); }
+:root:root .sp-window[data-look="bitbots"] .sp-titlebar,
+:root:root .sp-window[data-look="bitbots"] .sp-side { background: rgb(22 23 28 / .78); }
+:root:root .sp-window[data-look="bitbots"] .sp-bubble.user { background: rgb(141 134 246 / .30); }
+:root:root .sp-window[data-look="legacy"] { border: 2px dotted var(--line-strong); border-radius: 0; box-shadow: 4px 4px 0 var(--bb-shadow-colour, #000); background-image: radial-gradient(var(--line) 1px, transparent 1.2px); background-size: 6px 6px; }
+:root:root .sp-window[data-look="legacy"] .sp-titlebar span,
+:root:root .sp-window[data-look="legacy"] .sp-label { font-family: "Doto", "DM Mono", ui-monospace, monospace; font-weight: 700; letter-spacing: .08em; }
+:root:root .sp-window[data-look="legacy"] * { border-radius: 0; font-family: "DM Mono", ui-monospace, Menlo, monospace; }
+:root:root .sp-window[data-look="legacy"] .sp-bubble,
+:root:root .sp-window[data-look="legacy"] .sp-composer { border: 2px solid var(--line-strong); }
+:root:root .sp-window[data-look="legacy"] .sp-dots b { animation-timing-function: steps(2, end); }
+:root:root .sp-window[data-look="pop"] { border: 2px solid #27231c; background: #fff8da; color: #27231c; }
+:root:root .sp-window[data-look="pop"] .sp-bubble,
+:root:root .sp-window[data-look="pop"] .sp-composer { border: 2px solid #27231c; }
+:root:root .sp-window[data-look="dot"] { border: 1px solid #aaa; background: #171717; color: #eee; }
 
 /* Blobots window: soft corners, calm shadow, system type. */
 :root:root .sp-window[data-look="blobots"] { border: 1px solid var(--line-strong); border-radius: 16px; box-shadow: 0 18px 44px rgba(0, 0, 0, .28); }

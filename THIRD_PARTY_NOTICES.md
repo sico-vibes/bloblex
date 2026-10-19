@@ -1,5 +1,9 @@
 # Third-party notices
 
+## Bundled fonts
+
+Inter, Geist, DM Sans, Manrope, Plus Jakarta Sans, IBM Plex Sans, Figtree, Sora, Outfit, Nunito, Space Grotesk, Bricolage Grotesque, JetBrains Mono, Geist Mono, Fira Code, IBM Plex Mono, DM Mono, Space Mono, Doto, Silkscreen, Pixelify Sans, VT323, Press Start 2P and Jersey 10 are bundled under the SIL Open Font License 1.1. The font packages contain the corresponding upstream license texts.
+
 The effort meter, message outline and hold-to-complete dialog port selected interaction and animation mechanics from the following MIT-licensed reference projects into independent React and CSS components. No reference component files, demo copy, assets, fixed demo tiers or provider branding are included. Bitbots supplies the actual runtime catalog, tier count, labels, theme and asynchronous delete result.
 
 Reference provenance (source checkouts reviewed on 7 October 2026):
@@ -57,7 +61,7 @@ The dictation island in `apps/desktop/src/ui/DictationIsland.tsx` adapts the lay
 
 The robots in Bitbots mode (Settings, Experimental) are drawn by [robot-heads](https://github.com/fayazara/robot-heads) 0.3.0, MIT License, Copyright (c) 2026 Fayaz Ahmed (the licence text below applies). A copy is vendored in `apps/desktop/src/vendor/robot-heads/` with its licence. Bitbots changes two things in it, both for cost: the shared animation loop draws at most about 30 times a second, and avatars of 80px or less draw at up to 1.5x and update at about 15 fps. It only draws while the mode is on.
 
-The pixel theme is set in [Doto](https://fonts.google.com/specimen/Doto) and [DM Mono](https://fonts.google.com/specimen/DM+Mono), both under the SIL Open Font License 1.1, bundled through the `@fontsource/doto` and `@fontsource/dm-mono` packages, and loaded only while the mode is on. The palette and the dotted, dithered look follow the reference site claudes.dev.
+The Legacy pixel look uses [Doto](https://fonts.google.com/specimen/Doto) and [DM Mono](https://fonts.google.com/specimen/DM+Mono), both under the SIL Open Font License 1.1, bundled through the `@fontsource/doto` and `@fontsource/dm-mono` packages, and loaded only while Legacy is active. The palette and the dotted, dithered look follow the reference site claudes.dev.
 
 ## Companion sounds
 

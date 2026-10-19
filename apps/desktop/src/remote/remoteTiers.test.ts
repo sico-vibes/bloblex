@@ -283,6 +283,10 @@ describe('redactSnapshotForRemote', () => {
       settings: {
         'appearance.style': 'dark',
         'appearance.accent': 'amber',
+        'appearance.wallpaper': 'lake',
+        'appearance.glass': 'solid',
+        'appearance.font': 'inter',
+        'appearance.monoFont': 'geist-mono',
         'appearance.theme': 'system',
         'appearance.textSize': 'medium',
         'appearance.density': 'comfortable',

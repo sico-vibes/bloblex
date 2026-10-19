@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react'
 import { ArrowUp } from 'lucide-react'
 import type { ThemeStyle } from './appearance'
 import { LookAvatar, LOOKS } from './LookPicker'
-import '@fontsource/doto/latin-700.css'
-import '@fontsource/dm-mono/latin-400.css'
 import './lookPicker.css'
 
 const ROSTER = ['Atlas', 'Pixel', 'Nova'] as const
@@ -51,10 +49,11 @@ function PreviewWindow({ look, active }: { look: ThemeStyle; active: boolean }) 
 
 /** The preview that opens when a look is chosen. Both windows stay mounted so switching cross-fades. */
 export function LookPreview({ look }: { look: ThemeStyle | null }) {
-  return <div className="look-preview" data-open={look ? 'true' : 'false'} role="img" aria-label={look ? `Preview of the ${look === 'bitbots' ? 'Bitbots' : 'Blobots'} look` : undefined} aria-hidden={look ? undefined : true}>
+  const previewName = look ? LOOKS.find((item) => item.id === look)?.name : undefined
+  return <div className="look-preview" data-open={look ? 'true' : 'false'} role="img" aria-label={previewName ? `Preview of the ${previewName} look` : undefined} aria-hidden={look ? undefined : true}>
     <div className="look-preview-inner">
       <div className="look-preview-stage">
-        <PreviewWindow look="bitbots" active={look === 'bitbots'} />
+        <PreviewWindow look={look && look !== 'blobots' ? look : 'bitbots'} active={!!look && look !== 'blobots'} />
         <PreviewWindow look="blobots" active={look === 'blobots'} />
       </div>
     </div>

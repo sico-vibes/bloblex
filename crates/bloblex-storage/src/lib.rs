@@ -1277,7 +1277,10 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="skills.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots","legacy","pop","dot"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.wallpaper" && !v.as_str().is_some_and(|s| ["lake","dusk","bloom","sand","custom"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.glass" && !v.as_str().is_some_and(|s| ["solid","balanced","clear"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if matches!(k,"appearance.font" | "appearance.monoFont") && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()<=40 && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c==b'-'))){return Err(StorageError::InvalidAgent)}
     if k=="appearance.accent" && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()==7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit()))){return Err(StorageError::InvalidAgent)}
     if k=="appearance.density" && !v.as_str().is_some_and(|s| ["compact","default","roomy"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="hints.seen" && !valid_hints_seen(v){return Err(StorageError::InvalidAgent)}
@@ -5678,6 +5681,14 @@ mod pricing_override_removal_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn appearance_values_validate() {
+        for style in ["bitbots", "blobots", "legacy", "pop", "dot"] { assert!(validate_setting_value("appearance.style", &json!(style)).is_ok()); }
+        for wallpaper in ["lake", "dusk", "bloom", "sand", "custom"] { assert!(validate_setting_value("appearance.wallpaper", &json!(wallpaper)).is_ok()); }
+        for glass in ["solid", "balanced", "clear"] { assert!(validate_setting_value("appearance.glass", &json!(glass)).is_ok()); }
+        for key in ["appearance.font", "appearance.monoFont"] { for font in ["", "space-grotesk", "jersey-10"] { assert!(validate_setting_value(key, &json!(font)).is_ok()); } }
+        for (key, value) in [("appearance.style", json!("unknown")), ("appearance.wallpaper", json!("nope")), ("appearance.glass", json!("opaque")), ("appearance.font", json!("Font Name")), ("appearance.monoFont", json!("_bad")), ("appearance.font", json!("x".repeat(41)))] { assert!(validate_setting_value(key, &value).is_err(), "{key}: {value}"); }
+    }
     fn remove_session_controls_migration(c: &Connection) {
         c.execute_batch("DROP TABLE IF EXISTS message_reactions; DROP INDEX IF EXISTS idx_messages_session_id_id; ALTER TABLE sessions DROP COLUMN model_lock_json; DROP TABLE IF EXISTS quota_snapshots; DELETE FROM schema_migrations WHERE version IN (6,7,8,9,10,11,12); PRAGMA user_version=5; ALTER TABLE sessions DROP COLUMN archived; ALTER TABLE sessions DROP COLUMN title_override; ALTER TABLE agents DROP COLUMN outfit; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
     }

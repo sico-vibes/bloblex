@@ -18,22 +18,17 @@ import { BackupPage } from './BackupPage'
 import { normalizeEngineChoice, setDictationEnginePrefs, type DictationEngineChoice } from './dictation'
 import { UpdatesPanel } from './UpdatesPanel'
 import { autostartEnabled, setAutostartEnabled } from '../desktopIntegrations'
-import { applyAppearance } from './appearance'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { runtimeAuthSummary } from './launchChecks'
 import { needsSignIn, SignInHelp } from './SignInHelp'
 import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTime, type DiscoveryStatus } from './runtimeDiscovery'
 import { ScanRecovery } from './ScanRecovery'
 import { ConfirmDialog } from './BlobPage'
-import { setAccentColor, setThemeStyle, useAccentColor, useThemeStyle } from '../blob/bitbots'
-import { LookPicker } from './LookPicker'
 import { RowCopy, SettingsGroup, SettingsRow } from './SettingsParts'
 import { RemoteSettings } from './RemoteSettings'
 import { DiagnosticsDialog } from './DiagnosticsDialog'
-import { LookPreview } from './LookPreview'
+import { AppearancePage } from './AppearancePage'
 import { searchSettings, type SettingsIndexEntry } from './settingsIndex'
-import { AccentPicker } from './AccentPicker'
-import { DensityControl } from './DensityControl'
 import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME } from '../blob/soundVolume'
 import { applySoundPrefs, previewSoundVolume, saveSoundsEnabled, saveSoundVolume as persistSoundVolume, soundPrefsFromSettings, subscribeSoundPrefs } from './soundPrefs'
@@ -126,8 +121,6 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const savedSoundVolume = useRef(DEFAULT_SOUND_VOLUME)
   const [startPosition, setStartPosition] = useState<'launch' | 'last'>('launch')
   const [companionHotkey, setCompanionHotkey] = useState(true)
-  const [appearanceTheme, setAppearanceTheme] = useState<'system' | 'dark' | 'light'>('system')
-  const [textSize, setTextSize] = useState<'small' | 'default' | 'large' | 'larger'>('default')
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
   const [retryMaxWaitSecs, setRetryMaxWaitSecs] = useState(21600)
   const [profileAbout, setProfileAbout] = useState('')
@@ -193,8 +186,6 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
           }
         } catch { /* Shortcut support may be unavailable on this platform. */ }
       }
-      if (settings['appearance.theme'] === 'dark' || settings['appearance.theme'] === 'light' || settings['appearance.theme'] === 'system') setAppearanceTheme(settings['appearance.theme'])
-      if (['small', 'default', 'large', 'larger'].includes(String(settings['appearance.textSize']))) setTextSize(settings['appearance.textSize'] as typeof textSize)
       setNotificationsEnabled(settings['notifications.enabled'] !== false)
       if (typeof settings['retry.maxWaitSecs'] === 'number') setRetryMaxWaitSecs(settings['retry.maxWaitSecs'])
       if (typeof settings['profile.about'] === 'string') setProfileAbout(settings['profile.about'])
@@ -323,8 +314,6 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
   const setCompanion = (visible: boolean) => guarded(async () => { await setCompanionVisibility(visible) })
   const saveSetting = (key: string, value: unknown) => guarded(async () => { await rpc('settings.set', { key, value }) })
-  const themeStyleValue = useThemeStyle()
-  const accentValue = useAccentColor()
   const applySpeechEngine = async (engine: DictationEngineChoice, consent: boolean) => {
     const failure = await guarded(async () => {
       if (consent !== cloudConsent) {
@@ -360,16 +349,6 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
         : failure)
     }
   }
-  const updateAppearance = (theme: typeof appearanceTheme, size: typeof textSize) => guarded(async () => {
-    await rpc('settings.set', { key: 'appearance.theme', value: theme })
-    await rpc('settings.set', { key: 'appearance.textSize', value: size })
-    try { localStorage.setItem('bloblex.appearance', JSON.stringify({ theme, textSize: size })) } catch { /* The daemon remains the persisted source. */ }
-    document.documentElement.dataset.themeChoice = theme
-    applyAppearance(document.documentElement, theme, size)
-    setAppearanceTheme(theme)
-    setTextSize(size)
-    setNotice('Appearance updated.')
-  })
   const updateCloseToTray = (enabled: boolean) => guarded(async () => { await setCloseToTray(enabled); setCloseToTrayValue(enabled) })
   const updateAutostart = (enabled: boolean) => guarded(async () => {
     await setAutostartEnabled(enabled)
@@ -620,28 +599,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             </SettingsGroup>
           </>}
 
-          {!loading && page === 'Appearance' && <>
-            <div className="appearance-preview"><LookPreview look={themeStyleValue} /></div>
-            <SettingsGroup title="Look and colour">
-              <SettingsRow label="Look" hint="Bitbots is the primary look. Blobots is the softer alternative." stacked>
-                <LookPicker value={themeStyleValue} disabled={saving} label="App look" onChange={(next) => { void saveSetting('appearance.style', next).then((failure) => { if (!failure) setThemeStyle(next) }) }} />
-              </SettingsRow>
-              <SettingsRow label="Accent colour" stacked hint="Used for buttons, selections and focus in both looks. Neutral follows the theme.">
-                <AccentPicker value={accentValue} disabled={saving} onChange={(next) => { void saveSetting('appearance.accent', next).then((failure) => { if (!failure) setAccentColor(next) }) }} />
-              </SettingsRow>
-            </SettingsGroup>
-            <SettingsGroup title="Display">
-              <SettingsRow label="Theme">
-                <Select ariaLabel="Theme" variant="muted" value={appearanceTheme} disabled={saving} onChange={(value) => { if (value === 'system' || value === 'dark' || value === 'light') void updateAppearance(value, textSize) }} options={[{ value: 'system', label: 'Follow system' }, { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} />
-              </SettingsRow>
-              <SettingsRow label="Text size">
-                <Select ariaLabel="Text size" variant="muted" value={textSize} disabled={saving} onChange={(value) => { if (['small', 'default', 'large', 'larger'].includes(value)) void updateAppearance(appearanceTheme, value as typeof textSize) }} options={[{ value: 'small', label: 'Small 13' }, { value: 'default', label: 'Default 14' }, { value: 'large', label: 'Large 15' }, { value: 'larger', label: 'Larger 16' }]} />
-              </SettingsRow>
-              <SettingsRow label="Density" hint="How much room rows and messages take. Applies everywhere.">
-                <DensityControl />
-              </SettingsRow>
-            </SettingsGroup>
-          </>}
+          {!loading && page === 'Appearance' && <AppearancePage />}
 
           {!loading && page === 'Remote' && <RemoteSettings onOpenPower={() => switchPage('General')} />}
 

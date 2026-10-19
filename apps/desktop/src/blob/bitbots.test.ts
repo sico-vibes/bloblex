@@ -16,9 +16,29 @@ describe('theme style switch', () => {
   it('defaults to bitbots and marks the document', async () => {
     const bitbots = await loadModule()
     expect(bitbots.themeStyle()).toBe('bitbots')
-    expect(bitbots.bitbotsEnabled()).toBe(true)
+    expect(bitbots.bitbotsEnabled()).toBe(false)
     expect(document.documentElement.dataset.style).toBe('bitbots')
+    expect(document.documentElement.dataset.bitbots).toBeUndefined()
+    expect(document.documentElement.dataset.wallpaper).toBe('lake')
+    expect(document.documentElement.dataset.glass).toBe('solid')
+  })
+
+  it('keeps the bitbots marker exclusive to Legacy and applies wallpaper and glass preferences', async () => {
+    const bitbots = await loadModule()
+    for (const look of ['bitbots','blobots','pop','dot'] as const) {
+      bitbots.setThemeStyle(look)
+      expect(document.documentElement.dataset.style).toBe(look)
+      expect(document.documentElement.dataset.bitbots).toBeUndefined()
+    }
+    bitbots.setThemeStyle('legacy')
     expect(document.documentElement.dataset.bitbots).toBe('on')
+    expect(bitbots.bitbotsEnabled()).toBe(true)
+    bitbots.setWallpaper('dusk')
+    bitbots.setGlass('clear')
+    expect(document.documentElement.dataset.wallpaper).toBe('dusk')
+    expect(document.documentElement.dataset.glass).toBe('clear')
+    expect(localStorage.getItem('bitbots.wallpaper')).toBe('dusk')
+    expect(localStorage.getItem('bitbots.glass')).toBe('clear')
   })
 
   it('reads the new cache key first', async () => {
@@ -51,11 +71,24 @@ describe('theme style switch', () => {
     expect(localStorage.getItem('bloblex.bitbots')).toBeNull()
 
     bitbots.setThemeStyle('bitbots')
-    expect(document.documentElement.dataset.bitbots).toBe('on')
+    expect(document.documentElement.dataset.bitbots).toBeUndefined()
     expect(localStorage.getItem('bitbots.style')).toBe('bitbots')
+
+    bitbots.setThemeStyle('legacy')
+    expect(document.documentElement.dataset.bitbots).toBe('on')
 
     bitbots.setBitbotsEnabled(false)
     expect(bitbots.bitbotsEnabled()).toBe(false)
+    expect(bitbots.themeStyle()).toBe('blobots')
+  })
+
+  it('keeps the deprecated setter false-to-Blobots and true-to-Bitbots behavior', async () => {
+    const bitbots = await loadModule()
+    bitbots.setBitbotsEnabled(true)
+    expect(bitbots.themeStyle()).toBe('bitbots')
+    expect(bitbots.bitbotsEnabled()).toBe(false)
+    expect(document.documentElement.dataset.bitbots).toBeUndefined()
+    bitbots.setBitbotsEnabled(false)
     expect(bitbots.themeStyle()).toBe('blobots')
   })
 

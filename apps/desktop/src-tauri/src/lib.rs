@@ -55,6 +55,7 @@ enum SelectedFilePurpose {
     BackupExport,
     BackupImport,
     DiagnosticsExport,
+    WallpaperImport,
 }
 
 struct SelectedFilePath {
@@ -766,6 +767,68 @@ fn read_blob_import(state: State<'_, AppState>, selection_token: String) -> Resu
         return Err("This blob file is too large.".to_string());
     }
     String::from_utf8(bytes).map_err(|_| "This blob file is not UTF-8 text.".to_string())
+}
+
+const MAX_WALLPAPER_BYTES: usize = 15 * 1024 * 1024;
+#[tauri::command]
+fn select_wallpaper_image(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(selected) = app.dialog().file().add_filter("Images", &["png", "jpg", "jpeg", "webp"]).blocking_pick_file() else { return Ok(None); };
+    let path = selected.into_path().map_err(|_| "The selected image path is unavailable.".to_string())?;
+    Ok(Some(remember_selected_path(&state, path, SelectedFilePurpose::WallpaperImport)?))
+}
+#[tauri::command]
+fn import_wallpaper(app: AppHandle, state: State<'_, AppState>, selection_token: String) -> Result<(), String> {
+    let path = take_selected_path(&state, &selection_token, SelectedFilePurpose::WallpaperImport)?;
+    let metadata = fs::metadata(&path).map_err(|_| "The image could not be read.".to_string())?;
+    if !wallpaper_size_allowed(metadata.len() as usize) { return Err("Choose an image smaller than 15 MB.".into()); }
+    let bytes = fs::read(&path).map_err(|_| "The image could not be read.".to_string())?;
+    if !wallpaper_size_allowed(bytes.len()) { return Err("Choose an image smaller than 15 MB.".into()); }
+    let ext = wallpaper_extension(&bytes).ok_or_else(|| "Choose a PNG, JPEG or WebP image.".to_string())?;
+    let mut dir = app.path().app_local_data_dir().map_err(|_| "The wallpaper folder is unavailable.".to_string())?;
+    dir.push("wallpapers"); fs::create_dir_all(&dir).map_err(|_| "The wallpaper folder could not be created.".to_string())?;
+    clear_wallpaper_files(&dir);
+    fs::write(dir.join(wallpaper_file_name(ext)), bytes).map_err(|_| "The image could not be saved.".to_string())
+}
+#[tauri::command]
+fn read_wallpaper(app: AppHandle) -> Result<tauri::ipc::Response, String> {
+    let mut dir = app.path().app_local_data_dir().map_err(|_| "The wallpaper folder is unavailable.".to_string())?; dir.push("wallpapers");
+    for ext in ["png", "jpg", "webp"] { let path = dir.join(format!("custom.{ext}")); if path.is_file() { let bytes = fs::read(path).map_err(|_| "The wallpaper could not be read.".to_string())?; if bytes.len() <= MAX_WALLPAPER_BYTES { return Ok(tauri::ipc::Response::new(bytes)); } } }
+    Ok(tauri::ipc::Response::new(Vec::new()))
+}
+#[tauri::command]
+fn clear_wallpaper(app: AppHandle) -> Result<(), String> {
+    let mut dir = app.path().app_local_data_dir().map_err(|_| "The wallpaper folder is unavailable.".to_string())?; dir.push("wallpapers"); clear_wallpaper_files(&dir); Ok(())
+}
+fn wallpaper_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89,b'P',b'N',b'G',0x0d,0x0a,0x1a,0x0a]) { return Some("png"); }
+    if bytes.starts_with(&[0xff,0xd8,0xff]) { return Some("jpg"); }
+    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" { return Some("webp"); }
+    None
+}
+fn wallpaper_size_allowed(size: usize) -> bool { size > 0 && size <= MAX_WALLPAPER_BYTES }
+fn wallpaper_file_name(extension: &str) -> String { format!("custom.{extension}") }
+fn clear_wallpaper_files(dir: &Path) { for ext in ["png", "jpg", "webp"] { let _ = fs::remove_file(dir.join(format!("custom.{ext}"))); } }
+
+#[cfg(test)]
+mod wallpaper_tests {
+    use super::*;
+    #[test]
+    fn accepts_only_supported_signatures_within_the_size_cap() {
+        assert_eq!(wallpaper_extension(&[0x89,b'P',b'N',b'G',0x0d,0x0a,0x1a,0x0a]), Some("png"));
+        assert_eq!(wallpaper_extension(&[0xff,0xd8,0xff]), Some("jpg"));
+        assert_eq!(wallpaper_extension(b"RIFFxxxxWEBP"), Some("webp"));
+        assert_eq!(wallpaper_extension(b"GIF89a"), None);
+        assert!(wallpaper_size_allowed(1));
+        assert!(wallpaper_size_allowed(MAX_WALLPAPER_BYTES));
+        assert!(!wallpaper_size_allowed(0));
+        assert!(!wallpaper_size_allowed(MAX_WALLPAPER_BYTES + 1));
+    }
+    #[test]
+    fn custom_file_names_are_fixed_and_extension_derived() {
+        assert_eq!(wallpaper_file_name("png"), "custom.png");
+        assert_eq!(wallpaper_file_name("webp"), "custom.webp");
+    }
 }
 
 /// Largest `.bitbots-backup.json` the native reader accepts.
@@ -2670,6 +2733,10 @@ pub fn run() {
             select_blob_export_path,
             select_blob_import_path,
             read_blob_import,
+            select_wallpaper_image,
+            import_wallpaper,
+            read_wallpaper,
+            clear_wallpaper,
             select_backup_export_path,
             select_backup_import_path,
             backup_export_write,

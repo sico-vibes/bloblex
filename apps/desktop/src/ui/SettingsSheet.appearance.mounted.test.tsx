@@ -20,6 +20,10 @@ vi.mock('../tauri', () => ({
   setCompanionMonitor: mocks.setCompanionMonitor,
   setCompanionVisibility: mocks.setCompanionVisibility,
   setCloseToTray: mocks.setCloseToTray,
+  readWallpaper: vi.fn(async () => new Uint8Array()),
+  selectWallpaperImage: vi.fn(async () => null),
+  importWallpaper: vi.fn(async () => undefined),
+  clearWallpaper: vi.fn(async () => undefined),
 }))
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: vi.fn(async () => false), setAutostartEnabled: vi.fn(async () => undefined) }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke, isTauri: () => true }))
@@ -28,13 +32,14 @@ vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => undefined), li
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 let host: HTMLDivElement
 let root: Root
+let localCache = new Map<string, string>()
 beforeEach(() => {
-  const store = new Map<string, string>()
+  localCache = new Map<string, string>()
   vi.stubGlobal('localStorage', {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => { store.set(key, String(value)) },
-    removeItem: (key: string) => { store.delete(key) },
-    clear: () => store.clear(),
+    getItem: (key: string) => localCache.get(key) ?? null,
+    setItem: (key: string, value: string) => { localCache.set(key, String(value)) },
+    removeItem: (key: string) => { localCache.delete(key) },
+    clear: () => localCache.clear(),
   })
   mocks.rpc.mockReset()
   mocks.invoke.mockReset()
@@ -45,6 +50,30 @@ beforeEach(() => {
 afterEach(() => { if (root) act(() => root.unmount()); host?.remove(); vi.unstubAllGlobals() })
 
 describe('General settings mounted controls', () => {
+
+  it('offers five looks, Bitbots-only options and font settings', async () => {
+    mocks.invoke.mockResolvedValue(true)
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Appearance" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect([...host.querySelectorAll('.appearance-primary-grid button strong,.appearance-more-grid button strong')].map((button) => button.textContent)).toEqual(['Bitbots','Blobots','Legacy','Pop','Dot'])
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-primary-grid button,.appearance-more-grid button')].find((button) => button.textContent?.includes('Pop'))?.click(); await Promise.resolve() })
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.style', value: 'pop' })
+    expect(host.textContent).toContain('This look has no extra options yet.')
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-primary-grid button,.appearance-more-grid button')].find((button) => button.textContent?.includes('Bitbots'))?.click(); await Promise.resolve() })
+    expect(host.textContent).toContain('Wallpaper')
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-page .density-control button')].find((button) => button.textContent === 'Balanced')?.click(); await Promise.resolve() })
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.glass', value: 'balanced' })
+    const font = [...host.querySelectorAll<HTMLButtonElement>('.font-options button')].find((button) => button.textContent === 'Geist')
+    await act(async () => { font?.click(); await Promise.resolve() })
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.font', value: 'geist' })
+    expect(localCache.get('bitbots.font')).toBe('geist')
+    const codeSearch = host.querySelector<HTMLInputElement>('[aria-label="Search code fonts"]')!
+    const codeChoices = codeSearch.parentElement!.querySelector('.font-options')!.textContent ?? ''
+    expect(codeChoices).toContain('JetBrains Mono')
+    expect(codeChoices).not.toContain('IBM Plex Sans')
+  })
 
   it('loads and saves the busy-send preference in General', async () => {
     mocks.invoke.mockResolvedValue(false)
@@ -149,12 +178,12 @@ describe('General settings mounted controls', () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
     await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Appearance" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-    expect(await selectOptions(host, 'Theme')).toEqual(expect.arrayContaining([
-      expect.objectContaining({ value: 'system', label: 'Follow system' }),
-      expect.objectContaining({ value: 'light', label: 'Light' }),
-    ]))
-    expect((await selectOptions(host, 'Text size')).map((item) => item.value)).toEqual(['small', 'default', 'large', 'larger'])
-    await chooseOption(host, 'Theme', 'light')
+    expect([...host.querySelectorAll('.appearance-page .density-control button')].map((button) => button.textContent)).toContain('Light')
+    expect(host.textContent).toContain('Interface font')
+    expect(host.textContent).toContain('Code font')
+    expect([...host.querySelectorAll('[role="radiogroup"][aria-label="Text size"] [role="radio"]')].map((button) => button.textContent)).toEqual(['Small','Default','Large','Larger'])
+    expect([...host.querySelectorAll('[role="radiogroup"][aria-label="Density"] [role="radio"]')].map((button) => button.textContent)).toEqual(['Compact','Default','Roomy'])
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-page .density-control button')].find((button) => button.textContent === 'Light')?.click(); await Promise.resolve() })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.theme', value: 'light' })
     expect(document.documentElement.dataset.theme).toBe('light')
     // Companion placement and the hotkey stay on General.

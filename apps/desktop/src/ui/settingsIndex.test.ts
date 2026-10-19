@@ -4,13 +4,17 @@ import { searchSettings, settingsPageFromEvent, SETTINGS_INDEX, SETTINGS_PAGE_NA
 describe('searchSettings', () => {
   it('finds a setting by its label, ranking label hits first', () => {
     const results = searchSettings('accent')
-    expect(results[0]?.label).toBe('Accent colour')
+    expect(results[0]?.label).toBe('Accent')
     expect(results[0]?.page).toBe('Appearance')
   })
 
   it('finds a setting by a keyword the label does not contain', () => {
     expect(searchSettings('autostart')[0]?.label).toBe('Start with Windows')
     expect(searchSettings('dark')[0]?.label).toBe('Theme')
+  })
+
+  it('indexes all new appearance choices', () => {
+    for (const term of ['legacy', 'pop', 'dot', 'wallpaper', 'glass', 'font', 'mono']) expect(searchSettings(term).some((entry) => entry.page === 'Appearance'), term).toBe(true)
   })
 
   it('requires every word to match', () => {

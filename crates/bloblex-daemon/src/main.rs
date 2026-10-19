@@ -8746,14 +8746,6 @@ mod phase2a_tests {
         assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":"blue"})).await.unwrap_err().1.code, "invalid_argument");
         assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":"#12345"})).await.unwrap_err().1.code, "invalid_argument");
         assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.accent","value":"#12345g"})).await.unwrap_err().1.code, "invalid_argument");
-        for style in ["bitbots", "blobots", "legacy", "pop", "dot"] { dispatch(&st, "settings.set", json!({"key":"appearance.style","value":style})).await.unwrap(); }
-        for (key, value) in [("appearance.wallpaper", "lake"), ("appearance.wallpaper", "dusk"), ("appearance.wallpaper", "bloom"), ("appearance.wallpaper", "sand"), ("appearance.wallpaper", "custom"), ("appearance.glass", "solid"), ("appearance.glass", "balanced"), ("appearance.glass", "clear"), ("appearance.font", ""), ("appearance.font", "space-grotesk"), ("appearance.monoFont", "jetbrains-mono")] {
-            dispatch(&st, "settings.set", json!({"key":key,"value":value})).await.unwrap();
-        }
-        for (key, value) in [("appearance.wallpaper", "unknown"), ("appearance.glass", "opaque"), ("appearance.font", "A Font"), ("appearance.monoFont", "font_name")] {
-            assert_eq!(dispatch(&st, "settings.set", json!({"key":key,"value":value})).await.unwrap_err().1.code, "invalid_argument");
-        }
-
         dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"bitbots"})).await.unwrap();
         let style = events.recv().await.unwrap();
         assert_eq!(style.event_type, "settings.changed");
@@ -8774,6 +8766,14 @@ mod phase2a_tests {
 
         dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"bitbots"})).await.unwrap();
         assert!(events.try_recv().is_err(), "an unchanged value does not re-broadcast");
+
+        for style in ["bitbots", "blobots", "legacy", "pop", "dot"] { dispatch(&st, "settings.set", json!({"key":"appearance.style","value":style})).await.unwrap(); }
+        for (key, value) in [("appearance.wallpaper", "lake"), ("appearance.wallpaper", "dusk"), ("appearance.wallpaper", "bloom"), ("appearance.wallpaper", "sand"), ("appearance.wallpaper", "custom"), ("appearance.glass", "solid"), ("appearance.glass", "balanced"), ("appearance.glass", "clear"), ("appearance.font", ""), ("appearance.font", "space-grotesk"), ("appearance.monoFont", "jetbrains-mono")] {
+            dispatch(&st, "settings.set", json!({"key":key,"value":value})).await.unwrap();
+        }
+        for (key, value) in [("appearance.wallpaper", "unknown"), ("appearance.glass", "opaque"), ("appearance.font", "A Font"), ("appearance.monoFont", "font_name")] {
+            assert_eq!(dispatch(&st, "settings.set", json!({"key":key,"value":value})).await.unwrap_err().1.code, "invalid_argument");
+        }
     }
 
     #[tokio::test]

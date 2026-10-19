@@ -5,6 +5,7 @@
 .appearance-more-grid button { display:grid; grid-template-columns:minmax(0,1fr); justify-items:start; align-content:start; align-items:start; gap:7px; padding:9px; }
 .appearance-primary-grid button[data-selected="true"],.appearance-more-grid button[data-selected="true"] { border-color:var(--user-accent,var(--accent)); }
 .appearance-primary-grid small,.appearance-more-grid small,.appearance-quiet { color:var(--text-2); font-size:var(--fs-xs); }
+p.appearance-quiet { margin:0; padding:12px 16px; }
 .appearance-more-label { margin:12px 0 5px; color:var(--text-3); font-size:var(--fs-xs); font-weight:500; }
 .appearance-look-copy { min-width:0; display:grid; gap:4px; }
 .appearance-more-grid .appearance-look-copy { gap:2px; }

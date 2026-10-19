@@ -1,5 +1,9 @@
 # OpenCode effort evidence, 2026-10-13
 
+> **What this is:** Evidence for OpenCode effort levels, 13 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-13
+
 Lane: OpenCode (backend). Method: live probes against the installed `opencode` CLI in throwaway
 temp directories with an isolated `OPENCODE_CONFIG_CONTENT`. Prompts were trivial
 ("Reply with the single word OK"); no user config, session, or credential value was read or logged.

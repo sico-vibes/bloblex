@@ -1,5 +1,9 @@
 # Runtime capabilities (Phase 1.5)
 
+> **What this is:** Runtime capabilities of the installed CLIs (Phase 1.5), second record, 2 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-15
+
 Verified 2 October 2026 against the CLIs installed on this machine: Claude Code **2.1.286** (`claude`), codex-cli **0.159.3** (`codex`), OpenCode **1.18.34** (`opencode`). All three are npm shims under `%AppData%\Roaming\npm` and were invoked from PowerShell. No production code was changed. No model completion was run.
 
 ## How to read this
@@ -356,7 +360,7 @@ Allowlists only. Anything not listed is rejected. Paths in allowlisted file flag
 
 **Env:** reject secret-looking keys the same way `settings.set` already does. Never log env values or instruction text. `OPENCODE_CONFIG_CONTENT` is Bitbots-owned, not a user-supplied env blob.
 
-## Z3. Corrections `docs/E2E_PLAN_V2.md` needs
+## Z3. Corrections `docs/plans/e2e-plan-v2.md` needs
 
 The plan file was not edited.
 

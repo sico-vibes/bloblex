@@ -1,5 +1,9 @@
 # Bitbots remote protocol (v1)
 
+> **What this is:** The Remote mode protocol (v1): requests, events and the rules for each.
+> **Status:** current; the design for the wire contract. Its own line "Design, not implemented" is out of date: the daemon contains the gateway (crates/bloblex-daemon/src/remote/).
+> **Last updated:** 2026-10-19
+
 **Status: Design, not implemented.** This document describes the wire contract between a
 device (phone, tablet, browser) and a host's gateway. It is grounded in the daemon as it
 exists today; every daemon fact cites its source file. Choices that are not yet forced by the
@@ -321,7 +325,7 @@ and resumes. No partial in-memory state is trusted across the gap.
 ## 7. Snapshot filtering
 
 `app.snapshot` is redacted before it reaches a device. The host applies
-`redactSnapshotForRemote(snapshot)` (`docs/FIX18_REMOTE_TIERS_SPEC.md:50-55`):
+`redactSnapshotForRemote(snapshot)` (`docs/history/fix-18/remote-tiers-spec.md:50-55`):
 
 - `customEnv` is replaced by `{}`: values and key names are both removed (the code and its test do exactly this).
 - An `instructions` string of any length is replaced by `{ "hasInstructions": true }`.
@@ -347,7 +351,7 @@ The gateway applies the same redaction to redacted fields inside other read resu
 
 A device may call only methods on the allowlist, and only at or above the tier a method needs.
 `METHOD_RULES` in `apps/desktop/src/remote/remoteTiers.ts` is the source of truth
-(`docs/FIX18_REMOTE_TIERS_SPEC.md:10-42`); the table below is generated from it. An unknown
+(`docs/history/fix-18/remote-tiers-spec.md:10-42`); the table below is generated from it. An unknown
 method is denied with reason "not on the remote allowlist".
 
 Three tiers, each including everything below it
@@ -361,7 +365,7 @@ Three tiers, each including everything below it
 **never remote** — always denied, at every tier: settings writes, blob and project lifecycle,
 runtime profile writes, session deletion, daemon shutdown, hooks, and the retired
 `pricing.*`, `subscription.*` and `budget.*` families
-(`docs/FIX18_REMOTE_TIERS_SPEC.md:33-39`).
+(`docs/history/fix-18/remote-tiers-spec.md:33-39`).
 
 <!-- Generated from apps/desktop/src/remote/remoteTiers.ts (renderTierTableMarkdown). The parity test keeps it equal to the daemon dispatch. -->
 

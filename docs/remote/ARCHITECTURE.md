@@ -1,5 +1,9 @@
 # Remote mode: architecture
 
+> **What this is:** The architecture of Remote mode over Tailscale.
+> **Status:** current (Tailscale method); later amendments are in AGENTS.md
+> **Last updated:** 2026-10-16
+
 **Status: design.** Written 15 October 2026; amended 16 October 2026 for the owner's choice of
 Tailscale. Wire details are in [PROTOCOL.md](PROTOCOL.md), risks in
 [THREAT_MODEL.md](THREAT_MODEL.md), phases in [PHASES.md](PHASES.md).
@@ -106,7 +110,7 @@ The existing React UI kit, built separately (`vite.remote.config.ts`, input `rem
 output `dist-remote`, public folder `remote-public/`). An alias swaps `../tauri` for
 `src/remote/remoteTauri.ts`, which sits on `remoteTransport.ts`: `fetch` for RPC and a WebSocket
 with a cursor, back-off and gap recovery for events. Native features are hidden through a
-`platform()` capability object ([FIX16](../FIX16_TRANSPORT_SEAM_SPEC.md)). The phone shell in
+`platform()` capability object ([FIX16](../history/fix-16/transport-seam-spec.md)). The phone shell in
 `src/remote/` is a mobile layout over the same data (bot list, chat, approvals), not the desktop
 window shrunk.
 

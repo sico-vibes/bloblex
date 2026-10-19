@@ -1,5 +1,9 @@
 # Remote mode: threat model
 
+> **What this is:** The threat model for Remote mode. The release-gate checklists in sections 8 and 11 are still owed.
+> **Status:** current
+> **Last updated:** 2026-10-18
+
 **Status: design.** Written 15 October 2026; amended 16 October 2026 for the owner's choice of
 Tailscale. Scope: the gateway, Tailscale serve, paired devices and the pairing flow. Out of
 scope: the coding agents' own sandboxing, provider accounts, and Tailscale's own security.
@@ -168,7 +172,7 @@ later). While it is on, the gateway's own listener binds the host's interfaces o
 `remote.nativePort` (default 48621), serves HTTPS only with a certificate Bitbots generates, and
 may be reachable from the whole internet once the owner forwards the port (by hand or through
 UPnP with consent). Everything in §4–§11 still applies; this section covers what is new. Facts
-below come from the lane reports ([FIX35_C1](../FIX35_C1_REPORT.md), [FIX35_C2](../FIX35_C2_REPORT.md))
+below come from the lane reports ([FIX35_C1](../history/fix-35/c1-report.md), [FIX35_C2](../history/fix-35/c2-report.md))
 and the Director's review; none of it has been tested against a live router, a real phone on
 mobile data or an outside attacker.
 

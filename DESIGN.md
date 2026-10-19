@@ -1,5 +1,9 @@
 # Bitbots Design System
 
+> **What this is:** The visual design rules for Bitbots: the scene, tokens, layout, controls, companion, and the FIX39 and FIX40 rules. Read it before changing the UI.
+> **Status:** current
+> **Last updated:** 2026-10-19
+
 ## Scene and Register
 
 Product UI for a developer moving between coding-agent sessions on a desktop. It should feel like a simple chat app: calm, monochrome chrome, very little repeated information. The blob characters supply the warmth; everything else stays quiet.
@@ -49,7 +53,7 @@ For Legacy and Blobots, the companion keeps its dark token palette over transpar
 
 ## FIX39 visual rules (18 October 2026)
 
-These rules came from the owner's review and the audits (item numbers refer to [docs/FIX39_FEEDBACK.md](docs/FIX39_FEEDBACK.md)). Both looks and both themes follow them. *FIX40: "both looks" now means all five looks.*
+These rules came from the owner's review and the audits (item numbers refer to [docs/history/fix-39/feedback.md](docs/history/fix-39/feedback.md)). Both looks and both themes follow them. *FIX40: "both looks" now means all five looks.*
 
 - **Bot shapes (item 4).** Eight shapes, symmetrical by default, in this order: Circle, Pebble, Squircle, Capsule, Triangle, Hexagon, Cloud, Droplet. Each has soft shading and two equal, upright pill eyes mirrored around the centre. Eye tuning (size, height, spacing, Squareness) changes only the eyes. Shuffle and Surprise me never change the shape; they change the eyes and the colour. Older names migrate: round and sun become Circle, organic and cat become Pebble, boxy becomes Squircle. *FIX40: the eight shapes apply to the glossy blob only. The robot arts and the hand-painted blobs have their own sets; see the FIX40 section.*
 - **The Manager's badge (item 8).** A filled white star on an orange circle, on the Manager's avatar. It is the only star or sparkle icon in the app. Do not use `Sparkles`, `Sparkle`, `Wand2`, `WandSparkles`, ✦, ✧ or ✨ anywhere. It is the one exception to monochrome chrome.
@@ -61,7 +65,7 @@ These rules came from the owner's review and the audits (item numbers refer to [
 
 ## FIX40 looks and bot art (19 October 2026)
 
-Rules from the owner's FIX40 request. The record of the wave is [docs/FIX40_REPORT.md](docs/FIX40_REPORT.md). Where this section and an earlier rule differ, this section wins; the earlier rules carry a short note that points here.
+Rules from the owner's FIX40 request. The record of the wave is [docs/history/fix-40/report.md](docs/history/fix-40/report.md). Where this section and an earlier rule differ, this section wins; the earlier rules carry a short note that points here.
 
 ### Looks and families
 
@@ -121,7 +125,7 @@ Rules from the owner's FIX40 request. The record of the wave is [docs/FIX40_REPO
 
 ### Companion and dictation windows (FIX41)
 
-These rules extend the looks above to the companion and dictation windows. The record is [docs/FIX41_COMPANION_LOOKS_REPORT.md](docs/FIX41_COMPANION_LOOKS_REPORT.md).
+These rules extend the looks above to the companion and dictation windows. The record is [docs/history/fix-41/companion-looks-report.md](docs/history/fix-41/companion-looks-report.md).
 
 - Each look styles the overlay windows through its own layer.
 - Dark is each look's default. Light follows `data-surface-theme`.

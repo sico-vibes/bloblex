@@ -5,7 +5,7 @@
 //! Codex CLI's `auth.json` read-only to call ChatGPT transcription. The token,
 //! the audio and the transcript are never persisted or logged, the token lives
 //! only in a redacting, zeroizing `Secret`, and on-device stays the default and
-//! the automatic fallback. See `docs/IMPROVEMENT_PHASE_7_SPEC.md`.
+//! the automatic fallback. See `docs/history/improvement/phase-7-spec.md`.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};

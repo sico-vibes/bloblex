@@ -1,5 +1,9 @@
 # Cloud dictation: what the Cloudflare challenge actually keys on (14 October 2026)
 
+> **What this is:** Evidence for what the Cloudflare challenge keys on in cloud dictation, 14 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-15
+
 Supersedes the root-cause attribution in
 [cloud-dictation-diagnosis-2026-10-13.md](cloud-dictation-diagnosis-2026-10-13.md).
 Scope of this run: live probes only. No repository source was changed.
@@ -80,7 +84,7 @@ triggers the challenge was **not** identified. Candidate properties are HTTP/1.1
 header casing, order and set, and client-version-specific defaults. Identifying
 it would require bisecting request shape against a live anti-bot control to find
 what slips past it; that was deliberately not done here, and is a policy
-decision for the owner, not a diagnostic step (see `FIX1_DICTATION_SPEC.md`,
+decision for the owner, not a diagnostic step (see `docs/history/fix-01/dictation-spec.md`,
 "No bypass of bot protection").
 
 The `node:https` result is a single environment's observation. It may drift with

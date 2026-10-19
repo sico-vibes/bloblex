@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 const PROVIDER: &str = "claude";
 const CLI: &str = "claude";
-/// The cheapest Claude model, fixed by `docs/FIX39_DECISIONS.md` so a live run
+/// The cheapest Claude model, fixed by `docs/history/fix-39/decisions.md` so a live run
 /// never spends on the installed default.
 const MODEL: &str = "claude-haiku-5-5";
 const THINKING: &str = "medium";

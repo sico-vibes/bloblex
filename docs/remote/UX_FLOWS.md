@@ -1,5 +1,9 @@
 # Remote mode: UX flows
 
+> **What this is:** The UX flows for Remote mode.
+> **Status:** current
+> **Last updated:** 2026-10-16
+
 **Status: design.** Written 15 October 2026; amended 16 October 2026 for the owner's choice of
 Tailscale. The 15 October states are reachable in the web preview; the Tailscale states
 (sections 1.2 and 1.3) are new and the preview must gain them in FIX30. Preview URLs assume `npm run dev --workspace @bloblex/desktop` with the preview config

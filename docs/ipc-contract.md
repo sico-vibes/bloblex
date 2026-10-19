@@ -1,14 +1,18 @@
 # Bitbots daemon IPC contract (v1)
 
+> **What this is:** The daemon IPC contract (v1): methods, events, and the rules for the capability and the local listeners.
+> **Status:** current
+> **Last updated:** 2026-10-18
+
 ## Update commands
 
-The desktop updater commands and events are defined in [UPDATER.md](UPDATER.md). They run in the Tauri shell and persist preferences through the daemon settings store; they are separate from the daemon's v1 IPC methods below.
+The desktop updater commands and events are defined in [docs/operations/updater.md](operations/updater.md). They run in the Tauri shell and persist preferences through the daemon settings store; they are separate from the daemon's v1 IPC methods below.
 
 This is the integration contract between `bitbotsd.exe` and the desktop shell. The daemon is authoritative; UI state is reconstructed from `app.snapshot` and subsequent ordered events.
 
 The desktop shell also exposes local Tauri commands for user-selected file flows. Native save/open dialogs retain their selected paths in process-local state and return only opaque single-use selection tokens to the webview. `write_selected_export_text` consumes a save token to write UTF-8 text, and `read_blob_import` consumes an open token to read UTF-8 JSON with a 64 KiB limit. A webview-supplied path is never accepted by these commands, and they do not access the daemon database.
 
-This document includes intended contract requirements, not a statement that every guarantee is already implemented or independently tested. See [implementation status](implementation-status.md) for open acceptance work. Snapshot/event atomicity, complete permission lifecycle, financial aggregation and process-tree cleanup remain under review.
+This document includes intended contract requirements, not a statement that every guarantee is already implemented or independently tested. See [implementation status](operations/implementation-status.md) for open acceptance work. Snapshot/event atomicity, complete permission lifecycle, financial aggregation and process-tree cleanup remain under review.
 
 ## Transport and startup
 
@@ -118,7 +122,7 @@ Events:
 | `session.close` | `{ "sessionId": string }` | Closes managed adapter process; persisted session remains. |
 | `permission.reply` | `{ "permissionId": string, "choice": string }` | Choice is an opaque provider-supported option ID from that request; the provider adapter must receive and acknowledge it before Bitbots marks it resolved. |
 | `usage.summary` | `{ "from": string, "to": string, "scope"?: object }` | Raw token totals and separate known/unknown valuations; subscription fees are not API estimates. |
-| `usage.analytics` | `{ "from": string, "to": string, "bucket": "day"|"week", "tz": string, "projectPath"?: string, "agentId"?: string }` | Returns `UsageAnalytics` as defined in `docs/PHASE_5_CONTRACT.md`; invalid range, bucket, or timezone is `invalid_argument`, unknown agent is `not_found`. |
+| `usage.analytics` | `{ "from": string, "to": string, "bucket": "day"|"week", "tz": string, "projectPath"?: string, "agentId"?: string }` | Returns `UsageAnalytics` as defined in `docs/reference/phase-5-analytics-contract.md`; invalid range, bucket, or timezone is `invalid_argument`, unknown agent is `not_found`. |
 | `pricing.list` | `{ "provider"?: string }` | **Retired:** returns `unsupported` (`crates/bloblex-daemon/src/main.rs:1085`). The description below is historical. User overrides and exact-decimal official price-list rows (`inputPerMillion`, `outputPerMillion`, cache rates, currency, `sourceUrl`, `checkedAt`, optional tiers/notes), with source `user_override` or `official_price_list`; effective rows include `effectiveFields` with rate, currency, source and checked date for each rate field, so partial overrides retain lower-priority values and provenance. Legacy shipped database rates are omitted. Usage & limits separately combines current runtime catalogs as `opencode_catalog_estimate`. Models without an applicable override, official row, or catalog rate remain unpriced. |
 | `pricing.override` | `{ "rule": PricingRule }` | Save user pricing with exact non-negative decimal strings per million tokens (up to twelve fractional digits) or `null` for unknown buckets. Blank buckets inherit the official or cached catalog rate when available. IDs, provider, model, currency and RFC3339 `effectiveFrom` are validated. `{ "rule": { "id": string, "remove": true } }` removes that override. |
 | `subscription.list` | `{}` | **Retired:** returns `unsupported` (`crates/bloblex-daemon/src/main.rs:1085`); historical description follows. User-entered plan fees, separated from token estimates and quota (`unknown` unless measured). |
@@ -168,7 +172,7 @@ Settings `remote.enabled`, `remote.port`, `remote.servePort` and `remote.securit
 
 Native adds `remote.method.set`, `remote.native.account.set`, `remote.native.port.set`, `remote.native.cert.regenerate`, `remote.native.upnp.set`, `remote.native.externalIp.set`, `remote.native.firewall.add` and `remote.native.firewall.remove`, all `never` remote; shapes in [remote/PROTOCOL.md §13](remote/PROTOCOL.md).
 
-**Manager (FIX36).** One agent has `systemRole: "manager"`: it has no project, cannot be archived, deleted or demoted, and is created with `manager.ensure` (the `agent.create` fields; a no-op returning `created:false` when one exists; `manager.get` reads it). Its consequential actions are proposals: a `kind: "proposal"` permission card answered with `proposal.decide {id, decision: "approve"|"reject", edits?}`; nothing is created before approval. What it knows: `manager.profile.list`, `manager.profile.set {id?, category, key, value, locked}`, `manager.profile.delete {id}`, events `manager.profile.changed`. Its playbook: `manager.playbook.get`, `manager.playbook.history`, `manager.playbook.set {text}`, `manager.playbook.revert {version}`, events `manager.playbook.changed`. Reports: [FIX36_D1](FIX36_D1_REPORT.md), [FIX36_D2](FIX36_D2_REPORT.md), [FIX36_D3](FIX36_D3_REPORT.md).
+**Manager (FIX36).** One agent has `systemRole: "manager"`: it has no project, cannot be archived, deleted or demoted, and is created with `manager.ensure` (the `agent.create` fields; a no-op returning `created:false` when one exists; `manager.get` reads it). Its consequential actions are proposals: a `kind: "proposal"` permission card answered with `proposal.decide {id, decision: "approve"|"reject", edits?}`; nothing is created before approval. What it knows: `manager.profile.list`, `manager.profile.set {id?, category, key, value, locked}`, `manager.profile.delete {id}`, events `manager.profile.changed`. Its playbook: `manager.playbook.get`, `manager.playbook.history`, `manager.playbook.set {text}`, `manager.playbook.revert {version}`, events `manager.playbook.changed`. Reports: [FIX36_D1](history/fix-36/d1-report.md), [FIX36_D2](history/fix-36/d2-report.md), [FIX36_D3](history/fix-36/d3-report.md).
 
 The browser simulator's `remote.direct.set` is dropped (there is no LAN listener). `remote.hosts.list` and `remote.hosts.select` are not daemon methods: the list of computers lives only on the device.
 

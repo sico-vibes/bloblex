@@ -66,7 +66,7 @@ Owner directive; this amends the 12 October lanes below where they differ.
 
 # Amendment (12 October 2026): lanes, dictation exception, budgets
 
-Owner directive; this amends the section below where they differ. The roadmap is [docs/IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md).
+Owner directive; this amends the section below where they differ. The roadmap is [docs/plans/improvement-plan.md](docs/plans/improvement-plan.md).
 
 - **Lanes.** Heavy non-UI coding (Rust daemon, adapters, storage, speech crate, `src-tauri` native code, schema, non-visual TypeScript, backend tests) goes to OpenCode `opencode-go/deepseek-v4.1-flash` at high effort. Anything that touches UI or UX (components, styles, copy, motion, island/companion, settings screens) is done by the Director (Claude), who follows `DESIGN.md` and `PRODUCT.md`. The Director therefore may write UI/UX production code; it still reviews every OpenCode diff and commits after gates. The OpenCode lane never runs `git commit` and does not grade its own work: backend diffs also get a read-only second opinion from a different lane (`impl-b` via `scripts/run-cursor-delegate.ps1`). Codex `impl` remains available when the owner assigns it.
 - **Dictation exception (approved by the owner, 12 October 2026).** Cloud dictation may read the Codex CLI's `auth.json` read-only to call ChatGPT transcription. It is opt-in with explicit consent, the on-device engine stays the default and automatic fallback, the token, audio and transcripts are never persisted or logged, and the exception covers dictation only. All other "no copied provider authentication" rules stand.
@@ -74,7 +74,7 @@ Owner directive; this amends the section below where they differ. The roadmap is
 
 # Amendment (14 October 2026): request-shape matching for cloud dictation
 
-Owner directive. Amends the 12 October dictation exception and the "No bypass of bot protection" rule in [docs/FIX1_DICTATION_SPEC.md](docs/FIX1_DICTATION_SPEC.md).
+Owner directive. Amends the 12 October dictation exception and the "No bypass of bot protection" rule in [docs/history/fix-01/dictation-spec.md](docs/history/fix-01/dictation-spec.md).
 
 - **Endpoint approved, by the owner's account of OpenAI's reply.** The owner states that OpenAI's answer to them names `chatgpt.com/backend-api/transcribe` and permits its use. This is recorded as **owner-attested**: no copy of the correspondence is in the repository, and no blob has independently verified it. If the endpoint or the terms change, this exception lapses.
 - **Request-shape matching is allowed, for cloud dictation only.** The earlier prohibition on shaping requests past OpenAI's bot check is lifted for this one call path. Reason: the check is not an identity or permission gate — live probes returned HTTP 200 while identifying as Bloblex — so matching the accepted request shape is no longer "impersonation to defeat a check" in this case.
@@ -87,7 +87,7 @@ Owner directive. Amends the 12 October dictation exception and the "No bypass of
 
 Owner directive, to stop build leftovers filling the disk. A release is not finished until this is done.
 
-- **When.** Once a release is published and its GitHub asset digests have been checked against the local files, and the release entry is in [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+- **When.** Once a release is published and its GitHub asset digests have been checked against the local files, and the release entry is in [docs/operations/release-checklist.md](docs/operations/release-checklist.md).
 - **What is removed.** The short-path build worktree (`C:\b<N>`, or `D:\b<N>` where that drive exists) including its `target\desktop-release`, any lane worktree (`C:\fx<N>` and similar) whose result has been reviewed and merged or discarded, the temporary branches those lanes used, and throwaway probes or patches kept outside the repository. The installer needs no local copy: the published asset and the digest in the checklist are the record.
 - **What is kept.** The main checkout's `node_modules` and its `target` (they make every later gate fast), and any worktree that still holds unreviewed or unmerged work. A lane worktree is never deleted before its diff has been reviewed.
 - **How, in this order.**
@@ -99,7 +99,7 @@ Owner directive, to stop build leftovers filling the disk. A release is not fini
 
 # Delegation pipeline (from 1 October 2026, evening)
 
-This section supersedes the older **Resume** and **User's current working arrangement** sections below; their text remains as history. The Director is the orchestrating Claude session acting as CTO. The Director directs and reviews every diff and never writes production code. Implementer lane `impl` is Codex `gpt-6-luna` at high effort. Implementer lane `impl-b` is Cursor `grok-4.7-high`, invoked through the `cursor-delegate` skill for bake-offs. QA lane `qa` is OpenCode `opencode-go/deepseek-v4.1-flash` and reports to the Director only. Cursor runs MUST go through `scripts/run-cursor-delegate.ps1` from PowerShell; it isolates Cursor from third-party hooks in `~/.claude/settings.json` and strips the Store PowerShell from PATH. Never edit the user's hooks or settings. other tools and other third-party harnesses are not part of this pipeline. Backend work is RESUMED according to [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md). Implementers never run `git commit`; the Director commits after review and gates. The invariants in **Scope and invariants** below remain in force.
+This section supersedes the older **Resume** and **User's current working arrangement** sections below; their text remains as history. The Director is the orchestrating Claude session acting as CTO. The Director directs and reviews every diff and never writes production code. Implementer lane `impl` is Codex `gpt-6-luna` at high effort. Implementer lane `impl-b` is Cursor `grok-4.7-high`, invoked through the `cursor-delegate` skill for bake-offs. QA lane `qa` is OpenCode `opencode-go/deepseek-v4.1-flash` and reports to the Director only. Cursor runs MUST go through `scripts/run-cursor-delegate.ps1` from PowerShell; it isolates Cursor from third-party hooks in `~/.claude/settings.json` and strips the Store PowerShell from PATH. Never edit the user's hooks or settings. other tools and other third-party harnesses are not part of this pipeline. Backend work is RESUMED according to [docs/plans/e2e-plan-v2.md](docs/plans/e2e-plan-v2.md). Implementers never run `git commit`; the Director commits after review and gates. The invariants in **Scope and invariants** below remain in force.
 
 ## Resume — 1 October 2026, evening (superseded by Delegation pipeline above)
 
@@ -107,7 +107,7 @@ The user explicitly resumed work after the 20:37 stop. Finish the UI first: the 
 
 Status at 22:30: the character engine, companion island and chat-style main shell are implemented and pass typecheck/tests/build; native-window verification and per-blob model/effort/speed (needs daemon support) remain. See the top section of `SESSION_HANDOFF.md`.
 
-Read `SESSION_HANDOFF.md` and `docs/implementation-status.md` before resuming work. They describe an unfinished implementation; passing old checks is not current acceptance.
+Read `SESSION_HANDOFF.md` and `docs/operations/implementation-status.md` before resuming work. They describe an unfinished implementation; passing old checks is not current acceptance.
 
 ## User's current working arrangement (superseded by Delegation pipeline above)
 

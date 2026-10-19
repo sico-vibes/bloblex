@@ -1,5 +1,9 @@
 # Draft amendment for AGENTS.md: Remote mode (for owner approval)
 
+> **What this is:** The draft amendment to AGENTS.md for Remote mode, as first written for owner approval.
+> **Status:** historical; accepted into AGENTS.md (17 October 2026 amendment)
+> **Last updated:** 2026-10-17
+
 **In force from 17 October 2026.** The owner accepted the proposed text below as written, with the
 defaults in "Decisions" (approvals from remote off, Chat preselected, Tailscale only, pairing
 without a login header allowed), and waived the release gate once for `v0.1.0-beta.30`; see the

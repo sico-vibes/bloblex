@@ -1,5 +1,9 @@
 # Wire fixtures and replay (Phase 3B)
 
+> **What this is:** Wire fixtures and replay for recorded CLI output (Phase 3B).
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-13
+
 Recorded-wire replay lets the adapter tests exercise a real CLI protocol
 transcript without the CLI: each fixture is a synthesised NDJSON transcript of
 one provider session, replayed by the provider's fake binary. The production
@@ -9,7 +13,7 @@ what the fixture recorded fails the replayer with a JSON-pointer diagnostic.
 All fixtures here are **synthesised** from the in-repo fake binaries' own
 output, not captured from a real CLI. Every header carries `"synthesised": true`
 and the CLI version the transcript models (from
-[`docs/runtime-capabilities.md`](../runtime-capabilities.md): Claude Code
+[`docs/reference/runtime-capabilities.md`](../reference/runtime-capabilities.md): Claude Code
 2.1.286, Codex CLI 0.159.3, OpenCode 1.18.34).
 
 ## Format

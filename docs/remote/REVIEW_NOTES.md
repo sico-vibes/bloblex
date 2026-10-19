@@ -1,5 +1,9 @@
 # Remote mode: independent review (FIX24)
 
+> **What this is:** The independent review of the Remote mode design (FIX24).
+> **Status:** historical record
+> **Last updated:** 2026-10-16
+
 Reviewer: OpenCode lane, 15 October 2026. Docs-only; no code or existing design file was
 edited. Claims about code cite `file:line`. Read: `docs/remote/*`, `docs/ipc-contract.md`,
 `apps/desktop/src/remote/*`, `crates/bloblex-daemon/src/main.rs` (auth, dispatch, events,

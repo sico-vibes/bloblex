@@ -1,5 +1,9 @@
 # Remote mode: sequence diagrams
 
+> **What this is:** Sequence diagrams for Remote mode pairing, sign-in and requests.
+> **Status:** current
+> **Last updated:** 2026-10-16
+
 **Status: design.** Written 15 October 2026 as part of FIX24; rewritten 16 October 2026 for
 the owner's choice of Tailscale. The 15 October diagrams (relay, Noise XX/IK handshakes) are
 superseded and are in git history. These diagrams describe the intended behaviour from

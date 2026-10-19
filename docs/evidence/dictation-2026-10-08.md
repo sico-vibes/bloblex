@@ -1,5 +1,9 @@
 # On-device dictation (beta.11)
 
+> **What this is:** Evidence for on-device dictation (beta.11), 8 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-08
+
 Current as of 8 October 2026. Release source commit `2d3f16d`; manual-only [v0.1.0-beta.11](../releases/0.1.0-beta.11.md).
 
 ## What shipped

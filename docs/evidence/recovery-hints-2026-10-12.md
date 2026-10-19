@@ -1,5 +1,9 @@
 # Recovery-hint evidence inventory (Phase 1B, 12 October 2026)
 
+> **What this is:** Evidence inventory for recovery hints (Phase 1B), 12 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-12
+
 Read-only inventory that justifies every classification the Phase 1B recovery
 hints add. A classification is only implemented when its row is
 `verified-in-source` or `fixture-only`; otherwise it is `unknown` and no hint is
@@ -13,7 +17,7 @@ Evidence sources used:
   `codex app-server generate-json-schema --out <OS temp dir>` (codex-cli
   0.162.1). Schema paths are relative to that output. Nothing generated is
   committed.
-- `docs/runtime-capabilities.md` (checked-in CLI capability record).
+- `docs/reference/runtime-capabilities.md` (checked-in CLI capability record).
 - The installed Claude CLI's embedded result schema, read as a binary string
   from `claude.exe` (see the Claude note). Binary-string evidence is weaker
   than a generated schema; it is flagged where used.

@@ -1,4 +1,8 @@
-﻿# Installed runtime capabilities for Phase 2b
+# Installed runtime capabilities for Phase 2b
+
+> **What this is:** The original read-only capability spike for Phase 2b, 2 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-15
 
 **Scope/date:** Read-only capability spike against the installed Windows npm shims on 2026-10-02. Installed versions observed: Claude Code 2.1.286, Codex CLI 0.159.3, OpenCode 1.18.34. No model calls were made. This is a machine-local snapshot, not a promise about later CLI releases.
 
@@ -94,7 +98,7 @@ Custom environment keys should be explicit per-runtime allowlisted, reject secre
 
 Commands below were run in PowerShell from the repo unless marked otherwise. Temporary output/config/data directories were created only beneath `$env:TEMP`. No live model requests were made. **Codex CLI invocations warned that they could not clean/create temporary PATH aliases under `C:\Users\user\.codex\tmp\arg0` (Access denied) and proceeded. These commands attempted filesystem activity outside `$env:TEMP`; no successful write there was reported.** One OpenCode model-list attempt without isolated environment also reported an attempted open of `C:\Users\user\.local\share\opencode\log\opencode.log` and failed; no log content was read into this report.
 
-1. `Get-Content -Raw 'C:\Users\user\.codex\memories\MEMORY.md' | Select-String -Pattern 'Bitbots|runtime-capabilities|E2E_PLAN_V2' -Context 2,3; Get-Content -Raw AGENTS.md; Get-Content -Raw docs/E2E_PLAN_V2.md` — memory search and required repo reads.
+1. `Get-Content -Raw 'C:\Users\user\.codex\memories\MEMORY.md' | Select-String -Pattern 'Bitbots|runtime-capabilities|E2E_PLAN_V2' -Context 2,3; Get-Content -Raw AGENTS.md; Get-Content -Raw docs/plans/e2e-plan-v2.md` — memory search and required repo reads.
 2. `claude --version; claude --help; codex --version; codex --help; opencode --version; opencode --help` — versions and top-level help.
 3. `claude --help | Select-String -Pattern 'model|effort|system-prompt|stream-json|resume|continue'; codex debug --help; codex app-server --help; opencode models --help; opencode acp --help; opencode debug --help` — relevant subcommand and flag help.
 4. `$schema=Join-Path $env:TEMP ('bloblex-codex-schema-'+[guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Path $schema | Out-Null; codex app-server generate-json-schema --out $schema; Get-ChildItem $schema -Name; rg -n 'thread/start|thread/resume|turn/start|model_reasoning_effort|developerInstructions|serviceTier|service_tier|tokenUsage|token_usage|rateLimits|reasoningEffort|model/list' docs/qa-schema/codex-0.159.3/ $schema` — generated current schema in temp and searched both schema sets.
@@ -108,5 +112,5 @@ Commands below were run in PowerShell from the repo unless marked otherwise. Tem
 12. `codex debug models | Out-File <temp>\codex.json; ConvertFrom-Json; Select-Object -First 8 ...` — sanitized catalog extraction. Like the other Codex commands listed here, this emitted the denied alias-path warnings described above.
 13. With the same OpenCode temp-directory environment: `opencode models --verbose 2>&1 | Select-Object -First 15` — failed with `EPERM: operation not permitted, uv_spawn 'git'`; no model metadata was used from this attempt.
 14. `rg -n 'result" =>|let u = &v\["usage"\]|input_tokens|cache_read_input_tokens|cache_creation_input_tokens|model\].as_str|"--output-format"|"--input-format"|"--permission-mode"|"--permission-prompt-tool"|--resume|"thread/start"|"turn/start"|"app-server"|"session/new"|"session/prompt"|current_mode_update|usage: false|model_reasoning_effort|pub struct NewSessionRequest|pub struct PromptRequest' crates/bloblex-adapter-claude/src/lib.rs crates/bloblex-adapter-codex/src/lib.rs crates/bloblex-adapter-acp/src/lib.rs crates/bloblex-agent-core/src/lib.rs; rg -n '"developerInstructions"|"baseInstructions"|"model"|"serviceTier"|"effort"|"serviceTierForTurn"|"inputTokens"|"cacheWriteInputTokens"|"tokenUsage"' docs/qa-schema/codex-0.159.3/v2/ThreadStartParams.json docs/qa-schema/codex-0.159.3/v2/ThreadResumeParams.json docs/qa-schema/codex-0.159.3/v2/TurnStartParams.json docs/qa-schema/codex-0.159.3/v2/ThreadTokenUsageUpdatedNotification.json` — source/schema line citations used above.
-15. `git status --short` — final scope check showed `.delegate/config.json` modified and `docs/runtime-capabilities.md` new. The unrelated `.delegate/config.json` diff adds an `impl-b` lane and has a filesystem timestamp of 2026-10-01 22:59 UTC, before this spike; it was preserved.
+15. `git status --short` — final scope check showed `.delegate/config.json` modified and `docs/reference/runtime-capabilities.md` new. The unrelated `.delegate/config.json` diff adds an `impl-b` lane and has a filesystem timestamp of 2026-10-01 22:59 UTC, before this spike; it was preserved.
 16. Re-ran two low-cost evidence commands after drafting: `claude --help | Select-String -Pattern 'model|effort|system-prompt|stream-json|resume|continue'` and the schema/source `rg -n` command in item 14. Their relevant excerpts matched the evidence cited above.

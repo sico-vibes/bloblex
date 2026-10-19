@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 
 const PROVIDER: &str = "codex";
 const CLI: &str = "codex";
-/// The cheapest Codex model, fixed by `docs/FIX39_DECISIONS.md` so a live run
+/// The cheapest Codex model, fixed by `docs/history/fix-39/decisions.md` so a live run
 /// never spends on the installed default.
 const MODEL: &str = "gpt-6-luna";
 const THINKING: &str = "medium";

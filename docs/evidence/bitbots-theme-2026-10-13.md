@@ -1,5 +1,9 @@
 # Evidence: Bitbots pixel theme (CSS only) — 2026-10-13
 
+> **What this is:** Evidence for the Bitbots pixel theme (CSS only), 13 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-13
+
 Lane: OpenCode (`opencode-go/deepseek-v4.1-flash`), CSS only. Branch `fix2-bitbots-css`.
 
 ## Deliverable

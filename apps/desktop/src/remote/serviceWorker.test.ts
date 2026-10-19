@@ -1,6 +1,6 @@
 // The two hooks the "Update ready" prompt uses, and the registration guard.
 // Installing on a phone and the real update flow are not exercised here (they
-// need a browser and a host); FIX29_WP6C_REPORT.md says so.
+// need a browser and a host); docs/history/fix-29/wp6c-report.md says so.
 
 import { describe, expect, it, vi } from 'vitest'
 import { applyUpdate, onUpdateReady, registerRemoteServiceWorker, updateIsReady } from './serviceWorker'

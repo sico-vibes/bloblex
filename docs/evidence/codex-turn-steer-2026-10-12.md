@@ -1,5 +1,9 @@
 # Codex turn/steer evidence inventory (Phase 2B, 12 October 2026)
 
+> **What this is:** Evidence inventory for Codex turn/steer (Phase 2B), 12 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-15
+
 Read-only inventory for the Phase 2B `session.steer` backend. Steering is off by
 default and reported as unproven (`evidence: "none"`) until a real Codex turn
 accepts it live.

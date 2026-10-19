@@ -1,5 +1,9 @@
 # Remote mode: phases
 
+> **What this is:** The phases of the Remote mode work.
+> **Status:** historical plan; see the status of each phase in SESSION_HANDOFF.md
+> **Last updated:** 2026-10-16
+
 **Status:** P0 done in the repository (docs, contract, policy, simulator, mock UI). P1 and P3
 are plans. Written 15 October 2026; amended 16 October 2026 for the owner's choice of
 Tailscale.

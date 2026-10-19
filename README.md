@@ -1,14 +1,18 @@
 # Bitbots
 
+> **What this is:** The front page of the repository: what Bitbots is, how to build and test it, and where the documentation starts.
+> **Status:** current. The release figures in this file were last set at v0.1.0-beta.34; Cargo.toml and package.json already show v0.1.0-beta.35.
+> **Last updated:** 2026-10-19
+
 Bitbots (formerly Bloblex)
 
 Local Windows desktop control plane for Claude Code, Codex, and OpenCode. A React/Tauri shell and a companion window share state from the `bitbotsd` daemon. Each provider CLI keeps its own login.
 
-**Status: `v0.1.0-beta.34`** (the version in `Cargo.toml` and `package.json`), published as an NSIS installer that is not Authenticode-signed but is signed for the updater (new key) and offered on the beta update channel; beta.32 and later update themselves; older versions install by hand once. Full native acceptance and a clean-machine install remain open ([docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)). Release notes: [docs/releases/0.1.0-beta.34.md](docs/releases/0.1.0-beta.34.md). History and dated records: [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and [docs/implementation-status.md](docs/implementation-status.md). The hub for every document is [docs/README.md](docs/README.md).
+**Status: `v0.1.0-beta.34`** (the version in `Cargo.toml` and `package.json`), published as an NSIS installer that is not Authenticode-signed but is signed for the updater (new key) and offered on the beta update channel; beta.32 and later update themselves; older versions install by hand once. Full native acceptance and a clean-machine install remain open ([docs/operations/release-checklist.md](docs/operations/release-checklist.md)). Release notes: [docs/releases/0.1.0-beta.34.md](docs/releases/0.1.0-beta.34.md). History and dated records: [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and [docs/operations/implementation-status.md](docs/operations/implementation-status.md). The hub for every document is [docs/README.md](docs/README.md).
 
 ## Continue this project
 
-Start with [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and [docs/implementation-status.md](docs/implementation-status.md). The plan remains [docs/E2E_PLAN_V2.md](docs/E2E_PLAN_V2.md).
+Start with [SESSION_HANDOFF.md](SESSION_HANDOFF.md) and [docs/operations/implementation-status.md](docs/operations/implementation-status.md). The plan remains [docs/plans/e2e-plan-v2.md](docs/plans/e2e-plan-v2.md).
 
 ## Local development
 
@@ -30,7 +34,7 @@ Native development, when you intend to open the window, uses an isolated databas
 npm run desktop:dev
 ```
 
-Details: [docs/windows-development.md](docs/windows-development.md).
+Details: [docs/guides/windows-development.md](docs/guides/windows-development.md).
 
 Renderer-only Vite (`npm run dev`) does not establish native IPC or a provider session.
 
@@ -46,7 +50,7 @@ An opt-in provider smoke may use provider quota. A default test pass does not me
 npm run desktop:bundle
 ```
 
-This is the local NSIS path (`bundle.targets` is `nsis` only in `apps/desktop/src-tauri/tauri.conf.json`). A trusted signed installer and a clean-machine install are still open (Phase 7). The signed updater feed is at `v0.1.0-beta.6` ([docs/UPDATER.md](docs/UPDATER.md)).
+This is the local NSIS path (`bundle.targets` is `nsis` only in `apps/desktop/src-tauri/tauri.conf.json`). A trusted signed installer and a clean-machine install are still open (Phase 7). The signed updater feed is at `v0.1.0-beta.6` (superseded: the feed now offers the latest beta; see the [release checklist](docs/operations/release-checklist.md)) ([docs/operations/updater.md](docs/operations/updater.md)).
 
 ## Source map
 
@@ -65,6 +69,6 @@ This is the local NSIS path (`bundle.targets` is `nsis` only in `apps/desktop/sr
 ## References
 
 - [IPC contract](docs/ipc-contract.md)
-- [Phase 5 analytics contract](docs/PHASE_5_CONTRACT.md)
-- [Approval modes](docs/APPROVAL_MODES.md)
+- [Phase 5 analytics contract](docs/reference/phase-5-analytics-contract.md)
+- [Approval modes](docs/reference/approval-modes.md)
 - [Product](PRODUCT.md) and [design](DESIGN.md)

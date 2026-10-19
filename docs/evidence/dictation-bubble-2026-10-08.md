@@ -1,5 +1,9 @@
 # Floating dictation bubble (beta.12)
 
+> **What this is:** Evidence for the floating dictation bubble (beta.12), 8 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-08
+
 Current as of 8 October 2026. Release source commit `6662b14`; manual-only [v0.1.0-beta.12](../releases/0.1.0-beta.12.md).
 
 ## What shipped

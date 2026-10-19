@@ -1,5 +1,9 @@
 # Cloud dictation diagnosis: "verification required" (Fix 1A)
 
+> **What this is:** Evidence for the cloud dictation diagnosis ("verification required"), 13 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-15
+
 Date: 13 October 2026. Worktree `Blolblex-wt-fix1-dictation`. Scope: `crates/bloblex-speech` (mainly `src/cloud.rs`), `apps/desktop/src-tauri/src/speech.rs`, `scripts/live-checks/live-cloud-dictation.mjs`.
 
 > **Corrected on 14 October 2026.** The root-cause attribution below is

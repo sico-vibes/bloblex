@@ -1,5 +1,9 @@
 # Bitbots Product
 
+> **What this is:** The product purpose, users, brand personality, anti-references and design principles for Bitbots.
+> **Status:** current
+> **Last updated:** 2026-10-15
+
 ## Register
 
 product

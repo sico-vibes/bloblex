@@ -1,5 +1,9 @@
 # Composer controls — 7 October 2026
 
+> **What this is:** Evidence for the composer controls, 7 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-15
+
 Status: source implementation and browser-fixture verification complete. Native and live-provider verification remain open.
 
 ## Scope

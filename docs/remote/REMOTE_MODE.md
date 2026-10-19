@@ -1,5 +1,9 @@
 # Remote mode: product specification
 
+> **What this is:** The product specification for Remote mode.
+> **Status:** current
+> **Last updated:** 2026-10-16
+
 **Status: design with a browser mock. Not implemented in the daemon.** Written 15 October
 2026; amended 16 October 2026 for the owner's choice of Tailscale, which replaces the relay and
 the end-to-end Noise channel of the first draft. Companion documents:

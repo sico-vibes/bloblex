@@ -1,5 +1,9 @@
 # Cloud dictation: the TLS backend fix (14 October 2026)
 
+> **What this is:** Evidence for the TLS backend fix in cloud dictation, 14 October 2026.
+> **Status:** evidence; immutable record
+> **Last updated:** 2026-10-14
+
 Status: **released.** Shipped in `v0.1.0-beta.22` (annotated tag at `b42cd6e`,
 installer SHA-256 `ff8f1c0009dddef66d14e194c7675d65d1dd057eefc211075508aea1eb4fe066`).
 Implemented in the OpenCode lane under the owner's one-release commit and release

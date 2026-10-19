@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 const PROVIDER: &str = "opencode";
 const CLI: &str = "opencode";
-/// The free Zen model, selected for tests only (`docs/FIX39_DECISIONS.md`).
+/// The free Zen model, selected for tests only (`docs/history/fix-39/decisions.md`).
 const MODEL: &str = "opencode/deepseek-v4.1-flash-free";
 const LIVE_FIXTURES: &[&str] = &["opencode-two-turn.ndjson"];
 const TWO_TURN_FIXTURE: &str = "opencode-two-turn.ndjson";

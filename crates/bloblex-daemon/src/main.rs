@@ -11186,7 +11186,7 @@ mod fix39_p12_tests {
 
 /// FIX39 P5 (items 13, 16, 19): the bot lock, the composer's bot-level write and
 /// a conversation's own permission pin. The auditor asked for one daemon test
-/// per row of the writer table in `docs/FIX39_P5_REPORT.md`; the test names here
+/// per row of the writer table in `docs/history/fix-39/p5-report.md`; the test names here
 /// match that table.
 #[cfg(test)]
 mod fix39_p5_tests {

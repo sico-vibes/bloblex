@@ -18,6 +18,7 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 - **Root cause:** `build` wrote hashes from the LF source files it read; `check` hashed the raw CRLF bytes produced by git checkout. Markdown snapshots had the same mismatch.
 - **Fix:** `hashSource()` in `scripts/docs-library.mjs` normalises CRLF to LF for `.md`, `.css`, `.js`, `.mjs`, `.svg`, `.json` and `.html` before SHA-256; PNG stays byte-for-byte. Build, asset hashes and snapshot comparison all use it.
 - **Avoid:** normalise before hashing, never hash raw working-tree bytes for text. Prove with a CRLF round-trip on one Markdown file, one CSS file and the script, then convert back to LF.
+- **Churn after a build:** `npm run docs:build` rewrites every snapshot in `docs/library/sources/` with LF, so on a CRLF checkout `git status` lists ~290 modified files. Check `git diff --ignore-cr-at-eol --stat`; if only `catalog.json`, `DOCUMENTATION.html` and new snapshots really changed, run `git checkout -- docs/library/sources` and then `npm run docs:check` (it still passes). Adding release notes needs a docs rebuild, or `docs:check` fails (beta.36).
 
 ## 2026-10-19 · Docs · Library guides must stay user-facing
 - **Symptom:** the first library build mixed developer material into the guides: `package.json`/`Cargo.toml` version notes, `settings.set`/`appearance.style` keys, `path:line` citations and "daemon"/"adapter"/"IPC" terms; the five-minute path also repeated a stale README version note.

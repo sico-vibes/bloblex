@@ -6,6 +6,7 @@ use std::{
 };
 
 #[test]
+#[allow(clippy::zombie_processes)]
 fn parent_helper() {
     let Some(folder) = std::env::var_os("FIX39_PARENT_HELPER") else {
         return;

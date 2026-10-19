@@ -1269,7 +1269,7 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="permissions.default_mode" && !v.as_str().is_some_and(|s|["ask","auto"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="notifications.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if matches!(k,"experimental.autoRetry" | "experimental.resumeAfterUsageLimits") && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-    if k=="retry.maxWaitSecs" && !v.as_u64().is_some_and(|secs| secs<=86_400){return Err(StorageError::InvalidAgent)}
+    if k=="retry.maxWaitSecs" && v.as_u64().is_none_or(|secs| secs > 86_400){return Err(StorageError::InvalidAgent)}
     if k=="automations.paused" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="automations.maxConcurrent" && !v.as_u64().is_some_and(|count| (1..=3).contains(&count)){return Err(StorageError::InvalidAgent)}
     if k=="experimental.usageTips" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
@@ -1287,7 +1287,7 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="onboarding.tour" && !valid_tour_state(v){return Err(StorageError::InvalidAgent)}
     if k=="companion.focusMode" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="companion.positions" && !valid_companion_positions(v){return Err(StorageError::InvalidAgent)}
-    if k=="profile.about" && !v.as_str().is_some_and(|text| text.trim().chars().count()<=1500){return Err(StorageError::InvalidAgent)}
+    if k=="profile.about" && v.as_str().is_none_or(|text| text.trim().chars().count() > 1500){return Err(StorageError::InvalidAgent)}
     if k=="conversations.autoTitle" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     Ok(())
 }
@@ -2648,7 +2648,7 @@ impl Storage {
             .optional()?;
         let Some((turns, provider_id, resumable)) = row else { return Ok(false); };
         if let Some(turns) = turns { return Ok(turns > 0); }
-        if !resumable && !provider_id.is_some_and(|value| !value.is_empty()) { return Ok(false); }
+        if !resumable && provider_id.is_none_or(|value| value.is_empty()) { return Ok(false); }
         let has_message: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND role IN ('user','assistant'))", [id], |r| r.get(0))?;
         Ok(has_message)
     }
@@ -5346,7 +5346,7 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
     if v.get("approvalMode").and_then(Value::as_str).is_some_and(|s| !["ask","auto","bypass"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if v.get("notificationLevel").is_some_and(|x| !x.is_null() && !x.as_str().is_some_and(|s| ["all","input","muted"].contains(&s))){return Err(StorageError::InvalidAgent)}
     if v.get("outfit").is_some_and(|value| !value.as_str().is_some_and(|s| ["auto","none","party-hat","beanie","crown","sunglasses","round-glasses","bow","scarf","witch-hat","santa-hat","pumpkin","bunny-ears"].contains(&s))) { return Err(StorageError::InvalidAgent); }
-    if v.get("role").is_some_and(|x| !x.is_null() && !x.as_str().is_some_and(|r| r.trim().chars().count() <= 40)) { return Err(StorageError::InvalidAgent); }
+    if v.get("role").is_some_and(|x| !x.is_null() && x.as_str().is_none_or(|r| r.trim().chars().count() > 40)) { return Err(StorageError::InvalidAgent); }
     if v.get("systemRole").is_some_and(|x| !x.is_null() && x.as_str() != Some("manager")) { return Err(StorageError::InvalidAgent); }
     if v.get("look").is_some_and(|look| !look.is_null() && !valid_look(look)) { return Err(StorageError::InvalidAgent); }
     if create && (!v["name"].is_string()||!v["runtimeId"].is_string()){return Err(StorageError::InvalidAgent)}

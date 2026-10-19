@@ -1363,7 +1363,7 @@ fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
             Err(message) => return Err(derr("invalid_argument", &message, StatusCode::BAD_REQUEST)),
         }
     }
-    if k == "retry.maxWaitSecs" && !value.as_u64().is_some_and(|secs| secs <= 86_400) { return Err(derr("invalid_argument", "retry.maxWaitSecs requires an integer between 0 and 86400", StatusCode::BAD_REQUEST)); }
+    if k == "retry.maxWaitSecs" && value.as_u64().is_none_or(|secs| secs > 86_400) { return Err(derr("invalid_argument", "retry.maxWaitSecs requires an integer between 0 and 86400", StatusCode::BAD_REQUEST)); }
     if k == "claude.enableWorkflows" && !value.is_boolean() { return Err(derr("invalid_argument", "claude.enableWorkflows requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "permissions.default_mode" && !value.as_str().is_some_and(|v| ["ask", "auto"].contains(&v)) { return Err(derr("invalid_argument", "permissions.default_mode must be ask or auto", StatusCode::BAD_REQUEST)); }
     if k == "automations.paused" && !value.is_boolean() { return Err(derr("invalid_argument", "automations.paused requires a JSON boolean", StatusCode::BAD_REQUEST)); }
@@ -4954,7 +4954,7 @@ mod phase2a_tests {
 
     #[tokio::test]
     async fn manager_ensure_is_idempotent_and_manager_get_reports_it() {
-        let (mut st, _) = state();
+        let (st, _) = state();
         let runtime_id = "rt-manager-get";
         st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
         *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
@@ -4976,7 +4976,7 @@ mod phase2a_tests {
     }
     #[tokio::test]
     async fn runtime_instructions_name_the_manager_and_reserve_projects_for_it() {
-        let (mut st, _) = state();
+        let (st, _) = state();
         let runtime_id = "rt-instructions";
         st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
         *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
@@ -9511,15 +9511,15 @@ mod phase2a_tests {
 
         // OpenCode does not load those folders, so it still gets the pool copy.
         let sid = "native-opencode";
-        skills_session(&st, &sid, "opencode");
-        assert!(skills::index_for_prompt(&st, &sid).unwrap().contains("gamma"));
-        assert!(call_tool(&st, &sid, "list_skills", json!({})).await["content"][0]["text"].as_str().unwrap().contains("gamma"));
+        skills_session(&st, sid, "opencode");
+        assert!(skills::index_for_prompt(&st, sid).unwrap().contains("gamma"));
+        assert!(call_tool(&st, sid, "list_skills", json!({})).await["content"][0]["text"].as_str().unwrap().contains("gamma"));
 
         // Removing the native copy brings the pool copy back for Claude.
         std::fs::remove_dir_all(claude.join("gamma")).unwrap();
         let sid = "native-claude-2";
-        skills_session(&st, &sid, "claude");
-        assert!(skills::index_for_prompt(&st, &sid).unwrap().contains("gamma"));
+        skills_session(&st, sid, "claude");
+        assert!(skills::index_for_prompt(&st, sid).unwrap().contains("gamma"));
         let _ = std::fs::remove_dir_all(&data);
     }
 

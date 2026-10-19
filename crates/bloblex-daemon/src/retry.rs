@@ -552,6 +552,67 @@ fn blocked_reset(entry: Option<Value>, now: DateTime<Utc>) -> Option<DateTime<Ut
     best
 }
 
+/// Record content-free recovery evidence before terminal handling. Structured
+/// adapter hints win over this fallback for process/transport failures.
+pub fn note_failure(st: &AppState, session_id: &str, turn: &str, class: &str, message: &str) {
+    if matches!(class,"permission_denied" | "unauthenticated" | "context" | "config_unsupported") {
+        record_decision(st,turn,"decline","permanent_failure",&now_millis());
+        return;
+    }
+    let lower = message.to_ascii_lowercase();
+    let crashed = class == "process_error" || message.starts_with("provider process unavailable:") || ["process exited", "app-server exited", "stream disconnected", "stream closed unexpectedly", "transport closed"].iter().any(|needle| lower.contains(needle));
+    if crashed {
+        let _ = st.db.watchdog_interrupted(session_id);
+        let _ = st.db.merge_turn_data(turn,&json!({"watchdogCrashed":true,"watchdogInterrupted":true}));
+    }
+    if st.db.turn_data(turn).ok().is_some_and(|data| data["hint"].is_object()) { return; }
+    let value = serde_json::from_str::<Value>(message).unwrap_or_else(|_| json!({"message":message}));
+    let hint = bloblex_agent_core::recovery::provider_recovery(&value).or_else(|| {
+        (matches!(class,"process_error" | "timeout") || message.starts_with("provider process unavailable:")).then_some(bloblex_agent_core::RecoveryHintKind::Overloaded)
+    });
+    if let Some(hint) = hint {
+        let seconds = bloblex_agent_core::recovery::provider_retry_after(&value, Utc::now().timestamp());
+        let _ = st.db.merge_turn_data(turn, &json!({"hint":{"kind":hint.as_str(),"retryAfterSecs":seconds}}));
+    }
+}
+
+/// Called under the activation gate. Persist the queue item with consumption of
+/// the restart marker, so simultaneous warm-up/RPC calls cannot duplicate it.
+pub async fn continue_on_activation(st: &AppState, sid: &str) {
+    if st.db.watchdog_enqueue(sid, false, &now_millis()).unwrap_or(false) {
+        if !st.db.session_had_provider_turns(sid).unwrap_or(false) {
+            let _ = st.db.set_session_recap_pending(sid,true);
+        }
+        crate::team::note(st, sid, "Picking up where it left off", json!({"kind":"watchdog_continuation"})).await;
+        crate::queue::emit_changed(st, sid).await;
+    }
+}
+
+pub async fn sweep(st: &AppState) {
+    if st.db.settings().unwrap_or(Value::Null)["experimental.resumeAfterUsageLimits"] == false { return; }
+    for id in st.db.watchdog_due_sessions(&now_millis()).unwrap_or_default() {
+        if crate::team::session_busy(st,&id).await { continue; }
+        let gate = crate::gate_for_session(st,&id).await;
+        let _guard = gate.lock().await;
+        if st.db.watchdog_enqueue(&id,true,&now_millis()).unwrap_or(false) {
+            crate::team::note(st,&id,"Picking up where it left off",json!({"kind":"watchdog_continuation"})).await;
+            if let Ok(summary) = st.db.session_event_summary(&id) { st.emit("session.changed",summary).await; }
+            crate::queue::emit_changed(st,&id).await;
+        }
+    }
+}
+
+pub async fn sweep_loop(st: AppState) {
+    let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = timer.tick() => sweep(&st).await,
+            _ = st.stopping.notified() => break,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,66 +738,5 @@ mod tests {
         });
         assert_eq!(blocked_reset(Some(snapshot), now), Some(at(500)));
         assert_eq!(blocked_reset(None, now), None);
-    }
-}
-
-/// Record content-free recovery evidence before terminal handling. Structured
-/// adapter hints win over this fallback for process/transport failures.
-pub fn note_failure(st: &AppState, session_id: &str, turn: &str, class: &str, message: &str) {
-    if matches!(class,"permission_denied" | "unauthenticated" | "context" | "config_unsupported") {
-        record_decision(st,turn,"decline","permanent_failure",&now_millis());
-        return;
-    }
-    let lower = message.to_ascii_lowercase();
-    let crashed = class == "process_error" || message.starts_with("provider process unavailable:") || ["process exited", "app-server exited", "stream disconnected", "stream closed unexpectedly", "transport closed"].iter().any(|needle| lower.contains(needle));
-    if crashed {
-        let _ = st.db.watchdog_interrupted(session_id);
-        let _ = st.db.merge_turn_data(turn,&json!({"watchdogCrashed":true,"watchdogInterrupted":true}));
-    }
-    if st.db.turn_data(turn).ok().is_some_and(|data| data["hint"].is_object()) { return; }
-    let value = serde_json::from_str::<Value>(message).unwrap_or_else(|_| json!({"message":message}));
-    let hint = bloblex_agent_core::recovery::provider_recovery(&value).or_else(|| {
-        (matches!(class,"process_error" | "timeout") || message.starts_with("provider process unavailable:")).then_some(bloblex_agent_core::RecoveryHintKind::Overloaded)
-    });
-    if let Some(hint) = hint {
-        let seconds = bloblex_agent_core::recovery::provider_retry_after(&value, Utc::now().timestamp());
-        let _ = st.db.merge_turn_data(turn, &json!({"hint":{"kind":hint.as_str(),"retryAfterSecs":seconds}}));
-    }
-}
-
-/// Called under the activation gate. Persist the queue item with consumption of
-/// the restart marker, so simultaneous warm-up/RPC calls cannot duplicate it.
-pub async fn continue_on_activation(st: &AppState, sid: &str) {
-    if st.db.watchdog_enqueue(sid, false, &now_millis()).unwrap_or(false) {
-        if !st.db.session_had_provider_turns(sid).unwrap_or(false) {
-            let _ = st.db.set_session_recap_pending(sid,true);
-        }
-        crate::team::note(st, sid, "Picking up where it left off", json!({"kind":"watchdog_continuation"})).await;
-        crate::queue::emit_changed(st, sid).await;
-    }
-}
-
-pub async fn sweep(st: &AppState) {
-    if st.db.settings().unwrap_or(Value::Null)["experimental.resumeAfterUsageLimits"] == false { return; }
-    for id in st.db.watchdog_due_sessions(&now_millis()).unwrap_or_default() {
-        if crate::team::session_busy(st,&id).await { continue; }
-        let gate = crate::gate_for_session(st,&id).await;
-        let _guard = gate.lock().await;
-        if st.db.watchdog_enqueue(&id,true,&now_millis()).unwrap_or(false) {
-            crate::team::note(st,&id,"Picking up where it left off",json!({"kind":"watchdog_continuation"})).await;
-            if let Ok(summary) = st.db.session_event_summary(&id) { st.emit("session.changed",summary).await; }
-            crate::queue::emit_changed(st,&id).await;
-        }
-    }
-}
-
-pub async fn sweep_loop(st: AppState) {
-    let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
-    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            _ = timer.tick() => sweep(&st).await,
-            _ = st.stopping.notified() => break,
-        }
     }
 }

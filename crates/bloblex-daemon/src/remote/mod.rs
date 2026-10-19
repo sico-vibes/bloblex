@@ -1178,7 +1178,7 @@ fn security_set(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         return Err(derr("invalid_argument", "approvalsFromRemote must be a boolean", StatusCode::BAD_REQUEST));
     }
     if let Some(days) = p.get("idleExpiryDays") {
-        if !days.as_u64().is_some_and(|days| days <= 3_650) {
+        if days.as_u64().is_none_or(|days| days > 3_650) {
             return Err(derr("invalid_argument", "idleExpiryDays must be a number of days from 0 to 3650", StatusCode::BAD_REQUEST));
         }
     }
@@ -1188,7 +1188,7 @@ fn security_set(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         }
         for key in ["from", "to"] {
             if let Some(value) = quiet.get(key) {
-                if !value.as_str().and_then(parse_clock).is_some() {
+                if value.as_str().and_then(parse_clock).is_none() {
                     return Err(derr("invalid_argument", "quiet hours must be times like 22:00", StatusCode::BAD_REQUEST));
                 }
             }

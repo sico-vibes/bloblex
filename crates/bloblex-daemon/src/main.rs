@@ -46,6 +46,8 @@ mod experiments;
 mod quota;
 mod quota_sources;
 mod automations;
+// Durable task board (expansion-v2 slice 1A): owner dispatch, queue and runs.
+mod tasks;
 mod backup;
 mod memory;
 mod questions;
@@ -820,6 +822,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
     match method {
         "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
+        "task.create" | "task.list" | "task.get" | "task.update" | "task.dispatch" | "task.unassign" | "task.reorder" | "task.cancel" | "task.stop" | "task.review" | "task.runs" => tasks::rpc(st, method, &p).await,
         "memory.list" | "memory.get" | "memory.create" | "memory.update" | "memory.approve" | "memory.delete" | "memory.restore" => memory::rpc(st, method, &p).await,
         "skills.list" | "skills.get" | "skills.forAgent" | "skills.scan" | "skills.import" | "skills.delete" | "skills.toggle" => skills::rpc(st, method, &p).await,
         "backup.export" | "backup.preview" | "backup.import" => backup::rpc(st, method, &p).await,
@@ -1234,6 +1237,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 if let Some(turn_id) = st.active_turns.lock().await.get(&session_id).cloned() { st.denied_turns.lock().await.insert(turn_id); }
             }
             st.emit("permission.resolved", json!({"permissionId":id,"choice":choice})).await;
+            crate::tasks::permission_resolved(st, &session_id).await;
             Ok(json!({"resolved":true}))
         }
         "proposal.decide" => crate::proposals::decide(st, &p).await,
@@ -1295,7 +1299,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 return Err(derr("invalid_argument", "Remote settings change only through Settings › Remote.", StatusCode::BAD_REQUEST));
             }
             let value = validate_setting(k, &p["value"])?;
-            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="appearance.wallpaper"||k=="appearance.glass"||k=="appearance.font"||k=="appearance.monoFont"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions"||k=="concurrency.botsAtOnce";
+            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="task.concurrency.max"||k=="task.globalPaused"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="appearance.wallpaper"||k=="appearance.glass"||k=="appearance.font"||k=="appearance.monoFont"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions"||k=="concurrency.botsAtOnce";
             let events=st.db.set_setting(k, &value).map_err(|e| {
                 derr(
                     if validation_key{"invalid_argument"}else{"internal"},
@@ -1371,6 +1375,8 @@ fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
     if k == "companion.positions" && !valid_companion_positions(value) { return Err(derr("invalid_argument", "companion.positions must map at most 8 display names to {x,y} numbers", StatusCode::BAD_REQUEST)); }
     if k == "questions.expirySecs" && !value.as_i64().is_some_and(|secs| (1_800..=604_800).contains(&secs)) { return Err(derr("invalid_argument", "questions.expirySecs requires an integer between 1800 and 604800", StatusCode::BAD_REQUEST)); }
     if k == "automations.maxConcurrent" && !value.as_u64().is_some_and(|count| (1..=3).contains(&count)) { return Err(derr("invalid_argument", "automations.maxConcurrent requires an integer between 1 and 3", StatusCode::BAD_REQUEST)); }
+    if k == "task.concurrency.max" && !value.as_u64().is_some_and(|count| (1..=3).contains(&count)) { return Err(derr("invalid_argument", "task.concurrency.max requires an integer between 1 and 3", StatusCode::BAD_REQUEST)); }
+    if k == "task.globalPaused" && !value.is_boolean() { return Err(derr("invalid_argument", "task.globalPaused requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     // FIX39 item 18: "Bots working at once" — the only concurrency limit, since
     // the per-bot cap was removed. Default 4, range 1–16.
     if k == "concurrency.botsAtOnce" && !value.as_u64().is_some_and(|count| (1..=16).contains(&count)) { return Err(derr("invalid_argument", "concurrency.botsAtOnce requires an integer between 1 and 16", StatusCode::BAD_REQUEST)); }
@@ -2859,6 +2865,7 @@ enum PromptOrigin {
     Queue,
     Automation,
     QuestionAnswer,
+    Task,
 }
 
 /// The prompt path accepts `meta` only from daemon-internal callers, and only
@@ -2895,6 +2902,14 @@ fn sanitize_prompt_meta(value: &Value, origin: PromptOrigin) -> Option<Value> {
             let question_id = object.get("questionId")?.as_str().filter(|id| !id.is_empty())?;
             Some(json!({"kind":"question_answer","questionId":question_id}))
         }
+        PromptOrigin::Task => {
+            if kind != "task" {
+                return None;
+            }
+            let task_id = object.get("taskId")?.as_str().filter(|id| !id.is_empty())?;
+            let run_id = object.get("runId")?.as_str().filter(|id| !id.is_empty())?;
+            Some(json!({"kind":"task","taskId":task_id,"runId":run_id}))
+        }
     }
 }
 
@@ -2916,6 +2931,12 @@ pub(crate) async fn session_prompt_queued(st: &AppState, p: Value) -> Result<Val
 /// meta (`automationId`, `runId`) survives sanitization here.
 pub(crate) async fn session_prompt_for_automation(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     session_prompt_impl(st, p, PromptOrigin::Automation).await
+}
+
+/// Entry point for a durable board task's turn. Only allowlisted `task` meta
+/// (`taskId`, `runId`) survives sanitization here.
+pub(crate) async fn session_prompt_for_task(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    session_prompt_impl(st, p, PromptOrigin::Task).await
 }
 
 /// Entry point for the answer to an `ask_user` question. Only allowlisted
@@ -3882,6 +3903,9 @@ async fn forward_events_with_timeouts(
                         st.emit("session.changed", summary).await;
                     }
                 }
+                // A board task waiting for this approval is not "running" on
+                // the board until someone answers.
+                crate::tasks::permission_pending(&st, &sid).await;
                 ("permission.requested",json!({"id":id,"sessionId":sid,"runtimeId":runtime_id,"category":"other","title":title,"detail":detail,"risk":"unknown","choices":choices,"expiresAt":null,"status":"pending"}))
             }
             AgentEvent::UsageUpdated {
@@ -4088,6 +4112,7 @@ async fn forward_events_with_timeouts(
                 if st.db.insert_question(&id, &sid, &provider_request_id, &title, &questions, None).is_err() { continue; }
                 let _ = st.db.update_session_state(&sid, "waiting_permission");
                 if let Ok(summary) = st.db.session_event_summary(&sid) { st.emit("session.changed", summary).await; }
+                crate::tasks::permission_pending(&st, &sid).await;
                 ("permission.requested", json!({"id":id,"sessionId":sid,"runtimeId":runtime_id,"kind":"question","category":"question","title":title,"detail":null,"risk":"none","choices":["answer","dismiss"],"questions":questions,"expiresAt":null,"status":"pending"}))
             }
             AgentEvent::PlanProposed { markdown } => {
@@ -4284,6 +4309,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(paused) = st.db.queue_paused_sessions() { st.queue.mark_startup_paused(paused); }
     // A run interrupted by an unclean exit is not a failure; leave its session.
     let _ = st.db.automation_interrupt_running();
+    // Durable tasks: ambiguous claims become needs_you (never a duplicate
+    // spawn) and queued work is resumed once.
+    tasks::startup(&st).await;
     // Drop automatic retries that missed their window while the daemon was down.
     retry::reconcile_restart(&st).await;
     tokio::spawn(retry::sweep_loop(st.clone()));
@@ -11986,4 +12014,297 @@ mod fix39_p6_tests {
         assert_eq!(refused.1.message, "This bot is locked. Unlock it to change its settings.");
         assert_eq!(st.db.agent_get(&id).unwrap()["tags"], json!(["before"]), "the tags are unchanged");
     }
+
+mod task_board_tests {
+    use super::*;
+
+    // ── Expansion-v2 slice 1A: durable board tasks ─────────────────────────
+    #[derive(Default)]
+    struct TaskAdapter;
+    #[async_trait::async_trait]
+    impl AgentAdapter for TaskAdapter {
+        async fn probe(&self,_:&RuntimeSpec)->Result<bloblex_agent_core::ProbeResult,bloblex_agent_core::AdapterError>{Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))}
+        async fn new_session(&self,_:&RuntimeSpec,request:NewSessionRequest,_:tokio::sync::mpsc::Sender<AgentEvent>)->Result<SessionHandle,bloblex_agent_core::AdapterError>{
+            Ok(SessionHandle{session_id:request.session_id,provider_session_id:format!("task-{}",Uuid::new_v4()),capabilities:bloblex_agent_core::AgentCapabilities::default()})
+        }
+        async fn resume_session(&self,_:&RuntimeSpec,_:ResumeSessionRequest,_:tokio::sync::mpsc::Sender<AgentEvent>)->Result<SessionHandle,bloblex_agent_core::AdapterError>{Err(bloblex_agent_core::AdapterError::Unsupported("test".into()))}
+        async fn prompt(&self,_:&SessionHandle,_:PromptRequest)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+        async fn cancel(&self,_:&SessionHandle)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+        async fn reply_permission(&self,_:&str,_:&str)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+        async fn close_session(&self,_:&SessionHandle)->Result<(),bloblex_agent_core::AdapterError>{Ok(())}
+    }
+
+    fn task_state()->(AppState,broadcast::Receiver<EventEnvelope>){
+        let(st,rx)=state();
+        let st=AppState{adapters:Arc::new(Adapters{acp:st.adapters.acp.clone(),codex:Arc::new(TaskAdapter),claude:st.adapters.claude.clone()}),..st};
+        (st,rx)
+    }
+
+    async fn task_bot(st:&AppState)->String{
+        let(agent,_)=st.db.agent_create(&json!({"name":format!("Tasker {}",Uuid::new_v4()),"runtimeId":"rt-test"})).unwrap();
+        agent["id"].as_str().unwrap().to_owned()
+    }
+
+    async fn task_draft(st:&AppState,title:&str)->Value{
+        dispatch(st,"task.create",json!({"title":title,"brief":"Inspect the files","doneGoal":"Find the issue","reportBack":"Summarise"})).await.unwrap()["task"].clone()
+    }
+
+    /// A live turn on a session of this bot, so the dispatcher sees it as busy.
+    async fn hold_bot(st:&AppState,agent:&str,session:&str){
+        st.db.create_session_for_agent(session,"rt-test","codex",".","Busy",Some(agent)).unwrap();
+        st.db.update_session_state(session,"working").unwrap();
+        st.active_turns.lock().await.insert(session.into(),"turn-live".into());
+    }
+
+    /// End a simulated turn the way the event loop does: map the outcome, then
+    /// release the session's slot.
+    async fn end_turn(st:&AppState,session:&str,outcome:&str){
+        tasks::after_turn(st,session,outcome).await;
+        st.active_turns.lock().await.remove(session);
+    }
+
+    #[tokio::test]
+    async fn task_manager_tool_creates_unassigned_drafts_only(){
+        let(st,_)=task_state();
+        let(manager,_)=st.db.agent_create(&json!({"name":"Manager","runtimeId":"rt-test","systemRole":"manager","role":"Manager"})).unwrap();
+        let manager_id=manager["id"].as_str().unwrap().to_owned();
+        st.db.create_session_for_agent("manager-session","rt-test","codex",".","Manager",Some(&manager_id)).unwrap();
+        let created=team::mcp_rpc(&st,"manager-session","mcp.tools.call",&json!({"name":"create_task","arguments":{"title":"Board draft","brief":"Fix the flaky test","doneGoal":"Suite is green","reportBack":"What changed","assigneeAgentId":"sneaky-bot","queuePosition":4}})).await.unwrap();
+        let text=created["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Created unassigned task"),"{text}");
+        let tasks=dispatch(&st,"task.list",json!({})).await.unwrap()["tasks"].as_array().cloned().unwrap();
+        assert_eq!(tasks.len(),1);
+        assert_eq!(tasks[0]["state"],"unassigned");
+        assert_eq!(tasks[0]["assigneeAgentId"],Value::Null,"the Manager cannot assign");
+        assert_eq!(tasks[0]["queuePosition"],Value::Null,"the Manager cannot queue");
+        assert_eq!(tasks[0]["originSessionId"],"manager-session");
+        assert_eq!(tasks[0]["doneGoal"],"Suite is green");
+        let task_id=tasks[0]["id"].as_str().unwrap();
+        assert!(dispatch(&st,"task.runs",json!({"taskId":task_id})).await.unwrap()["runs"].as_array().unwrap().is_empty(),"a draft has no run");
+        // An ordinary bot is refused the tool entirely.
+        let(worker,_)=st.db.agent_create(&json!({"name":"Worker","runtimeId":"rt-test"})).unwrap();
+        let worker_id=worker["id"].as_str().unwrap().to_owned();
+        st.db.create_session_for_agent("worker-session","rt-test","codex",".","Worker",Some(&worker_id)).unwrap();
+        let refused=team::mcp_rpc(&st,"worker-session","mcp.tools.call",&json!({"name":"create_task","arguments":{"title":"Nope","brief":"b","doneGoal":"d","reportBack":"r"}})).await.unwrap();
+        assert_eq!(refused["isError"],true,"only the Manager may file board drafts");
+        // Names from the tool list are Manager-only, so a bot never sees it.
+        let worker_tools=team::mcp_rpc(&st,"worker-session","mcp.tools.list",&json!({})).await.unwrap();
+        assert!(!worker_tools["tools"].as_array().unwrap().iter().any(|tool|tool["name"]=="create_task"));
+        let manager_tools=team::mcp_rpc(&st,"manager-session","mcp.tools.list",&json!({})).await.unwrap();
+        assert!(manager_tools["tools"].as_array().unwrap().iter().any(|tool|tool["name"]=="create_task"));
+        // Bounded supervision is not implemented in this slice.
+        let unsupported=dispatch(&st,"task.create",json!({"title":"Bounded","supervisionPolicy":"bounded"})).await.unwrap_err();
+        assert_eq!(unsupported.1.code,"unsupported");
+    }
+
+    #[tokio::test]
+    async fn task_owner_dispatch_starts_replays_and_refuses_stale_versions(){
+        let(st,_)=task_state();
+        let bot=task_bot(&st).await;
+        let task=task_draft(&st,"Dispatch me").await;
+        let id=task["id"].as_str().unwrap().to_owned();
+        let started=dispatch(&st,"task.dispatch",json!({"taskId":id,"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"drop-1"})).await.unwrap();
+        assert_eq!(started["disposition"],"started");
+        assert_eq!(started["replayed"],false);
+        assert_eq!(started["task"]["state"],"running");
+        assert_eq!(started["run"]["state"],"running");
+        assert!(started["run"]["sessionId"].is_string(),"the run is bound to its session");
+        assert!(started["run"]["startedAt"].is_string());
+        assert_eq!(started["queuePosition"],Value::Null);
+        let run_id=started["run"]["id"].as_str().unwrap().to_owned();
+        // A replayed key returns the same run and starts nothing new.
+        let replay=dispatch(&st,"task.dispatch",json!({"taskId":id,"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"drop-1"})).await.unwrap();
+        assert_eq!(replay["replayed"],true);
+        assert_eq!(replay["run"]["id"],run_id);
+        assert_eq!(dispatch(&st,"task.runs",json!({"taskId":id})).await.unwrap()["runs"].as_array().unwrap().len(),1);
+        // A stale version and a task held by another bot both conflict.
+        assert_eq!(dispatch(&st,"task.dispatch",json!({"taskId":id,"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"drop-2"})).await.unwrap_err().1.code,"conflict");
+        let other=task_bot(&st).await;
+        assert_eq!(dispatch(&st,"task.dispatch",json!({"taskId":id,"assigneeAgentId":other,"expectedVersion":2,"idempotencyKey":"drop-1"})).await.unwrap_err().1.code,"conflict");
+        assert_eq!(dispatch(&st,"task.dispatch",json!({"taskId":id,"assigneeAgentId":Uuid::new_v4().to_string(),"expectedVersion":2,"idempotencyKey":"drop-3"})).await.unwrap_err().1.code,"not_found");
+        // Only the owner's fields are editable, and only while a draft.
+        assert_eq!(dispatch(&st,"task.update",json!({"taskId":id,"expectedVersion":2,"title":"Rewritten"})).await.unwrap_err().1.code,"conflict");
+    }
+
+    #[tokio::test]
+    async fn task_dispatch_queues_for_a_busy_bot_a_full_slot_or_a_global_pause(){
+        let(st,_)=task_state();
+        let busy_bot=task_bot(&st).await;
+        hold_bot(&st,&busy_bot,"busy-session").await;
+        let task=task_draft(&st,"Wait for the bot").await;
+        let id=task["id"].as_str().unwrap().to_owned();
+        let queued=dispatch(&st,"task.dispatch",json!({"taskId":id,"assigneeAgentId":busy_bot,"expectedVersion":1,"idempotencyKey":"busy-1"})).await.unwrap();
+        assert_eq!(queued["disposition"],"queued");
+        assert_eq!(queued["reason"],"bot_busy");
+        assert_eq!(queued["queuePosition"],0);
+        assert_eq!(queued["task"]["state"],"queued");
+        assert_eq!(queued["run"]["state"],"queued");
+        assert_eq!(queued["run"]["sessionId"],Value::Null,"queued work has no session yet");
+        // A paused board never starts work, even for a free bot.
+        st.db.set_setting("task.globalPaused",&json!(true)).unwrap();
+        let free_bot=task_bot(&st).await;
+        let paused_task=task_draft(&st,"Paused").await;
+        let paused_id=paused_task["id"].as_str().unwrap().to_owned();
+        let paused=dispatch(&st,"task.dispatch",json!({"taskId":paused_id,"assigneeAgentId":free_bot,"expectedVersion":1,"idempotencyKey":"paused-1"})).await.unwrap();
+        assert_eq!(paused["disposition"],"queued");
+        assert_eq!(paused["reason"],"global_pause");
+        st.db.set_setting("task.globalPaused",&json!(false)).unwrap();
+        // The concurrency cap (default one) queues a drop for a different bot
+        // because the one task slot is already taken.
+        let first_bot=task_bot(&st).await;
+        let first=task_draft(&st,"First").await;
+        dispatch(&st,"task.dispatch",json!({"taskId":first["id"].as_str().unwrap(),"assigneeAgentId":first_bot,"expectedVersion":1,"idempotencyKey":"cap-1"})).await.unwrap();
+        let second=task_draft(&st,"Second").await;
+        let capped=dispatch(&st,"task.dispatch",json!({"taskId":second["id"].as_str().unwrap(),"assigneeAgentId":task_bot(&st).await,"expectedVersion":1,"idempotencyKey":"cap-2"})).await.unwrap();
+        assert_eq!(capped["disposition"],"queued");
+        assert_eq!(capped["reason"],"global_limit");
+        assert_eq!(st.db.settings().unwrap()["task.concurrency.max"],Value::Null,"the default cap is not stored");
+        // Raising the cap lets queued work start on the next queue pass; the
+        // paused draft is ahead of the capped one.
+        st.db.set_setting("task.concurrency.max",&json!(2)).unwrap();
+        tasks::sweep(&st).await;
+        assert_eq!(dispatch(&st,"task.get",json!({"taskId":paused_id})).await.unwrap()["task"]["state"],"running");
+        assert_eq!(dispatch(&st,"task.get",json!({"taskId":second["id"].as_str().unwrap()})).await.unwrap()["task"]["state"],"queued");
+        // An archived bot is refused outright rather than queued forever.
+        let archived=task_bot(&st).await;
+        st.db.agent_archive(&archived).unwrap();
+        let refused=dispatch(&st,"task.dispatch",json!({"taskId":task_draft(&st,"Archived bot").await["id"].as_str().unwrap(),"assigneeAgentId":archived,"expectedVersion":1,"idempotencyKey":"archived-1"})).await.unwrap_err();
+        assert_eq!(refused.1.code,"conflict");
+    }
+
+    #[tokio::test]
+    async fn task_turn_end_needs_owner_review_and_review_stores_evidence(){
+        let(st,mut events)=task_state();
+        let bot=task_bot(&st).await;
+        let task=task_draft(&st,"Review me").await;
+        let id=task["id"].as_str().unwrap().to_owned();
+        let started=dispatch(&st,"task.dispatch",json!({"taskId":id,"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"review-1"})).await.unwrap();
+        let session=started["run"]["sessionId"].as_str().unwrap().to_owned();
+        let run_id=started["run"]["id"].as_str().unwrap().to_owned();
+        while events.try_recv().is_ok(){}
+        // A provider turn ending is evidence, not completion.
+        end_turn(&st,&session,"turn.completed").await;
+        let awaiting=dispatch(&st,"task.get",json!({"taskId":id})).await.unwrap()["task"].clone();
+        assert_eq!(awaiting["state"],"awaiting_review");
+        assert_eq!(awaiting["completedAt"],Value::Null);
+        let run=dispatch(&st,"task.runs",json!({"taskId":id})).await.unwrap()["runs"][0].clone();
+        assert_eq!(run["state"],"awaiting_review");
+        assert_eq!(run["decision"]["status"],"awaiting_review");
+        assert_eq!(run["decision"]["evidence"][0]["source"],"turn");
+        let mut emitted=Vec::new();
+        while let Ok(event)=events.try_recv(){ emitted.push(event); }
+        let finished=emitted.iter().find(|event|event.event_type=="task.run.finished").expect("a finished run is announced");
+        assert!(finished.payload["run"].get("decision").is_some());
+        assert!(finished.payload.get("brief").is_none()&&finished.payload.get("title").is_none(),"a run event carries no task content");
+        let changed=emitted.iter().find(|event|event.event_type=="task.changed").expect("the board is told the task moved");
+        assert!(changed.payload["task"].get("brief").is_none()&&changed.payload["task"].get("doneGoal").is_none(),"the event projection is content-free");
+        // Evidence is required, and the decision is stored with reviewer and time.
+        assert_eq!(dispatch(&st,"task.review",json!({"taskId":id,"runId":run_id,"decision":"done","evidence":"  ","expectedVersion":4})).await.unwrap_err().1.code,"invalid_argument");
+        let done=dispatch(&st,"task.review",json!({"taskId":id,"runId":run_id,"decision":"done","evidence":"The issue is fixed and the suite is green.","expectedVersion":4})).await.unwrap();
+        assert_eq!(done["task"]["state"],"done");
+        assert!(done["task"]["completedAt"].is_string());
+        assert_eq!(done["run"]["decision"]["reviewer"],"owner");
+        assert_eq!(done["run"]["decision"]["status"],"accepted");
+        assert_eq!(done["run"]["decision"]["summary"],"The issue is fixed and the suite is green.");
+        // No further review of a closed task.
+        assert_eq!(dispatch(&st,"task.review",json!({"taskId":id,"runId":run_id,"decision":"done","evidence":"Again.","expectedVersion":5})).await.unwrap_err().1.code,"conflict");
+        // needs_changes keeps the task in review with the note.
+        let second=task_draft(&st,"Needs changes").await;
+        let second_id=second["id"].as_str().unwrap().to_owned();
+        let second_started=dispatch(&st,"task.dispatch",json!({"taskId":second_id,"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"review-2"})).await.unwrap();
+        let second_run=second_started["run"]["id"].as_str().unwrap().to_owned();
+        end_turn(&st,second_started["run"]["sessionId"].as_str().unwrap(),"turn.completed").await;
+        let kept=dispatch(&st,"task.review",json!({"taskId":second_id,"runId":second_run,"decision":"needs_changes","evidence":"The report names no evidence.","expectedVersion":4})).await.unwrap();
+        assert_eq!(kept["task"]["state"],"awaiting_review");
+        assert_eq!(kept["run"]["decision"]["status"],"needs_changes");
+    }
+
+    #[tokio::test]
+    async fn task_failed_turn_and_stop_both_end_the_run(){
+        let(st,_)=task_state();
+        let bot=task_bot(&st).await;
+        let task=task_draft(&st,"Failing").await;
+        let id=task["id"].as_str().unwrap().to_owned();
+        let started=dispatch(&st,"task.dispatch",json!({"taskId":id,"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"fail-1"})).await.unwrap();
+        end_turn(&st,started["run"]["sessionId"].as_str().unwrap(),"turn.error").await;
+        let failed=dispatch(&st,"task.get",json!({"taskId":id})).await.unwrap()["task"].clone();
+        assert_eq!(failed["state"],"failed");
+        assert!(failed["completedAt"].is_string());
+        assert_eq!(dispatch(&st,"task.runs",json!({"taskId":id})).await.unwrap()["runs"][0]["errorCode"],"provider_error");
+        // A stop records the request, then the cancelled turn closes the task.
+        let running=task_draft(&st,"Stoppable").await;
+        let running_id=running["id"].as_str().unwrap().to_owned();
+        let started=dispatch(&st,"task.dispatch",json!({"taskId":running_id,"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"stop-1"})).await.unwrap();
+        let version=started["task"]["version"].as_i64().unwrap();
+        let stopped=dispatch(&st,"task.stop",json!({"taskId":running_id,"expectedVersion":version})).await.unwrap_or_else(|error|panic!("stop failed for version {version}: {error:?}"));
+        assert_eq!(stopped["stopRequested"],true);
+        assert_eq!(stopped["task"]["state"],"running");
+        end_turn(&st,started["run"]["sessionId"].as_str().unwrap(),"turn.cancelled").await;
+        assert_eq!(dispatch(&st,"task.get",json!({"taskId":running_id})).await.unwrap()["task"]["state"],"cancelled");
+        // A task waiting on an approval is `needs_you` and can still be stopped.
+        let waiting=task_draft(&st,"Waiting").await;
+        let waiting_id=waiting["id"].as_str().unwrap().to_owned();
+        let waiting_started=dispatch(&st,"task.dispatch",json!({"taskId":waiting_id,"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"wait-1"})).await.unwrap();
+        let waiting_session=waiting_started["run"]["sessionId"].as_str().unwrap().to_owned();
+        tasks::permission_pending(&st,&waiting_session).await;
+        let needs_you=dispatch(&st,"task.get",json!({"taskId":waiting_id})).await.unwrap()["task"].clone();
+        assert_eq!(needs_you["state"],"needs_you");
+        assert_eq!(dispatch(&st,"task.runs",json!({"taskId":waiting_id})).await.unwrap()["runs"][0]["state"],"needs_you");
+        let stopped_waiting=dispatch(&st,"task.stop",json!({"taskId":waiting_id,"expectedVersion":needs_you["version"].as_i64().unwrap()})).await.unwrap();
+        assert_eq!(stopped_waiting["stopRequested"],true);
+        end_turn(&st,&waiting_session,"turn.cancelled").await;
+        assert_eq!(dispatch(&st,"task.get",json!({"taskId":waiting_id})).await.unwrap()["task"]["state"],"cancelled");
+        // A queued task can be unassigned before it ever starts, or cancelled.
+        let queued=task_draft(&st,"Queued").await;
+        let queued_id=queued["id"].as_str().unwrap().to_owned();
+        hold_bot(&st,&bot,"busy-two").await;
+        let queued=dispatch(&st,"task.dispatch",json!({"taskId":queued_id,"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"queue-1"})).await.unwrap();
+        assert_eq!(queued["disposition"],"queued");
+        let unassigned=dispatch(&st,"task.unassign",json!({"taskId":queued_id,"expectedVersion":2})).await.unwrap();
+        assert_eq!(unassigned["task"]["state"],"unassigned");
+        assert_eq!(unassigned["task"]["assigneeAgentId"],Value::Null);
+        let cancelled=dispatch(&st,"task.cancel",json!({"taskId":queued_id,"expectedVersion":3})).await.unwrap();
+        assert_eq!(cancelled["task"]["state"],"cancelled");
+        assert_eq!(dispatch(&st,"task.cancel",json!({"taskId":queued_id,"expectedVersion":3})).await.unwrap_err().1.code,"conflict");
+    }
+
+    #[tokio::test]
+    async fn task_restart_marks_ambiguous_work_needs_you_and_resumes_queued_work_once(){
+        let(st,_)=task_state();
+        let bot=task_bot(&st).await;
+        // Committed claim without a bound session = ambiguous after a restart.
+        let ambiguous=task_draft(&st,"Ambiguous").await;
+        let ambiguous_id=ambiguous["id"].as_str().unwrap().to_owned();
+        st.db.task_dispatch_claim(&ambiguous_id,&bot,1,"restart-ambiguous",false,None).unwrap();
+        // A queued task whose bot is free again must start once, not twice.
+        hold_bot(&st,&bot,"busy-restart").await;
+        let queued=task_draft(&st,"Queued at restart").await;
+        let queued_id=queued["id"].as_str().unwrap().to_owned();
+        st.db.task_dispatch_claim(&queued_id,&bot,1,"restart-queued",true,Some("bot_busy")).unwrap();
+        st.active_turns.lock().await.remove("busy-restart");
+        st.db.update_session_state("busy-restart","idle").unwrap();
+        tasks::startup(&st).await;
+        assert_eq!(dispatch(&st,"task.get",json!({"taskId":ambiguous_id})).await.unwrap()["task"]["state"],"needs_you");
+        assert_eq!(dispatch(&st,"task.runs",json!({"taskId":ambiguous_id})).await.unwrap()["runs"][0]["state"],"ambiguous");
+        assert_eq!(dispatch(&st,"task.get",json!({"taskId":queued_id})).await.unwrap()["task"]["state"],"running","queued work resumes once");
+        assert_eq!(dispatch(&st,"task.runs",json!({"taskId":queued_id})).await.unwrap()["runs"].as_array().unwrap().len(),1,"no duplicate run is spawned");
+        // A second reconcile changes nothing.
+        tasks::startup(&st).await;
+        assert_eq!(dispatch(&st,"task.runs",json!({"taskId":ambiguous_id})).await.unwrap()["runs"].as_array().unwrap().len(),1);
+    }
+
+    #[tokio::test]
+    async fn task_settings_and_unknown_methods_are_guarded(){
+        let(st,_)=task_state();
+        assert_eq!(dispatch(&st,"settings.set",json!({"key":"task.concurrency.max","value":4})).await.unwrap_err().1.code,"invalid_argument");
+        dispatch(&st,"settings.set",json!({"key":"task.concurrency.max","value":2})).await.unwrap();
+        assert_eq!(st.db.settings().unwrap()["task.concurrency.max"],2);
+        assert_eq!(dispatch(&st,"settings.set",json!({"key":"task.globalPaused","value":"yes"})).await.unwrap_err().1.code,"invalid_argument");
+        dispatch(&st,"settings.set",json!({"key":"task.globalPaused","value":true})).await.unwrap();
+        assert_eq!(dispatch(&st,"task.nope",json!({})).await.unwrap_err().1.code,"unsupported");
+        assert_eq!(dispatch(&st,"task.create",json!({"title":""})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"task.get",json!({"taskId":"missing"})).await.unwrap_err().1.code,"not_found");
+        assert_eq!(dispatch(&st,"task.runs",json!({"taskId":"missing"})).await.unwrap_err().1.code,"not_found");
+    }
+}
 }

@@ -2,6 +2,11 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-21 · Daemon tests · A simulated turn end must release the slot
+- **Symptom:** after calling `tasks::after_turn` directly, the next `task.dispatch` for the same bot came back `queued`/`bot_busy` and versions were one bump behind.
+- **Root cause:** "the bot has a live turn" is read from `active_turns`. The event loop removes the entry when a turn really ends; a test that calls the after-turn hook itself never does.
+- **Avoid:** in tests, call the hook and then `st.active_turns.lock().await.remove(session)` (see `end_turn` in `main.rs` `mod task_board_tests`), or let the fake adapter emit the turn-end event.
+
 ## 2026-10-19 · Process · A piped gate hid a failure before a push
 - **Symptom:** the Director ran `git merge ... && node scripts/docs-library.mjs check 2>&1 | tail -1 && ... && git push`; the check failed, but `main` was pushed anyway (`917f730`).
 - **Root cause:** in a pipe, the exit status is the last command's (`tail`, which succeeds), so `&&` never saw the failure.

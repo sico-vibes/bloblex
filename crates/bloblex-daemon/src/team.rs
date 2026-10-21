@@ -298,6 +298,8 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
         list.extend(manager_tool_schemas());
         list.extend(crate::proposals::tool_schemas());
         list.extend(crate::knowledge::tool_schemas());
+        // The board draft tool: creates only, never assigns or dispatches.
+        list.push(json!({"name":"create_task","description":format!("Create an unassigned task on the user's task board. It is a draft: it has no bot, does not run and cannot be scheduled. The user decides which {noun} gets it by dragging it in Bitbots. Use it when the user asks for work to be tracked on the board; use message_blob for ordinary delegation."),"inputSchema":{"type":"object","properties":{"title":{"type":"string","description":"A short title, 1 to 120 characters."},"brief":{"type":"string","description":"The full brief: goal, context, paths and constraints."},"doneGoal":{"type":"string","description":"What must be true for the task to count as done."},"reportBack":{"type":"string","description":"What the bot should report when it stops."},"projectId":{"type":"string","description":"The project this task belongs to (optional)."},"parentTaskId":{"type":"string","description":"The parent task, when this is a follow-up (optional)."}},"required":["title","brief","doneGoal","reportBack"],"additionalProperties":false}}));
         for tool in &mut list {
             if tool["name"] == "message_blob" {
                 tool["description"] = json!("Propose messaging a teammate. Supply the brief, doneGoal and reportBack yourself; the owner only approves the card. For parallel work give a new topic; to continue pass conversation. Nothing is sent before approval.");
@@ -379,13 +381,14 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "propose_project" if is_manager => crate::proposals::propose_project(st, session_id, args).await,
                 "propose_bot" if is_manager => crate::proposals::propose_bot(st, session_id, args).await,
                 "assign_task" if is_manager => crate::proposals::assign_task(st, session_id, args).await,
+                "create_task" if is_manager => crate::tasks::manager_create(st, session_id, args).await,
                 "project_status" if is_manager => crate::proposals::project_status(st, args).await,
                 "set_conversation_permission" if is_manager => crate::proposals::propose_permission(st, session_id, args).await,
                 "remember_about_user" if is_manager => crate::knowledge::tool_remember(st, session_id, args).await,
                 "forget_about_user" if is_manager => crate::knowledge::tool_forget(st, session_id, args).await,
                 "recall_about_user" if is_manager => crate::knowledge::tool_recall(st, args),
                 "update_playbook" if is_manager => crate::knowledge::tool_update_playbook(st, session_id, args).await,
-                "read_blob" | "read_project" | "read_conversation" | "get_conversation_permission" | "open_conversation" | "start_conversation" | "list_projects" | "update_blob" | "update_project" | "propose_project" | "propose_bot" | "assign_task" | "project_status" | "set_conversation_permission" | "remember_about_user" | "forget_about_user" | "recall_about_user" | "update_playbook" => Err(non_manager_error(st)),
+                "read_blob" | "read_project" | "read_conversation" | "get_conversation_permission" | "open_conversation" | "start_conversation" | "list_projects" | "update_blob" | "update_project" | "propose_project" | "propose_bot" | "assign_task" | "create_task" | "project_status" | "set_conversation_permission" | "remember_about_user" | "forget_about_user" | "recall_about_user" | "update_playbook" => Err(non_manager_error(st)),
                 "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
                 "ask_user" if ask_user => crate::questions::ask_user_tool(st, session_id, args).await,
@@ -798,6 +801,8 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
         crate::proposals::after_task_turn(&st, &session_id, &outcome).await;
         // Automation runs map the same turn outcome onto their run row.
         crate::automations::after_turn(&st, &session_id, &outcome).await;
+        // Board task runs map it onto their task and run.
+        crate::tasks::after_turn(&st, &session_id, &outcome).await;
         // The durable user queue drains before Team deliveries, so a queued
         // prompt is sent first and any pending team delivery follows it.
         crate::queue::after_turn(&st, &session_id, &outcome).await;

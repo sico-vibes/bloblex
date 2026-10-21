@@ -854,6 +854,83 @@
       "minTier": null,
       "why": "Only the owner at the computer may raise the firewall prompt; a device must never remove a rule.",
       "params": null
+    },
+    {
+      "method": "task.create",
+      "class": "never",
+      "minTier": null,
+      "why": "Tasks are owner-only in this slice; a device may not create board work.",
+      "params": null
+    },
+    {
+      "method": "task.list",
+      "class": "never",
+      "minTier": null,
+      "why": "Task content is not projected to remote devices in this slice.",
+      "params": null
+    },
+    {
+      "method": "task.get",
+      "class": "never",
+      "minTier": null,
+      "why": "Task content is not projected to remote devices in this slice.",
+      "params": null
+    },
+    {
+      "method": "task.update",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the desktop owner edits task drafts.",
+      "params": null
+    },
+    {
+      "method": "task.dispatch",
+      "class": "never",
+      "minTier": null,
+      "why": "Dispatching starts provider work; only the owner at the computer may drop a task on a bot.",
+      "params": null
+    },
+    {
+      "method": "task.unassign",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the desktop owner assigns or unassigns board work.",
+      "params": null
+    },
+    {
+      "method": "task.reorder",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the desktop owner orders the queue.",
+      "params": null
+    },
+    {
+      "method": "task.cancel",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the desktop owner cancels board work.",
+      "params": null
+    },
+    {
+      "method": "task.stop",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the desktop owner stops a running task.",
+      "params": null
+    },
+    {
+      "method": "task.review",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the desktop owner reviews evidence and closes a task.",
+      "params": null
+    },
+    {
+      "method": "task.runs",
+      "class": "never",
+      "minTier": null,
+      "why": "Run history is not projected to remote devices in this slice.",
+      "params": null
     }
   ],
   "events": {
@@ -905,7 +982,10 @@
     "remote.device.changed": "drop",
     "remote.pairing.requested": "drop",
     "remote.pairing.completed": "drop",
-    "remote.activity": "drop"
+    "remote.activity": "drop",
+    "task.changed": "drop",
+    "task.run.changed": "drop",
+    "task.run.finished": "drop"
   },
   "settingsAllowlist": [
     "appearance.style",

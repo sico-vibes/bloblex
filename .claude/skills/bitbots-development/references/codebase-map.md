@@ -30,8 +30,8 @@ Last reviewed: 2026-10-19. When you add or move something listed here, update th
 
 ## Daemon and crates
 
-- `crates/bloblex-daemon/src/`: `main.rs` (`dispatch()`, settings validation `validate_setting`, tests), `team.rs` (Manager tools and schemas), `proposals.rs`, `queue.rs`, `retry.rs` (watchdog/continuation), `automations.rs`, `memory.rs`, `skills.rs`, `backup.rs` (`SETTING_ALLOWLIST`, a fixed-size array), `diagnostics.rs`, `worktree.rs`, `quota*.rs`, `catalog.rs`, `remote/` (gateway, Tailscale, Native, pairing).
-- `crates/bloblex-storage/src/lib.rs`: SQLite schema and migrations, `validate_setting_value`, `validate_agent_fields`, `valid_look`.
+- `crates/bloblex-daemon/src/`: `main.rs` (`dispatch()`, settings validation `validate_setting`, tests), `team.rs` (Manager tools and schemas), `proposals.rs`, `queue.rs`, `retry.rs` (watchdog/continuation), `automations.rs`, `tasks.rs` (durable board tasks: `task.*` RPCs, owner dispatch/queue, turn-end mapping), `memory.rs`, `skills.rs`, `backup.rs` (`SETTING_ALLOWLIST`, a fixed-size array), `diagnostics.rs`, `worktree.rs`, `quota*.rs`, `catalog.rs`, `remote/` (gateway, Tailscale, Native, pairing).
+- `crates/bloblex-storage/src/lib.rs`: SQLite schema and migrations, `validate_setting_value`, `validate_agent_fields`, `valid_look`; the task ledger (`ensure_tasks_schema`, `task_*` reads and writes) with append-only `task_run_events`.
 - Others: `bloblex-adapter-{claude,codex,acp,opencode}`, `bloblex-agent-core`, `bloblex-runtime`, `bloblex-process`, `bloblex-protocol`, `bloblex-usage`, `bloblex-budget` (retired; `budget.*` returns unsupported), `bloblex-security`, `bloblex-speech` (on-device and opt-in cloud dictation), `bloblex-wsl`.
 
 ## Docs

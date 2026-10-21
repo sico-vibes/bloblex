@@ -363,6 +363,9 @@ pub async fn sweep_loop(st: AppState) {
                 crate::questions::sweep(&st).await;
                 // FIX36 D2: lapsed Manager proposals expire on the same tick.
                 crate::proposals::sweep(&st).await;
+                // Queued board tasks move on when a slot frees up outside a
+                // task turn (a user chat or an automation ended).
+                crate::tasks::sweep(&st).await;
             },
             _ = st.stopping.notified() => break,
         }

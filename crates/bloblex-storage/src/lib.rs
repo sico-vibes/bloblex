@@ -867,6 +867,182 @@ fn ensure_manager_knowledge_schema(c: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// Durable task board ledger (expansion-v2 slice 1A). Additive and idempotent,
+/// like the team/queue/automation schemas, so an older database gains the four
+/// tables on open without rewriting anything it already holds.
+///
+/// Timestamps are observed only: `assigned_at` is written when the claim is
+/// committed, `started_at` when a run is bound to its provider session (the
+/// moment its turn starts), `completed_at` when a terminal state is stored.
+/// Nothing invents a start time.
+fn ensure_tasks_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch("CREATE TABLE IF NOT EXISTS tasks(
+        id TEXT PRIMARY KEY NOT NULL,
+        title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 120),
+        brief TEXT NOT NULL DEFAULT '' CHECK(length(brief)<=12000),
+        done_goal TEXT NOT NULL DEFAULT '' CHECK(length(done_goal)<=4000),
+        report_back TEXT NOT NULL DEFAULT '' CHECK(length(report_back)<=4000),
+        project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+        origin_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+        parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        root_task_id TEXT NOT NULL,
+        assignee_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        supervision_policy TEXT NOT NULL DEFAULT 'report_only' CHECK(supervision_policy IN ('report_only','bounded','manager_completes')),
+        supervision_snapshot TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(supervision_snapshot) AND json_type(supervision_snapshot)='object'),
+        estimate_minutes INTEGER CHECK(estimate_minutes IS NULL OR estimate_minutes BETWEEN 1 AND 10080),
+        max_runtime_secs INTEGER NOT NULL DEFAULT 1800 CHECK(max_runtime_secs BETWEEN 60 AND 86400),
+        state TEXT NOT NULL CHECK(state IN ('unassigned','queued','running','needs_you','awaiting_review','done','failed','cancelled')),
+        queue_position INTEGER,
+        version INTEGER NOT NULL DEFAULT 1 CHECK(version>0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        assigned_at TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        CHECK((state='queued' AND assignee_agent_id IS NOT NULL AND queue_position IS NOT NULL) OR state<>'queued')
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_queue ON tasks(state,queue_position,created_at);
+    CREATE INDEX IF NOT EXISTS idx_tasks_assignee_state ON tasks(assignee_agent_id,state,queue_position);
+    CREATE INDEX IF NOT EXISTS idx_tasks_project_state ON tasks(project_id,state,updated_at);
+    CREATE TABLE IF NOT EXISTS task_runs(
+        id TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        attempt INTEGER NOT NULL CHECK(attempt>0),
+        session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+        assignee_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        assignee_agent_name TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL CHECK(state IN ('claimed','queued','running','needs_you','awaiting_review','done','failed','cancelled','ambiguous')),
+        started_at TEXT,
+        ended_at TEXT,
+        cancel_requested_at TEXT,
+        correction_rounds INTEGER NOT NULL DEFAULT 0 CHECK(correction_rounds BETWEEN 0 AND 2),
+        decision_json TEXT CHECK(decision_json IS NULL OR json_valid(decision_json)),
+        error_code TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(task_id,attempt)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_one_active ON task_runs(task_id) WHERE state IN ('claimed','queued','running');
+    CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id,attempt);
+    CREATE INDEX IF NOT EXISTS idx_task_runs_session ON task_runs(session_id);
+    CREATE TABLE IF NOT EXISTS task_run_events(
+        id TEXT PRIMARY KEY NOT NULL,
+        run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL,
+        at TEXT NOT NULL,
+        details_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(details_json) AND json_type(details_json)='object')
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_run_events_run ON task_run_events(run_id,at,id);
+    CREATE TABLE IF NOT EXISTS task_dispatch_keys(
+        idempotency_key TEXT PRIMARY KEY NOT NULL,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL
+    );")?;
+    Ok(())
+}
+
+/// The task states the ledger accepts, shared by reads and writes.
+const TASK_STATES: [&str; 8] = ["unassigned", "queued", "running", "needs_you", "awaiting_review", "done", "failed", "cancelled"];
+
+/// One observed timestamp, in the wire format every other record uses.
+fn task_stamp() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+/// Renumber one bot's queue after a card leaves it, so positions stay dense.
+/// A shifted card gets a version bump: its position changed, so a board row read
+/// earlier must re-read before it acts on the new order.
+fn task_compact_queue(tx: &Transaction<'_>, agent_id: &str) -> Result<(), StorageError> {
+    if agent_id.is_empty() { return Ok(()); }
+    let ids = {
+        let mut q = tx.prepare("SELECT id FROM tasks WHERE state='queued' AND assignee_agent_id=?1 ORDER BY queue_position,created_at,id")?;
+        let rows = q.query_map([agent_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    for (position, task_id) in ids.iter().enumerate() {
+        tx.execute("UPDATE tasks SET queue_position=?2,version=version+1,updated_at=?3 WHERE id=?1 AND queue_position<>?2", params![task_id, position as i64, task_stamp()])?;
+    }
+    Ok(())
+}
+
+/// The task DTO. Its content fields are user-authored; callers that project it
+/// for an event must use their own content-free shape.
+fn task_read(c: &Connection, id: &str) -> Result<Value, StorageError> {
+    let row = c.query_row(
+        "SELECT id,title,brief,done_goal,report_back,project_id,origin_session_id,parent_task_id,root_task_id,assignee_agent_id,supervision_policy,supervision_snapshot,estimate_minutes,max_runtime_secs,state,queue_position,version,created_at,updated_at,assigned_at,started_at,completed_at FROM tasks WHERE id=?1",
+        [id],
+        |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?, r.get::<_, Option<String>>(7)?,
+            r.get::<_, String>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, String>(10)?, r.get::<_, String>(11)?,
+            r.get::<_, Option<i64>>(12)?, r.get::<_, i64>(13)?, r.get::<_, String>(14)?, r.get::<_, Option<i64>>(15)?,
+            r.get::<_, i64>(16)?, r.get::<_, String>(17)?, r.get::<_, String>(18)?, r.get::<_, Option<String>>(19)?,
+            r.get::<_, Option<String>>(20)?, r.get::<_, Option<String>>(21)?,
+        )),
+    )
+    .optional()?
+    .ok_or(StorageError::AgentNotFound)?;
+    let snapshot: Value = serde_json::from_str(&row.11)?;
+    Ok(json!({
+        "id":row.0,"title":row.1,"brief":row.2,"doneGoal":row.3,"reportBack":row.4,
+        "projectId":row.5,"originSessionId":row.6,"parentTaskId":row.7,"rootTaskId":row.8,
+        "assigneeAgentId":row.9,"supervisionPolicy":row.10,"supervisionSnapshot":snapshot,
+        "estimateMinutes":row.12,"maxRuntimeSecs":row.13,"state":row.14,"queuePosition":row.15,
+        "version":row.16,"createdAt":row.17,"updatedAt":row.18,
+        "assignedAt":row.19,"startedAt":row.20,"completedAt":row.21,
+    }))
+}
+
+/// Task runs list order: oldest attempt first.
+fn task_run_ids(c: &Connection, task_id: &str) -> Result<Vec<String>, StorageError> {
+    let mut q = c.prepare("SELECT id FROM task_runs WHERE task_id=?1 ORDER BY attempt,created_at,id")?;
+    let rows = q.query_map([task_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// The append-only history of one run, oldest first.
+fn task_run_events(c: &Connection, run_id: &str) -> Result<Vec<Value>, StorageError> {
+    let mut q = c.prepare("SELECT id,event_type,at,details_json FROM task_run_events WHERE run_id=?1 ORDER BY at,rowid")?;
+    let rows = q.query_map([run_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?.collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter().map(|(id, event_type, at, details)| Ok(json!({
+        "id":id,"runId":run_id,"type":event_type,"at":at,"details":serde_json::from_str::<Value>(&details)?,
+    }))).collect()
+}
+
+fn task_run_read(c: &Connection, id: &str) -> Result<Value, StorageError> {
+    let row = c.query_row(
+        "SELECT id,task_id,attempt,session_id,assignee_agent_id,assignee_agent_name,state,started_at,ended_at,cancel_requested_at,correction_rounds,decision_json,error_code,created_at,updated_at FROM task_runs WHERE id=?1",
+        [id],
+        |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?,
+            r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, Option<String>>(7)?,
+            r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, i64>(10)?, r.get::<_, Option<String>>(11)?,
+            r.get::<_, Option<String>>(12)?, r.get::<_, String>(13)?, r.get::<_, String>(14)?,
+        )),
+    )
+    .optional()?
+    .ok_or(StorageError::AgentNotFound)?;
+    let decision = match row.11 { Some(raw) => serde_json::from_str::<Value>(&raw)?, None => Value::Null };
+    Ok(json!({
+        "id":row.0,"taskId":row.1,"attempt":row.2,"sessionId":row.3,
+        "assigneeAgentId":row.4,"assigneeAgentName":row.5,"state":row.6,
+        "startedAt":row.7,"endedAt":row.8,"cancelRequestedAt":row.9,"correctionRounds":row.10,
+        "decision":decision,"errorCode":row.12,"createdAt":row.13,"updatedAt":row.14,
+        "events":task_run_events(c, &row.0)?,
+    }))
+}
+
+/// Append one immutable transition record. Never updates an existing row.
+fn task_event_insert(c: &Connection, run_id: &str, task_id: &str, event_type: &str, at: &str, details: &Value) -> Result<(), StorageError> {
+    c.execute(
+        "INSERT INTO task_run_events(id,run_id,task_id,event_type,at,details_json) VALUES(?1,?2,?3,?4,?5,?6)",
+        params![Uuid::new_v4().to_string(), run_id, task_id, event_type, at, details.to_string()],
+    )?;
+    Ok(())
+}
+
 const REMOTE_DEVICE_COLUMNS: &str =
     "id,name,kind,platform,tier,login,paired_at,last_seen_at,revoked_at,signed_out_at";
 
@@ -1272,6 +1448,8 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="retry.maxWaitSecs" && v.as_u64().is_none_or(|secs| secs > 86_400){return Err(StorageError::InvalidAgent)}
     if k=="automations.paused" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="automations.maxConcurrent" && !v.as_u64().is_some_and(|count| (1..=3).contains(&count)){return Err(StorageError::InvalidAgent)}
+    if k=="task.concurrency.max" && !v.as_u64().is_some_and(|count| (1..=3).contains(&count)){return Err(StorageError::InvalidAgent)}
+    if k=="task.globalPaused" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="experimental.usageTips" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="experimental.usageTipDismissals" && !valid_usage_tip_dismissals(v){return Err(StorageError::InvalidAgent)}
     if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
@@ -1303,7 +1481,7 @@ fn write_setting(tx:&Transaction<'_>,k:&str,v:&Value)->Result<Vec<Value>,Storage
         let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
         let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
         if !same { events.push(push_settings_event(tx,k,enabled)?); }
-    } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("memory.") || k.starts_with("appearance.") || k.starts_with("hints.") || k.starts_with("onboarding.") || k.starts_with("conversations.") {
+    } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("task.") || k.starts_with("memory.") || k.starts_with("appearance.") || k.starts_with("hints.") || k.starts_with("onboarding.") || k.starts_with("conversations.") {
         // Window-level preferences: the main window and the companion both follow them live.
         let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
         if !same {
@@ -1683,6 +1861,7 @@ impl Storage {
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
                 ensure_manager_knowledge_schema(&conn)?;
+                ensure_tasks_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -3035,6 +3214,451 @@ impl Storage {
         c.execute("DELETE FROM queued_prompts WHERE id=?1 AND status IN ('queued','failed')", [id])?;
         Ok(())
     }
+    // ── Durable board tasks (expansion-v2 slice 1A) ────────────────────────
+    /// Create an unassigned draft. There is deliberately no assignment field:
+    /// only `task_dispatch_claim` (the owner's drop action) can assign work.
+    pub fn task_create(&self, input: &Value) -> Result<Value, StorageError> {
+        let title = input["title"].as_str().map(str::trim).filter(|title| (1..=120).contains(&title.chars().count())).ok_or(StorageError::InvalidAgent)?.to_owned();
+        let text = |key: &str, limit: usize| -> Result<String, StorageError> {
+            match input.get(key) {
+                None | Some(Value::Null) => Ok(String::new()),
+                Some(value) => value.as_str().filter(|text| text.len() <= limit).map(str::to_owned).ok_or(StorageError::InvalidAgent),
+            }
+        };
+        let brief = text("brief", 12_000)?;
+        let done_goal = text("doneGoal", 4_000)?;
+        let report_back = text("reportBack", 4_000)?;
+        let project_id = match input.get("projectId") { None | Some(Value::Null) => None, Some(value) => Some(value.as_str().filter(|id| !id.is_empty()).ok_or(StorageError::InvalidAgent)?.to_owned()) };
+        let origin_session_id = match input.get("originSessionId") { None | Some(Value::Null) => None, Some(value) => Some(value.as_str().filter(|id| !id.is_empty()).ok_or(StorageError::InvalidAgent)?.to_owned()) };
+        let parent_task_id = match input.get("parentTaskId") { None | Some(Value::Null) => None, Some(value) => Some(value.as_str().filter(|id| !id.is_empty()).ok_or(StorageError::InvalidAgent)?.to_owned()) };
+        let supervision_policy = match input.get("supervisionPolicy") {
+            None | Some(Value::Null) => "report_only".to_owned(),
+            Some(Value::String(policy)) if ["report_only", "bounded", "manager_completes"].contains(&policy.as_str()) => policy.clone(),
+            _ => return Err(StorageError::InvalidAgent),
+        };
+        let estimate_minutes = match input.get("estimateMinutes") { None | Some(Value::Null) => None, Some(value) => Some(value.as_i64().filter(|minutes| (1..=10_080).contains(minutes)).ok_or(StorageError::InvalidAgent)?) };
+        let max_runtime_secs = match input.get("maxRuntimeSecs") { None | Some(Value::Null) => 1800, Some(value) => value.as_i64().filter(|secs| (60..=86_400).contains(secs)).ok_or(StorageError::InvalidAgent)? };
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(project) = project_id.as_deref() {
+            if !tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [project], |r| r.get::<_, bool>(0))? { return Err(StorageError::AgentNotFound); }
+        }
+        if let Some(session) = origin_session_id.as_deref() {
+            if !tx.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get::<_, bool>(0))? { return Err(StorageError::AgentNotFound); }
+        }
+        let root_task_id = match parent_task_id.as_deref() {
+            Some(parent) => task_read(&tx, parent)?["rootTaskId"].as_str().unwrap_or(parent).to_owned(),
+            None => String::new(),
+        };
+        let id = Uuid::new_v4().to_string();
+        let root_task_id = if root_task_id.is_empty() { id.clone() } else { root_task_id };
+        let now = task_stamp();
+        let snapshot = json!({"policy": supervision_policy, "maxRuntimeSecs": max_runtime_secs});
+        tx.execute(
+            "INSERT INTO tasks(id,title,brief,done_goal,report_back,project_id,origin_session_id,parent_task_id,root_task_id,assignee_agent_id,supervision_policy,supervision_snapshot,estimate_minutes,max_runtime_secs,state,queue_position,version,created_at,updated_at,assigned_at,started_at,completed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,NULL,?10,?11,?12,?13,'unassigned',NULL,1,?14,?14,NULL,NULL,NULL)",
+            params![id, title, brief, done_goal, report_back, project_id, origin_session_id, parent_task_id, root_task_id, supervision_policy, snapshot.to_string(), estimate_minutes, max_runtime_secs, now],
+        )?;
+        let dto = task_read(&tx, &id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    pub fn task_get(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        task_read(&c, id)
+    }
+
+    pub fn task_list(&self, state: Option<&str>, project_id: Option<&str>, assignee_agent_id: Option<&str>, parent_task_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
+        if state.is_some_and(|state| !TASK_STATES.contains(&state)) { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let ids = {
+            let mut q = c.prepare("SELECT id FROM tasks WHERE (?1 IS NULL OR state=?1) AND (?2 IS NULL OR project_id=?2) AND (?3 IS NULL OR assignee_agent_id=?3) AND (?4 IS NULL OR parent_task_id=?4) ORDER BY CASE WHEN state='queued' THEN 0 ELSE 1 END, queue_position, updated_at DESC, id")?;
+            let rows = q.query_map(params![state, project_id, assignee_agent_id, parent_task_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        ids.iter().map(|id| task_read(&c, id)).collect()
+    }
+
+    /// Owner draft edits. Only an unassigned draft is editable, so an edit can
+    /// never rewrite the scope of work a bot is already running.
+    pub fn task_update(&self, id: &str, expected: i64, input: &Value) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing = task_read(&tx, id)?;
+        if existing["version"].as_i64() != Some(expected) || existing["state"] != "unassigned" { return Err(StorageError::AgentConflict); }
+        let title = match input.get("title") {
+            None => existing["title"].as_str().unwrap_or("").to_owned(),
+            Some(value) => value.as_str().map(str::trim).filter(|title| (1..=120).contains(&title.chars().count())).ok_or(StorageError::InvalidAgent)?.to_owned(),
+        };
+        let field = |key: &str, limit: usize| -> Result<String, StorageError> {
+            match input.get(key) {
+                None => Ok(existing[key].as_str().unwrap_or("").to_owned()),
+                Some(Value::Null) => Ok(String::new()),
+                Some(value) => value.as_str().filter(|text| text.len() <= limit).map(str::to_owned).ok_or(StorageError::InvalidAgent),
+            }
+        };
+        let brief = field("brief", 12_000)?;
+        let done_goal = field("doneGoal", 4_000)?;
+        let report_back = field("reportBack", 4_000)?;
+        let project_id: Option<String> = match input.get("projectId") {
+            None => existing["projectId"].as_str().map(str::to_owned),
+            Some(Value::Null) => None,
+            Some(value) => Some(value.as_str().filter(|id| !id.is_empty()).ok_or(StorageError::InvalidAgent)?.to_owned()),
+        };
+        if let Some(project) = project_id.as_deref() {
+            if !tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [project], |r| r.get::<_, bool>(0))? { return Err(StorageError::AgentNotFound); }
+        }
+        let supervision_policy = match input.get("supervisionPolicy") {
+            None => existing["supervisionPolicy"].as_str().unwrap_or("report_only").to_owned(),
+            Some(Value::String(policy)) if ["report_only", "bounded", "manager_completes"].contains(&policy.as_str()) => policy.clone(),
+            _ => return Err(StorageError::InvalidAgent),
+        };
+        let now = task_stamp();
+        let snapshot = json!({"policy": supervision_policy, "maxRuntimeSecs": existing["maxRuntimeSecs"]});
+        tx.execute(
+            "UPDATE tasks SET title=?2,brief=?3,done_goal=?4,report_back=?5,project_id=?6,supervision_policy=?7,supervision_snapshot=?8,version=version+1,updated_at=?9 WHERE id=?1 AND version=?10",
+            params![id, title, brief, done_goal, report_back, project_id, supervision_policy, snapshot.to_string(), now, expected],
+        )?;
+        let dto = task_read(&tx, id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    /// Atomically assign, claim and (when the caller may start at once) record
+    /// the dispatch. The claim row, the run and the idempotency key are
+    /// committed together before any provider session exists, so a crash can
+    /// never lose the fact that the owner asked for this work.
+    ///
+    /// `queued` is decided by the daemon from live turns and the concurrency
+    /// caps; the queue position is computed here, inside the same transaction,
+    /// so two simultaneous drops cannot share a position.
+    pub fn task_dispatch_claim(&self, id: &str, agent_id: &str, expected: i64, idempotency_key: &str, queued: bool, reason: Option<&str>) -> Result<(Value, Value, bool), StorageError> {
+        let key = idempotency_key.trim();
+        if key.is_empty() || key.len() > 200 || key.chars().any(char::is_control) { return Err(StorageError::InvalidAgent); }
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some((key_task, key_run)) = tx.query_row("SELECT task_id,run_id FROM task_dispatch_keys WHERE idempotency_key=?1", [key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).optional()? {
+            if key_task != id { return Err(StorageError::AgentConflict); }
+            let task = task_read(&tx, &key_task)?;
+            if task["assigneeAgentId"].as_str() != Some(agent_id) { return Err(StorageError::AgentConflict); }
+            let run = task_run_read(&tx, &key_run)?;
+            tx.commit()?;
+            return Ok((task, run, true));
+        }
+        let task = task_read(&tx, id)?;
+        if task["version"].as_i64() != Some(expected) { return Err(StorageError::AgentConflict); }
+        let from_state = task["state"].as_str().unwrap_or("").to_owned();
+        // A running task must be stopped, a queued one unassigned, and a
+        // finished one is not re-opened; awaiting review or needs-you work may
+        // be dropped on a bot again as a fresh attempt.
+        if !matches!(from_state.as_str(), "unassigned" | "awaiting_review" | "needs_you" | "failed") { return Err(StorageError::AgentConflict); }
+        let agent: Option<(bool, String)> = tx.query_row("SELECT archived,name FROM agents WHERE id=?1", [agent_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let (archived, agent_name) = agent.ok_or(StorageError::AgentNotFound)?;
+        if archived { return Err(StorageError::AgentConflict); }
+        let attempt: i64 = tx.query_row("SELECT COALESCE(MAX(attempt),0)+1 FROM task_runs WHERE task_id=?1", [id], |r| r.get(0))?;
+        let position = if queued {
+            Some(tx.query_row("SELECT COALESCE(MAX(queue_position),-1)+1 FROM tasks WHERE assignee_agent_id=?1 AND state='queued'", [agent_id], |r| r.get::<_, i64>(0))?)
+        } else { None };
+        let run_id = Uuid::new_v4().to_string();
+        let run_state = if queued { "queued" } else { "claimed" };
+        let to_state = if queued { "queued" } else { "running" };
+        let now = task_stamp();
+        tx.execute(
+            "INSERT INTO task_runs(id,task_id,attempt,session_id,assignee_agent_id,assignee_agent_name,state,started_at,ended_at,cancel_requested_at,correction_rounds,decision_json,error_code,created_at,updated_at) VALUES(?1,?2,?3,NULL,?4,?5,?6,NULL,NULL,NULL,0,NULL,NULL,?7,?7)",
+            params![run_id, id, attempt, agent_id, agent_name, run_state, now],
+        )?;
+        tx.execute("INSERT INTO task_dispatch_keys(idempotency_key,task_id,run_id,created_at) VALUES(?1,?2,?3,?4)", params![key, id, run_id, now])?;
+        tx.execute(
+            "UPDATE tasks SET assignee_agent_id=?2,state=?3,queue_position=?4,version=version+1,assigned_at=COALESCE(assigned_at,?5),updated_at=?5,completed_at=NULL WHERE id=?1",
+            params![id, agent_id, to_state, position, now],
+        )?;
+        task_event_insert(&tx, &run_id, id, "dispatch_claimed", &now, &json!({
+            "fromState": from_state, "toState": to_state, "fromAgentId": task["assigneeAgentId"], "toAgentId": agent_id,
+            "queued": queued, "reason": reason, "queuePosition": position,
+        }))?;
+        let task = task_read(&tx, id)?;
+        let run = task_run_read(&tx, &run_id)?;
+        tx.commit()?;
+        Ok((task, run, false))
+    }
+
+    /// Bind the claimed run to the provider session that will run it. The run's
+    /// `startedAt` is this observed moment: the point just before the task's
+    /// first turn is delivered, never the session's creation time.
+    pub fn task_run_bind_session(&self, run_id: &str, session_id: &str) -> Result<(Value, Value), StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (task_id, state, started): (String, String, Option<String>) = tx.query_row("SELECT task_id,state,started_at FROM task_runs WHERE id=?1", [run_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?.ok_or(StorageError::AgentNotFound)?;
+        if !matches!(state.as_str(), "claimed" | "queued") { return Err(StorageError::AgentConflict); }
+        let now = task_stamp();
+        let started = started.unwrap_or_else(|| now.clone());
+        tx.execute("UPDATE task_runs SET session_id=?2,state='running',started_at=?3,ended_at=NULL,updated_at=?4 WHERE id=?1", params![run_id, session_id, started, now])?;
+        tx.execute("UPDATE tasks SET state='running',queue_position=NULL,version=version+1,started_at=COALESCE(started_at,?2),updated_at=?2,completed_at=NULL WHERE id=?1", params![task_id, now])?;
+        task_event_insert(&tx, run_id, &task_id, "session_bound", &now, &json!({"fromState": state, "toState": "running", "sessionId": session_id}))?;
+        let task = task_read(&tx, &task_id)?;
+        let run = task_run_read(&tx, run_id)?;
+        tx.commit()?;
+        Ok((task, run))
+    }
+
+    /// Record a run outcome. `awaiting_review` ends the attempt but not the
+    /// task: only an owner review can close it.
+    pub fn task_run_finish(&self, run_id: &str, state: &str, code: Option<&str>, decision: Option<&Value>) -> Result<(Value, Value), StorageError> {
+        if !matches!(state, "needs_you" | "awaiting_review" | "failed" | "cancelled") { return Err(StorageError::InvalidAgent); }
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (task_id, old_state): (String, String) = tx.query_row("SELECT task_id,state FROM task_runs WHERE id=?1", [run_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?.ok_or(StorageError::AgentNotFound)?;
+        if !matches!(old_state.as_str(), "claimed" | "queued" | "running" | "needs_you") { return Err(StorageError::AgentConflict); }
+        let now = task_stamp();
+        let ended = state != "needs_you";
+        let completed = matches!(state, "failed" | "cancelled");
+        tx.execute(
+            "UPDATE task_runs SET state=?2,error_code=?3,decision_json=COALESCE(?4,decision_json),ended_at=CASE WHEN ?5 THEN COALESCE(ended_at,?6) ELSE NULL END,updated_at=?6 WHERE id=?1",
+            params![run_id, state, code, decision.map(Value::to_string), ended, now],
+        )?;
+        tx.execute(
+            "UPDATE tasks SET state=?2,completed_at=CASE WHEN ?3 THEN ?4 ELSE NULL END,version=version+1,updated_at=?4 WHERE id=?1",
+            params![task_id, state, completed, now],
+        )?;
+        task_event_insert(&tx, run_id, &task_id, if ended { "run_finished" } else { "state_changed" }, &now, &json!({
+            "fromState": old_state, "toState": state, "errorCode": code, "at": now, "decision": decision,
+        }))?;
+        let task = task_read(&tx, &task_id)?;
+        let run = task_run_read(&tx, run_id)?;
+        tx.commit()?;
+        Ok((task, run))
+    }
+
+    /// A resolved approval or answered question lets a waiting run continue.
+    pub fn task_run_resume(&self, run_id: &str) -> Result<Option<(Value, Value)>, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (task_id, state): (String, String) = tx.query_row("SELECT task_id,state FROM task_runs WHERE id=?1", [run_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?.ok_or(StorageError::AgentNotFound)?;
+        if state != "needs_you" { tx.commit()?; return Ok(None); }
+        let now = task_stamp();
+        tx.execute("UPDATE task_runs SET state='running',ended_at=NULL,updated_at=?2 WHERE id=?1", params![run_id, now])?;
+        tx.execute("UPDATE tasks SET state='running',completed_at=NULL,version=version+1,updated_at=?2 WHERE id=?1", params![task_id, now])?;
+        task_event_insert(&tx, run_id, &task_id, "state_changed", &now, &json!({"fromState": "needs_you", "toState": "running"}))?;
+        let task = task_read(&tx, &task_id)?;
+        let run = task_run_read(&tx, run_id)?;
+        tx.commit()?;
+        Ok(Some((task, run)))
+    }
+
+    /// Remove an assignment that never started. Only a queued task with an
+    /// unstarted run may be unassigned; a live run must be stopped first.
+    pub fn task_unassign(&self, id: &str, expected: i64) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let task = task_read(&tx, id)?;
+        if task["version"].as_i64() != Some(expected) || task["state"] != "queued" { return Err(StorageError::AgentConflict); }
+        let run: Option<(String, String)> = tx.query_row("SELECT id,state FROM task_runs WHERE task_id=?1 AND state IN ('queued','claimed','running') ORDER BY attempt DESC LIMIT 1", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let (run_id, run_state) = run.ok_or(StorageError::AgentConflict)?;
+        if run_state != "queued" { return Err(StorageError::AgentConflict); }
+        let now = task_stamp();
+        tx.execute("UPDATE task_runs SET state='cancelled',error_code='unassigned',ended_at=?2,updated_at=?2 WHERE id=?1", params![run_id, now])?;
+        tx.execute("UPDATE tasks SET assignee_agent_id=NULL,state='unassigned',queue_position=NULL,version=version+1,updated_at=?2,started_at=NULL,completed_at=NULL WHERE id=?1", params![id, now])?;
+        task_event_insert(&tx, &run_id, id, "unassigned", &now, &json!({"fromState": "queued", "toState": "unassigned", "fromAgentId": task["assigneeAgentId"]}))?;
+        task_compact_queue(&tx, task["assigneeAgentId"].as_str().unwrap_or(""))?;
+        let dto = task_read(&tx, id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    /// Move a queued task within its bot's queue. Every card whose position
+    /// changes gets a version bump, so a stale board row cannot silently
+    /// reorder work it did not read.
+    pub fn task_reorder(&self, id: &str, before_task_id: Option<&str>, expected: i64) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let task = task_read(&tx, id)?;
+        if task["version"].as_i64() != Some(expected) || task["state"] != "queued" { return Err(StorageError::AgentConflict); }
+        let agent_id = task["assigneeAgentId"].as_str().unwrap_or("");
+        let ids = {
+            let mut q = tx.prepare("SELECT id FROM tasks WHERE state='queued' AND assignee_agent_id=?1 ORDER BY queue_position,created_at,id")?;
+            let rows = q.query_map([agent_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let mut ids = ids.into_iter().filter(|candidate| candidate != id).collect::<Vec<_>>();
+        let index = match before_task_id {
+            Some(target) => ids.iter().position(|candidate| candidate == target).ok_or(StorageError::AgentNotFound)?,
+            None => ids.len(),
+        };
+        ids.insert(index, id.to_owned());
+        let now = task_stamp();
+        for (position, task_id) in ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE tasks SET queue_position=?2,version=version+1,updated_at=?3 WHERE id=?1 AND state='queued'",
+                params![task_id, position as i64, now],
+            )?;
+        }
+        // One append-only note on the moved card's own queued run, so the board
+        // history says why its position changed without inventing a run.
+        if let Some(run_id) = tx.query_row("SELECT id FROM task_runs WHERE task_id=?1 AND state='queued' ORDER BY attempt DESC LIMIT 1", [id], |r| r.get::<_, String>(0)).optional()? {
+            task_event_insert(&tx, &run_id, id, "reordered", &now, &json!({"queuePosition": index as i64, "beforeTaskId": before_task_id}))?;
+        }
+        let dto = task_read(&tx, id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    /// Cancel an unstarted task (draft or queued). A running task returns
+    /// conflict and must go through `task_request_stop`.
+    pub fn task_cancel_pending(&self, id: &str, expected: i64) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let task = task_read(&tx, id)?;
+        if task["version"].as_i64() != Some(expected) { return Err(StorageError::AgentConflict); }
+        if !matches!(task["state"].as_str(), Some("unassigned" | "queued")) { return Err(StorageError::AgentConflict); }
+        let now = task_stamp();
+        if let Some((run_id, run_state)) = tx.query_row("SELECT id,state FROM task_runs WHERE task_id=?1 AND state IN ('queued','claimed','running') ORDER BY attempt DESC LIMIT 1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).optional()? {
+            if run_state != "queued" { return Err(StorageError::AgentConflict); }
+            tx.execute("UPDATE task_runs SET state='cancelled',error_code='cancelled',ended_at=?2,updated_at=?2 WHERE id=?1", params![run_id, now])?;
+            task_event_insert(&tx, &run_id, id, "run_finished", &now, &json!({"fromState": "queued", "toState": "cancelled"}))?;
+        }
+        tx.execute("UPDATE tasks SET state='cancelled',queue_position=NULL,completed_at=?2,version=version+1,updated_at=?2 WHERE id=?1", params![id, now])?;
+        if let Some(agent_id) = task["assigneeAgentId"].as_str() { task_compact_queue(&tx, agent_id)?; }
+        let dto = task_read(&tx, id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    /// Durable stop for a live task: the cancellation is recorded first and the
+    /// daemon then cancels the turn. The turn-end path moves the task on. A task
+    /// waiting on an approval (`needs_you`) can be stopped the same way.
+    pub fn task_request_stop(&self, id: &str, expected: i64) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let task = task_read(&tx, id)?;
+        if task["version"].as_i64() != Some(expected) || !matches!(task["state"].as_str(), Some("running" | "needs_you")) { return Err(StorageError::AgentConflict); }
+        let (run_id, run_state): (String, String) = tx.query_row("SELECT id,state FROM task_runs WHERE task_id=?1 AND state IN ('running','needs_you') ORDER BY attempt DESC LIMIT 1", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?.ok_or(StorageError::AgentConflict)?;
+        let now = task_stamp();
+        tx.execute("UPDATE task_runs SET cancel_requested_at=COALESCE(cancel_requested_at,?2),updated_at=?2 WHERE id=?1", params![run_id, now])?;
+        tx.execute("UPDATE tasks SET version=version+1,updated_at=?2 WHERE id=?1", params![id, now])?;
+        task_event_insert(&tx, &run_id, id, "stop_requested", &now, &json!({"fromState": run_state, "toState": "cancelling", "at": now}))?;
+        let dto = task_read(&tx, id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    /// Store the desktop owner's evidence-backed review. Only this call can
+    /// close a task as done; a provider turn ending never does.
+    pub fn task_review(&self, id: &str, run_id: &str, decision: &str, evidence: &str, reviewer: &str, expected: i64) -> Result<(Value, Value), StorageError> {
+        if !["done", "needs_changes", "not_done"].contains(&decision) || !["owner"].contains(&reviewer) { return Err(StorageError::InvalidAgent); }
+        let summary = evidence.trim();
+        if summary.is_empty() || summary.chars().count() > 1200 { return Err(StorageError::InvalidAgent); }
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let task = task_read(&tx, id)?;
+        if task["version"].as_i64() != Some(expected) { return Err(StorageError::AgentConflict); }
+        if !matches!(task["state"].as_str(), Some("awaiting_review" | "needs_you")) { return Err(StorageError::AgentConflict); }
+        let (run_task, run_state, agent_id, rounds): (String, String, Option<String>, i64) = tx.query_row("SELECT task_id,state,assignee_agent_id,correction_rounds FROM task_runs WHERE id=?1", [run_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional()?.ok_or(StorageError::AgentNotFound)?;
+        if run_task != id || !matches!(run_state.as_str(), "awaiting_review" | "needs_you" | "failed") { return Err(StorageError::AgentConflict); }
+        let now = task_stamp();
+        let status = match decision { "done" => "accepted", "needs_changes" => "needs_changes", _ => "rejected" };
+        let review = json!({
+            "status": status, "summary": summary,
+            "evidence": [{"source": "review", "id": run_id, "at": now, "summary": summary}],
+            "at": now, "reviewer": reviewer, "round": rounds + 1,
+        });
+        // `needs_changes` keeps the task in review with the note attached: the
+        // owner decides whether to drop it on a bot again for a fresh attempt.
+        let to_state = match decision { "done" => "done", "needs_changes" => "awaiting_review", _ => "failed" };
+        let run_to = match decision { "done" => "done", "needs_changes" => run_state.as_str(), _ => "failed" };
+        let terminal = to_state != "awaiting_review";
+        tx.execute(
+            "UPDATE task_runs SET state=?2,decision_json=?3,ended_at=CASE WHEN ?4 THEN COALESCE(ended_at,?5) ELSE ended_at END,updated_at=?5 WHERE id=?1",
+            params![run_id, run_to, review.to_string(), terminal, now],
+        )?;
+        tx.execute(
+            "UPDATE tasks SET state=?2,completed_at=CASE WHEN ?3 THEN ?4 ELSE NULL END,version=version+1,updated_at=?4 WHERE id=?1",
+            params![id, to_state, terminal, now],
+        )?;
+        task_event_insert(&tx, run_id, id, "review_decided", &now, &json!({
+            "fromState": task["state"], "toState": to_state, "fromAgentId": agent_id, "toAgentId": agent_id,
+            "reviewer": reviewer, "decision": decision, "review": review,
+        }))?;
+        let task = task_read(&tx, id)?;
+        let run = task_run_read(&tx, run_id)?;
+        tx.commit()?;
+        Ok((task, run))
+    }
+
+    pub fn task_runs_list(&self, id: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        task_run_ids(&c, id)?.iter().map(|run_id| task_run_read(&c, run_id)).collect()
+    }
+
+    pub fn task_run_latest(&self, id: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let run_id: Option<String> = c.query_row("SELECT id FROM task_runs WHERE task_id=?1 ORDER BY attempt DESC LIMIT 1", [id], |r| r.get(0)).optional()?;
+        run_id.map(|run_id| task_run_read(&c, &run_id)).transpose()
+    }
+
+    /// The live run bound to a session, for the turn-end and approval hooks.
+    pub fn task_run_for_session(&self, session_id: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let run_id: Option<String> = c.query_row("SELECT id FROM task_runs WHERE session_id=?1 AND state IN ('running','needs_you') ORDER BY attempt DESC LIMIT 1", [session_id], |r| r.get(0)).optional()?;
+        run_id.map(|run_id| task_run_read(&c, &run_id)).transpose()
+    }
+
+    /// Queued tasks in queue order, optionally for one bot.
+    pub fn task_queued(&self, agent_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let ids = {
+            let mut q = c.prepare("SELECT id FROM tasks WHERE state='queued' AND (?1 IS NULL OR assignee_agent_id=?1) ORDER BY queue_position,created_at,id")?;
+            let rows = q.query_map([agent_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        ids.iter().map(|id| task_read(&c, id)).collect()
+    }
+
+    /// Atomically move one queued run to `claimed` so only one caller can start
+    /// it. `None` means somebody else already claimed or cancelled it.
+    pub fn task_run_claim_queued(&self, run_id: &str) -> Result<Option<(Value, Value)>, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (task_id, state): (String, String) = tx.query_row("SELECT task_id,state FROM task_runs WHERE id=?1", [run_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?.ok_or(StorageError::AgentNotFound)?;
+        if state != "queued" { tx.commit()?; return Ok(None); }
+        let now = task_stamp();
+        tx.execute("UPDATE task_runs SET state='claimed',updated_at=?2 WHERE id=?1", params![run_id, now])?;
+        tx.execute("UPDATE tasks SET state='running',queue_position=NULL,version=version+1,updated_at=?2 WHERE id=?1", params![task_id, now])?;
+        task_event_insert(&tx, run_id, &task_id, "queue_started", &now, &json!({"fromState": "queued", "toState": "running"}))?;
+        let task = task_read(&tx, &task_id)?;
+        let run = task_run_read(&tx, run_id)?;
+        tx.commit()?;
+        Ok(Some((task, run)))
+    }
+
+    /// Runs that hold a task slot: claimed (spawning) or running.
+    pub fn task_running_count(&self) -> Result<i64, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT COUNT(*) FROM task_runs WHERE state IN ('claimed','running')", [], |r| r.get(0))?)
+    }
+
+    /// Startup reconciliation. A claim or a run without an unambiguous live
+    /// session is never respawned: it moves to `needs_you` so the owner can
+    /// decide. Queued work is left queued and resumed once by the daemon.
+    pub fn task_recover_after_restart(&self) -> Result<Vec<Value>, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let rows = {
+            let mut q = tx.prepare("SELECT id,task_id,state FROM task_runs WHERE state IN ('claimed','running')")?;
+            let rows = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let now = task_stamp();
+        let mut changed = Vec::new();
+        for (run_id, task_id, state) in rows {
+            tx.execute("UPDATE task_runs SET state='ambiguous',error_code='restart_ambiguous',ended_at=COALESCE(ended_at,?2),updated_at=?2 WHERE id=?1", params![run_id, now])?;
+            tx.execute("UPDATE tasks SET state='needs_you',completed_at=NULL,version=version+1,updated_at=?2 WHERE id=?1 AND state IN ('running','queued')", params![task_id, now])?;
+            task_event_insert(&tx, &run_id, &task_id, "restart_ambiguous", &now, &json!({"fromState": state, "toState": "ambiguous", "errorCode": "restart_ambiguous"}))?;
+            changed.push(task_read(&tx, &task_id)?);
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
     // ── Scheduled automations ──────────────────────────────────────────────
     /// Insert an automation after full validation. New automations are
     /// disabled unless the request explicitly sets `enabled:true`; run
@@ -8073,5 +8697,227 @@ mod p8_watchdog_tests {
         let due = db.watchdog_due_sessions("2026-10-18T12:00:01.000Z").unwrap();
         assert_eq!(due, vec!["due".to_string()], "only a due, unarchived limited session is swept");
         assert!(db.watchdog_due_sessions("2026-10-18T11:59:59.000Z").unwrap().is_empty(), "a window that has not opened is not swept");
+    }
+}
+
+#[cfg(test)]
+mod task_ledger_tests {
+    use super::*;
+
+    fn ledger() -> (Storage, String, String) {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"r","provider":"codex"})).unwrap();
+        let (agent, _) = db.agent_create(&json!({"name":"Worker","runtimeId":"r"})).unwrap();
+        let agent_id = agent["id"].as_str().unwrap().to_owned();
+        (db, "r".into(), agent_id)
+    }
+
+    fn draft(db: &Storage, extra: Value) -> Value {
+        let mut input = json!({"title":"Review the ledger","brief":"Inspect the files","doneGoal":"Find the issue","reportBack":"Summarise"});
+        if let (Some(dst), Some(src)) = (input.as_object_mut(), extra.as_object()) { for (key, value) in src { dst.insert(key.clone(), value.clone()); } }
+        db.task_create(&input).unwrap()
+    }
+
+    fn bind(db: &Storage, run_id: &str, agent_id: &str, session: &str) {
+        db.create_session_for_agent(session, "r", "codex", ".", "Task", Some(agent_id)).unwrap();
+        db.task_run_bind_session(run_id, session).unwrap();
+    }
+
+    #[test]
+    fn task_draft_is_unassigned_editable_and_invents_no_timestamps() {
+        let (db, _, _) = ledger();
+        let task = draft(&db, json!({"estimateMinutes":30}));
+        let id = task["id"].as_str().unwrap();
+        assert_eq!(task["state"], "unassigned");
+        assert_eq!(task["version"], 1);
+        assert_eq!(task["assigneeAgentId"], Value::Null);
+        assert_eq!(task["estimateMinutes"], 30);
+        assert_eq!(task["maxRuntimeSecs"], 1800);
+        assert_eq!(task["supervisionPolicy"], "report_only");
+        assert_eq!(task["rootTaskId"], id);
+        for field in ["assignedAt", "startedAt", "completedAt"] { assert_eq!(task[field], Value::Null, "{field} is unknown until observed"); }
+        assert!(db.task_runs_list(id).unwrap().is_empty(), "a draft has no run");
+        // Draft edits bump the version; a stale edit conflicts.
+        let edited = db.task_update(id, 1, &json!({"title":"Edited"})).unwrap();
+        assert_eq!(edited["title"], "Edited");
+        assert_eq!(edited["version"], 2);
+        assert!(matches!(db.task_update(id, 1, &json!({"title":"Stale"})), Err(StorageError::AgentConflict)));
+        assert!(matches!(db.task_update(id, 2, &json!({"title":" "})), Err(StorageError::InvalidAgent)));
+        assert!(matches!(db.task_update(id, 2, &json!({"projectId":"missing-project"})), Err(StorageError::AgentNotFound)));
+        assert_eq!(db.task_list(Some("unassigned"), None, None, None).unwrap().len(), 1);
+        assert!(matches!(db.task_list(Some("bogus"), None, None, None), Err(StorageError::InvalidAgent)));
+        let child = draft(&db, json!({"parentTaskId":id}));
+        assert_eq!(child["rootTaskId"], id);
+        assert_eq!(db.task_list(None, None, None, Some(id)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn task_dispatch_is_idempotent_and_queues_in_order() {
+        let (db, _, agent) = ledger();
+        let first = draft(&db, json!({}));
+        let id = first["id"].as_str().unwrap();
+        let (claimed, run, replayed) = db.task_dispatch_claim(id, &agent, 1, "drop-1", false, None).unwrap();
+        assert!(!replayed);
+        assert_eq!(claimed["state"], "running");
+        assert_eq!(run["state"], "claimed");
+        assert_eq!(run["attempt"], 1);
+        assert_eq!(run["startedAt"], Value::Null, "a claim is not a start");
+        assert!(claimed["assignedAt"].is_string());
+        assert_eq!(claimed["startedAt"], Value::Null);
+        // The same key returns the same run and never claims twice.
+        let (again, same_run, replayed) = db.task_dispatch_claim(id, &agent, 1, "drop-1", false, None).unwrap();
+        assert!(replayed);
+        assert_eq!(again["id"], id);
+        assert_eq!(same_run["id"], run["id"]);
+        assert_eq!(db.task_runs_list(id).unwrap().len(), 1);
+        // A key already used for another task conflicts.
+        let other = draft(&db, json!({}));
+        assert!(matches!(db.task_dispatch_claim(other["id"].as_str().unwrap(), &agent, 1, "drop-1", false, None), Err(StorageError::AgentConflict)));
+        // Binding is the observed start.
+        bind(&db, run["id"].as_str().unwrap(), &agent, "s-start");
+        let started = db.task_get(id).unwrap();
+        assert_eq!(started["state"], "running");
+        assert_eq!(started["queuePosition"], Value::Null);
+        assert!(started["startedAt"].is_string());
+        assert!(db.task_run_latest(id).unwrap().unwrap()["startedAt"].is_string());
+        // Queued drops take positions in order.
+        let queued_a = db.task_create(&json!({"title":"Queued A"})).unwrap();
+        let (_, run_a, _) = db.task_dispatch_claim(queued_a["id"].as_str().unwrap(), &agent, 1, "drop-a", true, Some("bot_busy")).unwrap();
+        assert_eq!(run_a["state"], "queued");
+        assert_eq!(db.task_get(queued_a["id"].as_str().unwrap()).unwrap()["queuePosition"], 0);
+        let queued_b = db.task_create(&json!({"title":"Queued B"})).unwrap();
+        db.task_dispatch_claim(queued_b["id"].as_str().unwrap(), &agent, 1, "drop-b", true, Some("bot_busy")).unwrap();
+        assert_eq!(db.task_get(queued_b["id"].as_str().unwrap()).unwrap()["queuePosition"], 1);
+        // Reorder moves B above A and bumps every touched card's version.
+        let moved = db.task_reorder(queued_b["id"].as_str().unwrap(), Some(queued_a["id"].as_str().unwrap()), 2).unwrap();
+        assert_eq!(moved["queuePosition"], 0);
+        assert_eq!(moved["version"], 3);
+        assert_eq!(db.task_get(queued_a["id"].as_str().unwrap()).unwrap()["queuePosition"], 1);
+        assert_eq!(db.task_get(queued_a["id"].as_str().unwrap()).unwrap()["version"], 3, "a shifted card is re-read before it is moved");
+        assert_eq!(db.task_queued(Some(&agent)).unwrap()[0]["id"], queued_b["id"]);
+        // Only one caller can start a queued run.
+        let (started_task, started_run) = db.task_run_claim_queued(run_a["id"].as_str().unwrap()).unwrap().unwrap();
+        assert_eq!(started_run["state"], "claimed");
+        assert_eq!(started_task["state"], "running");
+        assert!(db.task_run_claim_queued(run_a["id"].as_str().unwrap()).unwrap().is_none());
+        assert_eq!(db.task_running_count().unwrap(), 2, "claimed and running both hold a slot");
+    }
+
+    #[test]
+    fn task_unassign_cancel_and_stop_follow_the_state_rules() {
+        let (db, _, agent) = ledger();
+        let queued = draft(&db, json!({}));
+        let queued_id = queued["id"].as_str().unwrap();
+        let (_, queued_run, _) = db.task_dispatch_claim(queued_id, &agent, 1, "unassign-key", true, Some("global_limit")).unwrap();
+        let unassigned = db.task_unassign(queued_id, 2).unwrap();
+        assert_eq!(unassigned["state"], "unassigned");
+        assert_eq!(unassigned["assigneeAgentId"], Value::Null);
+        assert_eq!(unassigned["queuePosition"], Value::Null);
+        assert_eq!(db.task_run_latest(queued_id).unwrap().unwrap()["state"], "cancelled");
+        assert!(matches!(db.task_unassign(queued_id, 3), Err(StorageError::AgentConflict)), "nothing is assigned any more");
+        assert_eq!(queued_run["id"], db.task_runs_list(queued_id).unwrap()[0]["id"]);
+        // Cancel accepts a draft and a queued task, never a running one.
+        let cancelled = db.task_cancel_pending(queued_id, 3).unwrap();
+        assert_eq!(cancelled["state"], "cancelled");
+        assert!(cancelled["completedAt"].is_string());
+        assert!(matches!(db.task_cancel_pending(queued_id, 4), Err(StorageError::AgentConflict)));
+        let running = draft(&db, json!({}));
+        let running_id = running["id"].as_str().unwrap();
+        let (_, run, _) = db.task_dispatch_claim(running_id, &agent, 1, "stop-key", false, None).unwrap();
+        bind(&db, run["id"].as_str().unwrap(), &agent, "s-stop");
+        assert!(matches!(db.task_cancel_pending(running_id, 3), Err(StorageError::AgentConflict)), "a running task must be stopped");
+        let stopping = db.task_request_stop(running_id, 3).unwrap();
+        assert_eq!(stopping["state"], "running");
+        assert_eq!(stopping["version"], 4);
+        assert!(db.task_run_latest(running_id).unwrap().unwrap()["cancelRequestedAt"].is_string());
+        let (finished, run) = db.task_run_finish(run["id"].as_str().unwrap(), "cancelled", Some("cancelled"), None).unwrap();
+        assert_eq!(finished["state"], "cancelled");
+        assert!(finished["completedAt"].is_string());
+        assert!(run["endedAt"].is_string());
+        assert!(matches!(db.task_review(running_id, run["id"].as_str().unwrap(), "done", "x", "owner", 5), Err(StorageError::AgentConflict)), "a cancelled task is not reviewable");
+    }
+
+    #[test]
+    fn task_run_events_are_append_only() {
+        let (db, _, agent) = ledger();
+        let task = draft(&db, json!({}));
+        let id = task["id"].as_str().unwrap();
+        let (_, run, _) = db.task_dispatch_claim(id, &agent, 1, "events-key", false, None).unwrap();
+        let run_id = run["id"].as_str().unwrap().to_owned();
+        bind(&db, &run_id, &agent, "s-events");
+        db.task_run_finish(&run_id, "awaiting_review", None, Some(&json!({"summary":"turn ended"}))).unwrap();
+        let events = db.task_runs_list(id).unwrap()[0]["events"].as_array().cloned().unwrap();
+        assert_eq!(events.iter().map(|event| event["type"].as_str().unwrap()).collect::<Vec<_>>(), vec!["dispatch_claimed", "session_bound", "run_finished"]);
+        let first = events[0].clone();
+        db.task_review(id, &run_id, "needs_changes", "Add the missing check.", "owner", 4).unwrap();
+        let after = db.task_runs_list(id).unwrap()[0]["events"].as_array().cloned().unwrap();
+        assert_eq!(after.len(), events.len() + 1, "a review appends; it never rewrites history");
+        assert_eq!(after[0], first);
+        assert_eq!(after.last().unwrap()["type"], "review_decided");
+    }
+
+    #[test]
+    fn task_review_needs_evidence_and_only_done_closes_the_task() {
+        let (db, _, agent) = ledger();
+        let task = draft(&db, json!({}));
+        let id = task["id"].as_str().unwrap();
+        let (_, run, _) = db.task_dispatch_claim(id, &agent, 1, "review-key", false, None).unwrap();
+        let run_id = run["id"].as_str().unwrap().to_owned();
+        bind(&db, &run_id, &agent, "s-review");
+        let (awaiting, _) = db.task_run_finish(&run_id, "awaiting_review", None, Some(&json!({"summary":"Provider turn ended; completion requires review.","evidence":[{"source":"turn","id":"turn-1"}]}))).unwrap();
+        assert_eq!(awaiting["state"], "awaiting_review");
+        assert_eq!(awaiting["completedAt"], Value::Null, "a finished turn is not completion");
+        assert!(matches!(db.task_review(id, &run_id, "done", "   ", "owner", 4), Err(StorageError::InvalidAgent)));
+        assert!(matches!(db.task_review(id, &run_id, "done", "Verified.", "manager", 4), Err(StorageError::InvalidAgent)), "this slice accepts the desktop owner only");
+        assert!(matches!(db.task_review(id, &run_id, "maybe", "Verified.", "owner", 4), Err(StorageError::InvalidAgent)));
+        let (kept, kept_run) = db.task_review(id, &run_id, "needs_changes", "The report names no evidence.", "owner", 4).unwrap();
+        assert_eq!(kept["state"], "awaiting_review");
+        assert_eq!(kept["version"], 5);
+        assert_eq!(kept_run["decision"]["status"], "needs_changes");
+        assert_eq!(kept_run["decision"]["evidence"][0]["source"], "review");
+        let (done, done_run) = db.task_review(id, &run_id, "done", "The goal is met by turn-1.", "owner", 5).unwrap();
+        assert_eq!(done["state"], "done");
+        assert!(done["completedAt"].is_string());
+        assert_eq!(done_run["state"], "done");
+        assert_eq!(done_run["decision"]["reviewer"], "owner");
+        assert!(matches!(db.task_review(id, &run_id, "done", "Again.", "owner", 6), Err(StorageError::AgentConflict)));
+        // A stale version from another board card conflicts.
+        let not_done_task = draft(&db, json!({}));
+        let nd_id = not_done_task["id"].as_str().unwrap();
+        let (_, nd_run, _) = db.task_dispatch_claim(nd_id, &agent, 1, "nd-key", false, None).unwrap();
+        let nd_run_id = nd_run["id"].as_str().unwrap().to_owned();
+        bind(&db, &nd_run_id, &agent, "s-nd");
+        db.task_run_finish(&nd_run_id, "awaiting_review", None, None).unwrap();
+        assert!(matches!(db.task_review(nd_id, &nd_run_id, "not_done", "Not done: no changes.", "owner", 2), Err(StorageError::AgentConflict)));
+        let (rejected, rejected_run) = db.task_review(nd_id, &nd_run_id, "not_done", "Not done: no changes.", "owner", 4).unwrap();
+        assert_eq!(rejected["state"], "failed");
+        assert_eq!(rejected_run["decision"]["status"], "rejected");
+        assert!(rejected["completedAt"].is_string());
+    }
+
+    #[test]
+    fn task_restart_recovery_marks_ambiguous_work_and_never_duplicates() {
+        let (db, _, agent) = ledger();
+        let claimed_task = draft(&db, json!({}));
+        let claimed_id = claimed_task["id"].as_str().unwrap();
+        let (_, claimed_run, _) = db.task_dispatch_claim(claimed_id, &agent, 1, "restart-claim", false, None).unwrap();
+        let running_task = draft(&db, json!({}));
+        let running_id = running_task["id"].as_str().unwrap();
+        let (_, running_run, _) = db.task_dispatch_claim(running_id, &agent, 1, "restart-running", false, None).unwrap();
+        bind(&db, running_run["id"].as_str().unwrap(), &agent, "s-restart");
+        let queued_task = draft(&db, json!({}));
+        let queued_id = queued_task["id"].as_str().unwrap();
+        db.task_dispatch_claim(queued_id, &agent, 1, "restart-queued", true, Some("global_limit")).unwrap();
+        let changed = db.task_recover_after_restart().unwrap();
+        assert_eq!(changed.len(), 2);
+        for id in [claimed_id, running_id] {
+            assert_eq!(db.task_get(id).unwrap()["state"], "needs_you");
+            let run = db.task_run_latest(id).unwrap().unwrap();
+            assert_eq!(run["state"], "ambiguous");
+            assert_eq!(run["errorCode"], "restart_ambiguous");
+        }
+        assert_eq!(db.task_get(queued_id).unwrap()["state"], "queued", "queued work resumes instead of being abandoned");
+        assert_eq!(db.task_run_latest(claimed_id).unwrap().unwrap()["id"], claimed_run["id"], "no duplicate run is created");
+        assert!(db.task_recover_after_restart().unwrap().is_empty(), "recovery runs once");
     }
 }

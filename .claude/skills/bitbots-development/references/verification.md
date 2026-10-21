@@ -1,6 +1,6 @@
 # Verification
 
-Last reviewed: 2026-10-19 (Rust 1.94.0 stable, Node 24, OpenCode 2.0.32, Codex CLI 0.163). Update this file when a gate, tool or environment fact changes.
+Last reviewed: 2026-10-21 (Rust 1.94.0 stable, Node 24, OpenCode 2.0.32, Codex CLI 0.163). Update this file when a gate, tool or environment fact changes.
 
 ## Gates (run all before calling work done)
 
@@ -29,6 +29,8 @@ cargo test -p bloblex-desktop --lib
 ## The browser preview
 
 `npx vite --config apps/desktop/vite.preview.config.ts apps/desktop --port 5174 --strictPort --host 127.0.0.1` (the Claude desktop app has this as the `desktop-preview` launch config). It swaps `tauri.ts` for `preview/fixtureBridge.ts` (fixture bots and conversations, no daemon).
+
+The local launch file `.claude/launch.json` (git-ignored, so it is not in the repository) has a `board-preview` configuration on port 5176 for the worktree at `D:/fx61` (branch `exp/board-ui`). Its board data comes from `apps/desktop/src/preview/fixtureTasks.ts`, a preview-only ledger that mimics the task contract, so the board checks run without the daemon.
 
 Useful URLs: `/` (main window; add `?style=bitbots|blobots|legacy|pop|dot`, `&theme=light|dark`, `&wallpaper=`, `&glass=`, `&font=`, `&accent=%23rrggbb`, `&density=`), `/?preview-settings` (settings sheet), `/?companion&mode=home&view=chat|activity|settings`, `/preview.html` (bot art sheet; `?art=robot|robot-flat|robot-pop|robot-dot|blob|painted`), `/launch-preview.html?fixture=in-progress|onboarding-step-1`, `/dictation-preview.html`, `/gallery.html`.
 

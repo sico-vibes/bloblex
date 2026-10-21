@@ -1,6 +1,17 @@
 # Pipeline: the Director, lanes, worktrees and releases
 
-Last reviewed: 2026-10-19. The governing rules are the top amendments in `AGENTS.md`; this file is the practical how-to. When the owner changes the arrangement, update both.
+Last reviewed: 2026-10-21. The governing rules are the top amendments in `AGENTS.md`; this file is the practical how-to. When the owner changes the arrangement, update both.
+
+## Owner resume: expansion, 21 October 2026
+
+The owner resumed the product expansion on 21 October 2026 and set a three-lane arrangement for it. This section replaces the paused-expansion override of the same date. It applies to the expansion work until the owner says otherwise.
+
+- **Director** (Claude): all UI and UX.
+- **OpenCode DeepSeek v4.1 flash (high):** all backend and tests.
+- **Claude Haiku:** all documentation.
+- Lanes never commit. The Director reviews every diff, runs the gates and commits.
+- Worktrees: `D:\fx60` (backend, branch `exp/tasks-backend`), `D:\fx61` (UI, branch `exp/board-ui`), `D:\fx62` (docs, branch `exp/docs`).
+- The Codex worktrees under `C:\Users\SicoZ\.codex\worktrees` are read-only reference. Do not edit or commit there.
 
 ## Roles (current arrangement, FIX40 amendment of 19 October 2026)
 

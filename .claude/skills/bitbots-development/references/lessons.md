@@ -7,6 +7,23 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 - **Root cause:** "the bot has a live turn" is read from `active_turns`. The event loop removes the entry when a turn really ends; a test that calls the after-turn hook itself never does.
 - **Avoid:** in tests, call the hook and then `st.active_turns.lock().await.remove(session)` (see `end_turn` in `main.rs` `mod task_board_tests`), or let the fake adapter emit the turn-end event.
 
+## 2026-10-21 · UI · A new page's segmented control was unstyled in the main window
+- **Symptom:** a new Tasks page used the `segmented` class from `SegmentedControl.tsx`; in the main window it rendered as plain stacked buttons.
+- **Root cause:** the main window has no unscoped base style for `.segmented`. The only unscoped rule is in `companion.css` (companion window). The main window gets styling only from the Legacy, Pop and Dot look rules, each scoped to its own look (`bitbots.css`, `themes/pop.css`, `themes/dot.css`), so the default Frost look had none.
+- **Fix:** `ui/tasks.css` adds a scoped base rule, `.tasks-page .segmented`.
+- **Avoid:** before using a shared class in a new page, grep for its rule (`rg -n "\.segmented" apps/desktop/src`). If only the companion or a look styles it, add a scoped base rule in the page's own stylesheet.
+
+## 2026-10-21 · Process · The Bash tool rejects long heredocs with apostrophes
+- **Symptom:** a `cat > file <<'EOF'` heredoc that contained apostrophes failed with "unexpected EOF while looking for matching quote".
+- **Root cause:** the Bash tool's parser mis-reads quotes inside long heredoc bodies.
+- **Avoid:** write such files with the Write tool, or write a script file and run it. Do not rely on a long heredoc with quotes in it.
+
+## 2026-10-21 · Verification · Browser pane screenshots can show the previous state
+- **Symptom:** a screenshot showed the page before the last change, and a viewport emulation larger than the pane rendered the page scaled into one corner.
+- **Root cause:** the pane captures before the new render settles, and an emulated size larger than the pane is scaled down to fit.
+- **Fix:** wait about a second and take the screenshot again. Reset the emulation with the `desktop` preset and check at the pane's own size.
+- **Avoid:** never judge a layout from one screenshot taken straight after a change, and never judge it from an emulated size larger than the pane.
+
 ## 2026-10-19 · Process · A piped gate hid a failure before a push
 - **Symptom:** the Director ran `git merge ... && node scripts/docs-library.mjs check 2>&1 | tail -1 && ... && git push`; the check failed, but `main` was pushed anyway (`917f730`).
 - **Root cause:** in a pipe, the exit status is the last command's (`tail`, which succeeds), so `&&` never saw the failure.

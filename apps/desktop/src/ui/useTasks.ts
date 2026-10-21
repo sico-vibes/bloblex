@@ -34,9 +34,13 @@ export function useTasks(active: boolean, connected: boolean) {
     let cancelled = false
     void listenForDaemonEvents((event) => {
       if (event.type === 'task.changed' || event.type === 'task.run.finished' || event.type === 'task.run.changed') {
-        const task = (event.payload as { task?: BoardTask } | undefined)?.task
-        if (task?.id) setTasks((current) => current.some((item) => item.id === task.id) ? current.map((item) => item.id === task.id ? task : item) : [task, ...current])
-        else void load()
+        // The daemon's task events carry identifiers and lifecycle only (no title or brief): patch the card we have, or reload for a task we have not seen.
+        const patch = (event.payload as { task?: Partial<BoardTask> } | undefined)?.task
+        if (patch?.id) {
+          let known = false
+          setTasks((current) => current.map((item) => { if (item.id !== patch.id) return item; known = true; return (patch.version ?? 0) >= item.version ? { ...item, ...patch } as BoardTask : item }))
+          if (!known) void load()
+        } else void load()
       }
     }).then((unlisten) => { if (cancelled) unlisten(); else off = unlisten })
     return () => { cancelled = true; off?.() }

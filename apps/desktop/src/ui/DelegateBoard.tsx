@@ -76,7 +76,7 @@ export function DelegateBoard({ tasks, agents, projects, nowMs, connected, busy,
               <span className="delegate-lane-name"><strong>{agent.name}</strong><small>{runtimeName(agent)}</small></span>
               <span className="delegate-badges"><span className={`delegate-availability tone-${availability.tone}`}>{availability.label}</span>{availability.queued > 0 && <span className="delegate-availability">{availability.queued} queued</span>}</span>
             </header>
-            {lane.length > 0 && <ul className="delegate-chips">{lane.map((task) => <li key={task.id}><button type="button" className={`delegate-chip tone-${task.state}`} onClick={() => onOpen(task)}><span className="delegate-dot" aria-hidden="true" /><span className="delegate-chip-title">{task.title}</span><small>{task.state === 'queued' && task.queuePosition ? `Queued ${task.queuePosition}` : TASK_STATE_LABEL[task.state]}</small></button></li>)}</ul>}
+            {lane.length > 0 && <ul className="delegate-chips">{lane.map((task) => <li key={task.id}><button type="button" className={`delegate-chip tone-${task.state}`} onClick={() => onOpen(task)}><span className="delegate-dot" aria-hidden="true" /><span className="delegate-chip-title">{task.title}</span><small>{task.state === 'queued' && task.queuePosition != null ? `Queued ${task.queuePosition + 1}` : TASK_STATE_LABEL[task.state]}</small></button></li>)}</ul>}
           </section>
         </li>
       })}</ul>}

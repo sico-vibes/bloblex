@@ -17,7 +17,7 @@ describe('task model', () => {
   })
 
   it('orders a lane: needs you, review, working, then the queue in order', () => {
-    const tasks = [task('q2', 'queued', { queuePosition: 2 }), task('run', 'running'), task('q1', 'queued', { queuePosition: 1 }), task('rev', 'awaiting_review'), task('need', 'needs_you'), task('done', 'done'), task('other', 'running', { assigneeAgentId: 'a2' })]
+    const tasks = [task('q2', 'queued', { queuePosition: 1 }), task('run', 'running'), task('q1', 'queued', { queuePosition: 0 }), task('rev', 'awaiting_review'), task('need', 'needs_you'), task('done', 'done'), task('other', 'running', { assigneeAgentId: 'a2' })]
     expect(laneTasks(tasks, 'a1').map((item) => item.id)).toEqual(['need', 'rev', 'run', 'q1', 'q2'])
   })
 
@@ -36,7 +36,7 @@ describe('task model', () => {
 
   it('words the dispatch result and elapsed time plainly', () => {
     expect(dispatchMessage('started', 'Codex')).toBe('Started on Codex.')
-    expect(dispatchMessage('queued', 'Codex', 2, 'bot_busy')).toBe('Codex is busy. Queued at position 2 for Codex.')
+    expect(dispatchMessage('queued', 'Codex', 1, 'bot_busy')).toBe('Codex is busy. Queued at position 2 for Codex.')
     expect(dispatchMessage('queued', 'Codex', null, 'global_pause')).toBe('Tasks are paused. Queued for Codex.')
     expect(elapsedLabel('2026-10-21T11:00:00Z', null, NOW)).toBe('1 h')
     expect(elapsedLabel(null, null, NOW)).toBeNull()

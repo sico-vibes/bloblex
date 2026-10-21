@@ -23,7 +23,7 @@ const tasks: BoardTask[] = [
   draft('task-crm', 'Clean up CRM duplicates', '', 18, 95),
   assigned('task-release', 'Ship the pricing relaunch', 'agent-manager', 'running', { startedAt: minutesAgo(70), assignedAt: minutesAgo(72) }),
   assigned('task-refactor', 'Refactor auth module', 'agent-codex', 'running', { estimateMinutes: 30, startedAt: minutesAgo(12), assignedAt: minutesAgo(16), queuePosition: null, parentTaskId: 'task-release' }),
-  assigned('task-stripe', 'Upgrade Stripe SDK', 'agent-codex', 'queued', { queuePosition: 1, assignedAt: minutesAgo(9), parentTaskId: 'task-release' }),
+  assigned('task-stripe', 'Upgrade Stripe SDK', 'agent-codex', 'queued', { queuePosition: 0, assignedAt: minutesAgo(9), parentTaskId: 'task-release' }),
   assigned('task-competitor', 'Competitor scan', 'agent-claude', 'awaiting_review', { startedAt: minutesAgo(35), completedAt: minutesAgo(6), assignedAt: minutesAgo(38), parentTaskId: 'task-release' }),
   assigned('task-copy', 'Confirm the copy direction', 'agent-opencode', 'needs_you', { startedAt: minutesAgo(18), assignedAt: minutesAgo(20), parentTaskId: 'task-release' }),
   assigned('task-lint', 'Fix lint warnings', 'agent-claude', 'done', { startedAt: minutesAgo(200), completedAt: minutesAgo(180), updatedAt: minutesAgo(180), assignedAt: minutesAgo(203) }),
@@ -66,7 +66,7 @@ export function handleFixtureTaskRpc(method: string, params: Record<string, unkn
       const busy = tasks.some((item) => item.assigneeAgentId === agentId && item.state === 'running')
       const queued = tasks.filter((item) => item.assigneeAgentId === agentId && item.state === 'queued').length
       const started = !busy
-      bump(task, { assigneeAgentId: agentId, assignedAt: new Date().toISOString(), state: started ? 'running' : 'queued', queuePosition: started ? null : queued + 1, startedAt: started ? new Date().toISOString() : null })
+      bump(task, { assigneeAgentId: agentId, assignedAt: new Date().toISOString(), state: started ? 'running' : 'queued', queuePosition: started ? null : queued, startedAt: started ? new Date().toISOString() : null })
       const run: BoardTaskRun = { id: `run-${task.id}-1`, taskId: task.id, attempt: 1, sessionId: null, assigneeAgentId: agentId, assigneeAgentName: null, state: task.state, startedAt: task.startedAt ?? null }
       runs[task.id] = [run]
       publish(task)

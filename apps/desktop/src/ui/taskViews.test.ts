@@ -39,7 +39,7 @@ describe('timeline bars', () => {
   })
 
   it('shows a queued task as a waiting bar up to now, and ignores another bot\'s runs', () => {
-    const tasks = [task('q', 'queued', { assignedAt: iso(9), queuePosition: 1 }), task('x', 'running')]
+    const tasks = [task('q', 'queued', { assignedAt: iso(9), queuePosition: 0 }), task('x', 'running')]
     const runs = { x: [run('x', 1, 'running', 5, null, 'a2')] }
     const { bars } = timelineBars(tasks, runs, 'a1', from, NOW)
     expect(bars).toHaveLength(1)

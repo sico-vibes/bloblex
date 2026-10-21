@@ -32,7 +32,7 @@ const drop = (lane: HTMLElement, id: string) => act(() => { lane.dispatchEvent(w
 
 describe('DelegateBoard', () => {
   it('lists drafts on the left and one lane per live bot', () => {
-    board([task('d1', 'unassigned'), task('r1', 'running', { estimateMinutes: 30, startedAt: '2026-10-21T11:48:00Z' }), task('q1', 'queued', { queuePosition: 1 }), task('x', 'done')])
+    board([task('d1', 'unassigned'), task('r1', 'running', { estimateMinutes: 30, startedAt: '2026-10-21T11:48:00Z' }), task('q1', 'queued', { queuePosition: 0 }), task('x', 'done')])
     expect(all('.delegate-draft')).toHaveLength(1)
     expect(all('.delegate-draft')[0].textContent).toContain('Task d1')
     expect(all('.delegate-lane').map((lane) => lane.getAttribute('aria-label'))).toEqual(['Codex, Busy · 18 min left', 'Claude, Free'])

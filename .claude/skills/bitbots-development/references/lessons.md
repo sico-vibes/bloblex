@@ -8,7 +8,7 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 - **Avoid:** in tests, call the hook and then `st.active_turns.lock().await.remove(session)` (see `end_turn` in `main.rs` `mod task_board_tests`), or let the fake adapter emit the turn-end event.
 
 ## 2026-10-21 · UI · A new page's segmented control was unstyled in the main window
-- **Symptom:** a new Tasks page used the `segmented` class from `SegmentedControl.tsx`; in the main window it rendered as plain stacked buttons.
+- **Symptom:** a new Tasks page used the shared `segmented` class; in the main window it rendered as plain stacked buttons.
 - **Root cause:** the main window has no unscoped base style for `.segmented`. The only unscoped rule is in `companion.css` (companion window). The main window gets styling only from the Legacy, Pop and Dot look rules, each scoped to its own look (`bitbots.css`, `themes/pop.css`, `themes/dot.css`), so the default Frost look had none.
 - **Fix:** `ui/tasks.css` adds a scoped base rule, `.tasks-page .segmented`.
 - **Avoid:** before using a shared class in a new page, grep for its rule (`rg -n "\.segmented" apps/desktop/src`). If only the companion or a look styles it, add a scoped base rule in the page's own stylesheet.

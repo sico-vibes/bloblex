@@ -1,8 +1,8 @@
 // Pure helpers for the task board: labels, grouping and the honest "how long" text. Times come only from observed timestamps.
 import type { Agent, BoardTask, TaskState } from '../types'
 
-export const TASK_STATE_LABEL: Record<TaskState, string> = {
-  unassigned: 'Draft', queued: 'Queued', running: 'Working', needs_you: 'Needs you', awaiting_review: 'Ready for review', done: 'Done', failed: 'Failed', cancelled: 'Cancelled',
+export const TASK_STATE_LABEL: Record<string, string> = {
+  claimed: 'Starting', ambiguous: 'Needs a look', unassigned: 'Draft', queued: 'Queued', running: 'Working', needs_you: 'Needs you', awaiting_review: 'Ready for review', done: 'Done', failed: 'Failed', cancelled: 'Cancelled',
 }
 
 export const FINISHED_STATES: readonly TaskState[] = ['done', 'failed', 'cancelled']
@@ -53,10 +53,13 @@ export function elapsedLabel(from: string | null | undefined, to: string | null 
   return `${hours} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`
 }
 
+/** The queue is numbered from 0 on the wire; show it from 1. */
+export const queueLabel = (position: number | null | undefined) => position == null ? null : position + 1
+
 export function dispatchMessage(disposition: 'started' | 'queued', agent: string, position?: number | null, reason?: string | null): string {
   if (disposition === 'started') return `Started on ${agent}.`
   const why = reason === 'global_pause' ? 'Tasks are paused' : reason === 'global_limit' ? 'The task limit is reached' : `${agent} is busy`
-  return `${why}. Queued${position ? ` at position ${position}` : ''} for ${agent}.`
+  return `${why}. Queued${position != null ? ` at position ${position + 1}` : ''} for ${agent}.`
 }
 
 export function newIdempotencyKey(taskId: string): string {

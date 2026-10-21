@@ -1,6 +1,7 @@
 // Development-only stand-in for src/tauri.ts, wired by vite.preview.config.ts
 // so the real App can be inspected in a browser without the daemon. Every
 // value below is a visual fixture, not product data.
+import { handleFixtureTaskRpc } from './fixtureTasks'
 import { EXPERIMENTS } from '../ui/experiments'
 import type { Agent, DaemonEvent, MessageMeta, PermissionRequest, Project, Runtime, Session, Snapshot } from '../types'
 import { answerUsageAnalytics } from '../ui/analyticsFixtures'
@@ -550,6 +551,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     notifyFixtureDaemon('message.reactions.changed', payload)
     return { reactions: message.reactions, selected } as T
   }
+  if (typeof method === 'string' && method.startsWith('task.')) return handleFixtureTaskRpc(method, params, notifyFixtureDaemon, rpcError) as T
   if (typeof method === 'string' && method.startsWith('automation.')) {
     const find = () => fixtureAutomations.find((item) => item.id === params.id)
     const publish = (item: Record<string, unknown>) => notifyFixtureDaemon('automation.changed', { automation: { ...item } })

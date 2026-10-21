@@ -615,3 +615,43 @@ export function formatUnknownSafe(value: unknown, fallback: string) {
 export function isPermissionReplyAllowed(permission: PermissionRequest, choice: string) {
   return Array.isArray(permission.choices) && permission.choices.includes(choice)
 }
+
+/** Durable board tasks (docs/history/expansion-v2/tasks-contract.md). A task is not a conversation; each attempt is a run. */
+export type TaskState = 'unassigned' | 'queued' | 'running' | 'needs_you' | 'awaiting_review' | 'done' | 'failed' | 'cancelled'
+export type TaskSupervisionPolicy = 'report_only' | 'bounded' | 'manager_completes'
+export interface BoardTask extends JsonRecord {
+  id: string
+  title: string
+  brief: string
+  doneGoal: string
+  reportBack: string
+  projectId: string | null
+  sourceUrl?: string | null
+  originSessionId?: string | null
+  parentTaskId?: string | null
+  rootTaskId?: string | null
+  assigneeAgentId: string | null
+  supervisionPolicy: TaskSupervisionPolicy
+  estimateMinutes?: number | null
+  maxRuntimeSecs?: number | null
+  state: TaskState
+  queuePosition?: number | null
+  version: number
+  createdAt: string
+  updatedAt: string
+  assignedAt?: string | null
+  startedAt?: string | null
+  completedAt?: string | null
+}
+export interface BoardTaskRun extends JsonRecord {
+  id: string
+  taskId: string
+  attempt: number
+  sessionId?: string | null
+  assigneeAgentId?: string | null
+  assigneeAgentName?: string | null
+  state: TaskState | string
+  startedAt?: string | null
+  endedAt?: string | null
+}
+export interface TaskDispatchResult { task: BoardTask; run?: BoardTaskRun | null; disposition: 'started' | 'queued'; queuePosition?: number | null; reason?: 'bot_busy' | 'global_limit' | 'global_pause' | null; replayed?: boolean }
